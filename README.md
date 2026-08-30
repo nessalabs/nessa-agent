@@ -172,6 +172,25 @@ dependency crates, which is where the time goes.
 Dev builds use `debug = "line-tables-only"`: full debug info is the single
 biggest cost in a Tauri rebuild, and line tables still give a readable backtrace.
 
+### The edit cycle
+
+Measured on this machine, with `pnpm app` running:
+
+| Change | Cost | What happens |
+| --- | --- | --- |
+| Anything under `src/` | **76 ms** | Vite HMR. No Rust rebuild, no restart, React state kept |
+| Anything under `src-tauri/src/` | **2.8 s** | Incremental rebuild (~1.7 s) and the app relaunches |
+| A dependency version | seconds | Cargo rebuilds that crate and its dependents, not the graph |
+
+So keep iteration in the frontend where the work allows it: that path is
+sub-100ms and does not lose the conversation on screen.
+
+There is no hot-*patching* of the Rust side, and it is not worth adding. Swapping
+code into a running process means building the app as a reloadable dylib
+(`hot-lib-reloader`, Dioxus's `subsecond`), which fights Tauri's runtime setup
+and would cost more to maintain than the 2.8 s it saves. The relaunch is already
+faster than the webview takes to paint.
+
 ### Only what we need
 
 The frontend is **576 KB**, all of it reached — down from 7.5 MB.

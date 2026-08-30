@@ -398,7 +398,22 @@ before writing it:
   that does not open. A write that silently half-succeeded is worse than one
   that failed loudly.
 
-Two habits that follow:
+Three habits that follow:
+
+**Restructure until the guarantee is provable.** The strongest version of an
+invariant is not "we tested it" but "here is the argument that it cannot be
+violated". If a documented guarantee cannot be argued from the code in a
+paragraph, it will quietly stop being true — and nobody will notice, because
+nothing fails. Changing the code so the argument becomes possible is legitimate
+work on its own, with no bug attached.
+
+**An escape hatch is a symptom.** When the answer to a design flaw is "there's a
+flag to turn it off", the flaw is still there and has grown a configuration
+surface. Worse, the flag only helps people who already know they need it — which
+is nobody, until they have hit the problem in production. Track such flags as
+debt to be removed by fixing the design.
+
+Two more habits:
 
 **Make illegal states unrepresentable before making them unreachable.** A type
 that cannot express the broken state removes a whole class of failure from
@@ -473,6 +488,12 @@ fixed duration and hope.
 broken behaviour. Both cases have a test that would have failed before. If you
 cannot write one, say so in the pull request and say why, out loud.
 
+**Pin stated semantics with tests.** When you document a subtle behaviour — an
+edge case, an ordering, what a caller sees after a failure — add the test that
+fails if the documentation stops being true. Prose drifts silently; an assertion
+does not. A change that is only documentation plus the tests that hold it is a
+legitimate and valuable change.
+
 **Do not test the implementation.** A test that breaks when you rename a private
 method is a tax on refactoring — the exact activity you most want to be free.
 
@@ -499,6 +520,15 @@ independently, in parallel, without coordination. You engineer for it directly:
 - **Make the common change a one-file change.** Look at the last ten changes.
   For each, ask how many files it *should* have touched. The gap between should
   and did is your architectural debt, measured honestly.
+- **Land big features as inert infrastructure first.** The first change adds the
+  types, the wiring, and the gate, and *does nothing* — it cannot affect existing
+  behaviour, which makes it reviewable on structure alone and revertible for
+  free. Capability comes one increment at a time afterwards. A single change that
+  both builds machinery and uses it can be neither reviewed nor unwound.
+- **Map the steps of a change to its commits.** A description with *why* and a
+  numbered *what*, where each step names the commit that performs it, lets a
+  reviewer take one idea at a time. It is five minutes of authoring for a
+  qualitatively better review.
 - **Prefer additive evolution at seams.** Add a new field, a new event version,
   a new port implementation. Removing comes later, once nothing reads the old
   thing. Big-bang migrations are how a quarter disappears.
@@ -523,7 +553,18 @@ You do not sprinkle performance work. You locate it.
   and buffer has a bound and a documented behaviour when full. An unbounded
   queue is a memory leak that hasn't happened yet.
 - **Benchmarks are regression tests.** A performance claim with no benchmark is
-  a rumour, and a benchmark that is not run in CI decays within a month.
+  a rumour, and a benchmark that is not run in CI decays within a month. But
+  benchmarks only model the workloads you thought of; production finds the
+  others. Passing benchmarks are evidence, not proof.
+- **Build the observability before you need it.** The metric that lets a
+  stranger diagnose a regression you have not had yet has to already exist when
+  it happens. Counters and timings on the hot path, available behind a flag,
+  are cheap insurance and the only alternative to guessing.
+- **Reverting is a normal move.** When a change turns out to cost more than it
+  bought, the correct response is usually to take it out, not to carry it plus a
+  partial fix while hunting for the real one. A fix that reintroduces the defect
+  the change existed to prevent is not a fix — say so out loud rather than
+  shipping it.
 
 ---
 
@@ -550,6 +591,11 @@ have shifted and you are asking whether the decision still holds.
 the intended change, circulated before implementation, is the cheapest possible
 place to discover the design is wrong. Discovering it in review costs a week.
 Discovering it after merge costs a quarter.
+
+**Record what you deliberately did not do.** In the change description and in
+the decision record: the restructuring you considered and rejected, and the
+reason. Without it, the next person "tidies" the code into the exact shape that
+was already considered and rejected, and nobody remembers why it was wrong.
 
 **Comments explain why, never what.** The code says what. A comment earns its
 place by capturing the context you had while writing it and the reader will not

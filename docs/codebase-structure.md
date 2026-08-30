@@ -68,7 +68,7 @@ comment — before correctness, before style.
 
 These must be true. They are invisible, so they are also the ones that erode.
 
-1. `domain/` contains no `tauri`, `serde`-transport, `tokio`-flavoured, or
+1. `domain/` contains no `tauri`, `serde`-transport, async-runtime, or
    filesystem import.
 2. No module imports another module's non-`contracts/` path.
 3. The module graph is acyclic.
