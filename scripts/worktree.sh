@@ -13,7 +13,14 @@
 #   * The Rust target directory is shared with the main checkout, so cargo
 #     reuses ~500 already-compiled dependency crates instead of starting over.
 #     Cargo takes a lock on it, so two worktrees building at once queue rather
-#     than corrupt each other — but a `cargo clean` in one empties it for all.
+#     than corrupt each other.
+#
+#     A bare `cargo clean` in any worktree does empty it for all of them, and
+#     that is not preventable — cargo offers no way to protect a shared target.
+#     It is bounded rather than fixed: sccache's cache lives outside the target
+#     directory entirely, so the recovery is one ~45s rebuild, not a cold one.
+#     `./scripts/worktree.sh clean` is the non-destructive version and is what
+#     you almost always want.
 #   * pnpm hardlinks from its global store, so `pnpm install` in a new worktree
 #     costs seconds and no disk.
 #
@@ -35,6 +42,7 @@ usage: ./scripts/worktree.sh <command> [name]
 
   create <name>   New branch <name> in a sibling worktree, ready to build
   remove <name>   Delete that worktree (the branch is kept)
+  clean           Rebuild this app's crate only, keeping dependencies
   list            Show every worktree
 
 <name> is a slug: letters, digits, dash, underscore, slash.
@@ -66,6 +74,9 @@ cmd_create() {
   # Share the compiled dependencies rather than rebuilding them. A symlink
   # rather than CARGO_TARGET_DIR so it applies however cargo is invoked —
   # directly, through pnpm, or by the Tauri CLI.
+  #
+  # LOAD-BEARING: this is a symlink, not a copy. `cmd_remove` must delete it
+  # before removing the worktree — see the warning there.
   local shared="$repo_root/src-tauri/target"
   mkdir -p "$shared"
   ln -s "$shared" "$path/src-tauri/target"
@@ -90,15 +101,35 @@ cmd_remove() {
   path="$(worktree_path "$1")"
   [[ -d "$path" ]] || die "no worktree at $path"
 
-  # Drop the symlink first: 'git worktree remove' would otherwise refuse, and
-  # a careless recursive delete here would follow it into the shared target.
+  # ┌──────────────────────────────────────────────────────────────────────┐
+  # │ DO NOT CHANGE THE ORDER OF THE NEXT TWO LINES.                       │
+  # │                                                                      │
+  # │ src-tauri/target is a SYMLINK into the main checkout's build cache,   │
+  # │ shared by every worktree. It must be unlinked BEFORE anything        │
+  # │ deletes the worktree directory: a recursive delete would otherwise   │
+  # │ follow it and wipe gigabytes of compiled artifacts for every         │
+  # │ worktree at once, turning every next build into a cold one.          │
+  # │                                                                      │
+  # │ `rm -f` on the link itself (no trailing slash, no -r) removes the    │
+  # │ link and never touches what it points at. Keep it that way.          │
+  # └──────────────────────────────────────────────────────────────────────┘
   rm -f "$path/src-tauri/target"
   git -C "$repo_root" worktree remove --force "$path"
   echo "removed $path (branch '$1' kept)"
 }
 
+# The safe counterpart to `cargo clean`. The target directory is shared, so a
+# bare clean throws away every worktree's dependency builds; this drops only
+# this app's own crate, which is what is actually stale after a code change,
+# and costs ~27s to rebuild instead of minutes.
+cmd_clean() {
+  echo "→ cargo clean -p nessa-app (dependencies kept)"
+  (cd "$repo_root/src-tauri" && cargo clean -p nessa-app)
+}
+
 case "${1:-}" in
   create) shift; cmd_create "$@" ;;
+  clean)  cmd_clean ;;
   remove) shift; cmd_remove "$@" ;;
   list)   git -C "$repo_root" worktree list ;;
   *)      usage ;;

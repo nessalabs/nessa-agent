@@ -117,6 +117,7 @@ Every agent starts here rather than running `git worktree` by hand:
 
 ```bash
 ./scripts/worktree.sh create add-something   # branch + worktree, ready to build
+./scripts/worktree.sh clean                  # rebuild this crate, keep deps
 ./scripts/worktree.sh list
 ./scripts/worktree.sh remove add-something   # the branch is kept
 ```
@@ -127,9 +128,17 @@ and only recompiles this app's own crate — measured at **27 s** in a new
 worktree, against minutes from scratch. pnpm hardlinks from its global store, so
 `pnpm install` costs seconds and no disk.
 
-Two things worth knowing about the shared target: cargo locks it, so two
-worktrees building at once queue rather than corrupt each other — but a
-`cargo clean` in any one of them empties it for all.
+Cargo locks the shared target, so two worktrees building at once queue rather
+than corrupt each other.
+
+A bare `cargo clean` in any worktree does empty it for all of them, and that is
+not preventable — cargo has no notion of a protected shared target. It is
+**bounded** rather than fixed: sccache's cache lives in
+`~/Library/Caches/Mozilla.sccache`, outside the target directory entirely, so
+the worst case is one ~45 s rebuild rather than a cold one. Use
+`./scripts/worktree.sh clean` instead: it runs `cargo clean -p nessa-app`, which
+drops only this app's crate — the thing that is actually stale after a code
+change — and rebuilds in **4 s** with every dependency intact.
 
 Worktrees are created as **siblings** of this checkout
 (`../nessa-app-<name>`), and that is load-bearing rather than cosmetic: the
