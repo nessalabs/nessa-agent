@@ -1,0 +1,58 @@
+/*
+ * Nessa UI is consumed as a linked checkout, so the app compiles the design
+ * system's Tailwind *source* rather than its prebuilt stylesheet. The built
+ * CSS only carries the utilities the library's own components happen to use,
+ * which silently drops any class the app writes for itself; compiling from
+ * source gives the app the full utility set and the same tokens.
+ *
+ * When PillComposer and the chat bubbles land on the package's main branch and
+ * it ships to npm, this becomes `@import "@nessa-ui/react/app.css"` again.
+ */
+@import "../node_modules/@nessa-ui/react/src/app.css";
+@source "./";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* The Tauri window is transparent and undecorated: the app paints the only
+   surface, so nothing above the panel may draw a background. */
+body {
+  background: transparent;
+  font-family: var(--nessa-font-sans);
+  overflow: hidden;
+  /* No titlebar, so a stray selection drag reads as a broken drag region.
+     Selection is re-enabled on the transcript. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/*
+ * Two surfaces, switched by the header control. `translucent` tints the native
+ * frost the window carries (see src-tauri/src/vibrancy.rs); `clear` removes the
+ * panel entirely, so only the bubbles and the pill hang over the desktop.
+ *
+ * There is deliberately no `backdrop-filter` here. On a transparent,
+ * undecorated macOS window it does not sample the behind-window content 1:1 —
+ * it stretches it into a bleed running down the panel, and stops updating when
+ * the window loses focus, so the surface visibly changed as you clicked away.
+ * The native NSVisualEffectView does both correctly.
+ */
+.nessa-panel[data-surface="translucent"] {
+  /* A tint over the native frost, not the frost itself. */
+  background: color-mix(in oklab, var(--background) 30%, transparent);
+  border-color: color-mix(in oklab, var(--border) 55%, transparent);
+}
+
+.nessa-panel[data-surface="clear"] {
+  background: transparent;
+  border-color: transparent;
+}
+
+/* With no panel behind it, the header sits directly on the desktop, so it
+   carries its own legibility rather than relying on the surface. */
+.nessa-panel[data-surface="clear"] > header {
+  text-shadow: 0 1px 3px color-mix(in oklab, black 55%, transparent);
+}
