@@ -1,7 +1,7 @@
 # Testing strategy
 
 Tests exist to make change safe and to give early feedback on coupling. A test
-that does neither is overhead. See §7 of [system-architect.md](system-architect.md)
+that does neither is overhead. See §11 of [system-architect.md](system-architect.md)
 for the reasoning; this is the operational version.
 
 ## What gets a test

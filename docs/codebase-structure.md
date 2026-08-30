@@ -83,6 +83,44 @@ These must be true. They are invisible, so they are also the ones that erode.
 When the codebase is large enough for these to be worth automating, they become
 a test (see [testing-strategy.md](testing-strategy.md), *structure tests*).
 
+## The core and what sits on it
+
+Nessa will grow a core — the agent runtime, the turn lifecycle, the transport to
+whatever produces replies — and a set of product surfaces on top of it: the
+panel, the composer, the tray, whatever comes after. The rule from §8 of the
+persona applies literally here:
+
+- The runtime core has no knowledge that a menu bar panel exists. No `if
+  panel`, no field only the tray sets, no enum variant named after a surface.
+- A surface composes core pieces and adds its own rules. It depends on the core;
+  the core never depends on it.
+- When a surface needs something the core cannot express, the core gains a
+  *general* capability — a port, an event, a parameter naming a concept the core
+  already has — and the surface supplies the specific part.
+- The test: could this core piece serve a Nessa with no menu bar at all — a CLI,
+  a second window, a background run? If not, it has been contaminated.
+
+The same applies inside the host today. `tray.rs` owns geometry and the menu;
+it does not own conversation state, and it does not decide preferences — it
+requests and reflects. Keep new code pointing the same way.
+
+## Failure-first checklist for host code
+
+Before any new code that touches the filesystem, the OS, or another process:
+
+- What must stay true if it stops halfway? Which function guarantees it?
+- What if it runs twice — two shows, a double shortcut press, a restart mid-write?
+- What if two of them run at once? Impossible by construction, serialised by one
+  owner, or a documented benign race — pick one.
+- Is the durable write ordered before the announcement?
+- What is the bound on every queue, channel, and retry?
+- Is this failure fatal or survivable? Match the existing policy: edge failures
+  degrade the surface and are logged; they do not stop the launch.
+
+Settings writes are the current instance of most of this: a partial write must
+not produce a file that fails to load, which is what `serde(default)` plus
+writing the full defaults on first launch is buying.
+
 ## Cross-context communication
 
 Prefer an event over a call. When one context needs another to act, it publishes

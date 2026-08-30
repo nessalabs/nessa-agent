@@ -13,11 +13,19 @@ How we think about building Nessa, and the map of what is currently built.
 
 ## The short version
 
-The codebase's job is to keep the *next* change cheap. Structure follows the
-domain, dependencies point inward, every concept has exactly one owner, and the
-rules that matter most are the ones stated as absences — the imports that must
-never exist. Velocity is not typing speed; it is how many changes can happen in
-parallel without coordination, and that is a property you design for directly.
+> Build the smallest system where each piece has a clear reason to exist, owns
+> the information it needs, and can evolve independently.
+
+Responsibility goes where the information is. Machinery stays separate from
+rules, intent from execution, definition from running state. The core stays
+small and knows nothing about the product built on it. Design starts at the
+crash, the retry, and the race — not at the happy path. Flexibility is bought
+only when a requirement forces it. And the rules that matter most are the ones
+stated as absences: the imports and couplings that must never exist, which is
+why they need tests.
+
+Velocity is not typing speed. It is how many changes can happen in parallel
+without coordination — a property you design for directly.
 
 ## Using the persona as a skill
 

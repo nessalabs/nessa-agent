@@ -27,7 +27,14 @@ So: **the structure of the code is a product decision.** You treat it as one.
 
 ## 1. Prime directive
 
-> Optimise for the cost of the *next* change, not the elegance of *this* one.
+> Build the smallest system where each piece has a clear reason to exist, owns
+> the information it needs, and can evolve independently.
+
+Operationally that means: **optimise for the cost of the *next* change, not the
+elegance of *this* one.** You judge an abstraction not by how neat it is today
+but by how expensive it makes a future *correct* change — and the corollary is
+that you do not build flexibility until a real requirement forces it, because
+speculative flexibility is a bet you pay for daily and usually lose.
 
 Three consequences you accept without arguing:
 
@@ -44,6 +51,28 @@ Three consequences you accept without arguing:
    mutable state, action-at-a-distance, "you also have to update X" — is a
    defect even when it works.
 
+### The pillars
+
+Everything below is one of these, applied. When you are stuck, the question is
+usually which pillar the situation is violating.
+
+| | Pillar | In short | Where |
+| --- | --- | --- | --- |
+| 1 | **Information ownership** | Responsibility belongs where the information is. | §2, §4 |
+| 2 | **Stable boundaries** | Components meet through minimal contracts and know as little about each other as possible. | §3, §7 |
+| 3 | **The three separations** | Mechanism from policy, what from how, definition from execution. | §5 |
+| 4 | **Small core, composable pieces** | Keep the kernel tiny; extend through clean interfaces, not by growing the middle. | §6 |
+| 5 | **Vertical isolation** | Product-specific capability sits *on top of* the core, never inside it. | §8 |
+| 6 | **Failure and invariants first** | Design around what stays true when things crash, retry, duplicate, or race. | §9 |
+| 7 | **No speculative abstraction** | Flexibility is bought when a requirement forces it, not before. | §1, §10 |
+| 8 | **Design for change** | Judge an abstraction by the cost of the next correct change. | §1, §12 |
+
+Two things hold the pillars up and are easy to forget because they are not
+structural. **Language:** a name that does not match the word the product uses
+will cost you more than any of the above, because every conversation pays a
+translation tax (§3). **Enforcement:** a pillar with no test and no review
+comment is decoration (§11, §15).
+
 ---
 
 ## 2. How you decide
@@ -51,24 +80,33 @@ Three consequences you accept without arguing:
 When a design question arrives, run this in order. Stop at the first step that
 answers it.
 
-1. **What is the domain concept?** Name it in the language the product uses. If
+1. **Who has the information needed to decide this?** Put the responsibility
+   there. Not where it is convenient to call from, not where the code already
+   is — where the knowledge lives. Most bad designs are a decision made in a
+   place that had to be *told* things in order to make it, and every one of
+   those tellings is a parameter, a coupling, and a future migration. If a
+   caller has to pass in three facts so the callee can branch, the branch
+   belongs to the caller. If the callee knows something the caller had to guess,
+   the decision belongs to the callee.
+2. **What is the domain concept?** Name it in the language the product uses. If
    you cannot name it without inventing a word, you have not found the concept
    yet — go find it before you write a type.
-2. **Which boundary does it belong inside?** Every concept lives in exactly one
+3. **Which boundary does it belong inside?** Every concept lives in exactly one
    context that owns it. If it seems to belong to two, it is probably two
    different concepts that share a word.
-3. **What is the invariant?** What must always be true? Who enforces it? An
+4. **What is the invariant?** What must always be true? Who enforces it? An
    invariant with no enforcer is a bug scheduled for later.
-4. **What is the smallest thing that makes it true?** Write that. Not the
+5. **What is the smallest thing that makes it true?** Write that. Not the
    framework for a family of things like it.
-5. **How does it get deleted?** If the answer involves more than the module it
+6. **How does it get deleted?** If the answer involves more than the module it
    lives in plus one adapter, the boundary is wrong.
-6. **What does it cost to be wrong?** Cheap-to-reverse decisions get made in
+7. **What does it cost to be wrong?** Cheap-to-reverse decisions get made in
    the pull request. Expensive-to-reverse decisions get a short written note
-   first (see §10).
+   first (see §14).
 
-You do not skip step 1. Structure that does not track the domain will be fought
-by every feature request, forever.
+You do not skip steps 1 and 2. A responsibility placed away from its
+information, or a structure that does not track the domain, will be fought by
+every feature request, forever.
 
 ---
 
@@ -135,6 +173,13 @@ point — wrap them. Primitive obsession is the cheapest bug factory there is: i
 lets you pass the wrong thing to the right slot and get no complaint from the
 compiler or the reviewer.
 
+**Put the rule where the data is.** An object that holds the state enforces the
+rules about that state. When a caller has to check something before calling —
+"only call this if the turn is still streaming" — that check has been placed
+away from the information it depends on, and it will be forgotten at the fourth
+call site. Give the callee the decision, and give it a return type that says
+what happened.
+
 **Invariants live in constructors, not in callers.** If a field can hold any
 value without breaking anything, expose it. If it cannot, make it private,
 document the invariant, and enforce it in the one function that can create the
@@ -152,7 +197,74 @@ replacement to reach into your rules.
 
 ---
 
-## 5. Structure: how the files are arranged
+## 5. The three separations
+
+One move, applied at three altitudes. Learn it once; you will see it everywhere.
+
+**Mechanism from policy.** The reusable machinery does not contain the rules.
+A scheduler knows how to run things, not which things deserve priority. A
+retrier knows how to retry, not what is worth retrying. Mechanism is the part
+you write once and stop thinking about; policy is the part the product changes
+every week. Fuse them and every product change becomes an edit to
+infrastructure, which is the single most reliable way to make a codebase slow.
+
+The test: *can I change this rule without touching the machinery, and can I
+reuse the machinery under a different rule?* If either answer is no, they are
+fused.
+
+**What from how.** Callers express intent; the system chooses execution.
+"Deliver this reply" is a what; "spawn a task, poll every 50ms, retry three
+times" is a how. Intent stated declaratively survives a change of execution
+strategy; intent expressed as a procedure has to be rewritten when the strategy
+changes, in every place it was expressed. Push the *what* up to the caller and
+keep the *how* down in one implementation — this is the same instinct as pushing
+conditionals up and loops down (§10).
+
+**Definition from execution.** The description of a thing is a separate,
+inspectable value from the state of running it. A workflow definition is data;
+a workflow run is state. A configuration is data; the configured session is
+state. Keeping them apart is what makes it possible to inspect, serialise,
+diff, version, test, and replay — and to answer "what was supposed to happen"
+separately from "what is happening". When definition and execution are the same
+object, you cannot examine one without disturbing the other, and you cannot
+change the definition of a thing already running.
+
+The three compound: definitions are *what*, the engine that runs them is *how*,
+and the engine is mechanism while the definitions are policy. A system that gets
+all three right is one where the interesting part is data and the machinery is
+small and dull — which is exactly the shape you are aiming at.
+
+---
+
+## 6. Small core, composable pieces
+
+Keep the kernel tiny. Everything that can live outside it, does.
+
+The core is whatever every part of the system depends on. It is therefore the
+most expensive thing in the codebase to change, and its size is a direct
+multiplier on the cost of every future decision. A large core is not a rich
+foundation; it is a large surface that nothing can move without permission from.
+
+- **A thing joins the core only when at least two independent consumers need it
+  and it has no plausible home outside.** One consumer means it belongs to that
+  consumer.
+- **Extend by adding a piece, not by widening the middle.** If a new capability
+  requires a new parameter on a core type, an extra branch in a core function,
+  or a flag threaded through, stop: that is the core absorbing a concern that
+  should have been composed on top.
+- **Prefer several small pieces with one job over one piece with a mode
+  switch.** Two functions beat one function with a boolean. Two adapters beat
+  one adapter with an `if`.
+- **Composition happens at the edge**, in the one place that wires concrete
+  things together. The pieces themselves know nothing about who else exists.
+
+The measure of the core is not lines. It is: *how many things must I understand
+before I can write anything at all?* Keep that number small and everything
+downstream gets cheaper — onboarding, review, testing, and parallel work.
+
+---
+
+## 7. Structure: how the files are arranged
 
 **Flat beats nested.** One level of modules, named exactly what they are. A deep
 tree encodes a taxonomy you will get wrong and then be too embarrassed to
@@ -214,7 +326,7 @@ things that must *not* exist. Write them down where people will read them:
   Dependencies arrive as parameters, first parameter, not last.
 
 Absences are invisible in the code and therefore erode silently. If a rule is
-worth having, it is worth a test that fails when it breaks (see §7).
+worth having, it is worth a test that fails when it breaks (see §11).
 
 **Cross-cutting concerns get one implementation, applied uniformly.** Logging,
 validation, transactions, correlation ids, retry — decorate at the boundary
@@ -223,7 +335,82 @@ every function, that is a signal it belongs one level up.
 
 ---
 
-## 6. What you refuse to build
+## 8. Vertical isolation
+
+Product-specific capability is built **on top of** the general core, never
+inside it. The core does not learn the product's vocabulary.
+
+This is the pillar that decides whether a system is still generalisable in a
+year. The pressure is always the same and always reasonable-sounding: a feature
+needs one small thing from the core, and adding it there takes an hour while
+composing it on top takes a day. Take the day. The hour is borrowed at a rate
+you cannot see, because what actually gets added is not a line of code — it is
+the core's knowledge that this product exists, and every subsequent feature
+gets to add one more.
+
+Concretely:
+
+- The core has no `if` on a product concept, no enum variant named after a
+  feature, no field that only one surface sets.
+- A product capability composes core pieces and adds its own rules. It may
+  depend on the core; the core may never depend on it.
+- When a feature genuinely needs something the core cannot express, the core
+  gains a *general* capability — a hook, a port, a parameter that names a
+  concept the core already has — and the feature supplies the specific part.
+  If you cannot describe the addition without naming the feature, it is not
+  general enough yet.
+- The tell: could this core piece be used by a product that does not have this
+  feature at all? If no, the contamination already happened.
+
+The same discipline runs vertically inside the app: a shared surface does not
+special-case one caller. The moment it does, the special case has become
+everyone's problem to preserve.
+
+---
+
+## 9. Failure and invariants first
+
+Design for the crash, the retry, the duplicate, and the race **before** you
+design the happy path. The happy path is the easy half and it will be fine; the
+system's real shape is determined by what happens when it is interrupted.
+
+For anything that touches state, storage, or another process, answer these
+before writing it:
+
+- **What must remain true if this stops halfway?** Name the invariant. Then find
+  the point in the code where it can be violated, and make that point atomic —
+  or make the violation detectable and repairable rather than silent.
+- **What happens if this runs twice?** Assume it will. Retries, restarts,
+  double-clicks, and redelivery are all the same event. Prefer operations that
+  are safe to repeat; where you cannot, make repetition detectable by identity
+  rather than by guessing from state.
+- **What happens if these two run at once?** Either it is impossible by
+  construction, or there is one owner serialising it, or there is a documented
+  race that is genuinely benign. "Unlikely" is not one of the three.
+- **What is the order-of-operations rule?** Write the durable fact before you
+  announce it. Announce before you act on it. A system that acts first and
+  records after is a system that loses work exactly when it matters.
+- **Where is the bound?** Every queue, buffer, channel, and retry loop has a
+  limit and a stated behaviour at the limit. Unbounded means "fails later, worse,
+  and somewhere else".
+- **How does it degrade?** Decide which failures are fatal and which are
+  survivable, and be consistent. A surface that opens degraded beats a surface
+  that does not open. A write that silently half-succeeded is worse than one
+  that failed loudly.
+
+Two habits that follow:
+
+**Make illegal states unrepresentable before making them unreachable.** A type
+that cannot express the broken state removes a whole class of failure from
+review, testing, and your memory. This is cheaper than any amount of validation.
+
+**Every invariant has a named enforcer.** If you cannot point at the function
+that guarantees it, it is not an invariant — it is a hope, and hopes do not
+survive concurrency.
+
+---
+
+## 10. What you refuse to build
 
 Say no to these even when they feel productive:
 
@@ -250,7 +437,7 @@ Say no to these even when they feel productive:
 
 ---
 
-## 7. Tests are a design instrument
+## 11. Tests are a design instrument
 
 Tests are not a quality ritual. They are the fastest feedback you have on
 whether the structure is right. Code that is hard to test is not "hard to test";
@@ -268,7 +455,7 @@ that state should not exist.
 | A domain rule or invariant | Fast unit test, real objects, no doubles |
 | A use case wired to real infrastructure | Integration test against the *real* dependency, not a mock of it |
 | A contract between two modules | Contract test on the event/DTO shape, owned by the consumer |
-| An architectural absence (§5) | Automated structure test over the module graph |
+| An architectural absence (§7) | Automated structure test over the module graph |
 | Anything concurrent, timed, or async | A deterministic seam — inject the clock, the scheduler, the channel |
 | A bug you just fixed | A regression test that fails on the old code |
 
@@ -291,7 +478,7 @@ method is a tax on refactoring — the exact activity you most want to be free.
 
 ---
 
-## 8. Velocity is a structural property
+## 12. Velocity is a structural property
 
 Velocity is not typing speed. It is the number of changes that can be made
 independently, in parallel, without coordination. You engineer for it directly:
@@ -318,7 +505,7 @@ independently, in parallel, without coordination. You engineer for it directly:
 
 ---
 
-## 9. Performance and scale, when they matter
+## 13. Performance and scale, when they matter
 
 You do not sprinkle performance work. You locate it.
 
@@ -340,7 +527,7 @@ You do not sprinkle performance work. You locate it.
 
 ---
 
-## 10. Write the decisions down
+## 14. Write the decisions down
 
 Code records *what*. It cannot record *why*, or the three options you rejected.
 That knowledge leaves with the person who has it unless you write it down.
@@ -370,7 +557,7 @@ have: the constraint, the surprise, the thing you tried that did not work.
 
 ---
 
-## 11. Review posture
+## 15. Review posture
 
 Review is the mechanism by which the standards in this document actually happen.
 
@@ -407,12 +594,17 @@ goal is that the same comment is not needed next time.
 
 ---
 
-## 12. Working checklist
+## 16. Working checklist
 
 Before you write:
 
+- [ ] The responsibility sits where the information is.
 - [ ] I can name the concept in the product's own words.
 - [ ] I know which context owns it and what the invariant is.
+- [ ] Machinery and rules are separable; definition and running state are
+      separate values.
+- [ ] Nothing product-specific went into the core.
+- [ ] I know what happens if it crashes halfway, runs twice, or races.
 - [ ] I know how this gets deleted.
 - [ ] The dependency this adds points inward.
 
@@ -422,10 +614,12 @@ Before you open a change:
 - [ ] A test fails without it.
 - [ ] It touches the number of modules it *should* touch.
 - [ ] No new absence-invariant was violated.
+- [ ] No flexibility was added that a requirement did not force.
+- [ ] Every queue, buffer, and retry in it has a bound.
 - [ ] Anything expensive to reverse has a written note or an ADR.
 - [ ] Names match the domain language, including in tests.
 
-## 13. Smells that mean stop and re-cut the boundary
+## 17. Smells that mean stop and re-cut the boundary
 
 - A feature request routinely touches three or more modules.
 - Two modules import each other, directly or through a third.
@@ -434,6 +628,11 @@ Before you open a change:
 - Tests need elaborate setup to reach a simple assertion.
 - A name in code needs translating before you can talk to product about it.
 - Someone says "just add a flag."
+- A core type has a field, branch, or variant that names one product feature.
+- The machinery has to change every time a rule changes.
+- A caller must check something before it is allowed to call.
+- The description of a thing and the state of running it are the same object.
+- The only reason something is in the core is that it was easier to put it there.
 - Someone says "we'll clean it up later" for the third time about the same file.
 
 None of these are emergencies. All of them are interest payments, and they
