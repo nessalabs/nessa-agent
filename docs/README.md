@@ -6,6 +6,7 @@ How we think about building Nessa, and the map of what is currently built.
 | --- | --- |
 | [system-architect.md](system-architect.md) | **The persona.** How to think about designing, structuring, and reviewing this system. Adopt it before writing a new module, adding a dependency between parts, or reviewing a change. Domain-driven, velocity-first, opinionated on purpose. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The map of the code as it stands: what each file owns, the boundaries, the invariants, and where a given change goes. |
+| [patterns.md](patterns.md) | **Concrete techniques**, observed in long-lived high-performance systems: the seams, the gating discipline, the test trees, how core changes actually get made and unmade, and the review comments that recur. The implementation-level companion to the persona. |
 | [codebase-structure.md](codebase-structure.md) | The persona's rules applied to this repository — layout, dependency direction, naming, the absences, and how to grow a new context. |
 | [testing-strategy.md](testing-strategy.md) | What gets a test, what does not, and why the tests are a design instrument rather than a quality ritual. |
 | [review-and-velocity.md](review-and-velocity.md) | The review standard, change size, commit conventions, and the diagnostics that tell you whether the structure is still earning its keep. |
