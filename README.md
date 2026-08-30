@@ -111,6 +111,31 @@ window's *current* size rather than resetting it to the configured one —
 otherwise a resize would be discarded the next time the panel was dismissed. The
 configured geometry is applied once, at startup, by `apply_configured_size`.
 
+## Working on a feature
+
+Every agent starts here rather than running `git worktree` by hand:
+
+```bash
+./scripts/worktree.sh create add-something   # branch + worktree, ready to build
+./scripts/worktree.sh list
+./scripts/worktree.sh remove add-something   # the branch is kept
+```
+
+A fresh worktree does not pay for a rebuild. It shares the main checkout's
+`src-tauri/target`, so cargo reuses the ~500 already-compiled dependency crates
+and only recompiles this app's own crate — measured at **27 s** in a new
+worktree, against minutes from scratch. pnpm hardlinks from its global store, so
+`pnpm install` costs seconds and no disk.
+
+Two things worth knowing about the shared target: cargo locks it, so two
+worktrees building at once queue rather than corrupt each other — but a
+`cargo clean` in any one of them empties it for all.
+
+Worktrees are created as **siblings** of this checkout
+(`../nessa-app-<name>`), and that is load-bearing rather than cosmetic: the
+design system is a relative `link:../nessa/…` dependency, so a worktree nested
+any deeper resolves that path to nothing and fails to install.
+
 ## Build
 
 Nothing ships that the app does not reach, and the two build modes exist so
