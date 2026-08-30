@@ -1,0 +1,50 @@
+[package]
+name = "nessa-app"
+version = "0.1.0"
+description = "Nessa — a floating agent composer"
+authors = ["Nessa Labs"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# `macos-private-api` is what makes the transparent, undecorated window legal
+# on macOS; `tray-icon` and `image-png` back the menu bar item.
+tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# The frosted surface is a native NSVisualEffectView rather than a CSS
+# `backdrop-filter`: on a transparent, undecorated macOS window the CSS filter
+# samples the behind-window content through a path that does not map 1:1, which
+# smears it down the panel as a stretched gradient.
+# Desktop-only: the panel is summoned by an accelerator that has to work while
+# another app is frontmost.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-global-shortcut = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+window-vibrancy = "0.6"
+
+[features]
+# Used for production builds or when a dev server is not specified. Do not remove.
+custom-protocol = ["tauri/custom-protocol"]
+
+# Release builds trade compile time for a smaller, faster binary. `lto = "fat"`
+# and a single codegen unit let the optimiser work across crate boundaries,
+# which is where most of both wins come from; `strip` drops symbols the app
+# never reads back. `panic` is deliberately left as unwind: aborting would save
+# a little more, but some dependencies catch panics and the saving is not worth
+# finding out which at runtime.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+
+# Dev builds are for iterating, so they optimise for link time rather than run
+# time: full debug info is the single biggest cost in a Tauri rebuild, and
+# line tables are enough for a backtrace to be readable.
+[profile.dev]
+debug = "line-tables-only"
