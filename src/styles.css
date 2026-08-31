@@ -191,22 +191,25 @@ body {
 
 .nessa-west-handle {
   position: absolute;
-  top: 0;
+  /* Stage is the webview; its bottom-right is the window. Pin to the
+     panel's left edge without becoming a positioned descendant of the
+     panel — that stacking context is the boxed left cap on Linux. */
+  top: auto;
+  left: auto;
   bottom: 4.75rem;
-  left: 0;
+  height: calc(var(--nessa-window-height, 100%) - 4.75rem);
   cursor: ew-resize;
   background: none;
-  /* No z-index: a positioned stacking context on the panel makes WebKitGTK
-     fill a layer from x=0 with opaque white — the boxed left cap. Absolute
-     with auto z-index still paints above in-flow chrome (CSS appendix E). */
 }
 
 .nessa-west-handle-narrow {
   width: 6px;
+  right: calc(var(--nessa-window-width, 100%) - 6px);
 }
 
 .nessa-west-handle-wide {
   width: 12px;
+  right: calc(var(--nessa-window-width, 100%) - 12px);
 }
 
 /*

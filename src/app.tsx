@@ -51,6 +51,27 @@ export function App() {
 
   return (
     <div className="nessa-stage">
+      {/* Lives on the stage, not the panel: a positioned descendant of the
+          panel (even with z-index auto) makes WebKitGTK fill a layer from
+          the panel origin with opaque white — the boxed left cap. The
+          stage's bottom-right is the window, so `right`/`height` from the
+          window size tokens pin this strip to the panel's left edge. */}
+      <div
+        role="presentation"
+        onPointerDown={(event) => {
+          // Pointer capture on Linux holds the button on the webview, so
+          // GTK's `begin_resize_drag` does not see it and the west resize
+          // never starts. The system's 5px inset still works; this path is
+          // the rest of the handle.
+          if (host.capturePointerOnWestHandle) {
+            event.currentTarget.setPointerCapture(event.pointerId)
+          }
+          edge.holdResize()
+          void startResizeFromLeftEdge()
+        }}
+        onPointerUp={edge.releaseResize}
+        className={host.westHandleClass}
+      />
       <div
         ref={edge.panelRef}
         data-nessa-root
@@ -73,29 +94,6 @@ export function App() {
           aria-hidden="true"
           className="nessa-edge-reveal pointer-events-none"
         />
-        {/* A grab handle for the left edge. macOS claims the window frame
-            before the webview sees it, so this only ever fires just inside the
-            system's own grab zone — the glow is pinned from window size
-            events rather than from this gesture. On Linux the handle *is* the
-            resize, so it is wide enough to grab and pointerdown here both
-            starts the drag and pins the glow. */}
-        <div
-          role="presentation"
-          onPointerDown={(event) => {
-            // Pointer capture on Linux holds the button on the webview, so
-            // GTK's `begin_resize_drag` does not see it and the west resize
-            // never starts. The system's 5px inset still works; this path is
-            // the rest of the handle.
-            if (host.capturePointerOnWestHandle) {
-              event.currentTarget.setPointerCapture(event.pointerId)
-            }
-            edge.holdResize()
-            void startResizeFromLeftEdge()
-          }}
-          onPointerUp={edge.releaseResize}
-          className={host.westHandleClass}
-        />
-
         {/* The strip is the titlebar too: the gaps around the tabs drag the
             window, while the tabs themselves stay clickable. */}
         <div
