@@ -49,6 +49,11 @@ export default defineConfig({
     // gets connection-refused and the transparent window shows the desktop
     // with no chrome.
     host: host ?? "127.0.0.1",
+    headers: {
+      // WebKitGTK keeps module scripts after a restart; HMR then updates CSS
+      // only, so a class added in JSX never lands on the node that is painted.
+      "Cache-Control": "no-store",
+    },
     hmr: host ? { protocol: "ws", host, port: 1421 } : undefined,
     watch: {
       ignored: [

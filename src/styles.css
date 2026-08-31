@@ -95,7 +95,7 @@ body {
  * box behind the rounded pill and as stacked bars overlapping the transcript.
  */
 .nessa-panel[data-surface="clear"] {
-  background: transparent;
+  background: none;
   border-color: transparent;
   overflow: visible;
 }
@@ -105,40 +105,65 @@ body {
 }
 
 .nessa-panel[data-surface="clear"] .nessa-chrome {
-  background: transparent;
+  background: none;
+}
+
+.nessa-panel [role="log"] {
+  background: none;
 }
 
 /*
- * Composer gutter is real CSS, not a Tailwind spacing token: those have
- * gone missing from a generated sheet before, which sat the pill flush on
- * the window's left clip — a hard vertical edge — while the right cap still
- * rounded. The west resize strip is 12px on Linux; padding plus a handle
- * that stops above the composer keeps it off the left cap.
+ * Composer gutter is real CSS padding, not a flex margin and not panel
+ * padding: those leave the pill flush on the window's left clip. The
+ * wrapper must not paint — `transparent` on a WebKitGTK layer becomes
+ * opaque white, which was the extra boxed left cap. `none` omits paint.
+ *
+ * Isolation, translateZ, mask, clip-path, and overflow-on-radius all
+ * promote a layer the size of this wrapper, so none of them belong here.
  */
 .nessa-composer {
   flex-shrink: 0;
   padding: 0 16px 12px;
-  background: transparent;
-}
-
-/*
- * WebKitGTK paints a promoted layer as an axis-aligned opaque rectangle
- * *and* the rounded content on top of it. That is the extra boxed shape
- * on the left of the pill (the right cap still looked finished because
- * the panel's own rounding clipped that corner). Isolation, translateZ,
- * mask, clip-path, and overflow-on-radius all promote, so none of them
- * belong on the form. The idle rim is `display: none` for the same
- * reason: opacity-0 and blur still allocate a backing store.
- */
-[data-slot="pill-composer"] {
+  background: none;
   isolation: auto;
   transform: none;
   filter: none;
   contain: none;
-  will-change: auto;
-  clip-path: none;
-  -webkit-mask-image: none;
-  mask-image: none;
+}
+
+/*
+ * Unwrap the form so `relative` + `bg-card` + radius cannot allocate a
+ * layer at the panel origin. The row is the capsule. Submit still reaches
+ * the form node (`requestSubmit`). While generating, the form owns a box
+ * again so the traveling rim has a containing block the size of the pill.
+ */
+[data-slot="pill-composer"] {
+  display: contents;
+}
+
+[data-slot="pill-composer-row"] {
+  padding: 6px;
+  background-color: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--card-foreground);
+}
+
+[data-slot="pill-composer"][data-generating] {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  padding: 6px;
+  background-color: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+[data-slot="pill-composer"][data-generating] [data-slot="pill-composer-row"] {
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 0;
 }
 
 [data-slot="pill-composer-rim"]:not([data-active]) {
@@ -149,6 +174,8 @@ body {
   transform: none;
   filter: none;
   will-change: auto;
+  isolation: auto;
+  background: none;
   transition-property: color, background-color;
 }
 
@@ -159,6 +186,7 @@ body {
   left: 0;
   z-index: 10;
   cursor: ew-resize;
+  background: none;
 }
 
 .nessa-west-handle-narrow {
@@ -167,10 +195,6 @@ body {
 
 .nessa-west-handle-wide {
   width: 12px;
-}
-
-.nessa-panel [role="log"] {
-  background: transparent;
 }
 
 /*

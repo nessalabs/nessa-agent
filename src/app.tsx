@@ -118,7 +118,11 @@ export function App() {
 
         <Transcript conversation={strip.active} ground={ground} />
 
-        <div className="nessa-chrome nessa-composer">
+        {/* Padding on this wrapper is the only inset WebKitGTK honours: flex
+            item margins and panel padding leave the pill flush left. The form
+            is unwrapped in CSS (`display: contents`) so it cannot allocate a
+            full-width layer; the row is the capsule. */}
+        <div className="nessa-composer" data-shell="composer-pad">
           <PillComposer generating={generating} onSubmit={submit}>
             <PillComposerRow>
               <ChatComposerAction aria-label="Add attachment" title="Add attachment">
