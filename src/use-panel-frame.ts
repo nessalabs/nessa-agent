@@ -28,13 +28,24 @@ export function usePanelFrame() {
     const root = document.documentElement
     let stale = false
 
+    // A size that is not a real length would be written as an invalid custom
+    // property, which CSS resolves not to the `100%` fallback but to `auto` —
+    // and an `auto` panel collapses to the height of the composer, because the
+    // transcript's `flex-1` has nothing definite to divide. Refusing the write
+    // keeps the fallback reachable.
     const publish = (size: { width: number; height: number } | null) => {
-      if (!size || stale) return
+      if (stale || !size) return
+      if (!Number.isFinite(size.width) || !Number.isFinite(size.height)) return
+      if (size.width <= 0 || size.height <= 0) return
       root.style.setProperty("--nessa-window-width", `${size.width}px`)
       root.style.setProperty("--nessa-window-height", `${size.height}px`)
     }
 
-    void windowSize().then(publish)
+    void windowSize().then(publish, (error) => {
+      // Silence here would leave the panel drawn the size of the whole stage,
+      // which is a great deal harder to recognise than a line in the log.
+      console.error("[nessa] could not read the panel's size", error)
+    })
     const subscription = onWindowResize(publish)
 
     return () => {
