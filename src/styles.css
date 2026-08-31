@@ -150,6 +150,7 @@ body {
   will-change: auto;
   animation: none;
   transition: none;
+  flex-shrink: 0;
 }
 
 .nessa-panel[data-host="linux"][data-surface="clear"] [data-slot="chat-message"] {

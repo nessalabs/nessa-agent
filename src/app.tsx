@@ -118,6 +118,7 @@ export function App() {
           conversation={strip.active}
           ground={ground}
           animate={host.animateTranscript}
+          pinBottom={host.stickTranscriptToBottom}
         />
 
         <div className="nessa-composer">

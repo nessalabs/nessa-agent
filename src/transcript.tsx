@@ -20,11 +20,17 @@ export function Transcript({
   conversation,
   ground,
   animate,
+  pinBottom,
 }: {
   conversation: Conversation
   ground: "paper" | "ink"
   /** False on WebKitGTK: mount springs leave compositor ghosts. */
   animate: boolean
+  /**
+   * Stick the turns to the composer. False on WebKitGTK: sliding a bubble
+   * up leaves its old pixels under the reply.
+   */
+  pinBottom: boolean
 }) {
   const logRef = React.useRef<HTMLDivElement>(null)
   const streamingId =
@@ -46,7 +52,11 @@ export function Transcript({
           compositing layer: that painted a white slab behind the bubbles. */}
       <div
         ref={logRef}
-        className="mt-auto flex min-h-0 flex-col gap-5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className={
+          pinBottom
+            ? "mt-auto flex min-h-0 flex-col gap-5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            : "flex min-h-0 flex-col gap-5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        }
       >
         {conversation.turns.length === 0 && conversation.phase === "idle" ? (
           <EmptyState seed={conversation.id} ground={ground} animate={animate} />
@@ -72,7 +82,22 @@ export function Transcript({
           </ChatMessage>
         ))}
         {conversation.phase === "thinking" ? (
-          <ChatTypingIndicator label="Nessa is typing" />
+          animate ? (
+            <ChatTypingIndicator label="Nessa is typing" />
+          ) : (
+            <div
+              role="status"
+              aria-label="Nessa is typing"
+              className="flex items-center gap-1 self-start rounded-[1.125rem] bg-accent px-3.5 py-3"
+            >
+              {[0, 1, 2].map((dot) => (
+                <span
+                  key={dot}
+                  className="size-2 rounded-full bg-muted-foreground opacity-35"
+                />
+              ))}
+            </div>
+          )
         ) : null}
       </div>
     </div>
@@ -90,14 +115,16 @@ function EmptyState({
 }) {
   return (
     <div className="flex flex-col items-center gap-2.5 py-6 text-center">
-      <RandomAvatar
-        seed={seed}
-        hues={AGENT_HUES}
-        name="Nessa"
-        ground={ground}
-        animateOnMount={animate}
-        className="size-14 rounded-full"
-      />
+      {animate ? (
+        <RandomAvatar
+          seed={seed}
+          hues={AGENT_HUES}
+          name="Nessa"
+          ground={ground}
+          animateOnMount
+          className="size-14 rounded-full"
+        />
+      ) : null}
       <p className="nessa-text-3 m-0 text-muted-foreground">
         Nessa is listening. Press Enter to send.
       </p>

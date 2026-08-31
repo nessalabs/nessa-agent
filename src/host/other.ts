@@ -7,4 +7,5 @@ export const other: HostFeatures = {
   westHandleClass: WEST_HANDLE_NARROW,
   capturePointerOnWestHandle: true,
   animateTranscript: true,
+  stickTranscriptToBottom: true,
 }
