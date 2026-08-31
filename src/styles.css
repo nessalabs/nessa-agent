@@ -164,6 +164,35 @@ body {
 }
 
 /*
+ * The tab pill grows when the title fills in, and the activity glow is a
+ * box-shadow layer. WebKitGTK leaves both behind, so two tabs sit in one
+ * place. Linux keeps a fixed-width pill with no transitions, and the
+ * working state is the avatar's `busy` wash — not a loading dot.
+ */
+.nessa-panel[data-host="linux"] [data-slot="chat-tab"],
+.nessa-panel[data-host="linux"] [data-slot="chat-tabs-new"],
+.nessa-panel[data-host="linux"] [data-slot="chat-tab-close"] {
+  transform: none;
+  translate: none;
+  scale: none;
+  filter: none;
+  isolation: auto;
+  will-change: auto;
+  animation: none;
+  transition: none;
+}
+
+.nessa-panel[data-host="linux"] [data-slot="chat-tab"] {
+  position: static;
+  width: 11rem;
+  max-width: 11rem;
+}
+
+.nessa-panel[data-host="linux"] [data-slot="chat-tab-loading"] {
+  display: none;
+}
+
+/*
  * Composer gutter is real CSS padding. The wrapper must not paint:
  * `transparent` on a WebKitGTK layer becomes opaque white. `none` omits
  * paint. The form is unwrapped so its radius cannot own a layer at the

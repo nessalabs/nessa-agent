@@ -36,14 +36,12 @@ export function App() {
     id: item.id,
     title: item.title,
     closeable: true,
-    // The avatars are still, so the dot is the only thing saying which thread
-    // is mid-reply.
-    loading: item.phase !== "idle",
     icon: (
       <RandomAvatar
         seed={item.id}
         hues={AGENT_HUES}
         ground={ground}
+        busy={item.phase !== "idle"}
         className="size-4 rounded-full"
       />
     ),
