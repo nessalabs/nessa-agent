@@ -6,4 +6,5 @@ export const macos: HostFeatures = {
   frost: "native",
   westHandleClass: WEST_HANDLE_NARROW,
   capturePointerOnWestHandle: true,
+  animateTranscript: true,
 }

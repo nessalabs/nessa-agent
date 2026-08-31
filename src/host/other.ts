@@ -6,4 +6,5 @@ export const other: HostFeatures = {
   frost: "css",
   westHandleClass: WEST_HANDLE_NARROW,
   capturePointerOnWestHandle: true,
+  animateTranscript: true,
 }

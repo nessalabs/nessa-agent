@@ -113,7 +113,12 @@ export function App() {
 
         {/* Keyed so WebKitGTK drops the previous conversation's bubble
             layers instead of leaving them composited over the wallpaper. */}
-        <Transcript key={strip.active.id} conversation={strip.active} ground={ground} />
+        <Transcript
+          key={strip.active.id}
+          conversation={strip.active}
+          ground={ground}
+          animate={host.animateTranscript}
+        />
 
         <div className="nessa-composer">
           <PillComposer generating={generating} onSubmit={submit}>

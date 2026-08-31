@@ -19,9 +19,12 @@ import type { Conversation } from "./conversation"
 export function Transcript({
   conversation,
   ground,
+  animate,
 }: {
   conversation: Conversation
   ground: "paper" | "ink"
+  /** False on WebKitGTK: mount springs leave compositor ghosts. */
+  animate: boolean
 }) {
   const logRef = React.useRef<HTMLDivElement>(null)
   const streamingId =
@@ -46,12 +49,16 @@ export function Transcript({
         className="mt-auto flex min-h-0 flex-col gap-5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         {conversation.turns.length === 0 && conversation.phase === "idle" ? (
-          <EmptyState seed={conversation.id} ground={ground} />
+          <EmptyState seed={conversation.id} ground={ground} animate={animate} />
         ) : null}
         {conversation.turns.map((turn) => (
-          <ChatMessage key={turn.id} tone={turn.from === "user" ? "sent" : "received"}>
+          <ChatMessage
+            key={turn.id}
+            tone={turn.from === "user" ? "sent" : "received"}
+            animateIn={animate}
+          >
             <ChatBubble>
-              {turn.id === streamingId ? (
+              {turn.id === streamingId && animate ? (
                 <MessageStreamText text={turn.text} />
               ) : (
                 turn.text
@@ -72,7 +79,15 @@ export function Transcript({
   )
 }
 
-function EmptyState({ seed, ground }: { seed: string; ground: "paper" | "ink" }) {
+function EmptyState({
+  seed,
+  ground,
+  animate,
+}: {
+  seed: string
+  ground: "paper" | "ink"
+  animate: boolean
+}) {
   return (
     <div className="flex flex-col items-center gap-2.5 py-6 text-center">
       <RandomAvatar
@@ -80,7 +95,7 @@ function EmptyState({ seed, ground }: { seed: string; ground: "paper" | "ink" })
         hues={AGENT_HUES}
         name="Nessa"
         ground={ground}
-        animateOnMount
+        animateOnMount={animate}
         className="size-14 rounded-full"
       />
       <p className="nessa-text-3 m-0 text-muted-foreground">

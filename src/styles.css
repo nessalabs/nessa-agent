@@ -133,6 +133,36 @@ body {
 }
 
 /*
+ * WebKitGTK promotes `translate` / `scale` / `filter` to compositor
+ * layers. In a transparent window those layers paint from the panel origin,
+ * so the user bubble sits behind the reply and a previous tab's text ghosts
+ * through. Keep the transcript in layout on Linux.
+ */
+.nessa-panel[data-host="linux"] [data-slot="chat-message"],
+.nessa-panel[data-host="linux"] [data-slot="chat-bubble"],
+.nessa-panel[data-host="linux"] [data-slot="chat-typing-indicator"],
+.nessa-panel[data-host="linux"] [data-slot="chat-typing-dot"] {
+  transform: none;
+  translate: none;
+  scale: none;
+  filter: none;
+  isolation: auto;
+  will-change: auto;
+  animation: none;
+  transition: none;
+}
+
+.nessa-panel[data-host="linux"][data-surface="clear"] [data-slot="chat-message"] {
+  /* `relative` is a containing block for hover actions; on Linux it is
+     also the layer origin the compositor fills. Actions stay in flow. */
+  position: static;
+}
+
+.nessa-panel[data-host="linux"] [data-slot="chat-message-actions"] {
+  position: static;
+}
+
+/*
  * Composer gutter is real CSS padding. The wrapper must not paint:
  * `transparent` on a WebKitGTK layer becomes opaque white. `none` omits
  * paint. The form is unwrapped so its radius cannot own a layer at the

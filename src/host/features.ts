@@ -34,6 +34,14 @@ export interface HostFeatures {
    * starts `_NET_WM_MOVERESIZE`.
    */
   readonly capturePointerOnWestHandle: boolean
+  /**
+   * Mount springs, per-letter fades, and filter transitions. WebKitGTK
+   * promotes those to compositor layers and, in a transparent window, paints
+   * them from the panel origin — so a user bubble sits behind the reply
+   * instead of above it, and a closed tab's text ghosts through. Linux
+   * keeps the transcript in layout.
+   */
+  readonly animateTranscript: boolean
 }
 
 export const WEST_HANDLE_NARROW = "nessa-west-handle nessa-west-handle-narrow"

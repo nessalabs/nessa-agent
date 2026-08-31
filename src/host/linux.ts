@@ -6,4 +6,5 @@ export const linux: HostFeatures = {
   frost: "css",
   westHandleClass: WEST_HANDLE_WIDE,
   capturePointerOnWestHandle: false,
+  animateTranscript: false,
 }

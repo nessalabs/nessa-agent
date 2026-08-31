@@ -22,6 +22,7 @@ describe("resolveHost", () => {
     expect(linux.frost).toBe("css")
     expect(linux.capturePointerOnWestHandle).toBe(false)
     expect(linux.westHandleClass).toContain("nessa-west-handle-wide")
+    expect(linux.animateTranscript).toBe(false)
   })
 
   it("injects the other host for an unmatched Tauri user agent", () => {
