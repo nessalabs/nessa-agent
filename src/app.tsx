@@ -196,19 +196,14 @@ export function App() {
     id: conversation.id,
     title: conversation.title,
     closeable: true,
-    // The avatar breathes constantly, so it cannot double as the working
-    // signal the way a subagent's does in the design system's own story —
-    // the dot stays on to say which thread is actually mid-reply.
+    // The avatars are still, so the dot is the only thing saying which thread
+    // is mid-reply.
     loading: conversation.phase !== "idle",
     icon: (
       <RandomAvatar
         seed={conversation.id}
         hues={AGENT_HUES}
         ground={ground}
-        busy
-        speed={conversation.phase === "idle" ? 1.6 : 2.4}
-        flood={conversation.phase === "idle" ? 0.75 : 1}
-        aria-busy={undefined}
         className="size-4 rounded-full"
       />
     ),
@@ -376,11 +371,7 @@ function EmptyState({ seed, ground }: { seed: string; ground: "paper" | "ink" })
         hues={AGENT_HUES}
         name="Nessa"
         ground={ground}
-        busy
-        speed={1.6}
-        flood={0.75}
         animateOnMount
-        aria-busy={undefined}
         className="size-14 rounded-full"
       />
       <p className="nessa-text-3 m-0 text-muted-foreground">
