@@ -30,6 +30,37 @@ body {
 }
 
 /*
+ * The stage the panel stands on, which is not the window.
+ *
+ * The webview is deliberately larger than the window and pinned to its bottom
+ * right corner, so that a resize never moves the page's viewport: a `WKWebView`
+ * positions the last frame its web process committed from the view's own top
+ * left corner, so moving that corner drags everything already drawn along with
+ * it — which is what walked the composer 90pt up and down the screen during a
+ * resize that holds the window's bottom edge still. See
+ * `src-tauri/src/viewport.rs`.
+ *
+ * So the viewport stays put and the panel is drawn the size of the window
+ * against the bottom right of it, from the size the host reports (see
+ * `use-panel-frame.ts`). The fallbacks are what a plain browser wants, where
+ * the viewport really is the window and nothing reports a size.
+ */
+.nessa-stage {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+}
+
+.nessa-panel {
+  /* Exactly the window, never flexed towards the stage it sits on. */
+  flex: none;
+  width: var(--nessa-window-width, 100%);
+  height: var(--nessa-window-height, 100%);
+}
+
+/*
  * Two surfaces, switched by the header control. `translucent` tints the native
  * frost the window carries (see src-tauri/src/vibrancy.rs); `clear` removes the
  * panel entirely, so only the bubbles and the pill hang over the desktop.

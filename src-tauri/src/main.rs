@@ -6,6 +6,7 @@ mod settings;
 mod shortcut;
 mod tray;
 mod vibrancy;
+mod viewport;
 
 use tauri::{Manager, WindowEvent};
 
@@ -33,6 +34,16 @@ fn main() {
                 }
                 if let Err(error) = vibrancy::set(&window, true) {
                     eprintln!("[nessa] could not frost the panel: {error}");
+                }
+                // The webview is sized once, to the work area, and then left
+                // alone: a resize that moves the page's viewport is what
+                // displaces everything anchored to the bottom of the panel.
+                // Failing here costs the fix, not the panel, so it is reported.
+                if let Err(error) = viewport::fit(&window) {
+                    eprintln!("[nessa] could not fit the panel's viewport: {error}");
+                }
+                if let Err(error) = viewport::watch(&window) {
+                    eprintln!("[nessa] could not watch the panel's viewport: {error}");
                 }
                 // Only the border glow depends on this, so a failure here is
                 // reported rather than fatal.
