@@ -51,15 +51,7 @@
 /// stops resizing — `innerSize()` reports the stage too. AppKit's content rect
 /// is the one description of the window left that a fixed webview cannot
 /// falsify, so it is read here and sent.
-pub const SIZED: &str = "nessa://panel-sized";
-
-/// Points, which are CSS pixels: the webview does its own scaling, so no device
-/// ratio enters into it.
-#[derive(Clone, serde::Serialize)]
-pub struct PanelSize {
-    pub width: f64,
-    pub height: f64,
-}
+use crate::host::{self, PanelSize};
 
 /// The window's size now, for a page that has just loaded and has no size event
 /// coming — a devtools reload mid-session, or a webview that mounted after the
@@ -79,8 +71,15 @@ pub fn panel_size(window: tauri::WebviewWindow) -> Result<PanelSize, String> {
 
 #[cfg(not(target_os = "macos"))]
 #[tauri::command]
-pub fn panel_size(_window: tauri::WebviewWindow) -> Result<PanelSize, String> {
-    Err(String::from("the panel only detaches its viewport on macOS"))
+pub fn panel_size(window: tauri::WebviewWindow) -> Result<PanelSize, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let gtk_window = window.gtk_window().map_err(|error| error.to_string())?;
+        return gtk_panel_size(&gtk_window)
+            .ok_or_else(|| String::from("the window has no size"));
+    }
+    #[cfg(not(target_os = "linux"))]
+    host::logical_inner_size(&window)
 }
 
 #[cfg(target_os = "macos")]
@@ -156,7 +155,7 @@ pub fn fit(window: &tauri::WebviewWindow) -> Result<(), String> {
     // rather than left for the next resize: a panel summoned at a size it was
     // already at raises no resize at all.
     use tauri::Emitter;
-    let _ = window.emit(SIZED, size_of(&content));
+    let _ = window.emit(host::PANEL_SIZED, size_of(&content));
 
     Ok(())
 }
@@ -198,7 +197,7 @@ pub fn watch(window: &tauri::WebviewWindow) -> Result<(), String> {
             // Every step, because this is the page's only account of the
             // window's size while it is being dragged.
             use tauri::Emitter;
-            let _ = target.emit(SIZED, size_of(&content));
+            let _ = target.emit(host::PANEL_SIZED, size_of(&content));
 
             let stage = webview.frame().size;
             let window = content.bounds().size;
@@ -258,7 +257,7 @@ fn webview_in(
 }
 
 /// The display the panel is on, falling back to the primary one — the same
-/// choice `tray::anchor_to_edge` makes when it places the panel.
+/// choice `panel::anchor_to_edge` makes when it places the panel.
 #[cfg(target_os = "macos")]
 fn current_monitor(window: &tauri::WebviewWindow) -> Result<Option<tauri::Monitor>, String> {
     let current = window.current_monitor().map_err(|e| e.to_string())?;
@@ -268,15 +267,200 @@ fn current_monitor(window: &tauri::WebviewWindow) -> Result<Option<tauri::Monito
     }
 }
 
-/// Elsewhere the webview simply fills its window and is repainted by a compositor
-/// that does not hand the page's last frame to a corner, so there is no viewport
-/// to hold still.
-#[cfg(not(target_os = "macos"))]
-pub fn fit(_window: &tauri::WebviewWindow) -> Result<(), String> {
+#[cfg(target_os = "linux")]
+thread_local! {
+    static FITTING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// WebKitGTK hangs its last committed frame off the widget's top-left the
+/// same way WKWebView does, so the same pin applies: the webview is sized to
+/// the work area, placed in a `GtkFixed` at the window's bottom right, and
+/// left there. The window grows and shrinks over it. A `GtkBox` child would
+/// be stretched with the window and the page's viewport would move — which is
+/// the jitter this module exists to prevent.
+#[cfg(target_os = "linux")]
+pub fn fit(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use gtk::glib::Cast;
+
+    let gtk_window = window.gtk_window().map_err(|error| error.to_string())?;
+    let Some(webview) = webview_in(gtk_window.upcast_ref()) else {
+        return Err(String::from("no webview under the window"));
+    };
+    let fixed = ensure_fixed(&webview)?;
+    let stage = stage_pixels(window, &gtk_window)?;
+    place(&fixed, &webview, &gtk_window, stage);
+
+    use tauri::Emitter;
+    if let Some(size) = gtk_panel_size(&gtk_window) {
+        let _ = window.emit(host::PANEL_SIZED, size);
+    }
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn watch(_window: &tauri::WebviewWindow) -> Result<(), String> {
+#[cfg(target_os = "linux")]
+pub fn watch(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use gtk::prelude::*;
+    use tauri::Emitter;
+
+    let gtk_window = window.gtk_window().map_err(|error| error.to_string())?;
+    let target = window.clone();
+    gtk_window.connect_size_allocate(move |gtk_window, _| {
+        if FITTING.with(|flag| flag.get()) {
+            return;
+        }
+        FITTING.with(|flag| flag.set(true));
+        if let Some(size) = gtk_panel_size(gtk_window) {
+            let _ = target.emit(host::PANEL_SIZED, size);
+        }
+        if let Err(error) = grow_stage_if_needed(&target) {
+            eprintln!("[nessa] could not re-fit the panel's viewport: {error}");
+        }
+        FITTING.with(|flag| flag.set(false));
+    });
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn grow_stage_if_needed(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use gtk::glib::Cast;
+    use gtk::prelude::*;
+
+    let gtk_window = window.gtk_window().map_err(|error| error.to_string())?;
+    let Some(webview) = webview_in(gtk_window.upcast_ref()) else {
+        return Ok(());
+    };
+    let Ok(fixed) = webview
+        .parent()
+        .and_then(|parent| parent.downcast::<gtk::Fixed>().ok())
+        .ok_or(())
+    else {
+        return Ok(());
+    };
+    let alloc = gtk_window.allocation();
+    let (stage_w, stage_h) = webview.size_request();
+    if alloc.width() <= stage_w && alloc.height() <= stage_h {
+        place(&fixed, &webview, &gtk_window, (stage_w, stage_h));
+        return Ok(());
+    }
+    fit(window)
+}
+
+#[cfg(target_os = "linux")]
+fn stage_pixels(
+    window: &tauri::WebviewWindow,
+    gtk_window: &gtk::ApplicationWindow,
+) -> Result<(i32, i32), String> {
+    use gtk::prelude::*;
+
+    let alloc = gtk_window.allocation();
+    let mut width = alloc.width().max(1);
+    let mut height = alloc.height().max(1);
+    if let Some(monitor) = current_monitor(window)? {
+        let scale = gtk_window.scale_factor().max(1);
+        let area = monitor.work_area();
+        width = width.max(area.size.width as i32 / scale);
+        height = height.max(area.size.height as i32 / scale);
+    }
+    Ok((width, height))
+}
+
+#[cfg(target_os = "linux")]
+fn gtk_panel_size(gtk_window: &gtk::ApplicationWindow) -> Option<PanelSize> {
+    use gtk::prelude::*;
+
+    // GTK3 allocations are already in application pixels, which match CSS
+    // pixels in the webview. Dividing by scale_factor again would shrink the
+    // panel to half size on a 2× display.
+    let alloc = gtk_window.allocation();
+    PanelSize::from_logical(alloc.width() as f64, alloc.height() as f64)
+}
+
+#[cfg(target_os = "linux")]
+fn place(
+    fixed: &gtk::Fixed,
+    webview: &gtk::Widget,
+    gtk_window: &gtk::ApplicationWindow,
+    stage: (i32, i32),
+) {
+    use gtk::prelude::*;
+
+    let alloc = gtk_window.allocation();
+    let x = alloc.width() - stage.0;
+    let y = alloc.height() - stage.1;
+    webview.set_size_request(stage.0, stage.1);
+    fixed.move_(webview, x, y);
+}
+
+#[cfg(target_os = "linux")]
+fn ensure_fixed(webview: &gtk::Widget) -> Result<gtk::Fixed, String> {
+    use gtk::glib::Cast;
+    use gtk::prelude::*;
+
+    if let Some(parent) = webview.parent() {
+        if let Ok(fixed) = parent.clone().downcast::<gtk::Fixed>() {
+            return Ok(fixed);
+        }
+        if let Ok(gtk_box) = parent.clone().downcast::<gtk::Box>() {
+            let fixed = gtk::Fixed::new();
+            gtk_box.remove(webview);
+            gtk_box.pack_start(&fixed, true, true, 0);
+            fixed.put(webview, 0, 0);
+            fixed.show_all();
+            return Ok(fixed);
+        }
+    }
+    Err(String::from("the webview has no parent to pin inside"))
+}
+
+#[cfg(target_os = "linux")]
+fn webview_in(root: &gtk::Widget) -> Option<gtk::Widget> {
+    use gtk::glib::Cast;
+    use gtk::prelude::*;
+
+    if root.type_().name() == "WebKitWebView" {
+        return Some(root.clone());
+    }
+    let container = root.clone().downcast::<gtk::Container>().ok()?;
+    for child in container.children() {
+        if let Some(found) = webview_in(&child) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn current_monitor(
+    window: &tauri::WebviewWindow,
+) -> Result<Option<tauri::Monitor>, String> {
+    let current = window.current_monitor().map_err(|e| e.to_string())?;
+    match current {
+        Some(monitor) => Ok(Some(monitor)),
+        None => window.primary_monitor().map_err(|e| e.to_string()),
+    }
+}
+
+/// Elsewhere the webview simply fills its window and is repainted by a compositor
+/// that does not hand the page's last frame to a corner, so there is no viewport
+/// to hold still. Size still has to be reported, because the page draws the
+/// panel from `--nessa-window-*` rather than from its own viewport.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn fit(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use tauri::Emitter;
+    let _ = window.emit(host::PANEL_SIZED, host::logical_inner_size(window)?);
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn watch(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use tauri::Emitter;
+    let target = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::Resized(_) = event {
+            if let Ok(size) = host::logical_inner_size(&target) {
+                let _ = target.emit(host::PANEL_SIZED, size);
+            }
+        }
+    });
     Ok(())
 }

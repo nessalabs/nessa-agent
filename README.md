@@ -14,7 +14,13 @@ Clawdia's panel does — a 420pt column filling the work area's height by defaul
 both configurable (see [Settings](#settings)). A panel shorter than the screen
 sits on the bottom edge rather than hanging from the top. The frame is reapplied
 on every show, so moving between displays re-fits it rather than stranding it
-(`anchor_to_edge` in [src-tauri/src/tray.rs](src-tauri/src/tray.rs)).
+(`anchor_to_edge` in [src-tauri/src/panel.rs](src-tauri/src/panel.rs)).
+
+On **Linux** the same panel is a floating window. There is no menu bar extra to
+hang from, so it opens on launch, stays on the taskbar, and still summons from
+the system tray and **Ctrl+Shift+A** when those exist. Frost is CSS
+`backdrop-filter` rather than an `NSVisualEffectView`. The webview is pinned
+the same way as on macOS so a resize does not jitter the composer.
 
 ## What is here
 
@@ -42,7 +48,7 @@ on every show, so moving between displays re-fits it rather than stranding it
   hang over the desktop. The frontend owns the choice and remembers it
   ([src/use-surface.ts](src/use-surface.ts)); the tray item only *requests* a
   toggle, and its check mark is reflected back from `set_frosted`.
-- **No agent** — `draftReply` in [src/app.tsx](src/app.tsx) is a stand-in that
+- **No agent** — `draftReply` in [src/conversation.ts](src/conversation.ts) is a stand-in that
   drives the same state a real runtime will drive: a turn list plus an
   `idle → thinking → streaming` phase.
 
@@ -167,13 +173,13 @@ of the two drifting. (The Tauri CLI has no `--profile` flag, so a real second
 cargo profile could not be selected anyway.) Both are release builds — neither
 carries debug assertions — so what you test behaves like what you ship.
 
-**sccache** caches compilation across profiles and checkouts
-([src-tauri/.cargo/config.toml](src-tauri/.cargo/config.toml)). Rebuilding from
-clean went 104s → **43s** at an 85% hit rate. It needs `sccache` on `PATH`
-(`brew install sccache`); without it cargo fails to spawn the wrapper, so delete
-that file if you would rather not have it. It cannot cache incrementally-compiled
-crates, so it skips this app's own crate in dev builds — the win is the ~500
-dependency crates, which is where the time goes.
+**sccache** caches compilation across profiles and checkouts when
+`RUSTC_WRAPPER=sccache` is set in the environment. It is optional: without it
+cargo uses the ordinary compiler, which is what Linux and CI need. Rebuilding
+from clean went 104s → **43s** at an 85% hit rate on the machine that measured
+it. `brew install sccache` or `apt install sccache`; it cannot cache
+incrementally-compiled crates, so it skips this app's own crate in dev builds —
+the win is the ~500 dependency crates, which is where the time goes.
 
 Dev builds use `debug = "line-tables-only"`: full debug info is the single
 biggest cost in a Tauri rebuild, and line tables still give a readable backtrace.

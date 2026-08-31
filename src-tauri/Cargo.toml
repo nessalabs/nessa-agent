@@ -35,6 +35,11 @@ objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSResponder", "NSVie
 objc2-foundation = { version = "0.3", features = ["NSNotification", "NSOperation", "block2"] }
 block2 = "0.6"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Already in the tree as wry's own dependencies. Named here so `viewport` can
+# pin the WebKitGTK widget the same way the macOS side pins WKWebView.
+gtk = "0.18"
+
 [features]
 # Used for production builds or when a dev server is not specified. Do not remove.
 custom-protocol = ["tauri/custom-protocol"]

@@ -75,7 +75,7 @@ pub fn load(app: &AppHandle) -> Settings {
     };
 
     match fs::read_to_string(&path) {
-        Ok(raw) => match serde_json::from_str::<Settings>(&raw) {
+        Ok(raw) => match parse(&raw) {
             Ok(settings) => {
                 // Rewrite the merged result so keys added by a later build show
                 // up in the file. Values already in it survive, because they
@@ -97,6 +97,10 @@ pub fn load(app: &AppHandle) -> Settings {
     }
 }
 
+fn parse(raw: &str) -> Result<Settings, serde_json::Error> {
+    serde_json::from_str(raw)
+}
+
 /// Best-effort: an unwritable config directory costs the file, not the launch.
 fn write(path: &std::path::Path, settings: &Settings) {
     if let Some(parent) = path.parent() {
@@ -104,5 +108,35 @@ fn write(path: &std::path::Path, settings: &Settings) {
     }
     if let Ok(raw) = serde_json::to_string_pretty(settings) {
         let _ = fs::write(path, format!("{raw}\n"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_keys_take_their_defaults() {
+        let settings = parse("{}").unwrap();
+        assert_eq!(settings.toggle_shortcut, Settings::default().toggle_shortcut);
+        assert_eq!(settings.panel.width, 420.0);
+        assert!(settings.panel.height.is_none());
+    }
+
+    #[test]
+    fn camel_case_keys_round_trip() {
+        let settings = parse(
+            r#"{ "toggleShortcut": "Alt+Space", "panel": { "width": 480, "minWidth": 400 } }"#,
+        )
+        .unwrap();
+        assert_eq!(settings.toggle_shortcut, "Alt+Space");
+        assert_eq!(settings.panel.width, 480.0);
+        assert_eq!(settings.panel.min_width, 400.0);
+        assert!(settings.panel.height.is_none());
+    }
+
+    #[test]
+    fn a_malformed_file_is_an_error_not_a_default() {
+        assert!(parse("{").is_err());
     }
 }

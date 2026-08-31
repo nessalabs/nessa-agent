@@ -57,8 +57,12 @@ must stay true:
    shows — that is the bug the design exists to prevent.
 4. Every host call goes through `host-window.ts` and no-ops outside Tauri.
 5. A settings file missing keys still launches; every new key has a default.
-6. Edge failures — blur, sizing, tray — are reported and survivable, never
-   fatal. The panel opening unblurred beats the panel not opening.
+6. Edge failures — blur, sizing, tray, viewport — are reported and survivable,
+   never fatal. The panel opening unblurred, or without a tray, beats the panel
+   not opening.
+7. The page's viewport does not move during a resize, on macOS or on Linux.
+8. Linux is reachable without a menu bar: skip-taskbar is off, and the panel
+   opens on launch.
 
 ## The core and what sits on it
 
@@ -76,9 +80,14 @@ panel, the composer, the tray, whatever comes after.
 - The test: could this core piece serve a Nessa with no menu bar at all — a CLI,
   a second window, a background run? If not, it has been contaminated.
 
-The same applies inside the host today. `tray.rs` owns geometry and the menu; it
-does not own conversation state, and it does not decide preferences — it
-requests and reflects. Keep new code pointing the same way.
+The same applies inside the host today. `panel.rs` owns the frame; `tray.rs`
+owns the menu. The tray does not own conversation state, and it does not decide
+preferences — it requests and reflects. Keep new code pointing the same way.
+
+On Linux the tray may not exist. That is an edge failure, not a different
+architecture: the panel is still the product, the taskbar is how you reach it,
+and `main.rs` is still the only place that decides to show the window because
+the tray is missing.
 
 ## Rules for the host/shell seam
 
@@ -87,9 +96,10 @@ The one boundary that already exists, and the one most likely to rot silently.
 - **One definition of every payload shape, imported by both sides.** Never
   redeclare the shape of a command argument or event on the receiving side. Two
   declarations of the same contract drift with no error anywhere — the compiler
-  is happy on both sides right up until runtime. Generate the frontend types
-  from the Rust definitions, or keep one hand-written declaration that both
-  sides import; not two.
+  is happy on both sides right up until runtime. The names and `PanelSize` live
+  in `host.rs` and `src/host-window.ts`; a test in `host.rs` fails if a name on
+  the host is missing from the shell. Generating one side from the other is the
+  next step if this list grows.
 - **Every new host call goes through the existing seam and no-ops outside the
   desktop host**, or `pnpm dev` breaks quietly for whoever does design work next.
 - **Pass the first payload in, do not make the shell ask for it.** State the
@@ -101,6 +111,9 @@ The one boundary that already exists, and the one most likely to rot silently.
   decay as a power of elapsed time, and velocity as pixels per second.
 - **Fake the clock in tests.** Anything timed gets its clock injected, including
   animation and anything that measures itself.
+- **Linux is not a later port.** A change that only works behind a macOS
+  `cfg` — a tray that is fatal, a size command that errors, a frost that never
+  paints, a resize that jitters — is a defect, not a platform gap.
 
 ## Failure-first checklist for host code
 
@@ -120,7 +133,9 @@ writing the full defaults on first launch is buying.
 ## Frontend specifics
 
 - A component either renders or coordinates, never both. Coordination lives in a
-  hook; rendering takes props and has no idea where they came from.
+  hook; rendering takes props and has no idea where they came from. `app.tsx`
+  is the panel chrome; `use-conversation.ts` is the strip; `transcript.tsx` is
+  the log.
 - Design-system components are consumed, not wrapped "just in case". A wrapper
   with no behaviour is a layer that only forwards.
 - Host-window interaction goes through one seam (as it already does), so the UI
@@ -130,3 +145,6 @@ writing the full defaults on first launch is buying.
 - Persisted UI preference is state with an owner. The frontend owning the
   surface choice and the tray reflecting it — rather than the tray owning it —
   is the right direction; keep new preferences pointing the same way.
+- Frost is a host concern. macOS uses a native effect view; Linux and the
+  browser use CSS. The shell picks via `data-host`, it does not reach for
+  `backdrop-filter` on the macOS Tauri window.

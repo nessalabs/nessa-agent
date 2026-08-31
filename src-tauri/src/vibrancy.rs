@@ -8,6 +8,7 @@
 
 /// Must match the panel's CSS corner radius, so the blur is clipped to the
 /// rounded corners instead of poking out past them.
+#[cfg(target_os = "macos")]
 const PANEL_RADIUS: f64 = 18.0;
 
 #[cfg(target_os = "macos")]
