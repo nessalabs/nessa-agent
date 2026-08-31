@@ -3,3 +3,6 @@ dist
 src-tauri/target
 src-tauri/gen
 .DS_Store
+
+# Rasterised icon intermediates: regenerate with scripts/render-icon.mjs
+src-tauri/icons/nessa-avatar.png
