@@ -25,6 +25,7 @@ import {
 } from "./host-window"
 import { useColorScheme } from "./use-color-scheme"
 import { useEdgeReveal } from "./use-edge-reveal"
+import { usePanelFrame } from "./use-panel-frame"
 import { useSurface } from "./use-surface"
 import { WaveformIcon } from "./waveform-icon"
 
@@ -81,6 +82,7 @@ export function App() {
   const ground = scheme === "dark" ? "ink" : "paper"
   const [surface, toggleSurface] = useSurface()
   const edge = useEdgeReveal()
+  usePanelFrame()
   const [conversations, setConversations] = React.useState<Conversation[]>(() => [
     newConversation("c0"),
   ])
@@ -210,12 +212,12 @@ export function App() {
   }))
 
   return (
-    <div className="flex h-full">
+    <div className="nessa-stage">
       <div
         ref={edge.panelRef}
         data-nessa-root
         data-surface={surface}
-        className="nessa-panel relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[18px] border"
+        className="nessa-panel relative flex min-h-0 flex-col overflow-hidden rounded-[18px] border"
         onPointerMove={edge.onPointerMove}
         onPointerLeave={edge.onPointerLeave}
       >

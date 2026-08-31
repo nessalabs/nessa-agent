@@ -109,6 +109,12 @@ pub fn toggle_panel(app: &AppHandle) {
     }
 
     let _ = anchor_to_edge(&window, &settings(app));
+    // The panel may have been summoned onto a display with more room than the
+    // one it was last fitted for, and the viewport is sized for the work area
+    // it is standing in. A failure costs the resize fix, not the show.
+    if let Err(error) = crate::viewport::fit(&window) {
+        eprintln!("[nessa] could not fit the panel's viewport: {error}");
+    }
     let _ = window.show();
     let _ = window.set_focus();
     let _ = window.emit(FOCUS_COMPOSER_EVENT, ());
