@@ -1,6 +1,7 @@
 // The release build is a menu bar app with no console window on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod live_resize;
 mod settings;
 mod shortcut;
 mod tray;
@@ -32,6 +33,11 @@ fn main() {
                 }
                 if let Err(error) = vibrancy::set(&window, true) {
                     eprintln!("[nessa] could not frost the panel: {error}");
+                }
+                // Only the border glow depends on this, so a failure here is
+                // reported rather than fatal.
+                if let Err(error) = live_resize::watch(&window) {
+                    eprintln!("[nessa] could not watch live resize: {error}");
                 }
             }
 

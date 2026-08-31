@@ -217,6 +217,7 @@ export function App() {
   return (
     <div className="flex h-full">
       <div
+        ref={edge.panelRef}
         data-nessa-root
         data-surface={surface}
         className="nessa-panel relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[18px] border"
@@ -231,14 +232,13 @@ export function App() {
           aria-hidden="true"
           className="nessa-edge-reveal pointer-events-none"
         />
-        {/* The window is undecorated, so macOS gives it no resize border of its
-            own; this edge is the grab handle. */}
+        {/* A grab handle for the left edge. macOS claims the window frame
+            before the webview sees it, so this only ever fires just inside the
+            system's own grab zone — the glow is pinned from window size events
+            rather than from this gesture. */}
         <div
           role="presentation"
-          onPointerDown={() => {
-            edge.onResizeStart()
-            void startResizeFromLeftEdge()
-          }}
+          onPointerDown={() => void startResizeFromLeftEdge()}
           className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-ew-resize"
         />
 
