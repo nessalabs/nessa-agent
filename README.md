@@ -301,11 +301,12 @@ a pale disc that reads as a white blob on any bar. Dropping the avatar's `paper`
 ground does *not* fix that — the pigment itself is near-white at that tone, so
 the weight has to change, not the backing.
 
-Regenerate it the same way as the app icon, from the preview's `sorbet · vivid`
-tile, at 44px (the 22pt menu bar slot at 2×):
+Regenerate it from the preview's `sorbet · vivid` tile, at 44px (the 22pt menu
+bar slot at 2×). Because it is compiled in, **cargo does not notice the new
+bytes on its own** — touch the file that includes it:
 
 ```bash
-qlmanage -t -s 256 -o /tmp src-tauri/icons/tray-avatar.svg && sips -Z 44 /tmp/tray-avatar.svg.png --out src-tauri/icons/tray-icon.png
+node scripts/render-icon.mjs src-tauri/icons/tray-avatar.svg src-tauri/icons/tray-icon.png 44 && touch src-tauri/src/tray.rs
 ```
 
 The icon itself is [src-tauri/icons/nessa-avatar.svg](src-tauri/icons/nessa-avatar.svg),
@@ -317,8 +318,22 @@ heavier `tone` in `AGENT_ICON_TONE` trades the sorbet for contrast. To rebuild
 the set:
 
 ```bash
-qlmanage -t -s 1024 -o /tmp src-tauri/icons/nessa-avatar.svg && cp /tmp/nessa-avatar.svg.png src-tauri/icons/nessa-avatar.png && pnpm tauri icon src-tauri/icons/nessa-avatar.png
+node scripts/render-icon.mjs src-tauri/icons/nessa-avatar.svg src-tauri/icons/nessa-avatar.png 1024 && pnpm tauri icon src-tauri/icons/nessa-avatar.png
 ```
+
+### Do not rasterise icons with `qlmanage`
+
+The obvious macOS one-liner, `qlmanage -t -s 1024 -o . icon.svg`, is a QuickLook
+**thumbnailer**: it composites the artwork onto white. The PNG it writes has an
+alpha channel — `sips -g hasAlpha` cheerfully reports `yes` — but every pixel is
+opaque, so the icon carries a white square into the menu bar and the Dock. That
+check is not evidence of transparency; read a corner pixel instead.
+
+[scripts/render-icon.mjs](scripts/render-icon.mjs) uses resvg, which renders the
+SVG itself and leaves everything outside the artwork transparent. It converts the
+design system's `oklch()` colours to sRGB first: resvg does not implement CSS
+Color 4, and without the conversion every fill resolves to black and the avatar
+comes out a solid disc.
 
 ## Next
 
