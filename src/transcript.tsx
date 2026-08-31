@@ -46,9 +46,9 @@ export function Transcript({
       className="flex min-h-0 flex-1 select-text flex-col px-3 pb-2"
     >
       {/* Sized to the turns, stood on the composer. Overflow lives on this
-          stack so a long thread still scrolls. Linux reserves the reply's
-          height while thinking so the user bubble never slides — a slide
-          leaves the previous tile on WebKitGTK. */}
+          stack so a long thread still scrolls. Linux holds an unpainted
+          reply-sized gap while the dots sit on the composer — same small
+          pill as macOS, without sliding the user bubble. */}
       <div className="mt-auto flex min-h-0 flex-col gap-5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {conversation.turns.length === 0 && conversation.phase === "idle" && animate ? (
           <EmptyState seed={conversation.id} ground={ground} />
@@ -77,7 +77,7 @@ export function Transcript({
           animate ? (
             <ChatTypingIndicator label="Nessa is typing" />
           ) : (
-            <ReservedReply prompt={conversation.pending} />
+            <LinuxThinking prompt={conversation.pending} />
           )
         ) : null}
       </div>
@@ -86,31 +86,34 @@ export function Transcript({
 }
 
 /**
- * WebKitGTK keeps the previous frame of a bubble that changes y. Holding
- * the incoming reply's height under the dots means the user turn is born
- * where it will stay, so one send cannot leave a second "hey".
+ * WebKitGTK keeps the previous frame of a bubble that changes y. The
+ * incoming reply's height is held as an invisible gap so the user turn
+ * never slides; the dots are the same small pill macOS shows, sat on
+ * the composer at the bottom of that gap.
  */
-function ReservedReply({ prompt }: { prompt: string }) {
+function LinuxThinking({ prompt }: { prompt: string }) {
   return (
-    <ChatMessage tone="received" animateIn={false}>
-      <ChatBubble>
-        <span className="grid">
-          <span className="invisible col-start-1 row-start-1">{draftReply(prompt)}</span>
-          <span
-            role="status"
-            aria-label="Nessa is typing"
-            className="col-start-1 row-start-1 flex items-center gap-1 self-center"
-          >
-            {[0, 1, 2].map((dot) => (
-              <span
-                key={dot}
-                className="size-2 rounded-full bg-muted-foreground opacity-35"
-              />
-            ))}
-          </span>
-        </span>
-      </ChatBubble>
-    </ChatMessage>
+    <div className="grid w-full">
+      <div className="invisible col-start-1 row-start-1" aria-hidden="true">
+        <ChatMessage tone="received" animateIn={false}>
+          <ChatBubble>{draftReply(prompt)}</ChatBubble>
+        </ChatMessage>
+      </div>
+      <div className="col-start-1 row-start-1 flex items-end">
+        <div
+          role="status"
+          aria-label="Nessa is typing"
+          className="flex items-center gap-1 self-start rounded-[1.125rem] bg-accent px-3.5 py-3"
+        >
+          {[0, 1, 2].map((dot) => (
+            <span
+              key={dot}
+              className="size-2 rounded-full bg-muted-foreground opacity-35"
+            />
+          ))}
+        </div>
+      </div>
+    </div>
   )
 }
 

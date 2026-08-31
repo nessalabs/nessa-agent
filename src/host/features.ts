@@ -40,8 +40,8 @@ export interface HostFeatures {
    * them from the panel origin — so a user bubble sits behind the reply
    * instead of above it, and a closed tab's text ghosts through. Linux
    * keeps the transcript in layout. The list still stands on the composer,
-   * same as macOS. Linux reserves the reply's height while thinking so the
-   * user bubble is never slid — a slide leaves the previous tile on screen.
+   * same as macOS. Linux holds an unpainted reply-sized gap under the
+   * small typing pill so the user bubble is never slid.
    */
   readonly animateTranscript: boolean
 }
