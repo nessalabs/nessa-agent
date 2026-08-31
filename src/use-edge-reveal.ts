@@ -29,9 +29,11 @@ export function useEdgeReveal() {
   const panel = React.useRef<HTMLElement | null>(null)
   const point = React.useRef({ x: 0, y: 0 })
   const frame = React.useRef(0)
-  // A native resize drag swallows every DOM event until the mouse releases, so
-  // the glow lit on pointerdown has to survive the stray pointerleave that
-  // follows and only resume tracking once the pointer moves again.
+  // A native resize drag is run by macOS, not by the page: the webview sees a
+  // pointerleave as the drag takes over and few or no events until the mouse
+  // is released. The glow therefore pins itself for the length of the drag
+  // rather than trying to track a distance that the moving window edge keeps
+  // redefining underneath it.
   const resizing = React.useRef(false)
 
   React.useEffect(() => () => cancelAnimationFrame(frame.current), [])
@@ -52,6 +54,13 @@ export function useEdgeReveal() {
     glow.style.setProperty("--edge-x", `${x}px`)
     glow.style.setProperty("--edge-y", `${y}px`)
 
+    if (resizing.current) {
+      // Mid-drag the panel's edge is moving with the pointer, so a computed
+      // distance would flicker; the drag itself is the reason to stay lit.
+      glow.style.opacity = String(MAX_STRENGTH)
+      return
+    }
+
     const distance = Math.min(x, y, box.width - x, box.height - y)
     const near = Math.min(Math.max((REACH - distance) / (REACH - CONTACT), 0), 1)
     // Squared, so the border stirs faintly at the fringe of the reach and
@@ -61,7 +70,11 @@ export function useEdgeReveal() {
 
   const onPointerMove = React.useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
-      resizing.current = false
+      // Only a move with no button held ends a drag. Clearing the flag on any
+      // move let a single stray event between pointerdown and the native
+      // drag's takeover cancel it, and the pointerleave that followed then
+      // put the glow out for the rest of the resize.
+      if (event.buttons === 0) resizing.current = false
       panel.current = event.currentTarget
       point.current = { x: event.clientX, y: event.clientY }
       if (frame.current) return
@@ -80,7 +93,17 @@ export function useEdgeReveal() {
   const onResizeStart = React.useCallback(() => {
     resizing.current = true
     if (glowRef.current) glowRef.current.style.opacity = String(MAX_STRENGTH)
-  }, [])
+
+    // The release may land outside the webview, where no React handler will
+    // see it — without this the glow would stay pinned until the pointer
+    // happened to move over the panel again.
+    const release = () => {
+      resizing.current = false
+      window.removeEventListener("mouseup", release, true)
+      if (!frame.current) frame.current = requestAnimationFrame(paint)
+    }
+    window.addEventListener("mouseup", release, true)
+  }, [paint])
 
   return { glowRef, onPointerMove, onPointerLeave, onResizeStart }
 }
