@@ -6,3 +6,8 @@ src-tauri/gen
 
 # Rasterised icon intermediates: regenerate with scripts/render-icon.mjs
 src-tauri/icons/nessa-avatar.png
+
+# Screen recordings. They are how a rendering bug gets reported here, but they
+# are megabytes of video that never diff, and this repository is public — a
+# recording carries whatever else was on screen when it was taken.
+*.mov
