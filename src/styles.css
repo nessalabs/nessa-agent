@@ -186,6 +186,15 @@ body {
   position: static;
   width: 11rem;
   max-width: 11rem;
+  /* Opaque chip: a 10% wash does not cover the previous title, so WebKitGTK
+     leaves "New chat" sitting under the new name. */
+  background-color: var(--card);
+  border-color: var(--border);
+}
+
+.nessa-panel[data-host="linux"] [data-slot="chat-tab"][data-active] {
+  background-color: color-mix(in oklab, var(--nessa-chat-accent) 18%, var(--card));
+  border-color: color-mix(in oklab, var(--nessa-chat-accent) 50%, var(--border));
 }
 
 .nessa-panel[data-host="linux"] [data-slot="chat-tab"] > [role="tab"] {
