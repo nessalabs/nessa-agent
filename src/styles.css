@@ -172,9 +172,9 @@ body {
 .nessa-panel[data-host="linux"] [data-slot="chat-tab"],
 .nessa-panel[data-host="linux"] [data-slot="chat-tabs-new"],
 .nessa-panel[data-host="linux"] [data-slot="chat-tab-close"] {
+  /* Do not set `translate`/`scale` here: those inherit and freeze the
+     avatar's busy wash. */
   transform: none;
-  translate: none;
-  scale: none;
   filter: none;
   isolation: auto;
   will-change: auto;
