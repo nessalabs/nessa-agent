@@ -44,6 +44,7 @@ export default tseslint.config(
         "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
+      "@typescript-eslint/no-non-null-assertion": "error",
       ...tauriSeam,
     },
   },
@@ -51,6 +52,12 @@ export default tseslint.config(
     files: ["src/host-window.ts"],
     rules: {
       "no-restricted-imports": "off",
+    },
+  },
+  {
+    files: ["src/**/*.test.ts"],
+    rules: {
+      "@typescript-eslint/no-non-null-assertion": "off",
     },
   },
   {

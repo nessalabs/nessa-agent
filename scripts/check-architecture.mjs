@@ -72,6 +72,28 @@ for (const file of walk(src)) {
   ) {
     fail(file, "the store must not import the panel chrome")
   }
+
+  if (
+    path !== "src/conversation.ts" &&
+    !path.endsWith(".test.ts") &&
+    /\bdraftReply\b/.test(text)
+  ) {
+    fail(file, "draftReply is the stand-in runtime; only conversation.ts may call it")
+  }
+
+  if (
+    (path === "src/transcript.tsx" || path === "src/app.tsx") &&
+    /Linux[A-Z]/.test(text)
+  ) {
+    fail(
+      file,
+      "host policy belongs in src/host; do not name Linux components in the chrome",
+    )
+  }
+
+  if (path === "src/transcript.tsx" && /data-host=/.test(text)) {
+    fail(file, "the transcript reads HostFeatures fields, not data-host")
+  }
 }
 
 if (failures.length > 0) {

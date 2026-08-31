@@ -4,7 +4,10 @@ import { WEST_HANDLE_NARROW, type HostFeatures } from "./features"
 export const other: HostFeatures = {
   kind: "other",
   frost: "css",
+  compositor: "layer",
   westHandleClass: WEST_HANDLE_NARROW,
   capturePointerOnWestHandle: true,
-  animateTranscript: true,
+  animateMount: true,
+  streamText: true,
+  emptyState: true,
 }

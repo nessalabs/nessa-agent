@@ -8,7 +8,7 @@
  */
 
 export { browser } from "./browser"
-export type { FrostKind, HostFeatures, HostKind } from "./features"
+export type { CompositorKind, FrostKind, HostFeatures, HostKind } from "./features"
 export { linux } from "./linux"
 export { macos } from "./macos"
 export { other } from "./other"

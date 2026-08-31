@@ -48,12 +48,13 @@ opinion rather than the product's.
 | File | Owns |
 | --- | --- |
 | `app.tsx` | The panel chrome: the stage, the glow, the resize handle, the tab strip, the composer. It renders; it does not own conversation rules or OS branches. |
-| `host/` | Injected host features (`frost`, west-handle behaviour, whether the transcript may animate). `resolveHost` picks `macos` / `linux` / `browser` / `other`. |
-| `transcript.tsx` | The turn list for the open conversation. Scrolls itself. |
+| `host/` | Injected host features (`frost`, `compositor`, mount/stream/empty-state policy, west-handle behaviour). `resolveHost` picks `macos` / `linux` / `browser` / `other`. |
+| `transcript.tsx` | The turn list for the open conversation. Scrolls itself. One `Thinking` pill for an empty assistant turn. |
 | `conversation.ts` | The strip's rules: naming, drafts, the never-empty tab bar, `idle → thinking → streaming`. The stand-in reply lives here too. No React, no Redux, no host. |
 | `conversation-slice.ts` | The adapter: those rules as named actions. This is what an agent dispatches. |
 | `store.ts` | The product store. Conversation strip only. `dispatch` is the non-React entry point. |
-| `use-conversation.tsx` | Selectors plus the stand-in clocks. One timer per conversation; the clock dispatches `advanceReply`. |
+| `use-conversation.tsx` | Selectors and the actions the chrome dispatches. |
+| `conversation-clocks.tsx` | The stand-in clocks. One timer per conversation; the clock dispatches `advanceReply`. |
 | `use-host-panel.ts` | The host seam wiring: frost, tray surface request, composer focus. |
 | `host-window.ts` | The single seam to the desktop host. Guarded so the same UI runs in a plain browser with the seam no-oping. |
 | `use-surface.ts` | Which surface is chosen, and remembering it. The frontend owns this; the tray only *requests* a toggle and reflects the answer back. |
@@ -128,7 +129,7 @@ are written here.
 | The summon shortcut | `settings.rs` for the key, `shortcut.rs` for registration |
 | A new persisted preference | `settings.rs` (with a default), then its owner |
 | A new host event or payload | `host.rs` and `host-window.ts` together |
-| The conversation surface (tabs, turns, stand-in reply) | `conversation.ts` (rules), `conversation-slice.ts` (actions), `use-conversation.tsx` (clocks) |
+| The conversation surface (tabs, turns, stand-in reply) | `conversation.ts` (rules), `conversation-slice.ts` (actions), `conversation-clocks.tsx` (clocks) |
 | The transcript chrome | `src/transcript.tsx` |
 | The panel chrome or composer | `src/app.tsx` |
 | Resize jitter, the pinned webview | `platform/{macos,linux,other}/viewport.rs` |

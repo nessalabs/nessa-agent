@@ -133,15 +133,14 @@ body {
 }
 
 /*
- * WebKitGTK promotes `translate` / `scale` / `filter` to compositor
- * layers. In a transparent window those layers paint from the panel origin,
- * so the user bubble sits behind the reply and a previous tab's text ghosts
- * through. Keep the transcript in layout on Linux.
+ * A layout compositor (WebKitGTK in a transparent window) promotes
+ * `translate` / `scale` / `filter` to layers that paint from the panel
+ * origin. Vacated tiles stay on screen. Keep the transcript in layout.
  */
-.nessa-panel[data-host="linux"] [data-slot="chat-message"],
-.nessa-panel[data-host="linux"] [data-slot="chat-bubble"],
-.nessa-panel[data-host="linux"] [data-slot="chat-typing-indicator"],
-.nessa-panel[data-host="linux"] [data-slot="chat-typing-dot"] {
+.nessa-panel[data-compositor="layout"] [data-slot="chat-message"],
+.nessa-panel[data-compositor="layout"] [data-slot="chat-bubble"],
+.nessa-panel[data-compositor="layout"] [data-slot="chat-typing-indicator"],
+.nessa-panel[data-compositor="layout"] [data-slot="chat-typing-dot"] {
   transform: none;
   translate: none;
   scale: none;
@@ -153,25 +152,25 @@ body {
   flex-shrink: 0;
 }
 
-.nessa-panel[data-host="linux"][data-surface="clear"] [data-slot="chat-message"] {
-  /* `relative` is a containing block for hover actions; on Linux it is
-     also the layer origin the compositor fills. Actions stay in flow. */
+.nessa-panel[data-compositor="layout"][data-surface="clear"] [data-slot="chat-message"] {
+  /* `relative` is a containing block for hover actions; on a layout
+     compositor it is also the layer origin that fills. Actions stay in flow. */
   position: static;
 }
 
-.nessa-panel[data-host="linux"] [data-slot="chat-message-actions"] {
+.nessa-panel[data-compositor="layout"] [data-slot="chat-message-actions"] {
   position: static;
 }
 
 /*
  * The tab pill grows when the title fills in, and the activity glow is a
- * box-shadow layer. WebKitGTK leaves both behind, so two tabs sit in one
- * place. Linux keeps a fixed-width pill with no transitions, and the
+ * box-shadow layer. A layout compositor leaves both behind, so two tabs
+ * sit in one place. Keep a fixed-width pill with no transitions, and the
  * working state is the avatar's `busy` wash — not a loading dot.
  */
-.nessa-panel[data-host="linux"] [data-slot="chat-tab"],
-.nessa-panel[data-host="linux"] [data-slot="chat-tabs-new"],
-.nessa-panel[data-host="linux"] [data-slot="chat-tab-close"] {
+.nessa-panel[data-compositor="layout"] [data-slot="chat-tab"],
+.nessa-panel[data-compositor="layout"] [data-slot="chat-tabs-new"],
+.nessa-panel[data-compositor="layout"] [data-slot="chat-tab-close"] {
   /* Do not set `translate`/`scale` here: those inherit and freeze the
      avatar's busy wash. */
   transform: none;
@@ -182,22 +181,22 @@ body {
   transition: none;
 }
 
-.nessa-panel[data-host="linux"] [data-slot="chat-tab"] {
+.nessa-panel[data-compositor="layout"] [data-slot="chat-tab"] {
   position: static;
   width: 11rem;
   max-width: 11rem;
-  /* Opaque chip: a 10% wash does not cover the previous title, so WebKitGTK
-     leaves "New chat" sitting under the new name. */
+  /* Opaque chip: a 10% wash does not cover the previous title, so a layout
+     compositor leaves "New chat" sitting under the new name. */
   background-color: var(--card);
   border-color: var(--border);
 }
 
-.nessa-panel[data-host="linux"] [data-slot="chat-tab"][data-active] {
+.nessa-panel[data-compositor="layout"] [data-slot="chat-tab"][data-active] {
   background-color: color-mix(in oklab, var(--nessa-chat-accent) 18%, var(--card));
   border-color: color-mix(in oklab, var(--nessa-chat-accent) 50%, var(--border));
 }
 
-.nessa-panel[data-host="linux"] [data-slot="chat-tab"] > [role="tab"] {
+.nessa-panel[data-compositor="layout"] [data-slot="chat-tab"] > [role="tab"] {
   flex: 1;
   min-width: 0;
 }
@@ -213,7 +212,7 @@ body {
   height: 1.25rem;
 }
 
-.nessa-panel[data-host="linux"] [data-slot="chat-tab-loading"] {
+.nessa-panel[data-compositor="layout"] [data-slot="chat-tab-loading"] {
   display: none;
 }
 

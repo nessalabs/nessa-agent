@@ -137,8 +137,8 @@ writing the full defaults on first launch is buying.
 
 - A component either renders or coordinates, never both. Coordination lives in a
   hook; rendering takes props and has no idea where they came from. `app.tsx`
-  is the panel chrome; `use-conversation.tsx` is the strip; `transcript.tsx` is
-  the log.
+  is the panel chrome; `use-conversation.tsx` is the strip; `conversation-clocks.tsx`
+  is the stand-in clock; `transcript.tsx` is the log.
 - Product state the agent will drive lives in the Redux store as named
   actions. `conversation.ts` stays the rules; the slice is the adapter. Host
   subscriptions (window, pointer, frost, colour scheme) stay in hooks — they

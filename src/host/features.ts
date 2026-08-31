@@ -17,9 +17,23 @@ export type HostKind = "macos" | "linux" | "browser" | "other"
  */
 export type FrostKind = "native" | "css"
 
+/**
+ * How the webview composites the page.
+ *
+ * `layer` is a normal compositor (macOS WKWebView, a browser). Mount springs
+ * and per-letter fades are safe.
+ *
+ * `layout` is WebKitGTK in a transparent window: transform/filter layers
+ * paint from the panel origin and vacated tiles stay on screen. The
+ * transcript stays in layout and the panel remounts the log when a turn
+ * lands so those tiles are dropped.
+ */
+export type CompositorKind = "layer" | "layout"
+
 export interface HostFeatures {
   readonly kind: HostKind
   readonly frost: FrostKind
+  readonly compositor: CompositorKind
   /**
    * Class for the west resize handle. Linux's handle *is* the resize (12px)
    * and stops above the composer. It must not carry a z-index: a stacking
@@ -34,16 +48,12 @@ export interface HostFeatures {
    * starts `_NET_WM_MOVERESIZE`.
    */
   readonly capturePointerOnWestHandle: boolean
-  /**
-   * Mount springs, per-letter fades, and filter transitions. WebKitGTK
-   * promotes those to compositor layers and, in a transparent window, paints
-   * them from the panel origin — so a user bubble sits behind the reply
-   * instead of above it, and a closed tab's text ghosts through. Linux
-   * keeps the transcript in layout. The list still stands on the composer,
-   * same as macOS. Linux holds an unpainted reply-sized gap under the
-   * small typing pill so the user bubble is never slid.
-   */
-  readonly animateTranscript: boolean
+  /** Mount springs, per-letter fades, filter transitions, WAAPI typing dots. */
+  readonly animateMount: boolean
+  /** Reveal the assistant turn a letter at a time. */
+  readonly streamText: boolean
+  /** Idle empty-state avatar. Safe on every host; motion follows animateMount. */
+  readonly emptyState: boolean
 }
 
 export const WEST_HANDLE_NARROW = "nessa-west-handle nessa-west-handle-narrow"

@@ -23,9 +23,9 @@ that turns those rules into actions. `store.dispatch` is the agent entry
 point.
 
 Host, DOM, and clocks stay in hooks: `use-host-panel`, `use-panel-frame`,
-`use-edge-reveal`, `use-color-scheme`, `use-surface`, and the per-conversation
-`ReplyTimer`. They subscribe to something outside the product and must not
-become reducers.
+`use-edge-reveal`, `use-color-scheme`, `use-surface`, and
+`ConversationClocks`. They subscribe to something outside the product and
+must not become reducers.
 
 `useEffect` is the right tool for those subscriptions. It does not belong in
 a component that only renders (`app.tsx`).

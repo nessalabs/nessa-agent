@@ -13,25 +13,34 @@ import {
   conversation,
   send,
   stop,
+  withDraft,
   type Conversation,
 } from "./conversation"
 
 export type ConversationStrip = {
   conversations: Conversation[]
   activeId: string
-  nextId: number
+  nextConversationId: number
+  nextTurnId: number
 }
 
 const initialState: ConversationStrip = {
   conversations: [conversation("c0")],
   activeId: "c0",
-  nextId: 1,
+  nextConversationId: 1,
+  nextTurnId: 1,
 }
 
-function takeId(state: ConversationStrip) {
-  const id = state.nextId
-  state.nextId += 1
-  return id
+function takeConversationId(state: ConversationStrip) {
+  const id = state.nextConversationId
+  state.nextConversationId += 1
+  return `c${id}`
+}
+
+function takeTurnId(state: ConversationStrip) {
+  const id = state.nextTurnId
+  state.nextTurnId += 1
+  return `t${id}`
 }
 
 function replace(state: ConversationStrip, next: Conversation) {
@@ -51,40 +60,42 @@ const conversationSlice = createSlice({
     setDraft(state, action: PayloadAction<{ draft: string; id?: string }>) {
       const id = action.payload.id ?? state.activeId
       const current = state.conversations.find((item) => item.id === id)
-      if (current) current.draft = action.payload.draft
+      if (current) replace(state, withDraft(current, action.payload.draft))
     },
     sendDraft(state, action: PayloadAction<{ id?: string } | undefined>) {
       const id = action.payload?.id ?? state.activeId
       const current = state.conversations.find((item) => item.id === id)
-      if (!current || current.draft.trim() === "" || current.phase !== "idle") {
-        return
-      }
-      replace(state, send(current, current.draft, `t${takeId(state)}`))
+      if (!current) return
+      const next = send(current, current.draft, takeTurnId(state), takeTurnId(state))
+      if (next === current) return
+      replace(state, next)
     },
     openConversation(state) {
-      const id = `c${takeId(state)}`
+      const id = takeConversationId(state)
       state.conversations.push(conversation(id))
       state.activeId = id
     },
     closeConversation(state, action: PayloadAction<string>) {
-      const next = closeInStrip(
-        state.conversations,
-        action.payload,
-        state.activeId,
-        () => `c${takeId(state)}`,
+      const next = closeInStrip(state.conversations, action.payload, state.activeId, () =>
+        takeConversationId(state),
       )
       state.conversations = next.items
       state.activeId = next.activeId
     },
-    stopGenerating(state, action: PayloadAction<{ id?: string } | undefined>) {
-      const id = action.payload?.id ?? state.activeId
+    stopGenerating(
+      state,
+      action: PayloadAction<{ conversationId?: string } | undefined>,
+    ) {
+      const id = action.payload?.conversationId ?? state.activeId
       const current = state.conversations.find((item) => item.id === id)
       if (current) replace(state, stop(current))
     },
-    /** The stand-in clock calls this; a real runtime will dispatch it too. */
-    advanceReply(state, action: PayloadAction<{ id: string }>) {
-      const current = state.conversations.find((item) => item.id === action.payload.id)
-      if (current) replace(state, advance(current, `t${takeId(state)}`))
+    /** The stand-in clock calls this. A real runtime will replace it. */
+    advanceReply(state, action: PayloadAction<{ conversationId: string }>) {
+      const current = state.conversations.find(
+        (item) => item.id === action.payload.conversationId,
+      )
+      if (current) replace(state, advance(current, takeTurnId(state)))
     },
   },
 })

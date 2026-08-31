@@ -60,4 +60,6 @@ function Preview() {
   )
 }
 
-createRoot(document.getElementById("root")!).render(<Preview />)
+const container = document.getElementById("root")
+if (!container) throw new Error("missing #root")
+createRoot(container).render(<Preview />)

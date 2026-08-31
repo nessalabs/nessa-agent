@@ -10,21 +10,25 @@ import { MessageStreamText } from "@nessa-ui/react/message"
 import { RandomAvatar } from "@nessa-ui/react/random-avatar"
 
 import { AGENT_HUES } from "./agent-identity"
-import { draftReply, type Conversation } from "./conversation"
+import { type Conversation, type Receipt, type Turn } from "./conversation"
 
 /**
  * The turn list for the open conversation. Scrolls itself; does not know
- * how the turns got here.
+ * how the turns got here. An empty assistant turn is thinking chrome —
+ * the same row later holds the reply.
  */
 export function Transcript({
   conversation,
   ground,
-  animate,
+  animateMount,
+  streamText,
+  emptyState,
 }: {
   conversation: Conversation
   ground: "paper" | "ink"
-  /** False on WebKitGTK: mount springs leave compositor ghosts. */
-  animate: boolean
+  animateMount: boolean
+  streamText: boolean
+  emptyState: boolean
 }) {
   const logRef = React.useRef<HTMLDivElement>(null)
   const streamingId =
@@ -41,83 +45,99 @@ export function Transcript({
       role="log"
       ref={logRef}
       aria-label={`${conversation.title} transcript, ${sentTurns} sent`}
-      data-turn-count={conversation.turns.length}
-      data-sent-turns={sentTurns}
-      className="flex min-h-0 flex-1 select-text flex-col px-3 pb-2"
+      className="flex min-h-0 flex-1 select-text flex-col overflow-y-auto px-3 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
     >
-      {/* Sized to the turns, stood on the composer. Overflow lives on this
-          stack so a long thread still scrolls. Linux holds an unpainted
-          reply-sized gap while the dots sit on the composer — same small
-          pill as macOS, without sliding the user bubble. */}
-      <div className="mt-auto flex min-h-0 flex-col gap-5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {conversation.turns.length === 0 && conversation.phase === "idle" && animate ? (
-          <EmptyState seed={conversation.id} ground={ground} />
+      <div className="mt-auto flex flex-col gap-5">
+        {conversation.turns.length === 0 &&
+        conversation.phase === "idle" &&
+        emptyState ? (
+          <EmptyState
+            seed={conversation.id}
+            ground={ground}
+            animateMount={animateMount}
+          />
         ) : null}
         {conversation.turns.map((turn) => (
-          <ChatMessage
+          <TurnRow
             key={turn.id}
-            tone={turn.from === "user" ? "sent" : "received"}
-            animateIn={animate}
-          >
-            <ChatBubble>
-              {turn.id === streamingId && animate ? (
-                <MessageStreamText text={turn.text} />
-              ) : (
-                turn.text
-              )}
-            </ChatBubble>
-            {turn.from === "user" ? (
-              <ChatMessageActions>
-                <ChatMessageReceipt>Delivered</ChatMessageReceipt>
-              </ChatMessageActions>
-            ) : null}
-          </ChatMessage>
+            turn={turn}
+            streaming={turn.id === streamingId && streamText}
+            animateMount={animateMount}
+          />
         ))}
-        {conversation.phase === "thinking" ? (
-          animate ? (
-            <ChatTypingIndicator label="Nessa is typing" />
-          ) : (
-            <LinuxThinking prompt={conversation.pending} />
-          )
-        ) : null}
       </div>
     </div>
+  )
+}
+
+function TurnRow({
+  turn,
+  streaming,
+  animateMount,
+}: {
+  turn: Turn
+  streaming: boolean
+  animateMount: boolean
+}) {
+  if (turn.from === "assistant" && turn.text === "") {
+    return <Thinking motion={animateMount} />
+  }
+
+  return (
+    <ChatMessage
+      tone={turn.from === "user" ? "sent" : "received"}
+      animateIn={animateMount}
+    >
+      <ChatBubble>
+        {streaming ? <MessageStreamText text={turn.text} /> : turn.text}
+      </ChatBubble>
+      {turn.from === "user" && turn.receipt ? (
+        <ChatMessageActions>
+          <ChatMessageReceipt>{receiptLabel(turn.receipt)}</ChatMessageReceipt>
+        </ChatMessageActions>
+      ) : null}
+    </ChatMessage>
   )
 }
 
 /**
- * WebKitGTK keeps the previous frame of a bubble that changes y. The
- * incoming reply's height is held as an invisible gap so the user turn
- * never slides; the dots are the same small pill macOS shows, sat on
- * the composer at the bottom of that gap.
+ * The typing pill. Motion hosts use the design-system indicator (WAAPI pulse).
+ * Layout hosts get the same pill without the translate animation — CSS cannot
+ * cancel a WAAPI `translate`, and that is what ghosts on a transparent window.
  */
-function LinuxThinking({ prompt }: { prompt: string }) {
+function Thinking({ motion }: { motion: boolean }) {
+  if (motion) return <ChatTypingIndicator label="Nessa is typing" />
   return (
-    <div className="grid w-full">
-      <div className="invisible col-start-1 row-start-1" aria-hidden="true">
-        <ChatMessage tone="received" animateIn={false}>
-          <ChatBubble>{draftReply(prompt)}</ChatBubble>
-        </ChatMessage>
-      </div>
-      <div className="col-start-1 row-start-1 flex items-end">
-        <div
-          role="status"
-          aria-label="Nessa is typing"
-          className="flex items-center gap-1 self-start rounded-[1.125rem] bg-accent px-3.5 py-3"
-        >
-          {[0, 1, 2].map((dot) => (
-            <span
-              key={dot}
-              className="size-2 rounded-full bg-muted-foreground opacity-35"
-            />
-          ))}
-        </div>
-      </div>
+    <div
+      role="status"
+      aria-label="Nessa is typing"
+      data-slot="chat-typing-indicator"
+      className="flex items-center gap-1 self-start rounded-[1.125rem] bg-accent px-3.5 py-3"
+    >
+      {[0, 1, 2].map((dot) => (
+        <span
+          key={dot}
+          data-slot="chat-typing-dot"
+          className="size-2 rounded-full bg-muted-foreground opacity-35"
+        />
+      ))}
     </div>
   )
 }
 
-function EmptyState({ seed, ground }: { seed: string; ground: "paper" | "ink" }) {
+function receiptLabel(receipt: Receipt) {
+  return receipt === "delivered" ? "Delivered" : "Sending"
+}
+
+function EmptyState({
+  seed,
+  ground,
+  animateMount,
+}: {
+  seed: string
+  ground: "paper" | "ink"
+  animateMount: boolean
+}) {
   return (
     <div className="flex flex-col items-center gap-2.5 py-6 text-center">
       <RandomAvatar
@@ -125,7 +145,7 @@ function EmptyState({ seed, ground }: { seed: string; ground: "paper" | "ink" })
         hues={AGENT_HUES}
         name="Nessa"
         ground={ground}
-        animateOnMount
+        animateOnMount={animateMount}
         className="size-14 rounded-full"
       />
       <p className="nessa-text-3 m-0 text-muted-foreground">

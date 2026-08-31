@@ -8,6 +8,7 @@ import { RandomAvatar } from "@nessa-ui/react/random-avatar"
 import { AGENT_HUES } from "./agent-identity"
 import { host } from "./host"
 import { startResizeFromLeftEdge } from "./host-window"
+import { ConversationClocks } from "./conversation-clocks"
 import { Transcript } from "./transcript"
 import { useColorScheme } from "./use-color-scheme"
 import { useConversation } from "./use-conversation"
@@ -76,6 +77,7 @@ export function App() {
         data-surface={surface}
         data-host={host.kind}
         data-frost={host.frost}
+        data-compositor={host.compositor}
         className={
           surface === "clear"
             ? "nessa-panel flex min-h-0 flex-col overflow-visible border-0"
@@ -110,13 +112,19 @@ export function App() {
           />
         </div>
 
-        {/* Keyed so WebKitGTK drops the previous conversation's bubble
-            layers instead of leaving them composited over the wallpaper. */}
+        {/* Layout compositors remount when a turn lands so vacated tiles
+            are dropped. Layer compositors only remount on tab switch. */}
         <Transcript
-          key={strip.active.id}
+          key={
+            host.compositor === "layout"
+              ? `${strip.active.id}:${strip.active.phase}:${strip.active.turns.length}`
+              : strip.active.id
+          }
           conversation={strip.active}
           ground={ground}
-          animate={host.animateTranscript}
+          animateMount={host.animateMount}
+          streamText={host.streamText}
+          emptyState={host.emptyState}
         />
 
         <div className="nessa-composer">
@@ -158,7 +166,7 @@ export function App() {
         </div>
       </div>
 
-      {strip.clocks}
+      <ConversationClocks />
     </div>
   )
 }
