@@ -22,8 +22,10 @@ export interface HostFeatures {
   readonly frost: FrostKind
   /**
    * Class for the west resize handle. Linux's handle *is* the resize (12px)
-   * and stops above the composer so it cannot square off the pill's left cap.
-   * macOS only covers the band inside the system's own grab zone.
+   * and stops above the composer. It must not carry a z-index: a stacking
+   * context on the panel makes WebKitGTK fill an opaque white layer from
+   * the window's left edge, squaring off the pill's left cap. macOS only
+   * covers the band inside the system's own grab zone.
    */
   readonly westHandleClass: string
   /**

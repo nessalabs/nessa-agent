@@ -118,8 +118,9 @@ body {
  * wrapper must not paint — `transparent` on a WebKitGTK layer becomes
  * opaque white, which was the extra boxed left cap. `none` omits paint.
  *
- * Isolation, translateZ, mask, clip-path, and overflow-on-radius all
- * promote a layer the size of this wrapper, so none of them belong here.
+ * Isolation, translateZ, mask, clip-path, overflow-on-radius, and a
+ * z-index on any positioned descendant all promote a layer from the
+ * panel origin, so none of them belong on this tree while idle.
  */
 .nessa-composer {
   flex-shrink: 0;
@@ -179,14 +180,25 @@ body {
   transition-property: color, background-color;
 }
 
+[data-slot="chat-composer-input"] {
+  background: none;
+  transform: none;
+  filter: none;
+  isolation: auto;
+  will-change: auto;
+  caret-color: var(--foreground);
+}
+
 .nessa-west-handle {
   position: absolute;
   top: 0;
   bottom: 4.75rem;
   left: 0;
-  z-index: 10;
   cursor: ew-resize;
   background: none;
+  /* No z-index: a positioned stacking context on the panel makes WebKitGTK
+     fill a layer from x=0 with opaque white — the boxed left cap. Absolute
+     with auto z-index still paints above in-flow chrome (CSS appendix E). */
 }
 
 .nessa-west-handle-narrow {
