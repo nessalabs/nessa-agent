@@ -41,6 +41,9 @@ describe("advance", () => {
     const thinking = send(conversation("c0"), "hi", "t1")
     const streaming = advance(thinking, "t2")
     expect(streaming.phase).toBe("streaming")
+    expect(streaming.turns.filter((turn) => turn.from === "user")).toEqual([
+      { id: "t1", from: "user", text: "hi" },
+    ])
     expect(streaming.turns.at(-1)).toEqual({
       id: "t2",
       from: "assistant",

@@ -27,6 +27,7 @@ export function Transcript({
   animate: boolean
 }) {
   const logRef = React.useRef<HTMLDivElement>(null)
+  const stackRef = React.useRef<HTMLDivElement>(null)
   const streamingId =
     conversation.phase === "streaming" ? conversation.turns.at(-1)?.id : undefined
   const stackKey = `${conversation.turns.length}:${conversation.phase}`
@@ -36,12 +37,13 @@ export function Transcript({
     if (log) log.scrollTop = log.scrollHeight
   }, [conversation.turns, conversation.phase, conversation.id])
 
-  // WebKitGTK keeps the previous frame of a bubble that `mt-auto` slides up.
-  // Hiding the stack before paint drops those tiles so Linux can stand on
-  // the composer the same way macOS does, without a ghost under the reply.
+  // WebKitGTK does not clear transparent pixels a bubble has left. Hiding
+  // this content-sized stack used to miss the vacated rect: the new box sat
+  // higher, empty frost skipped paint, and the old "hey" stayed on screen.
+  // The stack now fills its box (see styles.css) so that flush covers it.
   React.useLayoutEffect(() => {
     if (animate) return
-    const node = logRef.current
+    const node = stackRef.current
     if (!node) return
     node.style.visibility = "hidden"
     void node.offsetHeight
@@ -51,18 +53,17 @@ export function Transcript({
   return (
     <div
       role="log"
+      ref={logRef}
       aria-label={`${conversation.title} transcript`}
+      data-turn-count={conversation.turns.length}
       className="flex min-h-0 flex-1 select-text flex-col px-3 pb-2"
     >
       {/* Sized to the turns, stood on the composer. Overflow lives on this
-          stack so a long thread still scrolls. The stack itself is not a
-          compositing layer: that painted a white slab behind the bubbles.
-          Keyed per turn so WebKitGTK paints the whole group at the new
-          bottom instead of sliding a live layer. */}
+          stack so a long thread still scrolls. Linux paints the stack's
+          whole box so a slide cannot leave the previous user bubble. */}
       <div
-        key={stackKey}
-        ref={logRef}
-        className="mt-auto flex min-h-0 flex-col gap-5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        ref={stackRef}
+        className="nessa-transcript-stack mt-auto flex min-h-0 flex-col gap-5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         {conversation.turns.length === 0 && conversation.phase === "idle" && animate ? (
           <EmptyState seed={conversation.id} ground={ground} />
