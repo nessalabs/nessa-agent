@@ -45,8 +45,9 @@ pub fn fit(window: &tauri::WebviewWindow) -> Result<(), String> {
 }
 
 /// Drop the previous frame so a bubble that slid up does not leave a ghost.
-/// WebKitGTK skips paint on transparent frost; queueing a draw with the
-/// clear colour put back is what empties those pixels.
+/// WebKitGTK keeps vacated tiles on the window; a clear colour and a queue
+/// are not enough. Hiding the widget and moving it 1px drops the backing
+/// store so the next show paints only what the page still owns.
 pub fn repaint(window: &tauri::WebviewWindow) -> Result<(), String> {
     use gtk::gdk;
     use gtk::glib::Cast;
@@ -61,13 +62,25 @@ pub fn repaint(window: &tauri::WebviewWindow) -> Result<(), String> {
     if let Ok(wk) = webview.clone().downcast::<webkit2gtk::WebView>() {
         wk.set_background_color(&clear);
     }
+    if let Some(gdk_win) = gtk_window.window() {
+        gdk_win.invalidate_rect(None, true);
+    }
+    if let Some(fixed) = webview
+        .parent()
+        .and_then(|parent| parent.downcast::<gtk::Fixed>().ok())
+    {
+        let alloc = gtk_window.allocation();
+        let (stage_w, stage_h) = webview.size_request();
+        let x = alloc.width() - stage_w;
+        let y = alloc.height() - stage_h;
+        fixed.move_(&webview, x - 1, y);
+        webview.queue_draw();
+        fixed.move_(&webview, x, y);
+    }
+    webview.hide();
+    webview.show();
     webview.queue_draw();
     gtk_window.queue_draw();
-    // An opacity nudge invalidates the offscreen without a visible hide.
-    let opacity = webview.opacity();
-    webview.set_opacity(0.999);
-    webview.queue_draw();
-    webview.set_opacity(if opacity == 0.0 { 1.0 } else { opacity });
     Ok(())
 }
 
