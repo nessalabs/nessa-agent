@@ -36,11 +36,46 @@ export async function onFocusComposer(handler: () => void) {
 /**
  * Starts a live resize from the panel's left edge.
  *
- * An undecorated macOS window has no system resize border — `resizable: true`
- * alone gives nothing to grab — so the edge is a real element the window
- * drags from. West only: the panel is pinned to the right of the screen and
- * spans the work area's height, so width is the one dimension it owns.
+ * West only: the panel is pinned to the right of the screen and spans the work
+ * area's height, so width is the one dimension it owns.
+ *
+ * In practice macOS claims the frame first and resizes the window without ever
+ * telling the webview, so this runs only when the pointer lands inside the
+ * handle but outside the system's own grab zone. It is kept as the fallback
+ * for that band and for hosts with no system resize border of their own; the
+ * border glow deliberately does not depend on it firing (see `useEdgeReveal`).
  */
+/**
+ * Subscribes to the window changing size, whoever is driving it. Returns a
+ * promise for the unsubscribe, and a no-op outside Tauri.
+ */
+export async function onWindowResize(handler: () => void) {
+  if (!inTauri) return () => undefined
+  const { getCurrentWindow } = await import("@tauri-apps/api/window")
+  return getCurrentWindow().onResized(() => handler())
+}
+
+/**
+ * Subscribes to the window being live-resized — held by its frame, as opposed
+ * to resized programmatically.
+ *
+ * macOS runs that gesture itself and tells the webview nothing about it, so
+ * the host forwards AppKit's own notifications (see `live_resize.rs`); there
+ * is no reading it off the page's own events. Outside Tauri there is no
+ * window frame to hold, so the handler is simply never called.
+ */
+export async function onLiveResize(handler: (active: boolean) => void) {
+  if (!inTauri) return () => undefined
+  const { listen } = await import("@tauri-apps/api/event")
+  const unlisten = await Promise.all([
+    listen("nessa://resize-started", () => handler(true)),
+    listen("nessa://resize-ended", () => handler(false)),
+  ])
+  return () => {
+    for (const stop of unlisten) stop()
+  }
+}
+
 export async function startResizeFromLeftEdge() {
   if (!inTauri) return
   const { getCurrentWindow } = await import("@tauri-apps/api/window")
