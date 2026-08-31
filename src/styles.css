@@ -133,16 +133,6 @@ body {
 }
 
 /*
- * `mt-auto` slides the stack up when a reply lands. WebKitGTK skips paint
- * on the vacated frost, so the user bubble's previous tile stays — a second
- * "hey" with only one turn in the store. A real fill on the stack dirties
- * that rect. Keep it tiny: a compositing layer here becomes an opaque slab.
- */
-.nessa-panel[data-host="linux"] .nessa-transcript-stack {
-  background-color: rgb(0 0 0 / 0.02);
-}
-
-/*
  * WebKitGTK promotes `translate` / `scale` / `filter` to compositor
  * layers. In a transparent window those layers paint from the panel origin,
  * so the user bubble sits behind the reply and a previous tab's text ghosts
