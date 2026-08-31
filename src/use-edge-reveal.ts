@@ -70,11 +70,12 @@ export function useEdgeReveal() {
 
   const onPointerMove = React.useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
-      // Only a move with no button held ends a drag. Clearing the flag on any
-      // move let a single stray event between pointerdown and the native
-      // drag's takeover cancel it, and the pointerleave that followed then
-      // put the glow out for the rest of the resize.
-      if (event.buttons === 0) resizing.current = false
+      // Nothing here ends a drag. A native drag is run by the window server,
+      // which synthesises moves that do not reliably carry button state, so
+      // inferring the end from `buttons` cut the pin short mid-resize — the
+      // glow then followed plain proximity, which still lights near where the
+      // drag began and dies as soon as the pointer travels along the edge.
+      // Only a real release ends it; see `onResizeStart`.
       panel.current = event.currentTarget
       point.current = { x: event.clientX, y: event.clientY }
       if (frame.current) return
@@ -94,15 +95,22 @@ export function useEdgeReveal() {
     resizing.current = true
     if (glowRef.current) glowRef.current.style.opacity = String(MAX_STRENGTH)
 
-    // The release may land outside the webview, where no React handler will
-    // see it — without this the glow would stay pinned until the pointer
-    // happened to move over the panel again.
+    // The pin is released only by a real end-of-drag, never inferred from
+    // pointer movement. The release can land outside the webview and the
+    // window server does not always hand the page a matching event, so every
+    // signal that means "the drag is over" is listened for and the first one
+    // to arrive wins. Losing focus counts: a drag cannot still be running.
+    const endings = ["mouseup", "pointerup", "pointercancel", "blur"] as const
     const release = () => {
       resizing.current = false
-      window.removeEventListener("mouseup", release, true)
+      for (const ending of endings) {
+        window.removeEventListener(ending, release, true)
+      }
       if (!frame.current) frame.current = requestAnimationFrame(paint)
     }
-    window.addEventListener("mouseup", release, true)
+    for (const ending of endings) {
+      window.addEventListener(ending, release, true)
+    }
   }, [paint])
 
   return { glowRef, onPointerMove, onPointerLeave, onResizeStart }
