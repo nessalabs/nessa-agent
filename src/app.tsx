@@ -42,7 +42,8 @@ export function App() {
         hues={AGENT_HUES}
         ground={ground}
         busy={item.phase !== "idle"}
-        className="size-4 rounded-full"
+        speed={2}
+        className="size-5 rounded-full"
       />
     ),
   }))
