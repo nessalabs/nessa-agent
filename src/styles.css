@@ -61,6 +61,20 @@ body {
 }
 
 /*
+ * The size tokens arrive asynchronously from the host. Until they do, `100%`
+ * is the stage — the whole webview, which is larger than the window and
+ * pinned to its bottom right. A first paint at that width lays the pill
+ * across the webview; the window then clips a hard left edge while the
+ * right cap still rounds. Tauri hosts fall back to the window's min width
+ * so the first layer is already window-sized. A browser preview keeps
+ * `100%`: there the viewport *is* the window.
+ */
+.nessa-panel[data-host="linux"],
+.nessa-panel[data-host="macos"] {
+  width: var(--nessa-window-width, 420px);
+}
+
+/*
  * Two surfaces, switched by the header control. `translucent` tints the native
  * frost the window carries (see `platform/macos/vibrancy.rs`); `clear` removes the
  * panel entirely, so only the bubbles and the pill hang over the desktop.
@@ -98,10 +112,16 @@ body {
   background: none;
   border-color: transparent;
   overflow: visible;
+  /* `relative` is only needed as a containing block for the edge reveal,
+     which is hidden here. A positioned panel is the layer origin WebKitGTK
+     fills with opaque white around the rounded pill. */
+  position: static;
 }
 
 .nessa-panel[data-surface="clear"] .nessa-edge-reveal {
   display: none;
+  z-index: auto;
+  position: static;
 }
 
 .nessa-panel[data-surface="clear"] .nessa-chrome {
@@ -113,14 +133,10 @@ body {
 }
 
 /*
- * Composer gutter is real CSS padding, not a flex margin and not panel
- * padding: those leave the pill flush on the window's left clip. The
- * wrapper must not paint — `transparent` on a WebKitGTK layer becomes
- * opaque white, which was the extra boxed left cap. `none` omits paint.
- *
- * Isolation, translateZ, mask, clip-path, overflow-on-radius, and a
- * z-index on any positioned descendant all promote a layer from the
- * panel origin, so none of them belong on this tree while idle.
+ * Composer gutter is real CSS padding. The wrapper must not paint:
+ * `transparent` on a WebKitGTK layer becomes opaque white. `none` omits
+ * paint. The form is unwrapped so its radius cannot own a layer at the
+ * panel origin; the row is the capsule.
  */
 .nessa-composer {
   flex-shrink: 0;

@@ -51,11 +51,10 @@ export function App() {
 
   return (
     <div className="nessa-stage">
-      {/* Lives on the stage, not the panel: a positioned descendant of the
-          panel (even with z-index auto) makes WebKitGTK fill a layer from
-          the panel origin with opaque white — the boxed left cap. The
-          stage's bottom-right is the window, so `right`/`height` from the
-          window size tokens pin this strip to the panel's left edge. */}
+      {/* On the stage, not the panel: a positioned descendant of the panel
+          makes WebKitGTK fill a layer from the panel origin with opaque
+          white. The stage's bottom-right is the window, so window-size
+          tokens pin this strip to the panel's left edge. */}
       <div
         role="presentation"
         onPointerDown={(event) => {
@@ -80,7 +79,7 @@ export function App() {
         data-frost={host.frost}
         className={
           surface === "clear"
-            ? "nessa-panel relative flex min-h-0 flex-col overflow-visible rounded-[18px] border-0"
+            ? "nessa-panel flex min-h-0 flex-col overflow-visible border-0"
             : "nessa-panel relative flex min-h-0 flex-col overflow-hidden rounded-[18px] border"
         }
         onPointerMove={edge.onPointerMove}
@@ -92,6 +91,7 @@ export function App() {
         <div
           ref={edge.glowRef}
           aria-hidden="true"
+          hidden={surface === "clear"}
           className="nessa-edge-reveal pointer-events-none"
         />
         {/* The strip is the titlebar too: the gaps around the tabs drag the
@@ -116,11 +116,7 @@ export function App() {
 
         <Transcript conversation={strip.active} ground={ground} />
 
-        {/* Padding on this wrapper is the only inset WebKitGTK honours: flex
-            item margins and panel padding leave the pill flush left. The form
-            is unwrapped in CSS (`display: contents`) so it cannot allocate a
-            full-width layer; the row is the capsule. */}
-        <div className="nessa-composer" data-shell="composer-pad">
+        <div className="nessa-composer">
           <PillComposer generating={generating} onSubmit={submit}>
             <PillComposerRow>
               <ChatComposerAction aria-label="Add attachment" title="Add attachment">
