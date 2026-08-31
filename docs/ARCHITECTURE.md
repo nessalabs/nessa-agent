@@ -32,21 +32,23 @@ opinion rather than the product's.
 
 | File | Owns |
 | --- | --- |
-| `main.rs` | The composition root. Builds the app, wires the tray, shortcut, and window, and is the only place concrete pieces are chosen and handed to each other. |
+| `main.rs` | The composition root. Builds the app, wires the tray, shortcut, and window. It never mentions macOS or Linux: OS behaviour is injected through `platform::current()`. |
 | `host.rs` | The host/shell seam: event names and the `PanelSize` payload. The frontend lists the same names in `host-window.ts`; a test fails if they drift. |
 | `panel.rs` | The panel frame: opening size, lower-right placement, show/hide. The tray and the shortcut request a toggle; they do not fit the frame. |
 | `tray.rs` | The menu bar extra (macOS) or StatusNotifierItem (Linux), and the surface-toggle request. Creating it is survivable: a desktop with no tray still launches. |
 | `shortcut.rs` | The global accelerator that summons and dismisses the panel. |
 | `settings.rs` | The on-disk settings shape and its defaults. The file *is* the settings interface until there is a UI; `serde(default)` is what lets an older or hand-edited file still load. |
-| `vibrancy.rs` | The native frosted surface on macOS, exposed to the frontend as one command. On Linux it is a no-op; the shell uses CSS `backdrop-filter` instead. |
-| `viewport.rs` | Holds the page's viewport still during a live resize, on both WKWebView and WebKitGTK, by pinning a work-area-sized webview to the window's bottom right. On Linux the pin *replaces* tao's GtkBox, so the webview stays two widgets under the GtkWindow — Tauri's click-to-resize handler unwraps that grandparent. |
-| `live_resize.rs` | Forwards AppKit's live-resize notifications so the border glow can stay lit. On Linux, size-allocate while a mouse button is down is the drag. |
+| `platform/` | The OS host. `Host` is the contract; `current()` injects one implementation for the compiled target. Commands `set_frosted` and `panel_size` live here too. |
+| `platform/macos/` | Accessory app, `NSVisualEffectView` frost, WKWebView pin, AppKit live-resize notifications, hide-on-blur in release. |
+| `platform/linux/` | WebKit DMA-BUF prep, GtkFixed pin, CSS frost (no-op natively), allocate-based live resize, shown on the taskbar at launch. |
+| `platform/other/` | Webview fills the window; size events only. |
 
 **React shell** (`src/`) — everything that is on screen.
 
 | File | Owns |
 | --- | --- |
-| `app.tsx` | The panel chrome: the stage, the glow, the resize handle, the tab strip, the composer. It renders; it does not own conversation rules. |
+| `app.tsx` | The panel chrome: the stage, the glow, the resize handle, the tab strip, the composer. It renders; it does not own conversation rules or OS branches. |
+| `host/` | Injected host features (`frost`, west-handle behaviour). `resolveHost` picks `macos` / `linux` / `browser` / `other`. |
 | `transcript.tsx` | The turn list for the open conversation. Scrolls itself. |
 | `conversation.ts` | The strip's rules: naming, drafts, the never-empty tab bar, `idle → thinking → streaming`. The stand-in reply lives here too. |
 | `use-conversation.tsx` | The strip's state and the stand-in clocks. One timer per conversation. |
@@ -78,8 +80,9 @@ get an ADR explaining why not.
 Things that must stay true. They are invisible in the code, which is why they
 are written here.
 
-- `main.rs` is the only composition point. Nothing else constructs a concrete
-  dependency for someone else to use.
+- `main.rs` is the app composition root. OS-specific hosts are injected by
+  `platform::current()` — one `Host` for the compiled target. Shared modules
+  never name macOS or Linux.
 - The panel frame is reapplied on every show. Nothing may cache a frame across
   shows — that is the bug this design exists to prevent.
 - The page's viewport does not move during a resize. The webview is pinned; the
@@ -101,8 +104,10 @@ are written here.
 
 - **Failure policy:** edge failures degrade the surface, they do not stop the
   launch. Log with the `[nessa]` prefix and continue.
-- **Platform code** is `cfg`-gated at the narrowest point that works, never
-  spread through a module.
+- **Platform code** lives in `platform/{macos,linux,other}` (Rust) and
+  `src/host/{macos,linux,browser,other}.ts` (shell), injected through `Host` /
+  `HostFeatures`. Shared modules do not contain `cfg(target_os)` or
+  `hostKind ===` branches.
 - **Nothing in the shell reaches the OS directly.** It goes through the seam.
 - **Frost:** native `NSVisualEffectView` on macOS; CSS `backdrop-filter` on
   Linux and in the browser. The macOS CSS path is the one that smears.
@@ -119,8 +124,11 @@ are written here.
 | The conversation surface (tabs, turns, stand-in reply) | `conversation.ts` / `use-conversation.tsx` |
 | The transcript chrome | `src/transcript.tsx` |
 | The panel chrome or composer | `src/app.tsx` |
-| Resize jitter, the pinned webview | `viewport.rs` |
-| The border glow | `use-edge-reveal.ts`, and `live_resize.rs` on macOS |
+| Resize jitter, the pinned webview | `platform/{macos,linux,other}/viewport.rs` |
+| Native frost | `platform/macos/vibrancy.rs` |
+| The border glow | `use-edge-reveal.ts`, and `platform/*/live_resize.rs` |
+| OS-specific window behaviour | `platform/` — add a method on `Host`, implement it in the OS folder |
+| Shell behaviour that differs per OS | `src/host/` — add a field on `HostFeatures`, set it on each host |
 | Anything that talks to the host | `src/host-window.ts` — and only there |
 | The agent runtime, when it lands | A new context; see *Growing a new context* in [codebase-structure.md](codebase-structure.md) |
 

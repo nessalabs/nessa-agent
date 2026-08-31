@@ -13,7 +13,7 @@ pub const TOGGLE_SURFACE: &str = "nessa://toggle-surface";
 /// without the reader having to click into it first.
 pub const FOCUS_COMPOSER: &str = "nessa://focus-composer";
 /// Carries the window's size to the page, which can no longer measure it
-/// once the webview is detached from the window (see `viewport`).
+/// once the webview is detached from the window (see `platform`).
 pub const PANEL_SIZED: &str = "nessa://panel-sized";
 /// Emitted as the user takes hold of the window's frame.
 pub const RESIZE_STARTED: &str = "nessa://resize-started";
@@ -36,19 +36,6 @@ impl PanelSize {
             None
         }
     }
-}
-
-/// The window's inner size in CSS pixels. Used on hosts where the webview
-/// still fills the window (everywhere the viewport is not detached).
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-pub fn logical_inner_size(window: &tauri::WebviewWindow) -> Result<PanelSize, String> {
-    let size = window.inner_size().map_err(|error| error.to_string())?;
-    let scale = window.scale_factor().map_err(|error| error.to_string())?;
-    PanelSize::from_logical(
-        f64::from(size.width) / scale,
-        f64::from(size.height) / scale,
-    )
-    .ok_or_else(|| String::from("the window has no size"))
 }
 
 #[cfg(test)]

@@ -38,7 +38,7 @@ body {
  * left corner, so moving that corner drags everything already drawn along with
  * it — which is what walked the composer 90pt up and down the screen during a
  * resize that holds the window's bottom edge still. See
- * `src-tauri/src/viewport.rs`.
+ * `src-tauri/src/platform/macos/viewport.rs`.
  *
  * So the viewport stays put and the panel is drawn the size of the window
  * against the bottom right of it, from the size the host reports (see
@@ -62,7 +62,7 @@ body {
 
 /*
  * Two surfaces, switched by the header control. `translucent` tints the native
- * frost the window carries (see src-tauri/src/vibrancy.rs); `clear` removes the
+ * frost the window carries (see `platform/macos/vibrancy.rs`); `clear` removes the
  * panel entirely, so only the bubbles and the pill hang over the desktop.
  *
  * There is deliberately no `backdrop-filter` here. On a transparent,
@@ -78,12 +78,12 @@ body {
 }
 
 /*
- * Native frost is macOS-only (see vibrancy.rs). Everywhere else — Linux from
- * day 0, a browser preview, other hosts — the CSS filter *is* the frost. It
- * is kept off the macOS Tauri window on purpose: on a transparent undecorated
- * NSWindow it smears the behind-window content and freezes when unfocused.
+ * CSS frost is injected on hosts without a native effect view (Linux, a
+ * browser preview, Windows). macOS sets `data-frost="native"` and keeps this
+ * filter off: on a transparent undecorated NSWindow it smears the
+ * behind-window content and freezes when unfocused.
  */
-.nessa-panel[data-surface="translucent"]:not([data-host="macos"]) {
+.nessa-panel[data-surface="translucent"][data-frost="css"] {
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
 }

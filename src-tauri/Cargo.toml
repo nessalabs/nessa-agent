@@ -30,19 +30,18 @@ tauri-plugin-global-shortcut = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 window-vibrancy = "0.6"
 # Already in the tree as window-vibrancy's own dependencies, and named here
-# only so `live_resize` can observe AppKit's live resize notifications and
-# `viewport` can place the webview inside the window. Nothing new is compiled
-# into the binary.
+# only so `platform/macos` can observe AppKit's live resize notifications and
+# place the webview inside the window. Nothing new is compiled into the binary.
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSResponder", "NSView"] }
 objc2-foundation = { version = "0.3", features = ["NSNotification", "NSOperation", "block2"] }
 block2 = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# Already in the tree as wry's own dependencies. Named here so `viewport` can
-# pin the WebKitGTK widget the same way the macOS side pins WKWebView, and
-# so the pin can put the webview's transparent background back after
-# reparenting — GtkFixed would otherwise paint the panel opaque.
+# Already in the tree as wry's own dependencies. Named here so
+# `platform/linux` can pin the WebKitGTK widget the same way the macOS side
+# pins WKWebView, and so the pin can put the webview's transparent background
+# back after reparenting — GtkFixed would otherwise paint the panel opaque.
 gtk = "0.18"
 webkit2gtk = "2.0"
 

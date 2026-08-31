@@ -51,8 +51,8 @@ must stay true:
 
 1. `domain/` contains no `tauri`, `serde`-transport, async-runtime, or
    filesystem import.
-2. `main.rs` is the only composition point. Nothing else constructs a concrete
-   dependency for someone else to use.
+2. `main.rs` is the app composition root. OS-specific hosts are injected by
+   `platform::current()`; shared modules never construct a macOS or Linux host.
 3. The panel frame is reapplied on every show. Nothing caches a frame across
    shows — that is the bug the design exists to prevent.
 4. Every host call goes through `host-window.ts` and no-ops outside Tauri.

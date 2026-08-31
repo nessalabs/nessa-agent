@@ -8,20 +8,6 @@
  */
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 
-/**
- * Which host is drawing the panel. Decides whether frost is native (macOS
- * Tauri) or CSS (Linux, a browser, everywhere else). The macOS CSS
- * `backdrop-filter` path is the one that smears on an undecorated window;
- * everywhere else it is the frost.
- */
-export const hostKind: "macos" | "linux" | "browser" | "other" = !inTauri
-  ? "browser"
-  : navigator.userAgent.includes("Mac")
-    ? "macos"
-    : navigator.userAgent.includes("Linux")
-      ? "linux"
-      : "other"
-
 export const HOST_EVENTS = {
   toggleSurface: "nessa://toggle-surface",
   focusComposer: "nessa://focus-composer",
@@ -72,7 +58,7 @@ export interface PanelSize {
  * The size is carried, and it comes from the host rather than from Tauri's own
  * window APIs. The webview is deliberately larger than the window and pinned to
  * its bottom right corner, so that a resize never moves the page's viewport and
- * so cannot displace anything already drawn — see `src-tauri/src/viewport.rs`.
+ * so cannot displace anything already drawn — see `src-tauri/src/platform/`.
  * Tauri reads a window's inner size off that same view, so with the view
  * detached from the window `innerSize()` answers with the stage, agreeing with
  * `innerHeight` and with nothing the reader can see. The host reads AppKit's
@@ -100,7 +86,7 @@ export async function windowSize(): Promise<PanelSize | null> {
  * to resized programmatically.
  *
  * macOS runs that gesture itself and tells the webview nothing about it, so
- * the host forwards AppKit's own notifications (see `live_resize.rs`); there
+ * the host forwards AppKit's own notifications (see `platform/macos/live_resize.rs`); there
  * is no reading it off the page's own events. Outside Tauri there is no
  * window frame to hold, so the handler is simply never called.
  */

@@ -6,10 +6,8 @@ import { PillComposer, PillComposerRow } from "@nessa-ui/react/pill-composer"
 import { RandomAvatar } from "@nessa-ui/react/random-avatar"
 
 import { AGENT_HUES } from "./agent-identity"
-import {
-  hostKind,
-  startResizeFromLeftEdge,
-} from "./host-window"
+import { host } from "./host"
+import { startResizeFromLeftEdge } from "./host-window"
 import { Transcript } from "./transcript"
 import { useColorScheme } from "./use-color-scheme"
 import { useConversation } from "./use-conversation"
@@ -57,7 +55,8 @@ export function App() {
         ref={edge.panelRef}
         data-nessa-root
         data-surface={surface}
-        data-host={hostKind}
+        data-host={host.kind}
+        data-frost={host.frost}
         className="nessa-panel relative flex min-h-0 flex-col overflow-hidden rounded-[18px] border"
         onPointerMove={edge.onPointerMove}
         onPointerLeave={edge.onPointerLeave}
@@ -83,18 +82,14 @@ export function App() {
             // GTK's `begin_resize_drag` does not see it and the west resize
             // never starts. The system's 5px inset still works; this path is
             // the rest of the handle.
-            if (hostKind !== "linux") {
+            if (host.capturePointerOnWestHandle) {
               event.currentTarget.setPointerCapture(event.pointerId)
             }
             edge.holdResize()
             void startResizeFromLeftEdge()
           }}
           onPointerUp={edge.releaseResize}
-          className={
-            hostKind === "linux"
-              ? "absolute inset-y-0 left-0 z-10 w-3 cursor-ew-resize"
-              : "absolute inset-y-0 left-0 z-10 w-1.5 cursor-ew-resize"
-          }
+          className={host.westHandleClass}
         />
 
         {/* The strip is the titlebar too: the gaps around the tabs drag the

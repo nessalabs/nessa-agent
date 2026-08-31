@@ -10,7 +10,7 @@ straight to the composer. The tab strip doubles as the titlebar — the gaps
 around the tabs drag the window; everything else lives in the tray menu.
 
 It opens in the **lower right** of whichever screen it is summoned on, the way
-Clawdia's panel does — a 420pt column filling the work area's height by default,
+Nessa's panel does — a 420pt column filling the work area's height by default,
 both configurable (see [Settings](#settings)). A panel shorter than the screen
 sits on the bottom edge rather than hanging from the top. The frame is reapplied
 on every show, so moving between displays re-fits it rather than stranding it
@@ -21,6 +21,11 @@ hang from, so it opens on launch, stays on the taskbar, and still summons from
 the system tray and **Ctrl+Shift+A** when those exist. Frost is CSS
 `backdrop-filter` rather than an `NSVisualEffectView`. The webview is pinned
 the same way as on macOS so a resize does not jitter the composer.
+
+OS-specific window behaviour is not scattered through `main`. It lives in
+[`src-tauri/src/platform/`](src-tauri/src/platform/) — a `Host` trait with one
+implementation per OS, injected by `current()` — and in
+[`src/host/`](src/host/) on the shell.
 
 ## What is here
 
@@ -254,7 +259,7 @@ dead locals are not this app's to fix.
 ### The frosted surface is native, not CSS
 
 The frost is an `NSVisualEffectView` behind the webview
-([src-tauri/src/vibrancy.rs](src-tauri/src/vibrancy.rs)), not a CSS
+([src-tauri/src/platform/macos/vibrancy.rs](src-tauri/src/platform/macos/vibrancy.rs)), not a CSS
 `backdrop-filter`. On a transparent, undecorated macOS window the CSS filter does
 not sample the behind-window content 1:1 — it stretches it into a bleed running a
 few hundred points down the panel — and it stops updating when the window loses
@@ -271,8 +276,9 @@ natively too, which is what the `set_frosted` command is for.
 ### Hide-on-blur
 
 A menu bar panel normally dismisses when you click away, but that would hide the
-window every time you open devtools. It is therefore release-only — see the
-`Focused(false)` arm in [src-tauri/src/main.rs](src-tauri/src/main.rs).
+window every time you open devtools. It is therefore release-only — see
+`on_window_event` on the macOS host in
+[src-tauri/src/platform/macos/mod.rs](src-tauri/src/platform/macos/mod.rs).
 
 ## The Nessa UI dependency
 
