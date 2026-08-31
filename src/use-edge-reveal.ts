@@ -61,6 +61,15 @@ export function useEdgeReveal() {
       return
     }
 
+    // Outside the panel there is no border to reveal. Without this the
+    // distance goes negative, clamps to full strength, and a drag released
+    // beyond the window's edge leaves the glow lit with no further
+    // pointerleave coming to put it out.
+    if (x < 0 || y < 0 || x > box.width || y > box.height) {
+      glow.style.opacity = "0"
+      return
+    }
+
     const distance = Math.min(x, y, box.width - x, box.height - y)
     const near = Math.min(Math.max((REACH - distance) / (REACH - CONTACT), 0), 1)
     // Squared, so the border stirs faintly at the fringe of the reach and
