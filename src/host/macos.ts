@@ -10,4 +10,5 @@ export const macos: HostFeatures = {
   animateMount: true,
   streamText: true,
   emptyState: true,
+  flushOnTurn: false,
 }

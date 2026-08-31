@@ -13,4 +13,5 @@ export const browser: HostFeatures = {
   animateMount: true,
   streamText: true,
   emptyState: true,
+  flushOnTurn: false,
 }

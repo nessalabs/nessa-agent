@@ -10,4 +10,5 @@ export const linux: HostFeatures = {
   animateMount: false,
   streamText: false,
   emptyState: true,
+  flushOnTurn: true,
 }

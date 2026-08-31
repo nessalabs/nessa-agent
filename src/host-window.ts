@@ -82,6 +82,16 @@ export async function windowSize(): Promise<PanelSize | null> {
 }
 
 /**
+ * Drops vacated compositor tiles. WebKitGTK keeps the previous frame of a
+ * bubble that has changed y; macOS and the browser preview do not need this.
+ */
+export async function flushCompositor() {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("flush_compositor")
+}
+
+/**
  * Subscribes to the window being live-resized — held by its frame, as opposed
  * to resized programmatically.
  *

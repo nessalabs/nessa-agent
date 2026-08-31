@@ -11,6 +11,7 @@ import { RandomAvatar } from "@nessa-ui/react/random-avatar"
 
 import { AGENT_HUES } from "./agent-identity"
 import { type Conversation, type Receipt, type Turn } from "./conversation"
+import { flushCompositor } from "./host-window"
 
 /**
  * The turn list for the open conversation. Scrolls itself; does not know
@@ -23,22 +24,30 @@ export function Transcript({
   animateMount,
   streamText,
   emptyState,
+  flushOnTurn,
 }: {
   conversation: Conversation
   ground: "paper" | "ink"
   animateMount: boolean
   streamText: boolean
   emptyState: boolean
+  flushOnTurn: boolean
 }) {
   const logRef = React.useRef<HTMLDivElement>(null)
   const streamingId =
     conversation.phase === "streaming" ? conversation.turns.at(-1)?.id : undefined
   const sentTurns = conversation.turns.filter((turn) => turn.from === "user").length
+  const turnKey = `${conversation.id}:${conversation.phase}:${conversation.turns.length}`
 
   React.useEffect(() => {
     const log = logRef.current
     if (log) log.scrollTop = log.scrollHeight
   }, [conversation.turns, conversation.phase, conversation.id])
+
+  React.useLayoutEffect(() => {
+    if (!flushOnTurn) return
+    void flushCompositor()
+  }, [flushOnTurn, turnKey])
 
   return (
     <div

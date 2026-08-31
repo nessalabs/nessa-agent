@@ -129,6 +129,7 @@ are written here.
 | The summon shortcut | `settings.rs` for the key, `shortcut.rs` for registration |
 | A new persisted preference | `settings.rs` (with a default), then its owner |
 | A new host event or payload | `host.rs` and `host-window.ts` together |
+| Leftover transcript tiles on a layout compositor | `flush_compositor` in `platform/` plus `flushOnTurn` on `HostFeatures` |
 | The conversation surface (tabs, turns, stand-in reply) | `conversation.ts` (rules), `conversation-slice.ts` (actions), `conversation-clocks.tsx` (clocks) |
 | The transcript chrome | `src/transcript.tsx` |
 | The panel chrome or composer | `src/app.tsx` |

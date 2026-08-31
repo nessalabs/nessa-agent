@@ -54,6 +54,11 @@ export interface HostFeatures {
   readonly streamText: boolean
   /** Idle empty-state avatar. Safe on every host; motion follows animateMount. */
   readonly emptyState: boolean
+  /**
+   * Ask the host to drop vacated compositor tiles after a turn lands.
+   * WebKitGTK in a transparent window keeps the previous bubble frame.
+   */
+  readonly flushOnTurn: boolean
 }
 
 export const WEST_HANDLE_NARROW = "nessa-west-handle nessa-west-handle-narrow"

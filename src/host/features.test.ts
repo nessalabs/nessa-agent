@@ -25,6 +25,7 @@ function expectFeatures(
     animateMount: boolean
     streamText: boolean
     emptyState: boolean
+    flushOnTurn: boolean
   },
 ) {
   expect(host).toEqual(expected)
@@ -41,6 +42,7 @@ describe("host features", () => {
       animateMount: false,
       streamText: false,
       emptyState: true,
+      flushOnTurn: true,
     })
   })
 
@@ -54,6 +56,7 @@ describe("host features", () => {
       animateMount: true,
       streamText: true,
       emptyState: true,
+      flushOnTurn: false,
     })
   })
 
@@ -67,6 +70,7 @@ describe("host features", () => {
       animateMount: true,
       streamText: true,
       emptyState: true,
+      flushOnTurn: false,
     })
   })
 
@@ -80,6 +84,7 @@ describe("host features", () => {
       animateMount: true,
       streamText: true,
       emptyState: true,
+      flushOnTurn: false,
     })
   })
 })

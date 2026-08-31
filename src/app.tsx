@@ -112,19 +112,16 @@ export function App() {
           />
         </div>
 
-        {/* Layout compositors remount when a turn lands so vacated tiles
-            are dropped. Layer compositors only remount on tab switch. */}
+        {/* Keyed so a layout compositor drops the previous conversation's
+            tiles instead of leaving them over the wallpaper. */}
         <Transcript
-          key={
-            host.compositor === "layout"
-              ? `${strip.active.id}:${strip.active.phase}:${strip.active.turns.length}`
-              : strip.active.id
-          }
+          key={strip.active.id}
           conversation={strip.active}
           ground={ground}
           animateMount={host.animateMount}
           streamText={host.streamText}
           emptyState={host.emptyState}
+          flushOnTurn={host.flushOnTurn}
         />
 
         <div className="nessa-composer">
