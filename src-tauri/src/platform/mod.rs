@@ -63,12 +63,6 @@ pub trait Host: Send + Sync {
     /// tray summons it.
     fn after_attach(&self, _window: &WebviewWindow, _settings: &Settings) {}
 
-    /// Drop leftover WebKitGTK tiles after the page moves a bubble. No-op
-    /// where the webview already clears vacated pixels (macOS, browsers).
-    fn repaint_panel(&self, _window: &WebviewWindow) -> Result<(), String> {
-        Ok(())
-    }
-
     /// OS-specific window events. Shared close-to-hide lives in `main`.
     fn on_window_event(&self, _window: &Window, _event: &WindowEvent) {}
 }
@@ -133,13 +127,6 @@ pub fn set_frosted(
 #[tauri::command]
 pub fn panel_size(window: WebviewWindow) -> Result<PanelSize, String> {
     current().panel_size(&window)
-}
-
-/// Clears leftover compositor tiles in the webview. Linux needs this when
-/// the transcript slides; other hosts already paint vacated pixels.
-#[tauri::command]
-pub fn repaint_panel(window: WebviewWindow) -> Result<(), String> {
-    current().repaint_panel(&window)
 }
 
 /// The display the panel is on, falling back to the primary one — the same
