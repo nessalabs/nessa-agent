@@ -12,7 +12,30 @@ mod viewport;
 
 use tauri::{Manager, WindowEvent};
 
+/// WebKitGTK's DMA-BUF renderer needs a DRM device. A VNC or llvmpipe session
+/// has none, and the panel paints black (or not at all). The env has to be
+/// set before GTK starts; a reader who already chose a value is left alone.
+#[cfg(target_os = "linux")]
+fn prepare_webkit() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some() {
+        return;
+    }
+    let has_drm = std::path::Path::new("/dev/dri/card0").exists()
+        || std::path::Path::new("/dev/dri/renderD128").exists();
+    if has_drm {
+        return;
+    }
+    // SAFETY: called from `main` before any other threads exist.
+    unsafe {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+    }
+}
+
 fn main() {
+    #[cfg(target_os = "linux")]
+    prepare_webkit();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![

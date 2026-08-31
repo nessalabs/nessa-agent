@@ -93,11 +93,25 @@ pub fn width_only_physical(
     scale: f64,
 ) -> Option<PhysicalSize<u32>> {
     (current.height > 0).then(|| {
-        PhysicalSize::new(
-            (opening_width * scale).round() as u32,
-            current.height,
-        )
+        PhysicalSize::new((opening_width * scale).round() as u32, current.height)
     })
+}
+
+/// GTK reports `outer_size` as 0×0 before the window is realized. Feeding
+/// that to `frame_on` would open a 1px-wide strip, because the helper only
+/// clamps to 1. Substitute the configured opening width instead; height 0 is
+/// fine when the frame fills the work area.
+pub fn realized_outer(
+    current: PhysicalSize<u32>,
+    opening_width: f64,
+    scale: f64,
+) -> PhysicalSize<u32> {
+    let width = if current.width == 0 {
+        (opening_width * scale).round() as u32
+    } else {
+        current.width
+    };
+    PhysicalSize::new(width.max(1), current.height)
 }
 
 pub fn opening_size(panel: &crate::settings::Panel) -> OpeningSize {
@@ -174,6 +188,8 @@ fn anchor_to_edge(window: &WebviewWindow, settings: &Settings) -> tauri::Result<
     };
 
     let area = monitor.work_area();
+    let scale = monitor.scale_factor();
+    let opening = opening_size(&settings.panel);
     let frame = frame_on(
         WorkArea {
             x: area.position.x,
@@ -181,9 +197,9 @@ fn anchor_to_edge(window: &WebviewWindow, settings: &Settings) -> tauri::Result<
             width: area.size.width,
             height: area.size.height,
         },
-        window.outer_size()?,
+        realized_outer(window.outer_size()?, opening.width, scale),
         settings.panel.height.is_none(),
-        monitor.scale_factor(),
+        scale,
     );
 
     window.set_size(PhysicalSize::new(frame.width, frame.height))?;
@@ -249,6 +265,14 @@ mod tests {
             min_width: 420.0,
         };
         assert_eq!(opening_size(&panel).height, Some(MIN_PANEL_HEIGHT));
+    }
+
+    #[test]
+    fn an_unrealized_window_opens_at_the_configured_width() {
+        let size = realized_outer(PhysicalSize::new(0, 0), 420.0, 1.0);
+        let frame = frame_on(area(1920, 1080), size, true, 1.0);
+        assert_eq!(frame.width, 420);
+        assert_eq!(frame.height, 1080 - 40);
     }
 
     #[test]
