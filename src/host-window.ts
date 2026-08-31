@@ -43,35 +43,30 @@ export interface HostSize {
  * Subscribes to the window changing size, whoever is driving it. Returns a
  * promise for the unsubscribe, and a no-op outside Tauri.
  *
- * The size is carried because the page can no longer read it off its own
- * viewport. The webview is deliberately larger than the window and pinned to
+ * The size is carried, and it comes from the host rather than from Tauri's own
+ * window APIs. The webview is deliberately larger than the window and pinned to
  * its bottom right corner, so that a resize never moves the page's viewport and
- * so cannot displace anything already drawn — see `src-tauri/src/viewport.rs`
- * for why that is the only place the displacement can be fixed. `innerHeight`
- * therefore describes the stage the panel stands on, not the panel.
+ * so cannot displace anything already drawn — see `src-tauri/src/viewport.rs`.
+ * Tauri reads a window's inner size off that same view, so with the view
+ * detached from the window `innerSize()` answers with the stage, agreeing with
+ * `innerHeight` and with nothing the reader can see. The host reads AppKit's
+ * content rect instead, which a fixed webview cannot falsify, and sends it.
  */
 export async function onWindowResize(handler: (size: HostSize) => void) {
   if (!inTauri) return () => undefined
-  const { getCurrentWindow } = await import("@tauri-apps/api/window")
-  return getCurrentWindow().onResized(({ payload }) => handler(logical(payload)))
+  const { listen } = await import("@tauri-apps/api/event")
+  return listen<HostSize>("nessa://panel-sized", ({ payload }) => handler(payload))
 }
 
 /**
- * The window's size now, for the first paint. The panel is summoned hidden and
- * sized before it is shown, so the opening size normally arrives as an event —
- * but a reload mid-session has no event coming and would otherwise draw the
- * panel the size of the whole stage until the reader next dragged an edge.
+ * The window's size now, for a page with no size event coming. The host sends
+ * one as it places the panel, which a webview that reloaded mid-session — a
+ * devtools reload — will have missed.
  */
 export async function windowSize(): Promise<HostSize | null> {
   if (!inTauri) return null
-  const { getCurrentWindow } = await import("@tauri-apps/api/window")
-  return logical(await getCurrentWindow().innerSize())
-}
-
-/** Window sizes arrive in device pixels; CSS is written in logical ones. */
-function logical(size: { width: number; height: number }): HostSize {
-  const scale = window.devicePixelRatio || 1
-  return { width: size.width / scale, height: size.height / scale }
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<HostSize>("panel_size")
 }
 
 /**

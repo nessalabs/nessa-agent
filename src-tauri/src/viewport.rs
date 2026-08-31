@@ -44,6 +44,54 @@
 //! under the cursor, where it reads as the drag catching up rather than as the
 //! contents coming loose.
 
+/// Carries the window's size to the page, which can no longer measure it.
+///
+/// Nothing in the page can: its own viewport is the stage, and Tauri's window
+/// size APIs read the webview's view, which is the very thing this module
+/// stops resizing — `innerSize()` reports the stage too. AppKit's content rect
+/// is the one description of the window left that a fixed webview cannot
+/// falsify, so it is read here and sent.
+pub const SIZED: &str = "nessa://panel-sized";
+
+/// Points, which are CSS pixels: the webview does its own scaling, so no device
+/// ratio enters into it.
+#[derive(Clone, serde::Serialize)]
+pub struct PanelSize {
+    pub width: f64,
+    pub height: f64,
+}
+
+/// The window's size now, for a page that has just loaded and has no size event
+/// coming — a devtools reload mid-session, or a webview that mounted after the
+/// panel was last fitted.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn panel_size(window: tauri::WebviewWindow) -> Result<PanelSize, String> {
+    use objc2_app_kit::NSWindow;
+
+    let handle = window.ns_window().map_err(|error| error.to_string())?;
+    let ns_window: &NSWindow = unsafe { &*handle.cast::<NSWindow>() };
+    ns_window
+        .contentView()
+        .map(|content| size_of(&content))
+        .ok_or_else(|| String::from("the window has no content view"))
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn panel_size(_window: tauri::WebviewWindow) -> Result<PanelSize, String> {
+    Err(String::from("the panel only detaches its viewport on macOS"))
+}
+
+#[cfg(target_os = "macos")]
+fn size_of(content: &objc2_app_kit::NSView) -> PanelSize {
+    let bounds = content.bounds();
+    PanelSize {
+        width: bounds.size.width,
+        height: bounds.size.height,
+    }
+}
+
 /// Sizes the webview to the stage and pins it to the window's bottom right.
 ///
 /// Call this whenever the window may have gained room to grow into — at setup,
@@ -104,10 +152,17 @@ pub fn fit(window: &tauri::WebviewWindow) -> Result<(), String> {
     webview.setAutoresizingMask(mask);
     webview.setFrame(NSRect::new(origin, NSSize::new(width, height)));
 
+    // The page draws the panel from this, so it is sent with the placement
+    // rather than left for the next resize: a panel summoned at a size it was
+    // already at raises no resize at all.
+    use tauri::Emitter;
+    let _ = window.emit(SIZED, size_of(&content));
+
     Ok(())
 }
 
-/// Re-fits the stage if the window is ever dragged past it.
+/// Carries the window's size to the page on every resize, and re-fits the stage
+/// if the window is ever dragged past it.
 ///
 /// The stage is sized for the work area, which is as large as the panel is ever
 /// summoned; macOS will nonetheless let a drag pull the frame past it, and a
@@ -139,6 +194,11 @@ pub fn watch(window: &tauri::WebviewWindow) -> Result<(), String> {
             let Some(webview) = webview_in(&content) else {
                 return;
             };
+
+            // Every step, because this is the page's only account of the
+            // window's size while it is being dragged.
+            use tauri::Emitter;
+            let _ = target.emit(SIZED, size_of(&content));
 
             let stage = webview.frame().size;
             let window = content.bounds().size;

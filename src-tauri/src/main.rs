@@ -13,7 +13,10 @@ use tauri::{Manager, WindowEvent};
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![vibrancy::set_frosted])
+        .invoke_handler(tauri::generate_handler![
+            vibrancy::set_frosted,
+            viewport::panel_size
+        ])
         .setup(|app| {
             // No Dock icon and no app menu: Nessa lives in the menu bar and is
             // summoned from there.
