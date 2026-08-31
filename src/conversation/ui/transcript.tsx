@@ -4,14 +4,13 @@ import {
   ChatMessage,
   ChatMessageActions,
   ChatMessageReceipt,
-  ChatTypingIndicator,
 } from "@nessa-ui/react/chat-bubbles"
 import { MessageStreamText } from "@nessa-ui/react/message"
-import { RandomAvatar } from "@nessa-ui/react/random-avatar"
 
-import { AGENT_HUES } from "./agent-identity"
-import { type Conversation, type Receipt, type Turn } from "./conversation"
-import { flushCompositor } from "./host-window"
+import { useFlushOnTurn } from "../adapters/compositor-flush"
+import { type Conversation, type Receipt, type Turn } from "../model"
+import { EmptyState } from "./empty-state"
+import { Thinking } from "./thinking"
 
 /**
  * The turn list for the open conversation. Scrolls itself; does not know
@@ -44,10 +43,7 @@ export function Transcript({
     if (log) log.scrollTop = log.scrollHeight
   }, [conversation.turns, conversation.phase, conversation.id])
 
-  React.useLayoutEffect(() => {
-    if (!flushOnTurn) return
-    void flushCompositor()
-  }, [flushOnTurn, turnKey])
+  useFlushOnTurn(flushOnTurn, turnKey)
 
   return (
     <div
@@ -109,57 +105,6 @@ function TurnRow({
   )
 }
 
-/**
- * The typing pill. Motion hosts use the design-system indicator (WAAPI pulse).
- * Layout hosts get the same pill without the translate animation — CSS cannot
- * cancel a WAAPI `translate`, and that is what ghosts on a transparent window.
- */
-function Thinking({ motion }: { motion: boolean }) {
-  if (motion) return <ChatTypingIndicator label="Nessa is typing" />
-  return (
-    <div
-      role="status"
-      aria-label="Nessa is typing"
-      data-slot="chat-typing-indicator"
-      className="flex items-center gap-1 self-start rounded-[1.125rem] bg-accent px-3.5 py-3"
-    >
-      {[0, 1, 2].map((dot) => (
-        <span
-          key={dot}
-          data-slot="chat-typing-dot"
-          className="size-2 rounded-full bg-muted-foreground opacity-35"
-        />
-      ))}
-    </div>
-  )
-}
-
 function receiptLabel(receipt: Receipt) {
   return receipt === "delivered" ? "Delivered" : "Sending"
-}
-
-function EmptyState({
-  seed,
-  ground,
-  animateMount,
-}: {
-  seed: string
-  ground: "paper" | "ink"
-  animateMount: boolean
-}) {
-  return (
-    <div className="flex flex-col items-center gap-2.5 py-6 text-center">
-      <RandomAvatar
-        seed={seed}
-        hues={AGENT_HUES}
-        name="Nessa"
-        ground={ground}
-        animateOnMount={animateMount}
-        className="size-14 rounded-full"
-      />
-      <p className="nessa-text-3 m-0 text-muted-foreground">
-        Nessa is listening. Press Enter to send.
-      </p>
-    </div>
-  )
 }

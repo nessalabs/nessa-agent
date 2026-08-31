@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
 
+import { draftReply } from "../../application/internal/stand-in"
+import { makeStore } from "../../../store"
 import {
   advanceReply,
   closeConversation,
@@ -8,9 +10,7 @@ import {
   setActiveId,
   setDraft,
   stopGenerating,
-} from "./conversation-slice"
-import { draftReply } from "./conversation"
-import { makeStore } from "./store"
+} from "./slice"
 
 /** An agent (or a test) drives the strip by dispatching named actions. */
 function agent(store: ReturnType<typeof makeStore>) {

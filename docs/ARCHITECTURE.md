@@ -20,10 +20,9 @@ The two hard parts are **the window** — placing, sizing, and re-fitting a
 chromeless panel across displays without the page's contents jittering during a
 resize, with a frost that can be turned off — and **the conversation surface**
 — a turn list with an `idle → thinking → streaming` lifecycle that a real agent
-runtime will eventually drive. There is no agent in this repository yet; the
-stand-in in `conversation.ts` exists so the bubbles, the typing dots, the
-streaming reveal, and the composer's lit rim can be built and resized against
-real UI.
+runtime will eventually drive. There is no agent in this repository yet; the local conversation gateway
+stands in so the bubbles, the typing dots, the streaming reveal, and the
+composer's lit rim can be built and resized against real UI.
 
 ## Code map
 
@@ -49,12 +48,8 @@ opinion rather than the product's.
 | --- | --- |
 | `app.tsx` | The panel chrome: the stage, the glow, the resize handle, the tab strip, the composer. It renders; it does not own conversation rules or OS branches. |
 | `host/` | Injected host features (`frost`, `compositor`, mount/stream/empty-state policy, west-handle behaviour). `resolveHost` picks `macos` / `linux` / `browser` / `other`. |
-| `transcript.tsx` | The turn list for the open conversation. Scrolls itself. One `Thinking` pill for an empty assistant turn. |
-| `conversation.ts` | The strip's rules: naming, drafts, the never-empty tab bar, `idle → thinking → streaming`. The stand-in reply lives here too. No React, no Redux, no host. |
-| `conversation-slice.ts` | The adapter: those rules as named actions. This is what an agent dispatches. |
-| `store.ts` | The product store. Conversation strip only. `dispatch` is the non-React entry point. |
-| `use-conversation.tsx` | Selectors and the actions the chrome dispatches. |
-| `conversation-clocks.tsx` | The stand-in clocks. One timer per conversation; the clock dispatches `advanceReply`. |
+| `conversation/` | The conversation vertical. See the table below. |
+| `store.ts` | Composition root for product state. Mounts the conversation projection. `dispatch` is the non-React entry point. |
 | `use-host-panel.ts` | The host seam wiring: frost, tray surface request, composer focus. |
 | `host-window.ts` | The single seam to the desktop host. Guarded so the same UI runs in a plain browser with the seam no-oping. |
 | `use-surface.ts` | Which surface is chosen, and remembering it. The frontend owns this; the tray only *requests* a toggle and reflects the answer back. |
@@ -63,6 +58,18 @@ opinion rather than the product's.
 | `use-panel-frame.ts` | Writes the host window's size into CSS, so the panel can be the window even when the viewport is not. |
 | `agent-identity.ts` | The agent's name and avatar seed. |
 | `waveform-icon.tsx` | The voice glyph in the composer. |
+
+**Conversation vertical** (`src/conversation/`) — one feature, independently testable.
+
+| Path | Owns |
+| --- | --- |
+| `model/` | The contract: `Conversation`, `Turn`, `ConversationStrip`. Types only. |
+| `application/usecases/` | One file per command. Server-owned: send, advance, stop, open, close. UI session: draft, active tab. |
+| `application/ports.ts` | `ConversationGateway` — what the panel may ask the product to do. |
+| `adapters/gateway/local.ts` | In-process stand-in. Tomorrow this is the remote gateway. |
+| `adapters/store/` | Redux projection. Reducers call the gateway; they do not contain rules. |
+| `adapters/clock/` | Stand-in phase timer. A real runtime drives phase from stream events. |
+| `ui/` | Transcript, thinking pill, `useConversation`. Paints and dispatches. |
 
 ## Boundaries
 
@@ -130,8 +137,8 @@ are written here.
 | A new persisted preference | `settings.rs` (with a default), then its owner |
 | A new host event or payload | `host.rs` and `host-window.ts` together |
 | Leftover transcript tiles on a layout compositor | `flush_compositor` in `platform/` plus `flushOnTurn` on `HostFeatures` |
-| The conversation surface (tabs, turns, stand-in reply) | `conversation.ts` (rules), `conversation-slice.ts` (actions), `conversation-clocks.tsx` (clocks) |
-| The transcript chrome | `src/transcript.tsx` |
+| The conversation surface (tabs, turns, stand-in reply) | `src/conversation/application/usecases/` (commands), `adapters/gateway/` (stand-in), `adapters/store/` (projection) |
+| The transcript chrome | `src/conversation/ui/` |
 | The panel chrome or composer | `src/app.tsx` |
 | Resize jitter, the pinned webview | `platform/{macos,linux,other}/viewport.rs` |
 | Native frost | `platform/macos/vibrancy.rs` |
@@ -145,6 +152,6 @@ are written here.
 
 There is no agent runtime, no persistence for conversations, no settings UI.
 When those arrive they are new contexts with their own domain, not additions to
-`conversation.ts` and `settings.rs`. The shape to grow into is in
-[codebase-structure.md](codebase-structure.md); the trigger for applying it is a
-concept acquiring an invariant, a second consumer, or its own storage.
+the local conversation gateway and `settings.rs`. The conversation vertical is
+already shaped so a remote gateway can replace `adapters/gateway/local.ts`. See
+[adr/0002-conversation-vertical-and-gateway.md](adr/0002-conversation-vertical-and-gateway.md).

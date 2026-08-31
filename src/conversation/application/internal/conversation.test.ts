@@ -1,15 +1,10 @@
 import { describe, expect, it } from "vitest"
 
-import {
-  advance,
-  closeInStrip,
-  conversation,
-  draftReply,
-  send,
-  stop,
-  titleFor,
-  withDraft,
-} from "./conversation"
+import { conversation } from "../../model"
+import { advance, send, stop, withDraft } from "./conversation"
+import { closeInStrip } from "./strip"
+import { draftReply } from "./stand-in"
+import { titleFor } from "./title"
 
 describe("send", () => {
   it("names a new conversation after its opening line and opens an assistant row", () => {
@@ -50,7 +45,7 @@ describe("send", () => {
 describe("advance", () => {
   it("fills the open assistant row, then returns to idle", () => {
     const thinking = send(conversation("c0"), "hi", "t1", "t2")
-    const streaming = advance(thinking, "t9")
+    const streaming = advance(thinking, "t9", draftReply)
     expect(streaming.phase).toBe("streaming")
     expect(streaming.turns.filter((turn) => turn.from === "user")).toEqual([
       { id: "t1", from: "user", text: "hi", receipt: "sending" },
@@ -60,7 +55,7 @@ describe("advance", () => {
       from: "assistant",
       text: draftReply("hi"),
     })
-    const idle = advance(streaming, "t10")
+    const idle = advance(streaming, "t10", draftReply)
     expect(idle.phase).toBe("idle")
     expect(idle.pending).toBe("")
     expect(idle.turns[0]).toEqual({
@@ -73,7 +68,7 @@ describe("advance", () => {
 
   it("leaves an idle conversation alone", () => {
     const idle = conversation("c0")
-    expect(advance(idle, "t1")).toBe(idle)
+    expect(advance(idle, "t1", draftReply)).toBe(idle)
   })
 })
 

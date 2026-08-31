@@ -1,14 +1,18 @@
 import { useEffect } from "react"
 
-import { STREAMING_MS, THINKING_MS, type Phase } from "./conversation"
-import { advanceReply, useAppDispatch, useAppSelector } from "./store"
+import { STREAMING_MS, THINKING_MS } from "../../application/delays"
+import type { Phase } from "../../model"
+import { advanceReply } from "../store/slice"
+import { useConversationDispatch, useConversationSelector } from "../store/hooks"
 
 /**
- * The stand-in runtime's clocks. One timer per conversation so a reply
- * arriving in a background tab does not restart another conversation's clock.
+ * Stand-in for the server driving `idle → thinking → streaming`. One timer
+ * per conversation so a background tab does not restart another clock.
  */
 export function ConversationClocks() {
-  const conversations = useAppSelector((state) => state.conversation.conversations)
+  const conversations = useConversationSelector(
+    (state) => state.conversation.conversations,
+  )
 
   return (
     <>
@@ -20,7 +24,7 @@ export function ConversationClocks() {
 }
 
 function ReplyTimer({ conversationId, phase }: { conversationId: string; phase: Phase }) {
-  const dispatch = useAppDispatch()
+  const dispatch = useConversationDispatch()
 
   useEffect(() => {
     if (phase === "idle") return

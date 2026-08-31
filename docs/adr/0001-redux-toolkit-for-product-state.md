@@ -18,9 +18,9 @@ exposes hook setters cannot either.
 ## Decision
 
 Use Redux Toolkit and react-redux for product state. The first slice is the
-conversation strip. Rules stay in `conversation.ts`; the slice is the adapter
-that turns those rules into actions. `store.dispatch` is the agent entry
-point.
+conversation strip. It is a projection: named actions call
+`ConversationGateway` and store the strip. `store.dispatch` is the agent
+entry point. See [0002](0002-conversation-vertical-and-gateway.md).
 
 Host, DOM, and clocks stay in hooks: `use-host-panel`, `use-panel-frame`,
 `use-edge-reveal`, `use-color-scheme`, `use-surface`, and
@@ -41,10 +41,9 @@ a component that only renders (`app.tsx`).
 - **Keep `useState`.** Cheap today, and the strip is still small. It cannot
   be dispatched into from outside the tree, so it would have to be replaced
   the moment an agent existed.
-- **A four-layer DDD tree around this slice.** The repo's own rule: a module
-  does not earn `domain/application/adapters` until a concept has an
-  invariant, a second consumer, or its own storage. Conversation rules are
-  already a pure module. That is enough.
+- **A four-layer DDD tree around this slice.** Deferred at the time. The
+  conversation vertical later earned it — see 0002 — because a server will
+  own the commands and the UI must already be a projection.
 
 ## Consequences
 
@@ -55,8 +54,7 @@ What stays hard: deciding whether a new piece of state is product or host.
 If it is a window, a pointer, a clock, or a CSS token, it is a hook. If an
 agent should be able to ask for it by name, it is a slice.
 
-Watch for the store importing the panel chrome, or `conversation.ts`
-importing React or Redux — both are architecture-check failures. Revisit this
-record if the agent grows a runtime that owns the turn lifecycle itself; the
-slice would then become a projection of that runtime, not the source of
-truth.
+Watch for the store importing the panel chrome, or conversation use cases
+importing React or Redux — both are architecture-check failures. The slice
+is already a projection of the gateway; a remote runtime replaces the local
+adapter, not the chrome.

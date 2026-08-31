@@ -1,12 +1,23 @@
 /**
  * Product state the shell — and later an agent — can dispatch into.
  *
- * Host, DOM, and clocks stay in hooks. This store is the conversation strip.
+ * The conversation vertical owns its slice. This file is the composition
+ * root: it mounts that projection. It imports the slice, not the UI barrel,
+ * so tests do not pull the design system.
  */
 import { configureStore } from "@reduxjs/toolkit"
 import { useDispatch, useSelector } from "react-redux"
 
-import { conversationReducer } from "./conversation-slice"
+import {
+  conversationReducer,
+  advanceReply,
+  closeConversation,
+  openConversation,
+  sendDraft,
+  setActiveId,
+  setDraft,
+  stopGenerating,
+} from "./conversation/adapters/store/slice"
 
 export function makeStore() {
   return configureStore({
@@ -35,4 +46,4 @@ export {
   setActiveId,
   setDraft,
   stopGenerating,
-} from "./conversation-slice"
+}

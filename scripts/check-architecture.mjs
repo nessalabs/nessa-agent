@@ -33,19 +33,37 @@ if (existsSync(join(src, "utils.ts")) || existsSync(join(src, "utils.tsx"))) {
   fail(join(src, "utils.ts"), "there is no utils module")
 }
 
+const draftReplyHome = "src/conversation/application/internal/stand-in.ts"
+
 for (const file of walk(src)) {
   const text = readFileSync(file, "utf8")
   const path = rel(file)
 
-  if (path === "src/conversation.ts") {
+  const inConversationRules =
+    path.startsWith("src/conversation/model/") ||
+    path.startsWith("src/conversation/application/")
+
+  if (inConversationRules && !path.endsWith(".test.ts")) {
     if (/from\s+["']react["']/.test(text) || /from\s+["']react\//.test(text)) {
-      fail(file, "conversation rules must not import React")
+      fail(file, "conversation model/use cases must not import React")
     }
     if (/@tauri-apps/.test(text)) {
-      fail(file, "conversation rules must not import the host")
+      fail(file, "conversation model/use cases must not import the host")
     }
     if (/redux/i.test(text)) {
-      fail(file, "conversation rules must not import the store")
+      fail(file, "conversation model/use cases must not import the store")
+    }
+  }
+
+  if (path.startsWith("src/conversation/ui/")) {
+    if (/application\/internal/.test(text)) {
+      fail(file, "the UI reads the projection; it does not import gateway internals")
+    }
+    if (/from\s+["'][^"']*host-window["']/.test(text)) {
+      fail(file, "the UI does not talk to the host; adapters do")
+    }
+    if (/Linux[A-Z]/.test(text) || /data-host=/.test(text)) {
+      fail(file, "host policy belongs in src/host, as a HostFeatures field")
     }
   }
 
@@ -62,37 +80,30 @@ for (const file of walk(src)) {
     fail(file, "hostKind === belongs in src/host, as a HostFeatures field")
   }
 
-  if (path === "src/app.tsx" && /\buseEffect\b/.test(text)) {
+  if (
+    (path === "src/app.tsx" || path.endsWith("/app.tsx")) &&
+    /\buseEffect\b/.test(text)
+  ) {
     fail(file, "app.tsx renders; effects belong in a hook")
   }
 
-  if (
-    (path === "src/store.ts" || path === "src/conversation-slice.ts") &&
-    /from\s+["']\.\/app["']/.test(text)
-  ) {
+  if (path === "src/store.ts" && /from\s+["']\.\/app["']/.test(text)) {
     fail(file, "the store must not import the panel chrome")
   }
 
   if (
-    path !== "src/conversation.ts" &&
+    path !== draftReplyHome &&
     !path.endsWith(".test.ts") &&
     /\bdraftReply\b/.test(text)
   ) {
-    fail(file, "draftReply is the stand-in runtime; only conversation.ts may call it")
+    fail(file, "draftReply is the stand-in runtime; only the local gateway may call it")
   }
 
-  if (
-    (path === "src/transcript.tsx" || path === "src/app.tsx") &&
-    /Linux[A-Z]/.test(text)
-  ) {
+  if ((path === "src/app.tsx" || path.endsWith("/app.tsx")) && /Linux[A-Z]/.test(text)) {
     fail(
       file,
       "host policy belongs in src/host; do not name Linux components in the chrome",
     )
-  }
-
-  if (path === "src/transcript.tsx" && /data-host=/.test(text)) {
-    fail(file, "the transcript reads HostFeatures fields, not data-host")
   }
 }
 

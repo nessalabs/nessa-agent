@@ -10,18 +10,15 @@ and it is the part that changes as Nessa grows.
 
 Nessa is a two-runtime desktop app: a Rust host (window, tray, shortcut,
 settings, OS integration) and a React shell (chat surface, composer, avatar).
-Right now both sides are small and flat, and that is correct — a five-file
-module does not need a four-layer split. The shape below is what to grow *into*,
-applied at the moment a module earns it, not before.
-
-**The trigger:** a concept acquires an invariant, a second consumer, or its own
-persistence. Until then, one well-named file.
+The conversation vertical has earned the split: the panel is a projection, and
+a server will own the commands. Other modules stay flat until they earn the
+same trigger — an invariant, a second consumer, or their own persistence.
 
 ## Target shape
 
 ```
-src/                      React shell — presentation adapters only
-  <feature>/              one folder per product surface (conversation, composer, …)
+src/                      React shell — presentation adapters and projections
+  conversation/           first vertical (model / use cases / gateway / UI)
 src-tauri/src/
   <context>/
     domain/               rules, entities, value objects, events
@@ -137,14 +134,11 @@ writing the full defaults on first launch is buying.
 
 - A component either renders or coordinates, never both. Coordination lives in a
   hook; rendering takes props and has no idea where they came from. `app.tsx`
-  is the panel chrome; `use-conversation.tsx` is the strip; `conversation-clocks.tsx`
-  is the stand-in clock; `transcript.tsx` is the log.
-- Product state the agent will drive lives in the Redux store as named
-  actions. `conversation.ts` stays the rules; the slice is the adapter. Host
-  subscriptions (window, pointer, frost, colour scheme) stay in hooks — they
-  are not product state. Do not grow a `domain/application/adapters` tree
-  around this until a concept has an invariant, a second consumer, or its own
-  storage.
+  is the panel chrome. Conversation UI lives in `src/conversation/ui/`.
+- Product commands live in `src/conversation/application/usecases/`. The store
+  is a projection: reducers call `ConversationGateway` and keep the strip.
+  Host subscriptions stay in adapters. See
+  [adr/0002-conversation-vertical-and-gateway.md](adr/0002-conversation-vertical-and-gateway.md).
 - Design-system components are consumed, not wrapped "just in case". A wrapper
   with no behaviour is a layer that only forwards.
 - Host-window interaction goes through one seam (as it already does), so the UI

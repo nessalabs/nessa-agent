@@ -1,4 +1,4 @@
-import { conversationInStrip } from "./conversation"
+import { activeConversation } from "../application/queries/active-conversation"
 import {
   closeConversation,
   openConversation,
@@ -6,19 +6,18 @@ import {
   setActiveId,
   setDraft,
   stopGenerating,
-  useAppDispatch,
-  useAppSelector,
-} from "./store"
+} from "../adapters/store/slice"
+import { useConversationDispatch, useConversationSelector } from "../adapters/store/hooks"
 
 /**
- * The conversation strip on screen: selectors and the actions the chrome
- * dispatches. Clocks live in `ConversationClocks`.
+ * Binds the strip on screen to the store. No product rules: it reads the
+ * projection and dispatches the named commands.
  */
 export function useConversation() {
-  const dispatch = useAppDispatch()
-  const conversations = useAppSelector((state) => state.conversation.conversations)
-  const activeId = useAppSelector((state) => state.conversation.activeId)
-  const active = conversationInStrip(conversations, activeId)
+  const dispatch = useConversationDispatch()
+  const strip = useConversationSelector((state) => state.conversation)
+  const conversations = strip.conversations
+  const active = activeConversation(strip)
 
   return {
     conversations,

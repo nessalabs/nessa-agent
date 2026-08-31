@@ -53,9 +53,10 @@ implementation per OS, injected by `current()` — and in
   hang over the desktop. The frontend owns the choice and remembers it
   ([src/use-surface.ts](src/use-surface.ts)); the tray item only *requests* a
   toggle, and its check mark is reflected back from `set_frosted`.
-- **No agent** — `draftReply` in [src/conversation.ts](src/conversation.ts) is a stand-in that
-  drives the same state a real runtime will drive: a turn list plus an
-  `idle → thinking → streaming` phase.
+- **No agent** — the local conversation gateway in
+  [`src/conversation/`](src/conversation/) stands in for the server. It drives
+  the same strip a real runtime will drive: a turn list plus an
+  `idle → thinking → streaming` phase. The panel only paints that projection.
 
 ## Running it
 
@@ -373,7 +374,7 @@ comes out a solid disc.
 
 ## Next
 
-- Wire a real agent to `draftReply` and drive `phase` from stream events.
+- Replace `adapters/gateway/local.ts` with a remote `ConversationGateway` and drive `phase` from stream events.
 - Make the voice control real: the design system's story streams a transcription
   into the input word by word, with hold-to-record and a live meter.
 - Persist the transcript across launches.
