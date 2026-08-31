@@ -7,5 +7,4 @@ export const macos: HostFeatures = {
   westHandleClass: WEST_HANDLE_NARROW,
   capturePointerOnWestHandle: true,
   animateTranscript: true,
-  stickTranscriptToBottom: true,
 }

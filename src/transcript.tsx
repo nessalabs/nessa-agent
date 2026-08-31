@@ -20,26 +20,33 @@ export function Transcript({
   conversation,
   ground,
   animate,
-  pinBottom,
 }: {
   conversation: Conversation
   ground: "paper" | "ink"
   /** False on WebKitGTK: mount springs leave compositor ghosts. */
   animate: boolean
-  /**
-   * Stick the turns to the composer. False on WebKitGTK: sliding a bubble
-   * up leaves its old pixels under the reply.
-   */
-  pinBottom: boolean
 }) {
   const logRef = React.useRef<HTMLDivElement>(null)
   const streamingId =
     conversation.phase === "streaming" ? conversation.turns.at(-1)?.id : undefined
+  const stackKey = `${conversation.turns.length}:${conversation.phase}`
 
   React.useEffect(() => {
     const log = logRef.current
     if (log) log.scrollTop = log.scrollHeight
   }, [conversation.turns, conversation.phase, conversation.id])
+
+  // WebKitGTK keeps the previous frame of a bubble that `mt-auto` slides up.
+  // Hiding the stack before paint drops those tiles so Linux can stand on
+  // the composer the same way macOS does, without a ghost under the reply.
+  React.useLayoutEffect(() => {
+    if (animate) return
+    const node = logRef.current
+    if (!node) return
+    node.style.visibility = "hidden"
+    void node.offsetHeight
+    node.style.visibility = ""
+  }, [animate, stackKey])
 
   return (
     <div
@@ -49,14 +56,13 @@ export function Transcript({
     >
       {/* Sized to the turns, stood on the composer. Overflow lives on this
           stack so a long thread still scrolls. The stack itself is not a
-          compositing layer: that painted a white slab behind the bubbles. */}
+          compositing layer: that painted a white slab behind the bubbles.
+          Keyed per turn so WebKitGTK paints the whole group at the new
+          bottom instead of sliding a live layer. */}
       <div
+        key={stackKey}
         ref={logRef}
-        className={
-          pinBottom
-            ? "mt-auto flex min-h-0 flex-col gap-5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-            : "flex min-h-0 flex-col gap-5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-        }
+        className="mt-auto flex min-h-0 flex-col gap-5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         {conversation.turns.length === 0 && conversation.phase === "idle" && animate ? (
           <EmptyState seed={conversation.id} ground={ground} />

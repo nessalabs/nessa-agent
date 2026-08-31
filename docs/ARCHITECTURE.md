@@ -48,7 +48,7 @@ opinion rather than the product's.
 | File | Owns |
 | --- | --- |
 | `app.tsx` | The panel chrome: the stage, the glow, the resize handle, the tab strip, the composer. It renders; it does not own conversation rules or OS branches. |
-| `host/` | Injected host features (`frost`, west-handle behaviour, whether the transcript may animate or stick to the composer). `resolveHost` picks `macos` / `linux` / `browser` / `other`. |
+| `host/` | Injected host features (`frost`, west-handle behaviour, whether the transcript may animate). `resolveHost` picks `macos` / `linux` / `browser` / `other`. |
 | `transcript.tsx` | The turn list for the open conversation. Scrolls itself. |
 | `conversation.ts` | The strip's rules: naming, drafts, the never-empty tab bar, `idle → thinking → streaming`. The stand-in reply lives here too. No React, no Redux, no host. |
 | `conversation-slice.ts` | The adapter: those rules as named actions. This is what an agent dispatches. |

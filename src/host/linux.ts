@@ -7,5 +7,4 @@ export const linux: HostFeatures = {
   westHandleClass: WEST_HANDLE_WIDE,
   capturePointerOnWestHandle: false,
   animateTranscript: false,
-  stickTranscriptToBottom: false,
 }

@@ -39,17 +39,11 @@ export interface HostFeatures {
    * promotes those to compositor layers and, in a transparent window, paints
    * them from the panel origin — so a user bubble sits behind the reply
    * instead of above it, and a closed tab's text ghosts through. Linux
-   * keeps the transcript in layout.
+   * keeps the transcript in layout. The list still stands on the composer,
+   * same as macOS; Linux remounts the stack when a turn lands so the old
+   * frame is not slid up.
    */
   readonly animateTranscript: boolean
-  /**
-   * Stick the turn list to the composer (`mt-auto`). Linux must not: a
-   * transparent WebKitGTK window does not clear the pixels a bubble leaves
-   * behind when it slides up to make room for the reply, so the user
-   * bubble's old frame sits under the white one. Linux grows the list down
-   * from the tabs instead.
-   */
-  readonly stickTranscriptToBottom: boolean
 }
 
 export const WEST_HANDLE_NARROW = "nessa-west-handle nessa-west-handle-narrow"
