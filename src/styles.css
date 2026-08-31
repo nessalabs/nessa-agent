@@ -188,6 +188,11 @@ body {
   max-width: 11rem;
 }
 
+.nessa-panel[data-host="linux"] [data-slot="chat-tab"] > [role="tab"] {
+  flex: 1;
+  min-width: 0;
+}
+
 .nessa-panel[data-host="linux"] [data-slot="chat-tab-loading"] {
   display: none;
 }
