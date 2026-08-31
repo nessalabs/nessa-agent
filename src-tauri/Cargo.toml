@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Nessa — a floating agent composer"
 authors = ["Nessa Labs"]
 edition = "2021"
+# The lockfile pulls crates that need edition 2024 (icu_normalizer_data 2.x).
+# Packaged rustc 1.83 cannot build it; rustup's stable can.
+rust-version = "1.85"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

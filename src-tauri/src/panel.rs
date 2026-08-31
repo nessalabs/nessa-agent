@@ -65,13 +65,10 @@ pub fn apply_configured_size(window: &WebviewWindow, settings: &Settings) -> tau
     // `anchor_to_edge` does on every show — so only the width is set here.
     if let Some(height) = opening.height {
         window.set_size(LogicalSize::new(opening.width, height))?;
-    } else {
-        let current = window.outer_size()?;
-        let scale = window.scale_factor()?;
-        window.set_size(PhysicalSize::new(
-            (opening.width * scale).round() as u32,
-            current.height,
-        ))?;
+    } else if let Some(size) =
+        width_only_physical(opening.width, window.outer_size()?, window.scale_factor()?)
+    {
+        window.set_size(size)?;
     }
 
     Ok(())
@@ -83,6 +80,24 @@ pub struct OpeningSize {
     pub width: f64,
     pub min_width: f64,
     pub height: Option<f64>,
+}
+
+/// A width-only fit that keeps the window's current height.
+///
+/// GTK asserts `height > 0` on `gtk_window_resize`. Before the window is
+/// realized, `outer_size` reports height 0, so there is nothing safe to set
+/// yet — `anchor_to_edge` on the first show fills the work area instead.
+pub fn width_only_physical(
+    opening_width: f64,
+    current: PhysicalSize<u32>,
+    scale: f64,
+) -> Option<PhysicalSize<u32>> {
+    (current.height > 0).then(|| {
+        PhysicalSize::new(
+            (opening_width * scale).round() as u32,
+            current.height,
+        )
+    })
 }
 
 pub fn opening_size(panel: &crate::settings::Panel) -> OpeningSize {
@@ -234,6 +249,22 @@ mod tests {
             min_width: 420.0,
         };
         assert_eq!(opening_size(&panel).height, Some(MIN_PANEL_HEIGHT));
+    }
+
+    #[test]
+    fn a_zero_height_window_is_not_resized_width_only() {
+        assert_eq!(
+            width_only_physical(420.0, PhysicalSize::new(420, 0), 1.0),
+            None
+        );
+    }
+
+    #[test]
+    fn a_realized_window_keeps_its_height_on_a_width_only_fit() {
+        assert_eq!(
+            width_only_physical(420.0, PhysicalSize::new(800, 900), 2.0),
+            Some(PhysicalSize::new(840, 900))
+        );
     }
 
     #[test]

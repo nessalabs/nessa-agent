@@ -278,6 +278,13 @@ thread_local! {
 /// left there. The window grows and shrinks over it. A `GtkBox` child would
 /// be stretched with the window and the page's viewport would move — which is
 /// the jitter this module exists to prevent.
+///
+/// The Fixed *replaces* tao's default vbox as the window's child. Nesting it
+/// inside the box would put three widgets between the webview and the
+/// GtkWindow, and Tauri's undecorated resize handler does
+/// `webview.parent().parent().downcast::<gtk::Window>().unwrap()` on every
+/// click. A GtkBox there panics; GTK callbacks cannot unwind, so the process
+/// aborts.
 #[cfg(target_os = "linux")]
 pub fn fit(window: &tauri::WebviewWindow) -> Result<(), String> {
     use gtk::glib::Cast;
@@ -396,20 +403,35 @@ fn ensure_fixed(webview: &gtk::Widget) -> Result<gtk::Fixed, String> {
     use gtk::glib::Cast;
     use gtk::prelude::*;
 
-    if let Some(parent) = webview.parent() {
-        if let Ok(fixed) = parent.clone().downcast::<gtk::Fixed>() {
-            return Ok(fixed);
-        }
-        if let Ok(gtk_box) = parent.clone().downcast::<gtk::Box>() {
-            let fixed = gtk::Fixed::new();
-            gtk_box.remove(webview);
-            gtk_box.pack_start(&fixed, true, true, 0);
-            fixed.put(webview, 0, 0);
-            fixed.show_all();
-            return Ok(fixed);
-        }
+    let Some(parent) = webview.parent() else {
+        return Err(String::from("the webview has no parent to pin inside"));
+    };
+    if let Ok(fixed) = parent.clone().downcast::<gtk::Fixed>() {
+        return Ok(fixed);
     }
-    Err(String::from("the webview has no parent to pin inside"))
+
+    // Two widgets above the webview, the upper one a GtkWindow: that is the
+    // shape Tauri's click-to-resize handler unwraps. Replacing the vbox —
+    // not packing Fixed inside it — is what keeps the shape.
+    let Some(window_widget) = parent.parent() else {
+        return Err(String::from("the webview's parent has no window above it"));
+    };
+    let Ok(window) = window_widget.downcast::<gtk::Container>() else {
+        return Err(String::from(
+            "the webview's grandparent is not a container",
+        ));
+    };
+
+    if let Ok(old) = parent.clone().downcast::<gtk::Container>() {
+        old.remove(webview);
+    }
+    window.remove(&parent);
+
+    let fixed = gtk::Fixed::new();
+    window.add(&fixed);
+    fixed.put(webview, 0, 0);
+    fixed.show_all();
+    Ok(fixed)
 }
 
 #[cfg(target_os = "linux")]

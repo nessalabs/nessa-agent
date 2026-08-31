@@ -39,7 +39,7 @@ opinion rather than the product's.
 | `shortcut.rs` | The global accelerator that summons and dismisses the panel. |
 | `settings.rs` | The on-disk settings shape and its defaults. The file *is* the settings interface until there is a UI; `serde(default)` is what lets an older or hand-edited file still load. |
 | `vibrancy.rs` | The native frosted surface on macOS, exposed to the frontend as one command. On Linux it is a no-op; the shell uses CSS `backdrop-filter` instead. |
-| `viewport.rs` | Holds the page's viewport still during a live resize, on both WKWebView and WebKitGTK, by pinning a work-area-sized webview to the window's bottom right. |
+| `viewport.rs` | Holds the page's viewport still during a live resize, on both WKWebView and WebKitGTK, by pinning a work-area-sized webview to the window's bottom right. On Linux the pin *replaces* tao's GtkBox, so the webview stays two widgets under the GtkWindow — Tauri's click-to-resize handler unwraps that grandparent. |
 | `live_resize.rs` | Forwards AppKit's live-resize notifications so the border glow can stay lit. On Linux, size-allocate while a mouse button is down is the drag. |
 
 **React shell** (`src/`) — everything that is on screen.
@@ -49,7 +49,7 @@ opinion rather than the product's.
 | `app.tsx` | The panel chrome: the stage, the glow, the resize handle, the tab strip, the composer. It renders; it does not own conversation rules. |
 | `transcript.tsx` | The turn list for the open conversation. Scrolls itself. |
 | `conversation.ts` | The strip's rules: naming, drafts, the never-empty tab bar, `idle → thinking → streaming`. The stand-in reply lives here too. |
-| `use-conversation.ts` | The strip's state and the stand-in clocks. One timer per conversation. |
+| `use-conversation.tsx` | The strip's state and the stand-in clocks. One timer per conversation. |
 | `use-host-panel.ts` | The host seam wiring: frost, tray surface request, composer focus. |
 | `host-window.ts` | The single seam to the desktop host. Guarded so the same UI runs in a plain browser with the seam no-oping. |
 | `use-surface.ts` | Which surface is chosen, and remembering it. The frontend owns this; the tray only *requests* a toggle and reflects the answer back. |
@@ -92,6 +92,8 @@ are written here.
   the panel not opening.
 - Linux is a first-class host. The panel is reachable without a menu bar: the
   taskbar is on, the window opens on launch, and close quits if there is no tray.
+- On Linux the webview's grandparent is the GtkWindow. An extra widget in
+  between panics inside a GTK callback and aborts the process.
 - A component either renders or coordinates, never both.
 - There is no `utils` module, on either side.
 
@@ -114,7 +116,7 @@ are written here.
 | The summon shortcut | `settings.rs` for the key, `shortcut.rs` for registration |
 | A new persisted preference | `settings.rs` (with a default), then its owner |
 | A new host event or payload | `host.rs` and `host-window.ts` together |
-| The conversation surface (tabs, turns, stand-in reply) | `conversation.ts` / `use-conversation.ts` |
+| The conversation surface (tabs, turns, stand-in reply) | `conversation.ts` / `use-conversation.tsx` |
 | The transcript chrome | `src/transcript.tsx` |
 | The panel chrome or composer | `src/app.tsx` |
 | Resize jitter, the pinned webview | `viewport.rs` |

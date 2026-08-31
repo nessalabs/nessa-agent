@@ -63,6 +63,9 @@ must stay true:
 7. The page's viewport does not move during a resize, on macOS or on Linux.
 8. Linux is reachable without a menu bar: skip-taskbar is off, and the panel
    opens on launch.
+9. On Linux the webview's grandparent is the GtkWindow. Nesting the pin
+   widget inside tao's vbox panics on click (Tauri unwraps that grandparent
+   as a Window) and GTK cannot unwind, so the process aborts.
 
 ## The core and what sits on it
 
@@ -134,7 +137,7 @@ writing the full defaults on first launch is buying.
 
 - A component either renders or coordinates, never both. Coordination lives in a
   hook; rendering takes props and has no idea where they came from. `app.tsx`
-  is the panel chrome; `use-conversation.ts` is the strip; `transcript.tsx` is
+  is the panel chrome; `use-conversation.tsx` is the strip; `transcript.tsx` is
   the log.
 - Design-system components are consumed, not wrapped "just in case". A wrapper
   with no behaviour is a layer that only forwards.

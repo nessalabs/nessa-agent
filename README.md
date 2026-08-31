@@ -63,6 +63,24 @@ pnpm app
 `pnpm dev` alone opens the same UI in a plain browser, which is useful for design
 work — the window controls no-op there (see [src/host-window.ts](src/host-window.ts)).
 
+### Linux
+
+The lockfile needs **Rust 1.85+** (edition 2024 crates). Ubuntu's packaged
+`rustc` is often 1.83; install via rustup and run with `RUSTUP_TOOLCHAIN=stable`,
+or `rustup default stable`.
+
+Build packages on Debian/Ubuntu:
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+```
+
+On a VNC or software X server, WebKit's DMA-BUF path can fail to paint:
+
+```bash
+WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 pnpm app
+```
+
 | Script | What it does |
 | --- | --- |
 | `pnpm app` | Run the desktop app (dev) |
