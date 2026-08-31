@@ -99,7 +99,10 @@ export function App() {
 
         {/* The strip is the titlebar too: the gaps around the tabs drag the
             window, while the tabs themselves stay clickable. */}
-        <div data-tauri-drag-region className="shrink-0 px-1.5 pt-2 pb-1">
+        <div
+          data-tauri-drag-region
+          className="nessa-chrome shrink-0 px-1.5 pt-2 pb-1"
+        >
           <ChatTabs
             label="Conversations"
             tabs={tabs}
@@ -116,7 +119,7 @@ export function App() {
 
         <Transcript conversation={strip.active} ground={ground} />
 
-        <div className="shrink-0 px-2.5 pb-2.5">
+        <div className="nessa-chrome shrink-0 px-2.5 pb-2.5">
           <PillComposer generating={generating} onSubmit={submit}>
             <PillComposerRow>
               <ChatComposerAction aria-label="Add attachment" title="Add attachment">

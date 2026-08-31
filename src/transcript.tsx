@@ -34,36 +34,41 @@ export function Transcript({
 
   return (
     <div
-      ref={logRef}
       role="log"
       aria-label={`${conversation.title} transcript`}
-      className="flex min-h-0 flex-1 select-text flex-col gap-5 overflow-y-auto px-3 pb-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      className="flex min-h-0 flex-1 select-text flex-col px-3 pb-2"
     >
-      {/* Bottom-anchors a short transcript without justify-end, which
-          would trap overflowing messages above an unscrollable top. */}
-      <div aria-hidden="true" className="mt-auto shrink-0" />
-      {conversation.turns.length === 0 && conversation.phase === "idle" ? (
-        <EmptyState seed={conversation.id} ground={ground} />
-      ) : null}
-      {conversation.turns.map((turn) => (
-        <ChatMessage key={turn.id} tone={turn.from === "user" ? "sent" : "received"}>
-          <ChatBubble>
-            {turn.id === streamingId ? (
-              <MessageStreamText text={turn.text} />
-            ) : (
-              turn.text
-            )}
-          </ChatBubble>
-          {turn.from === "user" ? (
-            <ChatMessageActions>
-              <ChatMessageReceipt>Delivered</ChatMessageReceipt>
-            </ChatMessageActions>
-          ) : null}
-        </ChatMessage>
-      ))}
-      {conversation.phase === "thinking" ? (
-        <ChatTypingIndicator label="Nessa is typing" />
-      ) : null}
+      {/* Sized to the turns, stood on the composer. A flex-1 scroller the
+          height of the panel is an opaque layer in WebKitGTK — a white
+          slab with frost only in the margins. Overflow lives on this
+          stack so a long thread still scrolls. */}
+      <div
+        ref={logRef}
+        className="nessa-chrome mt-auto flex min-h-0 flex-col gap-5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
+        {conversation.turns.length === 0 && conversation.phase === "idle" ? (
+          <EmptyState seed={conversation.id} ground={ground} />
+        ) : null}
+        {conversation.turns.map((turn) => (
+          <ChatMessage key={turn.id} tone={turn.from === "user" ? "sent" : "received"}>
+            <ChatBubble>
+              {turn.id === streamingId ? (
+                <MessageStreamText text={turn.text} />
+              ) : (
+                turn.text
+              )}
+            </ChatBubble>
+            {turn.from === "user" ? (
+              <ChatMessageActions>
+                <ChatMessageReceipt>Delivered</ChatMessageReceipt>
+              </ChatMessageActions>
+            ) : null}
+          </ChatMessage>
+        ))}
+        {conversation.phase === "thinking" ? (
+          <ChatTypingIndicator label="Nessa is typing" />
+        ) : null}
+      </div>
     </div>
   )
 }

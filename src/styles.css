@@ -71,38 +71,46 @@ body {
  * the window loses focus, so the surface visibly changed as you clicked away.
  * The native NSVisualEffectView does both correctly.
  */
-.nessa-panel[data-surface="translucent"][data-host="macos"] {
+.nessa-panel[data-surface="translucent"] {
   /* A tint over the native frost, not the frost itself. */
   background: color-mix(in oklab, var(--background) 30%, transparent);
   border-color: color-mix(in oklab, var(--border) 55%, transparent);
 }
 
 /*
- * Native frost is macOS-only (see vibrancy.rs). On Linux, changing the
- * panel's `background` — even between two rgba tints — makes WebKitGTK
- * replace the transparent backing with opaque white. The fill is therefore
- * a constant hairline, and frost is an inset veil that does not touch
- * `background`. A fully transparent fill still drops the bubbles and the
- * composer, so the hairline stays in both surfaces.
+ * Native frost is macOS-only (see vibrancy.rs). Everywhere else — Linux from
+ * day 0, a browser preview, other hosts — the CSS filter *is* the frost. It
+ * is kept off the macOS Tauri window on purpose: on a transparent undecorated
+ * NSWindow it smears the behind-window content and freezes when unfocused.
  */
-.nessa-panel:not([data-host="macos"]) {
-  background: rgb(255 255 255 / 0.02);
-  border-color: rgb(255 255 255 / 0.22);
-}
-
 .nessa-panel[data-surface="translucent"]:not([data-host="macos"]) {
-  box-shadow: inset 0 0 160px 24px rgb(255 255 255 / 0.42);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
 }
 
+/*
+ * Clear removes the panel. Only the tabs, the bubbles, and the composer hang
+ * over the desktop — that is the macOS reading of Transparent, and Linux
+ * matches it. WebKitGTK will drop those descendants if the panel has no
+ * compositing layer of its own, so each chrome cluster is forced onto one
+ * without filling the window.
+ */
 .nessa-panel[data-surface="clear"] {
   background: transparent;
   border-color: transparent;
 }
 
-.nessa-panel[data-surface="clear"]:not([data-host="macos"]) {
-  background: rgb(255 255 255 / 0.02);
-  border-color: rgb(255 255 255 / 0.12);
-  box-shadow: none;
+.nessa-panel[data-surface="clear"] .nessa-edge-reveal {
+  display: none;
+}
+
+.nessa-panel[data-surface="clear"] .nessa-chrome {
+  isolation: isolate;
+  transform: translateZ(0);
+}
+
+.nessa-panel [role="log"] {
+  background: transparent;
 }
 
 /*
