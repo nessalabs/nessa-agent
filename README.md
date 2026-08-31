@@ -6,8 +6,8 @@ TypeScript, and the [Nessa UI](https://github.com/nessalabs/nessa_ui) design sys
 The window has no titlebar and no Dock icon. It lives behind the menu bar item —
 click it to summon the panel, click again (or click away, in a release build) to
 dismiss it, or press **⌘⇧A** from anywhere. Summoning it hands the caret
-straight to the composer. The panel's header is just the agent's face and name,
-and the whole strip drags the window; everything else lives in the tray menu.
+straight to the composer. The tab strip doubles as the titlebar — the gaps
+around the tabs drag the window; everything else lives in the tray menu.
 
 It opens in the **lower right** of whichever screen it is summoned on, the way
 Clawdia's panel does — a 420pt column filling the work area's height by default,
@@ -30,6 +30,12 @@ on every show, so moving between displays re-fits it rather than stranding it
 - **The agent's face** — `RandomAvatar`, a deterministic generative avatar
   painted from the seed `"nessa"`. The app icon is the same painting, rasterized
   (see [Regenerating the icon](#regenerating-the-icon)).
+- **Tabs** — `ChatTabs`, one per conversation. Each carries its own
+  `RandomAvatar`, painted from the tab's id, and a busy dot while it is
+  mid-reply. A conversation is named after its opening line. Transcripts,
+  phases *and drafts* belong to the conversation, not to the panel: a reply
+  keeps arriving in a background tab, and switching tabs mid-sentence does not
+  carry the sentence into someone else's thread.
 - **Two surfaces** — the tray menu's **Transparent** item switches between the
   frosted surface, which blurs whatever the panel was summoned over, and the
   clear one, which removes the panel entirely so only the bubbles and the pill

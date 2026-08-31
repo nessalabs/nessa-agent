@@ -11,12 +11,13 @@ year later, whether the constraints that produced a decision still hold.
 - A dependency direction, especially where the obvious direction was rejected.
 - Anything that would be costly to undo: a storage format, a wire contract, a
   concurrency model, a persistence choice, a third-party dependency at the core.
-- A deliberate exception to a rule in [../codebase-structure.md](../codebase-structure.md).
+- A deliberate exception to a rule in [../codebase-structure.md](../codebase-structure.md)
+  or in the `system-architect` skill.
 
 ## What does not
 
 - Anything reversible in an afternoon. Decide it in the pull request.
-- Style, naming conventions, formatting. Those live in the style docs.
+- Style, naming conventions, formatting. Those live in the `coding` skill.
 - Restating a rule that already exists elsewhere.
 
 ## Format
