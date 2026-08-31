@@ -89,15 +89,18 @@ body {
 }
 
 /*
- * Clear removes the panel. Only the tabs, the bubbles, and the composer hang
- * over the desktop — that is the macOS reading of Transparent, and Linux
- * matches it. WebKitGTK will drop those descendants if the panel has no
- * compositing layer of its own, so each chrome cluster is forced onto one
- * without filling the window.
+ * Clear removes the panel. Only the tabs, the bubbles, and the pill hang
+ * over the desktop. Wrappers must not promote a compositing layer: WebKitGTK
+ * paints those as opaque rectangles, which showed up as a white box behind
+ * the rounded pill and as stacked bars overlapping the transcript.
+ *
+ * Promote only the already-rounded painted pieces, so their layer is the
+ * chrome itself rather than a full-width strip.
  */
 .nessa-panel[data-surface="clear"] {
   background: transparent;
   border-color: transparent;
+  overflow: visible;
 }
 
 .nessa-panel[data-surface="clear"] .nessa-edge-reveal {
@@ -105,6 +108,14 @@ body {
 }
 
 .nessa-panel[data-surface="clear"] .nessa-chrome {
+  background: transparent;
+}
+
+.nessa-panel[data-surface="clear"] [data-slot="pill-composer"],
+.nessa-panel[data-surface="clear"] [data-slot="chat-bubble"],
+.nessa-panel[data-surface="clear"] [data-slot="chat-tab"],
+.nessa-panel[data-surface="clear"] [data-slot="chat-tabs-new"],
+.nessa-panel[data-surface="clear"] [data-slot="chat-typing-indicator"] {
   isolation: isolate;
   transform: translateZ(0);
 }

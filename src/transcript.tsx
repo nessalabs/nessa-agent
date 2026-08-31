@@ -38,13 +38,12 @@ export function Transcript({
       aria-label={`${conversation.title} transcript`}
       className="flex min-h-0 flex-1 select-text flex-col px-3 pb-2"
     >
-      {/* Sized to the turns, stood on the composer. A flex-1 scroller the
-          height of the panel is an opaque layer in WebKitGTK — a white
-          slab with frost only in the margins. Overflow lives on this
-          stack so a long thread still scrolls. */}
+      {/* Sized to the turns, stood on the composer. Overflow lives on this
+          stack so a long thread still scrolls. The stack itself is not a
+          compositing layer: that painted a white slab behind the bubbles. */}
       <div
         ref={logRef}
-        className="nessa-chrome mt-auto flex min-h-0 flex-col gap-5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className="mt-auto flex min-h-0 flex-col gap-5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         {conversation.turns.length === 0 && conversation.phase === "idle" ? (
           <EmptyState seed={conversation.id} ground={ground} />
