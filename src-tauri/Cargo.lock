@@ -1949,6 +1949,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-global-shortcut",
+ "webkit2gtk",
  "window-vibrancy",
 ]
 

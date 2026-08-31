@@ -428,10 +428,42 @@ fn ensure_fixed(webview: &gtk::Widget) -> Result<gtk::Fixed, String> {
     window.remove(&parent);
 
     let fixed = gtk::Fixed::new();
+    keep_transparent(&window, &fixed, webview);
     window.add(&fixed);
     fixed.put(webview, 0, 0);
+    keep_transparent(&window, &fixed, webview);
     fixed.show_all();
     Ok(fixed)
+}
+
+/// Reparenting into a new GtkFixed drops the rgba visual and the webview's
+/// transparent background that wry set on the original vbox. Without them
+/// the panel paints opaque white and the Linux CSS frost has nothing to
+/// sample. Re-apply both on the window, the Fixed, and the webview.
+#[cfg(target_os = "linux")]
+fn keep_transparent(window: &gtk::Container, fixed: &gtk::Fixed, webview: &gtk::Widget) {
+    use gtk::gdk;
+    use gtk::glib::Cast;
+    use gtk::prelude::*;
+    use webkit2gtk::WebViewExt;
+
+    let clear = gdk::RGBA::new(0.0, 0.0, 0.0, 0.0);
+    for widget in [
+        window.upcast_ref::<gtk::Widget>(),
+        fixed.upcast_ref::<gtk::Widget>(),
+        webview,
+    ] {
+        widget.set_app_paintable(true);
+        if let Some(screen) = widget.screen() {
+            if let Some(visual) = screen.rgba_visual() {
+                widget.set_visual(Some(&visual));
+            }
+        }
+    }
+
+    if let Ok(wk) = webview.clone().downcast::<webkit2gtk::WebView>() {
+        wk.set_background_color(&clear);
+    }
 }
 
 #[cfg(target_os = "linux")]

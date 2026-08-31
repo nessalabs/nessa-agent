@@ -40,8 +40,11 @@ block2 = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Already in the tree as wry's own dependencies. Named here so `viewport` can
-# pin the WebKitGTK widget the same way the macOS side pins WKWebView.
+# pin the WebKitGTK widget the same way the macOS side pins WKWebView, and
+# so the pin can put the webview's transparent background back after
+# reparenting — GtkFixed would otherwise paint the panel opaque.
 gtk = "0.18"
+webkit2gtk = "2.0"
 
 [features]
 # Used for production builds or when a dev server is not specified. Do not remove.

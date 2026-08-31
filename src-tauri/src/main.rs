@@ -26,9 +26,10 @@ fn prepare_webkit() {
         return;
     }
     // SAFETY: called from `main` before any other threads exist.
+    // DMA-BUF is the path that needs a DRM device. Compositing stays on:
+    // CSS `backdrop-filter` is the Linux frost, and it needs a compositor.
     unsafe {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
     }
 }
 
