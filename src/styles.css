@@ -71,21 +71,27 @@ body {
  * the window loses focus, so the surface visibly changed as you clicked away.
  * The native NSVisualEffectView does both correctly.
  */
-.nessa-panel[data-surface="translucent"] {
+.nessa-panel[data-surface="translucent"][data-host="macos"] {
   /* A tint over the native frost, not the frost itself. */
   background: color-mix(in oklab, var(--background) 30%, transparent);
   border-color: color-mix(in oklab, var(--border) 55%, transparent);
 }
 
 /*
- * Native frost is macOS-only (see vibrancy.rs). Everywhere else — Linux from
- * day 0, a browser preview, other hosts — the CSS filter *is* the frost. It
- * is kept off the macOS Tauri window on purpose: on a transparent undecorated
- * NSWindow it smears the behind-window content and freezes when unfocused.
+ * Native frost is macOS-only (see vibrancy.rs). On Linux, changing the
+ * panel's `background` — even between two rgba tints — makes WebKitGTK
+ * replace the transparent backing with opaque white. The fill is therefore
+ * a constant hairline, and frost is an inset veil that does not touch
+ * `background`. A fully transparent fill still drops the bubbles and the
+ * composer, so the hairline stays in both surfaces.
  */
+.nessa-panel:not([data-host="macos"]) {
+  background: rgb(255 255 255 / 0.02);
+  border-color: rgb(255 255 255 / 0.22);
+}
+
 .nessa-panel[data-surface="translucent"]:not([data-host="macos"]) {
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
+  box-shadow: inset 0 0 160px 24px rgb(255 255 255 / 0.42);
 }
 
 .nessa-panel[data-surface="clear"] {
@@ -93,15 +99,10 @@ body {
   border-color: transparent;
 }
 
-/*
- * WebKitGTK drops descendant layers when the panel fill is fully
- * transparent on a transparent window — the bubbles and the composer
- * vanish with the fill. A hairline tint is enough to keep them in the
- * compositor; the desktop still reads through. macOS uses the native
- * effect view and a true 0% fill, so it is left out.
- */
 .nessa-panel[data-surface="clear"]:not([data-host="macos"]) {
-  background: color-mix(in oklab, var(--background) 12%, transparent);
+  background: rgb(255 255 255 / 0.02);
+  border-color: rgb(255 255 255 / 0.12);
+  box-shadow: none;
 }
 
 /*

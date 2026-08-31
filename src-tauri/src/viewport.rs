@@ -396,6 +396,7 @@ fn place(
     let y = alloc.height() - stage.1;
     webview.set_size_request(stage.0, stage.1);
     fixed.move_(webview, x, y);
+    keep_transparent(gtk_window.upcast_ref(), fixed, webview);
 }
 
 #[cfg(target_os = "linux")]
@@ -432,8 +433,39 @@ fn ensure_fixed(webview: &gtk::Widget) -> Result<gtk::Fixed, String> {
     window.add(&fixed);
     fixed.put(webview, 0, 0);
     keep_transparent(&window, &fixed, webview);
+    watch_background(webview);
     fixed.show_all();
     Ok(fixed)
+}
+
+/// WebKitGTK resets the webview's background to opaque when the page
+/// promotes a new compositing layer — focusing the composer, streaming a
+/// bubble. The CSS frost then has a white backing and nothing to sample.
+/// Putting the clear colour back on every draw is what keeps the window
+/// transparent after the first paint.
+#[cfg(target_os = "linux")]
+fn watch_background(webview: &gtk::Widget) {
+    use gtk::gdk;
+    use gtk::glib::{Cast, Propagation};
+    use gtk::prelude::*;
+    use std::cell::Cell;
+    use webkit2gtk::WebViewExt;
+
+    thread_local! {
+        static HOOKED: Cell<bool> = const { Cell::new(false) };
+    }
+    if HOOKED.with(Cell::get) {
+        return;
+    }
+    HOOKED.with(|flag| flag.set(true));
+
+    let clear = gdk::RGBA::new(0.0, 0.0, 0.0, 0.0);
+    webview.connect_draw(move |webview, _| {
+        if let Ok(wk) = webview.clone().downcast::<webkit2gtk::WebView>() {
+            wk.set_background_color(&clear);
+        }
+        Propagation::Proceed
+    });
 }
 
 /// Reparenting into a new GtkFixed drops the rgba visual and the webview's
