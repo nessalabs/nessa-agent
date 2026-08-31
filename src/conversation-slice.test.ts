@@ -92,4 +92,24 @@ describe("conversation strip store", () => {
     expect(run.strip().conversations).toHaveLength(1)
     expect(run.strip().conversations[0]!.id).toBe("c2")
   })
+
+  it("keeps each conversation's turns on that conversation", () => {
+    const run = agent(makeStore())
+    run.draft("hello from the store")
+    run.send()
+    run.open()
+    run.draft("second tab")
+    run.send()
+    const [first, second] = run.strip().conversations
+    expect(first!.title).toBe("hello from the store")
+    expect(second!.title).toBe("second tab")
+    expect(first!.turns.map((turn) => turn.text)).toEqual(["hello from the store"])
+    expect(second!.turns.map((turn) => turn.text)).toEqual(["second tab"])
+    expect(first!.turns).not.toBe(second!.turns)
+    run.activate("c0")
+    const open = run
+      .strip()
+      .conversations.find((item) => item.id === run.strip().activeId)
+    expect(open!.turns.map((turn) => turn.text)).toEqual(["hello from the store"])
+  })
 })
