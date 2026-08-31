@@ -99,9 +99,7 @@ export function useEdgeReveal() {
     const at = { x: point.current.x - box.left, y: point.current.y - box.top }
     // Pinned, the gradient rides the edge being dragged instead of sitting
     // where the pointer last was, which the panel is moving away from.
-    const centre = resizing.current
-      ? ontoEdge(grabbed.current, at.x, at.y, box)
-      : at
+    const centre = resizing.current ? ontoEdge(grabbed.current, at.x, at.y, box) : at
 
     // The gradient is centred on the pointer; the mask keeps only the part of
     // it that falls on the border, so corners are handled by the geometry

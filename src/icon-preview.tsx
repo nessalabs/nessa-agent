@@ -6,10 +6,7 @@
  * palette that reads well at 96px can collapse into a blob at 16px.
  */
 import { createRoot } from "react-dom/client"
-import {
-  RandomAvatar,
-  type RandomAvatarTone,
-} from "@nessa-ui/react/random-avatar"
+import { RandomAvatar, type RandomAvatarTone } from "@nessa-ui/react/random-avatar"
 
 import { AGENT_HUES, AGENT_ICON_TONE, AGENT_SEED } from "./agent-identity"
 import "./styles.css"

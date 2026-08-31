@@ -139,6 +139,12 @@ writing the full defaults on first launch is buying.
   hook; rendering takes props and has no idea where they came from. `app.tsx`
   is the panel chrome; `use-conversation.tsx` is the strip; `transcript.tsx` is
   the log.
+- Product state the agent will drive lives in the Redux store as named
+  actions. `conversation.ts` stays the rules; the slice is the adapter. Host
+  subscriptions (window, pointer, frost, colour scheme) stay in hooks — they
+  are not product state. Do not grow a `domain/application/adapters` tree
+  around this until a concept has an invariant, a second consumer, or its own
+  storage.
 - Design-system components are consumed, not wrapped "just in case". A wrapper
   with no behaviour is a layer that only forwards.
 - Host-window interaction goes through one seam (as it already does), so the UI

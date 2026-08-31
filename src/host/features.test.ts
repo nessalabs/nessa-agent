@@ -8,15 +8,11 @@ import { resolveHost } from "./resolve"
 
 describe("resolveHost", () => {
   it("injects the browser host when there is no Tauri runtime", () => {
-    expect(resolveHost("Mozilla/5.0 (Macintosh; Intel Mac OS X)", false)).toBe(
-      browser,
-    )
+    expect(resolveHost("Mozilla/5.0 (Macintosh; Intel Mac OS X)", false)).toBe(browser)
   })
 
   it("injects macOS features for a Mac Tauri user agent", () => {
-    expect(resolveHost("Mozilla/5.0 (Macintosh; Intel Mac OS X)", true)).toBe(
-      macos,
-    )
+    expect(resolveHost("Mozilla/5.0 (Macintosh; Intel Mac OS X)", true)).toBe(macos)
     expect(macos.frost).toBe("native")
     expect(macos.capturePointerOnWestHandle).toBe(true)
   })
@@ -29,9 +25,7 @@ describe("resolveHost", () => {
   })
 
   it("injects the other host for an unmatched Tauri user agent", () => {
-    expect(resolveHost("Mozilla/5.0 (Windows NT 10.0; Win64; x64)", true)).toBe(
-      other,
-    )
+    expect(resolveHost("Mozilla/5.0 (Windows NT 10.0; Win64; x64)", true)).toBe(other)
     expect(other.frost).toBe("css")
   })
 })

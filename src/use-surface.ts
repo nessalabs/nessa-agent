@@ -7,9 +7,7 @@ const storageKey = "nessa.surface"
 
 function read(): Surface {
   try {
-    return window.localStorage.getItem(storageKey) === "clear"
-      ? "clear"
-      : "translucent"
+    return window.localStorage.getItem(storageKey) === "clear" ? "clear" : "translucent"
   } catch {
     // Private windows and blocked site data throw rather than return null.
     return "translucent"

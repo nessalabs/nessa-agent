@@ -36,7 +36,5 @@ export interface HostFeatures {
   readonly capturePointerOnWestHandle: boolean
 }
 
-export const WEST_HANDLE_NARROW =
-  "nessa-west-handle nessa-west-handle-narrow"
-export const WEST_HANDLE_WIDE =
-  "nessa-west-handle nessa-west-handle-wide"
+export const WEST_HANDLE_NARROW = "nessa-west-handle nessa-west-handle-narrow"
+export const WEST_HANDLE_WIDE = "nessa-west-handle nessa-west-handle-wide"

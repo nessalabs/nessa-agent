@@ -96,10 +96,7 @@ export function App() {
         />
         {/* The strip is the titlebar too: the gaps around the tabs drag the
             window, while the tabs themselves stay clickable. */}
-        <div
-          data-tauri-drag-region
-          className="nessa-chrome shrink-0 px-2 pt-2 pb-1"
-        >
+        <div data-tauri-drag-region className="nessa-chrome shrink-0 px-2 pt-2 pb-1">
           <ChatTabs
             label="Conversations"
             tabs={tabs}

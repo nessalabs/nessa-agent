@@ -9,7 +9,7 @@ picks them up automatically.
 | --- | --- |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The map of the code as it stands: what each file owns, the boundaries, the invariants, and where a given change goes. Read this first. |
 | [codebase-structure.md](codebase-structure.md) | The general structural rules applied to Nessa specifically — the target shape, the Nessa absences, the host/shell seam, and what the core must never learn. |
-| [adr/](adr/README.md) | Decision records for anything expensive to reverse. |
+| [adr/](adr/README.md) | Decision records for anything expensive to reverse. [0001](adr/0001-redux-toolkit-for-product-state.md) is why the conversation strip is Redux Toolkit. |
 
 ## The skills
 

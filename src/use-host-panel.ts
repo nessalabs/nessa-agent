@@ -1,10 +1,6 @@
 import * as React from "react"
 
-import {
-  onFocusComposer,
-  onToggleSurface,
-  setFrosted,
-} from "./host-window"
+import { onFocusComposer, onToggleSurface, setFrosted } from "./host-window"
 import { usePanelFrame } from "./use-panel-frame"
 
 /**

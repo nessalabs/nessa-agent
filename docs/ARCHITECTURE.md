@@ -50,8 +50,10 @@ opinion rather than the product's.
 | `app.tsx` | The panel chrome: the stage, the glow, the resize handle, the tab strip, the composer. It renders; it does not own conversation rules or OS branches. |
 | `host/` | Injected host features (`frost`, west-handle behaviour). `resolveHost` picks `macos` / `linux` / `browser` / `other`. |
 | `transcript.tsx` | The turn list for the open conversation. Scrolls itself. |
-| `conversation.ts` | The strip's rules: naming, drafts, the never-empty tab bar, `idle → thinking → streaming`. The stand-in reply lives here too. |
-| `use-conversation.tsx` | The strip's state and the stand-in clocks. One timer per conversation. |
+| `conversation.ts` | The strip's rules: naming, drafts, the never-empty tab bar, `idle → thinking → streaming`. The stand-in reply lives here too. No React, no Redux, no host. |
+| `conversation-slice.ts` | The adapter: those rules as named actions. This is what an agent dispatches. |
+| `store.ts` | The product store. Conversation strip only. `dispatch` is the non-React entry point. |
+| `use-conversation.tsx` | Selectors plus the stand-in clocks. One timer per conversation; the clock dispatches `advanceReply`. |
 | `use-host-panel.ts` | The host seam wiring: frost, tray surface request, composer focus. |
 | `host-window.ts` | The single seam to the desktop host. Guarded so the same UI runs in a plain browser with the seam no-oping. |
 | `use-surface.ts` | Which surface is chosen, and remembering it. The frontend owns this; the tray only *requests* a toggle and reflects the answer back. |
@@ -63,12 +65,16 @@ opinion rather than the product's.
 
 ## Boundaries
 
-Two, and they are both real:
+Three, and they are all real:
 
 **Host ↔ shell.** They talk over exactly one seam (`host-window.ts` on one side,
 `host.rs` plus the command handlers on the other). Everything crossing it is an
 explicit command or event, never shared state. This is what lets `pnpm dev`
 open the UI in a browser with no host at all.
+
+**Product store ↔ host subscriptions.** Conversation state is Redux, so an
+agent can dispatch it. Window, pointer, frost, and clocks stay in hooks.
+They do not belong in the store, and the store does not import the chrome.
 
 **Owner of a preference.** State has one owner and one direction. The surface
 choice is owned by the frontend and reflected into the tray's check mark; the
@@ -99,6 +105,7 @@ are written here.
   between panics inside a GTK callback and aborts the process.
 - A component either renders or coordinates, never both.
 - There is no `utils` module, on either side.
+- Product state an agent must drive lives in the Redux store. Host, DOM, and clocks stay in hooks. See [adr/0001-redux-toolkit-for-product-state.md](adr/0001-redux-toolkit-for-product-state.md).
 
 ## Cross-cutting
 
@@ -121,7 +128,7 @@ are written here.
 | The summon shortcut | `settings.rs` for the key, `shortcut.rs` for registration |
 | A new persisted preference | `settings.rs` (with a default), then its owner |
 | A new host event or payload | `host.rs` and `host-window.ts` together |
-| The conversation surface (tabs, turns, stand-in reply) | `conversation.ts` / `use-conversation.tsx` |
+| The conversation surface (tabs, turns, stand-in reply) | `conversation.ts` (rules), `conversation-slice.ts` (actions), `use-conversation.tsx` (clocks) |
 | The transcript chrome | `src/transcript.tsx` |
 | The panel chrome or composer | `src/app.tsx` |
 | Resize jitter, the pinned webview | `platform/{macos,linux,other}/viewport.rs` |

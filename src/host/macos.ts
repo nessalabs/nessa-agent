@@ -1,7 +1,4 @@
-import {
-  WEST_HANDLE_NARROW,
-  type HostFeatures,
-} from "./features"
+import { WEST_HANDLE_NARROW, type HostFeatures } from "./features"
 
 /** macOS Tauri: native frost, system-owned resize frame. */
 export const macos: HostFeatures = {

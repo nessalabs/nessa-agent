@@ -1,74 +1,31 @@
 import * as React from "react"
 
+import { STREAMING_MS, THINKING_MS, type Phase } from "./conversation"
 import {
-  advance,
-  closeInStrip,
-  conversation,
-  send,
-  stop,
-  STREAMING_MS,
-  THINKING_MS,
-  type Conversation,
-  type Phase,
-} from "./conversation"
+  advanceReply,
+  closeConversation,
+  openConversation,
+  sendDraft,
+  setActiveId,
+  setDraft,
+  stopGenerating,
+  useAppDispatch,
+  useAppSelector,
+} from "./store"
 
 /**
- * The conversation strip: which thread is open, each thread's turns and
- * draft, and the stand-in clock that walks `idle → thinking → streaming`.
+ * The conversation strip on screen: selectors, the actions the chrome
+ * dispatches, and the stand-in clock that walks `idle → thinking → streaming`.
  *
  * One timer per conversation, so a reply arriving in a background tab does
- * not restart the clock on another.
+ * not restart the clock on another. The clock dispatches; it does not own
+ * the strip.
  */
 export function useConversation() {
-  const nextId = React.useRef(1)
-  const [conversations, setConversations] = React.useState<Conversation[]>(() => [
-    conversation("c0"),
-  ])
-  const [activeId, setActiveId] = React.useState("c0")
-  const activeIdRef = React.useRef(activeId)
-  activeIdRef.current = activeId
-
-  function takeId() {
-    return nextId.current++
-  }
-
-  function update(id: string, change: (current: Conversation) => Conversation) {
-    setConversations((items) =>
-      items.map((item) => (item.id === id ? change(item) : item)),
-    )
-  }
-
-  const active =
-    conversations.find((item) => item.id === activeId) ?? conversations[0]!
-
-  function submit() {
-    if (active.draft.trim() === "" || active.phase !== "idle") return
-    const turnId = `t${takeId()}`
-    update(active.id, (current) => send(current, current.draft, turnId))
-  }
-
-  function openConversation() {
-    const id = `c${takeId()}`
-    setConversations((items) => [...items, conversation(id)])
-    setActiveId(id)
-  }
-
-  function closeConversation(id: string) {
-    setConversations((items) => {
-      const next = closeInStrip(items, id, activeIdRef.current, () => `c${takeId()}`)
-      activeIdRef.current = next.activeId
-      setActiveId(next.activeId)
-      return next.items
-    })
-  }
-
-  function setDraft(draft: string) {
-    update(active.id, (current) => ({ ...current, draft }))
-  }
-
-  function stopGenerating() {
-    update(active.id, stop)
-  }
+  const dispatch = useAppDispatch()
+  const conversations = useAppSelector((state) => state.conversation.conversations)
+  const activeId = useAppSelector((state) => state.conversation.activeId)
+  const active = conversations.find((item) => item.id === activeId) ?? conversations[0]!
 
   const clocks = (
     <>
@@ -76,7 +33,7 @@ export function useConversation() {
         <ReplyTimer
           key={item.id}
           phase={item.phase}
-          onAdvance={() => update(item.id, (current) => advance(current, `t${takeId()}`))}
+          onAdvance={() => dispatch(advanceReply({ id: item.id }))}
         />
       ))}
     </>
@@ -85,12 +42,14 @@ export function useConversation() {
   return {
     conversations,
     active,
-    setActiveId,
-    submit,
-    openConversation,
-    closeConversation,
-    setDraft,
-    stopGenerating,
+    setActiveId: (id: string) => dispatch(setActiveId(id)),
+    submit: () => dispatch(sendDraft()),
+    openConversation: () => {
+      dispatch(openConversation())
+    },
+    closeConversation: (id: string) => dispatch(closeConversation(id)),
+    setDraft: (draft: string) => dispatch(setDraft({ draft })),
+    stopGenerating: () => dispatch(stopGenerating()),
     clocks,
   }
 }
@@ -105,7 +64,7 @@ function ReplyTimer({ phase, onAdvance }: { phase: Phase; onAdvance: () => void 
   const latest = React.useRef(onAdvance)
   React.useEffect(() => {
     latest.current = onAdvance
-  })
+  }, [onAdvance])
 
   React.useEffect(() => {
     if (phase === "idle") return

@@ -1,7 +1,4 @@
-import {
-  WEST_HANDLE_NARROW,
-  type HostFeatures,
-} from "./features"
+import { WEST_HANDLE_NARROW, type HostFeatures } from "./features"
 
 /**
  * Plain browser (`pnpm dev`). There is no window frame and no native frost,
