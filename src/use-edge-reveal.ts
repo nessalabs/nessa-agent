@@ -189,6 +189,22 @@ export function useEdgeReveal() {
   // zone reaches past it, so the pointer often crosses out of the panel just
   // before a drag. Putting the glow out here is still right: the drag lights
   // it again the moment AppKit says one has started.
+  // Hiding the panel fires no pointerleave — the window simply goes away — so
+  // without this the last opacity survives until the pointer next crosses the
+  // panel, and the border comes back lit on a summon from across the screen.
+  // Losing focus is the one signal that always accompanies being hidden.
+  React.useEffect(() => {
+    const clear = () => {
+      // A native resize blurs the window too, and the pin has to outlive that.
+      if (resizing.current) return
+      cancelAnimationFrame(frame.current)
+      frame.current = 0
+      if (glowRef.current) glowRef.current.style.opacity = "0"
+    }
+    window.addEventListener("blur", clear)
+    return () => window.removeEventListener("blur", clear)
+  }, [])
+
   const onPointerLeave = React.useCallback(() => {
     if (resizing.current) return
     cancelAnimationFrame(frame.current)
