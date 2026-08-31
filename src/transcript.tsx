@@ -58,8 +58,8 @@ export function Transcript({
             : "flex min-h-0 flex-col gap-5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         }
       >
-        {conversation.turns.length === 0 && conversation.phase === "idle" ? (
-          <EmptyState seed={conversation.id} ground={ground} animate={animate} />
+        {conversation.turns.length === 0 && conversation.phase === "idle" && animate ? (
+          <EmptyState seed={conversation.id} ground={ground} />
         ) : null}
         {conversation.turns.map((turn) => (
           <ChatMessage
@@ -104,27 +104,17 @@ export function Transcript({
   )
 }
 
-function EmptyState({
-  seed,
-  ground,
-  animate,
-}: {
-  seed: string
-  ground: "paper" | "ink"
-  animate: boolean
-}) {
+function EmptyState({ seed, ground }: { seed: string; ground: "paper" | "ink" }) {
   return (
     <div className="flex flex-col items-center gap-2.5 py-6 text-center">
-      {animate ? (
-        <RandomAvatar
-          seed={seed}
-          hues={AGENT_HUES}
-          name="Nessa"
-          ground={ground}
-          animateOnMount
-          className="size-14 rounded-full"
-        />
-      ) : null}
+      <RandomAvatar
+        seed={seed}
+        hues={AGENT_HUES}
+        name="Nessa"
+        ground={ground}
+        animateOnMount
+        className="size-14 rounded-full"
+      />
       <p className="nessa-text-3 m-0 text-muted-foreground">
         Nessa is listening. Press Enter to send.
       </p>
