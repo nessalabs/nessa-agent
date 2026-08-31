@@ -288,6 +288,26 @@ shipped wheel is `AGENT_HUES` in
 [src/agent-identity.ts](src/agent-identity.ts), shared with the in-app avatar so
 the two cannot drift.
 
+### The tray icon is a different painting
+
+The menu bar gets its own icon, [src-tauri/icons/tray-avatar.svg](src-tauri/icons/tray-avatar.svg)
+→ `tray-icon.png`, compiled into the binary with `include_bytes!` so dev and
+packaged builds load identical bytes with no resource-path lookup.
+
+Same seed and hue wheel as the app icon, but `tone="vivid"` instead of
+`"pastel"`. Pastel washes sit around 0.87–0.97 lightness: delicate and correct in
+the Dock at 128pt, but at the 16pt the menu bar actually draws they collapse into
+a pale disc that reads as a white blob on any bar. Dropping the avatar's `paper`
+ground does *not* fix that — the pigment itself is near-white at that tone, so
+the weight has to change, not the backing.
+
+Regenerate it the same way as the app icon, from the preview's `sorbet · vivid`
+tile, at 44px (the 22pt menu bar slot at 2×):
+
+```bash
+qlmanage -t -s 256 -o /tmp src-tauri/icons/tray-avatar.svg && sips -Z 44 /tmp/tray-avatar.svg.png --out src-tauri/icons/tray-icon.png
+```
+
 The icon itself is [src-tauri/icons/nessa-avatar.svg](src-tauri/icons/nessa-avatar.svg),
 lifted from the preview's `sorbet · pastel · shipped` tile — a rendered
 `RandomAvatar` with `AGENT_HUES`, `AGENT_ICON_TONE`, and `ground="paper"` — with

@@ -240,6 +240,57 @@ version and broke ours.* The institutional memory of a specific past injury,
 applied as a rule. It was then re-landed using the in-house equivalent, and the
 re-landed version was smaller than the original.
 
+**Refactor, then test, then change — as three commits.** A recurring shape in
+codebases with a long memory, visible directly in the commit sequence: first
+*split the logic out so it is reachable from a test*, with the message saying
+"no functional change"; then *add the tests, whose reference output records the
+current behaviour including the wrong parts*; then *change the behaviour*. Each
+commit is separately reviewable and separately revertible, and the middle one
+makes the third one's diff a list of exactly which behaviours changed.
+
+**Name the commit that introduced the defect.** The strongest convention seen:
+every regression fix carries a `Fixes: <hash> ("<original subject>")` line
+pointing at the change that caused it. It costs one `git blame` and it turns the
+history into something you can actually query — what did this change break, how
+long did it take to notice, which areas keep regressing.
+
+**Big structural changes are made *ahead of* the feature that needs them.** One
+of the clearest examples: a ~2900-line refactor whose entire stated motivation
+was that a *future, not-yet-written* feature would swap out an object at
+checkpoint time, invalidating every outstanding reference to it. The refactor
+landed alone, with no feature attached. The description named two strategies and
+the rule for choosing between them — encapsulate the logic into the owner where
+possible, and where it is not possible *because external extensions need it*,
+introduce an explicit handle. Notice that the reason encapsulation fails is
+precisely vertical isolation: the core cannot write the functions in advance
+because it does not know what the product-specific code wants to do.
+
+Reviewers on that change did something worth copying: they reasoned forward to
+the unbuilt feature. *"Thinking ahead to the swapped index — will this still be
+correct if we revert an append after the object was replaced?"* And they caught
+a silently narrowed lock scope: *"this returns the pinned items but doesn't hold
+the list lock, whereas before we held it for the whole loop."* Lock scope is
+exactly the kind of thing a refactor changes by accident and a diff does not
+make obvious.
+
+**A mechanical mega-change is justified by the test suite, not by review.** A
+change replacing a hand-written interface layer with a specification plus code
+generation — sixteen thousand lines added, nineteen thousand deleted, 112 files —
+had a three-sentence description whose substance was: *if there are any
+unexpected divergences, the existing tests will catch them.* That is the only
+honest way to review a change of that size, and it is only available to a
+codebase that earned it first. It is also the strongest possible argument for
+generating repetitive code from a spec rather than maintaining it by hand.
+
+**Cleanup has an owner on each side of the boundary.** From a change making
+aborted bulk writes clean up after themselves: the writers remove their own
+un-finalised output, and the transaction removes the finalised output. Stated
+explicitly, because otherwise both sides assume the other did it. Reviewers on
+that change pushed twice on API shape — *"make this a flag, or we will have
+`TryRemoveNonEmptyDirectory` next"* and *"this is added in many different places,
+there is probably a less error-prone way"* — which is the right instinct: a
+cleanup obligation repeated at every call site will be forgotten at one of them.
+
 **Revert rather than patch a regression.** The most instructive sequence in the
 whole history:
 
@@ -281,6 +332,128 @@ tracked as debt to be removed by fixing the design.
 
 ---
 
+## Performance work, specifically
+
+**Quantify the claim in the description.** The good performance changes lead
+with numbers: *peak memory allocation down 5–15%, code generation time down
+30–70% depending on payload*. Not "this is faster". A number is falsifiable and
+a reviewer can decide whether it is worth the complexity; "faster" cannot be
+argued with and therefore cannot be evaluated.
+
+**Prove the output is unchanged, bit for bit.** The safety net for a pure
+performance change is not "the tests pass" — it is *all fixtures produce
+byte-identical output, and I ran it against real codebases and pathological
+inputs and confirmed byte-identical output there too*. When a change is supposed
+to alter only how long something takes, equality of output is the whole
+correctness argument, and it is cheap to check exhaustively.
+
+**Record performance statistics in test baselines.** The most transferable idea
+found: a test harness that automatically writes counters — how many symbols,
+how many nodes, how much work — into the recorded baseline output whenever the
+number is interesting, **rounded to coarse intervals so that ordinary noise does
+not produce a diff**. A performance regression then shows up in review as a text
+diff in a file, next to the behavioural changes, reviewed by the same person in
+the same pass. No dashboard, no separate job, no one remembering to look.
+
+**"Accidentally quadratic" is the failure mode to hunt.** One change found a
+code generator that deep-cloned a syntax tree to record what it had replaced —
+correct, local, and invisible in review, and quadratic in the size of the input.
+The pattern to watch for: a defensive copy inside a loop, made for a *local*
+reason (ownership, immutability, avoiding aliasing), where the loop is over
+something that grows.
+
+**Laziness beats eagerness beats recomputation.** A change hoisted a repeatedly
+constructed lookup table into a constant. The reviewer's correction is the
+lesson: don't make it an eager global — make it *memoised and lazy*, and mark
+the initialiser so a bundler can drop it entirely when unused. Eager work at
+startup is still work; the goal is *once, and only if needed*.
+
+**A readonly type is not a runtime guarantee.** From the same review: the hoisted
+table was typed as immutable, and a reviewer noted that the type does not prevent
+mutation and the obvious runtime freeze does not work on that container. Shared
+mutable state that is only *typed* as immutable is shared mutable state.
+
+**Hunt retention, not just allocation.** A subtle and expensive class of bug: an
+event listener registered on a caller-supplied cancellation signal, removed only
+from inside the listener itself. On the success path the signal never fires, so
+the listener stays attached and its closure keeps the *entire finished result*
+reachable for as long as the caller holds the signal. The fix was structural
+rather than bookkeeping — bind the listener to a lifetime that ends when the work
+does, so the runtime removes it, and nothing has to remember to. The reviewer
+proposed exactly that, and the author's reply is the tell: *"that made the
+cleanup much simpler, and it automatically handles the cancelled case too."*
+
+**Any subscription without a removal path is a leak.** Generalise the above:
+whenever you attach a callback to something whose lifetime you do not control,
+the removal must be structural — tied to a lifetime, a scope, a guard — not a
+teardown function someone must remember to call on every exit path, including the
+successful one.
+
+**Measure to schedule, and watch the measurement.** A build pipeline that
+assigned work to workers round-robin was changed to shard by *measured* duration,
+with the measurements written out by the build itself and fed back on the next
+run. Two details make it good rather than clever: the measurement is written
+fresh each time rather than merged, so retired work drops out instead of
+accumulating; and a diff against the previous measurement is logged **so that
+the team can notice if run-to-run variance grows large enough that the heuristic
+has stopped working**. Build the signal that tells you your optimisation has gone
+stale.
+
+**Untrusted inputs must not be able to poison a cache.** In that same change:
+only trusted runs may write the shared measurement cache, while untrusted runs
+may read it. A shared cache that anything can write is an injection point.
+
+---
+
+## Interface and UI systems
+
+**Anything per-tick must be scaled by elapsed time.** A camera-throw that decayed
+with a flat multiplier once per frame lost speed twice as fast on a 120 Hz
+display as on a 60 Hz one — the decay was `f^(2n)` where it should have been
+`f^n` over the same wall-clock time. The fix expresses friction as a power of
+elapsed time rather than a per-frame constant. **Every per-frame decay,
+increment, or velocity is a latent device-dependent bug** until it is written in
+terms of elapsed time, and the bug reports arrive as "feels wrong on my machine",
+which is nearly impossible to act on.
+
+**A sentinel that means two things will eventually mean the wrong one.** From a
+persistence change: a null field was doing double duty as "never looked up" *and*
+"looked up, nothing usable found". Under retry those two cases needed opposite
+behaviour, and the result was a write that could be silently skipped. Give each
+state its own representation. The same change had a second instance of the same
+disease: one counter shared between two independent lanes of activity, so
+activity on one lane made the other look changed.
+
+**A retried operation must be idempotent, or it must be keyed.** In that case the
+retry re-ran the whole body, where one write overwrote and another appended under
+a fresh timestamped key — so a retry silently accumulated duplicates. Overwriting
+writes tolerate retries; appending writes need an identity that makes the second
+attempt recognisable as the same attempt.
+
+**Do not duplicate a shape across a process boundary.** Observed on a change that
+passed initial state from a host into an embedded view: the payload type was
+redeclared on the receiving side instead of imported from the shared definition,
+so the two could drift apart with no type error anywhere. If two sides of a seam
+must agree on a shape, exactly one definition exists and both import it.
+
+**Inline the first payload, lazy-load the heavy parts.** The load-performance
+pattern for an embedded view: pass the initial content in with the view itself
+rather than making it ask for it afterwards, and defer anything large that is not
+needed to show the first frame. Two independent wins — one round trip removed,
+one parse deferred — and neither changes the architecture.
+
+**Fake time in tests.** A UI test suite that stubs the high-resolution clock so
+fixtures are deterministic: the same seam discipline as anywhere else, applied to
+the one dependency every animation and every performance measurement has.
+
+**Coverage gaps are found by writing tests, and what they find gets filed.** A
+change that took a geometry library's line coverage from 31% to 97% surfaced three
+behaviours that looked like bugs — and each was **filed as its own issue rather
+than fixed inside the test change**. The test change stayed a test change, and the
+bugs got their own discussion, their own fix, and their own regression test.
+
+---
+
 ## Review moves seen repeatedly
 
 These are the actual comments that recur. They make a good self-review checklist,
@@ -310,7 +483,30 @@ because each one is a mistake competent contributors make constantly.
 - *"Leave a note to switch to the better construct once the minimum version
   allows it."* — deferred improvements get an explicit, findable marker rather
   than being silently forgotten.
-- *"Only incremental improvement is needed to land. It does not need to be
+- *"I don't think that is fixed yet."* — the single most valuable review
+  behaviour observed: a reviewer re-derived the failure path after the author
+  said it was handled, walked through the exact interleaving, and was right. The
+  author's reply — *"you're right, it wasn't fixed; thanks for pushing back"* —
+  is what a healthy review culture sounds like. **An author's claim that
+  something is handled is a hypothesis, not evidence.**
+- *"Can you expand on why this only handles the committed case?"* — asking who
+  owns the other half, rather than assuming it is covered.
+- *"This is added in many different places — there is probably a less
+  error-prone way."* — a repeated obligation at every call site is a design
+  problem, not a diligence problem.
+- *"Make it a flag, or we will have a fourth variant of this function next
+  month."* — resisting API surface growth by anticipating the sequence.
+- *"Does this handle circular references?"* / *"What happens under load in the
+  degenerate case?"* / *"Does this need to save and restore the previous value
+  if this is re-entered?"* — the three questions asked of any new cache, buffer,
+  or shared slot: cycles, adversarial size, re-entrancy.
+- *"Make it lazy and memoised rather than an eager global, and mark it so it can
+  be dropped when unused."* — precision about *when* work happens, not just how
+  much.
+- *"This new file lives outside the watched directory, so editing it will not
+  trigger a rebuild."* — reviewing the build's view of the change, not only the
+  code.
+- *"Only incremental improvement is needed to land It does not need to be
   perfect, only better than the status quo."* — stated policy, and visible in
   practice: maintainers land imperfect work and open follow-ups rather than
   holding contributions hostage.
@@ -321,3 +517,14 @@ because each one is a mistake competent contributors make constantly.
 The through-line: **reviewers spend their attention on names, on unnecessary
 state, on things that can drift out of sync, and on whether a claim is true.**
 They spend almost none on formatting, because a machine does that.
+
+Reading a wider sample sharpens the last one. *Whether a claim is true* is not
+mostly about documentation — it is about the author's assertion that a case is
+handled. The highest-value comments in every codebase examined are the ones where
+a reviewer took a stated guarantee, reconstructed the path themselves, and found
+it did not hold: a lock quietly narrowed by a refactor, a retry that reads back
+what its own failed attempt wrote, a sentinel standing for two different states,
+a listener with no removal path on the success case. None of these are visible in
+a diff. All of them are found by someone asking *how does this behave when it is
+interrupted, repeated, or re-entered* — and then not accepting the answer without
+walking it through.
