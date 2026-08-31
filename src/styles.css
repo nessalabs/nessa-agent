@@ -51,8 +51,51 @@ body {
   border-color: transparent;
 }
 
-/* With no panel behind it, the header sits directly on the desktop, so it
-   carries its own legibility rather than relying on the surface. */
-.nessa-panel[data-surface="clear"] > header {
-  text-shadow: 0 1px 3px color-mix(in oklab, black 55%, transparent);
+/*
+ * The border's proximity reveal: a radial gradient centred on the pointer,
+ * masked down to the border ring so only the stretch of outline nearest the
+ * pointer lights — the whole border glowing at once reads as a state change
+ * rather than as the panel noticing you.
+ *
+ * The mask is the same two-layer exclude the design system's PillComposer rim
+ * uses: an inner box clipped to content, composited away from the outer border
+ * box, leaving a band exactly `padding` thick. Colours are the Nessa rim
+ * spectrum, so the edge and the composer's working rim are lit by the same
+ * light source.
+ *
+ * Nothing animates on a loop. The gradient moves because the pointer moves;
+ * the transition only smooths the strength writes, and the motion duration
+ * token collapses to 0ms under prefers-reduced-motion (see the design
+ * system's theme.css), which turns the smoothing into a snap with no media
+ * query here.
+ */
+.nessa-edge-reveal {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  border-radius: inherit;
+  /* The band thickness: the ring left after the mask excludes the content box.
+     Thicker than the panel's own hairline, so the lit stretch reads as a
+     deliberate band of light rather than as the border changing colour. */
+  padding: 2.5px;
+  opacity: 0;
+  transition: opacity var(--nessa-motion-duration-normal)
+    var(--nessa-motion-easing-standard);
+  /* Tight, and with no white head: the reach is a short arc around the
+     pointer, and the spectrum alone carries it. A wider radius or a specular
+     core reads as the whole edge lighting rather than a spot of light on it. */
+  background: radial-gradient(
+    4rem circle at var(--edge-x, 50%) var(--edge-y, 50%),
+    var(--nessa-chat-rim-4) 0%,
+    var(--nessa-chat-rim-3) 30%,
+    var(--nessa-chat-rim-2) 55%,
+    transparent 75%
+  );
+  mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+  mask-clip: content-box, border-box;
+  mask-composite: exclude;
+  -webkit-mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+  -webkit-mask-clip: content-box, border-box;
+  -webkit-mask-composite: xor;
 }
+

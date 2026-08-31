@@ -24,6 +24,7 @@ import {
   startResizeFromLeftEdge,
 } from "./host-window"
 import { useColorScheme } from "./use-color-scheme"
+import { useEdgeReveal } from "./use-edge-reveal"
 import { useSurface } from "./use-surface"
 import { WaveformIcon } from "./waveform-icon"
 
@@ -79,6 +80,7 @@ export function App() {
   const scheme = useColorScheme()
   const ground = scheme === "dark" ? "ink" : "paper"
   const [surface, toggleSurface] = useSurface()
+  const edge = useEdgeReveal()
   const [conversations, setConversations] = React.useState<Conversation[]>(() => [
     newConversation("c0"),
   ])
@@ -218,12 +220,25 @@ export function App() {
         data-nessa-root
         data-surface={surface}
         className="nessa-panel relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[18px] border"
+        onPointerMove={edge.onPointerMove}
+        onPointerLeave={edge.onPointerLeave}
       >
+        {/* Lights the stretch of border nearest the pointer. Inert on
+            purpose: it covers the whole panel, and anything interactive here
+            would steal every click in the transcript. */}
+        <div
+          ref={edge.glowRef}
+          aria-hidden="true"
+          className="nessa-edge-reveal pointer-events-none"
+        />
         {/* The window is undecorated, so macOS gives it no resize border of its
             own; this edge is the grab handle. */}
         <div
           role="presentation"
-          onPointerDown={() => void startResizeFromLeftEdge()}
+          onPointerDown={() => {
+            edge.onResizeStart()
+            void startResizeFromLeftEdge()
+          }}
           className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-ew-resize"
         />
 

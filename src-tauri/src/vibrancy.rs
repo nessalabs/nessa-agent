@@ -25,7 +25,13 @@ pub fn set(window: &tauri::WebviewWindow, frosted: bool) -> Result<(), String> {
     clear_vibrancy(window).map_err(|error| error.to_string())?;
 
     if !frosted {
-        return Ok(());
+        // Removing the effect view leaves the NSWindow holding the opaque
+        // background that effect was painted over, so the clear surface still
+        // rendered as a filled panel. Put the window back to fully
+        // transparent explicitly rather than trusting the removal to do it.
+        return window
+            .set_background_color(Some(tauri::window::Color(0, 0, 0, 0)))
+            .map_err(|error| error.to_string());
     }
 
     apply_vibrancy(
