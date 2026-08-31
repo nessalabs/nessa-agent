@@ -44,7 +44,11 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
-    host: host ?? false,
+    // WebKitGTK resolves `localhost` to 127.0.0.1. Node's `true`/`false`
+    // localhost bind is IPv6-only on this host, so a reload of the webview
+    // gets connection-refused and the transparent window shows the desktop
+    // with no chrome.
+    host: host ?? "127.0.0.1",
     hmr: host ? { protocol: "ws", host, port: 1421 } : undefined,
     watch: {
       ignored: [

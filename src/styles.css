@@ -94,6 +94,17 @@ body {
 }
 
 /*
+ * WebKitGTK drops descendant layers when the panel fill is fully
+ * transparent on a transparent window — the bubbles and the composer
+ * vanish with the fill. A hairline tint is enough to keep them in the
+ * compositor; the desktop still reads through. macOS uses the native
+ * effect view and a true 0% fill, so it is left out.
+ */
+.nessa-panel[data-surface="clear"]:not([data-host="macos"]) {
+  background: color-mix(in oklab, var(--background) 12%, transparent);
+}
+
+/*
  * The border's proximity reveal: a radial gradient centred on the pointer,
  * masked down to the border ring so only the stretch of outline nearest the
  * pointer lights — the whole border glowing at once reads as a state change
