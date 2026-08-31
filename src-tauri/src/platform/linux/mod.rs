@@ -34,6 +34,10 @@ impl Host for Linux {
         live_resize::watch(window)
     }
 
+    fn repaint_panel(&self, window: &WebviewWindow) -> Result<(), String> {
+        viewport::repaint(window)
+    }
+
     fn after_attach(&self, window: &WebviewWindow, settings: &Settings) {
         // Linux has no menu bar extra to discover the panel from, so it opens
         // on launch and stays on the taskbar.

@@ -19,7 +19,8 @@ fn main() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             platform::set_frosted,
-            platform::panel_size
+            platform::panel_size,
+            platform::repaint_panel
         ])
         .setup(|app| {
             platform::current().configure_app(app.handle());

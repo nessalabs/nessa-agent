@@ -82,6 +82,16 @@ export async function windowSize(): Promise<PanelSize | null> {
 }
 
 /**
+ * Asks the host to redraw the webview. WebKitGTK leaves the previous frame
+ * of a bubble that has slid; macOS and the browser preview do not need this.
+ */
+export async function repaintPanel() {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("repaint_panel")
+}
+
+/**
  * Subscribes to the window being live-resized — held by its frame, as opposed
  * to resized programmatically.
  *

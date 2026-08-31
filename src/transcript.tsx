@@ -11,6 +11,7 @@ import { RandomAvatar } from "@nessa-ui/react/random-avatar"
 
 import { AGENT_HUES } from "./agent-identity"
 import type { Conversation } from "./conversation"
+import { repaintPanel } from "./host-window"
 
 /**
  * The turn list for the open conversation. Scrolls itself; does not know
@@ -31,31 +32,28 @@ export function Transcript({
   const streamingId =
     conversation.phase === "streaming" ? conversation.turns.at(-1)?.id : undefined
   const stackKey = `${conversation.turns.length}:${conversation.phase}`
+  const sentTurns = conversation.turns.filter((turn) => turn.from === "user").length
 
   React.useEffect(() => {
     const log = logRef.current
     if (log) log.scrollTop = log.scrollHeight
   }, [conversation.turns, conversation.phase, conversation.id])
 
-  // WebKitGTK does not clear transparent pixels a bubble has left. Hiding
-  // this content-sized stack used to miss the vacated rect: the new box sat
-  // higher, empty frost skipped paint, and the old "hey" stayed on screen.
-  // The stack now fills its box (see styles.css) so that flush covers it.
+  // WebKitGTK does not clear transparent pixels a bubble has left. A CSS
+  // hide of this box misses tiles that already live on the window. Ask the
+  // host to redraw from a clear colour after the new layout is committed.
   React.useLayoutEffect(() => {
     if (animate) return
-    const node = stackRef.current
-    if (!node) return
-    node.style.visibility = "hidden"
-    void node.offsetHeight
-    node.style.visibility = ""
+    void repaintPanel()
   }, [animate, stackKey])
 
   return (
     <div
       role="log"
       ref={logRef}
-      aria-label={`${conversation.title} transcript`}
+      aria-label={`${conversation.title} transcript, ${sentTurns} sent`}
       data-turn-count={conversation.turns.length}
+      data-sent-turns={sentTurns}
       className="flex min-h-0 flex-1 select-text flex-col px-3 pb-2"
     >
       {/* Sized to the turns, stood on the composer. Overflow lives on this

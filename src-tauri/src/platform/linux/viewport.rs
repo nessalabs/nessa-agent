@@ -44,6 +44,33 @@ pub fn fit(window: &tauri::WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
+/// Drop the previous frame so a bubble that slid up does not leave a ghost.
+/// WebKitGTK skips paint on transparent frost; queueing a draw with the
+/// clear colour put back is what empties those pixels.
+pub fn repaint(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use gtk::gdk;
+    use gtk::glib::Cast;
+    use gtk::prelude::*;
+    use webkit2gtk::WebViewExt;
+
+    let gtk_window = window.gtk_window().map_err(|error| error.to_string())?;
+    let Some(webview) = webview_in(gtk_window.upcast_ref()) else {
+        return Err(String::from("no webview under the window"));
+    };
+    let clear = gdk::RGBA::new(0.0, 0.0, 0.0, 0.0);
+    if let Ok(wk) = webview.clone().downcast::<webkit2gtk::WebView>() {
+        wk.set_background_color(&clear);
+    }
+    webview.queue_draw();
+    gtk_window.queue_draw();
+    // An opacity nudge invalidates the offscreen without a visible hide.
+    let opacity = webview.opacity();
+    webview.set_opacity(0.999);
+    webview.queue_draw();
+    webview.set_opacity(if opacity == 0.0 { 1.0 } else { opacity });
+    Ok(())
+}
+
 pub fn watch(window: &tauri::WebviewWindow) -> Result<(), String> {
     use gtk::prelude::*;
     use tauri::Emitter;
