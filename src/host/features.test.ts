@@ -25,7 +25,7 @@ describe("resolveHost", () => {
     expect(resolveHost("Mozilla/5.0 (X11; Linux x86_64)", true)).toBe(linux)
     expect(linux.frost).toBe("css")
     expect(linux.capturePointerOnWestHandle).toBe(false)
-    expect(linux.westHandleClass).toContain("w-3")
+    expect(linux.westHandleClass).toContain("nessa-west-handle-wide")
   })
 
   it("injects the other host for an unmatched Tauri user agent", () => {

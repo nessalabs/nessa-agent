@@ -21,8 +21,9 @@ export interface HostFeatures {
   readonly kind: HostKind
   readonly frost: FrostKind
   /**
-   * Tailwind width of the west resize handle. Linux's handle *is* the resize
-   * (12px); macOS only covers the band inside the system's own grab zone.
+   * Class for the west resize handle. Linux's handle *is* the resize (12px)
+   * and stops above the composer so it cannot square off the pill's left cap.
+   * macOS only covers the band inside the system's own grab zone.
    */
   readonly westHandleClass: string
   /**
@@ -34,6 +35,6 @@ export interface HostFeatures {
 }
 
 export const WEST_HANDLE_NARROW =
-  "absolute inset-y-0 left-0 z-10 w-1.5 cursor-ew-resize"
+  "nessa-west-handle nessa-west-handle-narrow"
 export const WEST_HANDLE_WIDE =
-  "absolute inset-y-0 left-0 z-10 w-3 cursor-ew-resize"
+  "nessa-west-handle nessa-west-handle-wide"

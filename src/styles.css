@@ -90,12 +90,9 @@ body {
 
 /*
  * Clear removes the panel. Only the tabs, the bubbles, and the pill hang
- * over the desktop. Wrappers must not promote a compositing layer: WebKitGTK
- * paints those as opaque rectangles, which showed up as a white box behind
- * the rounded pill and as stacked bars overlapping the transcript.
- *
- * Promote only the already-rounded painted pieces, so their layer is the
- * chrome itself rather than a full-width strip.
+ * over the desktop. Nothing in this tree may promote a compositing layer:
+ * WebKitGTK paints those as opaque rectangles, which showed up as a white
+ * box behind the rounded pill and as stacked bars overlapping the transcript.
  */
 .nessa-panel[data-surface="clear"] {
   background: transparent;
@@ -111,13 +108,65 @@ body {
   background: transparent;
 }
 
-.nessa-panel[data-surface="clear"] [data-slot="pill-composer"],
-.nessa-panel[data-surface="clear"] [data-slot="chat-bubble"],
-.nessa-panel[data-surface="clear"] [data-slot="chat-tab"],
-.nessa-panel[data-surface="clear"] [data-slot="chat-tabs-new"],
-.nessa-panel[data-surface="clear"] [data-slot="chat-typing-indicator"] {
-  isolation: isolate;
-  transform: translateZ(0);
+/*
+ * Composer gutter is real CSS, not a Tailwind spacing token: those have
+ * gone missing from a generated sheet before, which sat the pill flush on
+ * the window's left clip — a hard vertical edge — while the right cap still
+ * rounded. The west resize strip is 12px on Linux; padding plus a handle
+ * that stops above the composer keeps it off the left cap.
+ */
+.nessa-composer {
+  flex-shrink: 0;
+  padding: 0 16px 12px;
+  background: transparent;
+}
+
+/*
+ * WebKitGTK paints a promoted layer as an axis-aligned opaque rectangle
+ * *and* the rounded content on top of it. That is the extra boxed shape
+ * on the left of the pill (the right cap still looked finished because
+ * the panel's own rounding clipped that corner). Isolation, translateZ,
+ * mask, clip-path, and overflow-on-radius all promote, so none of them
+ * belong on the form. The idle rim is `display: none` for the same
+ * reason: opacity-0 and blur still allocate a backing store.
+ */
+[data-slot="pill-composer"] {
+  isolation: auto;
+  transform: none;
+  filter: none;
+  contain: none;
+  will-change: auto;
+  clip-path: none;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+[data-slot="pill-composer-rim"]:not([data-active]) {
+  display: none;
+}
+
+[data-slot="chat-composer-action"] {
+  transform: none;
+  filter: none;
+  will-change: auto;
+  transition-property: color, background-color;
+}
+
+.nessa-west-handle {
+  position: absolute;
+  top: 0;
+  bottom: 4.75rem;
+  left: 0;
+  z-index: 10;
+  cursor: ew-resize;
+}
+
+.nessa-west-handle-narrow {
+  width: 6px;
+}
+
+.nessa-west-handle-wide {
+  width: 12px;
 }
 
 .nessa-panel [role="log"] {

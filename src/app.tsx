@@ -57,7 +57,11 @@ export function App() {
         data-surface={surface}
         data-host={host.kind}
         data-frost={host.frost}
-        className="nessa-panel relative flex min-h-0 flex-col overflow-hidden rounded-[18px] border"
+        className={
+          surface === "clear"
+            ? "nessa-panel relative flex min-h-0 flex-col overflow-visible rounded-[18px] border-0"
+            : "nessa-panel relative flex min-h-0 flex-col overflow-hidden rounded-[18px] border"
+        }
         onPointerMove={edge.onPointerMove}
         onPointerLeave={edge.onPointerLeave}
       >
@@ -96,7 +100,7 @@ export function App() {
             window, while the tabs themselves stay clickable. */}
         <div
           data-tauri-drag-region
-          className="nessa-chrome shrink-0 px-1.5 pt-2 pb-1"
+          className="nessa-chrome shrink-0 px-2 pt-2 pb-1"
         >
           <ChatTabs
             label="Conversations"
@@ -114,7 +118,7 @@ export function App() {
 
         <Transcript conversation={strip.active} ground={ground} />
 
-        <div className="nessa-chrome shrink-0 px-2.5 pb-2.5">
+        <div className="nessa-chrome nessa-composer">
           <PillComposer generating={generating} onSubmit={submit}>
             <PillComposerRow>
               <ChatComposerAction aria-label="Add attachment" title="Add attachment">
