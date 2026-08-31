@@ -75,7 +75,9 @@ Build packages on Debian/Ubuntu:
 sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 ```
 
-On a VNC or software X server, WebKit's DMA-BUF path can fail to paint:
+On a VNC or software X server there is no DRM device, and the host disables
+WebKit's DMA-BUF renderer on its own. To force that path on a machine that
+does have `/dev/dri`:
 
 ```bash
 WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 pnpm app
@@ -88,7 +90,7 @@ WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 pnpm app
 | `pnpm app:build` | The shipping bundle (`.app` + `.dmg`) |
 | `pnpm dev` | The UI in a browser, no Tauri |
 | `pnpm typecheck` | `tsc --noEmit` |
-| `pnpm ui:types` | Rebuild the linked package's `.d.ts` (see below) |
+| `pnpm ui:types` | Pull the vendored `@nessa-ui/react` checkout forward |
 
 ### Settings
 
@@ -171,9 +173,7 @@ drops only this app's crate — the thing that is actually stale after a code
 change — and rebuilds in **4 s** with every dependency intact.
 
 Worktrees are created as **siblings** of this checkout
-(`../nessa-app-<name>`), and that is load-bearing rather than cosmetic: the
-design system is a relative `link:../nessa/…` dependency, so a worktree nested
-any deeper resolves that path to nothing and fails to install.
+(`../nessa-app-<name>`) so they can share this crate's `src-tauri/target`.
 
 ## Build
 
@@ -276,23 +276,23 @@ window every time you open devtools. It is therefore release-only — see the
 
 ## The Nessa UI dependency
 
-`PillComposer` and the chat bubbles have **not landed on the design system's main
-branch yet** — they live on `claude/imessage-composer-chat-ui-be1e6a`. So the app
-depends on a git worktree of that branch rather than on npm:
+The chat kit lives in [`nessalabs/nessa_ui`](https://github.com/nessalabs/nessa_ui)
+(`packages/react`). It is not on npm yet, so `pnpm install` links it from
+`.vendor/nessa_ui`. That directory is filled by `scripts/ensure-nessa-ui.mjs`
+before install: a sibling `nessa_ui` (or the original imessage worktree) is
+symlinked if present, otherwise the repo is cloned.
 
 ```
-"@nessa-ui/react": "link:../nessa/.claude/worktrees/imessage-composer-chat-ui/packages/react"
+"@nessa-ui/react": "link:.vendor/nessa_ui/packages/react"
 ```
 
-That worktree is checked out detached at the branch tip. To move it forward:
+To move the clone forward:
 
 ```bash
-git -C ../nessa/.claude/worktrees/imessage-composer-chat-ui checkout claude/imessage-composer-chat-ui-be1e6a
-pnpm ui:build
+pnpm ui:types
 ```
 
-When the branch merges and the package publishes, this becomes a plain
-`"@nessa-ui/react": "^x.y.z"` and the worktree can go away.
+When the package publishes, this becomes `"@nessa-ui/react": "^x.y.z"`.
 
 ### Why the app compiles the design system's CSS from source
 

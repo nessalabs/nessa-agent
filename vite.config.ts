@@ -21,12 +21,18 @@ import tailwindcss from "@tailwindcss/vite"
  * and Vite treats a resolved real path as project source to transform rather
  * than as a prebundled dependency.
  */
-const nessaUi = resolve(
-  realpathSync(
-    resolve(dirname(fileURLToPath(import.meta.url)), "node_modules/@nessa-ui/react"),
-  ),
-  "src",
+const nessaUiPkg = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "node_modules/@nessa-ui/react",
 )
+let nessaUi
+try {
+  nessaUi = resolve(realpathSync(nessaUiPkg), "src")
+} catch {
+  throw new Error(
+    `Cannot resolve @nessa-ui/react at ${nessaUiPkg}. Run pnpm install — it clones nessalabs/nessa_ui into .vendor.`,
+  )
+}
 
 // Tauri drives this dev server, so the port is fixed and the Rust sources are
 // left to cargo's own watcher.

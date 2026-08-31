@@ -5,8 +5,8 @@
  * which silently drops any class the app writes for itself; compiling from
  * source gives the app the full utility set and the same tokens.
  *
- * When PillComposer and the chat bubbles land on the package's main branch and
- * it ships to npm, this becomes `@import "@nessa-ui/react/app.css"` again.
+ * When the package ships to npm, this becomes `@import "@nessa-ui/react/app.css"`
+ * again.
  */
 @import "../node_modules/@nessa-ui/react/src/app.css";
 @source "./";

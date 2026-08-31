@@ -73,8 +73,9 @@ export function App() {
         {/* A grab handle for the left edge. macOS claims the window frame
             before the webview sees it, so this only ever fires just inside the
             system's own grab zone — the glow is pinned from window size
-            events rather than from this gesture. On Linux the handle is the
-            resize, so pointerdown here both starts the drag and pins the glow. */}
+            events rather than from this gesture. On Linux the handle *is* the
+            resize, so it is wide enough to grab and pointerdown here both
+            starts the drag and pins the glow. */}
         <div
           role="presentation"
           onPointerDown={(event) => {
@@ -83,7 +84,11 @@ export function App() {
             void startResizeFromLeftEdge()
           }}
           onPointerUp={edge.releaseResize}
-          className="absolute inset-y-0 left-0 z-10 w-1.5 cursor-ew-resize"
+          className={
+            hostKind === "linux"
+              ? "absolute inset-y-0 left-0 z-10 w-3 cursor-ew-resize"
+              : "absolute inset-y-0 left-0 z-10 w-1.5 cursor-ew-resize"
+          }
         />
 
         {/* The strip is the titlebar too: the gaps around the tabs drag the
