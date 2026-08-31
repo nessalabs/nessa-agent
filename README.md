@@ -66,8 +66,8 @@ work — the window controls no-op there (see [src/host-window.ts](src/host-wind
 ### Linux
 
 The lockfile needs **Rust 1.85+** (edition 2024 crates). Ubuntu's packaged
-`rustc` is often 1.83; install via rustup and run with `RUSTUP_TOOLCHAIN=stable`,
-or `rustup default stable`.
+`rustc` is often 1.83; install via rustup. [`rust-toolchain.toml`](rust-toolchain.toml)
+pins `stable`, so `pnpm app` and `cargo test` pick it without an extra env var.
 
 Build packages on Debian/Ubuntu:
 
