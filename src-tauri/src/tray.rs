@@ -1,6 +1,7 @@
 //! The menu bar item and the placement of the floating panel.
 
 use tauri::{
+    image::Image,
     menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalSize, WebviewWindow, Wry,
@@ -26,6 +27,16 @@ pub const FOCUS_COMPOSER_EVENT: &str = "nessa://focus-composer";
 
 const MAIN_WINDOW: &str = "main";
 const TRAY_ID: &str = "nessa-tray";
+/// The menu bar icon, compiled in rather than resolved as a bundle resource so
+/// dev and packaged builds load the identical bytes with no path lookup.
+///
+/// It is a *different* painting from the app icon: same seed and hue wheel, but
+/// heavier pigment. The app icon's pastel washes sit around 0.87–0.97 lightness,
+/// which at the 16pt the menu bar actually draws collapses into a pale disc —
+/// a white blob on any bar. Delicate reads fine in the Dock at 128pt; the menu
+/// bar needs contrast. See the README on regenerating it.
+const TRAY_ICON: &[u8] = include_bytes!("../icons/tray-icon.png");
+
 /// The floor the resize edge may not drag the panel below, whatever the
 /// configured minimum width is: a panel shorter than this has no transcript.
 const MIN_PANEL_HEIGHT: f64 = 320.0;
@@ -71,8 +82,16 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             }
         });
 
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone());
+    match Image::from_bytes(TRAY_ICON) {
+        Ok(icon) => builder = builder.icon(icon),
+        // The app icon is the wrong weight for a menu bar, but an icon that is
+        // hard to see beats a tray item with none at all.
+        Err(error) => {
+            eprintln!("[nessa] falling back to the app icon in the tray: {error}");
+            if let Some(icon) = app.default_window_icon() {
+                builder = builder.icon(icon.clone());
+            }
+        }
     }
 
     builder.build(app)?;

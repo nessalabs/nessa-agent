@@ -104,6 +104,28 @@ The same applies inside the host today. `tray.rs` owns geometry and the menu;
 it does not own conversation state, and it does not decide preferences — it
 requests and reflects. Keep new code pointing the same way.
 
+## Rules for the host/shell seam
+
+The one boundary that already exists, and the one most likely to rot silently.
+
+- **One definition of every payload shape, imported by both sides.** Never
+  redeclare the shape of a command argument or event on the receiving side. Two
+  declarations of the same contract drift with no error anywhere — the compiler
+  is happy on both sides right up until runtime. Generate the frontend types from
+  the Rust definitions, or keep one hand-written declaration that both sides
+  import; not two.
+- **Every new host call goes through the existing seam and no-ops outside the
+  desktop host**, or `pnpm dev` breaks quietly for whoever does design work next.
+- **Pass the first payload in, do not make the shell ask for it.** State the
+  shell needs to paint its first frame should arrive with the shell, not as a
+  round trip after mount. Defer anything heavy that is not needed for that frame.
+- **Anything per-frame is scaled by elapsed time.** Panel animation, coasting,
+  easing, decay — a flat per-tick multiplier runs at double speed on a 120 Hz
+  display and produces bug reports that read "feels wrong on my machine". Write
+  decay as a power of elapsed time, and velocity as pixels per second.
+- **Fake the clock in tests.** Anything timed gets its clock injected, including
+  animation and anything that measures itself.
+
 ## Failure-first checklist for host code
 
 Before any new code that touches the filesystem, the OS, or another process:

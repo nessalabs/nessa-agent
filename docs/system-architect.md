@@ -415,6 +415,19 @@ debt to be removed by fixing the design.
 
 Two more habits:
 
+**One state, one representation.** A sentinel that means two things — a null
+standing for both "never looked up" and "looked up and found nothing", a counter
+shared by two independent activities — will eventually be read as the wrong one,
+and the case where it matters is always a retry or a restart. Give each state its
+own representation before you need to tell them apart.
+
+**Cleanup must be structural, not remembered.** Whenever you attach something to
+a lifetime you do not control — a listener, a subscription, a registration — the
+removal has to be tied to a scope, a guard, or a lifetime token, never to a
+teardown call someone must make on every exit path. The path that gets forgotten
+is the successful one, and the symptom is that finished work stays reachable
+forever.
+
 **Make illegal states unrepresentable before making them unreachable.** A type
 that cannot express the broken state removes a whole class of failure from
 review, testing, and your memory. This is cheaper than any amount of validation.
@@ -488,6 +501,18 @@ fixed duration and hope.
 broken behaviour. Both cases have a test that would have failed before. If you
 cannot write one, say so in the pull request and say why, out loud.
 
+**Record performance facts in test baselines.** The cheapest defence against
+performance regressions is to write the relevant counters into the recorded
+output of the test suite, rounded coarsely enough that ordinary noise produces no
+diff. The regression then arrives in review as a text diff beside the behavioural
+changes, seen by the same person in the same pass — rather than in a dashboard
+nobody opens.
+
+**Tests are a discovery instrument, and what they discover gets filed.** Writing
+tests for an untested area will surface things that look like bugs. File each one
+separately. Do not fix them inside the test change: the test change stays
+reviewable, and each bug gets its own discussion, fix, and regression test.
+
 **Pin stated semantics with tests.** When you document a subtle behaviour — an
 edge case, an ordering, what a caller sees after a failure — add the test that
 fails if the documentation stops being true. Prose drifts silently; an assertion
@@ -525,6 +550,19 @@ independently, in parallel, without coordination. You engineer for it directly:
   behaviour, which makes it reviewable on structure alone and revertible for
   free. Capability comes one increment at a time afterwards. A single change that
   both builds machinery and uses it can be neither reviewed nor unwound.
+- **Refactor, then test, then change — as three commits.** First extract the
+  logic so it is reachable from a test, saying "no functional change". Then add
+  tests whose recorded output captures the current behaviour, *including the
+  parts that are wrong*. Then change the behaviour — and the third diff is now a
+  precise list of what changed.
+- **Name the change that introduced the defect.** Every regression fix carries a
+  reference to the commit that caused it. It costs one blame and it makes the
+  history queryable: what did this break, how long did it take to notice, which
+  areas keep regressing.
+- **Make the structural change ahead of the feature that needs it, on its own.**
+  A refactor that lands alone — motivated by a capability that does not exist
+  yet — is reviewable on its structure and revertible for free. Bundled with the
+  feature, it is neither.
 - **Map the steps of a change to its commits.** A description with *why* and a
   numbered *what*, where each step names the commit that performs it, lets a
   reviewer take one idea at a time. It is five minutes of authoring for a
@@ -556,6 +594,17 @@ You do not sprinkle performance work. You locate it.
   a rumour, and a benchmark that is not run in CI decays within a month. But
   benchmarks only model the workloads you thought of; production finds the
   others. Passing benchmarks are evidence, not proof.
+- **Quantify the claim.** "Peak memory down 5-15%, generation time down 30-70%"
+  can be argued with and evaluated. "Faster" cannot.
+- **For a pure performance change, prove the output is unchanged.** Not "tests
+  pass" — byte-identical results on the full fixture set and on real and
+  pathological inputs. If a change is only supposed to alter timing, equality of
+  output is the entire correctness argument.
+- **Hunt the accidental quadratic.** The classic shape is a defensive copy made
+  for a good local reason — ownership, immutability, avoiding aliasing — sitting
+  inside a loop over something that grows.
+- **Once, and only if needed.** Prefer lazy-and-memoised over eager-global over
+  recomputed. Eager work at startup is still work.
 - **Build the observability before you need it.** The metric that lets a
   stranger diagnose a regression you have not had yet has to already exist when
   it happens. Counters and timings on the hot path, available behind a flag,
