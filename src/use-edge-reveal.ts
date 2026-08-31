@@ -212,5 +212,36 @@ export function useEdgeReveal() {
     if (glowRef.current) glowRef.current.style.opacity = "0"
   }, [])
 
-  return { glowRef, panelRef, onPointerMove, onPointerLeave }
+  /**
+   * Pins the glow for a resize the page itself started. On Linux the left-edge
+   * handle is the drag, so pointerdown/up here is a complete signal. On macOS
+   * the system usually claims the frame first and these never fire; AppKit's
+   * live-resize notifications cover that path instead.
+   */
+  const holdResize = React.useCallback(() => {
+    const box = panelRef.current?.getBoundingClientRect()
+    if (box) {
+      grabbed.current = nearestEdge(
+        point.current.x - box.left,
+        point.current.y - box.top,
+        box,
+      )
+    }
+    resizing.current = true
+    if (!frame.current) frame.current = requestAnimationFrame(paint)
+  }, [paint])
+
+  const releaseResize = React.useCallback(() => {
+    resizing.current = false
+    if (!frame.current) frame.current = requestAnimationFrame(paint)
+  }, [paint])
+
+  return {
+    glowRef,
+    panelRef,
+    onPointerMove,
+    onPointerLeave,
+    holdResize,
+    releaseResize,
+  }
 }

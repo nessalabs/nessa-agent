@@ -1,8 +1,34 @@
 /**
  * The desktop window controls, guarded so the same UI also runs in a plain
  * browser (`pnpm dev`) where there is no Tauri host to talk to.
+ *
+ * Event names and the size payload are the host/shell contract. They are
+ * declared here and again in `src-tauri/src/host.rs`; a Rust test fails if a
+ * name on that side is missing from this file.
  */
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
+
+/**
+ * Which host is drawing the panel. Decides whether frost is native (macOS
+ * Tauri) or CSS (Linux, a browser, everywhere else). The macOS CSS
+ * `backdrop-filter` path is the one that smears on an undecorated window;
+ * everywhere else it is the frost.
+ */
+export const hostKind: "macos" | "linux" | "browser" | "other" = !inTauri
+  ? "browser"
+  : navigator.userAgent.includes("Mac")
+    ? "macos"
+    : navigator.userAgent.includes("Linux")
+      ? "linux"
+      : "other"
+
+export const HOST_EVENTS = {
+  toggleSurface: "nessa://toggle-surface",
+  focusComposer: "nessa://focus-composer",
+  panelSized: "nessa://panel-sized",
+  resizeStarted: "nessa://resize-started",
+  resizeEnded: "nessa://resize-ended",
+} as const
 
 /**
  * The frosted surface is a native window effect, so the clear surface has to
@@ -21,7 +47,7 @@ export async function setFrosted(frosted: boolean) {
 export async function onToggleSurface(handler: () => void) {
   if (!inTauri) return () => undefined
   const { listen } = await import("@tauri-apps/api/event")
-  return listen("nessa://toggle-surface", () => handler())
+  return listen(HOST_EVENTS.toggleSurface, () => handler())
 }
 
 /**
@@ -30,11 +56,11 @@ export async function onToggleSurface(handler: () => void) {
 export async function onFocusComposer(handler: () => void) {
   if (!inTauri) return () => undefined
   const { listen } = await import("@tauri-apps/api/event")
-  return listen("nessa://focus-composer", () => handler())
+  return listen(HOST_EVENTS.focusComposer, () => handler())
 }
 
-/** The host window's size, in CSS pixels. */
-export interface HostSize {
+/** The host window's size, in CSS pixels. Matches `host::PanelSize`. */
+export interface PanelSize {
   width: number
   height: number
 }
@@ -52,10 +78,10 @@ export interface HostSize {
  * `innerHeight` and with nothing the reader can see. The host reads AppKit's
  * content rect instead, which a fixed webview cannot falsify, and sends it.
  */
-export async function onWindowResize(handler: (size: HostSize) => void) {
+export async function onWindowResize(handler: (size: PanelSize) => void) {
   if (!inTauri) return () => undefined
   const { listen } = await import("@tauri-apps/api/event")
-  return listen<HostSize>("nessa://panel-sized", ({ payload }) => handler(payload))
+  return listen<PanelSize>(HOST_EVENTS.panelSized, ({ payload }) => handler(payload))
 }
 
 /**
@@ -63,10 +89,10 @@ export async function onWindowResize(handler: (size: HostSize) => void) {
  * one as it places the panel, which a webview that reloaded mid-session — a
  * devtools reload — will have missed.
  */
-export async function windowSize(): Promise<HostSize | null> {
+export async function windowSize(): Promise<PanelSize | null> {
   if (!inTauri) return null
   const { invoke } = await import("@tauri-apps/api/core")
-  return invoke<HostSize>("panel_size")
+  return invoke<PanelSize>("panel_size")
 }
 
 /**
@@ -82,8 +108,8 @@ export async function onLiveResize(handler: (active: boolean) => void) {
   if (!inTauri) return () => undefined
   const { listen } = await import("@tauri-apps/api/event")
   const unlisten = await Promise.all([
-    listen("nessa://resize-started", () => handler(true)),
-    listen("nessa://resize-ended", () => handler(false)),
+    listen(HOST_EVENTS.resizeStarted, () => handler(true)),
+    listen(HOST_EVENTS.resizeEnded, () => handler(false)),
   ])
   return () => {
     for (const stop of unlisten) stop()

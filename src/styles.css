@@ -77,6 +77,17 @@ body {
   border-color: color-mix(in oklab, var(--border) 55%, transparent);
 }
 
+/*
+ * Native frost is macOS-only (see vibrancy.rs). Everywhere else — Linux from
+ * day 0, a browser preview, other hosts — the CSS filter *is* the frost. It
+ * is kept off the macOS Tauri window on purpose: on a transparent undecorated
+ * NSWindow it smears the behind-window content and freezes when unfocused.
+ */
+.nessa-panel[data-surface="translucent"]:not([data-host="macos"]) {
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
 .nessa-panel[data-surface="clear"] {
   background: transparent;
   border-color: transparent;
