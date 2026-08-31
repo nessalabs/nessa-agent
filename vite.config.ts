@@ -2,7 +2,7 @@ import { realpathSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { defineConfig } from "vite"
+import { defineConfig, searchForWorkspaceRoot } from "vite"
 import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 
@@ -41,6 +41,11 @@ export default defineConfig({
     host: host ?? false,
     hmr: host ? { protocol: "ws", host, port: 1421 } : undefined,
     watch: { ignored: ["**/src-tauri/**"] },
+    // The design system is a symlink that often lives outside this checkout
+    // (a sibling worktree, or a clone for a machine that does not have one).
+    // Vite's default allow-list is the workspace root, so the realpath has
+    // to be named or every component 404s in `pnpm app`.
+    fs: { allow: [searchForWorkspaceRoot(process.cwd()), dirname(nessaUi)] },
   },
   resolve: {
     alias: [
