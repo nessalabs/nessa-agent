@@ -435,7 +435,7 @@ fn ensure_fixed(webview: &gtk::Widget) -> Result<gtk::Fixed, String> {
 }
 
 #[cfg(target_os = "linux")]
-fn webview_in(root: &gtk::Widget) -> Option<gtk::Widget> {
+pub(crate) fn webview_in(root: &gtk::Widget) -> Option<gtk::Widget> {
     use gtk::glib::Cast;
     use gtk::prelude::*;
 

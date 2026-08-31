@@ -46,7 +46,15 @@ export default defineConfig({
     strictPort: true,
     host: host ?? false,
     hmr: host ? { protocol: "ws", host, port: 1421 } : undefined,
-    watch: { ignored: ["**/src-tauri/**"] },
+    watch: {
+      ignored: [
+        "**/src-tauri/**",
+        // The vendor clone is a whole monorepo. Watching Storybook and
+        // validation tsconfigs forces a full reload on every install.
+        "**/.vendor/nessa_ui/apps/**",
+        "**/.vendor/nessa_ui/validation/**",
+      ],
+    },
     // The design system is a symlink that often lives outside this checkout
     // (a sibling worktree, or a clone for a machine that does not have one).
     // Vite's default allow-list is the workspace root, so the realpath has

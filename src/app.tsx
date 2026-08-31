@@ -79,7 +79,13 @@ export function App() {
         <div
           role="presentation"
           onPointerDown={(event) => {
-            event.currentTarget.setPointerCapture(event.pointerId)
+            // Pointer capture on Linux holds the button on the webview, so
+            // GTK's `begin_resize_drag` does not see it and the west resize
+            // never starts. The system's 5px inset still works; this path is
+            // the rest of the handle.
+            if (hostKind !== "linux") {
+              event.currentTarget.setPointerCapture(event.pointerId)
+            }
             edge.holdResize()
             void startResizeFromLeftEdge()
           }}

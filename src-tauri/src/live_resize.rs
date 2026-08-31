@@ -115,7 +115,54 @@ pub fn watch(window: &tauri::WebviewWindow) -> Result<(), String> {
         }
     });
 
+    arm_west_handle(&gtk_window);
+
     Ok(())
+}
+
+/// The page draws a 12px west handle, but `startResizeDragging` is an async
+/// invoke: it arrives after the button-press, and GTK's `_NET_WM_MOVERESIZE`
+/// has to run from the press itself. Tauri already does that for a 5px inset
+/// on the webview. This covers the rest of the handle, using the window's
+/// left edge rather than the webview's — the view is larger than the window
+/// and pinned to its bottom right.
+#[cfg(target_os = "linux")]
+fn arm_west_handle(gtk_window: &gtk::ApplicationWindow) {
+    use gtk::gdk::WindowEdge;
+    use gtk::glib::{Cast, Propagation};
+    use gtk::prelude::*;
+
+    const HANDLE: f64 = 12.0;
+    let Some(webview) = crate::viewport::webview_in(gtk_window.upcast_ref()) else {
+        return;
+    };
+    let gtk_window = gtk_window.clone();
+    webview.connect_button_press_event(move |_, event| {
+        if event.button() != 1 {
+            return Propagation::Proceed;
+        }
+        if gtk_window.is_decorated() || !gtk_window.is_resizable() || gtk_window.is_maximized()
+        {
+            return Propagation::Proceed;
+        }
+        let Some(gdk_window) = gtk_window.window() else {
+            return Propagation::Proceed;
+        };
+        let (root_x, root_y) = event.root();
+        let (window_x, _) = gdk_window.position();
+        let client_x = root_x - window_x as f64;
+        if !(0.0..HANDLE).contains(&client_x) {
+            return Propagation::Proceed;
+        }
+        gtk_window.begin_resize_drag(
+            WindowEdge::West,
+            1,
+            root_x as i32,
+            root_y as i32,
+            event.time(),
+        );
+        Propagation::Proceed
+    });
 }
 
 #[cfg(target_os = "linux")]
