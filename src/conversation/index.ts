@@ -3,6 +3,7 @@ export type { ConversationGateway } from "./application/ports"
 export {
   AGENT_HUES,
   AGENT_ICON_TONE,
+  AGENT_ICON_WASH,
   AGENT_SEED,
   conversation,
   emptyStrip,
