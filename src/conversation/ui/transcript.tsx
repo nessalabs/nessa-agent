@@ -7,43 +7,33 @@ import {
 } from "@nessa-ui/react/chat-bubbles"
 import { MessageStreamText } from "@nessa-ui/react/message"
 
-import { useFlushOnTurn } from "../adapters/compositor-flush"
 import { type Conversation, type Receipt, type Turn } from "../model"
 import { EmptyState } from "./empty-state"
 import { Thinking } from "./thinking"
 
-/**
- * The turn list for the open conversation. Scrolls itself; does not know
- * how the turns got here. An empty assistant turn is thinking chrome —
- * the same row later holds the reply.
- */
 export function Transcript({
   conversation,
   ground,
   animateMount,
   streamText,
   emptyState,
-  flushOnTurn,
 }: {
   conversation: Conversation
   ground: "paper" | "ink"
   animateMount: boolean
   streamText: boolean
   emptyState: boolean
-  flushOnTurn: boolean
 }) {
   const logRef = React.useRef<HTMLDivElement>(null)
-  const streamingId =
-    conversation.phase === "streaming" ? conversation.turns.at(-1)?.id : undefined
+  const lastId = conversation.turns.at(-1)?.id
+  const thinkingId = conversation.phase === "thinking" ? lastId : undefined
+  const streamingId = conversation.phase === "streaming" ? lastId : undefined
   const sentTurns = conversation.turns.filter((turn) => turn.from === "user").length
-  const turnKey = `${conversation.id}:${conversation.phase}:${conversation.turns.length}`
 
   React.useEffect(() => {
     const log = logRef.current
     if (log) log.scrollTop = log.scrollHeight
   }, [conversation.turns, conversation.phase, conversation.id])
-
-  useFlushOnTurn(flushOnTurn, turnKey)
 
   return (
     <div
@@ -66,6 +56,7 @@ export function Transcript({
           <TurnRow
             key={turn.id}
             turn={turn}
+            thinking={turn.id === thinkingId}
             streaming={turn.id === streamingId && streamText}
             animateMount={animateMount}
           />
@@ -77,16 +68,16 @@ export function Transcript({
 
 function TurnRow({
   turn,
+  thinking,
   streaming,
   animateMount,
 }: {
   turn: Turn
+  thinking: boolean
   streaming: boolean
   animateMount: boolean
 }) {
-  if (turn.from === "assistant" && turn.text === "") {
-    return <Thinking motion={animateMount} />
-  }
+  if (thinking) return <Thinking motion={animateMount} />
 
   return (
     <ChatMessage

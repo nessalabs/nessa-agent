@@ -58,4 +58,19 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn shell_panel_size_matches_the_host() {
+        let shell = include_str!("../../src/host/window.ts");
+        assert!(
+            shell.contains("export interface PanelSize"),
+            "src/host/window.ts is missing PanelSize"
+        );
+        for field in ["width", "height"] {
+            assert!(
+                shell.contains(&format!("{field}: number")),
+                "src/host/window.ts PanelSize is missing {field}"
+            );
+        }
+    }
 }

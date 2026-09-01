@@ -14,7 +14,7 @@ import {
   closeConversation,
   openConversation,
   sendDraft,
-  setActiveId,
+  setActive,
   setDraft,
   stopGenerating,
 } from "./conversation/adapters/store/slice"
@@ -43,7 +43,7 @@ export {
   closeConversation,
   openConversation,
   sendDraft,
-  setActiveId,
+  setActive,
   setDraft,
   stopGenerating,
 }

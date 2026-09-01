@@ -41,6 +41,12 @@ describe("sendDraft", () => {
 })
 
 describe("advanceReply", () => {
+  it("does not mint an id when the conversation is idle", () => {
+    const idle = emptyLocalStrip()
+    expect(tick(idle, "c0")).toBe(idle)
+    expect(idle.nextTurnId).toBe(1)
+  })
+
   it("walks thinking → streaming → idle", () => {
     const thinking = primed("hi")
     const streaming = tick(thinking, "c0")

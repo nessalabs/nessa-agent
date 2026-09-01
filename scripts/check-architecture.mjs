@@ -85,12 +85,16 @@ for (const file of walk(src)) {
     }
   }
 
+  if (
+    path.startsWith("src/conversation/") &&
+    /from\s+["'][^"']*\/host(?:\/window)?["']/.test(text)
+  ) {
+    fail(file, "the conversation vertical does not talk to the host; the panel does")
+  }
+
   if (path.startsWith("src/conversation/ui/")) {
     if (/application\/internal/.test(text) || /application\/usecases/.test(text)) {
       fail(file, "the UI reads the projection; it does not import gateway internals")
-    }
-    if (/from\s+["'][^"']*\/host(?:\/window)?["']/.test(text)) {
-      fail(file, "the UI does not talk to the host; adapters do")
     }
     if (/Linux[A-Z]/.test(text) || /data-host=/.test(text)) {
       fail(file, "host policy belongs in src/host, as a HostFeatures field")

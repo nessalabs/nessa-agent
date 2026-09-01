@@ -7,7 +7,7 @@ const conversationSlice = createSlice({
   name: "conversation",
   initialState: emptyLocalStrip(),
   reducers: {
-    setActiveId(state, action: PayloadAction<string>) {
+    setActive(state, action: PayloadAction<string>) {
       return gateway.setActive(state, action.payload)
     },
     setDraft(state, action: PayloadAction<{ draft: string; id?: string }>) {
@@ -35,7 +35,7 @@ const conversationSlice = createSlice({
 })
 
 export const {
-  setActiveId,
+  setActive,
   setDraft,
   sendDraft,
   openConversation,

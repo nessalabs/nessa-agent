@@ -4,12 +4,6 @@ import { onFocusComposer, onToggleSurface, setFrosted } from "../../host"
 import { type Surface } from "../model"
 import { usePanelFrame } from "./panel-frame"
 
-/**
- * Wires the panel to the desktop host: frost, the tray's surface request,
- * and handing the caret to the composer when the panel is summoned.
- *
- * Lives in a hook so `App` can render without owning the seam.
- */
 export function useHostPanel(
   surface: Surface,
   toggleSurface: () => void,
@@ -18,8 +12,12 @@ export function useHostPanel(
   usePanelFrame()
 
   React.useEffect(() => {
-    const subscription = onFocusComposer(() => composer.current?.focus())
+    let stale = false
+    const subscription = onFocusComposer(() => {
+      if (!stale) composer.current?.focus()
+    })
     return () => {
+      stale = true
       void subscription.then((unlisten) => unlisten())
     }
   }, [composer])
@@ -29,8 +27,12 @@ export function useHostPanel(
   }, [surface])
 
   React.useEffect(() => {
-    const subscription = onToggleSurface(toggleSurface)
+    let stale = false
+    const subscription = onToggleSurface(() => {
+      if (!stale) toggleSurface()
+    })
     return () => {
+      stale = true
       void subscription.then((unlisten) => unlisten())
     }
   }, [toggleSurface])

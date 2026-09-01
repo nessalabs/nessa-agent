@@ -8,6 +8,7 @@ import { RandomAvatar } from "@nessa-ui/react/random-avatar"
 import { AGENT_HUES, Transcript, useConversation } from "../../conversation"
 import { host, startResizeFromLeftEdge } from "../../host"
 import { useColorScheme } from "../adapters/color-scheme"
+import { useFlushOnTurn } from "../adapters/compositor-flush"
 import { useEdgeReveal } from "../adapters/edge-reveal"
 import { useHostPanel } from "../adapters/host-panel"
 import { useSurface } from "../adapters/surface"
@@ -21,6 +22,10 @@ export function App() {
   const strip = useConversation()
   const composerRef = React.useRef<HTMLTextAreaElement>(null)
   useHostPanel(surface, toggleSurface, composerRef)
+  useFlushOnTurn(
+    host.flushOnTurn,
+    `${strip.active.id}:${strip.active.phase}:${strip.active.turns.length}`,
+  )
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -98,7 +103,7 @@ export function App() {
             label="Conversations"
             tabs={tabs}
             value={strip.active.id}
-            onValueChange={strip.setActiveId}
+            onValueChange={strip.setActive}
             onClose={strip.closeConversation}
             onNew={() => {
               strip.openConversation()
@@ -117,7 +122,6 @@ export function App() {
           animateMount={host.animateMount}
           streamText={host.streamText}
           emptyState={host.emptyState}
-          flushOnTurn={host.flushOnTurn}
         />
 
         <div className="nessa-composer">

@@ -70,7 +70,7 @@ opinion rather than the product's.
 | Path | Owns |
 | --- | --- |
 | `model/` | `Surface` — frosted or clear. |
-| `adapters/` | Host subscriptions: colour scheme, edge reveal, panel frame, frost, remembered surface. |
+| `adapters/` | Host subscriptions: colour scheme, edge reveal, panel frame, frost, remembered surface, compositor flush. |
 | `ui/app.tsx` | The chrome: stage, glow, resize handle, tab strip, composer. Renders; no effects. |
 | `ui/waveform-icon.tsx` | The voice glyph in the composer. |
 
@@ -139,7 +139,7 @@ are written here.
 | The summon shortcut | `settings.rs` for the key, `shortcut.rs` for registration |
 | A new persisted preference | `settings.rs` (with a default), then its owner |
 | A new host event or payload | `host.rs` and `src/host/window.ts` together |
-| Leftover transcript tiles on a layout compositor | `flush_compositor` in `platform/` plus `flushOnTurn` on `HostFeatures` |
+| Leftover transcript tiles on a layout compositor | `flush_compositor` in `platform/` plus `useFlushOnTurn` in `src/panel/adapters/` |
 | The conversation surface (tabs, turns, stand-in reply) | `src/conversation/application/usecases/` (commands), `adapters/gateway/` (stand-in), `adapters/store/` (projection) |
 | The transcript chrome | `src/conversation/ui/` |
 | The panel chrome or composer | `src/panel/ui/app.tsx` |

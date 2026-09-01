@@ -9,5 +9,7 @@ export function advanceReply(
 ): LocalStrip {
   const current = conversationOnStrip(strip, conversationId)
   if (!current) return strip
-  return replaceConversation(strip, advance(current, replies.reply))
+  const next = advance(current, replies.reply)
+  if (next === current) return strip
+  return replaceConversation(strip, next)
 }

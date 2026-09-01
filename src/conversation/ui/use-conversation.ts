@@ -3,7 +3,7 @@ import {
   closeConversation,
   openConversation,
   sendDraft,
-  setActiveId,
+  setActive,
   setDraft,
   stopGenerating,
 } from "../adapters/store/slice"
@@ -18,7 +18,7 @@ export function useConversation() {
   return {
     conversations,
     active,
-    setActiveId: (id: string) => dispatch(setActiveId(id)),
+    setActive: (id: string) => dispatch(setActive(id)),
     submit: () => dispatch(sendDraft()),
     openConversation: () => {
       dispatch(openConversation())

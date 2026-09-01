@@ -7,7 +7,7 @@ import {
   closeConversation,
   openConversation,
   sendDraft,
-  setActiveId,
+  setActive,
   setDraft,
   stopGenerating,
 } from "./slice"
@@ -23,7 +23,7 @@ function agent(store: ReturnType<typeof makeStore>) {
     stop: (id?: string) =>
       store.dispatch(stopGenerating(id ? { conversationId: id } : undefined)),
     tick: (id: string) => store.dispatch(advanceReply({ conversationId: id })),
-    activate: (id: string) => store.dispatch(setActiveId(id)),
+    activate: (id: string) => store.dispatch(setActive(id)),
     strip: () => store.getState().conversation,
   }
 }
