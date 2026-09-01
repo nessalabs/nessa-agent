@@ -118,8 +118,18 @@ export function App() {
           className="nessa-edge-reveal pointer-events-none"
         />
         {/* The strip is the titlebar too: the gaps around the tabs drag the
-            window, while the tabs themselves stay clickable. */}
-        <div data-tauri-drag-region className="nessa-chrome shrink-0 px-2 pt-2 pb-1">
+            window, while the tabs themselves stay clickable.
+        
+            `deep` rather than a bare attribute. Bare means Tauri only drags on
+            a *direct* hit of this element (`el === composedPath[0]`), and the
+            tab list is `flex-1`, so its scroller covers the strip and takes
+            every press — there is no gap left to land on. `deep` drags from
+            anywhere in the subtree, and Tauri still refuses over anything
+            clickable, which is what keeps the tabs themselves tabs. */}
+        <div
+          data-tauri-drag-region="deep"
+          className="nessa-chrome shrink-0 px-2 pt-2 pb-1"
+        >
           <ChatTabs
             label="Conversations"
             tabs={tabs}
