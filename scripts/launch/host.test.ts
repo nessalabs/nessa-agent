@@ -28,6 +28,7 @@ describe("linux host", () => {
   it("is a .deb and needs a display", () => {
     const host = createLinux({ hasDrm: () => true, pkgConfig: () => true })
     expect(host.fastBundle).toBe("deb")
+    expect(host.releaseBundle).toBe("deb")
     expect(host.hasGui({ DISPLAY: ":1" })).toBe(true)
     expect(host.hasGui({ WAYLAND_DISPLAY: "wayland-0" })).toBe(true)
     expect(host.hasGui({})).toBe(false)
@@ -62,6 +63,7 @@ describe("macos host", () => {
   it("is a .app and has a GUI outside CI", () => {
     const host = createMacos({ xcodeSelect: () => true })
     expect(host.fastBundle).toBe("app")
+    expect(host.releaseBundle).toBe("dmg")
     expect(host.hasGui({})).toBe(true)
     expect(host.hasGui({ CI: "1" })).toBe(false)
     expect(host.prepareEnv({})).toEqual({})
@@ -79,6 +81,7 @@ describe("windows host", () => {
     const host = createWindows()
     expect(host.kind).toBe("windows")
     expect(host.fastBundle).toBe("nsis")
+    expect(host.releaseBundle).toBe("nsis")
     expect(host.hasGui({})).toBe(true)
     expect(host.hasGui({ CI: "1" })).toBe(false)
     expect(host.hasGui({ SESSIONNAME: "Services" })).toBe(false)
@@ -93,9 +96,11 @@ describe("parseArgs", () => {
     expect(parseArgs([])).toEqual({ mode: "app" })
   })
 
-  it("maps --web and --fast", () => {
+  it("maps --web, --fast, --dev, and --release", () => {
     expect(parseArgs(["--web"])).toEqual({ mode: "web" })
     expect(parseArgs(["--fast"])).toEqual({ mode: "fast" })
+    expect(parseArgs(["--dev"])).toEqual({ mode: "app" })
+    expect(parseArgs(["--release"])).toEqual({ mode: "release" })
   })
 
   it("treats -h as help", () => {
@@ -106,7 +111,7 @@ describe("parseArgs", () => {
   it("rejects unknown flags", () => {
     expect(parseArgs(["--nope"])).toEqual({
       mode: "error",
-      error: "unknown option: --nope (try --web or --fast)",
+      error: "unknown option: --nope (try --dev, --web, --fast, or --release)",
     })
   })
 })
@@ -224,5 +229,35 @@ describe("launch", () => {
       },
     })
     expect(calls[0]).toEqual(["exec", "tauri", "build", "--bundles", "app"])
+  })
+
+  it("asks for a .dmg on macOS --release without the fast profile", () => {
+    const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = []
+    const host = createMacos({ xcodeSelect: () => true })
+    launch("release", {
+      host,
+      env: {},
+      run: (args, opts) => {
+        calls.push({ args, env: opts?.env ?? {} })
+        return 0
+      },
+    })
+    expect(calls[0]?.args).toEqual(["exec", "tauri", "build", "--bundles", "dmg"])
+    expect(calls[0]?.env.CARGO_PROFILE_RELEASE_LTO).toBeUndefined()
+  })
+
+  it("asks for a .deb on Linux --release without the fast profile", () => {
+    const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = []
+    const host = createLinux({ hasDrm: () => true, pkgConfig: () => true })
+    launch("release", {
+      host,
+      env: { DISPLAY: ":1" },
+      run: (args, opts) => {
+        calls.push({ args, env: opts?.env ?? {} })
+        return 0
+      },
+    })
+    expect(calls[0]?.args).toEqual(["exec", "tauri", "build", "--bundles", "deb"])
+    expect(calls[0]?.env.CARGO_PROFILE_RELEASE_OPT_LEVEL).toBeUndefined()
   })
 })

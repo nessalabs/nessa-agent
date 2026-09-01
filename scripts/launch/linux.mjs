@@ -23,6 +23,7 @@ export function createLinux({
   return {
     kind: "linux",
     fastBundle: "deb",
+    releaseBundle: "deb",
 
     hasGui(env = process.env) {
       if (env.CI) return false

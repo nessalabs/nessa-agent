@@ -2,8 +2,8 @@
  * Windows launch host. Written to match Linux/macOS, not yet run on a
  * Windows box — `hasGui` is the guess a desktop session usually satisfies.
  * Native WebView2 / MSVC checks belong in `missingNative` once a Windows
- * machine has said which ones actually fail. Verify `just` and `just fast`
- * `pnpm app:fast` there before treating this as known-good.
+ * machine has said which ones actually fail. Verify `just`, `just fast`,
+ * and `just release` there before treating this as known-good.
  *
  * @returns {import('./host.mjs').LaunchHost}
  */
@@ -12,6 +12,7 @@ export function createWindows() {
     kind: "windows",
     // The analog of macOS `.app` / Linux `.deb`: the installer you actually run.
     fastBundle: "nsis",
+    releaseBundle: "nsis",
 
     hasGui(env = process.env) {
       if (env.CI) return false

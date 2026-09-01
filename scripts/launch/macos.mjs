@@ -13,6 +13,8 @@ export function createMacos({ xcodeSelect = defaultXcodeSelect } = {}) {
     kind: "macos",
     // The analog of "the .app, no dmg".
     fastBundle: "app",
+    // The thing you ship: a .dmg wrapping the .app.
+    releaseBundle: "dmg",
 
     hasGui(env = process.env) {
       // A Mac always has a window server for a logged-in session. CI is the

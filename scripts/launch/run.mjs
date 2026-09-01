@@ -15,27 +15,31 @@ export const FAST_PROFILE = {
   CARGO_PROFILE_RELEASE_STRIP: "false",
 }
 
-export const USAGE = `usage: just [web|fast]
+export const USAGE = `usage: just [dev|web|fast|release]
 
-  (default)  Run the desktop app — Vite on :1420 and tauri dev
+  (default)  just / just dev — desktop app in dev mode (tauri dev)
   web        Run the UI in a browser only; window controls no-op
-  fast       Release build with the slow optimisations off
-             (macOS .app / Linux .deb / Windows nsis)
+  fast       Testing-shaped release (macOS .app / Linux .deb / Windows nsis)
+  release    Shipping bundle (macOS .dmg / Linux .deb / Windows nsis)
 
-On Linux without a display, the default falls back to web automatically.
+On Linux without a display, just / just dev falls back to web automatically.
 `
 
 /**
  * @param {string[]} argv
- * @returns {{ mode: 'help' | 'web' | 'fast' | 'app' } | { mode: 'error', error: string }}
+ * @returns {{ mode: 'help' | 'web' | 'fast' | 'release' | 'app' } | { mode: 'error', error: string }}
  */
 export function parseArgs(argv) {
   const flag = argv[0]
   if (flag === "-h" || flag === "--help") return { mode: "help" }
   if (flag === "--web") return { mode: "web" }
   if (flag === "--fast") return { mode: "fast" }
-  if (!flag) return { mode: "app" }
-  return { mode: "error", error: `unknown option: ${flag} (try --web or --fast)` }
+  if (flag === "--release") return { mode: "release" }
+  if (flag === "--dev" || !flag) return { mode: "app" }
+  return {
+    mode: "error",
+    error: `unknown option: ${flag} (try --dev, --web, --fast, or --release)`,
+  }
 }
 
 /**
@@ -80,7 +84,7 @@ function withSccache(env) {
 }
 
 /**
- * @param {'web' | 'app' | 'fast'} mode
+ * @param {'web' | 'app' | 'fast' | 'release'} mode
  * @param {{
  *   host?: import('./host.mjs').LaunchHost,
  *   env?: NodeJS.ProcessEnv,
@@ -122,6 +126,13 @@ export function launch(
 
   if (mode === "app") {
     return run(["app"], { env: prepared, cwd })
+  }
+
+  if (mode === "release") {
+    return run(["exec", "tauri", "build", "--bundles", host.releaseBundle], {
+      env: prepared,
+      cwd,
+    })
   }
 
   return run(["exec", "tauri", "build", "--bundles", host.fastBundle], {
