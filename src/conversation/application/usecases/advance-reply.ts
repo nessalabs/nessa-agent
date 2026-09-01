@@ -1,24 +1,13 @@
-import type { ConversationStrip } from "../../model"
+import type { LocalStrip } from "../local-strip"
 import type { ReplySource } from "../ports"
-import {
-  advance,
-  conversationOnStrip,
-  replaceConversation,
-  standInReply,
-  takeTurnId,
-} from "../internal"
+import { advance, conversationOnStrip, replaceConversation } from "../internal"
 
-/**
- * Walk `thinking → streaming → idle`. Server-owned: a real runtime will
- * drive this from stream events instead of a clock.
- */
 export function advanceReply(
-  strip: ConversationStrip,
+  strip: LocalStrip,
   conversationId: string,
-  replies: ReplySource = standInReply,
-): ConversationStrip {
+  replies: ReplySource,
+): LocalStrip {
   const current = conversationOnStrip(strip, conversationId)
   if (!current) return strip
-  const nextId = takeTurnId(strip)
-  return replaceConversation(nextId.strip, advance(current, nextId.id, replies.reply))
+  return replaceConversation(strip, advance(current, replies.reply))
 }

@@ -1,12 +1,6 @@
-import type { ConversationStrip } from "../../model"
+import type { LocalStrip } from "../local-strip"
 
-/**
- * Which tab is open. UI session state: the panel remembers the selection.
- */
-export function setActive(
-  strip: ConversationStrip,
-  conversationId: string,
-): ConversationStrip {
+export function setActive(strip: LocalStrip, conversationId: string): LocalStrip {
   if (!strip.conversations.some((item) => item.id === conversationId)) return strip
   return { ...strip, activeId: conversationId }
 }

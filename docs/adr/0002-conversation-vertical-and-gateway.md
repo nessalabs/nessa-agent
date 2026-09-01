@@ -23,11 +23,14 @@ The conversation feature is a vertical slice:
 ```
 src/conversation/
   model/                 contract the panel and the future server share
+                         (strip = conversations + activeId; no id mill)
+  application/local-strip.ts
+                         stand-in counters; dies with the local adapter
   application/usecases/  one file per command
   application/ports.ts   ConversationGateway
   adapters/gateway/      local stand-in; later a remote adapter
   adapters/store/        Redux projection — apply gateway result, nothing else
-  adapters/clock/        stand-in phase timer
+  adapters/clock/        stand-in phase timer (mounted at the composition root)
   ui/                    presentational; no product rules
 ```
 
@@ -53,5 +56,7 @@ Each use case is independently testable. The transcript cannot import gateway
 internals or the host seam.
 
 When the gateway exists, the local adapter goes away and the use cases
-become `await gateway.sendDraft(…)`. The store grows an async boundary
-(`createAsyncThunk` or a listener); the UI does not change shape.
+become `await gateway.sendDraft(…)`. `LocalStrip` and the stand-in clock
+go with it. The store grows an async boundary (`createAsyncThunk` or a
+listener); the UI does not change shape. Other modules keep importing the
+conversation barrel, not the files under it.

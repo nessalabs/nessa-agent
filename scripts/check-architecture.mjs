@@ -43,13 +43,35 @@ for (const name of readdirSync(src)) {
 
 const draftReplyHome = "src/conversation/application/internal/stand-in.ts"
 
+function importedPaths(text) {
+  return [...text.matchAll(/from\s+["']([^"']+)["']/g)].map((match) => match[1])
+}
+
 for (const file of walk(src)) {
   const text = readFileSync(file, "utf8")
   const path = rel(file)
+  const imports = importedPaths(text)
 
   const inConversationRules =
     path.startsWith("src/conversation/model/") ||
     path.startsWith("src/conversation/application/")
+
+  if (path.startsWith("src/conversation/model/") && !path.endsWith(".test.ts")) {
+    if (
+      imports.some((item) => /(?:^|\/)(?:application|adapters|ui)(?:\/|$)/.test(item))
+    ) {
+      fail(file, "conversation model imports nothing outward")
+    }
+  }
+
+  if (path.startsWith("src/conversation/application/") && !path.endsWith(".test.ts")) {
+    if (imports.some((item) => /(?:^|\/)adapters(?:\/|$)/.test(item))) {
+      fail(file, "conversation use cases import the model and ports, not adapters")
+    }
+    if (imports.some((item) => /(?:^|\/)ui(?:\/|$)/.test(item))) {
+      fail(file, "conversation use cases must not import the UI")
+    }
+  }
 
   if (inConversationRules && !path.endsWith(".test.ts")) {
     if (/from\s+["']react["']/.test(text) || /from\s+["']react\//.test(text)) {
@@ -64,7 +86,7 @@ for (const file of walk(src)) {
   }
 
   if (path.startsWith("src/conversation/ui/")) {
-    if (/application\/internal/.test(text)) {
+    if (/application\/internal/.test(text) || /application\/usecases/.test(text)) {
       fail(file, "the UI reads the projection; it does not import gateway internals")
     }
     if (/from\s+["'][^"']*\/host(?:\/window)?["']/.test(text)) {
@@ -72,6 +94,20 @@ for (const file of walk(src)) {
     }
     if (/Linux[A-Z]/.test(text) || /data-host=/.test(text)) {
       fail(file, "host policy belongs in src/host, as a HostFeatures field")
+    }
+  }
+
+  if (!path.startsWith("src/conversation/") && !path.endsWith(".test.ts")) {
+    for (const item of imports) {
+      if (!/conversation/.test(item)) continue
+      const barrel =
+        /(?:^|\/)conversation$/.test(item) || /(?:^|\/)conversation\/index$/.test(item)
+      const slice = /conversation\/adapters\/store\/slice$/.test(item)
+      const identity = /conversation\/model$/.test(item)
+      if (path === "src/store.ts" && slice) continue
+      if (path === "src/icon-preview.tsx" && identity) continue
+      if (barrel) continue
+      fail(file, "other modules import the conversation barrel, not its internals")
     }
   }
 

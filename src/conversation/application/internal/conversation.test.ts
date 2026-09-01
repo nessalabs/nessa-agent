@@ -7,6 +7,10 @@ import { draftReply } from "./stand-in"
 import { titleFor } from "./title"
 
 describe("send", () => {
+  it("starts idle without a pending prompt", () => {
+    expect(conversation("c0")).not.toHaveProperty("pending")
+  })
+
   it("names a new conversation after its opening line and opens an assistant row", () => {
     const next = send(conversation("c0"), "hello there", "t1", "t2")
     expect(next.title).toBe("hello there")
@@ -15,13 +19,18 @@ describe("send", () => {
       { id: "t1", from: "user", text: "hello there", receipt: "sending" },
       { id: "t2", from: "assistant", text: "" },
     ])
-    expect(next.pending).toBe("hello there")
-    expect(next.draft).toBe("")
+    expect(next).toMatchObject({ phase: "thinking", pending: "hello there", draft: "" })
   })
 
   it("does not rename a conversation that already has a turn", () => {
     const open = send(conversation("c0"), "first", "t1", "t2")
-    const settled = { ...open, phase: "idle" as const, pending: "" }
+    const settled = {
+      id: open.id,
+      title: open.title,
+      turns: open.turns,
+      draft: open.draft,
+      phase: "idle" as const,
+    }
     const next = send(settled, "second", "t3", "t4")
     expect(next.title).toBe("first")
     expect(next.turns).toHaveLength(4)
@@ -45,7 +54,7 @@ describe("send", () => {
 describe("advance", () => {
   it("fills the open assistant row, then returns to idle", () => {
     const thinking = send(conversation("c0"), "hi", "t1", "t2")
-    const streaming = advance(thinking, "t9", draftReply)
+    const streaming = advance(thinking, draftReply)
     expect(streaming.phase).toBe("streaming")
     expect(streaming.turns.filter((turn) => turn.from === "user")).toEqual([
       { id: "t1", from: "user", text: "hi", receipt: "sending" },
@@ -55,9 +64,9 @@ describe("advance", () => {
       from: "assistant",
       text: draftReply("hi"),
     })
-    const idle = advance(streaming, "t10", draftReply)
+    const idle = advance(streaming, draftReply)
     expect(idle.phase).toBe("idle")
-    expect(idle.pending).toBe("")
+    expect(idle).not.toHaveProperty("pending")
     expect(idle.turns[0]).toEqual({
       id: "t1",
       from: "user",
@@ -68,7 +77,7 @@ describe("advance", () => {
 
   it("leaves an idle conversation alone", () => {
     const idle = conversation("c0")
-    expect(advance(idle, "t1", draftReply)).toBe(idle)
+    expect(advance(idle, draftReply)).toBe(idle)
   })
 })
 
@@ -77,7 +86,7 @@ describe("stop", () => {
     const thinking = send(conversation("c0"), "hi", "t1", "t2")
     const stopped = stop(thinking)
     expect(stopped.phase).toBe("idle")
-    expect(stopped.pending).toBe("")
+    expect(stopped).not.toHaveProperty("pending")
     expect(stopped.turns).toEqual([
       { id: "t1", from: "user", text: "hi", receipt: "delivered" },
     ])

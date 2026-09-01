@@ -1,8 +1,8 @@
-import { conversation, type ConversationStrip } from "../../model"
+import { conversation } from "../../model"
+import type { LocalStrip } from "../local-strip"
 import { takeConversationId } from "../internal"
 
-/** Open a new empty tab. Server-owned once conversations persist. */
-export function openConversation(strip: ConversationStrip): ConversationStrip {
+export function openConversation(strip: LocalStrip): LocalStrip {
   const next = takeConversationId(strip)
   return {
     ...next.strip,

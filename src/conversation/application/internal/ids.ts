@@ -1,7 +1,8 @@
-import type { Conversation, ConversationStrip } from "../../model"
+import type { Conversation } from "../../model"
+import type { LocalStrip } from "../local-strip"
 
-export function takeConversationId(strip: ConversationStrip): {
-  strip: ConversationStrip
+export function takeConversationId(strip: LocalStrip): {
+  strip: LocalStrip
   id: string
 } {
   return {
@@ -10,8 +11,8 @@ export function takeConversationId(strip: ConversationStrip): {
   }
 }
 
-export function takeTurnId(strip: ConversationStrip): {
-  strip: ConversationStrip
+export function takeTurnId(strip: LocalStrip): {
+  strip: LocalStrip
   id: string
 } {
   return {
@@ -20,10 +21,7 @@ export function takeTurnId(strip: ConversationStrip): {
   }
 }
 
-export function replaceConversation(
-  strip: ConversationStrip,
-  next: Conversation,
-): ConversationStrip {
+export function replaceConversation(strip: LocalStrip, next: Conversation): LocalStrip {
   return {
     ...strip,
     conversations: strip.conversations.map((item) => (item.id === next.id ? next : item)),
@@ -31,7 +29,7 @@ export function replaceConversation(
 }
 
 export function conversationOnStrip(
-  strip: ConversationStrip,
+  strip: LocalStrip,
   id: string,
 ): Conversation | undefined {
   return strip.conversations.find((item) => item.id === id)

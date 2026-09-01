@@ -68,7 +68,10 @@ describe("conversation strip store", () => {
     run.draft("again")
     run.send()
     expect(run.strip().conversations[0]!.turns).toHaveLength(2)
-    expect(run.strip().conversations[0]!.pending).toBe("hi")
+    expect(run.strip().conversations[0]).toMatchObject({
+      phase: "thinking",
+      pending: "hi",
+    })
   })
 
   it("walks thinking → streaming → idle when the clock dispatches", () => {
@@ -86,8 +89,8 @@ describe("conversation strip store", () => {
     run.tick("c0")
     const idle = run.strip().conversations[0]!
     expect(idle.phase).toBe("idle")
-    expect(idle.pending).toBe("")
-    expect(idle.turns[0]!.receipt).toBe("delivered")
+    expect(idle).not.toHaveProperty("pending")
+    expect(idle.turns[0]).toMatchObject({ from: "user", receipt: "delivered" })
   })
 
   it("stops a reply without dropping the user turn", () => {
@@ -97,10 +100,9 @@ describe("conversation strip store", () => {
     run.stop()
     const open = run.strip().conversations[0]!
     expect(open.phase).toBe("idle")
-    expect(open.pending).toBe("")
+    expect(open).not.toHaveProperty("pending")
     expect(open.turns).toHaveLength(1)
-    expect(open.turns[0]!.from).toBe("user")
-    expect(open.turns[0]!.receipt).toBe("delivered")
+    expect(open.turns[0]).toMatchObject({ from: "user", receipt: "delivered" })
   })
 
   it("keeps conversation ids and turn ids on separate counters", () => {

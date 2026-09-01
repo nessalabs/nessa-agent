@@ -1,19 +1,5 @@
 import { conversation, type Conversation } from "../../model"
 
-/** The open conversation. The strip never empties; a missing write is a bug. */
-export function conversationInStrip(
-  items: Conversation[],
-  activeId: string,
-): Conversation {
-  const found = items.find((item) => item.id === activeId) ?? items[0]
-  if (!found) throw new Error("conversation strip is empty")
-  return found
-}
-
-/**
- * Removes a conversation from the strip. The strip is the app's only
- * navigation, so it never empties: closing the last tab replaces it.
- */
 export function closeInStrip(
   items: Conversation[],
   id: string,

@@ -1,15 +1,11 @@
-/**
- * UI projection of the conversation strip. Reducers do not contain product
- * rules: they ask the gateway and store the strip it returns.
- */
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit"
 
-import { emptyStrip } from "../../model"
+import { emptyLocalStrip } from "../../application/local-strip"
 import { localConversationGateway as gateway } from "../gateway/local"
 
 const conversationSlice = createSlice({
   name: "conversation",
-  initialState: emptyStrip(),
+  initialState: emptyLocalStrip(),
   reducers: {
     setActiveId(state, action: PayloadAction<string>) {
       return gateway.setActive(state, action.payload)

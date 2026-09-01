@@ -5,12 +5,7 @@ import { ChatTabs, type ChatTabItem } from "@nessa-ui/react/chat-tabs"
 import { PillComposer, PillComposerRow } from "@nessa-ui/react/pill-composer"
 import { RandomAvatar } from "@nessa-ui/react/random-avatar"
 
-import {
-  AGENT_HUES,
-  ConversationClocks,
-  Transcript,
-  useConversation,
-} from "../../conversation"
+import { AGENT_HUES, Transcript, useConversation } from "../../conversation"
 import { host, startResizeFromLeftEdge } from "../../host"
 import { useColorScheme } from "../adapters/color-scheme"
 import { useEdgeReveal } from "../adapters/edge-reveal"
@@ -163,8 +158,6 @@ export function App() {
           </PillComposer>
         </div>
       </div>
-
-      <ConversationClocks />
     </div>
   )
 }

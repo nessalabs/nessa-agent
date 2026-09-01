@@ -9,10 +9,6 @@ import {
 } from "../adapters/store/slice"
 import { useConversationDispatch, useConversationSelector } from "../adapters/store/hooks"
 
-/**
- * Binds the strip on screen to the store. No product rules: it reads the
- * projection and dispatches the named commands.
- */
 export function useConversation() {
   const dispatch = useConversationDispatch()
   const strip = useConversationSelector((state) => state.conversation)

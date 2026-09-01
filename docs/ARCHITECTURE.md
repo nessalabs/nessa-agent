@@ -46,7 +46,7 @@ opinion rather than the product's.
 
 | Path | Owns |
 | --- | --- |
-| `main.tsx`, `store.ts` | Composition root. Mounts the panel and the conversation projection. |
+| `main.tsx`, `store.ts` | Composition root. Mounts the panel, the stand-in clocks, and the conversation projection. |
 | `conversation/` | The conversation vertical. See the table below. |
 | `panel/` | The floating-window chrome. See the table below. |
 | `host/` | Injected host features and the window seam (`window.ts`). |
@@ -55,12 +55,13 @@ opinion rather than the product's.
 
 | Path | Owns |
 | --- | --- |
-| `model/` | The contract: `Conversation`, `Turn`, `ConversationStrip`. Types only. |
+| `model/` | Shared language: `Conversation`, `Turn`, `ConversationStrip` (`conversations` + `activeId`). Discriminated turns and phases. No id mill. |
+| `application/local-strip.ts` | Stand-in store shape: the shared strip plus the local id counters. A remote gateway mints its own ids and this type goes away. |
 | `application/usecases/` | One file per command. Server-owned: send, advance, stop, open, close. UI session: draft, active tab. |
 | `application/ports.ts` | `ConversationGateway` — what the panel may ask the product to do. |
-| `adapters/gateway/local.ts` | In-process stand-in. Tomorrow this is the remote gateway. |
+| `adapters/gateway/local.ts` | In-process stand-in. Binds `ReplySource`. Tomorrow this is the remote gateway. |
 | `adapters/store/` | Redux projection. Reducers call the gateway; they do not contain rules. |
-| `adapters/clock/` | Stand-in phase timer. A real runtime drives phase from stream events. |
+| `adapters/clock/` | Stand-in phase timer, mounted from `main.tsx`. A real runtime drives phase from stream events. |
 | `ui/` | Transcript, thinking pill, `useConversation`. Paints and dispatches. |
 | `model/identity.ts` | The agent's name, seed, and hue wheel. |
 

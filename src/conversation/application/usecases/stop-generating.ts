@@ -1,11 +1,7 @@
-import type { ConversationStrip } from "../../model"
+import type { LocalStrip } from "../local-strip"
 import { conversationOnStrip, replaceConversation, stop } from "../internal"
 
-/** Cancel a reply in flight. Server-owned. */
-export function stopGenerating(
-  strip: ConversationStrip,
-  conversationId?: string,
-): ConversationStrip {
+export function stopGenerating(strip: LocalStrip, conversationId?: string): LocalStrip {
   const current = conversationOnStrip(strip, conversationId ?? strip.activeId)
   if (!current) return strip
   return replaceConversation(strip, stop(current))

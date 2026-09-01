@@ -140,7 +140,11 @@ writing the full defaults on first launch is buying.
   `src/conversation/ui/`. Host subscriptions live in `src/panel/adapters/`.
 - Product commands live in `src/conversation/application/usecases/`. The store
   is a projection: reducers call `ConversationGateway` and keep the strip.
-  Host subscriptions stay in adapters. See
+  The shared strip is `conversations` + `activeId`. Local id counters live on
+  `LocalStrip`, not on the model the future server will share. Other modules
+  import `src/conversation` (the barrel), not files under it — `store.ts` is
+  the exception, so tests do not pull the design system. Host subscriptions
+  stay in adapters. See
   [adr/0002-conversation-vertical-and-gateway.md](adr/0002-conversation-vertical-and-gateway.md).
 - Design-system components are consumed, not wrapped "just in case". A wrapper
   with no behaviour is a layer that only forwards.

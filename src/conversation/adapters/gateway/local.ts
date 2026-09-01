@@ -8,15 +8,12 @@ import {
   setDraft,
   stopGenerating,
 } from "../../application/usecases"
+import { standInReply } from "../../application/internal"
 
-/**
- * In-process stand-in for the conversation server. Swap this module for a
- * remote adapter when the gateway exists; the panel still only paints the
- * strip it gets back.
- */
 export const localConversationGateway: ConversationGateway = {
   sendDraft,
-  advanceReply,
+  advanceReply: (strip, conversationId) =>
+    advanceReply(strip, conversationId, standInReply),
   stopGenerating,
   openConversation,
   closeConversation,

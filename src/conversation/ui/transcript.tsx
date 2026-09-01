@@ -96,7 +96,7 @@ function TurnRow({
       <ChatBubble>
         {streaming ? <MessageStreamText text={turn.text} /> : turn.text}
       </ChatBubble>
-      {turn.from === "user" && turn.receipt ? (
+      {turn.from === "user" ? (
         <ChatMessageActions>
           <ChatMessageReceipt>{receiptLabel(turn.receipt)}</ChatMessageReceipt>
         </ChatMessageActions>

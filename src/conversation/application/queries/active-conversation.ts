@@ -1,7 +1,9 @@
-import type { Conversation, ConversationStrip } from "../../model"
-import { conversationInStrip } from "../internal"
+import {
+  conversationInStrip,
+  type Conversation,
+  type ConversationStrip,
+} from "../../model"
 
-/** The open conversation from a strip snapshot. */
 export function activeConversation(strip: ConversationStrip): Conversation {
   return conversationInStrip(strip.conversations, strip.activeId)
 }

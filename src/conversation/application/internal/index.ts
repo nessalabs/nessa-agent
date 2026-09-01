@@ -1,5 +1,5 @@
 export { advance, send, stop, withDraft } from "./conversation"
-export { closeInStrip, conversationInStrip } from "./strip"
+export { closeInStrip } from "./strip"
 export { standInReply } from "./stand-in"
 export {
   conversationOnStrip,

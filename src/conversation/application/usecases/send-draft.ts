@@ -1,11 +1,7 @@
-import type { ConversationStrip } from "../../model"
+import type { LocalStrip } from "../local-strip"
 import { conversationOnStrip, replaceConversation, send, takeTurnId } from "../internal"
 
-/** Send the conversation's draft. Server-owned: opens the assistant row. */
-export function sendDraft(
-  strip: ConversationStrip,
-  conversationId?: string,
-): ConversationStrip {
+export function sendDraft(strip: LocalStrip, conversationId?: string): LocalStrip {
   const id = conversationId ?? strip.activeId
   const current = conversationOnStrip(strip, id)
   if (!current) return strip

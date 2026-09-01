@@ -1,11 +1,7 @@
-import type { ConversationStrip } from "../../model"
+import type { LocalStrip } from "../local-strip"
 import { closeInStrip, takeConversationId } from "../internal"
 
-/** Close a tab. The strip never empties. Server-owned once conversations persist. */
-export function closeConversation(
-  strip: ConversationStrip,
-  conversationId: string,
-): ConversationStrip {
+export function closeConversation(strip: LocalStrip, conversationId: string): LocalStrip {
   let current = strip
   const closed = closeInStrip(strip.conversations, conversationId, strip.activeId, () => {
     const taken = takeConversationId(current)

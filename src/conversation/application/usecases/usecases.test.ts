@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
 
 import { draftReply } from "../internal/stand-in"
-import { emptyStrip } from "../../model"
+import { emptyLocalStrip } from "../local-strip"
+import { standInReply } from "../internal"
 import {
   advanceReply,
   closeConversation,
@@ -13,7 +14,11 @@ import {
 } from "./index"
 
 function primed(prompt: string) {
-  return sendDraft(setDraft(emptyStrip(), { draft: prompt }))
+  return sendDraft(setDraft(emptyLocalStrip(), { draft: prompt }))
+}
+
+function tick(strip: ReturnType<typeof primed>, id: string) {
+  return advanceReply(strip, id, standInReply)
 }
 
 describe("sendDraft", () => {
@@ -26,7 +31,7 @@ describe("sendDraft", () => {
   })
 
   it("ignores an empty draft and a busy conversation", () => {
-    const idle = emptyStrip()
+    const idle = emptyLocalStrip()
     expect(sendDraft(idle)).toBe(idle)
     const busy = primed("hi")
     expect(sendDraft(setDraft(busy, { draft: "again" }))).toEqual(
@@ -38,16 +43,16 @@ describe("sendDraft", () => {
 describe("advanceReply", () => {
   it("walks thinking → streaming → idle", () => {
     const thinking = primed("hi")
-    const streaming = advanceReply(thinking, "c0")
+    const streaming = tick(thinking, "c0")
     expect(streaming.conversations[0]!.phase).toBe("streaming")
     expect(streaming.conversations[0]!.turns.at(-1)).toEqual({
       id: "t2",
       from: "assistant",
       text: draftReply("hi"),
     })
-    const idle = advanceReply(streaming, "c0")
+    const idle = tick(streaming, "c0")
     expect(idle.conversations[0]!.phase).toBe("idle")
-    expect(idle.conversations[0]!.pending).toBe("")
+    expect(idle.conversations[0]!).not.toHaveProperty("pending")
   })
 })
 
@@ -56,6 +61,7 @@ describe("stopGenerating", () => {
     const stopped = stopGenerating(primed("hi"))
     expect(stopped.conversations[0]!.phase).toBe("idle")
     expect(stopped.conversations[0]!.turns).toHaveLength(1)
+    expect(stopped.conversations[0]!).not.toHaveProperty("pending")
   })
 })
 
@@ -67,14 +73,14 @@ describe("openConversation / closeConversation", () => {
   })
 
   it("never empties the strip", () => {
-    const only = closeConversation(emptyStrip(), "c0")
+    const only = closeConversation(emptyLocalStrip(), "c0")
     expect(only.conversations).toHaveLength(1)
     expect(only.conversations[0]!.id).toBe("c1")
     expect(only.activeId).toBe("c1")
   })
 
   it("no-ops an unknown id", () => {
-    const strip = emptyStrip()
+    const strip = emptyLocalStrip()
     const next = closeConversation(strip, "missing")
     expect(next.conversations).toBe(strip.conversations)
     expect(next.activeId).toBe("c0")
@@ -83,7 +89,7 @@ describe("openConversation / closeConversation", () => {
 
 describe("setActive / setDraft", () => {
   it("switches tabs and writes a draft on the open conversation", () => {
-    const two = openConversation(emptyStrip())
+    const two = openConversation(emptyLocalStrip())
     const drafted = setDraft(two, { draft: "note", id: "c0" })
     expect(setActive(drafted, "c0").activeId).toBe("c0")
     expect(drafted.conversations[0]!.draft).toBe("note")
