@@ -15,14 +15,14 @@ export const FAST_PROFILE = {
   CARGO_PROFILE_RELEASE_STRIP: "false",
 }
 
-export const USAGE = `usage: just [dev|web|fast|release]
+export const USAGE = `usage: just <dev|web|fast|release>
 
-  (default)  just / just dev — desktop app in dev mode (tauri dev)
-  web        Run the UI in a browser only; window controls no-op
-  fast       Testing-shaped release (macOS .app / Linux .deb / Windows nsis)
-  release    Shipping bundle (macOS .dmg / Linux .deb / Windows nsis)
+  just dev       Desktop app in dev mode (tauri dev)
+  just web       Run the UI in a browser only; window controls no-op
+  just fast      Testing-shaped release (macOS .app / Linux .deb / Windows nsis)
+  just release   Shipping bundle (macOS .dmg / Linux .deb / Windows nsis)
 
-On Linux without a display, just / just dev falls back to web automatically.
+On Linux without a display, just dev falls back to web automatically.
 `
 
 /**

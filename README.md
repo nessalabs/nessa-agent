@@ -66,7 +66,7 @@ just dev
 ```
 
 [`just`](https://just.systems) is the entry ([justfile](justfile)). It calls
-the launch host in `scripts/launch/`. `just` and `just dev` are the same:
+the launch host in `scripts/launch/`. `just` lists recipes. `just dev` is
 `tauri dev` when a display is available, the browser UI (`just web`) when it
 is not. `just release` is the shipping installer. `pnpm app` and `pnpm dev`
 still work without host defaults. The window controls no-op in the browser
@@ -79,7 +79,7 @@ Install `just` with the platform's package manager (`apt install just`,
 
 The lockfile needs **Rust 1.85+** (edition 2024 crates). Ubuntu's packaged
 `rustc` is often 1.83; install via rustup. [`rust-toolchain.toml`](rust-toolchain.toml)
-pins `stable`, so `just` and `cargo test` pick it without an extra env var.
+pins `stable`, so `just dev` and `cargo test` pick it without an extra env var.
 
 Build packages on Debian/Ubuntu:
 
@@ -115,7 +115,8 @@ there.
 
 | Command | What it does |
 | --- | --- |
-| `just` / `just dev` | Desktop app in dev mode (falls back to the browser UI with no display) |
+| `just` | List recipes |
+| `just dev` | Desktop app in dev mode (falls back to the browser UI with no display) |
 | `just web` | The UI in a browser, no Tauri |
 | `just fast` | Testing-shaped release — slow opts off (`.app` / `.deb` / NSIS) |
 | `just release` | Shipping bundle — fat LTO, stripped (`.dmg` / `.deb` / NSIS) |

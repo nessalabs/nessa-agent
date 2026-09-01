@@ -1,16 +1,19 @@
 # Nessa. The OS-shaped work lives in scripts/launch/; this file is the
 # entry so we do not keep a bash script and a cmd script.
 #
-#   just / just dev   desktop app in dev mode (falls back to the browser UI)
-#   just web          UI in a browser only; window controls no-op
-#   just fast         testing-shaped release (macOS .app / Linux .deb / Windows nsis)
-#   just release      shipping bundle (macOS .dmg / Linux .deb / Windows nsis)
+#   just          list recipes
+#   just dev      desktop app in dev mode (falls back to the browser UI)
+#   just web      UI in a browser only; window controls no-op
+#   just fast     testing-shaped release (macOS .app / Linux .deb / Windows nsis)
+#   just release  shipping bundle (macOS .dmg / Linux .deb / Windows nsis)
 
 # cmd so Windows does not need Git's sh. Unix still uses sh.
 set windows-shell := ["cmd.exe", "/c"]
 
-# Desktop app in dev mode when a display exists; browser UI otherwise.
-default: dev
+# List recipes. Bare `just` is not `just dev`.
+[private]
+default:
+    @just --list
 
 # Desktop app in dev mode (`tauri dev`).
 dev:
