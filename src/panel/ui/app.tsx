@@ -5,14 +5,17 @@ import { ChatTabs, type ChatTabItem } from "@nessa-ui/react/chat-tabs"
 import { PillComposer, PillComposerRow } from "@nessa-ui/react/pill-composer"
 import { RandomAvatar } from "@nessa-ui/react/random-avatar"
 
-import { AGENT_HUES } from "./agent-identity"
-import { ConversationClocks, Transcript, useConversation } from "./conversation"
-import { host } from "./host"
-import { startResizeFromLeftEdge } from "./host-window"
-import { useColorScheme } from "./use-color-scheme"
-import { useEdgeReveal } from "./use-edge-reveal"
-import { useHostPanel } from "./use-host-panel"
-import { useSurface } from "./use-surface"
+import {
+  AGENT_HUES,
+  ConversationClocks,
+  Transcript,
+  useConversation,
+} from "../../conversation"
+import { host, startResizeFromLeftEdge } from "../../host"
+import { useColorScheme } from "../adapters/color-scheme"
+import { useEdgeReveal } from "../adapters/edge-reveal"
+import { useHostPanel } from "../adapters/host-panel"
+import { useSurface } from "../adapters/surface"
 import { WaveformIcon } from "./waveform-icon"
 
 export function App() {

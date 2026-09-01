@@ -39,7 +39,7 @@
 //! What the page gives up is learning the window's size from its own viewport,
 //! which no longer changes. It is told instead, over the size events it already
 //! subscribes to, and draws the panel that size against the bottom right of the
-//! viewport (see `use-panel-frame.ts`). A slow relayout then shows as the
+//! viewport (see `src/panel/adapters/panel-frame.ts`). A slow relayout then shows as the
 //! panel's *dragged* edge trailing the window's for a frame or two, at the edge
 //! under the cursor, where it reads as the drag catching up rather than as the
 //! contents coming loose.

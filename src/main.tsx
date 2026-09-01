@@ -6,7 +6,7 @@ import "@fontsource-variable/geist"
 import "@fontsource-variable/geist-mono"
 import "./styles.css"
 
-import { App } from "./app"
+import { App } from "./panel"
 import { store } from "./store"
 
 const container = document.getElementById("root")

@@ -1,7 +1,8 @@
 import * as React from "react"
 
-import { onFocusComposer, onToggleSurface, setFrosted } from "./host-window"
-import { usePanelFrame } from "./use-panel-frame"
+import { onFocusComposer, onToggleSurface, setFrosted } from "../../host"
+import { type Surface } from "../model"
+import { usePanelFrame } from "./panel-frame"
 
 /**
  * Wires the panel to the desktop host: frost, the tray's surface request,
@@ -10,7 +11,7 @@ import { usePanelFrame } from "./use-panel-frame"
  * Lives in a hook so `App` can render without owning the seam.
  */
 export function useHostPanel(
-  surface: "translucent" | "clear",
+  surface: Surface,
   toggleSurface: () => void,
   composer: React.RefObject<HTMLTextAreaElement | null>,
 ) {

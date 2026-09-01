@@ -17,8 +17,10 @@ same trigger — an invariant, a second consumer, or their own persistence.
 ## Target shape
 
 ```
-src/                      React shell — presentation adapters and projections
-  conversation/           first vertical (model / use cases / gateway / UI)
+src/                      composition root (`main.tsx`, `store.ts`)
+  conversation/           product vertical (model / use cases / gateway / UI)
+  panel/                  floating-window chrome (model / adapters / UI)
+  host/                   injected OS features + the window seam
 src-tauri/src/
   <context>/
     domain/               rules, entities, value objects, events
@@ -52,7 +54,7 @@ must stay true:
    `platform::current()`; shared modules never construct a macOS or Linux host.
 3. The panel frame is reapplied on every show. Nothing caches a frame across
    shows — that is the bug the design exists to prevent.
-4. Every host call goes through `host-window.ts` and no-ops outside Tauri.
+4. Every host call goes through `src/host/window.ts` and no-ops outside Tauri.
 5. A settings file missing keys still launches; every new key has a default.
 6. Edge failures — blur, sizing, tray, viewport — are reported and survivable,
    never fatal. The panel opening unblurred, or without a tray, beats the panel
@@ -97,7 +99,7 @@ The one boundary that already exists, and the one most likely to rot silently.
   redeclare the shape of a command argument or event on the receiving side. Two
   declarations of the same contract drift with no error anywhere — the compiler
   is happy on both sides right up until runtime. The names and `PanelSize` live
-  in `host.rs` and `src/host-window.ts`; a test in `host.rs` fails if a name on
+  in `host.rs` and `src/host/window.ts`; a test in `host.rs` fails if a name on
   the host is missing from the shell. Generating one side from the other is the
   next step if this list grows.
 - **Every new host call goes through the existing seam and no-ops outside the
@@ -133,8 +135,9 @@ writing the full defaults on first launch is buying.
 ## Frontend specifics
 
 - A component either renders or coordinates, never both. Coordination lives in a
-  hook; rendering takes props and has no idea where they came from. `app.tsx`
-  is the panel chrome. Conversation UI lives in `src/conversation/ui/`.
+  hook; rendering takes props and has no idea where they came from.
+  `src/panel/ui/app.tsx` is the chrome. Conversation UI lives in
+  `src/conversation/ui/`. Host subscriptions live in `src/panel/adapters/`.
 - Product commands live in `src/conversation/application/usecases/`. The store
   is a projection: reducers call `ConversationGateway` and keep the strip.
   Host subscriptions stay in adapters. See

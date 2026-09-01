@@ -1,7 +1,7 @@
 //! The host/shell seam.
 //!
 //! Every name and payload that crosses into the webview is declared here. The
-//! other side is `src/host-window.ts`. The test at the bottom fails if a name
+//! other side is `src/host/window.ts`. The test at the bottom fails if a name
 //! here is not listed there — two declarations, one check, so they cannot drift
 //! silently. Generating one side from the other is the next step if this list
 //! grows past a handful of events.
@@ -44,7 +44,7 @@ mod tests {
 
     #[test]
     fn shell_listens_for_every_host_event() {
-        let shell = include_str!("../../src/host-window.ts");
+        let shell = include_str!("../../src/host/window.ts");
         for event in [
             TOGGLE_SURFACE,
             FOCUS_COMPOSER,
@@ -54,7 +54,7 @@ mod tests {
         ] {
             assert!(
                 shell.contains(&format!("\"{event}\"")),
-                "host-window.ts does not list {event}"
+                "src/host/window.ts does not list {event}"
             );
         }
     }

@@ -1,6 +1,6 @@
 import { useLayoutEffect } from "react"
 
-import { flushCompositor } from "../../host-window"
+import { flushCompositor } from "../../host"
 
 /**
  * Layout compositors drop vacated tiles after a turn lands. This is a host

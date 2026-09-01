@@ -33,6 +33,14 @@ if (existsSync(join(src, "utils.ts")) || existsSync(join(src, "utils.tsx"))) {
   fail(join(src, "utils.ts"), "there is no utils module")
 }
 
+const srcRootAllowed = new Set(["main.tsx", "store.ts", "icon-preview.tsx"])
+for (const name of readdirSync(src)) {
+  const path = join(src, name)
+  if (statSync(path).isFile() && /\.(ts|tsx)$/.test(name) && !srcRootAllowed.has(name)) {
+    fail(path, "src root is the composition root; feature code belongs in a vertical")
+  }
+}
+
 const draftReplyHome = "src/conversation/application/internal/stand-in.ts"
 
 for (const file of walk(src)) {
@@ -59,7 +67,7 @@ for (const file of walk(src)) {
     if (/application\/internal/.test(text)) {
       fail(file, "the UI reads the projection; it does not import gateway internals")
     }
-    if (/from\s+["'][^"']*host-window["']/.test(text)) {
+    if (/from\s+["'][^"']*\/host(?:\/window)?["']/.test(text)) {
       fail(file, "the UI does not talk to the host; adapters do")
     }
     if (/Linux[A-Z]/.test(text) || /data-host=/.test(text)) {
@@ -71,8 +79,8 @@ for (const file of walk(src)) {
     /from\s+["']@tauri-apps(?:\/[^"']*)?["']/.test(text) ||
     /import\(\s*["']@tauri-apps/.test(text)
   ) {
-    if (path !== "src/host-window.ts") {
-      fail(file, "only host-window.ts may import @tauri-apps")
+    if (path !== "src/host/window.ts") {
+      fail(file, "only src/host/window.ts may import @tauri-apps")
     }
   }
 

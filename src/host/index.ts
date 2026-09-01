@@ -1,10 +1,9 @@
 /**
- * The injected host for this page.
+ * The injected host for this page, and the one seam to the desktop window.
  *
  * OS-specific behaviour lives in `macos.ts` / `linux.ts` / `browser.ts` /
- * `other.ts`. `resolveHost` picks one. Shared window controls stay in
- * `host-window.ts` so the Rust event-name test still has a single file to
- * grep.
+ * `other.ts`. `resolveHost` picks one. Window commands live in `window.ts`
+ * so the Rust event-name test still has a single file to grep.
  */
 
 export { browser } from "./browser"
@@ -13,3 +12,14 @@ export { linux } from "./linux"
 export { macos } from "./macos"
 export { other } from "./other"
 export { host, resolveHost } from "./resolve"
+export type { PanelSize } from "./window"
+export {
+  flushCompositor,
+  onFocusComposer,
+  onLiveResize,
+  onToggleSurface,
+  onWindowResize,
+  setFrosted,
+  startResizeFromLeftEdge,
+  windowSize,
+} from "./window"

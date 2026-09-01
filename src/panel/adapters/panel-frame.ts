@@ -1,6 +1,6 @@
 import * as React from "react"
 
-import { onWindowResize, windowSize } from "./host-window"
+import { onWindowResize, windowSize } from "../../host"
 
 /**
  * Tells the page how big the host window is.

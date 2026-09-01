@@ -8,7 +8,7 @@
 import { createRoot } from "react-dom/client"
 import { RandomAvatar, type RandomAvatarTone } from "@nessa-ui/react/random-avatar"
 
-import { AGENT_HUES, AGENT_ICON_TONE, AGENT_SEED } from "./agent-identity"
+import { AGENT_HUES, AGENT_ICON_TONE, AGENT_SEED } from "./conversation/model"
 import "./styles.css"
 
 /** Pastel-leaning hue wheels, brighter than the eight defaults. */

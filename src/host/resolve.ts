@@ -1,4 +1,4 @@
-import { inTauri } from "../host-window"
+import { inTauri } from "./window"
 import { browser } from "./browser"
 import type { HostFeatures } from "./features"
 import { linux } from "./linux"

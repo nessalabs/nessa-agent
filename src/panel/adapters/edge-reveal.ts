@@ -1,6 +1,6 @@
 import * as React from "react"
 
-import { onLiveResize, onWindowResize } from "./host-window"
+import { onLiveResize, onWindowResize } from "../../host"
 
 /** How far from an edge, in px, the pointer starts waking the border. */
 const REACH = 64

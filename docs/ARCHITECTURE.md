@@ -32,7 +32,7 @@ opinion rather than the product's.
 | File | Owns |
 | --- | --- |
 | `main.rs` | The composition root. Builds the app, wires the tray, shortcut, and window. It never mentions macOS or Linux: OS behaviour is injected through `platform::current()`. |
-| `host.rs` | The host/shell seam: event names and the `PanelSize` payload. The frontend lists the same names in `host-window.ts`; a test fails if they drift. |
+| `host.rs` | The host/shell seam: event names and the `PanelSize` payload. The frontend lists the same names in `src/host/window.ts`; a test fails if they drift. |
 | `panel.rs` | The panel frame: opening size, lower-right placement, show/hide. The tray and the shortcut request a toggle; they do not fit the frame. |
 | `tray.rs` | The menu bar extra (macOS) or StatusNotifierItem (Linux), and the surface-toggle request. Creating it is survivable: a desktop with no tray still launches. |
 | `shortcut.rs` | The global accelerator that summons and dismisses the panel. |
@@ -44,20 +44,12 @@ opinion rather than the product's.
 
 **React shell** (`src/`) — everything that is on screen.
 
-| File | Owns |
+| Path | Owns |
 | --- | --- |
-| `app.tsx` | The panel chrome: the stage, the glow, the resize handle, the tab strip, the composer. It renders; it does not own conversation rules or OS branches. |
-| `host/` | Injected host features (`frost`, `compositor`, mount/stream/empty-state policy, west-handle behaviour). `resolveHost` picks `macos` / `linux` / `browser` / `other`. |
+| `main.tsx`, `store.ts` | Composition root. Mounts the panel and the conversation projection. |
 | `conversation/` | The conversation vertical. See the table below. |
-| `store.ts` | Composition root for product state. Mounts the conversation projection. `dispatch` is the non-React entry point. |
-| `use-host-panel.ts` | The host seam wiring: frost, tray surface request, composer focus. |
-| `host-window.ts` | The single seam to the desktop host. Guarded so the same UI runs in a plain browser with the seam no-oping. |
-| `use-surface.ts` | Which surface is chosen, and remembering it. The frontend owns this; the tray only *requests* a toggle and reflects the answer back. |
-| `use-color-scheme.ts` | Light/dark following the system. |
-| `use-edge-reveal.ts` | The border glow that follows the pointer, pinned for the length of a resize. |
-| `use-panel-frame.ts` | Writes the host window's size into CSS, so the panel can be the window even when the viewport is not. |
-| `agent-identity.ts` | The agent's name and avatar seed. |
-| `waveform-icon.tsx` | The voice glyph in the composer. |
+| `panel/` | The floating-window chrome. See the table below. |
+| `host/` | Injected host features and the window seam (`window.ts`). |
 
 **Conversation vertical** (`src/conversation/`) — one feature, independently testable.
 
@@ -70,12 +62,22 @@ opinion rather than the product's.
 | `adapters/store/` | Redux projection. Reducers call the gateway; they do not contain rules. |
 | `adapters/clock/` | Stand-in phase timer. A real runtime drives phase from stream events. |
 | `ui/` | Transcript, thinking pill, `useConversation`. Paints and dispatches. |
+| `model/identity.ts` | The agent's name, seed, and hue wheel. |
+
+**Panel vertical** (`src/panel/`) — the floating window, not the product.
+
+| Path | Owns |
+| --- | --- |
+| `model/` | `Surface` — frosted or clear. |
+| `adapters/` | Host subscriptions: colour scheme, edge reveal, panel frame, frost, remembered surface. |
+| `ui/app.tsx` | The chrome: stage, glow, resize handle, tab strip, composer. Renders; no effects. |
+| `ui/waveform-icon.tsx` | The voice glyph in the composer. |
 
 ## Boundaries
 
 Three, and they are all real:
 
-**Host ↔ shell.** They talk over exactly one seam (`host-window.ts` on one side,
+**Host ↔ shell.** They talk over exactly one seam (`src/host/window.ts` on one side,
 `host.rs` plus the command handlers on the other). Everything crossing it is an
 explicit command or event, never shared state. This is what lets `pnpm dev`
 open the UI in a browser with no host at all.
@@ -101,7 +103,7 @@ are written here.
   shows — that is the bug this design exists to prevent.
 - The page's viewport does not move during a resize. The webview is pinned; the
   window moves over it; the shell is told the window's size.
-- The window seam is guarded. Any new host call goes through `host-window.ts`
+- The window seam is guarded. Any new host call goes through `src/host/window.ts`
   and no-ops outside Tauri, or the browser workflow breaks silently.
 - A settings file missing keys still launches. Any new key has a default.
 - Failures at the edges — blur, sizing, tray, viewport — are reported and
@@ -113,7 +115,7 @@ are written here.
   between panics inside a GTK callback and aborts the process.
 - A component either renders or coordinates, never both.
 - There is no `utils` module, on either side.
-- Product state an agent must drive lives in the Redux store. Host, DOM, and clocks stay in hooks. See [adr/0001-redux-toolkit-for-product-state.md](adr/0001-redux-toolkit-for-product-state.md).
+- Product state an agent must drive lives in the Redux store. Host, DOM, and clocks stay in adapters. See [adr/0001-redux-toolkit-for-product-state.md](adr/0001-redux-toolkit-for-product-state.md) and [adr/0003-panel-vertical.md](adr/0003-panel-vertical.md).
 
 ## Cross-cutting
 
@@ -135,17 +137,17 @@ are written here.
 | What the tray menu offers | `tray.rs`, plus the frontend if it owns the state |
 | The summon shortcut | `settings.rs` for the key, `shortcut.rs` for registration |
 | A new persisted preference | `settings.rs` (with a default), then its owner |
-| A new host event or payload | `host.rs` and `host-window.ts` together |
+| A new host event or payload | `host.rs` and `src/host/window.ts` together |
 | Leftover transcript tiles on a layout compositor | `flush_compositor` in `platform/` plus `flushOnTurn` on `HostFeatures` |
 | The conversation surface (tabs, turns, stand-in reply) | `src/conversation/application/usecases/` (commands), `adapters/gateway/` (stand-in), `adapters/store/` (projection) |
 | The transcript chrome | `src/conversation/ui/` |
-| The panel chrome or composer | `src/app.tsx` |
+| The panel chrome or composer | `src/panel/ui/app.tsx` |
 | Resize jitter, the pinned webview | `platform/{macos,linux,other}/viewport.rs` |
 | Native frost | `platform/macos/vibrancy.rs` |
-| The border glow | `use-edge-reveal.ts`, and `platform/*/live_resize.rs` |
+| The border glow | `src/panel/adapters/edge-reveal.ts`, and `platform/*/live_resize.rs` |
 | OS-specific window behaviour | `platform/` — add a method on `Host`, implement it in the OS folder |
 | Shell behaviour that differs per OS | `src/host/` — add a field on `HostFeatures`, set it on each host |
-| Anything that talks to the host | `src/host-window.ts` — and only there |
+| Anything that talks to the host | `src/host/window.ts` — and only there |
 | The agent runtime, when it lands | A new context; see *Growing a new context* in [codebase-structure.md](codebase-structure.md) |
 
 ## What is deliberately not here yet

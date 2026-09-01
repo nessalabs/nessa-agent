@@ -10,13 +10,13 @@ const tauriSeam = {
       paths: [
         {
           name: "@tauri-apps/api",
-          message: "Talk to the host through host-window.ts.",
+          message: "Talk to the host through src/host/window.ts.",
         },
       ],
       patterns: [
         {
           group: ["@tauri-apps/*"],
-          message: "Talk to the host through host-window.ts.",
+          message: "Talk to the host through src/host/window.ts.",
         },
       ],
     },
@@ -49,7 +49,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["src/host-window.ts"],
+    files: ["src/host/window.ts"],
     rules: {
       "no-restricted-imports": "off",
     },
@@ -61,7 +61,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["src/app.tsx"],
+    files: ["src/panel/ui/app.tsx"],
     rules: {
       "no-restricted-syntax": [
         "error",

@@ -50,7 +50,7 @@ stay in adapters, not in the store and not in `app.tsx`.
 
 `src/conversation/application/usecases/` is the catalog for this feature.
 Each use case is independently testable. The transcript cannot import gateway
-internals or `host-window`.
+internals or the host seam.
 
 When the gateway exists, the local adapter goes away and the use cases
 become `await gateway.sendDraft(…)`. The store grows an async boundary

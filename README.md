@@ -51,7 +51,7 @@ implementation per OS, injected by `current()` — and in
   frosted surface, which blurs whatever the panel was summoned over, and the
   clear one, which removes the panel entirely so only the bubbles and the pill
   hang over the desktop. The frontend owns the choice and remembers it
-  ([src/use-surface.ts](src/use-surface.ts)); the tray item only *requests* a
+  ([src/panel/adapters/surface.ts](src/panel/adapters/surface.ts)); the tray item only *requests* a
   toggle, and its check mark is reflected back from `set_frosted`.
 - **No agent** — the local conversation gateway in
   [`src/conversation/`](src/conversation/) stands in for the server. It drives
@@ -67,7 +67,7 @@ pnpm app
 
 `pnpm app` is `tauri dev`; it starts Vite on port 1420 and builds the Rust side.
 `pnpm dev` alone opens the same UI in a plain browser, which is useful for design
-work — the window controls no-op there (see [src/host-window.ts](src/host-window.ts)).
+work — the window controls no-op there (see [src/host/window.ts](src/host/window.ts)).
 
 ### Linux
 
@@ -322,7 +322,7 @@ over a menu-bar blue — a palette that reads well at 96px can collapse into a b
 at 16px, which is how the first icon went wrong: the default hue wheel put a
 near-white wash against a dark ground, and the menu bar showed a white patch. The
 shipped wheel is `AGENT_HUES` in
-[src/agent-identity.ts](src/agent-identity.ts), shared with the in-app avatar so
+[src/conversation/model/identity.ts](src/conversation/model/identity.ts), shared with the in-app avatar so
 the two cannot drift.
 
 ### The tray icon is a different painting

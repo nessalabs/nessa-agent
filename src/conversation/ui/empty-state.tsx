@@ -1,6 +1,6 @@
 import { RandomAvatar } from "@nessa-ui/react/random-avatar"
 
-import { AGENT_HUES } from "../../agent-identity"
+import { AGENT_HUES } from "../model"
 
 export function EmptyState({
   seed,
