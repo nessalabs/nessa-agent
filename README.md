@@ -78,7 +78,7 @@ pins `stable`, so `pnpm app` and `cargo test` pick it without an extra env var.
 Build packages on Debian/Ubuntu:
 
 ```bash
-sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf fakeroot
 ```
 
 On a VNC or software X server there is no DRM device, and the host disables
@@ -92,8 +92,8 @@ WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 pnpm app
 | Script | What it does |
 | --- | --- |
 | `pnpm app` | Run the desktop app (dev) |
-| `pnpm app:fast` | A release build with the slow optimisations off — for testing |
-| `pnpm app:build` | The shipping bundle (`.app` + `.dmg`) |
+| `pnpm app:fast` | A release build with the slow optimisations off — for testing (`.app` / `.deb`) |
+| `pnpm app:build` | The shipping bundle (`.app` + `.dmg` / `.deb` + `.rpm` + AppImage) |
 | `pnpm dev` | The UI in a browser, no Tauri |
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm ui:types` | Pull the vendored `@nessa-ui/react` checkout forward |
@@ -186,16 +186,18 @@ Worktrees are created as **siblings** of this checkout
 Nothing ships that the app does not reach, and the two build modes exist so
 testing does not cost a shipping build.
 
-| | `.app` | Compile | What it is |
+| | Artifact | Compile | What it is |
 | --- | --- | --- | --- |
-| `pnpm app:fast` | ~9 MB | ~45 s warm | `opt-level=1`, no LTO, no strip, no dmg |
-| `pnpm app:build` | 6.5 MB | ~2 min | `opt-level=3`, fat LTO, one codegen unit, stripped |
+| `pnpm app:fast` | ~9 MB `.app` / a `.deb` | ~45 s warm | `opt-level=1`, no LTO, no strip, no dmg / AppImage |
+| `pnpm app:build` | 6.5 MB `.app` | ~2 min | `opt-level=3`, fat LTO, one codegen unit, stripped |
 
 `app:fast` overrides the release profile with `CARGO_PROFILE_RELEASE_*` env vars
 rather than defining a second profile, so there is one definition and no chance
 of the two drifting. (The Tauri CLI has no `--profile` flag, so a real second
-cargo profile could not be selected anyway.) Both are release builds — neither
-carries debug assertions — so what you test behaves like what you ship.
+cargo profile could not be selected anyway.) It asks Tauri for the host's
+runnable bundle (`app` / `deb` / `nsis`) rather than hardcoding macOS's `app`,
+which the Linux CLI rejects. Both are release builds — neither carries debug
+assertions — so what you test behaves like what you ship.
 
 **sccache** caches compilation across profiles and checkouts when
 `RUSTC_WRAPPER=sccache` is set in the environment. It is optional: without it
