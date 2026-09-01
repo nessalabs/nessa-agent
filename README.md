@@ -62,39 +62,62 @@ implementation per OS, injected by `current()` — and in
 
 ```bash
 pnpm install
-pnpm app
+just dev
 ```
 
-`pnpm app` is `tauri dev`; it starts Vite on port 1420 and builds the Rust side.
-`pnpm dev` alone opens the same UI in a plain browser, which is useful for design
-work — the window controls no-op there (see [src/host/window.ts](src/host/window.ts)).
+[`just`](https://just.systems) is the entry ([justfile](justfile)). `just`
+lists recipes. `just dev` is `tauri dev` when a display is available, the
+browser UI (`just web`) when it is not. `just release` is the shipping
+installer. `pnpm app` and `pnpm dev` still work without those defaults. The
+window controls no-op in the browser (see [src/host/window.ts](src/host/window.ts)).
+
+Install `just` with the platform's package manager (`apt install just`,
+`brew install just`, `winget install --id Casey.Just --exact`).
 
 ### Linux
 
 The lockfile needs **Rust 1.85+** (edition 2024 crates). Ubuntu's packaged
 `rustc` is often 1.83; install via rustup. [`rust-toolchain.toml`](rust-toolchain.toml)
-pins `stable`, so `pnpm app` and `cargo test` pick it without an extra env var.
+pins `stable`, so `just dev` and `cargo test` pick it without an extra env var.
 
 Build packages on Debian/Ubuntu:
 
 ```bash
-sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf fakeroot
 ```
 
-On a VNC or software X server there is no DRM device, and the host disables
-WebKit's DMA-BUF renderer on its own. To force that path on a machine that
-does have `/dev/dri`:
+Then `just dev`. The Linux recipe refuses to start the desktop app if those
+packages are missing, and it disables WebKit's DMA-BUF renderer on a VNC or
+software X server that has no DRM device. To force that path on a machine
+that does have `/dev/dri`:
 
 ```bash
-WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 pnpm app
+WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 just dev
 ```
 
-| Script | What it does |
+A testing-shaped `.deb` is `just fast`. A shipping `.deb` is `just release`.
+
+### macOS
+
+`just dev` is `tauri dev`. `just fast` writes a `.app` (no dmg). `just release`
+writes a `.dmg`.
+
+### Windows
+
+Windows recipes in the justfile have **not been run on a Windows machine yet**:
+`just fast` and `just release` ask Tauri for `nsis`. The justfile uses
+`cmd.exe` so Git's `sh` is not required. Please verify `just dev`, `just fast`,
+and `just release` there.
+
+| Command | What it does |
 | --- | --- |
-| `pnpm app` | Run the desktop app (dev) |
-| `pnpm app:fast` | A release build with the slow optimisations off — for testing |
-| `pnpm app:build` | The shipping bundle (`.app` + `.dmg`) |
-| `pnpm dev` | The UI in a browser, no Tauri |
+| `just` | List recipes |
+| `just dev` | Desktop app in dev mode (falls back to the browser UI with no display) |
+| `just web` | The UI in a browser, no Tauri |
+| `just fast` | Testing-shaped release — slow opts off (`.app` / `.deb` / NSIS) |
+| `just release` | Shipping bundle — fat LTO, stripped (`.dmg` / `.deb` / NSIS) |
+| `pnpm app` | `tauri dev`, no host defaults |
+| `pnpm app:build` | The shipping bundle for every Linux format (`.deb` + `.rpm` + AppImage) |
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm ui:types` | Pull the vendored `@nessa-ui/react` checkout forward |
 
@@ -186,16 +209,20 @@ Worktrees are created as **siblings** of this checkout
 Nothing ships that the app does not reach, and the two build modes exist so
 testing does not cost a shipping build.
 
-| | `.app` | Compile | What it is |
+| | Artifact | Compile | What it is |
 | --- | --- | --- | --- |
-| `pnpm app:fast` | ~9 MB | ~45 s warm | `opt-level=1`, no LTO, no strip, no dmg |
-| `pnpm app:build` | 6.5 MB | ~2 min | `opt-level=3`, fat LTO, one codegen unit, stripped |
+| `just fast` | ~9 MB `.app` / a `.deb` | ~45 s warm | `opt-level=1`, no LTO, no strip, no dmg / AppImage |
+| `just release` | 6.5 MB `.app` inside a `.dmg` / a `.deb` | ~2 min | `opt-level=3`, fat LTO, one codegen unit, stripped |
 
-`app:fast` overrides the release profile with `CARGO_PROFILE_RELEASE_*` env vars
-rather than defining a second profile, so there is one definition and no chance
-of the two drifting. (The Tauri CLI has no `--profile` flag, so a real second
-cargo profile could not be selected anyway.) Both are release builds — neither
-carries debug assertions — so what you test behaves like what you ship.
+`just fast` / `pnpm app:fast` overrides the release profile with
+`CARGO_PROFILE_RELEASE_*` env vars rather than defining a second profile, so
+there is one definition and no chance of the two drifting. (The Tauri CLI has
+no `--profile` flag, so a real second cargo profile could not be selected
+anyway.) `just release` leaves that profile alone (`opt-level=3`, fat LTO,
+strip) and asks for the shipping installer (`dmg` / `deb` / `nsis`). The
+justfile names the bundle so the Linux CLI is not asked for macOS's `app`
+or `dmg`. Both are release binaries — neither carries debug assertions — so
+what you test behaves like what you ship.
 
 **sccache** caches compilation across profiles and checkouts when
 `RUSTC_WRAPPER=sccache` is set in the environment. It is optional: without it
