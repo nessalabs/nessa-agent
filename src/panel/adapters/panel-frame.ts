@@ -1,6 +1,6 @@
 import * as React from "react"
 
-import { onWindowResize, windowSize } from "./host-window"
+import { onWindowResize, windowSize } from "../../host"
 
 /**
  * Tells the page how big the host window is.
@@ -9,7 +9,7 @@ import { onWindowResize, windowSize } from "./host-window"
  * right corner, so that a resize never moves the page's viewport: a `WKWebView`
  * hangs the last frame the web process committed off its own top left corner,
  * and moving that corner is what dragged the composer around by 90pt during a
- * resize. `src-tauri/src/viewport.rs` has the full account.
+ * resize. `src-tauri/src/platform/macos/viewport.rs` has the full account.
  *
  * The cost of holding the viewport still is that it no longer describes the
  * window, so the size is handed to CSS instead and the panel is drawn that big

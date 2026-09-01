@@ -1,15 +1,14 @@
 import * as React from "react"
 
-/** Frosted over what is behind the window, or no panel at all. */
-export type Surface = "translucent" | "clear"
+import { type Surface } from "../model"
+
+export type { Surface }
 
 const storageKey = "nessa.surface"
 
 function read(): Surface {
   try {
-    return window.localStorage.getItem(storageKey) === "clear"
-      ? "clear"
-      : "translucent"
+    return window.localStorage.getItem(storageKey) === "clear" ? "clear" : "translucent"
   } catch {
     // Private windows and blocked site data throw rather than return null.
     return "translucent"

@@ -24,9 +24,10 @@
 #   * pnpm hardlinks from its global store, so `pnpm install` in a new worktree
 #     costs seconds and no disk.
 #
-# Worktrees are created as SIBLINGS of this checkout, which is load-bearing:
-# the design system is a relative `link:../nessa/…` dependency, so a worktree
-# nested any deeper would resolve that path to nothing and fail to install.
+# Worktrees are created as SIBLINGS of this checkout so they can share this
+# crate's src-tauri/target. The design system is vendored by
+# scripts/ensure-nessa-ui.mjs, so install no longer depends on a relative path
+# sitting next to the checkout.
 
 set -euo pipefail
 

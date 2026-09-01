@@ -1,4 +1,4 @@
-//! Tells the frontend when the window is being live-resized.
+//! Forwards AppKit's live-resize notifications to the page.
 //!
 //! The panel's border glow has to stay lit for the length of a resize drag,
 //! and the page cannot work out for itself when one is running: on a
@@ -15,20 +15,16 @@
 //! a programmatic resize — the tray re-fitting the panel as it is summoned —
 //! which no amount of counting size events reliably does.
 
-/// Emitted as the user takes hold of the window's frame.
-pub const STARTED: &str = "nessa://resize-started";
-/// Emitted as they let go of it.
-pub const ENDED: &str = "nessa://resize-ended";
+use objc2::runtime::AnyObject;
+use objc2_app_kit::{
+    NSWindowDidEndLiveResizeNotification, NSWindowWillStartLiveResizeNotification,
+};
+use objc2_foundation::NSNotificationCenter;
+use tauri::Emitter;
 
-#[cfg(target_os = "macos")]
+use crate::host;
+
 pub fn watch(window: &tauri::WebviewWindow) -> Result<(), String> {
-    use objc2::runtime::AnyObject;
-    use objc2_app_kit::{
-        NSWindowDidEndLiveResizeNotification, NSWindowWillStartLiveResizeNotification,
-    };
-    use objc2_foundation::NSNotificationCenter;
-    use tauri::Emitter;
-
     let handle = window.ns_window().map_err(|error| error.to_string())?;
     // The notifications are filtered to this one window, so the panel does not
     // react to any other window the app may come to own.
@@ -36,8 +32,8 @@ pub fn watch(window: &tauri::WebviewWindow) -> Result<(), String> {
     let center = NSNotificationCenter::defaultCenter();
 
     for (notification, event) in [
-        (unsafe { NSWindowWillStartLiveResizeNotification }, STARTED),
-        (unsafe { NSWindowDidEndLiveResizeNotification }, ENDED),
+        (unsafe { NSWindowWillStartLiveResizeNotification }, host::RESIZE_STARTED),
+        (unsafe { NSWindowDidEndLiveResizeNotification }, host::RESIZE_ENDED),
     ] {
         let target = window.clone();
         let block = block2::RcBlock::new(move |_: core::ptr::NonNull<objc2_foundation::NSNotification>| {
@@ -62,12 +58,5 @@ pub fn watch(window: &tauri::WebviewWindow) -> Result<(), String> {
         core::mem::forget(token);
     }
 
-    Ok(())
-}
-
-/// Elsewhere the window has a system frame of its own and the webview is given
-/// the resize gesture like any other, so there is nothing to forward.
-#[cfg(not(target_os = "macos"))]
-pub fn watch(_window: &tauri::WebviewWindow) -> Result<(), String> {
     Ok(())
 }

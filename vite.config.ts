@@ -2,7 +2,7 @@ import { realpathSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { defineConfig } from "vite"
+import { defineConfig, searchForWorkspaceRoot } from "vite"
 import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 
@@ -21,12 +21,18 @@ import tailwindcss from "@tailwindcss/vite"
  * and Vite treats a resolved real path as project source to transform rather
  * than as a prebundled dependency.
  */
-const nessaUi = resolve(
-  realpathSync(
-    resolve(dirname(fileURLToPath(import.meta.url)), "node_modules/@nessa-ui/react"),
-  ),
-  "src",
+const nessaUiPkg = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "node_modules/@nessa-ui/react",
 )
+let nessaUi
+try {
+  nessaUi = resolve(realpathSync(nessaUiPkg), "src")
+} catch {
+  throw new Error(
+    `Cannot resolve @nessa-ui/react at ${nessaUiPkg}. Run pnpm install — it clones nessalabs/nessa_ui into .vendor.`,
+  )
+}
 
 // Tauri drives this dev server, so the port is fixed and the Rust sources are
 // left to cargo's own watcher.
@@ -38,9 +44,31 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
-    host: host ?? false,
+    // WebKitGTK resolves `localhost` to 127.0.0.1. Node's `true`/`false`
+    // localhost bind is IPv6-only on this host, so a reload of the webview
+    // gets connection-refused and the transparent window shows the desktop
+    // with no chrome.
+    host: host ?? "127.0.0.1",
+    headers: {
+      // WebKitGTK keeps module scripts after a restart; HMR then updates CSS
+      // only, so a class added in JSX never lands on the node that is painted.
+      "Cache-Control": "no-store",
+    },
     hmr: host ? { protocol: "ws", host, port: 1421 } : undefined,
-    watch: { ignored: ["**/src-tauri/**"] },
+    watch: {
+      ignored: [
+        "**/src-tauri/**",
+        // The vendor clone is a whole monorepo. Watching Storybook and
+        // validation tsconfigs forces a full reload on every install.
+        "**/.vendor/nessa_ui/apps/**",
+        "**/.vendor/nessa_ui/validation/**",
+      ],
+    },
+    // The design system is a symlink that often lives outside this checkout
+    // (a sibling worktree, or a clone for a machine that does not have one).
+    // Vite's default allow-list is the workspace root, so the realpath has
+    // to be named or every component 404s in `pnpm app`.
+    fs: { allow: [searchForWorkspaceRoot(process.cwd()), dirname(nessaUi)] },
   },
   resolve: {
     alias: [

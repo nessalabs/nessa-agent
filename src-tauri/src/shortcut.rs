@@ -20,7 +20,7 @@ pub fn register(app: &AppHandle, accelerator: &str) {
         // Both edges are delivered; acting on the release too would toggle the
         // panel straight back closed.
         if event.state() == ShortcutState::Pressed {
-            crate::tray::toggle_panel(app);
+            crate::panel::toggle(app);
         }
     });
 

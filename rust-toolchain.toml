@@ -1,0 +1,5 @@
+# The lockfile pulls crates that need edition 2024. Packaged rustc 1.83
+# cannot build them; rustup's stable can. This file is what makes
+# `cargo test` / `pnpm app` pick that compiler without an extra env var.
+[toolchain]
+channel = "stable"

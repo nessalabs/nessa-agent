@@ -22,21 +22,20 @@ export function WaveformIcon({
     if (!node || !active) return
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
 
-    const animations = Array.from(node.querySelectorAll("rect")).map(
-      (bar, index) =>
-        bar.animate(
-          [
-            { transform: "scaleY(0.7)" },
-            { transform: "scaleY(1.15)" },
-            { transform: "scaleY(0.7)" },
-          ],
-          {
-            duration: 1400,
-            delay: index * 150,
-            iterations: Infinity,
-            easing: "ease-in-out",
-          },
-        ),
+    const animations = Array.from(node.querySelectorAll("rect")).map((bar, index) =>
+      bar.animate(
+        [
+          { transform: "scaleY(0.7)" },
+          { transform: "scaleY(1.15)" },
+          { transform: "scaleY(0.7)" },
+        ],
+        {
+          duration: 1400,
+          delay: index * 150,
+          iterations: Infinity,
+          easing: "ease-in-out",
+        },
+      ),
     )
     return () => animations.forEach((animation) => animation.cancel())
   }, [active])

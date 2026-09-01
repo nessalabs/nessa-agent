@@ -5,8 +5,8 @@
  * which silently drops any class the app writes for itself; compiling from
  * source gives the app the full utility set and the same tokens.
  *
- * When PillComposer and the chat bubbles land on the package's main branch and
- * it ships to npm, this becomes `@import "@nessa-ui/react/app.css"` again.
+ * When the package ships to npm, this becomes `@import "@nessa-ui/react/app.css"`
+ * again.
  */
 @import "../node_modules/@nessa-ui/react/src/app.css";
 @source "./";
@@ -38,7 +38,7 @@ body {
  * left corner, so moving that corner drags everything already drawn along with
  * it — which is what walked the composer 90pt up and down the screen during a
  * resize that holds the window's bottom edge still. See
- * `src-tauri/src/viewport.rs`.
+ * `src-tauri/src/platform/macos/viewport.rs`.
  *
  * So the viewport stays put and the panel is drawn the size of the window
  * against the bottom right of it, from the size the host reports (see
@@ -61,8 +61,22 @@ body {
 }
 
 /*
+ * The size tokens arrive asynchronously from the host. Until they do, `100%`
+ * is the stage — the whole webview, which is larger than the window and
+ * pinned to its bottom right. A first paint at that width lays the pill
+ * across the webview; the window then clips a hard left edge while the
+ * right cap still rounds. Tauri hosts fall back to the window's min width
+ * so the first layer is already window-sized. A browser preview keeps
+ * `100%`: there the viewport *is* the window.
+ */
+.nessa-panel[data-host="linux"],
+.nessa-panel[data-host="macos"] {
+  width: var(--nessa-window-width, 420px);
+}
+
+/*
  * Two surfaces, switched by the header control. `translucent` tints the native
- * frost the window carries (see src-tauri/src/vibrancy.rs); `clear` removes the
+ * frost the window carries (see `platform/macos/vibrancy.rs`); `clear` removes the
  * panel entirely, so only the bubbles and the pill hang over the desktop.
  *
  * There is deliberately no `backdrop-filter` here. On a transparent,
@@ -77,9 +91,225 @@ body {
   border-color: color-mix(in oklab, var(--border) 55%, transparent);
 }
 
+/*
+ * CSS frost is injected on hosts without a native effect view (Linux, a
+ * browser preview, Windows). macOS sets `data-frost="native"` and keeps this
+ * filter off: on a transparent undecorated NSWindow it smears the
+ * behind-window content and freezes when unfocused.
+ */
+.nessa-panel[data-surface="translucent"][data-frost="css"] {
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+}
+
+/*
+ * Clear removes the panel. Only the tabs, the bubbles, and the pill hang
+ * over the desktop. Nothing in this tree may promote a compositing layer:
+ * WebKitGTK paints those as opaque rectangles, which showed up as a white
+ * box behind the rounded pill and as stacked bars overlapping the transcript.
+ */
 .nessa-panel[data-surface="clear"] {
-  background: transparent;
+  background: none;
   border-color: transparent;
+  overflow: visible;
+  /* `relative` is only needed as a containing block for the edge reveal,
+     which is hidden here. A positioned panel is the layer origin WebKitGTK
+     fills with opaque white around the rounded pill. */
+  position: static;
+}
+
+.nessa-panel[data-surface="clear"] .nessa-edge-reveal {
+  display: none;
+  z-index: auto;
+  position: static;
+}
+
+.nessa-panel[data-surface="clear"] .nessa-chrome {
+  background: none;
+}
+
+.nessa-panel [role="log"] {
+  background: none;
+}
+
+/*
+ * A layout compositor (WebKitGTK in a transparent window) promotes
+ * `translate` / `scale` / `filter` to layers that paint from the panel
+ * origin. Vacated tiles stay on screen. Keep the transcript in layout.
+ */
+.nessa-panel[data-compositor="layout"] [data-slot="chat-message"],
+.nessa-panel[data-compositor="layout"] [data-slot="chat-bubble"],
+.nessa-panel[data-compositor="layout"] [data-slot="chat-typing-indicator"],
+.nessa-panel[data-compositor="layout"] [data-slot="chat-typing-dot"] {
+  transform: none;
+  translate: none;
+  scale: none;
+  filter: none;
+  isolation: auto;
+  will-change: auto;
+  animation: none;
+  transition: none;
+  flex-shrink: 0;
+}
+
+.nessa-panel[data-compositor="layout"][data-surface="clear"] [data-slot="chat-message"] {
+  /* `relative` is a containing block for hover actions; on a layout
+     compositor it is also the layer origin that fills. Actions stay in flow. */
+  position: static;
+}
+
+.nessa-panel[data-compositor="layout"] [data-slot="chat-message-actions"] {
+  position: static;
+}
+
+/*
+ * The tab pill grows when the title fills in, and the activity glow is a
+ * box-shadow layer. A layout compositor leaves both behind, so two tabs
+ * sit in one place. Keep a fixed-width pill with no transitions, and the
+ * working state is the avatar's `busy` wash — not a loading dot.
+ */
+.nessa-panel[data-compositor="layout"] [data-slot="chat-tab"],
+.nessa-panel[data-compositor="layout"] [data-slot="chat-tabs-new"],
+.nessa-panel[data-compositor="layout"] [data-slot="chat-tab-close"] {
+  /* Do not set `translate`/`scale` here: those inherit and freeze the
+     avatar's busy wash. */
+  transform: none;
+  filter: none;
+  isolation: auto;
+  will-change: auto;
+  animation: none;
+  transition: none;
+}
+
+.nessa-panel[data-compositor="layout"] [data-slot="chat-tab"] {
+  position: static;
+  width: 11rem;
+  max-width: 11rem;
+  /* Opaque chip: a 10% wash does not cover the previous title, so a layout
+     compositor leaves "New chat" sitting under the new name. */
+  background-color: var(--card);
+  border-color: var(--border);
+}
+
+.nessa-panel[data-compositor="layout"] [data-slot="chat-tab"][data-active] {
+  background-color: color-mix(in oklab, var(--nessa-chat-accent) 18%, var(--card));
+  border-color: color-mix(in oklab, var(--nessa-chat-accent) 50%, var(--border));
+}
+
+.nessa-panel[data-compositor="layout"] [data-slot="chat-tab"] > [role="tab"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.nessa-panel [data-slot="chat-tab"] span:has([data-slot="random-avatar"]) {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.nessa-panel [data-slot="chat-tab"] [data-slot="random-avatar"],
+.nessa-panel [data-slot="chat-tab"] [data-slot="random-avatar"] svg {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+.nessa-panel[data-compositor="layout"] [data-slot="chat-tab-loading"] {
+  display: none;
+}
+
+/*
+ * Composer gutter is real CSS padding. The wrapper must not paint:
+ * `transparent` on a WebKitGTK layer becomes opaque white. `none` omits
+ * paint. The form is unwrapped so its radius cannot own a layer at the
+ * panel origin; the row is the capsule.
+ */
+.nessa-composer {
+  flex-shrink: 0;
+  padding: 0 16px 12px;
+  background: none;
+  isolation: auto;
+  transform: none;
+  filter: none;
+  contain: none;
+}
+
+/*
+ * Unwrap the form so `relative` + `bg-card` + radius cannot allocate a
+ * layer at the panel origin. The row is the capsule. Submit still reaches
+ * the form node (`requestSubmit`). While generating, the form owns a box
+ * again so the traveling rim has a containing block the size of the pill.
+ */
+[data-slot="pill-composer"] {
+  display: contents;
+}
+
+[data-slot="pill-composer-row"] {
+  padding: 6px;
+  background-color: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--card-foreground);
+}
+
+[data-slot="pill-composer"][data-generating] {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  padding: 6px;
+  background-color: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+[data-slot="pill-composer"][data-generating] [data-slot="pill-composer-row"] {
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+}
+
+[data-slot="pill-composer-rim"]:not([data-active]) {
+  display: none;
+}
+
+[data-slot="chat-composer-action"] {
+  transform: none;
+  filter: none;
+  will-change: auto;
+  isolation: auto;
+  background: none;
+  transition-property: color, background-color;
+}
+
+[data-slot="chat-composer-input"] {
+  background: none;
+  transform: none;
+  filter: none;
+  isolation: auto;
+  will-change: auto;
+  caret-color: var(--foreground);
+}
+
+.nessa-west-handle {
+  position: absolute;
+  /* Stage is the webview; its bottom-right is the window. Pin to the
+     panel's left edge without becoming a positioned descendant of the
+     panel — that stacking context is the boxed left cap on Linux. */
+  top: auto;
+  left: auto;
+  bottom: 4.75rem;
+  height: calc(var(--nessa-window-height, 100%) - 4.75rem);
+  cursor: ew-resize;
+  background: none;
+}
+
+.nessa-west-handle-narrow {
+  width: 6px;
+  right: calc(var(--nessa-window-width, 100%) - 6px);
+}
+
+.nessa-west-handle-wide {
+  width: 12px;
+  right: calc(var(--nessa-window-width, 100%) - 12px);
 }
 
 /*
@@ -129,4 +359,3 @@ body {
   -webkit-mask-clip: content-box, border-box;
   -webkit-mask-composite: xor;
 }
-

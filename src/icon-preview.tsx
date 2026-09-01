@@ -6,12 +6,9 @@
  * palette that reads well at 96px can collapse into a blob at 16px.
  */
 import { createRoot } from "react-dom/client"
-import {
-  RandomAvatar,
-  type RandomAvatarTone,
-} from "@nessa-ui/react/random-avatar"
+import { RandomAvatar, type RandomAvatarTone } from "@nessa-ui/react/random-avatar"
 
-import { AGENT_HUES, AGENT_ICON_TONE, AGENT_SEED } from "./agent-identity"
+import { AGENT_HUES, AGENT_ICON_TONE, AGENT_SEED } from "./conversation/model"
 import "./styles.css"
 
 /** Pastel-leaning hue wheels, brighter than the eight defaults. */
@@ -63,4 +60,6 @@ function Preview() {
   )
 }
 
-createRoot(document.getElementById("root")!).render(<Preview />)
+const container = document.getElementById("root")
+if (!container) throw new Error("missing #root")
+createRoot(container).render(<Preview />)

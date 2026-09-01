@@ -39,36 +39,17 @@
 //! What the page gives up is learning the window's size from its own viewport,
 //! which no longer changes. It is told instead, over the size events it already
 //! subscribes to, and draws the panel that size against the bottom right of the
-//! viewport (see `use-panel-frame.ts`). A slow relayout then shows as the
+//! viewport (see `src/panel/adapters/panel-frame.ts`). A slow relayout then shows as the
 //! panel's *dragged* edge trailing the window's for a frame or two, at the edge
 //! under the cursor, where it reads as the drag catching up rather than as the
 //! contents coming loose.
 
-/// Carries the window's size to the page, which can no longer measure it.
-///
-/// Nothing in the page can: its own viewport is the stage, and Tauri's window
-/// size APIs read the webview's view, which is the very thing this module
-/// stops resizing — `innerSize()` reports the stage too. AppKit's content rect
-/// is the one description of the window left that a fixed webview cannot
-/// falsify, so it is read here and sent.
-pub const SIZED: &str = "nessa://panel-sized";
+use objc2_app_kit::NSWindow;
 
-/// Points, which are CSS pixels: the webview does its own scaling, so no device
-/// ratio enters into it.
-#[derive(Clone, serde::Serialize)]
-pub struct PanelSize {
-    pub width: f64,
-    pub height: f64,
-}
+use crate::host::{self, PanelSize};
+use crate::platform::current_monitor;
 
-/// The window's size now, for a page that has just loaded and has no size event
-/// coming — a devtools reload mid-session, or a webview that mounted after the
-/// panel was last fitted.
-#[cfg(target_os = "macos")]
-#[tauri::command]
-pub fn panel_size(window: tauri::WebviewWindow) -> Result<PanelSize, String> {
-    use objc2_app_kit::NSWindow;
-
+pub fn panel_size(window: &tauri::WebviewWindow) -> Result<PanelSize, String> {
     let handle = window.ns_window().map_err(|error| error.to_string())?;
     let ns_window: &NSWindow = unsafe { &*handle.cast::<NSWindow>() };
     ns_window
@@ -77,13 +58,6 @@ pub fn panel_size(window: tauri::WebviewWindow) -> Result<PanelSize, String> {
         .ok_or_else(|| String::from("the window has no content view"))
 }
 
-#[cfg(not(target_os = "macos"))]
-#[tauri::command]
-pub fn panel_size(_window: tauri::WebviewWindow) -> Result<PanelSize, String> {
-    Err(String::from("the panel only detaches its viewport on macOS"))
-}
-
-#[cfg(target_os = "macos")]
 fn size_of(content: &objc2_app_kit::NSView) -> PanelSize {
     let bounds = content.bounds();
     PanelSize {
@@ -97,9 +71,8 @@ fn size_of(content: &objc2_app_kit::NSView) -> PanelSize {
 /// Call this whenever the window may have gained room to grow into — at setup,
 /// and on every show, since the panel can be summoned onto a different display
 /// from the one it was last fitted for.
-#[cfg(target_os = "macos")]
 pub fn fit(window: &tauri::WebviewWindow) -> Result<(), String> {
-    use objc2_app_kit::{NSAutoresizingMaskOptions, NSWindow};
+    use objc2_app_kit::NSAutoresizingMaskOptions;
     use objc2_foundation::{NSPoint, NSRect, NSSize};
 
     let handle = window.ns_window().map_err(|error| error.to_string())?;
@@ -156,7 +129,7 @@ pub fn fit(window: &tauri::WebviewWindow) -> Result<(), String> {
     // rather than left for the next resize: a panel summoned at a size it was
     // already at raises no resize at all.
     use tauri::Emitter;
-    let _ = window.emit(SIZED, size_of(&content));
+    let _ = window.emit(host::PANEL_SIZED, size_of(&content));
 
     Ok(())
 }
@@ -170,10 +143,9 @@ pub fn fit(window: &tauri::WebviewWindow) -> Result<(), String> {
 /// overhangs. Growing the stage costs one relayout, so it is done only when the
 /// window has actually outgrown it — never on an ordinary resize step, which is
 /// the case this whole module exists to leave alone.
-#[cfg(target_os = "macos")]
 pub fn watch(window: &tauri::WebviewWindow) -> Result<(), String> {
     use objc2::runtime::AnyObject;
-    use objc2_app_kit::{NSWindow, NSWindowDidResizeNotification};
+    use objc2_app_kit::NSWindowDidResizeNotification;
     use objc2_foundation::NSNotificationCenter;
 
     let handle = window.ns_window().map_err(|error| error.to_string())?;
@@ -198,7 +170,7 @@ pub fn watch(window: &tauri::WebviewWindow) -> Result<(), String> {
             // Every step, because this is the page's only account of the
             // window's size while it is being dragged.
             use tauri::Emitter;
-            let _ = target.emit(SIZED, size_of(&content));
+            let _ = target.emit(host::PANEL_SIZED, size_of(&content));
 
             let stage = webview.frame().size;
             let window = content.bounds().size;
@@ -237,14 +209,13 @@ pub fn watch(window: &tauri::WebviewWindow) -> Result<(), String> {
 /// The webview under the window's content view.
 ///
 /// It is found by walking rather than indexing: the frosted surface puts an
-/// `NSVisualEffectView` under the webview (see `vibrancy.rs`), so which subview
+/// `NSVisualEffectView` under the webview (see `vibrancy.rs` in this folder), so which subview
 /// comes first depends on whether the surface is currently frosted.
 ///
 /// The class is looked up by name rather than by depending on `objc2-web-kit`.
 /// It is certainly registered — wry built the view out of it — and naming the
 /// crate for one `isKindOfClass` would add two more to the build that nothing
 /// else in the binary needs.
-#[cfg(target_os = "macos")]
 fn webview_in(
     content: &objc2_app_kit::NSView,
 ) -> Option<objc2::rc::Retained<objc2_app_kit::NSView>> {
@@ -255,28 +226,4 @@ fn webview_in(
     (0..subviews.count())
         .map(|index| subviews.objectAtIndex(index))
         .find(|view| view.isKindOfClass(class))
-}
-
-/// The display the panel is on, falling back to the primary one — the same
-/// choice `tray::anchor_to_edge` makes when it places the panel.
-#[cfg(target_os = "macos")]
-fn current_monitor(window: &tauri::WebviewWindow) -> Result<Option<tauri::Monitor>, String> {
-    let current = window.current_monitor().map_err(|e| e.to_string())?;
-    match current {
-        Some(monitor) => Ok(Some(monitor)),
-        None => window.primary_monitor().map_err(|e| e.to_string()),
-    }
-}
-
-/// Elsewhere the webview simply fills its window and is repainted by a compositor
-/// that does not hand the page's last frame to a corner, so there is no viewport
-/// to hold still.
-#[cfg(not(target_os = "macos"))]
-pub fn fit(_window: &tauri::WebviewWindow) -> Result<(), String> {
-    Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn watch(_window: &tauri::WebviewWindow) -> Result<(), String> {
-    Ok(())
 }

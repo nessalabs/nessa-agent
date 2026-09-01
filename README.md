@@ -10,11 +10,22 @@ straight to the composer. The tab strip doubles as the titlebar — the gaps
 around the tabs drag the window; everything else lives in the tray menu.
 
 It opens in the **lower right** of whichever screen it is summoned on, the way
-Clawdia's panel does — a 420pt column filling the work area's height by default,
+Nessa's panel does — a 420pt column filling the work area's height by default,
 both configurable (see [Settings](#settings)). A panel shorter than the screen
 sits on the bottom edge rather than hanging from the top. The frame is reapplied
 on every show, so moving between displays re-fits it rather than stranding it
-(`anchor_to_edge` in [src-tauri/src/tray.rs](src-tauri/src/tray.rs)).
+(`anchor_to_edge` in [src-tauri/src/panel.rs](src-tauri/src/panel.rs)).
+
+On **Linux** the same panel is a floating window. There is no menu bar extra to
+hang from, so it opens on launch, stays on the taskbar, and still summons from
+the system tray and **Ctrl+Shift+A** when those exist. Frost is CSS
+`backdrop-filter` rather than an `NSVisualEffectView`. The webview is pinned
+the same way as on macOS so a resize does not jitter the composer.
+
+OS-specific window behaviour is not scattered through `main`. It lives in
+[`src-tauri/src/platform/`](src-tauri/src/platform/) — a `Host` trait with one
+implementation per OS, injected by `current()` — and in
+[`src/host/`](src/host/) on the shell.
 
 ## What is here
 
@@ -40,11 +51,12 @@ on every show, so moving between displays re-fits it rather than stranding it
   frosted surface, which blurs whatever the panel was summoned over, and the
   clear one, which removes the panel entirely so only the bubbles and the pill
   hang over the desktop. The frontend owns the choice and remembers it
-  ([src/use-surface.ts](src/use-surface.ts)); the tray item only *requests* a
+  ([src/panel/adapters/surface.ts](src/panel/adapters/surface.ts)); the tray item only *requests* a
   toggle, and its check mark is reflected back from `set_frosted`.
-- **No agent** — `draftReply` in [src/app.tsx](src/app.tsx) is a stand-in that
-  drives the same state a real runtime will drive: a turn list plus an
-  `idle → thinking → streaming` phase.
+- **No agent** — the local conversation gateway in
+  [`src/conversation/`](src/conversation/) stands in for the server. It drives
+  the same strip a real runtime will drive: a turn list plus an
+  `idle → thinking → streaming` phase. The panel only paints that projection.
 
 ## Running it
 
@@ -55,7 +67,27 @@ pnpm app
 
 `pnpm app` is `tauri dev`; it starts Vite on port 1420 and builds the Rust side.
 `pnpm dev` alone opens the same UI in a plain browser, which is useful for design
-work — the window controls no-op there (see [src/host-window.ts](src/host-window.ts)).
+work — the window controls no-op there (see [src/host/window.ts](src/host/window.ts)).
+
+### Linux
+
+The lockfile needs **Rust 1.85+** (edition 2024 crates). Ubuntu's packaged
+`rustc` is often 1.83; install via rustup. [`rust-toolchain.toml`](rust-toolchain.toml)
+pins `stable`, so `pnpm app` and `cargo test` pick it without an extra env var.
+
+Build packages on Debian/Ubuntu:
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+```
+
+On a VNC or software X server there is no DRM device, and the host disables
+WebKit's DMA-BUF renderer on its own. To force that path on a machine that
+does have `/dev/dri`:
+
+```bash
+WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 pnpm app
+```
 
 | Script | What it does |
 | --- | --- |
@@ -64,7 +96,7 @@ work — the window controls no-op there (see [src/host-window.ts](src/host-wind
 | `pnpm app:build` | The shipping bundle (`.app` + `.dmg`) |
 | `pnpm dev` | The UI in a browser, no Tauri |
 | `pnpm typecheck` | `tsc --noEmit` |
-| `pnpm ui:types` | Rebuild the linked package's `.d.ts` (see below) |
+| `pnpm ui:types` | Pull the vendored `@nessa-ui/react` checkout forward |
 
 ### Settings
 
@@ -147,9 +179,7 @@ drops only this app's crate — the thing that is actually stale after a code
 change — and rebuilds in **4 s** with every dependency intact.
 
 Worktrees are created as **siblings** of this checkout
-(`../nessa-app-<name>`), and that is load-bearing rather than cosmetic: the
-design system is a relative `link:../nessa/…` dependency, so a worktree nested
-any deeper resolves that path to nothing and fails to install.
+(`../nessa-app-<name>`) so they can share this crate's `src-tauri/target`.
 
 ## Build
 
@@ -167,13 +197,13 @@ of the two drifting. (The Tauri CLI has no `--profile` flag, so a real second
 cargo profile could not be selected anyway.) Both are release builds — neither
 carries debug assertions — so what you test behaves like what you ship.
 
-**sccache** caches compilation across profiles and checkouts
-([src-tauri/.cargo/config.toml](src-tauri/.cargo/config.toml)). Rebuilding from
-clean went 104s → **43s** at an 85% hit rate. It needs `sccache` on `PATH`
-(`brew install sccache`); without it cargo fails to spawn the wrapper, so delete
-that file if you would rather not have it. It cannot cache incrementally-compiled
-crates, so it skips this app's own crate in dev builds — the win is the ~500
-dependency crates, which is where the time goes.
+**sccache** caches compilation across profiles and checkouts when
+`RUSTC_WRAPPER=sccache` is set in the environment. It is optional: without it
+cargo uses the ordinary compiler, which is what Linux and CI need. Rebuilding
+from clean went 104s → **43s** at an 85% hit rate on the machine that measured
+it. `brew install sccache` or `apt install sccache`; it cannot cache
+incrementally-compiled crates, so it skips this app's own crate in dev builds —
+the win is the ~500 dependency crates, which is where the time goes.
 
 Dev builds use `debug = "line-tables-only"`: full debug info is the single
 biggest cost in a Tauri rebuild, and line tables still give a readable backtrace.
@@ -230,7 +260,7 @@ dead locals are not this app's to fix.
 ### The frosted surface is native, not CSS
 
 The frost is an `NSVisualEffectView` behind the webview
-([src-tauri/src/vibrancy.rs](src-tauri/src/vibrancy.rs)), not a CSS
+([src-tauri/src/platform/macos/vibrancy.rs](src-tauri/src/platform/macos/vibrancy.rs)), not a CSS
 `backdrop-filter`. On a transparent, undecorated macOS window the CSS filter does
 not sample the behind-window content 1:1 — it stretches it into a bleed running a
 few hundred points down the panel — and it stops updating when the window loses
@@ -247,28 +277,29 @@ natively too, which is what the `set_frosted` command is for.
 ### Hide-on-blur
 
 A menu bar panel normally dismisses when you click away, but that would hide the
-window every time you open devtools. It is therefore release-only — see the
-`Focused(false)` arm in [src-tauri/src/main.rs](src-tauri/src/main.rs).
+window every time you open devtools. It is therefore release-only — see
+`on_window_event` on the macOS host in
+[src-tauri/src/platform/macos/mod.rs](src-tauri/src/platform/macos/mod.rs).
 
 ## The Nessa UI dependency
 
-`PillComposer` and the chat bubbles have **not landed on the design system's main
-branch yet** — they live on `claude/imessage-composer-chat-ui-be1e6a`. So the app
-depends on a git worktree of that branch rather than on npm:
+The chat kit lives in [`nessalabs/nessa_ui`](https://github.com/nessalabs/nessa_ui)
+(`packages/react`). It is not on npm yet, so `pnpm install` links it from
+`.vendor/nessa_ui`. That directory is filled by `scripts/ensure-nessa-ui.mjs`
+before install: a sibling `nessa_ui` (or the original imessage worktree) is
+symlinked if present, otherwise the repo is cloned.
 
 ```
-"@nessa-ui/react": "link:../nessa/.claude/worktrees/imessage-composer-chat-ui/packages/react"
+"@nessa-ui/react": "link:.vendor/nessa_ui/packages/react"
 ```
 
-That worktree is checked out detached at the branch tip. To move it forward:
+To move the clone forward:
 
 ```bash
-git -C ../nessa/.claude/worktrees/imessage-composer-chat-ui checkout claude/imessage-composer-chat-ui-be1e6a
-pnpm ui:build
+pnpm ui:types
 ```
 
-When the branch merges and the package publishes, this becomes a plain
-`"@nessa-ui/react": "^x.y.z"` and the worktree can go away.
+When the package publishes, this becomes `"@nessa-ui/react": "^x.y.z"`.
 
 ### Why the app compiles the design system's CSS from source
 
@@ -291,7 +322,7 @@ over a menu-bar blue — a palette that reads well at 96px can collapse into a b
 at 16px, which is how the first icon went wrong: the default hue wheel put a
 near-white wash against a dark ground, and the menu bar showed a white patch. The
 shipped wheel is `AGENT_HUES` in
-[src/agent-identity.ts](src/agent-identity.ts), shared with the in-app avatar so
+[src/conversation/model/identity.ts](src/conversation/model/identity.ts), shared with the in-app avatar so
 the two cannot drift.
 
 ### The tray icon is a different painting
@@ -343,7 +374,7 @@ comes out a solid disc.
 
 ## Next
 
-- Wire a real agent to `draftReply` and drive `phase` from stream events.
+- Replace `adapters/gateway/local.ts` with a remote `ConversationGateway` and drive `phase` from stream events.
 - Make the voice control real: the design system's story streams a transcription
   into the input word by word, with hold-to-record and a live meter.
 - Persist the transcript across launches.

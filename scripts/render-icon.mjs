@@ -65,7 +65,9 @@ const png = new Resvg(toSrgb(readFileSync(input, "utf8")), {
   // Nothing is painted behind the artwork; the transparent default is the
   // whole point of not using qlmanage.
   font: { loadSystemFonts: false },
-}).render().asPng()
+})
+  .render()
+  .asPng()
 
 writeFileSync(output, png)
 console.log(`${output}  ${size}x${size}  ${(png.length / 1024).toFixed(1)}KB`)
