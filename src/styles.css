@@ -112,13 +112,24 @@ body {
   background: none;
   border-color: transparent;
   overflow: visible;
-  /* `relative` is only needed as a containing block for the edge reveal,
-     which is hidden here. A positioned panel is the layer origin WebKitGTK
-     fills with opaque white around the rounded pill. */
+}
+
+/*
+ * Flattening the clear panel is a WebKitGTK repair, not part of the surface.
+ * A positioned panel is the layer origin it fills with opaque white around the
+ * rounded pill, so on a layout compositor the panel gives up its containing
+ * block and the edge reveal goes with it — the reveal needs that block.
+ *
+ * It is scoped, because a layer compositor has neither the bug nor a reason to
+ * pay for the fix. Clear is the surface with no frame at all, which makes the
+ * lit edge the only thing that says where the window can be grabbed; losing it
+ * there costs more than anywhere else.
+ */
+.nessa-panel[data-compositor="layout"][data-surface="clear"] {
   position: static;
 }
 
-.nessa-panel[data-surface="clear"] .nessa-edge-reveal {
+.nessa-panel[data-compositor="layout"][data-surface="clear"] .nessa-edge-reveal {
   display: none;
   z-index: auto;
   position: static;

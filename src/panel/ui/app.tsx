@@ -6,13 +6,36 @@ import { PillComposer, PillComposerRow } from "@nessa-ui/react/pill-composer"
 import { RandomAvatar } from "@nessa-ui/react/random-avatar"
 
 import { AGENT_HUES, Transcript, useConversation } from "../../conversation"
-import { host, startResizeFromLeftEdge } from "../../host"
+import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
 import { useColorScheme } from "../adapters/color-scheme"
 import { useFlushOnTurn } from "../adapters/compositor-flush"
 import { useEdgeReveal } from "../adapters/edge-reveal"
 import { useHostPanel } from "../adapters/host-panel"
-import { useSurface } from "../adapters/surface"
+import { useSurface, type Surface } from "../adapters/surface"
 import { WaveformIcon } from "./waveform-icon"
+
+/**
+ * The panel's shape.
+ *
+ * Clear removes the frame — no background, no visible border — but it keeps its
+ * containing block and its border box, because that box is what the edge reveal
+ * is masked to. Without them the lit edge has nothing to trace, and clear is the
+ * surface that needs it most: there is no frame otherwise to say where the
+ * window ends or where it can be grabbed.
+ *
+ * A layout compositor is the exception. WebKitGTK fills a positioned panel's
+ * layer with opaque white around the rounded pill, so there the panel is
+ * flattened and the reveal is given up with it (see styles.css).
+ */
+function panelClass(surface: Surface, compositor: CompositorKind): string {
+  const base = "nessa-panel flex min-h-0 flex-col"
+  if (surface !== "clear") {
+    return `${base} relative overflow-hidden rounded-[18px] border`
+  }
+  return compositor === "layout"
+    ? `${base} overflow-visible border-0`
+    : `${base} relative overflow-visible rounded-[18px] border`
+}
 
 export function App() {
   const scheme = useColorScheme()
@@ -79,11 +102,7 @@ export function App() {
         data-host={host.kind}
         data-frost={host.frost}
         data-compositor={host.compositor}
-        className={
-          surface === "clear"
-            ? "nessa-panel flex min-h-0 flex-col overflow-visible border-0"
-            : "nessa-panel relative flex min-h-0 flex-col overflow-hidden rounded-[18px] border"
-        }
+        className={panelClass(surface, host.compositor)}
         onPointerMove={edge.onPointerMove}
         onPointerLeave={edge.onPointerLeave}
       >
@@ -93,7 +112,9 @@ export function App() {
         <div
           ref={edge.glowRef}
           aria-hidden="true"
-          hidden={surface === "clear"}
+          // Only a layout compositor gives the reveal up — see `panelClass`.
+          // Everywhere else clear is the surface that needs it most.
+          hidden={surface === "clear" && host.compositor === "layout"}
           className="nessa-edge-reveal pointer-events-none"
         />
         {/* The strip is the titlebar too: the gaps around the tabs drag the
