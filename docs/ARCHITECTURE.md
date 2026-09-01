@@ -42,6 +42,8 @@ opinion rather than the product's.
 | `platform/linux/` | WebKit DMA-BUF prep, GtkFixed pin, CSS frost (no-op natively), allocate-based live resize, shown on the taskbar at launch. |
 | `platform/other/` | Webview fills the window; size events only. |
 
+**Launch host** (`scripts/launch/`) — how you start the app on this machine. Same shape as `platform/`: a `LaunchHost` (GUI detect, env prep, fast bundle, native-dep check) with one implementation per OS, injected by `resolveLaunch`. [`dev.sh`](../dev.sh) / [`dev.cmd`](../dev.cmd) are stubs. The Windows host is written, not yet run on a Windows box.
+
 **React shell** (`src/`) — everything that is on screen.
 
 | Path | Owns |
