@@ -28,6 +28,10 @@ web:
 dev:
     #!/usr/bin/env bash
     set -euo pipefail
+    if [[ -n "${CI:-}" || ( -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ) ]]; then
+      echo "→ no GUI on this machine; starting web dev server instead"
+      exec pnpm dev
+    fi
     if ! pkg-config --exists webkit2gtk-4.1 gtk+-3.0; then
       echo "Linux native deps missing. On Debian/Ubuntu:"
       echo "  sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf fakeroot"
@@ -36,10 +40,6 @@ dev:
     if [[ -z "${WEBKIT_DISABLE_DMABUF_RENDERER:-}" && ! -e /dev/dri/card0 && ! -e /dev/dri/renderD128 ]]; then
       export WEBKIT_DISABLE_DMABUF_RENDERER=1
       export WEBKIT_DISABLE_COMPOSITING_MODE=1
-    fi
-    if [[ -n "${CI:-}" || ( -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ) ]]; then
-      echo "→ no GUI on this machine; starting web dev server instead"
-      exec pnpm dev
     fi
     exec pnpm app
 
