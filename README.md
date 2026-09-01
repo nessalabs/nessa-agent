@@ -65,12 +65,11 @@ pnpm install
 just dev
 ```
 
-[`just`](https://just.systems) is the entry ([justfile](justfile)). It calls
-the launch host in `scripts/launch/`. `just` lists recipes. `just dev` is
-`tauri dev` when a display is available, the browser UI (`just web`) when it
-is not. `just release` is the shipping installer. `pnpm app` and `pnpm dev`
-still work without host defaults. The window controls no-op in the browser
-(see [src/host/window.ts](src/host/window.ts)).
+[`just`](https://just.systems) is the entry ([justfile](justfile)). `just`
+lists recipes. `just dev` is `tauri dev` when a display is available, the
+browser UI (`just web`) when it is not. `just release` is the shipping
+installer. `pnpm app` and `pnpm dev` still work without those defaults. The
+window controls no-op in the browser (see [src/host/window.ts](src/host/window.ts)).
 
 Install `just` with the platform's package manager (`apt install just`,
 `brew install just`, `winget install --id Casey.Just --exact`).
@@ -87,11 +86,10 @@ Build packages on Debian/Ubuntu:
 sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf fakeroot
 ```
 
-Then `just dev`. The Linux host
-([scripts/launch/linux.mjs](scripts/launch/linux.mjs)) refuses to start the
-desktop app if those packages are missing, and it disables WebKit's DMA-BUF
-renderer on a VNC or software X server that has no DRM device. To force that
-path on a machine that does have `/dev/dri`:
+Then `just dev`. The Linux recipe refuses to start the desktop app if those
+packages are missing, and it disables WebKit's DMA-BUF renderer on a VNC or
+software X server that has no DRM device. To force that path on a machine
+that does have `/dev/dri`:
 
 ```bash
 WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 just dev
@@ -102,16 +100,14 @@ A testing-shaped `.deb` is `just fast`. A shipping `.deb` is `just release`.
 ### macOS
 
 `just dev` is `tauri dev`. `just fast` writes a `.app` (no dmg). `just release`
-writes a `.dmg`. The host checks that `xcode-select -p` succeeds.
+writes a `.dmg`.
 
 ### Windows
 
-The host lives in [scripts/launch/windows.mjs](scripts/launch/windows.mjs). It
-has **not been run on a Windows machine yet**: `just fast` and `just release`
-ask Tauri for `nsis`, and a GUI is assumed unless `CI` is set or
-`SESSIONNAME=Services`. The justfile uses `cmd.exe` on Windows so Git's `sh`
-is not required. Please verify `just dev`, `just fast`, and `just release`
-there.
+Windows recipes in the justfile have **not been run on a Windows machine yet**:
+`just fast` and `just release` ask Tauri for `nsis`. The justfile uses
+`cmd.exe` so Git's `sh` is not required. Please verify `just dev`, `just fast`,
+and `just release` there.
 
 | Command | What it does |
 | --- | --- |
@@ -224,7 +220,7 @@ there is one definition and no chance of the two drifting. (The Tauri CLI has
 no `--profile` flag, so a real second cargo profile could not be selected
 anyway.) `just release` leaves that profile alone (`opt-level=3`, fat LTO,
 strip) and asks for the shipping installer (`dmg` / `deb` / `nsis`). The
-launch host names the bundle so the Linux CLI is not asked for macOS's `app`
+justfile names the bundle so the Linux CLI is not asked for macOS's `app`
 or `dmg`. Both are release binaries — neither carries debug assertions — so
 what you test behaves like what you ship.
 
