@@ -6,13 +6,8 @@
  * so the Rust event-name test still has a single file to grep.
  */
 
-export { browser } from "./browser"
-export type { CompositorKind, FrostKind, HostFeatures, HostKind } from "./features"
-export { linux } from "./linux"
-export { macos } from "./macos"
-export { other } from "./other"
-export { host, resolveHost } from "./resolve"
-export type { PanelSize } from "./window"
+export type { CompositorKind } from "./features"
+export { host } from "./resolve"
 export {
   flushCompositor,
   onFocusComposer,

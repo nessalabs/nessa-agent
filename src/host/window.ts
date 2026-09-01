@@ -8,7 +8,7 @@
  */
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 
-export const HOST_EVENTS = {
+const HOST_EVENTS = {
   toggleSurface: "nessa://toggle-surface",
   focusComposer: "nessa://focus-composer",
   panelSized: "nessa://panel-sized",
