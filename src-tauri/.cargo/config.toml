@@ -1,0 +1,13 @@
+# Compilation cache, shared across profiles and checkouts: switching between the
+# release and fast-release builds, or rebuilding after `cargo clean`, replays
+# dependency artifacts instead of recompiling ~400 crates.
+#
+# Set `RUSTC_WRAPPER=sccache` in the environment when sccache is on PATH
+# (`brew install sccache`, `apt install sccache`). It is not required — Linux
+# and CI machines without it must still compile — and putting the wrapper here
+# would fail the build with "no such file or directory" on any machine that
+# has not installed it.
+#
+# sccache cannot cache incrementally-compiled crates, so it silently skips this
+# app's own crate in dev builds; the win is the dependency graph, which is
+# where nearly all of the time goes.

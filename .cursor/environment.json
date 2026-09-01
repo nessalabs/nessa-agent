@@ -1,0 +1,20 @@
+{
+  "name": "Nessa",
+  "install": "./.cursor/install.sh",
+  "terminals": [
+    {
+      "name": "dev",
+      "command": "pnpm dev",
+      "description": "Vite dev server for the Nessa chat surface on http://localhost:1420 (the browser design path; the native Tauri window is macOS-only)."
+    }
+  ],
+  "ports": [
+    {
+      "name": "vite",
+      "port": 1420
+    }
+  ],
+  "repositoryDependencies": [
+    "github.com/nessalabs/nessa_ui"
+  ]
+}
