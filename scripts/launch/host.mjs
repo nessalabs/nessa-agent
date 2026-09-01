@@ -1,5 +1,5 @@
 /**
- * The OS-shaped half of `pnpm launch`. Shared code never mentions Linux,
+ * The OS-shaped half of `just`. Shared code never mentions Linux,
  * macOS, or Windows. It talks to a LaunchHost: detect a GUI, prepare env,
  * name the fast bundle, refuse to compile when native deps are missing.
  * `resolveLaunch` injects one implementation.

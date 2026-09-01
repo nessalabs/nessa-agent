@@ -62,20 +62,23 @@ implementation per OS, injected by `current()` — and in
 
 ```bash
 pnpm install
-pnpm launch
+just
 ```
 
-`pnpm launch` is the host entry (`scripts/launch/`): `tauri dev` when a display
-is available, the browser UI (`--web`) when it is not. [`dev.sh`](dev.sh) is a
-Unix stub for the same CLI; [`dev.cmd`](dev.cmd) is the Windows stub. `pnpm app`
-and `pnpm dev` still work without host defaults. The window controls no-op in
-the browser (see [src/host/window.ts](src/host/window.ts)).
+[`just`](https://just.systems) is the entry ([justfile](justfile)). It calls
+the launch host in `scripts/launch/`: `tauri dev` when a display is available,
+the browser UI (`just web`) when it is not. `pnpm app` and `pnpm dev` still
+work without host defaults. The window controls no-op in the browser (see
+[src/host/window.ts](src/host/window.ts)).
+
+Install `just` with the platform's package manager (`apt install just`,
+`brew install just`, `winget install --id Casey.Just --exact`).
 
 ### Linux
 
 The lockfile needs **Rust 1.85+** (edition 2024 crates). Ubuntu's packaged
 `rustc` is often 1.83; install via rustup. [`rust-toolchain.toml`](rust-toolchain.toml)
-pins `stable`, so `pnpm launch` and `cargo test` pick it without an extra env var.
+pins `stable`, so `just` and `cargo test` pick it without an extra env var.
 
 Build packages on Debian/Ubuntu:
 
@@ -83,36 +86,36 @@ Build packages on Debian/Ubuntu:
 sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf fakeroot
 ```
 
-Then `pnpm launch` (or `./dev.sh`). The Linux host
+Then `just`. The Linux host
 ([scripts/launch/linux.mjs](scripts/launch/linux.mjs)) refuses to start the
 desktop app if those packages are missing, and it disables WebKit's DMA-BUF
 renderer on a VNC or software X server that has no DRM device. To force that
 path on a machine that does have `/dev/dri`:
 
 ```bash
-WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 pnpm launch
+WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 just
 ```
 
-A testing-shaped `.deb` is `pnpm launch --fast`.
+A testing-shaped `.deb` is `just fast`.
 
 ### macOS
 
-`pnpm launch` is `tauri dev`. `--fast` writes a `.app` (no dmg). The host
+`just` is `tauri dev`. `just fast` writes a `.app` (no dmg). The host
 checks that `xcode-select -p` succeeds.
 
 ### Windows
 
 The host lives in [scripts/launch/windows.mjs](scripts/launch/windows.mjs). It
-has **not been run on a Windows machine yet**: `--fast` asks Tauri for `nsis`,
-and a GUI is assumed unless `CI` is set or `SESSIONNAME=Services`. Please
-verify `pnpm launch` and `pnpm launch --fast` there (`dev.cmd` is the stub).
+has **not been run on a Windows machine yet**: `just fast` asks Tauri for
+`nsis`, and a GUI is assumed unless `CI` is set or `SESSIONNAME=Services`.
+The justfile uses `cmd.exe` on Windows so Git's `sh` is not required. Please
+verify `just` and `just fast` there.
 
-| Script | What it does |
+| Command | What it does |
 | --- | --- |
-| `pnpm launch` | Run the desktop app (falls back to the browser UI with no display) |
-| `pnpm launch --web` | The UI in a browser, no Tauri |
-| `pnpm launch --fast` | A release build with the slow optimisations off — for testing (`.app` / `.deb` / `.exe`) |
-| `./dev.sh` / `dev.cmd` | Thin wrappers around `pnpm launch` |
+| `just` | Run the desktop app (falls back to the browser UI with no display) |
+| `just web` | The UI in a browser, no Tauri |
+| `just fast` | A release build with the slow optimisations off — for testing (`.app` / `.deb` / `.exe`) |
 | `pnpm app` | `tauri dev`, no host defaults |
 | `pnpm app:build` | The shipping bundle (`.app` + `.dmg` / `.deb` + `.rpm` + AppImage / NSIS) |
 | `pnpm typecheck` | `tsc --noEmit` |
@@ -211,7 +214,7 @@ testing does not cost a shipping build.
 | `pnpm app:fast` | ~9 MB `.app` / a `.deb` | ~45 s warm | `opt-level=1`, no LTO, no strip, no dmg / AppImage |
 | `pnpm app:build` | 6.5 MB `.app` | ~2 min | `opt-level=3`, fat LTO, one codegen unit, stripped |
 
-`app:fast` / `pnpm launch --fast` overrides the release profile with
+`just fast` / `pnpm app:fast` overrides the release profile with
 `CARGO_PROFILE_RELEASE_*` env vars rather than defining a second profile, so
 there is one definition and no chance of the two drifting. (The Tauri CLI has
 no `--profile` flag, so a real second cargo profile could not be selected

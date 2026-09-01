@@ -2,7 +2,7 @@
  * Windows launch host. Written to match Linux/macOS, not yet run on a
  * Windows box — `hasGui` is the guess a desktop session usually satisfies.
  * Native WebView2 / MSVC checks belong in `missingNative` once a Windows
- * machine has said which ones actually fail. Verify `pnpm launch` and
+ * machine has said which ones actually fail. Verify `just` and `just fast`
  * `pnpm app:fast` there before treating this as known-good.
  *
  * @returns {import('./host.mjs').LaunchHost}

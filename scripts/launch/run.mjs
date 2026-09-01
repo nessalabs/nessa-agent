@@ -15,14 +15,14 @@ export const FAST_PROFILE = {
   CARGO_PROFILE_RELEASE_STRIP: "false",
 }
 
-export const USAGE = `usage: pnpm launch [--web|--fast]
+export const USAGE = `usage: just [web|fast]
 
   (default)  Run the desktop app — Vite on :1420 and tauri dev
-  --web      Run the UI in a browser only; window controls no-op
-  --fast     Release build with the slow optimisations off
+  web        Run the UI in a browser only; window controls no-op
+  fast       Release build with the slow optimisations off
              (macOS .app / Linux .deb / Windows nsis)
 
-On Linux without a display, the default falls back to --web automatically.
+On Linux without a display, the default falls back to web automatically.
 `
 
 /**
