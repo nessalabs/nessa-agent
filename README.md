@@ -62,18 +62,18 @@ implementation per OS, injected by `current()` — and in
 
 ```bash
 pnpm install
-pnpm app
+./dev.sh
 ```
 
-`pnpm app` is `tauri dev`; it starts Vite on port 1420 and builds the Rust side.
-`pnpm dev` alone opens the same UI in a plain browser, which is useful for design
-work — the window controls no-op there (see [src/host/window.ts](src/host/window.ts)).
+[`dev.sh`](dev.sh) is the launch script: `tauri dev` when a display is available,
+the browser UI (`--web`) when it is not. `pnpm app` and `pnpm dev` still work.
+The window controls no-op in the browser (see [src/host/window.ts](src/host/window.ts)).
 
 ### Linux
 
 The lockfile needs **Rust 1.85+** (edition 2024 crates). Ubuntu's packaged
 `rustc` is often 1.83; install via rustup. [`rust-toolchain.toml`](rust-toolchain.toml)
-pins `stable`, so `pnpm app` and `cargo test` pick it without an extra env var.
+pins `stable`, so `./dev.sh` and `cargo test` pick it without an extra env var.
 
 Build packages on Debian/Ubuntu:
 
@@ -81,20 +81,24 @@ Build packages on Debian/Ubuntu:
 sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf fakeroot
 ```
 
-On a VNC or software X server there is no DRM device, and the host disables
-WebKit's DMA-BUF renderer on its own. To force that path on a machine that
-does have `/dev/dri`:
+Then `./dev.sh`. It refuses to start the desktop app if those packages are
+missing, and it disables WebKit's DMA-BUF renderer on a VNC or software X
+server that has no DRM device. To force that path on a machine that does have
+`/dev/dri`:
 
 ```bash
-WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 pnpm app
+WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 ./dev.sh
 ```
+
+A testing-shaped `.deb` is `./dev.sh --fast` (same as `pnpm app:fast`).
 
 | Script | What it does |
 | --- | --- |
-| `pnpm app` | Run the desktop app (dev) |
-| `pnpm app:fast` | A release build with the slow optimisations off — for testing (`.app` / `.deb`) |
+| `./dev.sh` | Run the desktop app (falls back to the browser UI with no display) |
+| `./dev.sh --web` | The UI in a browser, no Tauri |
+| `./dev.sh --fast` | A release build with the slow optimisations off — for testing (`.app` / `.deb`) |
+| `pnpm app` | `tauri dev`, no host defaults |
 | `pnpm app:build` | The shipping bundle (`.app` + `.dmg` / `.deb` + `.rpm` + AppImage) |
-| `pnpm dev` | The UI in a browser, no Tauri |
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm ui:types` | Pull the vendored `@nessa-ui/react` checkout forward |
 
