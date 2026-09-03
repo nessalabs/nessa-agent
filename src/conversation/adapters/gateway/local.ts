@@ -1,6 +1,5 @@
 import type { ConversationGateway } from "../../application/ports"
 import {
-  advanceReply,
   closeConversation,
   openConversation,
   sendDraft,
@@ -8,12 +7,10 @@ import {
   setDraft,
   stopGenerating,
 } from "../../application/usecases"
-import { standInReply } from "../../application/internal"
 
+/** In-process UI-session gateway. Chat send/stop are no-ops until S2 RPCs. */
 export const localConversationGateway: ConversationGateway = {
   sendDraft,
-  advanceReply: (strip, conversationId) =>
-    advanceReply(strip, conversationId, standInReply),
   stopGenerating,
   openConversation,
   closeConversation,

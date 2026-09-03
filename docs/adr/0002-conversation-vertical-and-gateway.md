@@ -2,6 +2,8 @@
 
 - **Date:** 2026-08-31
 - **Status:** accepted
+- **Updated:** 2026-09-03 — removed the local reply stand-in and phase clock;
+  send/stop are no-ops until chat RPCs exist.
 
 ## Context
 
@@ -25,12 +27,11 @@ src/conversation/
   model/                 contract the panel and the future server share
                          (strip = conversations + activeId; no id mill)
   application/local-strip.ts
-                         stand-in counters; dies with the local adapter
+                         UI-session counters; dies with the local adapter
   application/usecases/  one file per command
   application/ports.ts   ConversationGateway
-  adapters/gateway/      local stand-in; later a remote adapter
+  adapters/gateway/      local UI-session adapter; later a remote adapter
   adapters/store/        Redux projection — apply gateway result, nothing else
-  adapters/clock/        stand-in phase timer (mounted at the composition root)
   ui/                    presentational; no product rules
 ```
 
@@ -41,13 +42,12 @@ dispatches and paints.
 
 Use cases split into two kinds:
 
-- **Server-owned:** `sendDraft`, `advanceReply`, `stopGenerating`,
-  `openConversation`, `closeConversation`.
-- **UI session:** `setDraft`, `setActive` — the composer and the open tab,
-  until those persist.
+- **Server-owned (no-ops until chat RPCs):** `sendDraft`, `stopGenerating`.
+- **UI session:** `setDraft`, `setActive`, `openConversation`,
+  `closeConversation` — the composer and the open tab, until those persist.
 
-Host subscriptions (frost, resize, compositor flush, the stand-in clock)
-stay in adapters, not in the store and not in `app.tsx`.
+Host subscriptions (frost, resize, compositor flush) stay in adapters, not
+in the store and not in `app.tsx`.
 
 ## Consequences
 
@@ -55,8 +55,8 @@ stay in adapters, not in the store and not in `app.tsx`.
 Each use case is independently testable. The transcript cannot import gateway
 internals or the host seam.
 
-When the gateway exists, the local adapter goes away and the use cases
-become `await gateway.sendDraft(…)`. `LocalStrip` and the stand-in clock
-go with it. The store grows an async boundary (`createAsyncThunk` or a
-listener); the UI does not change shape. Other modules keep importing the
-conversation barrel, not the files under it.
+When chat RPCs exist, the local adapter goes away and the use cases become
+`await gateway.sendDraft(…)`. `LocalStrip` goes with it. The store grows an
+async boundary (`createAsyncThunk` or a listener); the UI does not change
+shape. Other modules keep importing the conversation barrel, not the files
+under it.

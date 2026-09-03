@@ -22,7 +22,7 @@ export function EmptyState({
         className="size-14 rounded-full"
       />
       <p className="nessa-text-3 m-0 text-muted-foreground">
-        Nessa is listening. Press Enter to send.
+        No agent yet. Chat arrives when the server owns turns.
       </p>
     </div>
   )

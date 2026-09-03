@@ -53,10 +53,10 @@ implementation per OS, injected by `current()` — and in
   hang over the desktop. The frontend owns the choice and remembers it
   ([src/panel/adapters/surface.ts](src/panel/adapters/surface.ts)); the tray item only *requests* a
   toggle, and its check mark is reflected back from `set_frosted`.
-- **No agent** — the local conversation gateway in
-  [`src/conversation/`](src/conversation/) stands in for the server. It drives
-  the same strip a real runtime will drive: a turn list plus an
-  `idle → thinking → streaming` phase. The panel only paints that projection.
+- **No agent turns yet** — the conversation strip in
+  [`src/conversation/`](src/conversation/) is a UI session (tabs, drafts,
+  empty transcript). Send is a no-op until the server owns chat RPCs. The
+  panel only paints that projection.
 
 ## Running it
 
@@ -402,7 +402,7 @@ comes out a solid disc.
 
 ## Next
 
-- Replace `adapters/gateway/local.ts` with a remote `ConversationGateway` and drive `phase` from stream events.
+- Drive `phase` from stream events once chat RPCs exist on a remote `ConversationGateway`.
 - Make the voice control real: the design system's story streams a transcription
   into the input word by word, with hold-to-record and a live meter.
 - Persist the transcript across launches.

@@ -41,8 +41,6 @@ for (const name of readdirSync(src)) {
   }
 }
 
-const draftReplyHome = "src/conversation/application/internal/stand-in.ts"
-
 function importedPaths(text) {
   return [...text.matchAll(/from\s+["']([^"']+)["']/g)].map((match) => match[1])
 }
@@ -137,14 +135,6 @@ for (const file of walk(src)) {
 
   if (path === "src/store.ts" && /from\s+["']\.\/app["']/.test(text)) {
     fail(file, "the store must not import the panel chrome")
-  }
-
-  if (
-    path !== draftReplyHome &&
-    !path.endsWith(".test.ts") &&
-    /\bdraftReply\b/.test(text)
-  ) {
-    fail(file, "draftReply is the stand-in runtime; only the local gateway may call it")
   }
 
   if ((path === "src/app.tsx" || path.endsWith("/app.tsx")) && /Linux[A-Z]/.test(text)) {

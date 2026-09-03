@@ -20,9 +20,9 @@ The two hard parts are **the window** — placing, sizing, and re-fitting a
 chromeless panel across displays without the page's contents jittering during a
 resize, with a frost that can be turned off — and **the conversation surface**
 — a turn list with an `idle → thinking → streaming` lifecycle that a real agent
-runtime will eventually drive. There is no agent in this repository yet; the local conversation gateway
-stands in so the bubbles, the typing dots, the streaming reveal, and the
-composer's lit rim can be built and resized against real UI.
+runtime will eventually drive. There is no chat RPC in this repository yet; the
+conversation vertical keeps tabs and drafts as a UI session, and send is a
+no-op until a remote gateway owns turns.
 
 ## Code map
 
@@ -48,7 +48,7 @@ opinion rather than the product's.
 
 | Path | Owns |
 | --- | --- |
-| `main.tsx`, `store.ts` | Composition root. Mounts the panel, the stand-in clocks, and the conversation projection. |
+| `main.tsx`, `store.ts` | Composition root. Mounts the panel and the conversation projection. |
 | `conversation/` | The conversation vertical. See the table below. |
 | `panel/` | The floating-window chrome. See the table below. |
 | `host/` | Injected host features and the window seam (`window.ts`). |
@@ -58,12 +58,11 @@ opinion rather than the product's.
 | Path | Owns |
 | --- | --- |
 | `model/` | Shared language: `Conversation`, `Turn`, `ConversationStrip` (`conversations` + `activeId`). Discriminated turns and phases. No id mill. |
-| `application/local-strip.ts` | Stand-in store shape: the shared strip plus the local id counters. A remote gateway mints its own ids and this type goes away. |
-| `application/usecases/` | One file per command. Server-owned: send, advance, stop, open, close. UI session: draft, active tab. |
+| `application/local-strip.ts` | UI-session store shape: the shared strip plus local id counters. A remote gateway mints its own ids and this type goes away. |
+| `application/usecases/` | One file per command. Session: draft, active tab, open, close. Send/stop are no-ops until chat RPCs exist. |
 | `application/ports.ts` | `ConversationGateway` — what the panel may ask the product to do. |
-| `adapters/gateway/local.ts` | In-process stand-in. Binds `ReplySource`. Tomorrow this is the remote gateway. |
+| `adapters/gateway/local.ts` | In-process UI-session gateway. Tomorrow this is the remote gateway. |
 | `adapters/store/` | Redux projection. Reducers call the gateway; they do not contain rules. |
-| `adapters/clock/` | Stand-in phase timer, mounted from `main.tsx`. A real runtime drives phase from stream events. |
 | `ui/` | Transcript, thinking pill, `useConversation`. Paints and dispatches. |
 | `model/identity.ts` | The agent's name, seed, and hue wheel. |
 
@@ -142,7 +141,7 @@ are written here.
 | A new persisted preference | `settings.rs` (with a default), then its owner |
 | A new host event or payload | `host.rs` and `src/host/window.ts` together |
 | Leftover transcript tiles on a layout compositor | `flush_compositor` in `platform/` plus `useFlushOnTurn` in `src/panel/adapters/` |
-| The conversation surface (tabs, turns, stand-in reply) | `src/conversation/application/usecases/` (commands), `adapters/gateway/` (stand-in), `adapters/store/` (projection) |
+| The conversation surface (tabs, drafts, empty transcript) | `src/conversation/application/usecases/` (commands), `adapters/gateway/` (local session), `adapters/store/` (projection) |
 | The transcript chrome | `src/conversation/ui/` |
 | The panel chrome or composer | `src/panel/ui/app.tsx` |
 | Resize jitter, the pinned webview | `platform/{macos,linux,other}/viewport.rs` |

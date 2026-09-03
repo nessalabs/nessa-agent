@@ -28,9 +28,6 @@ const conversationSlice = createSlice({
     ) {
       return gateway.stopGenerating(state, action.payload?.conversationId)
     },
-    advanceReply(state, action: PayloadAction<{ conversationId: string }>) {
-      return gateway.advanceReply(state, action.payload.conversationId)
-    },
   },
 })
 
@@ -41,7 +38,6 @@ export const {
   openConversation,
   closeConversation,
   stopGenerating,
-  advanceReply,
 } = conversationSlice.actions
 
 export const conversationReducer = conversationSlice.reducer
