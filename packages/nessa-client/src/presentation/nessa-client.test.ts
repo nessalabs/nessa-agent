@@ -1,17 +1,24 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { type AddressInfo } from "node:net"
 import { WebSocket, WebSocketServer } from "ws"
 
 import { NessaClient } from "./nessa-client.js"
+import { NessaRpcError } from "../application/rpc-error.js"
+
+if (typeof globalThis.WebSocket === "undefined") {
+  ;(globalThis as typeof globalThis & { WebSocket: typeof WebSocket }).WebSocket =
+    WebSocket as unknown as typeof globalThis.WebSocket
+}
 
 const TOKEN = "test-token"
-const PORT = 19_420
 const CHALLENGE_NONCE = "test-challenge-nonce"
 
 describe("NessaClient", () => {
   let wss: WebSocketServer
+  let port: number
 
   beforeAll(async () => {
-    wss = new WebSocketServer({ host: "127.0.0.1", port: PORT })
+    wss = new WebSocketServer({ host: "127.0.0.1", port: 0 })
     wss.on("connection", (socket) => {
       let seq = 0
       let connected = false
@@ -47,6 +54,20 @@ describe("NessaClient", () => {
         }
 
         if (frame.method === "connect") {
+          if (connected) {
+            socket.send(
+              JSON.stringify({
+                type: "res",
+                id: frame.id,
+                ok: false,
+                error: {
+                  code: "already_connected",
+                  message: "session already completed connect",
+                },
+              }),
+            )
+            return
+          }
           if (frame.params?.auth?.nonce !== CHALLENGE_NONCE) {
             socket.send(
               JSON.stringify({
@@ -125,6 +146,7 @@ describe("NessaClient", () => {
       })
     })
     await new Promise<void>((resolve) => wss.once("listening", resolve))
+    port = (wss.address() as AddressInfo).port
   })
 
   afterAll(() => {
@@ -134,7 +156,7 @@ describe("NessaClient", () => {
 
   it("connects, completes handshake, and calls server.health", async () => {
     const client = await NessaClient.connect({
-      url: `ws://127.0.0.1:${PORT}`,
+      url: `ws://127.0.0.1:${port}`,
       role: "surface",
       surface: { kind: "panel", instance: "test" },
       client: { id: "test-client", version: "0.1.0", platform: "node" },
@@ -154,20 +176,20 @@ describe("NessaClient", () => {
     client.close()
   })
 
-  it("rejects invalid auth tokens", async () => {
-    await expect(
-      NessaClient.connect({
-        url: `ws://127.0.0.1:${PORT}`,
+  it("rejects invalid auth tokens with NessaRpcError", async () => {
+    try {
+      await NessaClient.connect({
+        url: `ws://127.0.0.1:${port}`,
         role: "surface",
         surface: { kind: "panel", instance: "test" },
         client: { id: "test-client", version: "0.1.0", platform: "node" },
         auth: { token: "wrong" },
-      }),
-    ).rejects.toThrow("invalid token")
+      })
+      expect.unreachable("expected connect to reject")
+    } catch (error) {
+      expect(error).toBeInstanceOf(NessaRpcError)
+      expect((error as NessaRpcError).code).toBe("unauthorized")
+      expect((error as NessaRpcError).message).toBe("invalid token")
+    }
   })
 })
-
-if (typeof globalThis.WebSocket === "undefined") {
-  ;(globalThis as typeof globalThis & { WebSocket: typeof WebSocket }).WebSocket =
-    WebSocket as unknown as typeof globalThis.WebSocket
-}

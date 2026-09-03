@@ -14,21 +14,35 @@ const CHALLENGE_TIMEOUT_MS = 5_000
 /** Wait for the server `connect.challenge` event before sending `connect`. */
 export function waitForConnectChallenge(session: WireSession): Promise<ConnectChallenge> {
   return new Promise((resolve, reject) => {
+    let settled = false
+
+    const settle = (fn: () => void) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      off()
+      offClose()
+      fn()
+    }
+
     const timeout = setTimeout(
-      () => reject(new Error("connect.challenge timeout")),
+      () => settle(() => reject(new Error("connect.challenge timeout"))),
       CHALLENGE_TIMEOUT_MS,
     )
+
     const off = session.onEvent(Event.ConnectChallenge, (payload) => {
       try {
         const challenge = assertConnectChallenge(payload)
-        clearTimeout(timeout)
-        off()
-        resolve(challenge)
+        settle(() => resolve(challenge))
       } catch (error) {
-        clearTimeout(timeout)
-        off()
-        reject(error instanceof Error ? error : new Error("invalid connect.challenge"))
+        settle(() =>
+          reject(error instanceof Error ? error : new Error("invalid connect.challenge")),
+        )
       }
+    })
+
+    const offClose = session.onClose(() => {
+      settle(() => reject(new Error("WebSocket closed before connect.challenge")))
     })
   })
 }

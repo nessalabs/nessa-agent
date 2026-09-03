@@ -9,4 +9,6 @@ export type NessaClientConnectOptions = {
   auth: { token: string }
   minProtocol?: number
   maxProtocol?: number
+  /** Per-RPC timeout in ms (default 30_000). */
+  requestTimeoutMs?: number
 }

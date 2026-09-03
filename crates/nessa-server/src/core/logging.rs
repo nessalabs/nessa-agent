@@ -2,8 +2,8 @@ use tracing_subscriber::EnvFilter;
 
 /// Install the process-global tracing subscriber. Call once at startup, before any log line.
 pub fn init() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("nessa_server=info"));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("nessa_server=info"));
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)

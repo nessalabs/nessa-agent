@@ -184,8 +184,8 @@ Every agent starts here rather than running `git worktree` by hand:
 ```
 
 A fresh worktree does not pay for a rebuild. It shares the main checkout's
-`src-tauri/target`, so cargo reuses the ~500 already-compiled dependency crates
-and only recompiles this app's own crate — measured at **27 s** in a new
+workspace `target/`, so cargo reuses the ~500 already-compiled dependency crates
+and only recompiles this repo's own crates — measured at **27 s** in a new
 worktree, against minutes from scratch. pnpm hardlinks from its global store, so
 `pnpm install` costs seconds and no disk.
 
@@ -197,12 +197,13 @@ not preventable — cargo has no notion of a protected shared target. It is
 **bounded** rather than fixed: sccache's cache lives in
 `~/Library/Caches/Mozilla.sccache`, outside the target directory entirely, so
 the worst case is one ~45 s rebuild rather than a cold one. Use
-`./scripts/worktree.sh clean` instead: it runs `cargo clean -p nessa-app`, which
-drops only this app's crate — the thing that is actually stale after a code
-change — and rebuilds in **4 s** with every dependency intact.
+`./scripts/worktree.sh clean` instead: it runs
+`cargo clean -p nessa-app -p nessa-server`, which drops only this repo's crates
+— the things that are actually stale after a code change — and rebuilds in
+**4 s** with every dependency intact.
 
 Worktrees are created as **siblings** of this checkout
-(`../nessa-app-<name>`) so they can share this crate's `src-tauri/target`.
+(`../nessa-app-<name>`) so they can share this repo's workspace `target/`.
 
 ## Build
 

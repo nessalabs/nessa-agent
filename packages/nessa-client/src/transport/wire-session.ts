@@ -6,6 +6,7 @@ import {
   type Frame,
 } from "../protocol/index.js"
 import { buildRequestFrame } from "../protocol/encode.js"
+import { NessaRpcError } from "../application/rpc-error.js"
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 
@@ -108,9 +109,15 @@ export class WireSession {
       return
     }
 
-    const message =
-      (frame.error as { message?: string } | undefined)?.message ?? "request failed"
-    pending.reject(new Error(message))
+    const error = frame.error as
+      { code?: string; message?: string; details?: unknown } | undefined
+    pending.reject(
+      new NessaRpcError(
+        error?.code ?? "request_failed",
+        error?.message ?? "request failed",
+        error?.details,
+      ),
+    )
   }
 
   close(): void {

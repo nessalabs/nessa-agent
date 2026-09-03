@@ -1,19 +1,19 @@
-//! Connect validation gates — run before the handler, fail with a wire error.
+//! Connect validation gates — fail with a wire error before success response.
 //!
 //! Each gate returns `Some(ResponseFrame)` on failure, `None` to continue.
-//! Order matters: protocol range first, then auth.
+//! Order is owned by `entrypoint::handle_connect` (not this module):
 //!
 //! ```text
-//! ConnectParams
+//! ConnectParams (+ WsSession)
 //!      │
-//!      ├── protocol::validate_protocol_range  (min/max vs PROTOCOL_VERSION)
-//!      │
+//!      ├── already_connected                 (session flag)
+//!      ├── protocol::validate_protocol_range (min/max vs PROTOCOL_VERSION)
+//!      ├── metadata::validate_connect_metadata
 //!      ├── challenge::validate_challenge_nonce (echo connect.challenge)
-//!      │
 //!      └── auth::validate_auth_token         (client token vs server token)
 //!              │
 //!              ▼
-//!         Ok → entrypoint::handle_connect
+//!         Ok → HelloOk + session.mark_connected()
 //!         Err → ResponseFrame::failure on the wire
 //! ```
 //!

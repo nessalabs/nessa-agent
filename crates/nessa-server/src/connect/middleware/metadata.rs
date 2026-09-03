@@ -6,16 +6,25 @@ pub fn validate_connect_metadata(
     params: &ConnectParams,
 ) -> Option<ResponseFrame> {
     if params.surface.instance.is_empty() {
-        return Some(invalid_params(request_id, "surface.instance must not be empty"));
+        return Some(invalid_params(
+            request_id,
+            "surface.instance must not be empty",
+        ));
     }
     if params.client.id.is_empty() {
         return Some(invalid_params(request_id, "client.id must not be empty"));
     }
     if params.client.version.is_empty() {
-        return Some(invalid_params(request_id, "client.version must not be empty"));
+        return Some(invalid_params(
+            request_id,
+            "client.version must not be empty",
+        ));
     }
     if params.client.platform.is_empty() {
-        return Some(invalid_params(request_id, "client.platform must not be empty"));
+        return Some(invalid_params(
+            request_id,
+            "client.platform must not be empty",
+        ));
     }
     if params.auth.token.is_empty() {
         return Some(invalid_params(request_id, "auth.token must not be empty"));
@@ -34,9 +43,7 @@ fn invalid_params(request_id: &str, message: &str) -> ResponseFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{
-        AuthToken, ClientInfo, ClientRole, SurfaceInfo, SurfaceKind,
-    };
+    use crate::protocol::{AuthToken, ClientInfo, ClientRole, SurfaceInfo, SurfaceKind};
 
     fn params(instance: &str) -> ConnectParams {
         ConnectParams {

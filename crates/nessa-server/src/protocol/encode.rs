@@ -1,16 +1,19 @@
 //! Build typed server messages ready to send on the WebSocket.
 
-use super::generated_types::{
-    ConnectChallenge, HelloOk, RuntimeStatus, Scope, ServerPolicy, HealthResult,
-};
 use super::frames::{EventFrame, OutgoingMessage, ResponseFrame};
 use super::generated_catalog::event;
+use super::generated_types::{
+    ConnectChallenge, HealthResult, HelloOk, RuntimeStatus, Scope, ServerPolicy,
+};
 
 pub const PROTOCOL_VERSION: i64 = 1;
 pub const MAX_PAYLOAD_BYTES: i64 = 65_536;
 
 /// `connect.challenge` event sent when a client opens the WebSocket.
-pub fn connect_challenge_message(nonce: String, seq: u64) -> Result<OutgoingMessage, serde_json::Error> {
+pub fn connect_challenge_message(
+    nonce: String,
+    seq: u64,
+) -> Result<OutgoingMessage, serde_json::Error> {
     let payload = ConnectChallenge {
         nonce,
         protocol: PROTOCOL_VERSION,
@@ -38,8 +41,7 @@ pub fn connect_success_message(
         },
     };
     Ok(OutgoingMessage::Response(ResponseFrame::success(
-        request_id,
-        &payload,
+        request_id, &payload,
     )?))
 }
 
@@ -54,8 +56,7 @@ pub fn health_check_message(
         uptime_ms: i64::try_from(uptime_ms).unwrap_or(i64::MAX),
     };
     Ok(OutgoingMessage::Response(ResponseFrame::success(
-        request_id,
-        &payload,
+        request_id, &payload,
     )?))
 }
 

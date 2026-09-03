@@ -41,7 +41,9 @@ pub fn decode_error_response(text: &str, error: DecodeError) -> Option<OutgoingM
         DecodeError::NotARequest => {
             error_message(&request_id, "invalid_request", "expected req frame")
         }
-        DecodeError::InvalidParams { method, message, .. } => error_message(
+        DecodeError::InvalidParams {
+            method, message, ..
+        } => error_message(
             &request_id,
             "invalid_params",
             &format!("{method}: {message}"),
@@ -217,7 +219,10 @@ mod tests {
             }"#,
         )
         .expect_err("unknown nested field");
-        assert!(matches!(error, DecodeError::InvalidJson | DecodeError::InvalidParams { .. }));
+        assert!(matches!(
+            error,
+            DecodeError::InvalidJson | DecodeError::InvalidParams { .. }
+        ));
     }
 
     #[test]
@@ -239,7 +244,10 @@ mod tests {
             }"#,
         )
         .expect_err("unknown field");
-        assert!(matches!(error, DecodeError::InvalidJson | DecodeError::InvalidParams { .. }));
+        assert!(matches!(
+            error,
+            DecodeError::InvalidJson | DecodeError::InvalidParams { .. }
+        ));
     }
 
     #[test]

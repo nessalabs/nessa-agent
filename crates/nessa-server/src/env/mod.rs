@@ -20,8 +20,8 @@ mod error;
 mod source;
 mod stage;
 
-pub use config::VERSION;
 pub use config::key::{HOST, PORT, STAGE, TOKEN};
+pub use config::VERSION;
 pub use environment::Environment;
 pub use error::EnvironmentError;
 pub use source::MockEnv;

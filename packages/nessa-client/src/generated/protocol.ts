@@ -8,98 +8,85 @@
  */
 
 export interface ReqFrame {
-  type: "req";
-  id: string;
-  method: string;
-  params: unknown;
+  type: "req"
+  id: string
+  method: string
+  params: unknown
 }
 
 export interface ResFrame {
-  type: "res";
-  id: string;
-  ok: boolean;
-  payload?: unknown;
-  error?: GatewayError;
+  type: "res"
+  id: string
+  ok: boolean
+  payload?: unknown
+  error?: GatewayError
 }
+
 export interface GatewayError {
-  code: string;
-  message: string;
-  details?: unknown;
+  code: string
+  message: string
+  details?: unknown
 }
 
 export interface EventFrame {
-  type: "event";
-  event: string;
-  payload: unknown;
-  seq: number;
-  stateVersion: number;
+  type: "event"
+  event: string
+  payload: unknown
+  seq: number
+  stateVersion: number
 }
 
 export interface ConnectParams {
-  minProtocol: number;
-  maxProtocol: number;
-  role: "surface";
-  surface: SurfaceInfo;
-  client: ClientInfo;
-  auth: AuthToken;
+  minProtocol: number
+  maxProtocol: number
+  role: "surface"
+  surface: SurfaceInfo
+  client: ClientInfo
+  auth: AuthToken
 }
+
 export interface SurfaceInfo {
-  kind: "panel" | "web" | "desktop" | "cli";
-  instance: string;
+  kind: "panel" | "web" | "desktop" | "cli"
+  instance: string
 }
+
 export interface ClientInfo {
-  id: string;
-  version: string;
-  platform: string;
+  id: string
+  version: string
+  platform: string
 }
+
 export interface AuthToken {
-  token: string;
+  token: string
   /**
    * Echo of connect.challenge nonce — binds this connect RPC to the open socket.
    */
-  nonce: string;
+  nonce: string
 }
 
 export interface HelloOk {
-  protocol: 1;
-  scopes: "server.read"[];
-  serverVersion: string;
-  runtimeStatus: "ready" | "starting" | "unavailable" | "error";
-  policy: ServerPolicy;
+  protocol: 1
+  scopes: "server.read"[]
+  serverVersion: string
+  runtimeStatus: "ready" | "starting" | "unavailable" | "error"
+  policy: ServerPolicy
 }
+
 export interface ServerPolicy {
-  maxPayloadBytes: number;
+  maxPayloadBytes: number
 }
 
 export interface ConnectChallenge {
-  nonce: string;
-  protocol: 1;
+  nonce: string
+  protocol: 1
 }
 
 export interface HealthResult {
-  ok: boolean;
-  runtimeStatus: "ready" | "starting" | "unavailable" | "error";
-  uptimeMs: number;
+  ok: boolean
+  runtimeStatus: "ready" | "starting" | "unavailable" | "error"
+  uptimeMs: number
 }
 
-export type ClientRole = "surface";
+export type ClientRole = "surface"
 
-export type Scope = "server.read";
-
-export interface SurfaceInfo {
-  kind: "panel" | "web" | "desktop" | "cli";
-  instance: string;
-}
-
-export interface ClientInfo {
-  id: string;
-  version: string;
-  platform: string;
-}
-
-export interface GatewayError {
-  code: string;
-  message: string;
-  details?: unknown;
-}
-
+export type Scope = "server.read"

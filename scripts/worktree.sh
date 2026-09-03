@@ -25,7 +25,7 @@
 #     costs seconds and no disk.
 #
 # Worktrees are created as SIBLINGS of this checkout so they can share this
-# crate's src-tauri/target. The design system is vendored by
+# repo's workspace `target/`. The design system is vendored by
 # scripts/ensure-nessa-ui.mjs, so install no longer depends on a relative path
 # sitting next to the checkout.
 
@@ -43,7 +43,7 @@ usage: ./scripts/worktree.sh <command> [name]
 
   create <name>   New branch <name> in a sibling worktree, ready to build
   remove <name>   Delete that worktree (the branch is kept)
-  clean           Rebuild this app's crate only, keeping dependencies
+  clean           Rebuild this repo's crates only, keeping dependencies
   list            Show every worktree
 
 <name> is a slug: letters, digits, dash, underscore, slash.
@@ -76,12 +76,15 @@ cmd_create() {
   # rather than CARGO_TARGET_DIR so it applies however cargo is invoked —
   # directly, through pnpm, or by the Tauri CLI.
   #
+  # The workspace root relocates cargo's build dir to <repo>/target (not
+  # src-tauri/target). Symlink that path.
+  #
   # LOAD-BEARING: this is a symlink, not a copy. `cmd_remove` must delete it
   # before removing the worktree — see the warning there.
-  local shared="$repo_root/src-tauri/target"
+  local shared="$repo_root/target"
   mkdir -p "$shared"
-  ln -s "$shared" "$path/src-tauri/target"
-  echo "→ sharing src-tauri/target with $repo_name"
+  ln -s "$shared" "$path/target"
+  echo "→ sharing target/ with $repo_name"
 
   echo "→ pnpm install"
   (cd "$path" && pnpm install --prefer-offline >/dev/null)
@@ -105,27 +108,27 @@ cmd_remove() {
   # ┌──────────────────────────────────────────────────────────────────────┐
   # │ DO NOT CHANGE THE ORDER OF THE NEXT TWO LINES.                       │
   # │                                                                      │
-  # │ src-tauri/target is a SYMLINK into the main checkout's build cache,   │
-  # │ shared by every worktree. It must be unlinked BEFORE anything        │
-  # │ deletes the worktree directory: a recursive delete would otherwise   │
-  # │ follow it and wipe gigabytes of compiled artifacts for every         │
-  # │ worktree at once, turning every next build into a cold one.          │
+  # │ target/ is a SYMLINK into the main checkout's build cache, shared by │
+  # │ every worktree. It must be unlinked BEFORE anything deletes the      │
+  # │ worktree directory: a recursive delete would otherwise follow it and │
+  # │ wipe gigabytes of compiled artifacts for every worktree at once,     │
+  # │ turning every next build into a cold one.                            │
   # │                                                                      │
   # │ `rm -f` on the link itself (no trailing slash, no -r) removes the    │
   # │ link and never touches what it points at. Keep it that way.          │
   # └──────────────────────────────────────────────────────────────────────┘
-  rm -f "$path/src-tauri/target"
+  rm -f "$path/target"
   git -C "$repo_root" worktree remove --force "$path"
   echo "removed $path (branch '$1' kept)"
 }
 
 # The safe counterpart to `cargo clean`. The target directory is shared, so a
 # bare clean throws away every worktree's dependency builds; this drops only
-# this app's own crate, which is what is actually stale after a code change,
+# this repo's own crates, which is what is actually stale after a code change,
 # and costs ~27s to rebuild instead of minutes.
 cmd_clean() {
-  echo "→ cargo clean -p nessa-app (dependencies kept)"
-  (cd "$repo_root/src-tauri" && cargo clean -p nessa-app)
+  echo "→ cargo clean -p nessa-app -p nessa-server (dependencies kept)"
+  (cd "$repo_root" && cargo clean -p nessa-app -p nessa-server)
 }
 
 case "${1:-}" in

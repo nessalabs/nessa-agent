@@ -1,0 +1,10 @@
+{
+  "type": "event",
+  "event": "connect.challenge",
+  "payload": {
+    "nonce": "fixture-challenge-nonce",
+    "protocol": 1
+  },
+  "seq": 1,
+  "stateVersion": 0
+}

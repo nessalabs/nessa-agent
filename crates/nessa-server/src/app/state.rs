@@ -51,12 +51,8 @@ mod tests {
 
     #[test]
     fn builds_from_environment() {
-        let config = Environment::load(
-            &MockEnv::new()
-                .set(STAGE, "ci")
-                .set(TOKEN, "secret"),
-        )
-        .expect("config");
+        let config = Environment::load(&MockEnv::new().set(STAGE, "ci").set(TOKEN, "secret"))
+            .expect("config");
         let state = AppState::from_environment(&config);
         assert_eq!(state.auth_token(), "secret");
         assert_eq!(state.stage(), "ci");

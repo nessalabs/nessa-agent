@@ -16,6 +16,7 @@ import { compile } from "json-schema-to-typescript"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { format, resolveConfig } from "prettier"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const protocolDir = join(root, "protocol")
@@ -288,8 +289,40 @@ for (const [name, ref] of Object.entries(exportSchema.$defs)) {
   chunks.push(ts.trim(), "\n\n")
 }
 
-writeFileSync(outFile, chunks.join(""))
+// json-schema-to-typescript inlines $refs per compile, so shared defs like
+// SurfaceInfo / ClientInfo / GatewayError appear once per referencing type.
+// Keep the first declaration of each exported name.
+const deduped = dedupeNamedExports(chunks.join(""))
+const prettierConfig = (await resolveConfig(join(root, "prettier.config.js"))) ?? {}
+const formatted = await format(deduped, {
+  ...prettierConfig,
+  filepath: outFile,
+})
+writeFileSync(outFile, formatted)
 console.log(`wrote ${outFile}`)
+
+/** Keep the first `export interface|type Name` block for each Name. */
+function dedupeNamedExports(source) {
+  const exportStart = source.search(/^export (?:interface|type) /m)
+  if (exportStart < 0) return source
+
+  const banner = source.slice(0, exportStart)
+  const body = source.slice(exportStart)
+  const starts = [...body.matchAll(/^export (?:interface|type) (\w+)\b/gm)]
+  const seen = new Set()
+  const kept = []
+
+  for (let i = 0; i < starts.length; i++) {
+    const name = starts[i][1]
+    const start = starts[i].index
+    const end = i + 1 < starts.length ? starts[i + 1].index : body.length
+    if (seen.has(name)) continue
+    seen.add(name)
+    kept.push(body.slice(start, end).trimEnd())
+  }
+
+  return `${banner}${kept.join("\n\n")}\n`
+}
 
 const methodEntries = Object.keys(manifest.methods ?? {}).sort()
 const eventEntries = Object.keys(manifest.events ?? {}).sort()

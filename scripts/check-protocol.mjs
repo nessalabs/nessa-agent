@@ -102,6 +102,26 @@ const fixtureSpecs = [
       return payload?.(doc.payload) ? null : payload?.errors
     },
   },
+  {
+    file: "connect-challenge.json",
+    validate: (doc) => {
+      const frame = ajv.getSchema("nessa://protocol/v1/frames.json#/$defs/EventFrame")
+      if (!frame?.(doc)) return frame?.errors
+      const payload = ajv.getSchema(
+        "nessa://protocol/v1/connect.json#/$defs/ConnectChallenge",
+      )
+      return payload?.(doc.payload) ? null : payload?.errors
+    },
+  },
+  {
+    file: "server-health-res.json",
+    validate: (doc) => {
+      const frame = ajv.getSchema("nessa://protocol/v1/frames.json#/$defs/ResFrame")
+      if (!frame?.(doc)) return frame?.errors
+      const payload = ajv.getSchema("nessa://protocol/v1/server.json#/$defs/HealthResult")
+      return payload?.(doc.payload) ? null : payload?.errors
+    },
+  },
 ]
 
 for (const { file, validate } of fixtureSpecs) {

@@ -25,12 +25,26 @@ impl std::error::Error for ReadError {}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum EnvironmentError {
-    Read { variable: &'static str, source: ReadError },
-    InvalidPort { variable: &'static str, value: String },
+    Read {
+        variable: &'static str,
+        source: ReadError,
+    },
+    InvalidPort {
+        variable: &'static str,
+        value: String,
+    },
     InvalidStage(InvalidStage),
-    Empty { variable: &'static str },
-    Required { variable: &'static str, stage: Stage },
-    InsecureBind { bind_host: String, stage: Stage },
+    Empty {
+        variable: &'static str,
+    },
+    Required {
+        variable: &'static str,
+        stage: Stage,
+    },
+    InsecureBind {
+        bind_host: String,
+        stage: Stage,
+    },
 }
 
 impl fmt::Display for EnvironmentError {

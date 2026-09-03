@@ -48,12 +48,8 @@ mod tests {
 
     #[test]
     fn environment_loads_for_ci_stage() {
-        let config = Environment::load(
-            &MockEnv::new()
-                .set(STAGE, "ci")
-                .set(TOKEN, "test"),
-        )
-        .expect("ci config");
+        let config = Environment::load(&MockEnv::new().set(STAGE, "ci").set(TOKEN, "test"))
+            .expect("ci config");
         assert_eq!(config.stage, Stage::Ci);
     }
 }

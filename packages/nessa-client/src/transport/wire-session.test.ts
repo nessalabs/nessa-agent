@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 
+import { NessaRpcError } from "../application/rpc-error.js"
 import { WireSession } from "./wire-session.js"
 
 describe("WireSession", () => {
@@ -50,5 +51,29 @@ describe("WireSession", () => {
     const session = new WireSession(socket, { requestTimeoutMs: 500 })
     await expect(session.request("connect", {})).rejects.toThrow("send failed")
     await expect(session.request("connect", {})).rejects.toThrow("send failed")
+  })
+
+  it("rejects RPC failures as NessaRpcError with wire code", async () => {
+    const socket = {
+      readyState: 1,
+      send: () => {},
+      addEventListener: () => {},
+      close: () => {},
+    } as unknown as WebSocket
+
+    const session = new WireSession(socket, { requestTimeoutMs: 500 })
+    const pending = session.request("connect", {})
+    session.dispatchFrame({
+      type: "res",
+      id: "1",
+      ok: false,
+      error: { code: "unauthorized", message: "invalid auth token" },
+    })
+
+    await expect(pending).rejects.toBeInstanceOf(NessaRpcError)
+    await expect(pending).rejects.toMatchObject({
+      code: "unauthorized",
+      message: "invalid auth token",
+    })
   })
 })

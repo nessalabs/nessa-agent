@@ -25,7 +25,9 @@ impl Environment {
         let bind_host =
             read_optional(source, key::HOST)?.unwrap_or_else(|| default::HOST.to_string());
         if bind_host.is_empty() {
-            return Err(EnvironmentError::Empty { variable: key::HOST });
+            return Err(EnvironmentError::Empty {
+                variable: key::HOST,
+            });
         }
         validate_bind_host(stage, &bind_host, source)?;
 
@@ -65,12 +67,11 @@ fn load_stage(source: &impl EnvSource) -> Result<Stage, EnvironmentError> {
     }
 }
 
-fn resolve_auth_token(
-    source: &impl EnvSource,
-    stage: Stage,
-) -> Result<String, EnvironmentError> {
+fn resolve_auth_token(source: &impl EnvSource, stage: Stage) -> Result<String, EnvironmentError> {
     match read_optional(source, key::TOKEN)? {
-        Some(value) if value.is_empty() => Err(EnvironmentError::Empty { variable: key::TOKEN }),
+        Some(value) if value.is_empty() => Err(EnvironmentError::Empty {
+            variable: key::TOKEN,
+        }),
         Some(value) => Ok(value),
         None if stage.allows_default_auth() => Ok(default::DEV_AUTH_TOKEN.to_string()),
         None => Err(EnvironmentError::Required {
@@ -84,16 +85,19 @@ fn read_optional(
     source: &impl EnvSource,
     key: &'static str,
 ) -> Result<Option<String>, EnvironmentError> {
-    source
-        .get(key)
-        .map_err(|source| EnvironmentError::Read { variable: key, source })
+    source.get(key).map_err(|source| EnvironmentError::Read {
+        variable: key,
+        source,
+    })
 }
 
 fn parse_port(variable: &'static str, value: &str) -> Result<u16, EnvironmentError> {
-    value.parse::<u16>().map_err(|_| EnvironmentError::InvalidPort {
-        variable,
-        value: value.to_string(),
-    })
+    value
+        .parse::<u16>()
+        .map_err(|_| EnvironmentError::InvalidPort {
+            variable,
+            value: value.to_string(),
+        })
 }
 
 fn validate_bind_host(
@@ -183,12 +187,8 @@ mod tests {
 
     #[test]
     fn dev_rejects_non_loopback_bind() {
-        let error = Environment::load(
-            &MockEnv::new()
-                .set(HOST, "0.0.0.0")
-                .set(TOKEN, "explicit"),
-        )
-        .unwrap_err();
+        let error = Environment::load(&MockEnv::new().set(HOST, "0.0.0.0").set(TOKEN, "explicit"))
+            .unwrap_err();
         assert!(matches!(error, EnvironmentError::InsecureBind { .. }));
     }
 

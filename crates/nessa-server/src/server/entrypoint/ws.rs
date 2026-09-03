@@ -1,7 +1,6 @@
 use super::session::WsSession;
 use crate::app::state::AppState;
 use crate::connect::entrypoint::handler as connect_handler;
-use crate::connect::middleware;
 use crate::health::entrypoint::handler as health_handler;
 use crate::protocol::{
     connect_challenge_message, decode_client_request, decode_error_response, error_message,
@@ -26,8 +25,22 @@ pub async fn handle_socket(mut socket: WebSocket, state: AppState) {
     }
 
     while let Some(result) = socket.next().await {
-        let Ok(Message::Text(text)) = result else {
-            break;
+        let message = match result {
+            Ok(message) => message,
+            Err(error) => {
+                tracing::warn!(%error, "websocket read error");
+                break;
+            }
+        };
+
+        let text = match message {
+            Message::Text(text) => text,
+            Message::Ping(_) | Message::Pong(_) => continue,
+            Message::Binary(bytes) => {
+                tracing::warn!(bytes = bytes.len(), "refusing binary WebSocket frame");
+                continue;
+            }
+            Message::Close(_) => break,
         };
 
         if is_oversized_frame(text.len()) {
@@ -69,25 +82,12 @@ fn dispatch_client_request(
     request: ClientRequest,
 ) -> Option<OutgoingMessage> {
     match request {
-        ClientRequest::Connect {
-            request_id,
+        ClientRequest::Connect { request_id, params } => Some(connect_handler::handle_connect(
+            state,
+            session,
+            &request_id,
             params,
-        } => {
-            if let Some(response) =
-                middleware::challenge::validate_challenge_nonce(&request_id, &params, session)
-            {
-                return Some(OutgoingMessage::Response(response));
-            }
-            if let Some(response) = middleware::metadata::validate_connect_metadata(&request_id, &params)
-            {
-                return Some(OutgoingMessage::Response(response));
-            }
-            let response = connect_handler::handle_connect(state, &request_id, params);
-            if response.is_success() {
-                session.mark_connected();
-            }
-            Some(response)
-        }
+        )),
         ClientRequest::ServerHealth { request_id, .. } => {
             if !session.is_connected() {
                 return Some(error_message(
@@ -98,22 +98,14 @@ fn dispatch_client_request(
             }
             Some(health_handler::handle_health_check(state, &request_id))
         }
-        ClientRequest::UnknownMethod {
-            request_id,
-            method,
-        } => Some(error_message(
-            &request_id,
-            "unknown_method",
-            &method,
-        )),
+        ClientRequest::UnknownMethod { request_id, method } => {
+            Some(error_message(&request_id, "unknown_method", &method))
+        }
     }
 }
 
 /// Serialize and send one server message on the WebSocket.
-async fn send_outgoing_message(
-    socket: &mut WebSocket,
-    message: OutgoingMessage,
-) -> Result<(), ()> {
+async fn send_outgoing_message(socket: &mut WebSocket, message: OutgoingMessage) -> Result<(), ()> {
     let text = message.to_wire_text().map_err(|_| ())?;
     socket
         .send(Message::Text(text.into()))

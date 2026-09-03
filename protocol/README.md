@@ -26,6 +26,38 @@ Generated (do not edit — each file header names its SSOT):
 
 Hand-written on the server: `frames.rs` / `decode.rs` / `encode.rs` (envelope helpers + routing). They **import** generated names and types.
 
-**Full v1** (conversation, channel state, agent, capability, plugin manifests) remains on branch `spike/server-ws-acp-panel`. Add schemas here when each spike lands — see [docs/plan/vision.md](../docs/plan/vision.md).
+## Wire shape
 
-Docs: [docs/server/protocol.md](../docs/server/protocol.md), [docs/server/client.md](../docs/server/client.md), [docs/server/websocket-primer.md](../docs/server/websocket-primer.md), [docs/coding_standards.md](../docs/coding_standards.md).
+Frames are JSON text on the WebSocket:
+
+| `type` | Direction | Correlates by |
+| --- | --- | --- |
+| `req` | client → server | `id` |
+| `res` | server → client | same `id` |
+| `event` | server → client | `seq` (monotonic per socket) |
+
+S1 methods/events (from `manifest.json`):
+
+| Name | Kind | Notes |
+| --- | --- | --- |
+| `connect` | req/res | First RPC; returns `HelloOk` |
+| `server.health` | req/res | Requires a successful `connect` |
+| `connect.challenge` | event | Sent immediately on socket open; nonce echoed in `connect` |
+
+## Error codes (S1)
+
+Returned on `res` frames with `ok: false` and `error: { code, message }`:
+
+| Code | When |
+| --- | --- |
+| `already_connected` | Second `connect` on the same socket |
+| `protocol_mismatch` | Client min/max does not include protocol v1 |
+| `invalid_params` | Empty required metadata strings |
+| `invalid_challenge` | Auth nonce ≠ this socket's challenge |
+| `unauthorized` | Auth token mismatch |
+| `not_connected` | `server.health` before `connect` |
+| `unknown_method` | Unrecognized `method` string |
+| `invalid_request` | Malformed / undecodable frame |
+| `internal_error` | Encode failure or missing challenge state |
+
+Repo context: [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md), [docs/codebase-structure.md](../docs/codebase-structure.md).

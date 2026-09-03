@@ -2,7 +2,7 @@ import type { HelloOk } from "../protocol/index.js"
 import type { WireSession } from "../transport/wire-session.js"
 import type { EventHandler, NessaClientEvents } from "../application/events.js"
 import type { NessaClientConnectOptions } from "../application/options.js"
-import { connectClient } from "../composition/root.js"
+import { establishSession } from "../composition/root.js"
 import { createServerApi, type ServerApi } from "./server-api.js"
 
 /**
@@ -23,12 +23,8 @@ export class NessaClient {
     this.server = createServerApi(wire)
   }
 
-  static connect(options: NessaClientConnectOptions): Promise<NessaClient> {
-    return connectClient(options)
-  }
-
-  /** @internal Used by composition root after handshake. */
-  static fromSession(wire: WireSession, hello: HelloOk): NessaClient {
+  static async connect(options: NessaClientConnectOptions): Promise<NessaClient> {
+    const { wire, hello } = await establishSession(options, NessaClient.defaultUrl)
     return new NessaClient(wire, hello)
   }
 
@@ -43,11 +39,6 @@ export class NessaClient {
 
   onClose(handler: () => void): () => void {
     return this.wire.onClose(handler)
-  }
-
-  /** @internal Test seam for frame dispatch. */
-  dispatchFrame(frame: import("../protocol/index.js").Frame): void {
-    this.wire.dispatchFrame(frame)
   }
 
   close(): void {
