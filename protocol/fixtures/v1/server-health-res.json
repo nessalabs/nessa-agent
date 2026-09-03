@@ -1,0 +1,10 @@
+{
+  "type": "res",
+  "id": "2",
+  "ok": true,
+  "payload": {
+    "ok": true,
+    "runtimeStatus": "ready",
+    "uptimeMs": 0
+  }
+}

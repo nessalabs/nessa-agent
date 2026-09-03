@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["crates/nessa-server", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+
+# Profiles must live on the workspace root. With a root Cargo.toml, cargo ignores
+# [profile.*] in member crates (and warns). Keep release/dev settings here so
+# Tauri builds still get fat LTO, one codegen unit, strip, and leaner debug info.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+
+[profile.dev]
+debug = "line-tables-only"

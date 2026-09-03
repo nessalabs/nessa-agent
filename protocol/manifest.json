@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "transport": "websocket",
+  "defaultUrl": "ws://127.0.0.1:7420",
+  "phase": "s1-connect-health",
+  "note": "Full v1 protocol (conversation, channel state, agent, plugins) lives on branch spike/server-ws-acp-panel. Add schemas here as each spike lands.",
+  "schemas": {
+    "common": "schemas/v1/common.json",
+    "frames": "schemas/v1/frames.json",
+    "connect": "schemas/v1/connect.json",
+    "server": "schemas/v1/server.json"
+  },
+  "methods": {
+    "connect": {
+      "params": "schemas/v1/connect.json#/$defs/ConnectParams",
+      "result": "schemas/v1/connect.json#/$defs/HelloOk"
+    },
+    "server.health": {
+      "params": null,
+      "result": "schemas/v1/server.json#/$defs/HealthResult"
+    }
+  },
+  "events": {
+    "connect.challenge": {
+      "payload": "schemas/v1/connect.json#/$defs/ConnectChallenge"
+    }
+  },
+  "roles": {
+    "surface": {
+      "scopes": ["server.read"],
+      "methods": ["connect", "server.health"],
+      "events": ["connect.challenge"]
+    }
+  }
+}

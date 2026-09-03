@@ -25,12 +25,19 @@ const tauriSeam = {
 
 export default tseslint.config(
   {
-    ignores: ["dist", "src-tauri", ".vendor", "node_modules", "scripts"],
+    ignores: [
+      "dist",
+      "src-tauri",
+      ".vendor",
+      "node_modules",
+      "scripts",
+      "packages/**/src/generated/**",
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ["src/**/*.{ts,tsx}"],
+    files: ["src/**/*.{ts,tsx}", "packages/**/*.{ts,tsx}"],
     languageOptions: {
       globals: { ...globals.browser },
     },
@@ -55,9 +62,17 @@ export default tseslint.config(
     },
   },
   {
-    files: ["src/**/*.test.ts"],
+    files: ["src/**/*.test.ts", "packages/**/*.test.ts"],
     rules: {
       "@typescript-eslint/no-non-null-assertion": "off",
+    },
+  },
+  {
+    files: ["packages/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": "off",
+      "react-hooks/rules-of-hooks": "off",
+      "react-hooks/exhaustive-deps": "off",
     },
   },
   {

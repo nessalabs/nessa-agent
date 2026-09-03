@@ -1,0 +1,12 @@
+{
+  "type": "res",
+  "id": "1",
+  "ok": true,
+  "payload": {
+    "protocol": 1,
+    "scopes": ["server.read"],
+    "serverVersion": "0.1.0",
+    "runtimeStatus": "ready",
+    "policy": { "maxPayloadBytes": 65536 }
+  }
+}

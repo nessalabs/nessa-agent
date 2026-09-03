@@ -1,0 +1,16 @@
+{
+  "name": "@nessa/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Typed WebSocket client for the Nessa Server Client API (S1: connect + health).",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  }
+}
