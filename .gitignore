@@ -1,9 +1,37 @@
-node_modules
-dist
-src-tauri/target
-src-tauri/gen
+# --- Dependencies & vendor ---
+node_modules/
+.vendor/
+
+# --- JavaScript / TypeScript build ---
+dist/
+coverage/
+*.tsbuildinfo
+
+# --- Rust (Cargo workspace: nessa-server + src-tauri) ---
+/target/
+src-tauri/target/
+
+# --- Tauri generated ---
+src-tauri/gen/
+
+# --- Environment & secrets ---
+.env
+.env.*
+!.env.example
+
+# --- OS ---
 .DS_Store
-.vendor
+Thumbs.db
+
+# --- Editor / local tooling ---
+.idea/
+*.swp
+*~
+
+# Claude Code local worktrees (full repo copies for agent sessions)
+.claude/worktrees/
+
+# --- Project-specific ---
 
 # Rasterised icon intermediates: regenerate with scripts/render-icon.mjs
 src-tauri/icons/nessa-avatar.png

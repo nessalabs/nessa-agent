@@ -1,0 +1,13 @@
+{
+  "type": "req",
+  "id": "1",
+  "method": "connect",
+  "params": {
+    "minProtocol": 1,
+    "maxProtocol": 1,
+    "role": "surface",
+    "surface": { "kind": "panel", "instance": "main" },
+    "client": { "id": "nessa-panel", "version": "0.1.0", "platform": "macos" },
+    "auth": { "token": "dev-token", "nonce": "fixture-challenge-nonce" }
+  }
+}

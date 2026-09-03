@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nessa://protocol/v1/server.json",
+  "$defs": {
+    "HealthResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok", "runtimeStatus", "uptimeMs"],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "runtimeStatus": { "$ref": "common.json#/$defs/RuntimeStatus" },
+        "uptimeMs": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

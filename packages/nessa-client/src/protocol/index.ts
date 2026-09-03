@@ -1,0 +1,38 @@
+/**
+ * Protocol layer — typed wire frames aligned with `protocol/schemas/v1/`.
+ *
+ * Decode incoming JSON once at the boundary; handlers work with typed frames,
+ * not untyped `JSON.parse` results.
+ *
+ * ```
+ * WebSocket text
+ *      │
+ *      ▼
+ * parseWireMessage ──► Frame
+ *      │
+ *      ├── event  → application event bus
+ *      └── res    → transport request registry
+ * ```
+ */
+export type {
+  AuthToken,
+  ClientEventMap,
+  ClientInfo,
+  ClientRole,
+  ConnectChallenge,
+  ConnectParams,
+  EventFrame,
+  Frame,
+  GatewayError,
+  HealthResult,
+  HelloOk,
+  ReqFrame,
+  ResFrame,
+  Scope,
+  SurfaceInfo,
+} from "./types.js"
+
+export { Event, Method, type EventName, type MethodName } from "../generated/catalog.js"
+export { isEventFrame, isResponseFrame, parseWireMessage } from "./decode.js"
+export { assertConnectChallenge, assertHealthResult, assertHelloOk } from "./validate.js"
+export { buildRequestFrame, encodeWireMessage } from "./encode.js"

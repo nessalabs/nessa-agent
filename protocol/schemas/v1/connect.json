@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nessa://protocol/v1/connect.json",
+  "$defs": {
+    "ConnectParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minProtocol", "maxProtocol", "role", "surface", "client", "auth"],
+      "properties": {
+        "minProtocol": { "type": "integer", "minimum": 1 },
+        "maxProtocol": { "type": "integer", "minimum": 1 },
+        "role": { "$ref": "common.json#/$defs/ClientRole" },
+        "surface": { "$ref": "common.json#/$defs/SurfaceInfo" },
+        "client": { "$ref": "common.json#/$defs/ClientInfo" },
+        "auth": { "$ref": "common.json#/$defs/AuthToken" }
+      }
+    },
+    "HelloOk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "scopes", "serverVersion", "runtimeStatus", "policy"],
+      "properties": {
+        "protocol": { "type": "integer", "const": 1 },
+        "scopes": {
+          "type": "array",
+          "items": { "$ref": "common.json#/$defs/Scope" },
+          "uniqueItems": true
+        },
+        "serverVersion": { "type": "string", "minLength": 1 },
+        "runtimeStatus": { "$ref": "common.json#/$defs/RuntimeStatus" },
+        "policy": {
+          "title": "ServerPolicy",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxPayloadBytes"],
+          "properties": {
+            "maxPayloadBytes": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "ConnectChallenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nonce", "protocol"],
+      "properties": {
+        "nonce": { "type": "string", "minLength": 1 },
+        "protocol": { "type": "integer", "const": 1 }
+      }
+    }
+  }
+}
