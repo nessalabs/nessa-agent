@@ -16,7 +16,9 @@ impl Host for Macos {
     fn configure_app(&self, app: &AppHandle) {
         // No Dock icon and no app menu: Nessa lives in the menu bar and is
         // summoned from there.
-        app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+        if let Err(error) = app.set_activation_policy(tauri::ActivationPolicy::Accessory) {
+            eprintln!("[nessa] could not set accessory activation policy: {error}");
+        }
     }
 
     fn set_frosted(&self, window: &WebviewWindow, frosted: bool) -> Result<(), String> {

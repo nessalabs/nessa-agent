@@ -2,7 +2,9 @@
 # Windows recipes are written, not yet run on a Windows box.
 #
 #   just          list recipes
+#   just start    desktop app + local nessa-server
 #   just dev      desktop app in dev mode (falls back to the browser UI)
+#   just server   local nessa-server only
 #   just web      UI in a browser only; window controls no-op
 #   just fast     testing-shaped release (macOS .app / Linux .deb / Windows nsis)
 #   just release  shipping bundle (macOS .dmg / Linux .deb / Windows nsis)
@@ -22,6 +24,51 @@ default:
 # Local nessa-server (stage=dev defaults: 127.0.0.1:7420, token=dev-token).
 server:
     pnpm server:run
+
+# Desktop app + local nessa-server (reuses :7420 if healthy).
+[unix]
+start:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    set -m
+    server_pid=""
+    cleanup() {
+      if [[ -n "${server_pid}" ]]; then
+        echo "→ stopping nessa-server (pid ${server_pid})"
+        kill -TERM -"${server_pid}" 2>/dev/null || kill -TERM "${server_pid}" 2>/dev/null || true
+        wait "${server_pid}" 2>/dev/null || true
+      fi
+    }
+    trap cleanup EXIT INT TERM
+
+    if curl -sf --connect-timeout 0.3 "http://127.0.0.1:7420/health" >/dev/null; then
+      echo "→ reusing nessa-server on :7420"
+    else
+      echo "→ starting nessa-server"
+      pnpm server:run &
+      server_pid=$!
+      ready=0
+      for _ in $(seq 1 120); do
+        if curl -sf --connect-timeout 0.3 "http://127.0.0.1:7420/health" >/dev/null; then
+          ready=1
+          break
+        fi
+        if ! kill -0 "${server_pid}" 2>/dev/null; then
+          wait "${server_pid}" || true
+          echo "→ nessa-server exited before becoming healthy"
+          server_pid=""
+          exit 1
+        fi
+        sleep 0.5
+      done
+      if [[ "${ready}" -ne 1 ]]; then
+        echo "→ nessa-server did not become healthy on :7420"
+        exit 1
+      fi
+      echo "→ nessa-server ready on :7420"
+    fi
+
+    just dev
 
 # UI in a browser only; window controls no-op.
 web:

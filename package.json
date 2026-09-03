@@ -6,7 +6,7 @@
   "packageManager": "pnpm@11.9.0",
   "scripts": {
     "preinstall": "node scripts/ensure-nessa-ui.mjs",
-    "dev": "vite",
+    "dev": "node scripts/free-dev-port.mjs && vite",
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",

@@ -52,18 +52,15 @@ use crate::platform::current_monitor;
 pub fn panel_size(window: &tauri::WebviewWindow) -> Result<PanelSize, String> {
     let handle = window.ns_window().map_err(|error| error.to_string())?;
     let ns_window: &NSWindow = unsafe { &*handle.cast::<NSWindow>() };
-    ns_window
+    let content = ns_window
         .contentView()
-        .map(|content| size_of(&content))
-        .ok_or_else(|| String::from("the window has no content view"))
+        .ok_or_else(|| String::from("the window has no content view"))?;
+    size_of(&content).ok_or_else(|| String::from("the window has no size"))
 }
 
-fn size_of(content: &objc2_app_kit::NSView) -> PanelSize {
+fn size_of(content: &objc2_app_kit::NSView) -> Option<PanelSize> {
     let bounds = content.bounds();
-    PanelSize {
-        width: bounds.size.width,
-        height: bounds.size.height,
-    }
+    PanelSize::from_logical(bounds.size.width, bounds.size.height)
 }
 
 /// Sizes the webview to the stage and pins it to the window's bottom right.
@@ -129,7 +126,9 @@ pub fn fit(window: &tauri::WebviewWindow) -> Result<(), String> {
     // rather than left for the next resize: a panel summoned at a size it was
     // already at raises no resize at all.
     use tauri::Emitter;
-    let _ = window.emit(host::PANEL_SIZED, size_of(&content));
+    if let Some(size) = size_of(&content) {
+        let _ = window.emit(host::PANEL_SIZED, size);
+    }
 
     Ok(())
 }
@@ -170,7 +169,9 @@ pub fn watch(window: &tauri::WebviewWindow) -> Result<(), String> {
             // Every step, because this is the page's only account of the
             // window's size while it is being dragged.
             use tauri::Emitter;
-            let _ = target.emit(host::PANEL_SIZED, size_of(&content));
+            if let Some(size) = size_of(&content) {
+                let _ = target.emit(host::PANEL_SIZED, size);
+            }
 
             let stage = webview.frame().size;
             let window = content.bounds().size;
