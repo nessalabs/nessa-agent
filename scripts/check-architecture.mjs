@@ -113,6 +113,33 @@ for (const file of walk(src)) {
     }
   }
 
+  if (!path.startsWith("src/session/") && !path.endsWith(".test.ts")) {
+    for (const item of imports) {
+      if (!/(?:^|\/)session(?:\/|$)/.test(item) && !item.endsWith("/session")) continue
+      // Avoid matching "session" inside unrelated paths; require session segment.
+      if (!/(?:^|[./])session(?:\/|$)/.test(item)) continue
+      const barrel = /(?:^|\/)session$/.test(item) || /(?:^|\/)session\/index$/.test(item)
+      const slice = /session\/adapters\/store\/slice$/.test(item)
+      if (path === "src/store.ts" && slice) continue
+      if (barrel) continue
+      fail(file, "other modules import the session barrel, not its internals")
+    }
+  }
+
+  if (path.startsWith("src/session/ui/")) {
+    if (/adapters\/client/.test(text) || /adapters\/lifecycle/.test(text)) {
+      fail(file, "session UI reads the projection; it does not open the socket")
+    }
+  }
+
+  if (
+    path.startsWith("src/session/model/") &&
+    !path.endsWith(".test.ts") &&
+    imports.some((item) => /(?:^|\/)(?:adapters|ui)(?:\/|$)/.test(item))
+  ) {
+    fail(file, "session model imports nothing outward")
+  }
+
   if (
     /from\s+["']@tauri-apps(?:\/[^"']*)?["']/.test(text) ||
     /import\(\s*["']@tauri-apps/.test(text)

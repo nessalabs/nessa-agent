@@ -43,6 +43,7 @@ try {
 
   const { NessaClient } = await import("@nessa/client")
   const client = await NessaClient.connect({
+    stage: "ci",
     url: `ws://127.0.0.1:${port}`,
     role: "surface",
     surface: { kind: "panel", instance: "smoke" },

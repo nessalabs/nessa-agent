@@ -19,6 +19,7 @@ same trigger — an invariant, a second consumer, or their own persistence.
 ```
 src/                      composition root (`main.tsx`, `store.ts`)
   conversation/           product vertical (model / use cases / gateway / UI)
+  session/                wire session to nessa-server (@nessa/client)
   panel/                  floating-window chrome (model / adapters / UI)
   host/                   injected OS features + the window seam
 src-tauri/src/

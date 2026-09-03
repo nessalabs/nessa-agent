@@ -42,14 +42,15 @@ opinion rather than the product's.
 | `platform/linux/` | WebKit DMA-BUF prep, GtkFixed pin, CSS frost (no-op natively), allocate-based live resize, shown on the taskbar at launch. |
 | `platform/other/` | Webview fills the window; size events only. |
 
-**Launch** ([justfile](../justfile)) — `just dev` / `just web` / `just fast` / `just release`. Bundle names and Linux WebKit/GTK checks live in the justfile, not a second host layer. Windows recipes are written, not yet run on a Windows box.
+**Launch** ([justfile](../justfile)) — `just server` / `just dev` / `just web` / `just fast` / `just release`. Bundle names and Linux WebKit/GTK checks live in the justfile, not a second host layer. Windows recipes are written, not yet run on a Windows box.
 
 **React shell** (`src/`) — everything that is on screen.
 
 | Path | Owns |
 | --- | --- |
-| `main.tsx`, `store.ts` | Composition root. Mounts the panel and the conversation projection. |
+| `main.tsx`, `store.ts` | Composition root. Mounts the panel, the session lifecycle, and product projections. |
 | `conversation/` | The conversation vertical. See the table below. |
+| `session/` | Wire session to `nessa-server` via `@nessa/client` (S1: connect + health). |
 | `panel/` | The floating-window chrome. See the table below. |
 | `host/` | Injected host features and the window seam (`window.ts`). |
 
@@ -65,6 +66,16 @@ opinion rather than the product's.
 | `adapters/store/` | Redux projection. Reducers call the gateway; they do not contain rules. |
 | `ui/` | Transcript, thinking pill, `useConversation`. Paints and dispatches. |
 | `model/identity.ts` | The agent's name, seed, and hue wheel. |
+
+**Session vertical** (`src/session/`) — WebSocket control-plane connection.
+
+| Path | Owns |
+| --- | --- |
+| `model/` | `SessionPhase`, status copy for the empty state. |
+| `adapters/client/` | `NessaClient.connect({ stage: "dev", … })` + `server.health`. |
+| `adapters/store/` | Redux projection of connection status. |
+| `adapters/lifecycle/` | Mount/reconnect effect, owned by the composition root. |
+| `ui/use-session.ts` | Hook the panel reads for status. |
 
 **Panel vertical** (`src/panel/`) — the floating window, not the product.
 
@@ -154,8 +165,8 @@ are written here.
 
 ## What is deliberately not here yet
 
-There is no agent runtime, no persistence for conversations, no settings UI.
-When those arrive they are new contexts with their own domain, not additions to
-the local conversation gateway and `settings.rs`. The conversation vertical is
-already shaped so a remote gateway can replace `adapters/gateway/local.ts`. See
+There is no agent runtime, no chat RPCs, no persistence for conversations, no
+settings UI. The panel already opens a `stage=dev` `@nessa/client` session for
+connect/health. When chat arrives it is a remote `ConversationGateway`, not an
+addition to the local session adapter. See
 [adr/0002-conversation-vertical-and-gateway.md](adr/0002-conversation-vertical-and-gateway.md).

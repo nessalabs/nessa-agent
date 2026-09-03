@@ -53,23 +53,27 @@ implementation per OS, injected by `current()` — and in
   hang over the desktop. The frontend owns the choice and remembers it
   ([src/panel/adapters/surface.ts](src/panel/adapters/surface.ts)); the tray item only *requests* a
   toggle, and its check mark is reflected back from `set_frosted`.
-- **No agent turns yet** — the conversation strip in
+- **No chat RPCs yet** — the conversation strip in
   [`src/conversation/`](src/conversation/) is a UI session (tabs, drafts,
-  empty transcript). Send is a no-op until the server owns chat RPCs. The
-  panel only paints that projection.
+  empty transcript). Send is a no-op until the server owns turns. On launch the
+  panel opens a `stage=dev` `@nessa/client` session against local
+  `nessa-server` (`just server`) and shows connect/health status in the empty
+  state.
 
 ## Running it
 
 ```bash
 pnpm install
-just dev
+just server   # terminal 1 — nessa-server on ws://127.0.0.1:7420
+just dev      # terminal 2 — panel; connects with stage=dev
 ```
 
 [`just`](https://just.systems) is the entry ([justfile](justfile)). `just`
-lists recipes. `just dev` is `tauri dev` when a display is available, the
-browser UI (`just web`) when it is not. `just release` is the shipping
-installer. `pnpm app` and `pnpm dev` still work without those defaults. The
-window controls no-op in the browser (see [src/host/window.ts](src/host/window.ts)).
+lists recipes. `just server` runs the WebSocket control plane. `just dev` is
+`tauri dev` when a display is available, the browser UI (`just web`) when it
+is not. `just release` is the shipping installer. `pnpm app` and `pnpm dev`
+still work without those defaults. The window controls no-op in the browser
+(see [src/host/window.ts](src/host/window.ts)).
 
 Install `just` with the platform's package manager (`apt install just`,
 `brew install just`, `winget install --id Casey.Just --exact`).
@@ -112,6 +116,7 @@ and `just release` there.
 | Command | What it does |
 | --- | --- |
 | `just` | List recipes |
+| `just server` | Local `nessa-server` (stage=dev defaults) |
 | `just dev` | Desktop app in dev mode (falls back to the browser UI with no display) |
 | `just web` | The UI in a browser, no Tauri |
 | `just fast` | Testing-shaped release — slow opts off (`.app` / `.deb` / NSIS) |

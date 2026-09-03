@@ -17,12 +17,14 @@ export function Transcript({
   animateMount,
   streamText,
   emptyState,
+  statusLabel,
 }: {
   conversation: Conversation
   ground: "paper" | "ink"
   animateMount: boolean
   streamText: boolean
   emptyState: boolean
+  statusLabel: string
 }) {
   const logRef = React.useRef<HTMLDivElement>(null)
   const lastId = conversation.turns.at(-1)?.id
@@ -50,6 +52,7 @@ export function Transcript({
             seed={conversation.id}
             ground={ground}
             animateMount={animateMount}
+            statusLabel={statusLabel}
           />
         ) : null}
         {conversation.turns.map((turn) => (

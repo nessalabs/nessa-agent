@@ -7,6 +7,7 @@ import "@fontsource-variable/geist-mono"
 import "./styles.css"
 
 import { App } from "./panel"
+import { SessionLifecycle } from "./session"
 import { store } from "./store"
 
 const container = document.getElementById("root")
@@ -16,6 +17,7 @@ createRoot(container).render(
   <React.StrictMode>
     <Provider store={store}>
       <App />
+      <SessionLifecycle />
     </Provider>
   </React.StrictMode>,
 )

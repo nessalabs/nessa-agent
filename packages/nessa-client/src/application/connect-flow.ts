@@ -7,7 +7,7 @@ import {
 } from "../protocol/index.js"
 import { Event, Method } from "../generated/catalog.js"
 import type { WireSession } from "../transport/wire-session.js"
-import type { NessaClientConnectOptions } from "./options.js"
+import type { ResolvedConnectOptions } from "./resolve-options.js"
 
 const CHALLENGE_TIMEOUT_MS = 5_000
 
@@ -50,7 +50,7 @@ export function waitForConnectChallenge(session: WireSession): Promise<ConnectCh
 /** Run the `connect` RPC and return the validated hello payload. */
 export async function runConnectHandshake(
   session: WireSession,
-  options: NessaClientConnectOptions,
+  options: ResolvedConnectOptions,
   challenge: ConnectChallenge,
 ): Promise<HelloOk> {
   const params: ConnectParams = {
