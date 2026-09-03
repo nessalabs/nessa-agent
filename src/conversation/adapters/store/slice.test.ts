@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest"
 
-import { draftReply } from "../../application/internal/stand-in"
 import { makeStore } from "../../../store"
 import {
-  advanceReply,
   closeConversation,
   openConversation,
   sendDraft,
@@ -22,7 +20,6 @@ function agent(store: ReturnType<typeof makeStore>) {
     close: (id: string) => store.dispatch(closeConversation(id)),
     stop: (id?: string) =>
       store.dispatch(stopGenerating(id ? { conversationId: id } : undefined)),
-    tick: (id: string) => store.dispatch(advanceReply({ conversationId: id })),
     activate: (id: string) => store.dispatch(setActive(id)),
     strip: () => store.getState().conversation,
   }
@@ -38,80 +35,22 @@ describe("conversation strip store", () => {
     expect(strip.nextTurnId).toBe(1)
   })
 
-  it("an agent can draft and send without going through React", () => {
+  it("drafts without inventing turns; send is a no-op", () => {
     const run = agent(makeStore())
     run.draft("hello there")
     run.send()
     const open = run.strip().conversations[0]!
-    expect(open.phase).toBe("thinking")
-    expect(open.title).toBe("hello there")
-    expect(open.draft).toBe("")
-    expect(open.turns[0]).toEqual({
-      id: "t1",
-      from: "user",
-      text: "hello there",
-      receipt: "sending",
-    })
-    expect(open.turns[1]).toEqual({
-      id: "t2",
-      from: "assistant",
-      text: "",
-    })
-  })
-
-  it("ignores send when the draft is empty or a reply is already in flight", () => {
-    const run = agent(makeStore())
-    run.send()
-    expect(run.strip().conversations[0]!.phase).toBe("idle")
-    run.draft("hi")
-    run.send()
-    run.draft("again")
-    run.send()
-    expect(run.strip().conversations[0]!.turns).toHaveLength(2)
-    expect(run.strip().conversations[0]).toMatchObject({
-      phase: "thinking",
-      pending: "hi",
-    })
-  })
-
-  it("walks thinking → streaming → idle when the clock dispatches", () => {
-    const run = agent(makeStore())
-    run.draft("hi")
-    run.send()
-    run.tick("c0")
-    const streaming = run.strip().conversations[0]!
-    expect(streaming.phase).toBe("streaming")
-    expect(streaming.turns.at(-1)).toEqual({
-      id: "t2",
-      from: "assistant",
-      text: draftReply("hi"),
-    })
-    run.tick("c0")
-    const idle = run.strip().conversations[0]!
-    expect(idle.phase).toBe("idle")
-    expect(idle).not.toHaveProperty("pending")
-    expect(idle.turns[0]).toMatchObject({ from: "user", receipt: "delivered" })
-  })
-
-  it("stops a reply without dropping the user turn", () => {
-    const run = agent(makeStore())
-    run.draft("hi")
-    run.send()
-    run.stop()
-    const open = run.strip().conversations[0]!
     expect(open.phase).toBe("idle")
-    expect(open).not.toHaveProperty("pending")
-    expect(open.turns).toHaveLength(1)
-    expect(open.turns[0]).toMatchObject({ from: "user", receipt: "delivered" })
+    expect(open.draft).toBe("hello there")
+    expect(open.turns).toEqual([])
   })
 
-  it("keeps conversation ids and turn ids on separate counters", () => {
+  it("stopGenerating is a no-op", () => {
     const run = agent(makeStore())
     run.draft("hi")
-    run.send()
-    run.open()
-    expect(run.strip().conversations.map((item) => item.id)).toEqual(["c0", "c1"])
-    expect(run.strip().activeId).toBe("c1")
+    run.stop()
+    expect(run.strip().conversations[0]!.draft).toBe("hi")
+    expect(run.strip().conversations[0]!.phase).toBe("idle")
   })
 
   it("opens a tab the agent can switch to, and never empties the strip", () => {
@@ -134,23 +73,18 @@ describe("conversation strip store", () => {
     expect(run.strip().activeId).toBe("c0")
   })
 
-  it("keeps each conversation's turns on that conversation", () => {
+  it("keeps each conversation's draft on that conversation", () => {
     const run = agent(makeStore())
     run.draft("hello from the store")
-    run.send()
     run.open()
     run.draft("second tab")
-    run.send()
     const [first, second] = run.strip().conversations
-    expect(first!.title).toBe("hello from the store")
-    expect(second!.title).toBe("second tab")
-    expect(first!.turns.map((turn) => turn.text)).toEqual(["hello from the store", ""])
-    expect(second!.turns.map((turn) => turn.text)).toEqual(["second tab", ""])
-    expect(first!.turns).not.toBe(second!.turns)
+    expect(first!.draft).toBe("hello from the store")
+    expect(second!.draft).toBe("second tab")
     run.activate("c0")
     const open = run
       .strip()
       .conversations.find((item) => item.id === run.strip().activeId)
-    expect(open!.turns.map((turn) => turn.text)).toEqual(["hello from the store", ""])
+    expect(open!.draft).toBe("hello from the store")
   })
 })

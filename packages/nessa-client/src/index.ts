@@ -17,7 +17,17 @@
 export { NessaClient, type ServerApi } from "./presentation/index.js"
 export type { NessaClientConnectOptions } from "./application/index.js"
 export type { NessaClientEvents } from "./application/index.js"
-export { NessaRpcError } from "./application/index.js"
+export {
+  DEV_AUTH_TOKEN,
+  isLoopbackWebSocketUrl,
+  isStage,
+  NessaRpcError,
+  resolveConnectOptions,
+  stageAllowsDefaultAuth,
+  StageConfigError,
+  STAGES,
+  type Stage,
+} from "./application/index.js"
 export type {
   AuthToken,
   ClientInfo,

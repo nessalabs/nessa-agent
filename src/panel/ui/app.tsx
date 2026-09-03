@@ -7,6 +7,7 @@ import { RandomAvatar } from "@nessa-ui/react/random-avatar"
 
 import { AGENT_HUES, Transcript, useConversation } from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
+import { useSession } from "../../session"
 import { useColorScheme } from "../adapters/color-scheme"
 import { useFlushOnTurn } from "../adapters/compositor-flush"
 import { useEdgeReveal } from "../adapters/edge-reveal"
@@ -43,6 +44,7 @@ export function App() {
   const [surface, toggleSurface] = useSurface()
   const edge = useEdgeReveal()
   const strip = useConversation()
+  const session = useSession()
   const composerRef = React.useRef<HTMLTextAreaElement>(null)
   useHostPanel(surface, toggleSurface, composerRef)
   useFlushOnTurn(
@@ -153,6 +155,7 @@ export function App() {
           animateMount={host.animateMount}
           streamText={host.streamText}
           emptyState={host.emptyState}
+          statusLabel={session.statusLabel}
         />
 
         <div className="nessa-composer">

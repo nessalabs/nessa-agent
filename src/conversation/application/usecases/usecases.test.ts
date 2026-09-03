@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest"
 
-import { draftReply } from "../internal/stand-in"
 import { emptyLocalStrip } from "../local-strip"
-import { standInReply } from "../internal"
 import {
-  advanceReply,
   closeConversation,
   openConversation,
   sendDraft,
@@ -13,67 +10,17 @@ import {
   stopGenerating,
 } from "./index"
 
-function primed(prompt: string) {
-  return sendDraft(setDraft(emptyLocalStrip(), { draft: prompt }))
-}
-
-function tick(strip: ReturnType<typeof primed>, id: string) {
-  return advanceReply(strip, id, standInReply)
-}
-
-describe("sendDraft", () => {
-  it("opens the assistant row from the draft", () => {
-    const next = primed("hello there")
-    expect(next.conversations[0]!.phase).toBe("thinking")
-    expect(next.conversations[0]!.title).toBe("hello there")
-    expect(next.conversations[0]!.turns).toHaveLength(2)
-    expect(next.nextTurnId).toBe(3)
-  })
-
-  it("ignores an empty draft and a busy conversation", () => {
-    const idle = emptyLocalStrip()
-    expect(sendDraft(idle)).toBe(idle)
-    const busy = primed("hi")
-    expect(sendDraft(setDraft(busy, { draft: "again" }))).toEqual(
-      setDraft(busy, { draft: "again" }),
-    )
-  })
-})
-
-describe("advanceReply", () => {
-  it("does not mint an id when the conversation is idle", () => {
-    const idle = emptyLocalStrip()
-    expect(tick(idle, "c0")).toBe(idle)
-    expect(idle.nextTurnId).toBe(1)
-  })
-
-  it("walks thinking → streaming → idle", () => {
-    const thinking = primed("hi")
-    const streaming = tick(thinking, "c0")
-    expect(streaming.conversations[0]!.phase).toBe("streaming")
-    expect(streaming.conversations[0]!.turns.at(-1)).toEqual({
-      id: "t2",
-      from: "assistant",
-      text: draftReply("hi"),
-    })
-    const idle = tick(streaming, "c0")
-    expect(idle.conversations[0]!.phase).toBe("idle")
-    expect(idle.conversations[0]!).not.toHaveProperty("pending")
-  })
-})
-
-describe("stopGenerating", () => {
-  it("drops the empty assistant row and keeps the user turn", () => {
-    const stopped = stopGenerating(primed("hi"))
-    expect(stopped.conversations[0]!.phase).toBe("idle")
-    expect(stopped.conversations[0]!.turns).toHaveLength(1)
-    expect(stopped.conversations[0]!).not.toHaveProperty("pending")
+describe("sendDraft / stopGenerating", () => {
+  it("are no-ops until a remote gateway owns turns", () => {
+    const drafted = setDraft(emptyLocalStrip(), { draft: "hello there" })
+    expect(sendDraft(drafted)).toBe(drafted)
+    expect(stopGenerating(drafted)).toBe(drafted)
   })
 })
 
 describe("openConversation / closeConversation", () => {
   it("keeps conversation ids off the turn counter", () => {
-    const opened = openConversation(primed("hi"))
+    const opened = openConversation(emptyLocalStrip())
     expect(opened.conversations.map((item) => item.id)).toEqual(["c0", "c1"])
     expect(opened.activeId).toBe("c1")
   })

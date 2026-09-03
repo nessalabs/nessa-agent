@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Typed WebSocket client for the Nessa Server Client API (S1: connect + health).",
+  "description": "Typed WebSocket client for the Nessa Server Client API (S1: connect + health; stage=dev defaults).",
   "exports": {
     ".": {
       "types": "./src/index.ts",

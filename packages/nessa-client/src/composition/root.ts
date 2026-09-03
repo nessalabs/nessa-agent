@@ -3,6 +3,7 @@ import {
   waitForConnectChallenge,
 } from "../application/connect-flow.js"
 import type { NessaClientConnectOptions } from "../application/options.js"
+import { resolveConnectOptions } from "../application/resolve-options.js"
 import type { HelloOk } from "../protocol/index.js"
 import { waitForSocketOpen, WireSession } from "../transport/index.js"
 
@@ -19,10 +20,10 @@ export async function establishSession(
   options: NessaClientConnectOptions,
   defaultUrl: string,
 ): Promise<EstablishedSession> {
-  const url = options.url ?? defaultUrl
-  const socket = new WebSocket(url)
+  const resolved = resolveConnectOptions(options, defaultUrl)
+  const socket = new WebSocket(resolved.url)
   const wire = new WireSession(socket, {
-    requestTimeoutMs: options.requestTimeoutMs,
+    requestTimeoutMs: resolved.requestTimeoutMs,
   })
 
   // Subscribe before open so a fast challenge cannot race past the listener.
@@ -35,7 +36,7 @@ export async function establishSession(
   try {
     await waitForSocketOpen(socket)
     const challenge = await challengePromise
-    const hello = await runConnectHandshake(wire, options, challenge)
+    const hello = await runConnectHandshake(wire, resolved, challenge)
     return { wire, hello }
   } catch (error) {
     socket.close()

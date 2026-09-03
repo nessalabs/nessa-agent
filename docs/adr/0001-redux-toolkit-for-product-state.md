@@ -22,9 +22,8 @@ conversation strip. It is a projection: named actions call
 `ConversationGateway` and store the strip. `store.dispatch` is the agent
 entry point. See [0002](0002-conversation-vertical-and-gateway.md).
 
-Host, DOM, and clocks stay in adapters: `src/panel/adapters/` and
-`ConversationClocks`. They subscribe to something outside the product and
-must not become reducers.
+Host and DOM stay in adapters: `src/panel/adapters/`. They subscribe to
+something outside the product and must not become reducers.
 
 `useEffect` is the right tool for those subscriptions. It does not belong in
 a component that only renders (`src/panel/ui/app.tsx`).

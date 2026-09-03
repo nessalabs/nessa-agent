@@ -6,10 +6,12 @@ export function EmptyState({
   seed,
   ground,
   animateMount,
+  statusLabel,
 }: {
   seed: string
   ground: "paper" | "ink"
   animateMount: boolean
+  statusLabel: string
 }) {
   return (
     <div className="flex flex-col items-center gap-2.5 py-6 text-center">
@@ -21,9 +23,7 @@ export function EmptyState({
         animateOnMount={animateMount}
         className="size-14 rounded-full"
       />
-      <p className="nessa-text-3 m-0 text-muted-foreground">
-        Nessa is listening. Press Enter to send.
-      </p>
+      <p className="nessa-text-3 m-0 text-muted-foreground">{statusLabel}</p>
     </div>
   )
 }

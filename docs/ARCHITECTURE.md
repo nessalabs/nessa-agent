@@ -20,9 +20,9 @@ The two hard parts are **the window** — placing, sizing, and re-fitting a
 chromeless panel across displays without the page's contents jittering during a
 resize, with a frost that can be turned off — and **the conversation surface**
 — a turn list with an `idle → thinking → streaming` lifecycle that a real agent
-runtime will eventually drive. There is no agent in this repository yet; the local conversation gateway
-stands in so the bubbles, the typing dots, the streaming reveal, and the
-composer's lit rim can be built and resized against real UI.
+runtime will eventually drive. There is no chat RPC in this repository yet; the
+conversation vertical keeps tabs and drafts as a UI session, and send is a
+no-op until a remote gateway owns turns.
 
 ## Code map
 
@@ -42,14 +42,15 @@ opinion rather than the product's.
 | `platform/linux/` | WebKit DMA-BUF prep, GtkFixed pin, CSS frost (no-op natively), allocate-based live resize, shown on the taskbar at launch. |
 | `platform/other/` | Webview fills the window; size events only. |
 
-**Launch** ([justfile](../justfile)) — `just dev` / `just web` / `just fast` / `just release`. Bundle names and Linux WebKit/GTK checks live in the justfile, not a second host layer. Windows recipes are written, not yet run on a Windows box.
+**Launch** ([justfile](../justfile)) — `just server` / `just dev` / `just web` / `just fast` / `just release`. Bundle names and Linux WebKit/GTK checks live in the justfile, not a second host layer. Windows recipes are written, not yet run on a Windows box.
 
 **React shell** (`src/`) — everything that is on screen.
 
 | Path | Owns |
 | --- | --- |
-| `main.tsx`, `store.ts` | Composition root. Mounts the panel, the stand-in clocks, and the conversation projection. |
+| `main.tsx`, `store.ts` | Composition root. Mounts the panel, the session lifecycle, and product projections. |
 | `conversation/` | The conversation vertical. See the table below. |
+| `session/` | Wire session to `nessa-server` via `@nessa/client` (S1: connect + health). |
 | `panel/` | The floating-window chrome. See the table below. |
 | `host/` | Injected host features and the window seam (`window.ts`). |
 
@@ -58,14 +59,25 @@ opinion rather than the product's.
 | Path | Owns |
 | --- | --- |
 | `model/` | Shared language: `Conversation`, `Turn`, `ConversationStrip` (`conversations` + `activeId`). Discriminated turns and phases. No id mill. |
-| `application/local-strip.ts` | Stand-in store shape: the shared strip plus the local id counters. A remote gateway mints its own ids and this type goes away. |
-| `application/usecases/` | One file per command. Server-owned: send, advance, stop, open, close. UI session: draft, active tab. |
+| `application/local-strip.ts` | UI-session store shape: the shared strip plus local id counters. A remote gateway mints its own ids and this type goes away. |
+| `application/usecases/` | One file per command. Session: draft, active tab, open, close. Send/stop are no-ops until chat RPCs exist. |
 | `application/ports.ts` | `ConversationGateway` — what the panel may ask the product to do. |
-| `adapters/gateway/local.ts` | In-process stand-in. Binds `ReplySource`. Tomorrow this is the remote gateway. |
+| `adapters/gateway/local.ts` | In-process UI-session gateway. Tomorrow this is the remote gateway. |
 | `adapters/store/` | Redux projection. Reducers call the gateway; they do not contain rules. |
-| `adapters/clock/` | Stand-in phase timer, mounted from `main.tsx`. A real runtime drives phase from stream events. |
 | `ui/` | Transcript, thinking pill, `useConversation`. Paints and dispatches. |
 | `model/identity.ts` | The agent's name, seed, and hue wheel. |
+
+**Session vertical** (`src/session/`) — WebSocket control-plane connection.
+
+| Path | Owns |
+| --- | --- |
+| `model/` | `SessionPhase`, status copy for the empty state. |
+| `adapters/client/` | `connectDevSession` (closes on health failure) + `getSessionClient` handle (live client outside Redux). |
+| `adapters/store/` | Redux projection of connection status (`hello` / `health` only). |
+| `adapters/lifecycle/` | Mount/reconnect effect, owned by the composition root. Subscribes `onClose` before publishing ready. |
+| `ui/use-session.ts` | Hook the panel reads for status. |
+
+Chat adapters must use `getSessionClient()` from the session barrel — do not open a second socket, and do not put `NessaClient` in Redux.
 
 **Panel vertical** (`src/panel/`) — the floating window, not the product.
 
@@ -142,7 +154,7 @@ are written here.
 | A new persisted preference | `settings.rs` (with a default), then its owner |
 | A new host event or payload | `host.rs` and `src/host/window.ts` together |
 | Leftover transcript tiles on a layout compositor | `flush_compositor` in `platform/` plus `useFlushOnTurn` in `src/panel/adapters/` |
-| The conversation surface (tabs, turns, stand-in reply) | `src/conversation/application/usecases/` (commands), `adapters/gateway/` (stand-in), `adapters/store/` (projection) |
+| The conversation surface (tabs, drafts, empty transcript) | `src/conversation/application/usecases/` (commands), `adapters/gateway/` (local session), `adapters/store/` (projection) |
 | The transcript chrome | `src/conversation/ui/` |
 | The panel chrome or composer | `src/panel/ui/app.tsx` |
 | Resize jitter, the pinned webview | `platform/{macos,linux,other}/viewport.rs` |
@@ -155,8 +167,8 @@ are written here.
 
 ## What is deliberately not here yet
 
-There is no agent runtime, no persistence for conversations, no settings UI.
-When those arrive they are new contexts with their own domain, not additions to
-the local conversation gateway and `settings.rs`. The conversation vertical is
-already shaped so a remote gateway can replace `adapters/gateway/local.ts`. See
+There is no agent runtime, no chat RPCs, no persistence for conversations, no
+settings UI. The panel already opens a `stage=dev` `@nessa/client` session for
+connect/health. When chat arrives it is a remote `ConversationGateway`, not an
+addition to the local session adapter. See
 [adr/0002-conversation-vertical-and-gateway.md](adr/0002-conversation-vertical-and-gateway.md).

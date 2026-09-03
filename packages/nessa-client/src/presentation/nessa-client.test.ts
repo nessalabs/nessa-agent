@@ -156,6 +156,7 @@ describe("NessaClient", () => {
 
   it("connects, completes handshake, and calls server.health", async () => {
     const client = await NessaClient.connect({
+      stage: "ci",
       url: `ws://127.0.0.1:${port}`,
       role: "surface",
       surface: { kind: "panel", instance: "test" },
@@ -179,6 +180,7 @@ describe("NessaClient", () => {
   it("rejects invalid auth tokens with NessaRpcError", async () => {
     try {
       await NessaClient.connect({
+        stage: "ci",
         url: `ws://127.0.0.1:${port}`,
         role: "surface",
         surface: { kind: "panel", instance: "test" },

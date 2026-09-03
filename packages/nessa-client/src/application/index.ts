@@ -14,4 +14,17 @@
 export { runConnectHandshake, waitForConnectChallenge } from "./connect-flow.js"
 export type { EventHandler, NessaClientEvents } from "./events.js"
 export type { NessaClientConnectOptions } from "./options.js"
+export {
+  isLoopbackWebSocketUrl,
+  resolveConnectOptions,
+  type ResolvedConnectOptions,
+} from "./resolve-options.js"
 export { NessaRpcError } from "./rpc-error.js"
+export {
+  DEV_AUTH_TOKEN,
+  isStage,
+  stageAllowsDefaultAuth,
+  StageConfigError,
+  STAGES,
+  type Stage,
+} from "./stage.js"

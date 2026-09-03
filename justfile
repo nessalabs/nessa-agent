@@ -19,6 +19,10 @@ release-bundle := if os() == "macos" { "dmg" } else if os() == "windows" { "nsis
 default:
     @just --list
 
+# Local nessa-server (stage=dev defaults: 127.0.0.1:7420, token=dev-token).
+server:
+    pnpm server:run
+
 # UI in a browser only; window controls no-op.
 web:
     pnpm dev
