@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react"
-import type { NessaClient } from "@nessa/client"
 
-import { connectDevSession } from "../client/dev-session"
+import { connectDevSession, SessionHealthError } from "../client/dev-session"
+import { getSessionClient, setSessionClient } from "../client/handle"
 import {
   sessionConnecting,
   sessionDisconnected,
@@ -16,37 +16,48 @@ import { useSessionDispatch } from "../store/hooks"
  */
 export function SessionLifecycle() {
   const dispatch = useSessionDispatch()
-  const clientRef = useRef<NessaClient | null>(null)
   const reconnectsRef = useRef(0)
 
   useEffect(() => {
     let cancelled = false
     let offClose: (() => void) | undefined
+    let generation = 0
 
     async function open() {
+      const gen = ++generation
+      setSessionClient(null)
       dispatch(sessionConnecting())
       try {
         const established = await connectDevSession()
-        if (cancelled) {
+        if (cancelled || gen !== generation) {
           established.client.close()
           return
         }
-        clientRef.current = established.client
-        dispatch(sessionReady({ hello: established.hello, health: established.health }))
+
+        // Subscribe before publishing ready so a fast close cannot leave Redux
+        // stuck on `ready` with no reconnect path.
+        offClose?.()
         offClose = established.client.onClose(() => {
-          if (cancelled) return
-          clientRef.current = null
+          if (cancelled || gen !== generation) return
+          setSessionClient(null)
           dispatch(sessionDisconnected())
           if (reconnectsRef.current < 1) {
             reconnectsRef.current += 1
             void open()
           }
         })
+
+        setSessionClient(established.client)
+        dispatch(sessionReady({ hello: established.hello, health: established.health }))
       } catch (error) {
-        if (cancelled) return
-        clientRef.current = null
+        if (cancelled || gen !== generation) return
+        setSessionClient(null)
         const message = error instanceof Error ? error.message : "Failed to connect"
-        dispatch(sessionError(`${message}. Is nessa-server running? (just server)`))
+        const hint =
+          error instanceof SessionHealthError
+            ? "Session opened but health check failed."
+            : "Is nessa-server running? (just server)"
+        dispatch(sessionError(`${message}. ${hint}`))
       }
     }
 
@@ -54,9 +65,11 @@ export function SessionLifecycle() {
 
     return () => {
       cancelled = true
+      generation += 1
       offClose?.()
-      clientRef.current?.close()
-      clientRef.current = null
+      offClose = undefined
+      getSessionClient()?.close()
+      setSessionClient(null)
     }
   }, [dispatch])
 

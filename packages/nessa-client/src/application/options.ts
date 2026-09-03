@@ -5,15 +5,20 @@ import type { Stage } from "./stage.js"
 export type NessaClientConnectOptions = {
   /**
    * Deployment stage. Defaults to `"dev"`.
-   * In `dev`, `url` and `auth.token` may be omitted (loopback + `dev-token`).
-   * Other stages require both.
+   * In `dev`, `url` may be omitted (loopback default) and `auth.token` may be
+   * omitted **only** for loopback URLs (default `dev-token`). Non-loopback
+   * URLs always need an explicit token. Other stages require both `url` and
+   * `auth.token`; non-loopback non-dev URLs must use `wss:`.
    */
   stage?: Stage
   url?: string
   role: ClientRole
   surface: SurfaceInfo
   client: ClientInfo
-  /** Required outside `dev`. In `dev`, defaults to `dev-token` when omitted. */
+  /**
+   * Required outside `dev`, and for any non-loopback URL.
+   * In `dev` on loopback, defaults to `dev-token` when omitted.
+   */
   auth?: { token: string }
   minProtocol?: number
   maxProtocol?: number

@@ -14,7 +14,15 @@ describe("resolveConnectOptions", () => {
   it("defaults stage to dev with loopback url and dev-token", () => {
     const resolved = resolveConnectOptions(base, NessaClient.defaultUrl)
     expect(resolved.stage).toBe("dev")
-    expect(resolved.url).toBe("ws://127.0.0.1:7420")
+    expect(resolved.url).toBe(NessaClient.defaultUrl)
+    expect(resolved.auth.token).toBe(DEV_AUTH_TOKEN)
+  })
+
+  it("defaults token for an explicit loopback url in dev", () => {
+    const resolved = resolveConnectOptions(
+      { ...base, stage: "dev", url: "ws://127.0.0.1:9999" },
+      NessaClient.defaultUrl,
+    )
     expect(resolved.auth.token).toBe(DEV_AUTH_TOKEN)
   })
 
@@ -30,6 +38,35 @@ describe("resolveConnectOptions", () => {
     )
     expect(resolved.url).toBe("ws://127.0.0.1:9999")
     expect(resolved.auth.token).toBe("custom")
+  })
+
+  it("refuses default token for a remote url even in stage=dev", () => {
+    expect(() =>
+      resolveConnectOptions(
+        { ...base, stage: "dev", url: "wss://api.example.com/ws" },
+        NessaClient.defaultUrl,
+      ),
+    ).toThrow(/non-loopback/)
+
+    const resolved = resolveConnectOptions(
+      {
+        ...base,
+        stage: "dev",
+        url: "wss://api.example.com/ws",
+        auth: { token: "explicit" },
+      },
+      NessaClient.defaultUrl,
+    )
+    expect(resolved.auth.token).toBe("explicit")
+  })
+
+  it("refuses default token when stage is omitted but url is remote", () => {
+    expect(() =>
+      resolveConnectOptions(
+        { ...base, url: "wss://evil.example/ws" },
+        NessaClient.defaultUrl,
+      ),
+    ).toThrow(StageConfigError)
   })
 
   it("requires url and token outside dev", () => {
@@ -54,5 +91,30 @@ describe("resolveConnectOptions", () => {
       NessaClient.defaultUrl,
     )
     expect(resolved.auth.token).toBe("ci-token")
+  })
+
+  it("requires wss for non-loopback urls outside dev", () => {
+    expect(() =>
+      resolveConnectOptions(
+        {
+          ...base,
+          stage: "prod",
+          url: "ws://api.example.com/ws",
+          auth: { token: "secret" },
+        },
+        NessaClient.defaultUrl,
+      ),
+    ).toThrow(/wss:/)
+
+    const resolved = resolveConnectOptions(
+      {
+        ...base,
+        stage: "prod",
+        url: "wss://api.example.com/ws",
+        auth: { token: "secret" },
+      },
+      NessaClient.defaultUrl,
+    )
+    expect(resolved.url).toBe("wss://api.example.com/ws")
   })
 })

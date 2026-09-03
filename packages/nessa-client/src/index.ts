@@ -19,6 +19,7 @@ export type { NessaClientConnectOptions } from "./application/index.js"
 export type { NessaClientEvents } from "./application/index.js"
 export {
   DEV_AUTH_TOKEN,
+  isLoopbackWebSocketUrl,
   isStage,
   NessaRpcError,
   resolveConnectOptions,

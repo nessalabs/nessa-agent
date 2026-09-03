@@ -72,10 +72,12 @@ opinion rather than the product's.
 | Path | Owns |
 | --- | --- |
 | `model/` | `SessionPhase`, status copy for the empty state. |
-| `adapters/client/` | `NessaClient.connect({ stage: "dev", … })` + `server.health`. |
-| `adapters/store/` | Redux projection of connection status. |
-| `adapters/lifecycle/` | Mount/reconnect effect, owned by the composition root. |
+| `adapters/client/` | `connectDevSession` (closes on health failure) + `getSessionClient` handle (live client outside Redux). |
+| `adapters/store/` | Redux projection of connection status (`hello` / `health` only). |
+| `adapters/lifecycle/` | Mount/reconnect effect, owned by the composition root. Subscribes `onClose` before publishing ready. |
 | `ui/use-session.ts` | Hook the panel reads for status. |
+
+Chat adapters must use `getSessionClient()` from the session barrel — do not open a second socket, and do not put `NessaClient` in Redux.
 
 **Panel vertical** (`src/panel/`) — the floating window, not the product.
 

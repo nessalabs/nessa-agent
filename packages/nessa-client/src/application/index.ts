@@ -14,7 +14,11 @@
 export { runConnectHandshake, waitForConnectChallenge } from "./connect-flow.js"
 export type { EventHandler, NessaClientEvents } from "./events.js"
 export type { NessaClientConnectOptions } from "./options.js"
-export { resolveConnectOptions, type ResolvedConnectOptions } from "./resolve-options.js"
+export {
+  isLoopbackWebSocketUrl,
+  resolveConnectOptions,
+  type ResolvedConnectOptions,
+} from "./resolve-options.js"
 export { NessaRpcError } from "./rpc-error.js"
 export {
   DEV_AUTH_TOKEN,
