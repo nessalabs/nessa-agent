@@ -36,13 +36,15 @@ describe("beginSend / completeEcho", () => {
     expect(beginSend(tabs, { text: "  " })).toBe(tabs)
   })
 
-  it("failSend returns to idle without an assistant turn", () => {
+  it("failSend returns to idle with a failure reply", () => {
     const pending = beginSend(emptyLocalTabs(), { text: "hey" })
-    const failed = failSend(pending, pending.activeId)
+    const failed = failSend(pending, pending.activeId, "not connected")
     const active = failed.conversations.find((item) => item.id === failed.activeId)!
     expect(active.phase).toBe("idle")
-    expect(active.turns).toHaveLength(1)
-    expect(active.turns[0]).toMatchObject({ from: "user", receipt: "delivered" })
+    expect(active.turns).toEqual([
+      { id: "t1", from: "user", text: "hey", receipt: "delivered" },
+      { id: "t2", from: "assistant", text: "not connected" },
+    ])
   })
 })
 

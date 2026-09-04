@@ -70,8 +70,12 @@ export function completeEcho(
   return replaceConversation(taken.tabs, next)
 }
 
-/** Leave the user turn in place and return to idle when the echo RPC fails. */
-export function failSend(tabs: LocalTabs, conversationId: string): LocalTabs {
+/** Leave the user turn and surface a short failure reply when echo fails. */
+export function failSend(
+  tabs: LocalTabs,
+  conversationId: string,
+  detail?: string,
+): LocalTabs {
   const conv = findConversation(tabs, conversationId)
   if (!conv) return tabs
 
@@ -82,12 +86,20 @@ export function failSend(tabs: LocalTabs, conversationId: string): LocalTabs {
     return turn
   })
 
+  const taken = takeTurnId(tabs)
+  const message =
+    detail && detail.trim().length > 0
+      ? detail.trim()
+      : "Couldn't reach the server."
   const next: IdleConversation = {
     id: conv.id,
     title: conv.title,
-    turns,
+    turns: [
+      ...turns,
+      { id: taken.id, from: "assistant", text: message },
+    ],
     draft: conv.draft,
     phase: "idle",
   }
-  return replaceConversation(tabs, next)
+  return replaceConversation(taken.tabs, next)
 }

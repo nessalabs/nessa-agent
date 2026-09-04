@@ -64,7 +64,7 @@ describe("conversation tabs store", () => {
     ])
   })
 
-  it("keeps the user turn when echo fails", async () => {
+  it("keeps the user turn and shows a failure reply when echo fails", async () => {
     setSessionClient({
       conversation: {
         echo: vi.fn().mockRejectedValue(new Error("offline")),
@@ -78,6 +78,7 @@ describe("conversation tabs store", () => {
     expect(open.phase).toBe("idle")
     expect(open.turns).toEqual([
       { id: "t1", from: "user", text: "hey", receipt: "delivered" },
+      { id: "t2", from: "assistant", text: "offline" },
     ])
   })
 

@@ -72,7 +72,11 @@ const conversationSlice = createSlice({
       .addCase(sendDraft.rejected, (state, action) => {
         if (action.payload === "empty draft") return state
         const id = action.meta.arg.id ?? state.activeId
-        return failSend(state, id)
+        const detail =
+          typeof action.payload === "string"
+            ? action.payload
+            : action.error.message
+        return failSend(state, id, detail)
       })
   },
 })

@@ -25,7 +25,7 @@ default:
 server:
     pnpm server:run
 
-# Desktop app + local nessa-server (reuses :7420 if healthy).
+# Desktop app + local nessa-server (always restarts :7420 so code changes load).
 [unix]
 start:
     #!/usr/bin/env bash
@@ -42,31 +42,40 @@ start:
     trap cleanup EXIT INT TERM
 
     if curl -sf --connect-timeout 0.3 "http://127.0.0.1:7420/health" >/dev/null; then
-      echo "→ reusing nessa-server on :7420"
-    else
-      echo "→ starting nessa-server"
-      pnpm server:run &
-      server_pid=$!
-      ready=0
-      for _ in $(seq 1 120); do
-        if curl -sf --connect-timeout 0.3 "http://127.0.0.1:7420/health" >/dev/null; then
-          ready=1
+      echo "→ stopping existing nessa-server on :7420"
+      if command -v lsof >/dev/null 2>&1; then
+        lsof -tiTCP:7420 -sTCP:LISTEN | xargs kill -TERM 2>/dev/null || true
+      fi
+      for _ in $(seq 1 20); do
+        if ! curl -sf --connect-timeout 0.3 "http://127.0.0.1:7420/health" >/dev/null; then
           break
         fi
-        if ! kill -0 "${server_pid}" 2>/dev/null; then
-          wait "${server_pid}" || true
-          echo "→ nessa-server exited before becoming healthy"
-          server_pid=""
-          exit 1
-        fi
-        sleep 0.5
+        sleep 0.25
       done
-      if [[ "${ready}" -ne 1 ]]; then
-        echo "→ nessa-server did not become healthy on :7420"
+    fi
+
+    echo "→ starting nessa-server"
+    pnpm server:run &
+    server_pid=$!
+    ready=0
+    for _ in $(seq 1 120); do
+      if curl -sf --connect-timeout 0.3 "http://127.0.0.1:7420/health" >/dev/null; then
+        ready=1
+        break
+      fi
+      if ! kill -0 "${server_pid}" 2>/dev/null; then
+        wait "${server_pid}" || true
+        echo "→ nessa-server exited before becoming healthy"
+        server_pid=""
         exit 1
       fi
-      echo "→ nessa-server ready on :7420"
+      sleep 0.5
+    done
+    if [[ "${ready}" -ne 1 ]]; then
+      echo "→ nessa-server did not become healthy on :7420"
+      exit 1
     fi
+    echo "→ nessa-server ready on :7420"
 
     just dev
 
