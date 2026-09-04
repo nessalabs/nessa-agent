@@ -2,9 +2,9 @@
 
 - **Date:** 2026-08-31
 - **Status:** accepted
-- **Updated:** 2026-09-03 — removed the local reply stand-in and phase clock;
-  send/stop are no-ops until chat RPCs exist. Renamed domain "strip" → "tabs"
-  (ubiquitous language).
+- **Updated:** 2026-09-04 — `sendDraft` uses temporary `conversation.echo` via
+  `NessaClient` (user turn + echoed assistant reply). Stop remains a no-op.
+  Renamed domain "strip" → "tabs" (ubiquitous language).
 
 ## Context
 
@@ -43,7 +43,8 @@ dispatches and paints.
 
 Use cases split into two kinds:
 
-- **Server-owned (no-ops until chat RPCs):** `sendDraft`, `stopGenerating`.
+- **Server-owned:** `sendDraft` calls `conversation.echo` over `NessaClient`
+  (temporary stub until real turn RPCs). `stopGenerating` remains a no-op.
 - **UI session:** `setDraft`, `setActive`, `openConversation`,
   `closeConversation` — the composer and the open tab, until those persist.
 

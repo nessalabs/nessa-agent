@@ -20,9 +20,8 @@ The two hard parts are **the window** — placing, sizing, and re-fitting a
 chromeless panel across displays without the page's contents jittering during a
 resize, with a frost that can be turned off — and **the conversation surface**
 — a turn list with an `idle → thinking → streaming` lifecycle that a real agent
-runtime will eventually drive. There is no chat RPC in this repository yet; the
-conversation vertical keeps tabs and drafts as a UI session, and send is a
-no-op until a remote gateway owns turns.
+runtime will eventually drive. Today send uses a temporary `conversation.echo`
+RPC (your text comes back as the assistant reply) until real turn RPCs land.
 
 ## Code map
 
@@ -51,7 +50,7 @@ opinion rather than the product's.
 | --- | --- |
 | `main.tsx`, `store.ts` | Composition root. Mounts the panel, the session lifecycle, and product projections. |
 | `conversation/` | The conversation vertical. See the table below. |
-| `session/` | Wire session to `nessa-server` via `@nessa/client` (S1: connect + health). |
+| `session/` | Wire session to `nessa-server` via `@nessa/client` (S1: connect + health + dev-only ping). |
 | `panel/` | The floating-window chrome. See the table below. |
 | `host/` | Injected host features and the window seam (`window.ts`). |
 
@@ -73,7 +72,7 @@ opinion rather than the product's.
 | Path | Owns |
 | --- | --- |
 | `model/` | `SessionPhase`, status copy for the empty state. |
-| `adapters/client/` | `connectDevSession` (closes on health failure) + `getSessionClient` handle (live client outside Redux). |
+| `adapters/client/` | `connectDevSession` (health + `NessaClient.server.ping`; closes on probe failure) + `getSessionClient` handle (live client outside Redux). |
 | `adapters/store/` | Redux projection of connection status (`hello` / `health` only). |
 | `adapters/lifecycle/` | Mount/reconnect effect, owned by the composition root. Subscribes `onClose` before publishing ready. |
 | `ui/use-session.ts` | Hook the panel reads for status. |

@@ -39,7 +39,11 @@ describe("NessaClient", () => {
           type?: string
           id?: string
           method?: string
-          params?: { auth?: { token?: string; nonce?: string } }
+          params?: {
+            auth?: { token?: string; nonce?: string }
+            nonce?: string
+            text?: string
+          }
         }
         if (frame.type !== "req" || !frame.id || !frame.method) {
           socket.send(
@@ -136,6 +140,56 @@ describe("NessaClient", () => {
           return
         }
 
+        if (frame.method === "server.ping") {
+          if (!connected) {
+            socket.send(
+              JSON.stringify({
+                type: "res",
+                id: frame.id,
+                ok: false,
+                error: { code: "not_connected", message: "connect required" },
+              }),
+            )
+            return
+          }
+          const nonce =
+            typeof frame.params?.nonce === "string" ? frame.params.nonce : ""
+          socket.send(
+            JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: true,
+              payload: { ok: true, nonce },
+            }),
+          )
+          return
+        }
+
+        if (frame.method === "conversation.echo") {
+          if (!connected) {
+            socket.send(
+              JSON.stringify({
+                type: "res",
+                id: frame.id,
+                ok: false,
+                error: { code: "not_connected", message: "connect required" },
+              }),
+            )
+            return
+          }
+          const text =
+            typeof frame.params?.text === "string" ? frame.params.text : ""
+          socket.send(
+            JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: true,
+              payload: { text },
+            }),
+          )
+          return
+        }
+
         socket.send(
           JSON.stringify({
             type: "res",
@@ -155,7 +209,7 @@ describe("NessaClient", () => {
     wss.close()
   })
 
-  it("connects, completes handshake, and calls server.health", async () => {
+  it("connects, completes handshake, and calls server.health and server.ping", async () => {
     const client = await NessaClient.connect({
       stage: "ci",
       url: `ws://127.0.0.1:${port}`,
@@ -174,6 +228,12 @@ describe("NessaClient", () => {
       runtimeStatus: "ready",
       uptimeMs: 42,
     })
+
+    const ping = await client.server.ping("probe-1")
+    expect(ping).toEqual({ ok: true, nonce: "probe-1" })
+
+    const echo = await client.conversation.echo("hey")
+    expect(echo).toEqual({ text: "hey" })
 
     client.close()
   })

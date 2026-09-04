@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
 
-import { assertHelloOk, assertHealthResult, parseResponseFrame } from "./validate.js"
+import {
+  assertHelloOk,
+  assertHealthResult,
+  assertPingResult,
+  parseResponseFrame,
+} from "./validate.js"
 
 describe("protocol validate", () => {
   it("rejects hello payloads with invalid scopes or policy", () => {
@@ -48,6 +53,13 @@ describe("protocol validate", () => {
         uptimeMs: 1,
       }),
     ).toThrow("invalid runtimeStatus")
+  })
+
+  it("rejects ping payloads without an echoed nonce", () => {
+    expect(() => assertPingResult({ ok: true })).toThrow("missing nonce")
+    expect(() => assertPingResult({ ok: false, nonce: "x" })).toThrow(
+      "not a valid PingResult",
+    )
   })
 
   it("rejects contradictory response envelopes", () => {

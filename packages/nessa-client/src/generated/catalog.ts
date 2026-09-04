@@ -12,7 +12,9 @@
 
 export const Method = {
   Connect: "connect",
+  ConversationEcho: "conversation.echo",
   ServerHealth: "server.health",
+  ServerPing: "server.ping",
 } as const
 
 export type MethodName = (typeof Method)[keyof typeof Method]

@@ -19,7 +19,11 @@ export function useConversation() {
     conversations,
     active,
     setActive: (id: string) => dispatch(setActive(id)),
-    submit: () => dispatch(sendDraft()),
+    submit: () => {
+      const text = active.draft.trim()
+      if (!text) return
+      void dispatch(sendDraft({ text, id: active.id }))
+    },
     openConversation: () => {
       dispatch(openConversation())
     },

@@ -3,7 +3,7 @@
 use super::encode::error_message;
 use super::frames::{OutgoingMessage, RequestFrame};
 use super::generated_catalog::method;
-use super::generated_types::{ConnectParams, HealthParams};
+use super::generated_types::{ConnectParams, EchoParams, HealthParams, PingParams};
 use serde::Deserialize;
 
 /// Supported client RPCs after decoding a WebSocket text message.
@@ -15,6 +15,14 @@ pub enum ClientRequest {
     },
     ServerHealth {
         request_id: String,
+    },
+    ServerPing {
+        request_id: String,
+        params: PingParams,
+    },
+    ConversationEcho {
+        request_id: String,
+        params: EchoParams,
     },
     UnknownMethod {
         request_id: String,
@@ -109,6 +117,20 @@ fn decode_request_from_frame(frame: RequestFrame) -> Result<ClientRequest, Decod
             parse_params::<HealthParams>(&frame, method::SERVER_HEALTH)?;
             Ok(ClientRequest::ServerHealth {
                 request_id: frame.id.clone(),
+            })
+        }
+        method::SERVER_PING => {
+            let params = parse_params::<PingParams>(&frame, method::SERVER_PING)?;
+            Ok(ClientRequest::ServerPing {
+                request_id: frame.id.clone(),
+                params,
+            })
+        }
+        method::CONVERSATION_ECHO => {
+            let params = parse_params::<EchoParams>(&frame, method::CONVERSATION_ECHO)?;
+            Ok(ClientRequest::ConversationEcho {
+                request_id: frame.id.clone(),
+                params,
             })
         }
         other => Ok(ClientRequest::UnknownMethod {

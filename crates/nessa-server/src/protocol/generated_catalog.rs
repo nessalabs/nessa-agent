@@ -12,7 +12,9 @@
 /// RPC method names on `type: "req"` frames.
 pub mod method {
     pub const CONNECT: &str = "connect";
+    pub const CONVERSATION_ECHO: &str = "conversation.echo";
     pub const SERVER_HEALTH: &str = "server.health";
+    pub const SERVER_PING: &str = "server.ping";
 }
 
 /// Server push event names on `type: "event"` frames.

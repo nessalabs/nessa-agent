@@ -1,6 +1,6 @@
 export { closeConversation } from "./close-conversation"
 export { openConversation } from "./open-conversation"
-export { sendDraft } from "./send-draft"
+export { beginSend, completeEcho, failSend } from "./send-draft"
 export { setActive } from "./set-active"
 export { setDraft } from "./set-draft"
 export { stopGenerating } from "./stop-generating"

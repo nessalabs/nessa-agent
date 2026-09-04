@@ -115,6 +115,35 @@ export interface HealthResult {
   uptimeMs: number
 }
 
+export interface PingParams {
+  /**
+   * Client-chosen value; the result must echo it.
+   */
+  nonce: string
+}
+
+export interface PingResult {
+  ok: true
+  /**
+   * Echo of PingParams.nonce.
+   */
+  nonce: string
+}
+
+export interface EchoParams {
+  /**
+   * User draft text to echo back.
+   */
+  text: string
+}
+
+export interface EchoResult {
+  /**
+   * Echo of EchoParams.text.
+   */
+  text: string
+}
+
 export type ShortcutAction =
   "panel.summon" | "panel.newTab" | "panel.closeTab" | "panel.activateTab"
 

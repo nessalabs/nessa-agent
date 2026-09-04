@@ -10,7 +10,7 @@ picks them up automatically.
 | [../CODING_STANDARDS.md](../CODING_STANDARDS.md) | PR gating checklist for this repo — typed errors, boundaries, tests. Reviewers and agents check this before merge. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The map of the code as it stands: what each file owns, the boundaries, the invariants, and where a given change goes. Read this first. |
 | [codebase-structure.md](codebase-structure.md) | The general structural rules applied to Nessa specifically — the target shape, the Nessa absences, the host/shell seam, and what the core must never learn. |
-| [adr/](adr/README.md) | Decision records. [0001](adr/0001-redux-toolkit-for-product-state.md) Redux tabs; [0004](adr/0004-server-owned-keybindings.md) server-authored `shortcuts.json`; [0005](adr/0005-stage-scoped-local-data.md) namespaced on-disk paths (only `prod` bare). |
+| [adr/](adr/README.md) | Decision records. [0001](adr/0001-redux-toolkit-for-product-state.md) Redux tabs; [0004](adr/0004-server-owned-keybindings.md) server-authored `shortcuts.json`; [0005](adr/0005-stage-scoped-local-data.md) namespaced on-disk paths (only `prod` bare); [0006](adr/0006-server-ping-round-trip.md) `server.ping` session link proof (dev only). |
 
 ## The skills
 

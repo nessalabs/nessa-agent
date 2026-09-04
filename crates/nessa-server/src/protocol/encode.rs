@@ -2,7 +2,8 @@ use super::defaults::default_shortcuts;
 use super::frames::{EventFrame, OutgoingMessage, ResponseFrame};
 use super::generated_catalog::event;
 use super::generated_types::{
-    ConnectChallenge, HealthResult, HelloOk, RuntimeStatus, Scope, ServerPolicy,
+    ConnectChallenge, EchoResult, HealthResult, HelloOk, PingResult, RuntimeStatus, Scope,
+    ServerPolicy,
 };
 
 pub const PROTOCOL_VERSION: i64 = 1;
@@ -55,6 +56,28 @@ pub fn health_check_message(
         runtime_status: RuntimeStatus::Ready,
         uptime_ms: i64::try_from(uptime_ms).unwrap_or(i64::MAX),
     };
+    Ok(OutgoingMessage::Response(ResponseFrame::success(
+        request_id, &payload,
+    )?))
+}
+
+/// Successful `server.ping` RPC reply (echo).
+pub fn ping_echo_message(
+    request_id: &str,
+    nonce: String,
+) -> Result<OutgoingMessage, serde_json::Error> {
+    let payload = PingResult { ok: true, nonce };
+    Ok(OutgoingMessage::Response(ResponseFrame::success(
+        request_id, &payload,
+    )?))
+}
+
+/// Successful `conversation.echo` RPC reply.
+pub fn echo_message(
+    request_id: &str,
+    text: String,
+) -> Result<OutgoingMessage, serde_json::Error> {
+    let payload = EchoResult { text };
     Ok(OutgoingMessage::Response(ResponseFrame::success(
         request_id, &payload,
     )?))

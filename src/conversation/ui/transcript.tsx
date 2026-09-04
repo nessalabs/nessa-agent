@@ -28,7 +28,6 @@ export function Transcript({
 }) {
   const logRef = React.useRef<HTMLDivElement>(null)
   const lastId = conversation.turns.at(-1)?.id
-  const thinkingId = conversation.phase === "thinking" ? lastId : undefined
   const streamingId = conversation.phase === "streaming" ? lastId : undefined
   const sentTurns = conversation.turns.filter((turn) => turn.from === "user").length
 
@@ -59,11 +58,13 @@ export function Transcript({
           <TurnRow
             key={turn.id}
             turn={turn}
-            thinking={turn.id === thinkingId}
             streaming={turn.id === streamingId && streamText}
             animateMount={animateMount}
           />
         ))}
+        {conversation.phase === "thinking" ? (
+          <Thinking motion={animateMount} />
+        ) : null}
       </div>
     </div>
   )
@@ -71,17 +72,13 @@ export function Transcript({
 
 function TurnRow({
   turn,
-  thinking,
   streaming,
   animateMount,
 }: {
   turn: Turn
-  thinking: boolean
   streaming: boolean
   animateMount: boolean
 }) {
-  if (thinking) return <Thinking motion={animateMount} />
-
   return (
     <ChatMessage
       tone={turn.from === "user" ? "sent" : "received"}

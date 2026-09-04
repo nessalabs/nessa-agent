@@ -20,7 +20,7 @@ describe("connectDevSession", () => {
     expect(close).toHaveBeenCalledTimes(1)
   })
 
-  it("returns the client when health succeeds", async () => {
+  it("returns the client when health and ping succeed", async () => {
     const close = vi.fn()
     const hello = {
       protocol: 1,
@@ -31,9 +31,13 @@ describe("connectDevSession", () => {
       shortcuts: { version: 1, bindings: [] },
     }
     const health = { ok: true, runtimeStatus: "ready", uptimeMs: 1 }
+    const ping = vi.fn().mockImplementation(async (nonce: string) => ({
+      ok: true as const,
+      nonce,
+    }))
     const client = {
       session: hello,
-      server: { health: vi.fn().mockResolvedValue(health) },
+      server: { health: vi.fn().mockResolvedValue(health), ping },
       close,
     }
     const connect = vi.fn().mockResolvedValue(client)
@@ -42,7 +46,30 @@ describe("connectDevSession", () => {
     expect(established.client).toBe(client)
     expect(established.hello).toEqual(hello)
     expect(established.health).toEqual(health)
+    expect(established.ping.ok).toBe(true)
+    expect(ping).toHaveBeenCalledTimes(1)
     expect(close).not.toHaveBeenCalled()
+  })
+
+  it("closes the client when ping nonce mismatches", async () => {
+    const close = vi.fn()
+    const connect = vi.fn().mockResolvedValue({
+      session: { protocol: 1 },
+      server: {
+        health: vi.fn().mockResolvedValue({
+          ok: true,
+          runtimeStatus: "ready",
+          uptimeMs: 1,
+        }),
+        ping: vi.fn().mockResolvedValue({ ok: true, nonce: "wrong" }),
+      },
+      close,
+    })
+
+    await expect(connectDevSession({ connect })).rejects.toBeInstanceOf(
+      SessionHealthError,
+    )
+    expect(close).toHaveBeenCalledTimes(1)
   })
 })
 

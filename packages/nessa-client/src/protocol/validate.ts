@@ -212,3 +212,22 @@ export function assertHealthResult(value: unknown): import("./types.js").HealthR
   }
   return value as unknown as import("./types.js").HealthResult
 }
+
+/** Validate a server.ping result payload (must echo a non-empty nonce). */
+export function assertPingResult(value: unknown): import("./types.js").PingResult {
+  if (!isRecord(value) || value.ok !== true) {
+    throw new Error("ping response is not a valid PingResult")
+  }
+  if (!isNonEmptyString(value.nonce)) {
+    throw new Error("ping response missing nonce")
+  }
+  return value as unknown as import("./types.js").PingResult
+}
+
+/** Validate a conversation.echo result payload. */
+export function assertEchoResult(value: unknown): import("./types.js").EchoResult {
+  if (!isRecord(value) || !isNonEmptyString(value.text)) {
+    throw new Error("echo response is not a valid EchoResult")
+  }
+  return value as unknown as import("./types.js").EchoResult
+}

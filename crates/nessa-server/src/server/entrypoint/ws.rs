@@ -2,10 +2,12 @@ use super::session::WsSession;
 use super::ws_error::WsReadFailure;
 use crate::app::state::AppState;
 use crate::connect::entrypoint::handler as connect_handler;
+use crate::conversation::entrypoint::handler as conversation_handler;
 use crate::health::entrypoint::handler as health_handler;
+use crate::ping::entrypoint::handler as ping_handler;
 use crate::protocol::{
     connect_challenge_message, decode_client_request, decode_error_response, error_message,
-    ClientRequest, OutgoingMessage, MAX_PAYLOAD_BYTES,
+    wire_method, ClientRequest, OutgoingMessage, MAX_PAYLOAD_BYTES,
 };
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::StreamExt;
@@ -106,6 +108,40 @@ fn dispatch_client_request(
             }
             Some(health_handler::handle_health_check(state, &request_id))
         }
+        ClientRequest::ServerPing {
+            request_id,
+            params,
+        } => {
+            // ADR 0006: ping is only composed on stage=dev — otherwise unknown_method.
+            if !state.offers_server_ping() {
+                return Some(error_message(
+                    &request_id,
+                    "unknown_method",
+                    wire_method::SERVER_PING,
+                ));
+            }
+            if !session.is_connected() {
+                return Some(error_message(
+                    &request_id,
+                    "not_connected",
+                    "connect required before server.ping",
+                ));
+            }
+            Some(ping_handler::handle_ping(&request_id, params))
+        }
+        ClientRequest::ConversationEcho {
+            request_id,
+            params,
+        } => {
+            if !session.is_connected() {
+                return Some(error_message(
+                    &request_id,
+                    "not_connected",
+                    "connect required before conversation.echo",
+                ));
+            }
+            Some(conversation_handler::handle_echo(&request_id, params))
+        }
         ClientRequest::UnknownMethod { request_id, method } => {
             Some(error_message(&request_id, "unknown_method", &method))
         }
@@ -128,10 +164,18 @@ fn is_oversized_frame(byte_len: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::env::{Environment, MockEnv};
+    use crate::env::{Environment, MockEnv, STAGE, TOKEN};
+    use crate::protocol::PingParams;
 
     fn test_state() -> AppState {
         AppState::from_environment(&Environment::load(&MockEnv::new()).expect("defaults"))
+    }
+
+    fn prod_state() -> AppState {
+        AppState::from_environment(
+            &Environment::load(&MockEnv::new().set(STAGE, "prod").set(TOKEN, "secret"))
+                .expect("prod"),
+        )
     }
 
     #[test]
@@ -153,6 +197,57 @@ mod tests {
         assert_eq!(
             frame.error.as_ref().map(|error| error.code.as_str()),
             Some("not_connected")
+        );
+    }
+
+    #[test]
+    fn ping_on_dev_echoes_nonce_after_connect() {
+        let mut session = WsSession::new();
+        session.mark_connected();
+        let response = dispatch_client_request(
+            &test_state(),
+            &mut session,
+            ClientRequest::ServerPing {
+                request_id: "3".to_string(),
+                params: PingParams {
+                    nonce: "probe-1".to_string(),
+                },
+            },
+        )
+        .expect("response");
+
+        let OutgoingMessage::Response(frame) = response else {
+            panic!("expected response frame");
+        };
+        assert!(frame.ok);
+        let payload = frame.payload.expect("payload");
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["nonce"], "probe-1");
+    }
+
+    #[test]
+    fn ping_absent_on_non_dev_is_unknown_method() {
+        let mut session = WsSession::new();
+        session.mark_connected();
+        let response = dispatch_client_request(
+            &prod_state(),
+            &mut session,
+            ClientRequest::ServerPing {
+                request_id: "3".to_string(),
+                params: PingParams {
+                    nonce: "probe-1".to_string(),
+                },
+            },
+        )
+        .expect("response");
+
+        let OutgoingMessage::Response(frame) = response else {
+            panic!("expected response frame");
+        };
+        assert!(!frame.ok);
+        assert_eq!(
+            frame.error.as_ref().map(|error| error.code.as_str()),
+            Some("unknown_method")
         );
     }
 

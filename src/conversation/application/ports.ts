@@ -3,10 +3,10 @@ import type { LocalTabs } from "./local-tabs"
 /**
  * What the panel may ask the product to do.
  *
- * `sendDraft` / `stopGenerating` are no-ops until chat RPCs exist.
+ * Send is driven by an async thunk that calls `conversation.echo` via
+ * `NessaClient`; these methods stay sync for UI-session tab ops.
  */
 export interface ConversationGateway {
-  sendDraft(tabs: LocalTabs, conversationId?: string): LocalTabs
   stopGenerating(tabs: LocalTabs, conversationId?: string): LocalTabs
   openConversation(tabs: LocalTabs): LocalTabs
   closeConversation(tabs: LocalTabs, conversationId: string): LocalTabs

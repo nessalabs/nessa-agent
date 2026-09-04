@@ -2,13 +2,14 @@
   "version": 1,
   "transport": "websocket",
   "defaultUrl": "ws://127.0.0.1:7420",
-  "phase": "s1-connect-health",
-  "note": "Full v1 protocol (conversation, channel state, agent, plugins) lives on branch spike/server-ws-acp-panel. Add schemas here as each spike lands.",
+  "phase": "s1-connect-health-ping-echo",
+  "note": "conversation.echo is a temporary round-trip stub until real turn RPCs land. server.ping is composed only on stage=dev (ADR 0006).",
   "schemas": {
     "common": "schemas/v1/common.json",
     "frames": "schemas/v1/frames.json",
     "connect": "schemas/v1/connect.json",
-    "server": "schemas/v1/server.json"
+    "server": "schemas/v1/server.json",
+    "conversation": "schemas/v1/conversation.json"
   },
   "methods": {
     "connect": {
@@ -18,6 +19,14 @@
     "server.health": {
       "params": null,
       "result": "schemas/v1/server.json#/$defs/HealthResult"
+    },
+    "server.ping": {
+      "params": "schemas/v1/server.json#/$defs/PingParams",
+      "result": "schemas/v1/server.json#/$defs/PingResult"
+    },
+    "conversation.echo": {
+      "params": "schemas/v1/conversation.json#/$defs/EchoParams",
+      "result": "schemas/v1/conversation.json#/$defs/EchoResult"
     }
   },
   "events": {
@@ -28,7 +37,7 @@
   "roles": {
     "surface": {
       "scopes": ["server.read"],
-      "methods": ["connect", "server.health"],
+      "methods": ["connect", "server.health", "server.ping", "conversation.echo"],
       "events": ["connect.challenge"]
     }
   }

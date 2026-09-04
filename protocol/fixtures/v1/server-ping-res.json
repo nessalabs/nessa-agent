@@ -1,0 +1,9 @@
+{
+  "type": "res",
+  "id": "3",
+  "ok": true,
+  "payload": {
+    "ok": true,
+    "nonce": "probe-1"
+  }
+}
