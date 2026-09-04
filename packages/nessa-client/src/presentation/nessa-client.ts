@@ -3,24 +3,30 @@ import type { WireSession } from "../transport/wire-session.js"
 import type { EventHandler, NessaClientEvents } from "../application/events.js"
 import type { NessaClientConnectOptions } from "../application/options.js"
 import { establishSession } from "../composition/root.js"
+import {
+  createConversationApi,
+  type ConversationApi,
+} from "./conversation-api.js"
 import { createServerApi, type ServerApi } from "./server-api.js"
 
 /**
  * Public SDK facade — what surfaces, bridges, and tests import.
  *
  * Presentation layer only: delegates connect to composition and RPCs to
- * transport via typed namespaces (`server.health`, …).
+ * transport via typed namespaces (`server.health`, `conversation.echo`, …).
  */
 export class NessaClient {
   static readonly defaultUrl = "ws://127.0.0.1:7420"
 
   readonly server: ServerApi
+  readonly conversation: ConversationApi
 
   private constructor(
     private readonly wire: WireSession,
     private hello: HelloOk | null,
   ) {
     this.server = createServerApi(wire)
+    this.conversation = createConversationApi(wire)
   }
 
   static async connect(options: NessaClientConnectOptions): Promise<NessaClient> {

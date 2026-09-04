@@ -21,11 +21,15 @@ export type {
   ClientRole,
   ConnectChallenge,
   ConnectParams,
+  EchoParams,
+  EchoResult,
   EventFrame,
   Frame,
   GatewayError,
   HealthResult,
   HelloOk,
+  PingParams,
+  PingResult,
   ReqFrame,
   ResFrame,
   Scope,
@@ -40,5 +44,5 @@ export type {
 
 export { Event, Method, type EventName, type MethodName } from "../generated/catalog.js"
 export { isEventFrame, isResponseFrame, parseWireMessage } from "./decode.js"
-export { assertConnectChallenge, assertHealthResult, assertHelloOk } from "./validate.js"
+export { assertConnectChallenge, assertEchoResult, assertHealthResult, assertHelloOk, assertPingResult } from "./validate.js"
 export { buildRequestFrame, encodeWireMessage } from "./encode.js"

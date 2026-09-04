@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
 
 import { makeStore } from "../../../store"
+import { setSessionClient } from "../../../session/adapters/client/handle"
 import {
   closeConversation,
   openConversation,
@@ -15,7 +16,9 @@ function agent(store: ReturnType<typeof makeStore>) {
   return {
     draft: (text: string, id?: string) =>
       store.dispatch(setDraft(id ? { draft: text, id } : { draft: text })),
-    send: (id?: string) => store.dispatch(sendDraft(id ? { id } : undefined)),
+    send: async (text: string, id?: string) => {
+      await store.dispatch(sendDraft(id ? { text, id } : { text }))
+    },
     open: () => store.dispatch(openConversation()),
     close: (id: string) => store.dispatch(closeConversation(id)),
     stop: (id?: string) =>
@@ -26,6 +29,13 @@ function agent(store: ReturnType<typeof makeStore>) {
 }
 
 describe("conversation tabs store", () => {
+  beforeEach(() => {
+    setSessionClient(null)
+  })
+  afterEach(() => {
+    setSessionClient(null)
+  })
+
   it("starts with one idle conversation", () => {
     const tabs = makeStore().getState().conversation
     expect(tabs.conversations).toHaveLength(1)
@@ -35,14 +45,40 @@ describe("conversation tabs store", () => {
     expect(tabs.nextTurnId).toBe(1)
   })
 
-  it("drafts without inventing turns; send is a no-op", () => {
+  it("echoes a send through the session client into turns", async () => {
+    setSessionClient({
+      conversation: {
+        echo: vi.fn().mockResolvedValue({ text: "hey" }),
+      },
+    } as never)
+
     const run = agent(makeStore())
-    run.draft("hello there")
-    run.send()
+    run.draft("hey")
+    await run.send("hey")
     const open = run.tabs().conversations[0]!
     expect(open.phase).toBe("idle")
-    expect(open.draft).toBe("hello there")
-    expect(open.turns).toEqual([])
+    expect(open.draft).toBe("")
+    expect(open.turns).toEqual([
+      { id: "t1", from: "user", text: "hey", receipt: "delivered" },
+      { id: "t2", from: "assistant", text: "hey" },
+    ])
+  })
+
+  it("keeps the user turn when echo fails", async () => {
+    setSessionClient({
+      conversation: {
+        echo: vi.fn().mockRejectedValue(new Error("offline")),
+      },
+    } as never)
+
+    const run = agent(makeStore())
+    run.draft("hey")
+    await run.send("hey")
+    const open = run.tabs().conversations[0]!
+    expect(open.phase).toBe("idle")
+    expect(open.turns).toEqual([
+      { id: "t1", from: "user", text: "hey", receipt: "delivered" },
+    ])
   })
 
   it("stopGenerating is a no-op", () => {

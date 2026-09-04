@@ -2,18 +2,53 @@ import { describe, expect, it } from "vitest"
 
 import { emptyLocalTabs } from "../local-tabs"
 import {
+  beginSend,
   closeConversation,
+  completeEcho,
+  failSend,
   openConversation,
-  sendDraft,
   setActive,
   setDraft,
   stopGenerating,
 } from "./index"
 
-describe("sendDraft / stopGenerating", () => {
-  it("are no-ops until a remote gateway owns turns", () => {
+describe("beginSend / completeEcho", () => {
+  it("appends a user turn then an echoed assistant reply", () => {
+    const pending = beginSend(emptyLocalTabs(), { text: "hey" })
+    const active = pending.conversations.find((item) => item.id === pending.activeId)!
+    expect(active.phase).toBe("thinking")
+    expect(active.draft).toBe("")
+    expect(active.turns).toEqual([
+      { id: "t1", from: "user", text: "hey", receipt: "sending" },
+    ])
+
+    const done = completeEcho(pending, pending.activeId, "hey")
+    const idle = done.conversations.find((item) => item.id === done.activeId)!
+    expect(idle.phase).toBe("idle")
+    expect(idle.turns).toEqual([
+      { id: "t1", from: "user", text: "hey", receipt: "delivered" },
+      { id: "t2", from: "assistant", text: "hey" },
+    ])
+  })
+
+  it("no-ops an empty draft", () => {
+    const tabs = emptyLocalTabs()
+    expect(beginSend(tabs, { text: "  " })).toBe(tabs)
+  })
+
+  it("failSend returns to idle without an assistant turn", () => {
+    const pending = beginSend(emptyLocalTabs(), { text: "hey" })
+    const failed = failSend(pending, pending.activeId)
+    const active = failed.conversations.find((item) => item.id === failed.activeId)!
+    expect(active.phase).toBe("idle")
+    expect(active.turns).toHaveLength(1)
+    expect(active.turns[0]).toMatchObject({ from: "user", receipt: "delivered" })
+  })
+})
+
+describe("stopGenerating", () => {
+  it("is a no-op until stop RPCs exist", () => {
     const drafted = setDraft(emptyLocalTabs(), { draft: "hello there" })
-    expect(sendDraft(drafted)).toBe(drafted)
     expect(stopGenerating(drafted)).toBe(drafted)
   })
 })

@@ -1,7 +1,38 @@
-import { createSlice, type PayloadAction } from "@reduxjs/toolkit"
+import { createAsyncThunk, createSlice, type PayloadAction } from "@reduxjs/toolkit"
 
 import { emptyLocalTabs } from "../../application/local-tabs"
+import {
+  beginSend,
+  completeEcho,
+  failSend,
+} from "../../application/usecases/send-draft"
+import { getSessionClient } from "../../../session"
 import { localConversationGateway as gateway } from "../gateway/local"
+
+export type SendDraftArg = {
+  text: string
+  id?: string
+}
+
+export const sendDraft = createAsyncThunk(
+  "conversation/sendDraft",
+  async (input: SendDraftArg, { rejectWithValue }) => {
+    const text = input.text.trim()
+    if (!text) {
+      return rejectWithValue("empty draft")
+    }
+
+    const client = getSessionClient()
+    if (!client) {
+      return rejectWithValue("not connected")
+    }
+
+    const result = await client.conversation.echo(text)
+    return {
+      text: result.text,
+    }
+  },
+)
 
 const conversationSlice = createSlice({
   name: "conversation",
@@ -12,9 +43,6 @@ const conversationSlice = createSlice({
     },
     setDraft(state, action: PayloadAction<{ draft: string; id?: string }>) {
       return gateway.setDraft(state, action.payload)
-    },
-    sendDraft(state, action: PayloadAction<{ id?: string } | undefined>) {
-      return gateway.sendDraft(state, action.payload?.id)
     },
     openConversation(state) {
       return gateway.openConversation(state)
@@ -29,12 +57,29 @@ const conversationSlice = createSlice({
       return gateway.stopGenerating(state, action.payload?.conversationId)
     },
   },
+  extraReducers: (builder) => {
+    builder
+      .addCase(sendDraft.pending, (state, action) => {
+        return beginSend(state, {
+          text: action.meta.arg.text,
+          conversationId: action.meta.arg.id,
+        })
+      })
+      .addCase(sendDraft.fulfilled, (state, action) => {
+        const id = action.meta.arg.id ?? state.activeId
+        return completeEcho(state, id, action.payload.text)
+      })
+      .addCase(sendDraft.rejected, (state, action) => {
+        if (action.payload === "empty draft") return state
+        const id = action.meta.arg.id ?? state.activeId
+        return failSend(state, id)
+      })
+  },
 })
 
 export const {
   setActive,
   setDraft,
-  sendDraft,
   openConversation,
   closeConversation,
   stopGenerating,

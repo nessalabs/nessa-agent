@@ -1,8 +1,6 @@
 import { useDispatch, useSelector, type TypedUseSelectorHook } from "react-redux"
 
-import type { LocalTabs } from "../../application/local-tabs"
+import type { AppDispatch, RootState } from "../../../store"
 
-type ConversationRoot = { conversation: LocalTabs }
-
-export const useConversationDispatch = useDispatch
-export const useConversationSelector: TypedUseSelectorHook<ConversationRoot> = useSelector
+export const useConversationDispatch: () => AppDispatch = useDispatch
+export const useConversationSelector: TypedUseSelectorHook<RootState> = useSelector

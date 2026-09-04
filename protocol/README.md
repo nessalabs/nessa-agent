@@ -1,6 +1,7 @@
-# Protocol — S1 (connect + health)
+# Protocol — S1 (connect + health + ping)
 
-Wire contracts for the **current** spike only: WebSocket handshake and `server.health`.
+Wire contracts for the **current** spike: WebSocket handshake, `server.health`,
+and `server.ping` (composed only when the server stage is `dev`; see ADR 0006).
 
 | Path | Purpose |
 | --- | --- |
@@ -43,6 +44,7 @@ S1 methods/events (from `manifest.json`):
 | --- | --- | --- |
 | `connect` | req/res | First RPC; returns `HelloOk` |
 | `server.health` | req/res | Requires a successful `connect` |
+| `server.ping` | req/res | Echo nonce; **composed only on stage=`dev`** (ADR 0006); call via `NessaClient.server.ping` |
 | `connect.challenge` | event | Sent immediately on socket open; nonce echoed in `connect` |
 
 ## Error codes (S1)
@@ -56,8 +58,8 @@ Returned on `res` frames with `ok: false` and `error: { code, message }`:
 | `invalid_params` | Empty required metadata strings |
 | `invalid_challenge` | Auth nonce ≠ this socket's challenge |
 | `unauthorized` | Auth token mismatch |
-| `not_connected` | `server.health` before `connect` |
-| `unknown_method` | Unrecognized `method` string |
+| `not_connected` | `server.health` / `server.ping` before `connect` |
+| `unknown_method` | Unrecognized `method` string (including `server.ping` when not composed) |
 | `invalid_request` | Malformed / undecodable frame |
 | `internal_error` | Encode failure or missing challenge state |
 

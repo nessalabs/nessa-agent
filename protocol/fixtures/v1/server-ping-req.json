@@ -1,0 +1,8 @@
+{
+  "type": "req",
+  "id": "3",
+  "method": "server.ping",
+  "params": {
+    "nonce": "probe-1"
+  }
+}

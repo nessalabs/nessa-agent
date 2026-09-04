@@ -25,7 +25,7 @@ export function statusLabel(state: SessionState): string {
     case "connecting":
       return "Connecting to the local server…"
     case "ready":
-      return "Connected. Chat arrives when the server owns turns."
+      return "Connected. Send a message — the server echoes it back."
     case "error":
       return state.detail || "Could not reach the server. Run just server."
   }

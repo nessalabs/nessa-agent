@@ -1,4 +1,4 @@
-import { NessaClient, type HealthResult, type HelloOk } from "@nessa/client"
+import { NessaClient, type HealthResult, type HelloOk, type PingResult } from "@nessa/client"
 
 import { host } from "../../../host"
 
@@ -6,9 +6,10 @@ export type EstablishedDevSession = {
   client: NessaClient
   hello: HelloOk
   health: HealthResult
+  ping: PingResult
 }
 
-/** Thrown when connect succeeded but the post-connect health probe failed. */
+/** Thrown when connect succeeded but a post-connect probe failed. */
 export class SessionHealthError extends Error {
   readonly cause: unknown
 
@@ -25,9 +26,10 @@ export type ConnectDevSessionDeps = {
 
 /**
  * Open a stage=dev session against the local nessa-server defaults
- * (`ws://127.0.0.1:7420`, `dev-token`), then probe `server.health`.
+ * (`ws://127.0.0.1:7420`, `dev-token`), then probe `server.health` and
+ * `server.ping` (ADR 0006) through `NessaClient`.
  *
- * Closes the socket if health fails so callers never see a leaked session.
+ * Closes the socket if a probe fails so callers never see a leaked session.
  */
 export async function connectDevSession(
   deps: ConnectDevSessionDeps = {},
@@ -45,11 +47,16 @@ export async function connectDevSession(
   })
   try {
     const health = await client.server.health()
-    return { client, hello: client.session, health }
+    const nonce = crypto.randomUUID()
+    const ping = await client.server.ping(nonce)
+    if (ping.nonce !== nonce) {
+      throw new Error("ping nonce mismatch")
+    }
+    return { client, hello: client.session, health, ping }
   } catch (error) {
     client.close()
     throw new SessionHealthError(
-      error instanceof Error ? error.message : "Health check failed",
+      error instanceof Error ? error.message : "Session probe failed",
       error,
     )
   }

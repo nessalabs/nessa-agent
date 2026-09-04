@@ -14,4 +14,5 @@
  */
 export { NessaClient } from "./nessa-client.js"
 export type { NessaClientConnectOptions } from "../application/options.js"
+export type { ConversationApi } from "./conversation-api.js"
 export type { ServerApi } from "./server-api.js"

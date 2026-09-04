@@ -35,7 +35,13 @@ const typesRsOut =
   process.env.NESSA_PROTOCOL_TYPES_RS_OUT ??
   join(root, "crates/nessa-server/src/protocol/generated_types.rs")
 
-const SCHEMA_FILES = ["common.json", "connect.json", "server.json", "shortcuts.json"]
+const SCHEMA_FILES = [
+  "common.json",
+  "connect.json",
+  "server.json",
+  "shortcuts.json",
+  "conversation.json",
+]
 
 function constName(wireName) {
   return wireName

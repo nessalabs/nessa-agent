@@ -11,6 +11,31 @@
         "runtimeStatus": { "$ref": "common.json#/$defs/RuntimeStatus" },
         "uptimeMs": { "type": "integer", "minimum": 0 }
       }
+    },
+    "PingParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nonce"],
+      "properties": {
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Client-chosen value; the result must echo it."
+        }
+      }
+    },
+    "PingResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ok", "nonce"],
+      "properties": {
+        "ok": { "type": "boolean", "const": true },
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Echo of PingParams.nonce."
+        }
+      }
     }
   }
 }

@@ -1,0 +1,8 @@
+{
+  "type": "req",
+  "id": "4",
+  "method": "conversation.echo",
+  "params": {
+    "text": "hey"
+  }
+}

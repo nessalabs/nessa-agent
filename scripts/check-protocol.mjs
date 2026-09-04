@@ -43,6 +43,7 @@ const loadOrder = [
   "shortcuts.json",
   "connect.json",
   "server.json",
+  "conversation.json",
   "export.json",
 ]
 for (const name of loadOrder) {
@@ -120,6 +121,46 @@ const fixtureSpecs = [
       const frame = ajv.getSchema("nessa://protocol/v1/frames.json#/$defs/ResFrame")
       if (!frame?.(doc)) return frame?.errors
       const payload = ajv.getSchema("nessa://protocol/v1/server.json#/$defs/HealthResult")
+      return payload?.(doc.payload) ? null : payload?.errors
+    },
+  },
+  {
+    file: "server-ping-req.json",
+    validate: (doc) => {
+      const schema = ajv.getSchema("nessa://protocol/v1/frames.json#/$defs/ReqFrame")
+      if (!schema?.(doc)) return schema?.errors
+      const params = ajv.getSchema("nessa://protocol/v1/server.json#/$defs/PingParams")
+      return params?.(doc.params) ? null : params?.errors
+    },
+  },
+  {
+    file: "server-ping-res.json",
+    validate: (doc) => {
+      const frame = ajv.getSchema("nessa://protocol/v1/frames.json#/$defs/ResFrame")
+      if (!frame?.(doc)) return frame?.errors
+      const payload = ajv.getSchema("nessa://protocol/v1/server.json#/$defs/PingResult")
+      return payload?.(doc.payload) ? null : payload?.errors
+    },
+  },
+  {
+    file: "conversation-echo-req.json",
+    validate: (doc) => {
+      const schema = ajv.getSchema("nessa://protocol/v1/frames.json#/$defs/ReqFrame")
+      if (!schema?.(doc)) return schema?.errors
+      const params = ajv.getSchema(
+        "nessa://protocol/v1/conversation.json#/$defs/EchoParams",
+      )
+      return params?.(doc.params) ? null : params?.errors
+    },
+  },
+  {
+    file: "conversation-echo-res.json",
+    validate: (doc) => {
+      const frame = ajv.getSchema("nessa://protocol/v1/frames.json#/$defs/ResFrame")
+      if (!frame?.(doc)) return frame?.errors
+      const payload = ajv.getSchema(
+        "nessa://protocol/v1/conversation.json#/$defs/EchoResult",
+      )
       return payload?.(doc.payload) ? null : payload?.errors
     },
   },

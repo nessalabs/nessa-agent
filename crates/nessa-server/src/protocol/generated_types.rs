@@ -52,6 +52,20 @@ pub struct ConnectParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EchoParams {
+    /// User draft text to echo back.
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EchoResult {
+    /// Echo of EchoParams.text.
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GatewayError {
     pub code: String,
     pub message: String,
@@ -79,6 +93,21 @@ pub struct HelloOk {
     pub runtime_status: RuntimeStatus,
     pub policy: ServerPolicy,
     pub shortcuts: ShortcutsDocument,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PingParams {
+    /// Client-chosen value; the result must echo it.
+    pub nonce: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PingResult {
+    pub ok: bool,
+    /// Echo of PingParams.nonce.
+    pub nonce: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
