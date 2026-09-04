@@ -1,6 +1,7 @@
 import { conversation, type Conversation } from "../../model"
 
-export function closeInStrip(
+/** Close a tab; always leave at least one conversation open. */
+export function closeTab(
   items: Conversation[],
   id: string,
   activeId: string,

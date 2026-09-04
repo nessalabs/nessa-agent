@@ -58,8 +58,8 @@ opinion rather than the product's.
 
 | Path | Owns |
 | --- | --- |
-| `model/` | Shared language: `Conversation`, `Turn`, `ConversationStrip` (`conversations` + `activeId`). Discriminated turns and phases. No id mill. |
-| `application/local-strip.ts` | UI-session store shape: the shared strip plus local id counters. A remote gateway mints its own ids and this type goes away. |
+| `model/` | Shared language: `Conversation`, `Turn`, `ConversationTabs` (`conversations` + `activeId`). Discriminated turns and phases. No id mill. |
+| `application/local-tabs.ts` | UI-session store shape: the shared tabs plus local id counters. A remote gateway mints its own ids and this type goes away. |
 | `application/usecases/` | One file per command. Session: draft, active tab, open, close. Send/stop are no-ops until chat RPCs exist. |
 | `application/ports.ts` | `ConversationGateway` — what the panel may ask the product to do. |
 | `adapters/gateway/local.ts` | In-process UI-session gateway. Tomorrow this is the remote gateway. |

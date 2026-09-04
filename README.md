@@ -53,8 +53,8 @@ implementation per OS, injected by `current()` — and in
   hang over the desktop. The frontend owns the choice and remembers it
   ([src/panel/adapters/surface.ts](src/panel/adapters/surface.ts)); the tray item only *requests* a
   toggle, and its check mark is reflected back from `set_frosted`.
-- **No chat RPCs yet** — the conversation strip in
-  [`src/conversation/`](src/conversation/) is a UI session (tabs, drafts,
+- **No chat RPCs yet** — the conversation tabs in
+  [`src/conversation/`](src/conversation/) are a UI session (tabs, drafts,
   empty transcript). Send is a no-op until the server owns turns. On launch the
   panel opens a `stage=dev` `@nessa/client` session against local
   `nessa-server` (`just server`) and shows connect/health status in the empty

@@ -1,16 +1,15 @@
-import type { LocalStrip } from "./local-strip"
+import type { LocalTabs } from "./local-tabs"
 
 /**
  * What the panel may ask the product to do.
  *
- * Session commands are local until a remote gateway owns them.
  * `sendDraft` / `stopGenerating` are no-ops until chat RPCs exist.
  */
 export interface ConversationGateway {
-  sendDraft(strip: LocalStrip, conversationId?: string): LocalStrip
-  stopGenerating(strip: LocalStrip, conversationId?: string): LocalStrip
-  openConversation(strip: LocalStrip): LocalStrip
-  closeConversation(strip: LocalStrip, conversationId: string): LocalStrip
-  setDraft(strip: LocalStrip, input: { draft: string; id?: string }): LocalStrip
-  setActive(strip: LocalStrip, conversationId: string): LocalStrip
+  sendDraft(tabs: LocalTabs, conversationId?: string): LocalTabs
+  stopGenerating(tabs: LocalTabs, conversationId?: string): LocalTabs
+  openConversation(tabs: LocalTabs): LocalTabs
+  closeConversation(tabs: LocalTabs, conversationId: string): LocalTabs
+  setDraft(tabs: LocalTabs, input: { draft: string; id?: string }): LocalTabs
+  setActive(tabs: LocalTabs, conversationId: string): LocalTabs
 }

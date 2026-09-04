@@ -1,6 +1,6 @@
-import type { LocalStrip } from "../local-strip"
+import type { LocalTabs } from "../local-tabs"
 
-/** No-op until a remote gateway owns chat turns. */
-export function stopGenerating(strip: LocalStrip, _conversationId?: string): LocalStrip {
-  return strip
+/** No-op until a remote gateway owns turns. */
+export function stopGenerating(tabs: LocalTabs, _conversationId?: string): LocalTabs {
+  return tabs
 }

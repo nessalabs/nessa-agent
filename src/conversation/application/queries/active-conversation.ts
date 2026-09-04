@@ -1,9 +1,9 @@
 import {
-  conversationInStrip,
+  conversationInTabs,
   type Conversation,
-  type ConversationStrip,
+  type ConversationTabs,
 } from "../../model"
 
-export function activeConversation(strip: ConversationStrip): Conversation {
-  return conversationInStrip(strip.conversations, strip.activeId)
+export function activeConversation(tabs: ConversationTabs): Conversation {
+  return conversationInTabs(tabs.conversations, tabs.activeId)
 }

@@ -43,23 +43,23 @@ export function App() {
   const ground = scheme === "dark" ? "ink" : "paper"
   const [surface, toggleSurface] = useSurface()
   const edge = useEdgeReveal()
-  const strip = useConversation()
+  const chat = useConversation()
   const session = useSession()
   const composerRef = React.useRef<HTMLTextAreaElement>(null)
   useHostPanel(surface, toggleSurface, composerRef)
   useFlushOnTurn(
     host.flushOnTurn,
-    `${strip.active.id}:${strip.active.phase}:${strip.active.turns.length}`,
+    `${chat.active.id}:${chat.active.phase}:${chat.active.turns.length}`,
   )
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    strip.submit()
+    chat.submit()
   }
 
-  const generating = strip.active.phase !== "idle"
+  const generating = chat.active.phase !== "idle"
 
-  const tabs: ChatTabItem[] = strip.conversations.map((item) => ({
+  const tabs: ChatTabItem[] = chat.conversations.map((item) => ({
     id: item.id,
     title: item.title,
     closeable: true,
@@ -119,12 +119,12 @@ export function App() {
           hidden={surface === "clear" && host.compositor === "layout"}
           className="nessa-edge-reveal pointer-events-none"
         />
-        {/* The strip is the titlebar too: the gaps around the tabs drag the
+        {/* The tabs bar is the titlebar too: the gaps around the tabs drag the
             window, while the tabs themselves stay clickable.
         
             `deep` rather than a bare attribute. Bare means Tauri only drags on
             a *direct* hit of this element (`el === composedPath[0]`), and the
-            tab list is `flex-1`, so its scroller covers the strip and takes
+            tab list is `flex-1`, so its scroller covers the bar and takes
             every press — there is no gap left to land on. `deep` drags from
             anywhere in the subtree, and Tauri still refuses over anything
             clickable, which is what keeps the tabs themselves tabs. */}
@@ -135,11 +135,11 @@ export function App() {
           <ChatTabs
             label="Conversations"
             tabs={tabs}
-            value={strip.active.id}
-            onValueChange={strip.setActive}
-            onClose={strip.closeConversation}
+            value={chat.active.id}
+            onValueChange={chat.setActive}
+            onClose={chat.closeConversation}
             onNew={() => {
-              strip.openConversation()
+              chat.openConversation()
               composerRef.current?.focus()
             }}
             newTabLabel="New conversation"
@@ -149,8 +149,8 @@ export function App() {
         {/* Keyed so a layout compositor drops the previous conversation's
             tiles instead of leaving them over the wallpaper. */}
         <Transcript
-          key={strip.active.id}
-          conversation={strip.active}
+          key={chat.active.id}
+          conversation={chat.active}
           ground={ground}
           animateMount={host.animateMount}
           streamText={host.streamText}
@@ -166,8 +166,8 @@ export function App() {
               </ChatComposerAction>
               <ChatComposerInput
                 ref={composerRef}
-                value={strip.active.draft}
-                onChange={(event) => strip.setDraft(event.target.value)}
+                value={chat.active.draft}
+                onChange={(event) => chat.setDraft(event.target.value)}
                 placeholder="Ask me anything"
                 className="self-center"
                 autoFocus
@@ -180,7 +180,7 @@ export function App() {
                 <ChatComposerAction
                   aria-label="Stop generating"
                   title="Stop generating"
-                  onClick={strip.stopGenerating}
+                  onClick={chat.stopGenerating}
                 >
                   <Square aria-hidden="true" className="fill-current" />
                 </ChatComposerAction>

@@ -3,16 +3,17 @@
 - **Date:** 2026-08-31
 - **Status:** accepted
 - **Updated:** 2026-09-03 — removed the local reply stand-in and phase clock;
-  send/stop are no-ops until chat RPCs exist.
+  send/stop are no-ops until chat RPCs exist. Renamed domain "strip" → "tabs"
+  (ubiquitous language).
 
 ## Context
 
 The panel will grow a real agent runtime and a gateway. Product rules — when
-a send is legal, how a reply lands, that the strip never empties — must not
+a send is legal, how a reply lands, that the tabs never empty — must not
 live in React components. The frontend should mostly call for a change and
-paint UI state. [0001](0001-redux-toolkit-for-product-state.md) put the strip
-in Redux so an agent can dispatch it; it left the rules in one module and
-deferred a layered tree.
+paint UI state. [0001](0001-redux-toolkit-for-product-state.md) put the open
+tabs in Redux so an agent can dispatch them; it left the rules in one module
+and deferred a layered tree.
 
 The second consumer is now planned: a server (or host-side runtime) that owns
 those operations. The UI must already be shaped as a projection so that swap
@@ -25,8 +26,8 @@ The conversation feature is a vertical slice:
 ```
 src/conversation/
   model/                 contract the panel and the future server share
-                         (strip = conversations + activeId; no id mill)
-  application/local-strip.ts
+                         (ConversationTabs = conversations + activeId; no id mill)
+  application/local-tabs.ts
                          UI-session counters; dies with the local adapter
   application/usecases/  one file per command
   application/ports.ts   ConversationGateway
@@ -36,7 +37,7 @@ src/conversation/
 ```
 
 Reducers do not contain rules. They call `ConversationGateway` and store the
-strip they get back. `localConversationGateway` runs the use cases
+tabs they get back. `localConversationGateway` runs the use cases
 in-process. A remote adapter replaces that object; the panel still only
 dispatches and paints.
 
@@ -56,7 +57,7 @@ Each use case is independently testable. The transcript cannot import gateway
 internals or the host seam.
 
 When chat RPCs exist, the local adapter goes away and the use cases become
-`await gateway.sendDraft(…)`. `LocalStrip` goes with it. The store grows an
+`await gateway.sendDraft(…)`. `LocalTabs` goes with it. The store grows an
 async boundary (`createAsyncThunk` or a listener); the UI does not change
 shape. Other modules keep importing the conversation barrel, not the files
 under it.

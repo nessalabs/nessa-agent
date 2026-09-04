@@ -1,6 +1,6 @@
-import type { LocalStrip } from "../local-strip"
+import type { LocalTabs } from "../local-tabs"
 
-export function setActive(strip: LocalStrip, conversationId: string): LocalStrip {
-  if (!strip.conversations.some((item) => item.id === conversationId)) return strip
-  return { ...strip, activeId: conversationId }
+export function setActive(tabs: LocalTabs, conversationId: string): LocalTabs {
+  if (!tabs.conversations.some((item) => item.id === conversationId)) return tabs
+  return { ...tabs, activeId: conversationId }
 }

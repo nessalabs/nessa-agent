@@ -1,11 +1,11 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit"
 
-import { emptyLocalStrip } from "../../application/local-strip"
+import { emptyLocalTabs } from "../../application/local-tabs"
 import { localConversationGateway as gateway } from "../gateway/local"
 
 const conversationSlice = createSlice({
   name: "conversation",
-  initialState: emptyLocalStrip(),
+  initialState: emptyLocalTabs(),
   reducers: {
     setActive(state, action: PayloadAction<string>) {
       return gateway.setActive(state, action.payload)
