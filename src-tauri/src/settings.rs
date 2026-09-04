@@ -3,11 +3,14 @@
 //! There is no settings UI yet, so the file is the interface: it is written
 //! with its defaults on first launch, which is what makes the keys
 //! discoverable. A later settings surface reads and writes the same shape.
+//! Path is stage-scoped via [`crate::local_data`] (ADR 0005).
 
 use std::fs;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+
+use crate::local_data;
 
 /// `serde(default)` so a file written by an older build — or one a person has
 /// hand-edited down to a single key — still loads, with the missing keys
@@ -57,12 +60,9 @@ impl Default for Panel {
     }
 }
 
-/// `settings.json` in the app's config directory.
+/// `settings.json` under the stage-scoped config root ([`local_data`]).
 fn path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    app.path()
-        .app_config_dir()
-        .ok()
-        .map(|dir| dir.join("settings.json"))
+    local_data::config_root(app).map(|root| root.join("settings.json"))
 }
 
 /// Reads the settings, falling back to the defaults for anything missing — and
