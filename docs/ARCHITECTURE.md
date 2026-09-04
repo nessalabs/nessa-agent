@@ -84,7 +84,7 @@ Chat adapters must use `getSessionClient()` from the session barrel — do not o
 | Path | Owns |
 | --- | --- |
 | `model/` | `Surface` — frosted or clear. |
-| `adapters/` | Host subscriptions: colour scheme, edge reveal, panel frame, frost, remembered surface, compositor flush. |
+| `adapters/` | Host subscriptions: colour scheme, edge reveal, panel frame, frost, remembered surface, compositor flush, in-panel tab shortcuts. |
 | `ui/app.tsx` | The chrome: stage, glow, resize handle, tab strip, composer. Renders; no effects. |
 | `ui/waveform-icon.tsx` | The voice glyph in the composer. |
 
