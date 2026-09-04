@@ -1,4 +1,5 @@
 use super::session::WsSession;
+use super::ws_error::WsReadFailure;
 use crate::app::state::AppState;
 use crate::connect::entrypoint::handler as connect_handler;
 use crate::health::entrypoint::handler as health_handler;
@@ -28,11 +29,13 @@ pub async fn handle_socket(mut socket: WebSocket, state: AppState) {
         let message = match result {
             Ok(message) => message,
             Err(error) => {
-                // App reload / quit often drops TCP without a Close frame.
-                if is_benign_disconnect(&error) {
-                    tracing::debug!(%error, "websocket closed");
-                } else {
-                    tracing::warn!(%error, "websocket read error");
+                match WsReadFailure::classify(&error) {
+                    WsReadFailure::Disconnected => {
+                        tracing::debug!(%error, "websocket disconnected");
+                    }
+                    WsReadFailure::Unexpected => {
+                        tracing::warn!(%error, "websocket read error");
+                    }
                 }
                 break;
             }
@@ -122,15 +125,6 @@ fn is_oversized_frame(byte_len: usize) -> bool {
     byte_len > MAX_PAYLOAD_BYTES as usize
 }
 
-/// Client reload, quit, or process kill often ends the TCP stream without a
-/// WebSocket Close frame. That is expected teardown, not a protocol bug.
-fn is_benign_disconnect(error: &impl std::fmt::Display) -> bool {
-    let message = error.to_string();
-    message.contains("without closing handshake")
-        || message.contains("Connection reset")
-        || message.contains("broken pipe")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,14 +160,5 @@ mod tests {
     fn rejects_oversized_wire_text() {
         assert!(is_oversized_frame(MAX_PAYLOAD_BYTES as usize + 1));
         assert!(!is_oversized_frame(MAX_PAYLOAD_BYTES as usize));
-    }
-
-    #[test]
-    fn treats_abrupt_client_teardown_as_benign() {
-        assert!(is_benign_disconnect(
-            &"WebSocket protocol error: Connection reset without closing handshake"
-        ));
-        assert!(is_benign_disconnect(&"IO error: broken pipe"));
-        assert!(!is_benign_disconnect(&"failed to decode frame"));
     }
 }
