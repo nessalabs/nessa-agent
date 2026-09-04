@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import type { ShortcutsDocument } from "@nessa/client"
 
@@ -28,11 +28,13 @@ export function useTabShortcuts(actions: {
   const { openTab, closeActiveTab, activateTab } = actions
   const session = useSession()
   const [shortcuts, setShortcuts] = useState<ShortcutsDocument>(bundledDefaults)
+  const helloApplied = useRef(false)
 
   useEffect(() => {
     let cancelled = false
     void loadShortcuts().then((loaded) => {
-      if (!cancelled && loaded) setShortcuts(loaded)
+      // HelloOk wins if it arrives first; do not let a late cache read replace it.
+      if (!cancelled && loaded && !helloApplied.current) setShortcuts(loaded)
     })
     return () => {
       cancelled = true
@@ -42,6 +44,7 @@ export function useTabShortcuts(actions: {
   useEffect(() => {
     const fromHello = session.hello?.shortcuts
     if (!fromHello) return
+    helloApplied.current = true
     setShortcuts(fromHello)
     void applyShortcuts(fromHello)
   }, [session.hello])
