@@ -18,7 +18,14 @@
     "HelloOk": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["protocol", "scopes", "serverVersion", "runtimeStatus", "policy"],
+      "required": [
+        "protocol",
+        "scopes",
+        "serverVersion",
+        "runtimeStatus",
+        "policy",
+        "shortcuts"
+      ],
       "properties": {
         "protocol": { "type": "integer", "const": 1 },
         "scopes": {
@@ -36,7 +43,8 @@
           "properties": {
             "maxPayloadBytes": { "type": "integer", "minimum": 1 }
           }
-        }
+        },
+        "shortcuts": { "$ref": "shortcuts.json#/$defs/ShortcutsDocument" }
       }
     },
     "ConnectChallenge": {

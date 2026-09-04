@@ -91,6 +91,22 @@ export async function flushCompositor() {
   await invoke("flush_compositor")
 }
 
+/** Stage-scoped shortcuts cache (or null outside Tauri — use bundled defaults). */
+export async function loadShortcuts(): Promise<import("@nessa/client").ShortcutsDocument | null> {
+  if (!inTauri) return null
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke("load_shortcuts")
+}
+
+/** Persist HelloOk.shortcuts and re-register global summon on the host. */
+export async function applyShortcuts(
+  document: import("@nessa/client").ShortcutsDocument,
+): Promise<void> {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("apply_shortcuts", { document })
+}
+
 /**
  * Subscribes to the window being live-resized — held by its frame, as opposed
  * to resized programmatically.

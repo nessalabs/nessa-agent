@@ -27,8 +27,10 @@ mod encode;
 mod frames;
 mod generated_catalog;
 mod generated_types;
+pub mod defaults;
 
 pub use decode::{decode_client_request, decode_error_response, ClientRequest, DecodeError};
+pub use defaults::default_shortcuts;
 pub use encode::{
     connect_challenge_message, connect_success_message, error_message, health_check_message,
     MAX_PAYLOAD_BYTES, PROTOCOL_VERSION,
@@ -37,5 +39,6 @@ pub use frames::{OutgoingMessage, ResponseFrame};
 pub use generated_catalog::{event as wire_event, method as wire_method};
 pub use generated_types::{
     AuthToken, ClientInfo, ClientRole, ConnectChallenge, ConnectParams, GatewayError, HealthParams,
-    HealthResult, HelloOk, RuntimeStatus, Scope, ServerPolicy, SurfaceInfo, SurfaceKind,
+    HealthResult, HelloOk, RuntimeStatus, Scope, ServerPolicy, ShortcutAction, ShortcutArgs,
+    ShortcutBinding, ShortcutScope, ShortcutSurface, ShortcutsDocument, SurfaceInfo, SurfaceKind,
 };

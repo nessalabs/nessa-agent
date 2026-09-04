@@ -4,6 +4,8 @@
 //! with its defaults on first launch, which is what makes the keys
 //! discoverable. A later settings surface reads and writes the same shape.
 //! Path is stage-scoped via [`crate::local_data`] (ADR 0005).
+//!
+//! Global summon lives in `shortcuts.json` (ADR 0004), not here.
 
 use std::fs;
 
@@ -18,17 +20,12 @@ use crate::local_data;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
-    /// The accelerator that summons and dismisses the panel from anywhere.
-    /// `CmdOrCtrl` resolves per platform. Tauri's accelerator syntax, e.g.
-    /// "CmdOrCtrl+Shift+A", "Alt+Space".
-    pub toggle_shortcut: String,
     pub panel: Panel,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            toggle_shortcut: String::from("CmdOrCtrl+Shift+A"),
             panel: Panel::default(),
         }
     }
@@ -118,21 +115,25 @@ mod tests {
     #[test]
     fn missing_keys_take_their_defaults() {
         let settings = parse("{}").unwrap();
-        assert_eq!(settings.toggle_shortcut, Settings::default().toggle_shortcut);
         assert_eq!(settings.panel.width, 420.0);
         assert!(settings.panel.height.is_none());
     }
 
     #[test]
     fn camel_case_keys_round_trip() {
-        let settings = parse(
-            r#"{ "toggleShortcut": "Alt+Space", "panel": { "width": 480, "minWidth": 400 } }"#,
-        )
-        .unwrap();
-        assert_eq!(settings.toggle_shortcut, "Alt+Space");
+        let settings = parse(r#"{ "panel": { "width": 480, "minWidth": 400 } }"#).unwrap();
         assert_eq!(settings.panel.width, 480.0);
         assert_eq!(settings.panel.min_width, 400.0);
         assert!(settings.panel.height.is_none());
+    }
+
+    #[test]
+    fn legacy_toggle_shortcut_is_ignored() {
+        let settings = parse(
+            r#"{ "toggleShortcut": "Alt+Space", "panel": { "width": 480 } }"#,
+        )
+        .unwrap();
+        assert_eq!(settings.panel.width, 480.0);
     }
 
     #[test]

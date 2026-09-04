@@ -13,6 +13,7 @@ import { useFlushOnTurn } from "../adapters/compositor-flush"
 import { useEdgeReveal } from "../adapters/edge-reveal"
 import { useHostPanel } from "../adapters/host-panel"
 import { useSurface, type Surface } from "../adapters/surface"
+import { useTabShortcuts } from "../adapters/use-tab-shortcuts"
 import { WaveformIcon } from "./waveform-icon"
 
 /**
@@ -46,7 +47,30 @@ export function App() {
   const chat = useConversation()
   const session = useSession()
   const composerRef = React.useRef<HTMLTextAreaElement>(null)
+  const openTab = React.useEffectEvent(() => {
+    chat.openConversation()
+    composerRef.current?.focus()
+  })
+  const closeActiveTab = React.useEffectEvent(() => {
+    chat.closeConversation(chat.active.id)
+  })
+  const activateTab = React.useEffectEvent(
+    (target: { index?: number; conversationId?: string }) => {
+      if (target.conversationId) {
+        const open = chat.conversations.some((item) => item.id === target.conversationId)
+        if (open) {
+          chat.setActive(target.conversationId)
+          return
+        }
+      }
+      if (typeof target.index !== "number") return
+      const next = chat.conversations[target.index]
+      if (!next) return
+      chat.setActive(next.id)
+    },
+  )
   useHostPanel(surface, toggleSurface, composerRef)
+  useTabShortcuts({ openTab, closeActiveTab, activateTab })
   useFlushOnTurn(
     host.flushOnTurn,
     `${chat.active.id}:${chat.active.phase}:${chat.active.turns.length}`,

@@ -118,7 +118,67 @@ export function assertHelloOk(value: unknown): HelloOk {
   if (!isRecord(value.policy) || !isPositiveInteger(value.policy.maxPayloadBytes)) {
     throw new Error("connect response has invalid policy.maxPayloadBytes")
   }
+  assertShortcutsDocument(value.shortcuts)
   return value as unknown as HelloOk
+}
+
+const SHORTCUT_ACTIONS = new Set([
+  "panel.summon",
+  "panel.newTab",
+  "panel.closeTab",
+  "panel.activateTab",
+])
+const SHORTCUT_SCOPES = new Set(["global", "focused"])
+const SHORTCUT_SURFACES = new Set(["desktop", "browser", "*"])
+
+function assertShortcutsDocument(value: unknown): void {
+  if (!isRecord(value)) {
+    throw new Error("connect response has invalid shortcuts")
+  }
+  if (value.version !== 1) {
+    throw new Error("connect response has unsupported shortcuts.version")
+  }
+  if (!Array.isArray(value.bindings)) {
+    throw new Error("connect response has invalid shortcuts.bindings")
+  }
+  for (const binding of value.bindings) {
+    if (!isRecord(binding)) {
+      throw new Error("connect response has invalid shortcut binding")
+    }
+    if (!isNonEmptyString(binding.keys)) {
+      throw new Error("connect response has invalid shortcut keys")
+    }
+    if (typeof binding.action !== "string" || !SHORTCUT_ACTIONS.has(binding.action)) {
+      throw new Error("connect response has invalid shortcut action")
+    }
+    if (typeof binding.scope !== "string" || !SHORTCUT_SCOPES.has(binding.scope)) {
+      throw new Error("connect response has invalid shortcut scope")
+    }
+    if (typeof binding.surface !== "string" || !SHORTCUT_SURFACES.has(binding.surface)) {
+      throw new Error("connect response has invalid shortcut surface")
+    }
+    if ("args" in binding && binding.args != null) {
+      if (!isRecord(binding.args)) {
+        throw new Error("connect response has invalid shortcut args")
+      }
+      if (
+        "index" in binding.args &&
+        binding.args.index != null &&
+        (typeof binding.args.index !== "number" ||
+          !Number.isInteger(binding.args.index) ||
+          binding.args.index < 0)
+      ) {
+        throw new Error("connect response has invalid shortcut args.index")
+      }
+      if (
+        "conversationId" in binding.args &&
+        binding.args.conversationId != null &&
+        !isNonEmptyString(binding.args.conversationId)
+      ) {
+        throw new Error("connect response has invalid shortcut args.conversationId")
+      }
+    }
+  }
 }
 
 /** Validate a connect.challenge event payload. */

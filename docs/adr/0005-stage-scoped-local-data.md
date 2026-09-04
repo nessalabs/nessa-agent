@@ -41,8 +41,8 @@ Derived from process env (not from the remote URL mid-session):
 
 `NESSA_STAGE` unset: `dev` in debug builds, `prod` in release.
 
-`settings.json`, later `shortcuts.json`, and any later local stores use that
-root.
+`settings.json`, `shortcuts.json` ([0004](0004-server-owned-keybindings.md)),
+and any later local stores use that root.
 
 **Protocol / env:** stage remains a propagatable string end-to-end. Known
 values (`dev`, `alpha`, `ci`, `prod`) may keep documented **policy** (e.g. who

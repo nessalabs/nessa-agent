@@ -35,8 +35,9 @@ opinion rather than the product's.
 | `host.rs` | The host/shell seam: event names and the `PanelSize` payload. The frontend lists the same names in `src/host/window.ts`; a test fails if they drift. |
 | `panel.rs` | The panel frame: opening size, lower-right placement, show/hide. The tray and the shortcut request a toggle; they do not fit the frame. |
 | `tray.rs` | The menu bar extra (macOS) or StatusNotifierItem (Linux), and the surface-toggle request. Creating it is survivable: a desktop with no tray still launches. |
-| `shortcut.rs` | The global accelerator that summons and dismisses the panel. |
-| `settings.rs` | The on-disk settings shape and its defaults. The file *is* the settings interface until there is a UI; `serde(default)` is what lets an older or hand-edited file still load. |
+| `shortcut.rs` | Registers / re-registers the global `panel.summon` accelerator from the shortcuts cache. |
+| `shortcuts.rs` | Stage-scoped `shortcuts.json` cache: seed from protocol defaults, refresh from HelloOk. |
+| `settings.rs` | The on-disk settings shape (panel geometry) and its defaults. Summon is not here — see `shortcuts.rs`. |
 | `platform/` | The OS host. `Host` is the contract; `current()` injects one implementation for the compiled target. Commands `set_frosted` and `panel_size` live here too. |
 | `platform/macos/` | Accessory app, `NSVisualEffectView` frost, WKWebView pin, AppKit live-resize notifications, hide-on-blur in release. |
 | `platform/linux/` | WebKit DMA-BUF prep, GtkFixed pin, CSS frost (no-op natively), allocate-based live resize, shown on the taskbar at launch. |
@@ -84,7 +85,7 @@ Chat adapters must use `getSessionClient()` from the session barrel — do not o
 | Path | Owns |
 | --- | --- |
 | `model/` | `Surface` — frosted or clear. |
-| `adapters/` | Host subscriptions: colour scheme, edge reveal, panel frame, frost, remembered surface, compositor flush. |
+| `adapters/` | Host subscriptions: colour scheme, edge reveal, panel frame, frost, remembered surface, compositor flush, config-driven tab shortcuts. |
 | `ui/app.tsx` | The chrome: stage, glow, resize handle, tab strip, composer. Renders; no effects. |
 | `ui/waveform-icon.tsx` | The voice glyph in the composer. |
 

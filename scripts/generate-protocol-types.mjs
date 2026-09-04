@@ -35,7 +35,7 @@ const typesRsOut =
   process.env.NESSA_PROTOCOL_TYPES_RS_OUT ??
   join(root, "crates/nessa-server/src/protocol/generated_types.rs")
 
-const SCHEMA_FILES = ["common.json", "connect.json", "server.json"]
+const SCHEMA_FILES = ["common.json", "connect.json", "server.json", "shortcuts.json"]
 
 function constName(wireName) {
   return wireName
@@ -65,6 +65,7 @@ function toSnake(name) {
 }
 
 function enumVariantName(wireValue) {
+  if (wireValue === "*") return "Any"
   return wireValue
     .split(/[.\-/]/)
     .filter(Boolean)

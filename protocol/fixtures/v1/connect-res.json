@@ -7,6 +7,23 @@
     "scopes": ["server.read"],
     "serverVersion": "0.1.0",
     "runtimeStatus": "ready",
-    "policy": { "maxPayloadBytes": 65536 }
+    "policy": { "maxPayloadBytes": 65536 },
+    "shortcuts": {
+      "version": 1,
+      "bindings": [
+        {
+          "keys": "CmdOrCtrl+T",
+          "action": "panel.newTab",
+          "scope": "focused",
+          "surface": "desktop"
+        },
+        {
+          "keys": "CmdOrCtrl+Shift+D",
+          "action": "panel.summon",
+          "scope": "global",
+          "surface": "*"
+        }
+      ]
+    }
   }
 }

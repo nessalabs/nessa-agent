@@ -6,6 +6,7 @@ Wire contracts for the **current** spike only: WebSocket handshake and `server.h
 | --- | --- |
 | [manifest.json](manifest.json) | **SSOT for method/event names**, roles, params/result refs |
 | [schemas/v1/](schemas/v1/) | **SSOT for payload shapes** (JSON Schema) |
+| [defaults/](defaults/) | Default documents the server serves (e.g. `shortcuts.v1.json`) |
 | [fixtures/v1/](fixtures/v1/) | Golden wire examples (CI-validated) |
 
 ```bash
