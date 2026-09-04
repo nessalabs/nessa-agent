@@ -10,7 +10,7 @@ import {
   stopGenerating,
 } from "./slice"
 
-/** An agent (or a test) drives the strip by dispatching named actions. */
+/** An agent (or a test) drives the tabs by dispatching named actions. */
 function agent(store: ReturnType<typeof makeStore>) {
   return {
     draft: (text: string, id?: string) =>
@@ -21,25 +21,25 @@ function agent(store: ReturnType<typeof makeStore>) {
     stop: (id?: string) =>
       store.dispatch(stopGenerating(id ? { conversationId: id } : undefined)),
     activate: (id: string) => store.dispatch(setActive(id)),
-    strip: () => store.getState().conversation,
+    tabs: () => store.getState().conversation,
   }
 }
 
-describe("conversation strip store", () => {
+describe("conversation tabs store", () => {
   it("starts with one idle conversation", () => {
-    const strip = makeStore().getState().conversation
-    expect(strip.conversations).toHaveLength(1)
-    expect(strip.activeId).toBe("c0")
-    expect(strip.conversations[0]!.phase).toBe("idle")
-    expect(strip.nextConversationId).toBe(1)
-    expect(strip.nextTurnId).toBe(1)
+    const tabs = makeStore().getState().conversation
+    expect(tabs.conversations).toHaveLength(1)
+    expect(tabs.activeId).toBe("c0")
+    expect(tabs.conversations[0]!.phase).toBe("idle")
+    expect(tabs.nextConversationId).toBe(1)
+    expect(tabs.nextTurnId).toBe(1)
   })
 
   it("drafts without inventing turns; send is a no-op", () => {
     const run = agent(makeStore())
     run.draft("hello there")
     run.send()
-    const open = run.strip().conversations[0]!
+    const open = run.tabs().conversations[0]!
     expect(open.phase).toBe("idle")
     expect(open.draft).toBe("hello there")
     expect(open.turns).toEqual([])
@@ -49,28 +49,28 @@ describe("conversation strip store", () => {
     const run = agent(makeStore())
     run.draft("hi")
     run.stop()
-    expect(run.strip().conversations[0]!.draft).toBe("hi")
-    expect(run.strip().conversations[0]!.phase).toBe("idle")
+    expect(run.tabs().conversations[0]!.draft).toBe("hi")
+    expect(run.tabs().conversations[0]!.phase).toBe("idle")
   })
 
-  it("opens a tab the agent can switch to, and never empties the strip", () => {
+  it("opens a tab the agent can switch to, and never empties the tabs", () => {
     const run = agent(makeStore())
     run.open()
-    expect(run.strip().conversations.map((item) => item.id)).toEqual(["c0", "c1"])
-    expect(run.strip().activeId).toBe("c1")
+    expect(run.tabs().conversations.map((item) => item.id)).toEqual(["c0", "c1"])
+    expect(run.tabs().activeId).toBe("c1")
     run.activate("c0")
     run.close("c0")
-    expect(run.strip().activeId).toBe("c1")
+    expect(run.tabs().activeId).toBe("c1")
     run.close("c1")
-    expect(run.strip().conversations).toHaveLength(1)
-    expect(run.strip().conversations[0]!.id).toBe("c2")
+    expect(run.tabs().conversations).toHaveLength(1)
+    expect(run.tabs().conversations[0]!.id).toBe("c2")
   })
 
   it("no-ops close on an unknown id", () => {
     const run = agent(makeStore())
     run.close("missing")
-    expect(run.strip().conversations.map((item) => item.id)).toEqual(["c0"])
-    expect(run.strip().activeId).toBe("c0")
+    expect(run.tabs().conversations.map((item) => item.id)).toEqual(["c0"])
+    expect(run.tabs().activeId).toBe("c0")
   })
 
   it("keeps each conversation's draft on that conversation", () => {
@@ -78,13 +78,13 @@ describe("conversation strip store", () => {
     run.draft("hello from the store")
     run.open()
     run.draft("second tab")
-    const [first, second] = run.strip().conversations
+    const [first, second] = run.tabs().conversations
     expect(first!.draft).toBe("hello from the store")
     expect(second!.draft).toBe("second tab")
     run.activate("c0")
     const open = run
-      .strip()
-      .conversations.find((item) => item.id === run.strip().activeId)
+      .tabs()
+      .conversations.find((item) => item.id === run.tabs().activeId)
     expect(open!.draft).toBe("hello from the store")
   })
 })

@@ -11,9 +11,9 @@ import { useConversationDispatch, useConversationSelector } from "../adapters/st
 
 export function useConversation() {
   const dispatch = useConversationDispatch()
-  const strip = useConversationSelector((state) => state.conversation)
-  const conversations = strip.conversations
-  const active = activeConversation(strip)
+  const tabs = useConversationSelector((state) => state.conversation)
+  const conversations = tabs.conversations
+  const active = activeConversation(tabs)
 
   return {
     conversations,

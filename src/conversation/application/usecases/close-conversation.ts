@@ -1,11 +1,11 @@
-import type { LocalStrip } from "../local-strip"
-import { closeInStrip, takeConversationId } from "../internal"
+import type { LocalTabs } from "../local-tabs"
+import { closeTab, takeConversationId } from "../internal"
 
-export function closeConversation(strip: LocalStrip, conversationId: string): LocalStrip {
-  let current = strip
-  const closed = closeInStrip(strip.conversations, conversationId, strip.activeId, () => {
+export function closeConversation(tabs: LocalTabs, conversationId: string): LocalTabs {
+  let current = tabs
+  const closed = closeTab(tabs.conversations, conversationId, tabs.activeId, () => {
     const taken = takeConversationId(current)
-    current = taken.strip
+    current = taken.tabs
     return taken.id
   })
   return {

@@ -1,12 +1,12 @@
 import { conversation } from "../../model"
-import type { LocalStrip } from "../local-strip"
+import type { LocalTabs } from "../local-tabs"
 import { takeConversationId } from "../internal"
 
-export function openConversation(strip: LocalStrip): LocalStrip {
-  const next = takeConversationId(strip)
+export function openConversation(tabs: LocalTabs): LocalTabs {
+  const next = takeConversationId(tabs)
   return {
-    ...next.strip,
-    conversations: [...next.strip.conversations, conversation(next.id)],
+    ...next.tabs,
+    conversations: [...next.tabs.conversations, conversation(next.id)],
     activeId: next.id,
   }
 }

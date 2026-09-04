@@ -140,9 +140,9 @@ writing the full defaults on first launch is buying.
   `src/panel/ui/app.tsx` is the chrome. Conversation UI lives in
   `src/conversation/ui/`. Host subscriptions live in `src/panel/adapters/`.
 - Product commands live in `src/conversation/application/usecases/`. The store
-  is a projection: reducers call `ConversationGateway` and keep the strip.
-  The shared strip is `conversations` + `activeId`. Local id counters live on
-  `LocalStrip`, not on the model the future server will share. Other modules
+  is a projection: reducers call `ConversationGateway` and keep the tabs.
+  The shared tabs are `conversations` + `activeId`. Local id counters live on
+  `LocalTabs`, not on the model the future server will share. Other modules
   import `src/conversation` (the barrel), not files under it — `store.ts` is
   the exception, so tests do not pull the design system. Host subscriptions
   stay in adapters. See

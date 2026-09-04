@@ -1,36 +1,33 @@
 import type { Conversation } from "../../model"
-import type { LocalStrip } from "../local-strip"
+import type { LocalTabs } from "../local-tabs"
 
-export function takeConversationId(strip: LocalStrip): {
-  strip: LocalStrip
+export function takeConversationId(tabs: LocalTabs): {
+  tabs: LocalTabs
   id: string
 } {
   return {
-    strip: { ...strip, nextConversationId: strip.nextConversationId + 1 },
-    id: `c${strip.nextConversationId}`,
+    tabs: { ...tabs, nextConversationId: tabs.nextConversationId + 1 },
+    id: `c${tabs.nextConversationId}`,
   }
 }
 
-export function takeTurnId(strip: LocalStrip): {
-  strip: LocalStrip
+export function takeTurnId(tabs: LocalTabs): {
+  tabs: LocalTabs
   id: string
 } {
   return {
-    strip: { ...strip, nextTurnId: strip.nextTurnId + 1 },
-    id: `t${strip.nextTurnId}`,
+    tabs: { ...tabs, nextTurnId: tabs.nextTurnId + 1 },
+    id: `t${tabs.nextTurnId}`,
   }
 }
 
-export function replaceConversation(strip: LocalStrip, next: Conversation): LocalStrip {
+export function replaceConversation(tabs: LocalTabs, next: Conversation): LocalTabs {
   return {
-    ...strip,
-    conversations: strip.conversations.map((item) => (item.id === next.id ? next : item)),
+    ...tabs,
+    conversations: tabs.conversations.map((item) => (item.id === next.id ? next : item)),
   }
 }
 
-export function conversationOnStrip(
-  strip: LocalStrip,
-  id: string,
-): Conversation | undefined {
-  return strip.conversations.find((item) => item.id === id)
+export function findConversation(tabs: LocalTabs, id: string): Conversation | undefined {
+  return tabs.conversations.find((item) => item.id === id)
 }

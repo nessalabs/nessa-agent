@@ -1,7 +1,7 @@
 export { withDraft } from "./conversation"
-export { closeInStrip } from "./strip"
+export { closeTab } from "./close-tab"
 export {
-  conversationOnStrip,
+  findConversation,
   replaceConversation,
   takeConversationId,
   takeTurnId,
