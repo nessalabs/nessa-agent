@@ -149,7 +149,6 @@ than falling back.
 
 ```json
 {
-  "toggleShortcut": "CmdOrCtrl+Shift+A",
   "panel": {
     "width": 420,
     "height": null,
@@ -160,7 +159,6 @@ than falling back.
 
 | Key | Meaning |
 | --- | --- |
-| `toggleShortcut` | Tauri accelerator syntax; `CmdOrCtrl` resolves per platform |
 | `panel.width` | The width the panel *opens* at. After that the window's own width wins, so a drag on the resize edge is not thrown away |
 | `panel.height` | The height it opens at. `null` fills whatever the work area leaves once the menu bar and the Dock have taken theirs, and keeps re-filling it across displays |
 | `panel.minWidth` | How narrow the resize edge may drag it |
@@ -170,10 +168,16 @@ it is what the resize edge enforces anyway. Height has its own floor
 (`MIN_PANEL_HEIGHT`, 320): a panel shorter than that has no transcript left.
 
 The file is rewritten with the merged result on every load, so keys a later build
-adds appear in it without resetting the values already there. A shortcut that
-will not parse, or that another app already owns, is reported and skipped rather
-than fatal: the tray icon still opens the panel
-([src-tauri/src/shortcut.rs](src-tauri/src/shortcut.rs)).
+adds appear in it without resetting the values already there.
+
+**Shortcuts** live in a sibling `shortcuts.json` under the same stage-scoped
+root ([ADR 0004](docs/adr/0004-server-owned-keybindings.md)). The server owns
+defaults (`protocol/defaults/shortcuts.v1.json`); the host caches them so
+summon works before connect. Default summon is `CmdOrCtrl+Shift+D`. A shortcut
+that will not parse, or that another app already owns, is reported and skipped
+rather than fatal: the tray icon still opens the panel
+([src-tauri/src/shortcut.rs](src-tauri/src/shortcut.rs)). Legacy
+`toggleShortcut` in `settings.json` is ignored.
 
 If you already have a flat `settings.json` from before stage scoping and you
 run a **prod** build, that file is still used. Non-prod stages start fresh under

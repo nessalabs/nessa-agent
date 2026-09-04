@@ -28,6 +28,7 @@ describe("connectDevSession", () => {
       serverVersion: "0.1.0",
       runtimeStatus: "ready",
       policy: { maxPayloadBytes: 65536 },
+      shortcuts: { version: 1, bindings: [] },
     }
     const health = { ok: true, runtimeStatus: "ready", uptimeMs: 1 }
     const client = {

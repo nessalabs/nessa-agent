@@ -1,0 +1,203 @@
+{
+  "version": 1,
+  "bindings": [
+    {
+      "keys": "CmdOrCtrl+T",
+      "action": "panel.newTab",
+      "scope": "focused",
+      "surface": "desktop"
+    },
+    {
+      "keys": "CmdOrCtrl+N",
+      "action": "panel.newTab",
+      "scope": "focused",
+      "surface": "desktop"
+    },
+    {
+      "keys": "CmdOrCtrl+W",
+      "action": "panel.closeTab",
+      "scope": "focused",
+      "surface": "desktop"
+    },
+    {
+      "keys": "CmdOrCtrl+1",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "desktop",
+      "args": {
+        "index": 0
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+2",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "desktop",
+      "args": {
+        "index": 1
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+3",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "desktop",
+      "args": {
+        "index": 2
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+4",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "desktop",
+      "args": {
+        "index": 3
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+5",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "desktop",
+      "args": {
+        "index": 4
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+6",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "desktop",
+      "args": {
+        "index": 5
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+7",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "desktop",
+      "args": {
+        "index": 6
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+8",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "desktop",
+      "args": {
+        "index": 7
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+9",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "desktop",
+      "args": {
+        "index": 8
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+Shift+T",
+      "action": "panel.newTab",
+      "scope": "focused",
+      "surface": "browser"
+    },
+    {
+      "keys": "CmdOrCtrl+Shift+W",
+      "action": "panel.closeTab",
+      "scope": "focused",
+      "surface": "browser"
+    },
+    {
+      "keys": "CmdOrCtrl+Shift+1",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "browser",
+      "args": {
+        "index": 0
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+Shift+2",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "browser",
+      "args": {
+        "index": 1
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+Shift+3",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "browser",
+      "args": {
+        "index": 2
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+Shift+4",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "browser",
+      "args": {
+        "index": 3
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+Shift+5",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "browser",
+      "args": {
+        "index": 4
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+Shift+6",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "browser",
+      "args": {
+        "index": 5
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+Shift+7",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "browser",
+      "args": {
+        "index": 6
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+Shift+8",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "browser",
+      "args": {
+        "index": 7
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+Shift+9",
+      "action": "panel.activateTab",
+      "scope": "focused",
+      "surface": "browser",
+      "args": {
+        "index": 8
+      }
+    },
+    {
+      "keys": "CmdOrCtrl+Shift+D",
+      "action": "panel.summon",
+      "scope": "global",
+      "surface": "*"
+    }
+  ]
+}

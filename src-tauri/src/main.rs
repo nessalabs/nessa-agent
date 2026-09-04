@@ -7,7 +7,10 @@ mod panel;
 mod platform;
 mod settings;
 mod shortcut;
+mod shortcuts;
 mod tray;
+
+use std::sync::Mutex;
 
 use tauri::{Manager, WindowEvent};
 
@@ -22,6 +25,8 @@ fn main() {
             platform::set_frosted,
             platform::panel_size,
             platform::flush_compositor,
+            shortcuts::load_shortcuts,
+            shortcuts::apply_shortcuts,
         ])
         .setup(|app| {
             platform::current().configure_app(app.handle());
@@ -42,7 +47,14 @@ fn main() {
             app.manage(tray::Present(tray_present));
 
             let settings = settings::load(app.handle());
-            shortcut::register(app.handle(), &settings.toggle_shortcut);
+            let shortcut_doc = shortcuts::load(app.handle());
+            let summon = shortcuts::SummonRegistration(Mutex::new(None));
+            shortcut::reregister_summon(
+                app.handle(),
+                &summon,
+                shortcuts::summon_accelerator(&shortcut_doc),
+            );
+            app.manage(summon);
 
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(error) = panel::apply_configured_size(&window, &settings) {
