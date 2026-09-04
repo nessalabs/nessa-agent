@@ -70,10 +70,38 @@ export interface HelloOk {
   serverVersion: string
   runtimeStatus: "ready" | "starting" | "unavailable" | "error"
   policy: ServerPolicy
+  shortcuts: ShortcutsDocument
 }
 
 export interface ServerPolicy {
   maxPayloadBytes: number
+}
+
+export interface ShortcutsDocument {
+  version: 1
+  bindings: ShortcutBinding[]
+}
+
+export interface ShortcutBinding {
+  /**
+   * Tauri-style accelerator, e.g. CmdOrCtrl+Shift+D.
+   */
+  keys: string
+  action: "panel.summon" | "panel.newTab" | "panel.closeTab" | "panel.activateTab"
+  args?: ShortcutArgs
+  scope: "global" | "focused"
+  surface: "desktop" | "browser" | "*"
+}
+
+export interface ShortcutArgs {
+  /**
+   * Zero-based index among open tabs.
+   */
+  index?: number
+  /**
+   * Preferred later: pin a binding to a conversation id when open.
+   */
+  conversationId?: string
 }
 
 export interface ConnectChallenge {
@@ -86,6 +114,13 @@ export interface HealthResult {
   runtimeStatus: "ready" | "starting" | "unavailable" | "error"
   uptimeMs: number
 }
+
+export type ShortcutAction =
+  "panel.summon" | "panel.newTab" | "panel.closeTab" | "panel.activateTab"
+
+export type ShortcutScope = "global" | "focused"
+
+export type ShortcutSurface = "desktop" | "browser" | "*"
 
 export type ClientRole = "surface"
 

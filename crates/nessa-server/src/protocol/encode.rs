@@ -1,5 +1,4 @@
-//! Build typed server messages ready to send on the WebSocket.
-
+use super::defaults::default_shortcuts;
 use super::frames::{EventFrame, OutgoingMessage, ResponseFrame};
 use super::generated_catalog::event;
 use super::generated_types::{
@@ -39,6 +38,7 @@ pub fn connect_success_message(
         policy: ServerPolicy {
             max_payload_bytes: MAX_PAYLOAD_BYTES,
         },
+        shortcuts: default_shortcuts(),
     };
     Ok(OutgoingMessage::Response(ResponseFrame::success(
         request_id, &payload,

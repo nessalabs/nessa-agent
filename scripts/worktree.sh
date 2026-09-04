@@ -94,7 +94,12 @@ cmd_create() {
 Ready:
 
   cd $path
+  export NESSA_STAGE=dev
+  export NESSA_INSTANCE=${branch//\//-}
   pnpm app
+
+Local data for this worktree lands under the app config dir at
+dev-\$NESSA_INSTANCE (see docs/adr/0005-stage-scoped-local-data.md).
 
 EOF
 }

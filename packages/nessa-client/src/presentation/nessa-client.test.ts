@@ -102,6 +102,7 @@ describe("NessaClient", () => {
                 serverVersion: "0.1.0-test",
                 runtimeStatus: "ready",
                 policy: { maxPayloadBytes: 65536 },
+                shortcuts: { version: 1, bindings: [] },
               },
             }),
           )

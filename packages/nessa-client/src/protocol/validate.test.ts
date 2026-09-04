@@ -11,6 +11,7 @@ describe("protocol validate", () => {
         serverVersion: "1.0.0",
         runtimeStatus: "ready",
         policy: { maxPayloadBytes: 65536 },
+        shortcuts: { version: 1, bindings: [] },
       }),
     ).toThrow("invalid scopes")
 
@@ -21,8 +22,22 @@ describe("protocol validate", () => {
         serverVersion: "1.0.0",
         runtimeStatus: "ready",
         policy: { maxPayloadBytes: -1 },
+        shortcuts: { version: 1, bindings: [] },
       }),
     ).toThrow("invalid policy.maxPayloadBytes")
+  })
+
+  it("rejects hello payloads with invalid shortcuts", () => {
+    expect(() =>
+      assertHelloOk({
+        protocol: 1,
+        scopes: ["server.read"],
+        serverVersion: "1.0.0",
+        runtimeStatus: "ready",
+        policy: { maxPayloadBytes: 65536 },
+        shortcuts: { version: 2, bindings: [] },
+      }),
+    ).toThrow("unsupported shortcuts.version")
   })
 
   it("rejects health payloads with invalid runtime status", () => {

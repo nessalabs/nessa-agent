@@ -40,6 +40,7 @@ const schemaDir = join(protocolDir, "schemas/v1")
 const loadOrder = [
   "common.json",
   "frames.json",
+  "shortcuts.json",
   "connect.json",
   "server.json",
   "export.json",

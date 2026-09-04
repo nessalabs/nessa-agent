@@ -3,11 +3,16 @@
 //! There is no settings UI yet, so the file is the interface: it is written
 //! with its defaults on first launch, which is what makes the keys
 //! discoverable. A later settings surface reads and writes the same shape.
+//! Path is stage-scoped via [`crate::local_data`] (ADR 0005).
+//!
+//! Global summon lives in `shortcuts.json` (ADR 0004), not here.
 
 use std::fs;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+
+use crate::local_data;
 
 /// `serde(default)` so a file written by an older build — or one a person has
 /// hand-edited down to a single key — still loads, with the missing keys
@@ -15,17 +20,12 @@ use tauri::{AppHandle, Manager};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
-    /// The accelerator that summons and dismisses the panel from anywhere.
-    /// `CmdOrCtrl` resolves per platform. Tauri's accelerator syntax, e.g.
-    /// "CmdOrCtrl+Shift+A", "Alt+Space".
-    pub toggle_shortcut: String,
     pub panel: Panel,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            toggle_shortcut: String::from("CmdOrCtrl+Shift+A"),
             panel: Panel::default(),
         }
     }
@@ -57,12 +57,9 @@ impl Default for Panel {
     }
 }
 
-/// `settings.json` in the app's config directory.
+/// `settings.json` under the stage-scoped config root ([`local_data`]).
 fn path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    app.path()
-        .app_config_dir()
-        .ok()
-        .map(|dir| dir.join("settings.json"))
+    local_data::config_root(app).map(|root| root.join("settings.json"))
 }
 
 /// Reads the settings, falling back to the defaults for anything missing — and
@@ -118,21 +115,25 @@ mod tests {
     #[test]
     fn missing_keys_take_their_defaults() {
         let settings = parse("{}").unwrap();
-        assert_eq!(settings.toggle_shortcut, Settings::default().toggle_shortcut);
         assert_eq!(settings.panel.width, 420.0);
         assert!(settings.panel.height.is_none());
     }
 
     #[test]
     fn camel_case_keys_round_trip() {
-        let settings = parse(
-            r#"{ "toggleShortcut": "Alt+Space", "panel": { "width": 480, "minWidth": 400 } }"#,
-        )
-        .unwrap();
-        assert_eq!(settings.toggle_shortcut, "Alt+Space");
+        let settings = parse(r#"{ "panel": { "width": 480, "minWidth": 400 } }"#).unwrap();
         assert_eq!(settings.panel.width, 480.0);
         assert_eq!(settings.panel.min_width, 400.0);
         assert!(settings.panel.height.is_none());
+    }
+
+    #[test]
+    fn legacy_toggle_shortcut_is_ignored() {
+        let settings = parse(
+            r#"{ "toggleShortcut": "Alt+Space", "panel": { "width": 480 } }"#,
+        )
+        .unwrap();
+        assert_eq!(settings.panel.width, 480.0);
     }
 
     #[test]

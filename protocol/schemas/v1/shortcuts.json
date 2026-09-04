@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nessa://protocol/v1/shortcuts.json",
+  "$defs": {
+    "ShortcutAction": {
+      "type": "string",
+      "enum": [
+        "panel.summon",
+        "panel.newTab",
+        "panel.closeTab",
+        "panel.activateTab"
+      ]
+    },
+    "ShortcutScope": {
+      "type": "string",
+      "enum": ["global", "focused"]
+    },
+    "ShortcutSurface": {
+      "type": "string",
+      "enum": ["desktop", "browser", "*"]
+    },
+    "ShortcutArgs": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-based index among open tabs."
+        },
+        "conversationId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Preferred later: pin a binding to a conversation id when open."
+        }
+      }
+    },
+    "ShortcutBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keys", "action", "scope", "surface"],
+      "properties": {
+        "keys": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tauri-style accelerator, e.g. CmdOrCtrl+Shift+D."
+        },
+        "action": { "$ref": "#/$defs/ShortcutAction" },
+        "args": { "$ref": "#/$defs/ShortcutArgs" },
+        "scope": { "$ref": "#/$defs/ShortcutScope" },
+        "surface": { "$ref": "#/$defs/ShortcutSurface" }
+      }
+    },
+    "ShortcutsDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "bindings"],
+      "properties": {
+        "version": { "type": "integer", "const": 1 },
+        "bindings": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ShortcutBinding" }
+        }
+      }
+    }
+  }
+}

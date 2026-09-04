@@ -78,6 +78,7 @@ pub struct HelloOk {
     pub server_version: String,
     pub runtime_status: RuntimeStatus,
     pub policy: ServerPolicy,
+    pub shortcuts: ShortcutsDocument,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -102,6 +103,66 @@ pub enum Scope {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ServerPolicy {
     pub max_payload_bytes: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ShortcutAction {
+    #[serde(rename = "panel.summon")]
+    PanelSummon,
+    #[serde(rename = "panel.newTab")]
+    PanelNewTab,
+    #[serde(rename = "panel.closeTab")]
+    PanelCloseTab,
+    #[serde(rename = "panel.activateTab")]
+    PanelActivateTab,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShortcutArgs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Zero-based index among open tabs.
+    pub index: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Preferred later: pin a binding to a conversation id when open.
+    pub conversation_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShortcutBinding {
+    /// Tauri-style accelerator, e.g. CmdOrCtrl+Shift+D.
+    pub keys: String,
+    pub action: ShortcutAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<ShortcutArgs>,
+    pub scope: ShortcutScope,
+    pub surface: ShortcutSurface,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ShortcutScope {
+    #[serde(rename = "global")]
+    Global,
+    #[serde(rename = "focused")]
+    Focused,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ShortcutsDocument {
+    pub version: i64,
+    pub bindings: Vec<ShortcutBinding>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ShortcutSurface {
+    #[serde(rename = "desktop")]
+    Desktop,
+    #[serde(rename = "browser")]
+    Browser,
+    #[serde(rename = "*")]
+    Any,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

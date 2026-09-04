@@ -15,6 +15,12 @@ export type {
   ReqFrame,
   ResFrame,
   Scope,
+  ShortcutAction,
+  ShortcutArgs,
+  ShortcutBinding,
+  ShortcutScope,
+  ShortcutSurface,
+  ShortcutsDocument,
   SurfaceInfo,
 } from "../generated/protocol.js"
 
