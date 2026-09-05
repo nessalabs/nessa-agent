@@ -1,5 +1,5 @@
 use crate::app::dependencies::RuntimeDependencies;
-use crate::app::ports::UptimeClock;
+use crate::app::ports::Clock;
 use crate::env::{Environment, Stage};
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ struct Inner {
     auth_token: String,
     version: &'static str,
     stage: Stage,
-    uptime_clock: Arc<dyn UptimeClock>,
+    clock: Arc<dyn Clock>,
 }
 
 impl AppState {
@@ -27,7 +27,7 @@ impl AppState {
                 auth_token: config.auth_token.clone(),
                 version: config.version,
                 stage: config.stage,
-                uptime_clock: dependencies.uptime_clock,
+                clock: dependencies.clock,
             }),
         }
     }
@@ -50,7 +50,7 @@ impl AppState {
     }
 
     pub fn uptime_ms(&self) -> u64 {
-        self.inner.uptime_clock.elapsed_ms()
+        self.inner.clock.elapsed_ms()
     }
 }
 
