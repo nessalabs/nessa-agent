@@ -1,6 +1,7 @@
+use crate::app::dependencies::RuntimeDependencies;
+use crate::app::ports::Clock;
 use crate::env::{Environment, Stage};
 use std::sync::Arc;
-use std::time::Instant;
 
 /// Shared runtime state wired once at composition root and passed to entrypoints.
 #[derive(Clone)]
@@ -12,17 +13,21 @@ struct Inner {
     auth_token: String,
     version: &'static str,
     stage: Stage,
-    started_at: Instant,
+    clock: Arc<dyn Clock>,
 }
 
 impl AppState {
     pub fn from_environment(config: &Environment) -> Self {
+        Self::with_dependencies(config, RuntimeDependencies::default())
+    }
+
+    pub fn with_dependencies(config: &Environment, dependencies: RuntimeDependencies) -> Self {
         Self {
             inner: Arc::new(Inner {
                 auth_token: config.auth_token.clone(),
                 version: config.version,
                 stage: config.stage,
-                started_at: Instant::now(),
+                clock: dependencies.clock,
             }),
         }
     }
@@ -45,7 +50,7 @@ impl AppState {
     }
 
     pub fn uptime_ms(&self) -> u64 {
-        self.inner.started_at.elapsed().as_millis() as u64
+        self.inner.clock.elapsed_ms()
     }
 }
 
@@ -66,7 +71,8 @@ mod tests {
 
     #[test]
     fn offers_ping_only_on_dev() {
-        let dev = AppState::from_environment(&Environment::load(&MockEnv::new()).expect("defaults"));
+        let dev =
+            AppState::from_environment(&Environment::load(&MockEnv::new()).expect("defaults"));
         assert!(dev.offers_server_ping());
     }
 }
