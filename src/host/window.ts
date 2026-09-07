@@ -92,13 +92,15 @@ export async function flushCompositor() {
 }
 
 /** Stage-scoped shortcuts cache (or null outside Tauri — use bundled defaults). */
-export async function loadShortcuts(): Promise<import("@nessa/client").ShortcutsDocument | null> {
+export async function loadShortcuts(): Promise<
+  import("@nessa/client").ShortcutsDocument | null
+> {
   if (!inTauri) return null
   const { invoke } = await import("@tauri-apps/api/core")
   return invoke("load_shortcuts")
 }
 
-/** Persist HelloOk.shortcuts and re-register global summon on the host. */
+/** Persist configured shortcuts and re-register global summon on the host. */
 export async function applyShortcuts(
   document: import("@nessa/client").ShortcutsDocument,
 ): Promise<void> {
@@ -147,3 +149,15 @@ export async function startResizeFromLeftEdge() {
 }
 
 export { inTauri }
+
+/** Whether this page runs inside the trusted desktop host. */
+export function hasNativeHost(): boolean {
+  return inTauri
+}
+
+/** Load only the bundled chat credential from native private storage. */
+export async function loadAssignedSurfaceCredential(stage: string): Promise<string> {
+  if (!inTauri) throw new Error("A native host is required for local credential storage")
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<string>("load_surface_credential", { stage })
+}

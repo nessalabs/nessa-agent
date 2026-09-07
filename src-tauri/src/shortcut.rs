@@ -1,7 +1,7 @@
 //! The global accelerator that summons the panel from anywhere.
 //!
 //! Binding comes from the stage-scoped `shortcuts.json` cache (`panel.summon`),
-//! not from settings ([ADR 0004](../../docs/adr/0004-server-owned-keybindings.md)).
+//! not from settings ([ADR 0004](../../docs/adr/done/0004-server-owned-keybindings.md)).
 
 use tauri::AppHandle;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};

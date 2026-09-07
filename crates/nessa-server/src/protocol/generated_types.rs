@@ -12,42 +12,35 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AuthToken {
-    pub token: String,
-    /// Echo of connect.challenge nonce — binds this connect RPC to the open socket.
-    pub nonce: String,
+pub struct ClientInfo {
+    /// Client application or instance identifier.
+    pub id: String,
+    /// Client software version.
+    pub version: String,
+    /// Runtime or host platform. Use other when none applies.
+    pub platform: ClientPlatform,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ClientInfo {
-    pub id: String,
-    pub version: String,
-    pub platform: String,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum ClientPlatform {
+    #[serde(rename = "node")]
+    Node,
+    #[serde(rename = "browser")]
+    Browser,
+    #[serde(rename = "macos")]
+    Macos,
+    #[serde(rename = "linux")]
+    Linux,
+    #[serde(rename = "windows")]
+    Windows,
+    #[serde(rename = "other")]
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum ClientRole {
     #[serde(rename = "surface")]
     Surface,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConnectChallenge {
-    pub nonce: String,
-    pub protocol: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConnectParams {
-    pub min_protocol: i64,
-    pub max_protocol: i64,
-    pub role: ClientRole,
-    pub surface: SurfaceInfo,
-    pub client: ClientInfo,
-    pub auth: AuthToken,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -67,9 +60,12 @@ pub struct EchoResult {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GatewayError {
+    /// Machine-readable error identifier.
     pub code: String,
+    /// Server-provided explanation of the rejection.
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Optional structured context; its shape depends on the error code.
     pub details: Option<serde_json::Value>,
 }
 
@@ -79,35 +75,12 @@ pub struct HealthParams {}
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HealthResult {
+    /// Whether the health probe succeeded.
     pub ok: bool,
+    /// Current runtime availability reported by the gateway.
     pub runtime_status: RuntimeStatus,
+    /// Time since server startup in milliseconds.
     pub uptime_ms: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HelloOk {
-    pub protocol: i64,
-    pub scopes: Vec<Scope>,
-    pub server_version: String,
-    pub runtime_status: RuntimeStatus,
-    pub policy: ServerPolicy,
-    pub shortcuts: ShortcutsDocument,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PingParams {
-    /// Client-chosen value; the result must echo it.
-    pub nonce: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PingResult {
-    pub ok: bool,
-    /// Echo of PingParams.nonce.
-    pub nonce: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -126,12 +99,6 @@ pub enum RuntimeStatus {
 pub enum Scope {
     #[serde(rename = "server.read")]
     ServerRead,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ServerPolicy {
-    pub max_payload_bytes: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -162,10 +129,14 @@ pub struct ShortcutArgs {
 pub struct ShortcutBinding {
     /// Tauri-style accelerator, e.g. CmdOrCtrl+Shift+D.
     pub keys: String,
+    /// Action requested when the binding fires.
     pub action: ShortcutAction,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Optional action-specific arguments.
     pub args: Option<ShortcutArgs>,
+    /// Context in which the binding applies.
     pub scope: ShortcutScope,
+    /// Surface on which the binding applies.
     pub surface: ShortcutSurface,
 }
 
@@ -180,7 +151,9 @@ pub enum ShortcutScope {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ShortcutsDocument {
+    /// Shortcut document format version.
     pub version: i64,
+    /// Ordered keyboard bindings supplied by the server.
     pub bindings: Vec<ShortcutBinding>,
 }
 
@@ -197,7 +170,9 @@ pub enum ShortcutSurface {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SurfaceInfo {
+    /// Kind of user-facing surface.
     pub kind: SurfaceKind,
+    /// Identifier distinguishing instances of this surface.
     pub instance: String,
 }
 

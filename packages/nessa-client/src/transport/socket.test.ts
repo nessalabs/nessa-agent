@@ -22,6 +22,6 @@ describe("waitForSocketOpen", () => {
 
     const pending = waitForSocketOpen(socket, 500)
     socket.close()
-    await expect(pending).rejects.toThrow("WebSocket closed before open")
+    await expect(pending).rejects.toThrow("WebSocket closed (1006)")
   })
 })

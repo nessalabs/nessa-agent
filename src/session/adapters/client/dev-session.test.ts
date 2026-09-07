@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest"
 
 import { connectDevSession, SessionHealthError } from "./dev-session"
-import { getSessionClient, setSessionClient } from "./handle"
+import { createSessionHandle } from "./handle"
 
 describe("connectDevSession", () => {
   it("closes the client when health fails after connect", async () => {
     const close = vi.fn()
     const connect = vi.fn().mockResolvedValue({
-      session: { protocol: 1 },
+      productSession: { version: 1 },
       server: {
         health: vi.fn().mockRejectedValue(new Error("health boom")),
       },
@@ -20,15 +20,19 @@ describe("connectDevSession", () => {
     expect(close).toHaveBeenCalledTimes(1)
   })
 
-  it("returns the client when health and ping succeed", async () => {
+  it("returns the client when product authentication and health succeed", async () => {
     const close = vi.fn()
     const hello = {
-      protocol: 1,
-      scopes: ["server.read"],
-      serverVersion: "0.1.0",
-      runtimeStatus: "ready",
-      policy: { maxPayloadBytes: 65536 },
-      shortcuts: { version: 1, bindings: [] },
+      version: 1,
+      gatewayId: "gateway",
+      principalId: "panel",
+      organizationId: "org",
+      membershipId: "panel-member",
+      credentialId: "panel-token",
+      audienceId: "gateway",
+      expiresAt: null,
+      grants: [],
+      methods: ["server.health"],
     }
     const health = { ok: true, runtimeStatus: "ready", uptimeMs: 1 }
     const ping = vi.fn().mockImplementation(async (nonce: string) => ({
@@ -36,7 +40,7 @@ describe("connectDevSession", () => {
       nonce,
     }))
     const client = {
-      session: hello,
+      productSession: hello,
       server: { health: vi.fn().mockResolvedValue(health), ping },
       close,
     }
@@ -46,39 +50,42 @@ describe("connectDevSession", () => {
     expect(established.client).toBe(client)
     expect(established.hello).toEqual(hello)
     expect(established.health).toEqual(health)
-    expect(established.ping.ok).toBe(true)
-    expect(ping).toHaveBeenCalledTimes(1)
+    expect(ping).not.toHaveBeenCalled()
+    expect(connect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profile: "product",
+        client: expect.objectContaining({ id: "nessa-panel" }),
+      }),
+    )
     expect(close).not.toHaveBeenCalled()
   })
 
-  it("closes the client when ping nonce mismatches", async () => {
-    const close = vi.fn()
+  it("passes the configured credential source without supplying a dev token", async () => {
+    const source = { load: vi.fn(async () => "private") }
     const connect = vi.fn().mockResolvedValue({
-      session: { protocol: 1 },
-      server: {
-        health: vi.fn().mockResolvedValue({
-          ok: true,
-          runtimeStatus: "ready",
-          uptimeMs: 1,
-        }),
-        ping: vi.fn().mockResolvedValue({ ok: true, nonce: "wrong" }),
-      },
-      close,
+      productSession: {},
+      server: { health: vi.fn(async () => ({})) },
+      close: vi.fn(),
     })
-
-    await expect(connectDevSession({ connect })).rejects.toBeInstanceOf(
-      SessionHealthError,
+    await connectDevSession({ connect, credentialSource: source, stage: "ci" })
+    expect(connect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profile: "product",
+        stage: "ci",
+        credentialSource: source,
+      }),
     )
-    expect(close).toHaveBeenCalledTimes(1)
+    expect(connect.mock.calls[0][0].auth).toBeUndefined()
   })
 })
 
 describe("session client handle", () => {
   it("stores and clears the live client outside Redux", () => {
     const fake = { close: vi.fn() } as never
-    setSessionClient(fake)
-    expect(getSessionClient()).toBe(fake)
-    setSessionClient(null)
-    expect(getSessionClient()).toBeNull()
+    const handle = createSessionHandle()
+    handle.set(fake)
+    expect(handle.get()).toBe(fake)
+    handle.set(null)
+    expect(handle.get()).toBeNull()
   })
 })

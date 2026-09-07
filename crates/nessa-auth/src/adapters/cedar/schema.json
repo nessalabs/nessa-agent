@@ -1,0 +1,112 @@
+{
+  "Nessa": {
+    "entityTypes": {
+      "Actor": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "organizationId": {
+              "type": "String",
+              "required": true
+            },
+            "role": {
+              "type": "String",
+              "required": true
+            },
+            "active": {
+              "type": "Boolean",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      },
+      "Resource": {
+        "shape": {
+          "type": "Record",
+          "attributes": {
+            "organizationId": {
+              "type": "String",
+              "required": true
+            }
+          },
+          "additionalAttributes": false
+        }
+      }
+    },
+    "actions": {
+      "server.read": {
+        "appliesTo": {
+          "principalTypes": [
+            "Actor"
+          ],
+          "resourceTypes": [
+            "Resource"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "credentialAllows": {
+                "type": "Boolean",
+                "required": true
+              },
+              "identityMatches": {
+                "type": "Boolean",
+                "required": true
+              }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "credential.manage": {
+        "appliesTo": {
+          "principalTypes": [
+            "Actor"
+          ],
+          "resourceTypes": [
+            "Resource"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "credentialAllows": {
+                "type": "Boolean",
+                "required": true
+              },
+              "identityMatches": {
+                "type": "Boolean",
+                "required": true
+              }
+            },
+            "additionalAttributes": false
+          }
+        }
+      },
+      "conversation.write": {
+        "appliesTo": {
+          "principalTypes": [
+            "Actor"
+          ],
+          "resourceTypes": [
+            "Resource"
+          ],
+          "context": {
+            "type": "Record",
+            "attributes": {
+              "credentialAllows": {
+                "type": "Boolean",
+                "required": true
+              },
+              "identityMatches": {
+                "type": "Boolean",
+                "required": true
+              }
+            },
+            "additionalAttributes": false
+          }
+        }
+      }
+    }
+  }
+}

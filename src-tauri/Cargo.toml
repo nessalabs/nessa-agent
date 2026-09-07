@@ -12,11 +12,13 @@ rust-version = "1.85"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+nessa-local-storage = { path = "../crates/nessa-local-storage" }
 # `macos-private-api` is what makes the transparent, undecorated window legal
 # on macOS; `tray-icon` and `image-png` back the menu bar item.
 tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+libc = "0.2"
 
 # The frosted surface is a native NSVisualEffectView rather than a CSS
 # `backdrop-filter`: on a transparent, undecorated macOS window the CSS filter

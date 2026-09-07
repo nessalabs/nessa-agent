@@ -3,27 +3,62 @@
   "$id": "nessa://protocol/v1/export.json",
   "title": "NessaProtocolS1",
   "$defs": {
-    "ReqFrame": { "$ref": "frames.json#/$defs/ReqFrame" },
-    "ResFrame": { "$ref": "frames.json#/$defs/ResFrame" },
-    "EventFrame": { "$ref": "frames.json#/$defs/EventFrame" },
-    "ConnectParams": { "$ref": "connect.json#/$defs/ConnectParams" },
-    "HelloOk": { "$ref": "connect.json#/$defs/HelloOk" },
-    "ConnectChallenge": { "$ref": "connect.json#/$defs/ConnectChallenge" },
-    "HealthResult": { "$ref": "server.json#/$defs/HealthResult" },
-    "PingParams": { "$ref": "server.json#/$defs/PingParams" },
-    "PingResult": { "$ref": "server.json#/$defs/PingResult" },
-    "EchoParams": { "$ref": "conversation.json#/$defs/EchoParams" },
-    "EchoResult": { "$ref": "conversation.json#/$defs/EchoResult" },
-    "ShortcutsDocument": { "$ref": "shortcuts.json#/$defs/ShortcutsDocument" },
-    "ShortcutBinding": { "$ref": "shortcuts.json#/$defs/ShortcutBinding" },
-    "ShortcutArgs": { "$ref": "shortcuts.json#/$defs/ShortcutArgs" },
-    "ShortcutAction": { "$ref": "shortcuts.json#/$defs/ShortcutAction" },
-    "ShortcutScope": { "$ref": "shortcuts.json#/$defs/ShortcutScope" },
-    "ShortcutSurface": { "$ref": "shortcuts.json#/$defs/ShortcutSurface" },
-    "ClientRole": { "$ref": "common.json#/$defs/ClientRole" },
-    "Scope": { "$ref": "common.json#/$defs/Scope" },
-    "SurfaceInfo": { "$ref": "common.json#/$defs/SurfaceInfo" },
-    "ClientInfo": { "$ref": "common.json#/$defs/ClientInfo" },
-    "GatewayError": { "$ref": "common.json#/$defs/GatewayError" }
+    "ReqFrame": {
+      "$ref": "frames.json#/$defs/ReqFrame"
+    },
+    "ResFrame": {
+      "$ref": "frames.json#/$defs/ResFrame"
+    },
+    "EventFrame": {
+      "$ref": "frames.json#/$defs/EventFrame"
+    },
+    "HealthResult": {
+      "$ref": "server.json#/$defs/HealthResult"
+    },
+    "EchoParams": {
+      "$ref": "conversation.json#/$defs/EchoParams"
+    },
+    "EchoResult": {
+      "$ref": "conversation.json#/$defs/EchoResult"
+    },
+    "ShortcutsDocument": {
+      "$ref": "shortcuts.json#/$defs/ShortcutsDocument"
+    },
+    "ShortcutBinding": {
+      "$ref": "shortcuts.json#/$defs/ShortcutBinding"
+    },
+    "ShortcutArgs": {
+      "$ref": "shortcuts.json#/$defs/ShortcutArgs"
+    },
+    "ShortcutAction": {
+      "$ref": "shortcuts.json#/$defs/ShortcutAction"
+    },
+    "ShortcutScope": {
+      "$ref": "shortcuts.json#/$defs/ShortcutScope"
+    },
+    "ShortcutSurface": {
+      "$ref": "shortcuts.json#/$defs/ShortcutSurface"
+    },
+    "ClientRole": {
+      "$ref": "common.json#/$defs/ClientRole"
+    },
+    "Scope": {
+      "$ref": "common.json#/$defs/Scope"
+    },
+    "SurfaceInfo": {
+      "$ref": "common.json#/$defs/SurfaceInfo"
+    },
+    "ClientInfo": {
+      "$ref": "common.json#/$defs/ClientInfo"
+    },
+    "GatewayError": {
+      "$ref": "common.json#/$defs/GatewayError"
+    },
+    "SurfaceKind": {
+      "$ref": "common.json#/$defs/SurfaceKind"
+    },
+    "ClientPlatform": {
+      "$ref": "common.json#/$defs/ClientPlatform"
+    }
   }
 }

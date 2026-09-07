@@ -35,7 +35,7 @@ opinion rather than the product's.
 | `panel.rs` | The panel frame: opening size, lower-right placement, show/hide. The tray and the shortcut request a toggle; they do not fit the frame. |
 | `tray.rs` | The menu bar extra (macOS) or StatusNotifierItem (Linux), and the surface-toggle request. Creating it is survivable: a desktop with no tray still launches. |
 | `shortcut.rs` | Registers / re-registers the global `panel.summon` accelerator from the shortcuts cache. |
-| `shortcuts.rs` | Stage-scoped `shortcuts.json` cache: seed from protocol defaults, refresh from HelloOk. |
+| `shortcuts.rs` | Stage-scoped `shortcuts.json` cache: seed from bundled protocol defaults. |
 | `settings.rs` | The on-disk settings shape (panel geometry) and its defaults. Summon is not here — see `shortcuts.rs`. |
 | `platform/` | The OS host. `Host` is the contract; `current()` injects one implementation for the compiled target. Commands `set_frosted` and `panel_size` live here too. |
 | `platform/macos/` | Accessory app, `NSVisualEffectView` frost, WKWebView pin, AppKit live-resize notifications, hide-on-blur in release. |
@@ -72,7 +72,7 @@ opinion rather than the product's.
 | Path | Owns |
 | --- | --- |
 | `model/` | `SessionPhase`, status copy for the empty state. |
-| `adapters/client/` | `connectDevSession` (health + `NessaClient.server.ping`; closes on probe failure) + `getSessionClient` handle (live client outside Redux). |
+| `adapters/client/` | `connectDevSession` (native credential loading, authenticated session, health; closes on probe failure) + injected session handle (live client outside Redux). |
 | `adapters/store/` | Redux projection of connection status (`hello` / `health` only). |
 | `adapters/lifecycle/` | Mount/reconnect effect, owned by the composition root. Subscribes `onClose` before publishing ready. |
 | `ui/use-session.ts` | Hook the panel reads for status. |
@@ -130,7 +130,7 @@ are written here.
   between panics inside a GTK callback and aborts the process.
 - A component either renders or coordinates, never both.
 - There is no `utils` module, on either side.
-- Product state an agent must drive lives in the Redux store. Host, DOM, and clocks stay in adapters. See [adr/0001-redux-toolkit-for-product-state.md](adr/0001-redux-toolkit-for-product-state.md) and [adr/0003-panel-vertical.md](adr/0003-panel-vertical.md).
+- Product state an agent must drive lives in the Redux store. Host, DOM, and clocks stay in adapters. See [adr/0001-redux-toolkit-for-product-state.md](adr/done/0001-redux-toolkit-for-product-state.md) and [adr/0003-panel-vertical.md](adr/done/0003-panel-vertical.md).
 
 ## Cross-cutting
 
@@ -171,4 +171,41 @@ There is no agent runtime, no chat RPCs, no persistence for conversations, no
 settings UI. The panel already opens a `stage=dev` `@nessa/client` session for
 connect/health. When chat arrives it is a remote `ConversationGateway`, not an
 addition to the local session adapter. See
-[adr/0002-conversation-vertical-and-gateway.md](adr/0002-conversation-vertical-and-gateway.md).
+[adr/0002-conversation-vertical-and-gateway.md](adr/done/0002-conversation-vertical-and-gateway.md).
+
+**Proposed direction for agent turns:** [adr/0007-nessa-session-protocol-and-authorities.md](adr/todo/0007-nessa-session-protocol-and-authorities.md) —
+Nessa Session Protocol as the only client wire, discovery before agent session
+creation, registered bindings, and a new Rust agent normalizer against a shared
+payload schema. Its [collaboration contract](design/surfaces-and-collaboration.md)
+adds one conversation across CLI/panel/desktop surfaces and attributed peer
+messages with scoped local credentials. [Sequence diagrams and MCP](design/collaboration-sequences-and-mcp.md)
+show shared surfaces and an authenticated external `NessaMCP` adapter using
+`NessaClient` for every gateway operation. [ADR 0008](adr/todo/0008-reusable-event-stream-crate.md) proposes a
+standalone generic Rust crate for streaming, replay, pluggable decoding, and
+local persistence. That crate is being implemented outside this repository; Nessa
+will consume it as a dependency, not implement another stream runtime. [ADR 0009](adr/todo/0009-agent-harnesses-and-optional-tools.md)
+preserves external harnesses, allows Nessa’s internal agent, and exposes optional
+MCP/CLI tools through the shared client. These are `proposed`, not implemented. See the
+[contract design](design/session-and-stream-contracts.md) before widening the
+protocol catalog.
+
+**Identity/access contracts** (`crates/nessa-auth`) — reusable library, no binary.
+Owns domain identities/memberships/credential metadata, boundary DTO validation,
+and injected session authentication contracts. Embedded Cedar evaluates product policies through the application port. The local credential backend and guarded `/session` gateway are implemented.
+See [local authentication](adr/done/0010-local-authentication.md) for setup and current limits. See the [crate guide](../crates/nessa-auth/README.md).
+
+## Gateway authorization
+
+The running gateway mounts one authenticated product flow on `/session`. Each request checks current credential validity and membership;
+product operations additionally require embedded Cedar approval for the action
+on the server-resolved gateway resource at operation admission. Admitted handlers
+and responses may finish after revocation; later operations read the latest
+committed state. Only auth mutations serialize; network writes share no admission mutex. The HTTP `/health` probe returns
+only liveness, without product state.
+
+The panel authenticates using its distinct private surface credential loaded by
+the native host. The SDK supports injected credential storage and a Node file
+source. Composition loads namespace `config.json` and injects registry limits
+and session deadlines. Use the
+[local SDK/CLI guide](guides/local-auth.md) for gateway access and the
+[adversarial review](reviews/local-auth-gateway.md) for validation and limits.

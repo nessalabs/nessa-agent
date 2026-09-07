@@ -40,3 +40,7 @@ src-tauri/icons/nessa-avatar.png
 # are megabytes of video that never diff, and this repository is public — a
 # recording carries whatever else was on screen when it was taken.
 *.mov
+
+# Rebuild with pnpm client:docs or client:docs:json.
+docs/generated/client-api/
+docs/generated/client-api.json

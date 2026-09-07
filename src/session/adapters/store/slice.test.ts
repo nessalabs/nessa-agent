@@ -21,12 +21,16 @@ describe("session store", () => {
     store.dispatch(
       sessionReady({
         hello: {
-          protocol: 1,
-          scopes: ["server.read"],
-          serverVersion: "0.1.0",
-          runtimeStatus: "ready",
-          policy: { maxPayloadBytes: 65536 },
-          shortcuts: { version: 1, bindings: [] },
+          version: 1,
+          gatewayId: "gateway",
+          principalId: "panel",
+          organizationId: "org",
+          membershipId: "panel-member",
+          credentialId: "panel-token",
+          audienceId: "gateway",
+          expiresAt: null,
+          grants: [],
+          methods: ["server.health"],
         },
         health: { ok: true, runtimeStatus: "ready", uptimeMs: 1 },
       }),

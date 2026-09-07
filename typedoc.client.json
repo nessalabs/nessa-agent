@@ -1,0 +1,10 @@
+{
+  "entryPoints": ["packages/nessa-client/src/index.ts"],
+  "tsconfig": "packages/nessa-client/tsconfig.json",
+  "readme": "packages/nessa-client/README.md",
+  "name": "Nessa Client SDK",
+  "out": "docs/generated/client-api",
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "disableSources": true
+}

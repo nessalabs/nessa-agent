@@ -13,3 +13,8 @@ export interface ConversationGateway {
   setDraft(tabs: LocalTabs, input: { draft: string; id?: string }): LocalTabs
   setActive(tabs: LocalTabs, conversationId: string): LocalTabs
 }
+
+/** External effects consumed by conversation commands. */
+export interface ConversationEffects {
+  echo(text: string): Promise<{ text: string }>
+}

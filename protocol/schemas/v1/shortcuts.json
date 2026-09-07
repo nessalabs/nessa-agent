@@ -9,15 +9,25 @@
         "panel.newTab",
         "panel.closeTab",
         "panel.activateTab"
-      ]
+      ],
+      "description": "Action identifiers supported by server-owned keyboard bindings."
     },
     "ShortcutScope": {
       "type": "string",
-      "enum": ["global", "focused"]
+      "enum": [
+        "global",
+        "focused"
+      ],
+      "description": "Contexts in which a shortcut binding applies."
     },
     "ShortcutSurface": {
       "type": "string",
-      "enum": ["desktop", "browser", "*"]
+      "enum": [
+        "desktop",
+        "browser",
+        "*"
+      ],
+      "description": "Surface selectors for server-owned keyboard bindings."
     },
     "ShortcutArgs": {
       "type": "object",
@@ -33,35 +43,65 @@
           "minLength": 1,
           "description": "Preferred later: pin a binding to a conversation id when open."
         }
-      }
+      },
+      "description": "Optional arguments attached to a server-owned shortcut action."
     },
     "ShortcutBinding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["keys", "action", "scope", "surface"],
+      "required": [
+        "keys",
+        "action",
+        "scope",
+        "surface"
+      ],
       "properties": {
         "keys": {
           "type": "string",
           "minLength": 1,
           "description": "Tauri-style accelerator, e.g. CmdOrCtrl+Shift+D."
         },
-        "action": { "$ref": "#/$defs/ShortcutAction" },
-        "args": { "$ref": "#/$defs/ShortcutArgs" },
-        "scope": { "$ref": "#/$defs/ShortcutScope" },
-        "surface": { "$ref": "#/$defs/ShortcutSurface" }
-      }
+        "action": {
+          "$ref": "#/$defs/ShortcutAction",
+          "description": "Action requested when the binding fires."
+        },
+        "args": {
+          "$ref": "#/$defs/ShortcutArgs",
+          "description": "Optional action-specific arguments."
+        },
+        "scope": {
+          "$ref": "#/$defs/ShortcutScope",
+          "description": "Context in which the binding applies."
+        },
+        "surface": {
+          "$ref": "#/$defs/ShortcutSurface",
+          "description": "Surface on which the binding applies."
+        }
+      },
+      "description": "Maps a keyboard accelerator to a product action for a given scope and surface."
     },
     "ShortcutsDocument": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["version", "bindings"],
+      "required": [
+        "version",
+        "bindings"
+      ],
       "properties": {
-        "version": { "type": "integer", "const": 1 },
+        "version": {
+          "type": "integer",
+          "const": 1,
+          "description": "Shortcut document format version."
+        },
         "bindings": {
           "type": "array",
-          "items": { "$ref": "#/$defs/ShortcutBinding" }
+          "items": {
+            "$ref": "#/$defs/ShortcutBinding"
+          },
+          "description": "Ordered keyboard bindings supplied by the server."
         }
-      }
+      },
+      "description": "Versioned server-owned shortcut configuration included in the legacy handshake."
     }
   }
 }

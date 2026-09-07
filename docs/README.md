@@ -10,7 +10,7 @@ picks them up automatically.
 | [../CODING_STANDARDS.md](../CODING_STANDARDS.md) | PR gating checklist for this repo — typed errors, boundaries, tests. Reviewers and agents check this before merge. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The map of the code as it stands: what each file owns, the boundaries, the invariants, and where a given change goes. Read this first. |
 | [codebase-structure.md](codebase-structure.md) | The general structural rules applied to Nessa specifically — the target shape, the Nessa absences, the host/shell seam, and what the core must never learn. |
-| [adr/](adr/README.md) | Decision records. [0001](adr/0001-redux-toolkit-for-product-state.md) Redux tabs; [0004](adr/0004-server-owned-keybindings.md) server-authored `shortcuts.json`; [0005](adr/0005-stage-scoped-local-data.md) namespaced on-disk paths (only `prod` bare); [0006](adr/0006-server-ping-round-trip.md) `server.ping` session link proof (dev only). |
+| [adr/](adr/README.md) | Architecture decisions by implementation progress: [done](adr/done) (0001–0006) and [todo](adr/todo) (0007–0009). See the index for scope and external work. |
 
 ## The skills
 
@@ -30,3 +30,13 @@ machine:
 ```bash
 git clone https://github.com/nessalabs/skills.git ../skills && mkdir -p .claude/skills && for s in coding system-architect method; do ln -sfn "$PWD/../skills/skills/engineering/$s" .claude/skills/$s; done
 ```
+
+Proposed implementation contracts: [session and stream design](design/session-and-stream-contracts.md), [surfaces and collaboration](design/surfaces-and-collaboration.md),
+and [sequence diagrams and MCP](design/collaboration-sequences-and-mcp.md).
+
+Authentication: [design references and primer](design/auth/README.md),
+[local usage guide](guides/local-auth.md), and [gateway review](reviews/local-auth-gateway.md).
+Completed local decisions are in [ADR 0010](adr/done/0010-local-authentication.md);
+unfinished auth delivery is in [ADR 0011](adr/todo/0011-authentication-delivery.md).
+
+- [Coding standards](coding-standards.md): one current contract, no compatibility shims or unnecessary version bumps.

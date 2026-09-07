@@ -23,9 +23,9 @@ the system tray and **Ctrl+Shift+A** when those exist. Frost is CSS
 the same way as on macOS so a resize does not jitter the composer.
 
 OS-specific window behaviour is not scattered through `main`. It lives in
-[`src-tauri/src/platform/`](src-tauri/src/platform/) — a `Host` trait with one
+[`src-tauri/src/platform/`](src-tauri/src/platform) — a `Host` trait with one
 implementation per OS, injected by `current()` — and in
-[`src/host/`](src/host/) on the shell.
+[`src/host/`](src/host) on the shell.
 
 ## What is here
 
@@ -54,7 +54,7 @@ implementation per OS, injected by `current()` — and in
   ([src/panel/adapters/surface.ts](src/panel/adapters/surface.ts)); the tray item only *requests* a
   toggle, and its check mark is reflected back from `set_frosted`.
 - **Temporary chat echo** — the conversation tabs in
-  [`src/conversation/`](src/conversation/) are still a UI session for tabs and
+  [`src/conversation/`](src/conversation) are still a UI session for tabs and
   drafts; send calls `conversation.echo` through `NessaClient` so your message
   and the server’s echo show in the transcript until real turn RPCs land. On
   launch the panel opens a `stage=dev` session against local `nessa-server`
@@ -68,6 +68,11 @@ just server   # terminal 1 — nessa-server on ws://127.0.0.1:7420
 just dev      # terminal 2 — panel; connects with stage=dev
 ```
 
+Before the first server run, initialize its private local credentials:
+`cargo run -p nessa-server -- auth init --owner-token-file "$HOME/nessa-owner.token"`.
+This requires no signup. See [local authentication](docs/adr/done/0010-local-authentication.md)
+for scoped clients, environment isolation, and owner recovery.
+
 [`just`](https://just.systems) is the entry ([justfile](justfile)). `just`
 lists recipes. `just server` runs the WebSocket control plane. `just dev` is
 `tauri dev` when a display is available, the browser UI (`just web`) when it
@@ -80,7 +85,7 @@ Install `just` with the platform's package manager (`apt install just`,
 
 ### Linux
 
-The lockfile needs **Rust 1.85+** (edition 2024 crates). Ubuntu's packaged
+The server and auth library need **Rust 1.89+** (embedded Cedar). Ubuntu's packaged
 `rustc` is often 1.83; install via rustup. [`rust-toolchain.toml`](rust-toolchain.toml)
 pins `stable`, so `just dev` and `cargo test` pick it without an extra env var.
 
@@ -129,7 +134,7 @@ and `just release` there.
 ### Settings
 
 There is no settings UI yet, so `settings.json` under the app config directory
-*is* the interface. Paths are **stage-scoped** ([ADR 0005](docs/adr/0005-stage-scoped-local-data.md)):
+*is* the interface. Paths are **stage-scoped** ([ADR 0005](docs/adr/done/0005-stage-scoped-local-data.md)):
 
 | Stage | Location (macOS example) |
 | --- | --- |
@@ -171,7 +176,7 @@ The file is rewritten with the merged result on every load, so keys a later buil
 adds appear in it without resetting the values already there.
 
 **Shortcuts** live in a sibling `shortcuts.json` under the same stage-scoped
-root ([ADR 0004](docs/adr/0004-server-owned-keybindings.md)). The server owns
+root ([ADR 0004](docs/adr/done/0004-server-owned-keybindings.md)). The server owns
 defaults (`protocol/defaults/shortcuts.v1.json`); the host caches them so
 summon works before connect. Default summon is `CmdOrCtrl+Shift+D`. A shortcut
 that will not parse, or that another app already owns, is reported and skipped
@@ -433,3 +438,9 @@ comes out a solid disc.
 - Persist the transcript across launches.
 - The rest of the chat kit — attachments, tapbacks, reply threads, chat tabs —
   is already in the design system; see its `pill-composer` Storybook story.
+
+Gateway access uses local credentials at `/session`. The panel automatically loads
+its assigned surface credential. Credentials have no expiry by default; grants and
+optional expiry are configurable per surface. Namespace `config.json` controls
+registry limits and session deadlines without rebuilding. See the
+[local auth guide](docs/guides/local-auth.md) and [coding standards](docs/coding-standards.md).

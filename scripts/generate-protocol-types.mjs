@@ -12,6 +12,7 @@
  *   crates/nessa-server/src/protocol/generated_catalog.rs
  *   crates/nessa-server/src/protocol/generated_types.rs
  */
+import ts from "typescript"
 import { compile } from "json-schema-to-typescript"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
@@ -35,13 +36,7 @@ const typesRsOut =
   process.env.NESSA_PROTOCOL_TYPES_RS_OUT ??
   join(root, "crates/nessa-server/src/protocol/generated_types.rs")
 
-const SCHEMA_FILES = [
-  "common.json",
-  "connect.json",
-  "server.json",
-  "shortcuts.json",
-  "conversation.json",
-]
+const SCHEMA_FILES = ["common.json", "server.json", "shortcuts.json", "conversation.json"]
 
 function constName(wireName) {
   return wireName
@@ -115,7 +110,10 @@ function rustTypeForSchema(schema, ctx) {
     }
     throw new Error("inline objects must be named via title or extracted first")
   }
-  if (!schema.type && Object.keys(schema).length === 0) {
+  if (
+    !schema.type &&
+    Object.keys(schema).every((key) => ["description", "tsType"].includes(key))
+  ) {
     return "serde_json::Value"
   }
   throw new Error(`unsupported schema node: ${JSON.stringify(schema)}`)
@@ -159,7 +157,7 @@ function emitStruct(name, schema, ctx) {
     } else if (
       propSchema.$ref ||
       propSchema.type ||
-      Object.keys(propSchema).length === 0
+      Object.keys(propSchema).every((key) => ["description", "tsType"].includes(key))
     ) {
       ty = rustTypeForSchema(propSchema, ctx)
     } else {
@@ -253,13 +251,6 @@ function generateRustTypes(schemasByFile) {
     throw new Error(`unsupported top-level def ${name}`)
   }
 
-  // Compat alias only if nested type was auto-named HelloOkPolicy.
-  if (named.has("HelloOkPolicy") && !named.has("ServerPolicy")) {
-    lines.push("/// Wire name for `HelloOk.policy` (alias of generated nested type).")
-    lines.push("pub type ServerPolicy = HelloOkPolicy;")
-    lines.push("")
-  }
-
   return lines.join("\n")
 }
 
@@ -299,36 +290,77 @@ for (const [name, ref] of Object.entries(exportSchema.$defs)) {
 // json-schema-to-typescript inlines $refs per compile, so shared defs like
 // SurfaceInfo / ClientInfo / GatewayError appear once per referencing type.
 // Keep the first declaration of each exported name.
-const deduped = dedupeNamedExports(chunks.join(""))
+const deduped = restoreSchemaDocs(dedupeNamedExports(chunks.join("")))
 const prettierConfig = (await resolveConfig(join(root, "prettier.config.js"))) ?? {}
-const formatted = await format(deduped, {
+const enumConstants = SCHEMA_FILES.flatMap((file) =>
+  Object.entries(JSON.parse(readFileSync(join(schemaDir, file), "utf8")).$defs ?? {})
+    .filter(([, def]) => def.enum)
+    .map(
+      ([name, def]) =>
+        `export const ${name} = ${JSON.stringify(Object.fromEntries(def.enum.map((value) => [enumVariantName(value), value])))} as const`,
+    ),
+).join("\n")
+const formatted = await format(deduped + "\n" + enumConstants, {
   ...prettierConfig,
   filepath: outFile,
 })
 writeFileSync(outFile, formatted)
 console.log(`wrote ${outFile}`)
 
+/** $ref compilation can move property descriptions onto referenced declarations.
+ * Restore canonical declaration and field comments from their owning schemas.
+ */
+function restoreSchemaDocs(source) {
+  const definitions = Object.assign(
+    {},
+    ...[...SCHEMA_FILES, "frames.json"].map(
+      (file) => JSON.parse(readFileSync(join(schemaDir, file), "utf8")).$defs,
+    ),
+  )
+  const tree = ts.createSourceFile("protocol.ts", source, ts.ScriptTarget.Latest, true)
+  const edits = []
+  function document(node, description) {
+    if (!description) return
+    const start = node.jsDoc?.[0]?.pos ?? node.getStart(tree)
+    const end = node.jsDoc?.at(-1)?.end ?? start
+    edits.push({ start, end, text: `/** ${description.replaceAll("*/", "* /")} */\n` })
+  }
+  for (const node of tree.statements) {
+    if (!ts.isInterfaceDeclaration(node) && !ts.isTypeAliasDeclaration(node)) continue
+    const definition = definitions[node.name.text]
+    if (!definition) continue
+    document(node, definition.description)
+    if (ts.isInterfaceDeclaration(node)) {
+      for (const member of node.members)
+        document(member, definition.properties?.[member.name?.getText(tree)]?.description)
+    }
+  }
+  for (const edit of edits.sort((a, b) => b.start - a.start)) {
+    source = source.slice(0, edit.start) + edit.text + source.slice(edit.end)
+  }
+  return source
+}
+
 /** Keep the first `export interface|type Name` block for each Name. */
 function dedupeNamedExports(source) {
-  const exportStart = source.search(/^export (?:interface|type) /m)
-  if (exportStart < 0) return source
-
-  const banner = source.slice(0, exportStart)
-  const body = source.slice(exportStart)
-  const starts = [...body.matchAll(/^export (?:interface|type) (\w+)\b/gm)]
+  const starts = [...source.matchAll(/^export (?:interface|type) (\w+)\b/gm)].map(
+    (match) => {
+      const prefix = source.slice(0, match.index).trimEnd()
+      // A declaration's leading JSDoc belongs to it, not the preceding export.
+      const start = prefix.endsWith("*/") ? prefix.lastIndexOf("/**") : match.index
+      return { name: match[1], index: start >= 0 ? start : match.index }
+    },
+  )
+  if (!starts.length) return source
   const seen = new Set()
   const kept = []
-
   for (let i = 0; i < starts.length; i++) {
-    const name = starts[i][1]
-    const start = starts[i].index
-    const end = i + 1 < starts.length ? starts[i + 1].index : body.length
+    const { name, index } = starts[i]
     if (seen.has(name)) continue
     seen.add(name)
-    kept.push(body.slice(start, end).trimEnd())
+    kept.push(source.slice(index, starts[i + 1]?.index ?? source.length).trimEnd())
   }
-
-  return `${banner}${kept.join("\n\n")}\n`
+  return `${source.slice(0, starts[0].index)}${kept.join("\n\n")}\n`
 }
 
 const methodEntries = Object.keys(manifest.methods ?? {}).sort()
@@ -359,7 +391,10 @@ ${eventEntries.map((name) => `  ${tsKey(name)}: "${name}",`).join("\n")}
 export type EventName = (typeof Event)[keyof typeof Event]
 `
 
-writeFileSync(catalogTsOut, catalogTs)
+writeFileSync(
+  catalogTsOut,
+  catalogTs.replace("export const Event = {\n\n}", "export const Event = {}"),
+)
 console.log(`wrote ${catalogTsOut}`)
 
 const catalogRs = `//! Generated from \`protocol/manifest.json\` — do not edit by hand.
@@ -388,7 +423,7 @@ ${eventEntries
 }
 `
 
-writeFileSync(catalogRsOut, catalogRs)
+writeFileSync(catalogRsOut, catalogRs.replace("pub mod event {\n\n}", "pub mod event {}"))
 console.log(`wrote ${catalogRsOut}`)
 
 const schemasByFile = Object.fromEntries(

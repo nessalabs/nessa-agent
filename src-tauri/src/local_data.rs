@@ -1,4 +1,4 @@
-//! Stage-scoped on-disk roots for client data ([ADR 0005](../../docs/adr/0005-stage-scoped-local-data.md)).
+//! Stage-scoped on-disk roots for client data ([ADR 0005](../../docs/adr/done/0005-stage-scoped-local-data.md)).
 //!
 //! `prod` uses the bare app config directory. Every other stage string gets a
 //! subdirectory. Optional `NESSA_INSTANCE` further isolates worktrees/sandboxes.
@@ -106,18 +106,12 @@ mod tests {
 
     #[test]
     fn open_stage_names_get_their_own_segment() {
-        assert_eq!(
-            namespace_segment("dev", None).as_deref(),
-            Some("dev")
-        );
+        assert_eq!(namespace_segment("dev", None).as_deref(), Some("dev"));
         assert_eq!(
             namespace_segment("dogfood", None).as_deref(),
             Some("dogfood")
         );
-        assert_eq!(
-            namespace_segment("alpha", None).as_deref(),
-            Some("alpha")
-        );
+        assert_eq!(namespace_segment("alpha", None).as_deref(), Some("alpha"));
     }
 
     #[test]

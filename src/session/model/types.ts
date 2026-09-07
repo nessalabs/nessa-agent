@@ -1,4 +1,4 @@
-import type { HealthResult, HelloOk } from "@nessa/client"
+import type { HealthResult, ProductSessionReady } from "@nessa/client"
 
 export type SessionPhase = "idle" | "connecting" | "ready" | "error"
 
@@ -6,7 +6,7 @@ export type SessionState = {
   phase: SessionPhase
   /** Human-readable detail for the empty state. */
   detail: string
-  hello: HelloOk | null
+  hello: ProductSessionReady | null
   health: HealthResult | null
 }
 

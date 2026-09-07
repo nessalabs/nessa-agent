@@ -1,4 +1,4 @@
-//! Bundled default shortcut document ([ADR 0004](../../../../docs/adr/0004-server-owned-keybindings.md)).
+//! Bundled default shortcut document ([ADR 0004](../../../../docs/adr/done/0004-server-owned-keybindings.md)).
 
 use crate::protocol::ShortcutsDocument;
 

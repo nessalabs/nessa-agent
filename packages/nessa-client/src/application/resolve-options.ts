@@ -1,15 +1,21 @@
-import type { NessaClientConnectOptions } from "./options.js"
-import {
-  DEV_AUTH_TOKEN,
-  StageConfigError,
-  stageAllowsDefaultAuth,
-  type Stage,
-} from "./stage.js"
+import { NessaClientConfig } from "./client-config.js"
+import type { NessaClientConnectOptions, ProductConnectOptions } from "./options.js"
+import { StageConfigError, stageAllowsDefaultUrl, type Stage } from "./stage.js"
 
-export type ResolvedConnectOptions = NessaClientConnectOptions & {
+export type ResolvedProductConnectOptions = ProductConnectOptions & {
+  auth: { credential: string }
+  config: NessaClientConfig
   stage: Stage
   url: string
-  auth: { token: string }
+  profile: "product"
+}
+export type ResolvedConnectOptions = ResolvedProductConnectOptions
+
+function productUrl(url: string): string {
+  const parsed = new URL(url)
+  const path = parsed.pathname.replace(/\/$/, "")
+  parsed.pathname = path.endsWith("/session") ? path : `${path}/session`
+  return parsed.toString()
 }
 
 /**
@@ -31,20 +37,18 @@ export function isLoopbackWebSocketUrl(url: string): boolean {
 }
 
 /**
- * Apply stage policy:
- * - `dev` may omit `url` (loopback default) and omit `auth.token` **only** for
- *   loopback URLs (default `dev-token`).
- * - Non-loopback URLs always require an explicit token, even in `dev`.
- * - Non-dev requires explicit `url` + `auth.token`.
- * - Non-dev non-loopback URLs must use `wss:`.
+ * Validate stage/URL policy and resolve defaults. Product credentials are always
+ * loaded before resolution.
+ * Non-dev requires an explicit URL and non-loopback connections require wss.
  */
 export function resolveConnectOptions(
   options: NessaClientConnectOptions,
   defaultUrl: string,
 ): ResolvedConnectOptions {
+  const config = options.config ?? new NessaClientConfig()
   const stage: Stage = options.stage ?? "dev"
 
-  const url = options.url ?? (stageAllowsDefaultAuth(stage) ? defaultUrl : undefined)
+  const url = options.url ?? (stageAllowsDefaultUrl(stage) ? defaultUrl : undefined)
   if (!url) {
     throw new StageConfigError(
       `url is required for the ${stage} stage (dev may omit it and use ${defaultUrl})`,
@@ -53,29 +57,29 @@ export function resolveConnectOptions(
 
   const loopback = isLoopbackWebSocketUrl(url)
 
-  if (!stageAllowsDefaultAuth(stage) && !loopback && !url.startsWith("wss:")) {
+  if (!stageAllowsDefaultUrl(stage) && !loopback && !url.startsWith("wss:")) {
     throw new StageConfigError(`non-loopback ${stage} urls must use wss: (got ${url})`)
   }
 
-  let token = options.auth?.token
-  if (token === undefined) {
-    if (stageAllowsDefaultAuth(stage) && loopback) {
-      token = DEV_AUTH_TOKEN
-    } else if (stageAllowsDefaultAuth(stage)) {
+  {
+    const credential = options.auth?.credential
+    const credentialBytes = new TextEncoder().encode(credential ?? "").byteLength
+    if (
+      credential === undefined ||
+      credentialBytes === 0 ||
+      credentialBytes > 16 * 1024
+    ) {
       throw new StageConfigError(
-        `auth.token is required for non-loopback urls even in the ${stage} stage`,
-      )
-    } else {
-      throw new StageConfigError(
-        `auth.token is required for the ${stage} stage (dev may omit it on loopback)`,
+        "auth.credential must contain 1 to 16384 bytes for product sessions",
       )
     }
-  }
-
-  return {
-    ...options,
-    stage,
-    url,
-    auth: { token },
+    return {
+      ...options,
+      profile: "product",
+      stage,
+      url: productUrl(url),
+      auth: { credential },
+      config,
+    }
   }
 }

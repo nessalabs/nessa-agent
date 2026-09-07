@@ -15,21 +15,15 @@
  * ```
  */
 export type {
-  AuthToken,
   ClientEventMap,
   ClientInfo,
   ClientRole,
-  ConnectChallenge,
-  ConnectParams,
   EchoParams,
   EchoResult,
   EventFrame,
   Frame,
   GatewayError,
   HealthResult,
-  HelloOk,
-  PingParams,
-  PingResult,
   ReqFrame,
   ResFrame,
   Scope,
@@ -40,9 +34,14 @@ export type {
   ShortcutSurface,
   ShortcutsDocument,
   SurfaceInfo,
+  ProductSessionReady,
+  SessionAuthenticateParams,
+  SessionChallenge,
 } from "./types.js"
 
 export { Event, Method, type EventName, type MethodName } from "../generated/catalog.js"
 export { isEventFrame, isResponseFrame, parseWireMessage } from "./decode.js"
-export { assertConnectChallenge, assertEchoResult, assertHealthResult, assertHelloOk, assertPingResult } from "./validate.js"
+export { assertEchoResult, assertHealthResult } from "./validate.js"
+export { assertProductSessionReady, assertSessionChallenge } from "./validate.js"
+export { ProductEvent, ProductMethod } from "./product-types.js"
 export { buildRequestFrame, encodeWireMessage } from "./encode.js"

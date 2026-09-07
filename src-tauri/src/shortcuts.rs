@@ -1,7 +1,7 @@
-//! Stage-scoped `shortcuts.json` cache ([ADR 0004](../../docs/adr/0004-server-owned-keybindings.md)).
+//! Stage-scoped `shortcuts.json` cache ([ADR 0004](../../docs/adr/done/0004-server-owned-keybindings.md)).
 //!
-//! Seeded from `protocol/defaults/shortcuts.v1.json` when absent; replaced when
-//! the shell pushes a HelloOk document after connect.
+//! Seeded from `protocol/defaults/shortcuts.v1.json` when absent. The shell loads
+//! this host-owned cache independently of the authenticated gateway session.
 
 use std::fs;
 use std::sync::Mutex;
@@ -13,7 +13,7 @@ use crate::local_data;
 
 const DEFAULTS_JSON: &str = include_str!("../../protocol/defaults/shortcuts.v1.json");
 
-/// Wire-shaped shortcut document (same as HelloOk.shortcuts / defaults file).
+/// Shortcut document shared with the bundled defaults file.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShortcutsDocument {
@@ -94,7 +94,7 @@ pub fn summon_accelerator(doc: &ShortcutsDocument) -> Option<&str> {
     })
 }
 
-/// Persist a HelloOk (or defaults) document and re-register the summon shortcut.
+/// Persist a shortcut document and re-register the summon shortcut.
 #[tauri::command]
 pub fn apply_shortcuts(
     app: AppHandle,
@@ -114,7 +114,7 @@ pub fn apply_shortcuts(
     Ok(())
 }
 
-/// Current on-disk (or seeded) document for shell hydrate before HelloOk.
+/// Current on-disk (or seeded) document for shell hydration.
 #[tauri::command]
 pub fn load_shortcuts(app: AppHandle) -> ShortcutsDocument {
     load(&app)
@@ -128,9 +128,6 @@ mod tests {
     fn bundled_defaults_include_summon() {
         let doc = defaults();
         assert_eq!(doc.version, 1);
-        assert_eq!(
-            summon_accelerator(&doc),
-            Some("CmdOrCtrl+Shift+D")
-        );
+        assert_eq!(summon_accelerator(&doc), Some("CmdOrCtrl+Shift+D"));
     }
 }

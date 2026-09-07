@@ -146,7 +146,7 @@ writing the full defaults on first launch is buying.
   import `src/conversation` (the barrel), not files under it — `store.ts` is
   the exception, so tests do not pull the design system. Host subscriptions
   stay in adapters. See
-  [adr/0002-conversation-vertical-and-gateway.md](adr/0002-conversation-vertical-and-gateway.md).
+  [adr/0002-conversation-vertical-and-gateway.md](adr/done/0002-conversation-vertical-and-gateway.md).
 - Design-system components are consumed, not wrapped "just in case". A wrapper
   with no behaviour is a layer that only forwards.
 - Host-window interaction goes through one seam (as it already does), so the UI
@@ -159,3 +159,24 @@ writing the full defaults on first launch is buying.
 - Frost is a host concern. macOS uses a native effect view; Linux and the
   browser use CSS. The shell picks via `data-host`, it does not reach for
   `backdrop-filter` on the macOS Tauri window.
+
+## Dependency composition
+
+Use the [typed DI foundation](design/dependency-injection.md). TypeScript constructs
+one dependency scope in `main.tsx`, injects effects into Redux thunks, and shares
+its session handle with the lifecycle. Rust composes `RuntimeDependencies` into
+`AppState`; application-owned traits define replaceable effects. Extend these
+patterns for actual backend integrations without adding a service locator.
+
+## Identity and access library
+
+`crates/nessa-auth` is a workspace library with pure domain models and
+application-owned DTOs/ports. See its [module and collaboration guide](../crates/nessa-auth/README.md).
+The local backend, embedded Cedar, and `/session` gateway are implemented.
+`nessa-server/src/product` owns the guarded wire profile; composition injects its
+providers. See [local authentication](adr/done/0010-local-authentication.md). Hosted
+identity providers remain future adapters.
+
+`crates/nessa-local-storage` owns native OS private-file mechanics shared by the
+local auth adapter and the desktop credential adapter. It has no auth/domain policy
+or Tauri dependency; callers inject the resulting adapters through composition.

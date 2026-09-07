@@ -1,14 +1,7 @@
-import type {
-  ConnectChallenge,
-  EventFrame,
-  Frame,
-  HelloOk,
-  ResFrame,
-  Scope,
-} from "./types.js"
+import type { EventFrame, Frame, ResFrame } from "./types.js"
+import type { ProductSessionReady, SessionChallenge } from "./product-types.js"
 
 const RUNTIME_STATUSES = new Set(["ready", "starting", "unavailable", "error"])
-const SCOPES = new Set<Scope>(["server.read"])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -22,22 +15,79 @@ function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1
 }
 
-function isRuntimeStatus(value: unknown): value is HelloOk["runtimeStatus"] {
-  return typeof value === "string" && RUNTIME_STATUSES.has(value)
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
 }
 
-function isScope(value: unknown): value is Scope {
-  return typeof value === "string" && SCOPES.has(value as Scope)
-}
-
-function isScopeList(value: unknown): value is Scope[] {
-  if (!Array.isArray(value) || value.length === 0) return false
-  const seen = new Set<string>()
-  for (const item of value) {
-    if (!isScope(item) || seen.has(item)) return false
-    seen.add(item)
+export function assertSessionChallenge(value: unknown): SessionChallenge {
+  if (
+    !isRecord(value) ||
+    !isPositiveInteger(value.minVersion) ||
+    !isPositiveInteger(value.maxVersion)
+  ) {
+    throw new Error("session.challenge has invalid version range")
   }
-  return true
+  if (value.minVersion > value.maxVersion || !isNonEmptyString(value.nonce)) {
+    throw new Error("session.challenge is invalid")
+  }
+  if (!isNonNegativeInteger(value.expiresAt)) {
+    throw new Error("session.challenge has invalid expiresAt")
+  }
+  return value as unknown as SessionChallenge
+}
+
+export function assertProductSessionReady(value: unknown): ProductSessionReady {
+  if (!isRecord(value) || value.version !== 1) {
+    throw new Error("session response has unsupported version")
+  }
+  for (const field of [
+    "gatewayId",
+    "principalId",
+    "organizationId",
+    "membershipId",
+    "credentialId",
+    "audienceId",
+  ] as const) {
+    if (!isNonEmptyString(value[field]))
+      throw new Error(`session response missing ${field}`)
+  }
+  if (value.expiresAt !== null && !isNonNegativeInteger(value.expiresAt)) {
+    throw new Error("session response has invalid expiresAt")
+  }
+  if (!Array.isArray(value.grants)) {
+    throw new Error("session response has invalid grants")
+  }
+  for (const grantValue of value.grants) {
+    if (!isRecord(grantValue) || !isNonEmptyString(grantValue.action)) {
+      throw new Error("session response has invalid grant")
+    }
+    const resource = grantValue.resource
+    if (
+      !isRecord(resource) ||
+      !isNonEmptyString(resource.organizationId) ||
+      resource.organizationId !== value.organizationId ||
+      !isNonEmptyString(resource.id)
+    ) {
+      throw new Error("session response has invalid grant resource")
+    }
+  }
+  if (!Array.isArray(value.methods)) {
+    throw new Error("session response has invalid methods")
+  }
+  const methods = new Set<string>()
+  for (const method of value.methods) {
+    if (!isNonEmptyString(method) || methods.has(method)) {
+      throw new Error("session response has invalid methods")
+    }
+    methods.add(method)
+  }
+  return value as unknown as ProductSessionReady
+}
+
+function isRuntimeStatus(
+  value: unknown,
+): value is import("./types.js").HealthResult["runtimeStatus"] {
+  return typeof value === "string" && RUNTIME_STATUSES.has(value)
 }
 
 function hasOnlyKeys(
@@ -98,103 +148,6 @@ export function parseWireMessage(raw: string): Frame | null {
   return parseResponseFrame(value) ?? parseEventFrame(value)
 }
 
-/** Validate a successful connect payload before exposing it as session state. */
-export function assertHelloOk(value: unknown): HelloOk {
-  if (!isRecord(value)) {
-    throw new Error("connect response is not an object")
-  }
-  if (value.protocol !== 1) {
-    throw new Error("connect response has unsupported protocol version")
-  }
-  if (!isScopeList(value.scopes)) {
-    throw new Error("connect response has invalid scopes")
-  }
-  if (!isNonEmptyString(value.serverVersion)) {
-    throw new Error("connect response missing serverVersion")
-  }
-  if (!isRuntimeStatus(value.runtimeStatus)) {
-    throw new Error("connect response has invalid runtimeStatus")
-  }
-  if (!isRecord(value.policy) || !isPositiveInteger(value.policy.maxPayloadBytes)) {
-    throw new Error("connect response has invalid policy.maxPayloadBytes")
-  }
-  assertShortcutsDocument(value.shortcuts)
-  return value as unknown as HelloOk
-}
-
-const SHORTCUT_ACTIONS = new Set([
-  "panel.summon",
-  "panel.newTab",
-  "panel.closeTab",
-  "panel.activateTab",
-])
-const SHORTCUT_SCOPES = new Set(["global", "focused"])
-const SHORTCUT_SURFACES = new Set(["desktop", "browser", "*"])
-
-function assertShortcutsDocument(value: unknown): void {
-  if (!isRecord(value)) {
-    throw new Error("connect response has invalid shortcuts")
-  }
-  if (value.version !== 1) {
-    throw new Error("connect response has unsupported shortcuts.version")
-  }
-  if (!Array.isArray(value.bindings)) {
-    throw new Error("connect response has invalid shortcuts.bindings")
-  }
-  for (const binding of value.bindings) {
-    if (!isRecord(binding)) {
-      throw new Error("connect response has invalid shortcut binding")
-    }
-    if (!isNonEmptyString(binding.keys)) {
-      throw new Error("connect response has invalid shortcut keys")
-    }
-    if (typeof binding.action !== "string" || !SHORTCUT_ACTIONS.has(binding.action)) {
-      throw new Error("connect response has invalid shortcut action")
-    }
-    if (typeof binding.scope !== "string" || !SHORTCUT_SCOPES.has(binding.scope)) {
-      throw new Error("connect response has invalid shortcut scope")
-    }
-    if (typeof binding.surface !== "string" || !SHORTCUT_SURFACES.has(binding.surface)) {
-      throw new Error("connect response has invalid shortcut surface")
-    }
-    if ("args" in binding && binding.args != null) {
-      if (!isRecord(binding.args)) {
-        throw new Error("connect response has invalid shortcut args")
-      }
-      if (
-        "index" in binding.args &&
-        binding.args.index != null &&
-        (typeof binding.args.index !== "number" ||
-          !Number.isInteger(binding.args.index) ||
-          binding.args.index < 0)
-      ) {
-        throw new Error("connect response has invalid shortcut args.index")
-      }
-      if (
-        "conversationId" in binding.args &&
-        binding.args.conversationId != null &&
-        !isNonEmptyString(binding.args.conversationId)
-      ) {
-        throw new Error("connect response has invalid shortcut args.conversationId")
-      }
-    }
-  }
-}
-
-/** Validate a connect.challenge event payload. */
-export function assertConnectChallenge(value: unknown): ConnectChallenge {
-  if (!isRecord(value)) {
-    throw new Error("connect.challenge payload is not an object")
-  }
-  if (!isNonEmptyString(value.nonce)) {
-    throw new Error("connect.challenge missing nonce")
-  }
-  if (value.protocol !== 1) {
-    throw new Error("connect.challenge has unsupported protocol version")
-  }
-  return value as unknown as ConnectChallenge
-}
-
 /** Validate a server.health result payload. */
 export function assertHealthResult(value: unknown): import("./types.js").HealthResult {
   if (!isRecord(value) || typeof value.ok !== "boolean") {
@@ -211,17 +164,6 @@ export function assertHealthResult(value: unknown): import("./types.js").HealthR
     throw new Error("health response has invalid uptimeMs")
   }
   return value as unknown as import("./types.js").HealthResult
-}
-
-/** Validate a server.ping result payload (must echo a non-empty nonce). */
-export function assertPingResult(value: unknown): import("./types.js").PingResult {
-  if (!isRecord(value) || value.ok !== true) {
-    throw new Error("ping response is not a valid PingResult")
-  }
-  if (!isNonEmptyString(value.nonce)) {
-    throw new Error("ping response missing nonce")
-  }
-  return value as unknown as import("./types.js").PingResult
 }
 
 /** Validate a conversation.echo result payload. */

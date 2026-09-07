@@ -42,7 +42,8 @@ export function parseAccelerator(keys: string): ParsedKeys | null {
     .filter(Boolean)
   if (parts.length === 0) return null
 
-  const keyToken = parts[parts.length - 1]!
+  const keyToken = parts[parts.length - 1]
+  if (keyToken === undefined) return null
   let cmdOrCtrl = false
   let meta = false
   let ctrl = false
@@ -52,7 +53,12 @@ export function parseAccelerator(keys: string): ParsedKeys | null {
   for (const part of parts.slice(0, -1)) {
     const token = part.toLowerCase()
     if (token === "cmdorctrl" || token === "commandorcontrol") cmdOrCtrl = true
-    else if (token === "cmd" || token === "command" || token === "super" || token === "meta")
+    else if (
+      token === "cmd" ||
+      token === "command" ||
+      token === "super" ||
+      token === "meta"
+    )
       meta = true
     else if (token === "ctrl" || token === "control") ctrl = true
     else if (token === "alt" || token === "option") alt = true

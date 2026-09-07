@@ -1,66 +1,43 @@
-# Protocol — S1 (connect + health + ping)
+# Gateway protocol
 
-Wire contracts for the **current** spike: WebSocket handshake, `server.health`,
-and `server.ping` (composed only when the server stage is `dev`; see ADR 0006).
+The gateway serves authenticated WebSocket sessions at `/session`. It sends
+`session.challenge`, accepts `session.authenticate`, and returns verified session
+metadata. Every product command checks current credentials, membership, and policy.
+HTTP `/health` reports process liveness only.
 
-| Path | Purpose |
+| Source | Purpose |
 | --- | --- |
-| [manifest.json](manifest.json) | **SSOT for method/event names**, roles, params/result refs |
-| [schemas/v1/](schemas/v1/) | **SSOT for payload shapes** (JSON Schema) |
-| [defaults/](defaults/) | Default documents the server serves (e.g. `shortcuts.v1.json`) |
-| [fixtures/v1/](fixtures/v1/) | Golden wire examples (CI-validated) |
+| [product/manifest.json](product/manifest.json) | Authenticated method and event catalog |
+| [product/v1.json](product/v1.json) | Session, credential, and termination payloads |
+| [manifest.json](manifest.json) | Shared health and echo method schemas |
+| [schemas/v1/](schemas/v1/) | Shared payloads, frames, and shortcut documents |
+| [defaults/](defaults/) | Bundled shortcut defaults |
+| [fixtures/v1/](fixtures/v1/) | Validated shared wire examples |
 
-```bash
-pnpm protocol:generate   # → TS + Rust catalogs and payload types
-pnpm protocol:check      # manifest + fixtures + generated parity
+```sh
+pnpm protocol:generate
+pnpm protocol:check
 ```
 
-**To add a method:** edit `manifest.json` + schemas → `pnpm protocol:generate` → wire the handler. Do not invent string literals in client/server code.
+Edit source schemas and manifests together with callers, fixtures, and handlers.
+Generated TypeScript and Rust files name their source in their headers. No protocol
+or schema version bump is needed merely to change this repository's current contract.
 
-Generated (do not edit — each file header names its SSOT):
-
-| Output | From |
+| Name | Purpose |
 | --- | --- |
-| `packages/nessa-client/src/generated/protocol.ts` | schemas (payload types) |
-| `packages/nessa-client/src/generated/catalog.ts` | manifest (`Method.ServerHealth`, …) |
-| `crates/nessa-server/src/protocol/generated_catalog.rs` | manifest (`method::SERVER_HEALTH`, …) |
-| `crates/nessa-server/src/protocol/generated_types.rs` | schemas (`ConnectParams`, `HelloOk`, …) |
+| `session.challenge` | Per-socket nonce and accepted protocol range |
+| `session.authenticate` | Credential proof and nonce; returns verified session |
+| `auth.session` | Current authenticated metadata |
+| `server.health` | Authorized health read (`server.read`) |
+| `conversation.echo` | Temporary text round trip (`conversation.write`) |
+| `credential.issue`, `credential.list`, `credential.revoke` | Credential administration (`credential.manage`) |
 
-Hand-written on the server: `frames.rs` / `decode.rs` / `encode.rs` (envelope helpers + routing). They **import** generated names and types.
+Frames use `req`, `res`, and `event`. A transport `id` correlates a response with
+its request. Mutations separately carry a stable `requestId` for explicit retries.
+Credential and session `expiresAt` may be null; issuance defaults to no expiry.
+Authentication challenges retain a deadline. Typed close reasons distinguish
+terminal authority failures from retryable transport or dependency failures.
 
-## Wire shape
-
-Frames are JSON text on the WebSocket:
-
-| `type` | Direction | Correlates by |
-| --- | --- | --- |
-| `req` | client → server | `id` |
-| `res` | server → client | same `id` |
-| `event` | server → client | `seq` (monotonic per socket) |
-
-S1 methods/events (from `manifest.json`):
-
-| Name | Kind | Notes |
-| --- | --- | --- |
-| `connect` | req/res | First RPC; returns `HelloOk` |
-| `server.health` | req/res | Requires a successful `connect` |
-| `server.ping` | req/res | Echo nonce; **composed only on stage=`dev`** (ADR 0006); call via `NessaClient.server.ping` |
-| `connect.challenge` | event | Sent immediately on socket open; nonce echoed in `connect` |
-
-## Error codes (S1)
-
-Returned on `res` frames with `ok: false` and `error: { code, message }`:
-
-| Code | When |
-| --- | --- |
-| `already_connected` | Second `connect` on the same socket |
-| `protocol_mismatch` | Client min/max does not include protocol v1 |
-| `invalid_params` | Empty required metadata strings |
-| `invalid_challenge` | Auth nonce ≠ this socket's challenge |
-| `unauthorized` | Auth token mismatch |
-| `not_connected` | `server.health` / `server.ping` before `connect` |
-| `unknown_method` | Unrecognized `method` string (including `server.ping` when not composed) |
-| `invalid_request` | Malformed / undecodable frame |
-| `internal_error` | Encode failure or missing challenge state |
-
-Repo context: [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md), [docs/codebase-structure.md](../docs/codebase-structure.md).
+See the [authentication decision](../docs/adr/done/0010-local-authentication.md),
+[local setup guide](../docs/guides/local-auth.md), and
+[SDK guide](../packages/nessa-client/README.md).

@@ -1,5 +1,5 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit"
-import type { HealthResult, HelloOk } from "@nessa/client"
+import type { HealthResult, ProductSessionReady } from "@nessa/client"
 
 import { initialSessionState, type SessionState } from "../../model"
 
@@ -13,7 +13,13 @@ const sessionSlice = createSlice({
       state.hello = null
       state.health = null
     },
-    sessionReady(state, action: PayloadAction<{ hello: HelloOk; health: HealthResult }>) {
+    sessionReady(
+      state,
+      action: PayloadAction<{
+        hello: ProductSessionReady
+        health: HealthResult
+      }>,
+    ) {
       state.phase = "ready"
       state.detail = "Connected"
       state.hello = action.payload.hello
