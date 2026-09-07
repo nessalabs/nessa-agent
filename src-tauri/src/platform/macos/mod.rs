@@ -4,7 +4,7 @@ mod live_resize;
 mod vibrancy;
 mod viewport;
 
-use tauri::{AppHandle, WebviewWindow, Window, WindowEvent};
+use tauri::{AppHandle, WebviewWindow};
 
 use crate::host::PanelSize;
 use crate::platform::Host;
@@ -39,18 +39,5 @@ impl Host for Macos {
 
     fn watch_live_resize(&self, window: &WebviewWindow) -> Result<(), String> {
         live_resize::watch(window)
-    }
-
-    fn on_window_event(&self, window: &Window, event: &WindowEvent) {
-        // A menu bar extra dismisses when you click away — but not in a debug
-        // build, where opening devtools would hide it instantly.
-        #[cfg(not(debug_assertions))]
-        if let WindowEvent::Focused(false) = event {
-            let _ = window.hide();
-        }
-        #[cfg(debug_assertions)]
-        {
-            let _ = (window, event);
-        }
     }
 }

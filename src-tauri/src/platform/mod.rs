@@ -11,7 +11,7 @@
 //! | Frost | `NSVisualEffectView` | CSS `backdrop-filter` (no-op here) | CSS |
 //! | Viewport pin | `WKWebView` in the content view | `WebKitWebView` in a `GtkFixed` | webview fills the window |
 //! | Live resize | AppKit notifications | size-allocate + button mask | none |
-//! | Lifecycle | accessory app, hide-on-blur in release | taskbar window, shown on launch | default window |
+//! | Lifecycle | accessory app, stays open when focus moves away | taskbar window, shown on launch | default window |
 
 use tauri::{AppHandle, Manager, WebviewWindow, Window, WindowEvent};
 

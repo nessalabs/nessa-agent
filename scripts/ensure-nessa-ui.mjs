@@ -7,7 +7,7 @@
  * Prefer a sibling checkout if one is already there (the original worktree,
  * or a clone named `nessa_ui`). Otherwise clone nessalabs/nessa_ui.
  */
-import { existsSync, mkdirSync, rmSync, symlinkSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -34,13 +34,12 @@ function run(command, args, cwd) {
 }
 
 function ensureWorkspace(repoRoot) {
-  // The app compiles the kit from source, so the kit's own node_modules have
-  // to exist. `workspace:*` (`@nessa-ui/agent-stream`) only resolves inside
-  // this checkout.
-  if (existsSync(resolve(repoRoot, "packages/react/node_modules/clsx"))) {
-    return
-  }
-  run("pnpm", ["install", "--filter", "@nessa-ui/react..."], repoRoot)
+  // Source consumption needs the UI package's dependencies installed in its
+  // own workspace. Always reconcile the install after checkout changes.
+  const { name } = JSON.parse(
+    readFileSync(resolve(repoRoot, "packages/react/package.json"), "utf8"),
+  )
+  run("pnpm", ["install", "--frozen-lockfile", "--filter", `${name}...`], repoRoot)
 }
 
 function placeVendor() {

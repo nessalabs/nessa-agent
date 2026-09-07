@@ -34,7 +34,7 @@
     "tauri": "tauri",
     "app": "tauri dev",
     "app:build": "tauri build",
-    "app:fast": "just fast",
+    "app:fast": "just release fast",
     "auth:e2e": "cargo build -p nessa-server && tsx scripts/smoke-auth.mjs",
     "client:docs": "pnpm protocol:generate && typedoc --options typedoc.client.json",
     "client:docs:json": "pnpm protocol:generate && typedoc --options typedoc.client.json --json docs/generated/client-api.json",
