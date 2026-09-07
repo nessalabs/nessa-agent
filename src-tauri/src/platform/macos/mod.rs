@@ -4,6 +4,7 @@ mod live_resize;
 mod vibrancy;
 mod viewport;
 
+use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
 use tauri::{AppHandle, WebviewWindow};
 
 use crate::host::PanelSize;
@@ -39,5 +40,23 @@ impl Host for Macos {
 
     fn watch_live_resize(&self, window: &WebviewWindow) -> Result<(), String> {
         live_resize::watch(window)
+    }
+
+    fn after_attach(&self, window: &WebviewWindow, _settings: &crate::settings::Settings) {
+        // Setup runs on the main thread. The live WebviewWindow owns this
+        // NSWindow; borrow it only for the duration of this configuration.
+        let handle = match window.ns_window() {
+            Ok(handle) => handle,
+            Err(error) => {
+                eprintln!("[nessa] could not configure fullscreen Space visibility: {error}");
+                return;
+            }
+        };
+        let native = unsafe { &*handle.cast::<NSWindow>() };
+        // Tauri's all-workspaces flag joins desktop Spaces. This additional
+        // behavior allows the accessory panel beside fullscreen windows.
+        native.setCollectionBehavior(
+            native.collectionBehavior() | NSWindowCollectionBehavior::FullScreenAuxiliary,
+        );
     }
 }

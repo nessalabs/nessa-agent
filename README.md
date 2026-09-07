@@ -338,7 +338,9 @@ natively too, which is what the `set_frosted` command is for.
 ### Working alongside other apps
 
 The panel stays open when you click away or open Spotlight, in both development
-and release builds. Use the tray item or summon shortcut to toggle it closed.
+and release builds. It appears across desktop Spaces, with macOS fullscreen
+auxiliary behavior enabled to allow it alongside fullscreen apps. Use the tray
+item or summon shortcut to toggle it closed.
 
 ## The Nessa UI dependency
 
