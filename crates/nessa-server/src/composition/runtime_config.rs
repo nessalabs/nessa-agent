@@ -35,13 +35,16 @@ impl RuntimeConfig {
             .parent()
             .ok_or_else(|| invalid("invalid data directory"))?
             .join("config.json");
-        let file = match std::fs::File::open(&path) {
-            Ok(file) => file,
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.is_file() => {}
+            Ok(_) => return Err(invalid("config.json must be a regular file")),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self::default())
             }
             Err(error) => return Err(invalid(error)),
-        };
+        }
+        let file = nessa_local_storage::open(&path, nessa_local_storage::OpenMode::Read)
+            .map_err(invalid)?;
         let mut bytes = Vec::new();
         file.take(65_537).read_to_end(&mut bytes).map_err(invalid)?;
         if bytes.len() > 65_536 {
@@ -83,6 +86,45 @@ fn invalid(error: impl std::fmt::Display) -> RunError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn config_loading_accepts_only_private_regular_files() {
+        use std::io::Write;
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("namespace");
+        nessa_local_storage::create_directory(&directory).unwrap();
+        let auth = directory.join("auth");
+        assert!(RuntimeConfig::load(&auth).is_ok());
+        let path = directory.join("config.json");
+        nessa_local_storage::open(&path, nessa_local_storage::OpenMode::CreateNew)
+            .unwrap()
+            .write_all(br#"{"session":{"handshakeTimeoutMs":1000}}"#)
+            .unwrap();
+        assert_eq!(
+            RuntimeConfig::load(&auth)
+                .unwrap()
+                .session()
+                .unwrap()
+                .handshake_timeout,
+            Duration::from_secs(1)
+        );
+        std::fs::hard_link(&path, directory.join("alias.json")).unwrap();
+        assert!(RuntimeConfig::load(&auth).is_err());
+        std::fs::remove_file(directory.join("alias.json")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{symlink, PermissionsExt};
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(RuntimeConfig::load(&auth).is_err());
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            let target = directory.join("target.json");
+            std::fs::rename(&path, &target).unwrap();
+            symlink(&target, &path).unwrap();
+            assert!(RuntimeConfig::load(&auth).is_err());
+            std::fs::remove_file(target).unwrap();
+            assert!(RuntimeConfig::load(&auth).is_err());
+        }
+    }
+
     #[test]
     fn partial_settings_override_only_their_scope() {
         let a = RuntimeConfig::parse(br#"{"registry":{"maxCredentials":2000,"maxRegistryBytes":8388608},"session":{"writeTimeoutMs":75}}"#).unwrap();

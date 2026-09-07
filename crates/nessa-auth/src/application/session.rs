@@ -186,8 +186,8 @@ mod tests {
         }
     }
     impl Clock for Adapter {
-        fn unix_seconds(&self) -> u64 {
-            self.now
+        fn unix_milliseconds(&self) -> u64 {
+            self.now * 1000
         }
     }
     fn fixture(org: &str, status: MembershipStatus) -> Adapter {

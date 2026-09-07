@@ -2380,6 +2380,7 @@ dependencies = [
  "nessa-local-storage",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

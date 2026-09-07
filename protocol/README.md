@@ -35,8 +35,15 @@ or schema version bump is needed merely to change this repository's current cont
 Frames use `req`, `res`, and `event`. A transport `id` correlates a response with
 its request. Mutations separately carry a stable `requestId` for explicit retries.
 Credential and session `expiresAt` may be null; issuance defaults to no expiry.
-Authentication challenges retain a deadline. Typed close reasons distinguish
+Authentication challenges advertise a Unix-second deadline rounded up from
+millisecond wall time. A single monotonic timeout covers challenge delivery and
+authentication; expiry closes with retryable `handshake_timeout` (4006). Typed close reasons distinguish
 terminal authority failures from retryable transport or dependency failures.
+
+Credential lifecycle RPC errors distinguish `credential_conflict`,
+`credential_capacity`, and `credential_not_found` from
+`credential_store_unavailable`. The first three reject the command; they do not
+signal a transient connection failure. Empty issuance grants are invalid.
 
 See the [authentication decision](../docs/adr/done/0010-local-authentication.md),
 [local setup guide](../docs/guides/local-auth.md), and

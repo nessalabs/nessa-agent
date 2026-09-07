@@ -16,7 +16,8 @@ import { createServer } from "node:net"
 import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { WebSocket } from "ws"
-import { NessaClient, NessaRpcError } from "@nessa/client"
+import { NessaClient, NessaMutationError, NessaRpcError } from "@nessa/client"
+import { windowsPrivateFile } from "../packages/nessa-client/src/transport/windows-private-file.js"
 
 globalThis.WebSocket = WebSocket
 const root = fileURLToPath(new URL("../", import.meta.url))
@@ -131,8 +132,19 @@ try {
   assert.notEqual(overwrite.status, 0)
   assert.equal(readFileSync(ownerPath, "utf8").trim(), ownerSecret)
   const configPath = join(env.NESSA_DATA_DIR, "ci", "instances", "e2e", "config.json")
-  // Offline commands and serving use the same file; invalid values never default.
-  writeFileSync(configPath, JSON.stringify({ registry: { maxCredentials: 0 } }))
+  const writeConfig = async (config) => {
+    const json = JSON.stringify(config)
+    if (process.platform === "win32") {
+      // This adapter deliberately writes once. Each offline fixture gets a new file.
+      rmSync(configPath, { force: true })
+      await windowsPrivateFile("reserve", configPath)
+      await windowsPrivateFile("write", configPath, json)
+    } else {
+      writeFileSync(configPath, json, { mode: 0o600 })
+    }
+  }
+  // Offline commands and serving use the same private file; invalid values never default.
+  await writeConfig({ registry: { maxCredentials: 0 } })
   const invalidConfig = spawnSync(
     binary,
     [
@@ -145,17 +157,14 @@ try {
   )
   assert.notEqual(invalidConfig.status, 0)
   assert.equal(existsSync(join(directory, "invalid-config.token")), false)
-  writeFileSync(
-    configPath,
-    JSON.stringify({
-      registry: { maxCredentials: 2000, maxRegistryBytes: 8388608 },
-      session: {
-        handshakeTimeoutMs: 1000,
-        writeTimeoutMs: 500,
-        currentStateIntervalMs: 100,
-      },
-    }),
-  )
+  await writeConfig({
+    registry: { maxCredentials: 2000, maxRegistryBytes: 8388608 },
+    session: {
+      handshakeTimeoutMs: 1000,
+      writeTimeoutMs: 500,
+      currentStateIntervalMs: 100,
+    },
+  })
   await start()
   assert.equal((await fetch(`http://127.0.0.1:${port}/`)).status, 404)
   const idle = new WebSocket(`${url}/session`)
@@ -215,6 +224,24 @@ try {
   assert.ok(!("secret" in retry))
   await assert.rejects(
     owner.credentials.issue({ ...request, expiresAt: request.expiresAt + 1 }),
+    (error) =>
+      error instanceof NessaMutationError &&
+      error.cause instanceof NessaRpcError &&
+      error.cause.code === "credential_conflict",
+  )
+  await assert.rejects(
+    owner.credentials.issue({ ...request, requestId: "empty-grants", grants: [] }),
+    (error) =>
+      error instanceof NessaMutationError &&
+      error.cause instanceof NessaRpcError &&
+      error.cause.code === "invalid_request",
+  )
+  await assert.rejects(
+    owner.credentials.revoke("missing-credential", "missing-revoke"),
+    (error) =>
+      error instanceof NessaMutationError &&
+      error.cause instanceof NessaRpcError &&
+      error.cause.code === "credential_not_found",
   )
   await assert.rejects(
     owner.credentials.issue({

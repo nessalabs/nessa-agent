@@ -6,7 +6,8 @@ use std::{fmt, future::Future, pin::Pin};
 
 /// Runtime-neutral boxed future borrowing its adapter and input for `'a`.
 /// Adapters return typed failures and must not hide unavailable state as success.
-pub type PortFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, AccessError>> + Send + 'a>>;
+pub type PortFuture<'a, T, E = AccessError> =
+    Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>;
 
 /// Private credential bytes: deliberately no Serialize, Clone, Display, or derived Debug.
 /// This wrapper redacts diagnostics; it does not promise memory zeroization.
@@ -102,8 +103,12 @@ pub trait AccessReader: Send + Sync {
 
 /// Absolute time for credential expiration, distinct from the server uptime clock.
 pub trait Clock: Send + Sync {
-    /// Current absolute Unix time in seconds, used for expiry rather than uptime.
-    fn unix_seconds(&self) -> u64;
+    /// Current absolute Unix time in milliseconds, used to advertise deadlines.
+    fn unix_milliseconds(&self) -> u64;
+    /// Whole Unix seconds for credential expiry, derived from the same clock.
+    fn unix_seconds(&self) -> u64 {
+        self.unix_milliseconds() / 1000
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

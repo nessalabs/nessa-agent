@@ -55,3 +55,10 @@ it("rejects public files, symlinks, and namespace traversal", async () => {
     "namespace",
   )
 })
+
+it("never resolves localhost for automatic credential loading", async () => {
+  const { source } = await fixture()
+  for (const url of ["ws://localhost:7420/session", "wss://localhost:7420/session"]) {
+    await expect(source.load({ ...context, url })).rejects.toThrow("loopback")
+  }
+})

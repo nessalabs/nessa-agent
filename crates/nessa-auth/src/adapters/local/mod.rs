@@ -8,12 +8,12 @@
 use crate::{
     application::{
         credential_admin::{
-            AuthRevisionSource, CredentialAdmin, IssueCredentialOutcome, IssueCredentialRequest,
-            ListCredentialsRequest, RevokeCredentialRequest,
+            AuthRevisionSource, CredentialAdmin, CredentialAdminError, IssueCredentialOutcome,
+            IssueCredentialRequest, ListCredentialsRequest, RevokeCredentialRequest,
         },
         dto::{
             CredentialGrantDto, CredentialMetadataDto, MembershipInputDto, MembershipRoleDto,
-            MembershipStateDto, OrganizationInputDto, PrincipalInputDto,
+            MembershipStateDto, OrganizationInputDto, PrincipalInputDto, PrincipalKindDto,
         },
         ports::{
             AccessError, AccessReader, AccessSnapshot, CredentialEvidence, CredentialVerifier,
@@ -160,6 +160,7 @@ struct RevokeReceipt {
 struct Registry {
     schema_version: u32,
     gateway_id: String,
+    owner_membership_id: String,
     revision: u64,
     organizations: Vec<OrganizationInputDto>,
     principals: Vec<PrincipalInputDto>,
@@ -316,6 +317,7 @@ impl LocalCredentialStore {
         let registry = Registry {
             schema_version: SCHEMA_VERSION,
             gateway_id: request.gateway_id,
+            owner_membership_id: request.membership.id.clone(),
             revision: 1,
             organizations: vec![request.organization],
             principals: vec![request.principal],
@@ -375,7 +377,9 @@ impl LocalCredentialStore {
                 .clone();
             return Ok(IssueCredentialOutcome::ExistingSecretUnavailable { metadata });
         }
-        if current.credentials.len() >= self.config.max_credentials {
+        if current.credentials.len() >= self.config.max_credentials
+            || current.issue_receipts.len() >= self.config.max_receipts
+        {
             return Err(LocalStoreError::Capacity);
         }
         validate_issue(current, &request, administrative_allowed)?;
@@ -405,11 +409,13 @@ impl LocalCredentialStore {
         if !next.principals.iter().any(|p| p.id == request.principal.id) {
             next.principals.push(request.principal);
         }
-        if !next
+        if let Some(membership) = next
             .memberships
-            .iter()
-            .any(|m| m.id == request.membership.id)
+            .iter_mut()
+            .find(|m| m.id == request.membership.id)
         {
+            *membership = request.membership;
+        } else {
             next.memberships.push(request.membership);
         }
         next.credentials.push(StoredCredential {
@@ -451,10 +457,7 @@ impl LocalCredentialStore {
             let membership = current
                 .memberships
                 .iter()
-                .find(|member| {
-                    member.role == MembershipRoleDto::Admin
-                        && member.state == MembershipStateDto::Active
-                })
+                .find(|member| member.id == current.owner_membership_id)
                 .ok_or(LocalStoreError::Corrupt)?
                 .clone();
             let principal = current
@@ -474,6 +477,12 @@ impl LocalCredentialStore {
         }
         let issuer_principal_id = principal.id.clone();
         principal.id = format!("surface:{surface_id}");
+        principal.kind = PrincipalKindDto::Integration;
+        membership.role = if actions.iter().any(|action| action == "credential.manage") {
+            MembershipRoleDto::Admin
+        } else {
+            MembershipRoleDto::Member
+        };
         membership.principal_id = principal.id.clone();
         membership.id = format!("surface:{surface_id}");
         let grants = actions
@@ -518,10 +527,7 @@ impl LocalCredentialStore {
         let membership = current
             .memberships
             .iter()
-            .find(|membership| {
-                membership.role == MembershipRoleDto::Admin
-                    && membership.state == MembershipStateDto::Active
-            })
+            .find(|membership| membership.id == current.owner_membership_id)
             .ok_or(LocalStoreError::Corrupt)?;
         let grants = current
             .credentials
@@ -839,17 +845,23 @@ impl CredentialAdmin for LocalCredentialStore {
     fn issue<'a>(
         &'a self,
         request: IssueCredentialRequest,
-    ) -> PortFuture<'a, IssueCredentialOutcome> {
-        Box::pin(async move { self.issue_sync(request).map_err(map_error) })
+    ) -> PortFuture<'a, IssueCredentialOutcome, CredentialAdminError> {
+        Box::pin(async move { self.issue_sync(request).map_err(CredentialAdminError::from) })
     }
     fn list<'a>(
         &'a self,
         request: ListCredentialsRequest,
-    ) -> PortFuture<'a, Vec<CredentialMetadataDto>> {
-        Box::pin(async move { self.list_sync(&request).map_err(map_error) })
+    ) -> PortFuture<'a, Vec<CredentialMetadataDto>, CredentialAdminError> {
+        Box::pin(async move { self.list_sync(&request).map_err(CredentialAdminError::from) })
     }
-    fn revoke<'a>(&'a self, request: RevokeCredentialRequest) -> PortFuture<'a, u64> {
-        Box::pin(async move { self.revoke_sync(request).map_err(map_error) })
+    fn revoke<'a>(
+        &'a self,
+        request: RevokeCredentialRequest,
+    ) -> PortFuture<'a, u64, CredentialAdminError> {
+        Box::pin(async move {
+            self.revoke_sync(request)
+                .map_err(CredentialAdminError::from)
+        })
     }
 }
 
@@ -893,8 +905,19 @@ pub fn write_evidence_file(
     Ok(())
 }
 
-fn map_error(_: LocalStoreError) -> AccessError {
-    AccessError::Unavailable
+impl From<LocalStoreError> for CredentialAdminError {
+    fn from(error: LocalStoreError) -> Self {
+        match error {
+            LocalStoreError::Conflict => Self::Conflict,
+            LocalStoreError::Capacity => Self::Capacity,
+            LocalStoreError::NotFound => Self::NotFound,
+            LocalStoreError::Locked
+            | LocalStoreError::NotInitialized
+            | LocalStoreError::AlreadyInitialized
+            | LocalStoreError::Corrupt
+            | LocalStoreError::Io(_) => Self::Unavailable,
+        }
+    }
 }
 
 fn issue_secret(credential_id: &str) -> Result<(CredentialEvidence, String), LocalStoreError> {
@@ -950,6 +973,11 @@ fn validate_registry(
         || registry.issue_receipts.len() > config.max_receipts
         || registry.revoke_receipts.len() > config.max_receipts
         || registry.gateway_id.is_empty()
+        || !registry.memberships.iter().any(|membership| {
+            membership.id == registry.owner_membership_id
+                && membership.role == MembershipRoleDto::Admin
+                && membership.state == MembershipStateDto::Active
+        })
     {
         return Err(LocalStoreError::Corrupt);
     }
@@ -1078,14 +1106,19 @@ fn validate_issue(
         .iter()
         .find(|m| m.id == request.membership.id)
     {
-        if membership != &request.membership {
+        if membership != &request.membership
+            && !(administrative_allowed
+                && membership.id != registry.owner_membership_id
+                && membership.principal_id == request.membership.principal_id
+                && membership.organization_id == request.membership.organization_id)
+        {
             return Err(LocalStoreError::Conflict);
         }
     }
     if registry.memberships.iter().any(|membership| {
         membership.principal_id == request.membership.principal_id
             && membership.organization_id == request.membership.organization_id
-            && membership != &request.membership
+            && membership.id != request.membership.id
     }) {
         return Err(LocalStoreError::Conflict);
     }
@@ -1097,14 +1130,16 @@ fn validate_grants(
     gateway_id: &str,
     administrative_allowed: bool,
 ) -> Result<(), LocalStoreError> {
-    if metadata.grants.iter().any(|grant| {
-        grant.resource.id != gateway_id
-            || !matches!(
-                grant.action.as_str(),
-                "server.read" | "credential.manage" | "conversation.write"
-            )
-            || (!administrative_allowed && grant.action == "credential.manage")
-    }) {
+    if metadata.grants.is_empty()
+        || metadata.grants.iter().any(|grant| {
+            grant.resource.id != gateway_id
+                || !matches!(
+                    grant.action.as_str(),
+                    "server.read" | "credential.manage" | "conversation.write"
+                )
+                || (!administrative_allowed && grant.action == "credential.manage")
+        })
+    {
         return Err(LocalStoreError::Conflict);
     }
     Ok(())
@@ -1410,7 +1445,39 @@ mod tests {
         else {
             panic!("new credential")
         };
+        let roles = || {
+            let slot = store.registry().unwrap();
+            let registry = slot.as_ref().unwrap();
+            assert!(registry
+                .principals
+                .iter()
+                .filter(|principal| principal.id.starts_with("surface:"))
+                .all(|principal| principal.kind == PrincipalKindDto::Integration));
+            registry
+                .memberships
+                .iter()
+                .filter(|membership| membership.id.starts_with("surface:"))
+                .map(|membership| (membership.id.clone(), membership.role.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            roles(),
+            vec![
+                ("surface:nessa-panel".into(), MembershipRoleDto::Admin),
+                ("surface:plugin".into(), MembershipRoleDto::Member),
+            ]
+        );
         issue("nessa-panel", "chat-two", vec!["server.read".into()]);
+        assert!(roles()
+            .iter()
+            .all(|(_, role)| *role == MembershipRoleDto::Member));
+        // Role and revocations are published coherently to active readers.
+        let snapshot = ready(store.read(&CredentialId::new("chat-two").unwrap())).unwrap();
+        assert_eq!(
+            snapshot.membership.role(),
+            crate::domain::MembershipRole::Member
+        );
+
         let audience = AudienceId::new("gateway-1").unwrap();
         assert_eq!(
             ready(store.verify(&chat, &audience)),
@@ -1427,10 +1494,28 @@ mod tests {
         let store = LocalCredentialStore::open(&path).unwrap();
         let original = store.bootstrap(bootstrap()).unwrap();
         let original_token = original.evidence.expose_bytes().to_vec();
+        store
+            .provision_surface(
+                "panel",
+                "panel-issue".into(),
+                "panel-token".into(),
+                vec!["credential.manage".into()],
+                110,
+                None,
+            )
+            .unwrap();
+        drop(store);
+        let mut registry: Registry = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        registry.memberships.reverse();
+        registry.principals.reverse();
+        fs::write(&path, serde_json::to_vec(&registry).unwrap()).unwrap();
+        let store = LocalCredentialStore::open(&path).unwrap();
+
         let identity = store.identity().unwrap();
         let recovered = store
             .recover_owner("replacement-owner".into(), 150, Some(250))
             .unwrap();
+        assert_eq!(recovered.metadata.principal_id, "owner");
         assert_eq!(store.identity().unwrap().gateway_id, identity.gateway_id);
         assert_eq!(
             store.identity().unwrap().organization_ids,
@@ -1442,6 +1527,92 @@ mod tests {
             Err(AccessError::InvalidCredential)
         );
         assert!(ready(store.verify(&recovered.evidence, &audience)).is_ok());
+    }
+
+    #[test]
+    fn empty_grants_and_receipt_capacity_fail_without_changing_durable_state() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("auth/credentials.v1.json");
+        let store = LocalCredentialStore::open_with_config(
+            &path,
+            LocalStoreConfig {
+                max_receipts: 1,
+                ..LocalStoreConfig::default()
+            },
+        )
+        .unwrap();
+        store.bootstrap(bootstrap()).unwrap();
+        let before = fs::read(&path).unwrap();
+        assert!(matches!(
+            store.provision_surface("empty", "empty".into(), "empty".into(), vec![], 110, None),
+            Err(LocalStoreError::Conflict)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), before);
+        store
+            .provision_surface(
+                "one",
+                "one".into(),
+                "one".into(),
+                vec!["server.read".into()],
+                110,
+                None,
+            )
+            .unwrap();
+        let full = fs::read(&path).unwrap();
+        assert!(matches!(
+            store.provision_surface(
+                "two",
+                "two".into(),
+                "two".into(),
+                vec!["server.read".into()],
+                110,
+                None
+            ),
+            Err(LocalStoreError::Capacity)
+        ));
+        // An exact retry still resolves its receipt at capacity.
+        assert!(matches!(
+            store.provision_surface(
+                "one",
+                "one".into(),
+                "one".into(),
+                vec!["server.read".into()],
+                110,
+                None
+            ),
+            Ok(IssueCredentialOutcome::ExistingSecretUnavailable { .. })
+        ));
+        assert_eq!(fs::read(&path).unwrap(), full);
+        drop(store);
+        assert!(LocalCredentialStore::open(&path).is_ok());
+    }
+
+    #[test]
+    fn administration_preserves_rejected_command_errors_through_the_port() {
+        let root = tempfile::tempdir().unwrap();
+        let store =
+            LocalCredentialStore::open(root.path().join("auth/credentials.v1.json")).unwrap();
+        store.bootstrap(bootstrap()).unwrap();
+        let request = RevokeCredentialRequest {
+            request_id: "revoke".into(),
+            issuer_principal_id: "owner".into(),
+            credential_id: "missing".into(),
+            revoked_at: 120,
+        };
+        assert_eq!(
+            ready(store.revoke(request.clone())),
+            Err(CredentialAdminError::NotFound)
+        );
+        let mut request = RevokeCredentialRequest {
+            credential_id: "owner-credential".into(),
+            ..request
+        };
+        assert!(ready(store.revoke(request.clone())).is_ok());
+        request.credential_id = "different".into();
+        assert_eq!(
+            ready(store.revoke(request)),
+            Err(CredentialAdminError::Conflict)
+        );
     }
 
     #[test]

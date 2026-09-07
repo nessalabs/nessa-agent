@@ -1,4 +1,4 @@
-/** Failed mutation attempt. Persist requestId and reuse it for an explicit retry. */
+/** Failed mutation attempt. Retain requestId for recovery after an uncertain transport failure. Inspect code/cause first: credential_conflict, credential_capacity, and credential_not_found are command rejections, not transient failures. */
 export class NessaMutationError extends Error {
   constructor(
     readonly requestId: string,

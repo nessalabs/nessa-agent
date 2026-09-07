@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { NessaClient } from "../presentation/nessa-client.js"
-import { resolveConnectOptions } from "./resolve-options.js"
+import { isLoopbackWebSocketUrl, resolveConnectOptions } from "./resolve-options.js"
 import { StageConfigError } from "./stage.js"
 const base = {
   role: "surface" as const,
@@ -43,6 +43,35 @@ describe("resolveConnectOptions", () => {
         NessaClient.defaultUrl,
       ).url,
     ).toBe("wss://example.com/session")
+  })
+  it("requires TLS for remote endpoints in every stage", () => {
+    for (const stage of ["dev", "ci", "prod", "alpha"] as const) {
+      expect(() =>
+        resolveConnectOptions(
+          { ...base, stage, url: "ws://example.com/session" },
+          NessaClient.defaultUrl,
+        ),
+      ).toThrow(/wss:/)
+      expect(
+        resolveConnectOptions(
+          { ...base, stage, url: "wss://example.com/session" },
+          NessaClient.defaultUrl,
+        ).url,
+      ).toBe("wss://example.com/session")
+    }
+  })
+  it("trusts numeric loopback addresses and rejects URL user information", () => {
+    expect(isLoopbackWebSocketUrl("ws://127.0.0.1:7420")).toBe(true)
+    expect(isLoopbackWebSocketUrl("ws://[::1]:7420")).toBe(true)
+    expect(isLoopbackWebSocketUrl("wss://localhost:7420")).toBe(false)
+    for (const url of [
+      "ws://127.0.0.1:7420@evil.example/session",
+      "wss://user@127.0.0.1",
+    ]) {
+      expect(() =>
+        resolveConnectOptions({ ...base, url }, NessaClient.defaultUrl),
+      ).toThrow(/user information/)
+    }
   })
   it("rejects empty and oversized credentials", () => {
     for (const credential of ["", "a".repeat(16385)]) {

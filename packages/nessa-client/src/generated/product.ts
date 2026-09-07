@@ -8,7 +8,7 @@ export interface SessionChallenge {
   maxVersion: number
   /** Single-handshake challenge value to return unchanged when authenticating. */
   nonce: string
-  /** Challenge expiry as Unix seconds. */
+  /** Challenge deadline as Unix seconds, rounded up from millisecond wall time. The server enforces one monotonic timeout including challenge delivery; expiry closes with retryable handshake_timeout. */
   expiresAt: number
 }
 /** Caller identification sent during the product handshake. This metadata does not grant permissions. */
