@@ -83,9 +83,9 @@ Passed on macOS:
   compaction or pagination; configured capacity exhaustion can still block minting
   and owner recovery.
 - Windows private ACL support is implemented for the gateway, token commands,
-  desktop, and Node. Its native crate/tests cross-compile; Windows and Linux
-  runtime results remain pending in the platform CI workflow. See the guide for
-  supported storage, Node PowerShell requirements, and durability scope.
+  desktop, and Node. Windows, Linux, and macOS runtime checks passed in
+  [platform CI](https://github.com/nessalabs/nessa-agent/actions/runs/34085966204).
+  See the guide for supported storage, Node PowerShell requirements, and durability scope.
 
 See [local auth usage](../guides/local-auth.md) and the
 [local decision](../adr/done/0010-local-authentication.md).

@@ -27,7 +27,7 @@ does not make an implementation done.
 | [0007 — Session protocol and bindings](todo/0007-nessa-session-protocol-and-authorities.md) | Local auth track done in 0010; discovery, normalization, durable conversations, collaboration, and agent execution remain |
 | [0008 — External event stream crate](todo/0008-reusable-event-stream-crate.md) | Being implemented in a separate project; Nessa dependency integration remains here |
 | [0009 — Harnesses and optional tools](todo/0009-agent-harnesses-and-optional-tools.md) | Internal agent boundary and optional MCP/CLI interfaces |
-| [0011 — Authentication delivery](todo/0011-authentication-delivery.md) | Panel onboarding, platforms, capacity/recovery, concurrency, policy operations, and broader identity integration |
+| [0011 — Remaining local authentication workflows](todo/0011-authentication-delivery.md) | In-app recovery guidance, credential settings, larger-registry usability, and measured operating bounds |
 
 Primers, research, and detailed auth designs live in
 [design/auth](../design/auth/README.md). Operational commands live in the
