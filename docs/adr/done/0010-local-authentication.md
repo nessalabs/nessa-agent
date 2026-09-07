@@ -1,9 +1,15 @@
 # 0010. Local authentication and gateway authorization
 
+## Purpose
+
+Require clients to authenticate and check their permissions on gateway
+operations. Provide local setup and scoped, revocable credentials without
+requiring hosted signup.
+
 - **Date:** 2026-09-06
 - **Status:** accepted and implemented for the local library, gateway, SDK, and command-line tool.
-- **Part of:** [ADR 0007 — session protocol](../todo/0007-nessa-session-protocol-and-authorities.md).
-- **Still to do:** [ADR 0011 — remaining local auth workflows](../todo/0011-authentication-delivery.md).
+- **Part of:** [ADR 0011 — session protocol](../todo/0011-nessa-session-protocol-and-authorities.md).
+- **Readiness evidence:** [ADR 0007 — auth API readiness and operating bounds](../done/0007-authentication-delivery.md).
 
 ## What we decided
 
@@ -529,8 +535,7 @@ Rust tests cover identity, permissions, storage, and gateway behavior.
 retrying, denial, revocation, expiry, restart, and owner recovery.
 
 See the [adversarial review](../../reviews/local-auth-gateway.md) for the detailed
-findings and limits. [ADR 0011](../todo/0011-authentication-delivery.md) tracks the
-unfinished work.
+findings and limits. [ADR 0007](../done/0007-authentication-delivery.md) records completed API readiness and operating-bound evidence.
 
 ## Connection failures covered by local tests
 

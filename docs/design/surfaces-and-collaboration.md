@@ -1,10 +1,10 @@
 # Nessa surfaces and collaboration — proposed contract
 
-Part of [ADR 0007](../adr/todo/0007-nessa-session-protocol-and-authorities.md), extending
+Part of [ADR 0011](../adr/todo/0011-nessa-session-protocol-and-authorities.md), extending
 [session and stream contracts](session-and-stream-contracts.md). These are design
 requirements, not implemented capabilities. Product identity, permissions,
 inboxes, and agent delivery belong to Nessa, not the generic stream crate.
-[ADR 0009](../adr/todo/0009-agent-harnesses-and-optional-tools.md) distinguishes the
+[ADR 0012](../adr/todo/0012-agent-harnesses-and-optional-tools.md) distinguishes the
 internal Nessa harness from unmodified external harnesses; both use optional
 MCP or CLI tools backed by scoped `NessaClient` instances.
 [Sequence diagrams and suggested native/MCP protocols](collaboration-sequences-and-mcp.md)

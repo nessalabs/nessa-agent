@@ -1,5 +1,11 @@
 # 0004. Client shortcuts are server-authored; `shortcuts.json` is a cache
 
+## Purpose
+
+Define client keyboard shortcuts centrally and let each client cache and apply
+them. This keeps shortcut behavior consistent across surfaces without turning
+ordinary tab actions into operating-system-wide shortcuts.
+
 - **Date:** 2026-09-03
 - **Status:** accepted
 

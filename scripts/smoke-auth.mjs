@@ -15,7 +15,7 @@ import { join } from "node:path"
 import { createServer } from "node:net"
 import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
-import { WebSocket } from "ws"
+import { WebSocket, WebSocketServer } from "ws"
 import { NessaClient, NessaMutationError, NessaRpcError } from "@nessa/client"
 import { windowsPrivateFile } from "../packages/nessa-client/src/transport/windows-private-file.js"
 
@@ -184,6 +184,7 @@ try {
   )
   assert.notEqual(locked.status, 0)
   const owner = await connect(ownerSecret)
+  assert.deepEqual(await owner.auth.session(), owner.productSession)
   const identity = owner.productSession
   assert.equal(identity.expiresAt, null)
   const chat = await NessaClient.connect({
@@ -297,6 +298,21 @@ try {
     reader.credentials.list(),
     (error) => error instanceof NessaRpcError && error.code === "forbidden",
   )
+  for (const operation of [
+    () => reader.credentials.issue({ ...request, requestId: "denied-issue" }),
+    () => reader.credentials.revoke(issued.credential.id, "denied-revoke"),
+  ]) {
+    await assert.rejects(
+      operation(),
+      (error) =>
+        error instanceof NessaMutationError &&
+        error.cause instanceof NessaRpcError &&
+        error.cause.code === "forbidden",
+    )
+  }
+  const restrictions = await reader.auth.session()
+  assert.equal(restrictions.credentialId, issued.credential.id)
+  assert.deepEqual(restrictions.grants, issued.credential.grants)
   await assert.rejects(connect(`${issued.secret}invalid`))
   const listed = await owner.credentials.list()
   assert.equal(listed.credentials.length, 5)
@@ -309,7 +325,10 @@ try {
       auth: { credential: "" },
     }),
   )
-  await assert.rejects(connect("invalid-credential"))
+  await assert.rejects(
+    connect("invalid-credential"),
+    (error) => error instanceof NessaRpcError && error.code === "unauthorized",
+  )
 
   // Pre-auth RPCs cannot reach handlers.
   for (const path of ["/session"]) {
@@ -388,6 +407,80 @@ try {
   })
   const shortClient = await connect(expiring.secret)
   await expectClose(shortClient, async () => {}, "credential_expired")
+  // Drop a committed issuance response at a real transport boundary. The SDK
+  // must retain its generated mutation ID, never replay, and retry after restart
+  // must resolve the durable receipt without delivering another secret.
+  const proxy = new WebSocketServer({ host: "127.0.0.1", port: 0 })
+  await once(proxy, "listening")
+  let issueFrames = 0
+  let committedId
+  proxy.on("connection", (downstream) => {
+    const upstream = new WebSocket(`${url}/session`)
+    let issueWireId
+    downstream.on("message", (bytes, binary) => {
+      const frame = JSON.parse(bytes.toString())
+      if (frame.method === "credential.issue") {
+        issueFrames++
+        issueWireId = frame.id
+      }
+      upstream.send(bytes, { binary })
+    })
+    upstream.on("message", (bytes, binary) => {
+      const frame = JSON.parse(bytes.toString())
+      if (issueWireId && frame.id === issueWireId) {
+        assert.ok(frame.payload.secret)
+        committedId = frame.payload.credential.id
+        downstream.close(1011)
+        upstream.close()
+      } else if (downstream.readyState === WebSocket.OPEN) {
+        downstream.send(bytes, { binary })
+      }
+    })
+    downstream.on("close", () => upstream.close())
+    upstream.on("error", () => downstream.close(1011))
+  })
+  let lostFailure
+  const lostRequest = { ...request, requestId: undefined }
+  try {
+    const lossy = await NessaClient.connect({
+      ...options,
+      url: `ws://127.0.0.1:${proxy.address().port}`,
+      profile: "product",
+      auth: { credential: ownerSecret },
+    })
+    clients.push(lossy)
+    try {
+      await lossy.credentials.issue(lostRequest)
+      assert.fail("committed response should have been lost")
+    } catch (error) {
+      assert.ok(error instanceof NessaMutationError)
+      assert.ok(error.requestId)
+      lostFailure = error
+    }
+    await sleep(250)
+    assert.equal(issueFrames, 1, "SDK automatically replayed an uncertain mutation")
+    lossy.close()
+  } finally {
+    for (const socket of proxy.clients) socket.terminate()
+    await new Promise((resolve) => proxy.close(resolve))
+  }
+  await stop()
+  await start()
+  const retryOwner = await connect(ownerSecret)
+  const beforeRetry = (await retryOwner.credentials.list()).credentials.length
+  const resolved = await retryOwner.credentials.issue({
+    ...lostRequest,
+    requestId: lostFailure.requestId,
+  })
+  assert.equal(resolved.credential.id, committedId)
+  assert.equal(resolved.secretUnavailable, true)
+  assert.ok(!("secret" in resolved))
+  assert.equal((await retryOwner.credentials.list()).credentials.length, beforeRetry)
+  const revokedLost = await retryOwner.credentials.revoke(committedId, "revoke-lost")
+  assert.deepEqual(
+    await retryOwner.credentials.revoke(committedId, "revoke-lost"),
+    revokedLost,
+  )
   const registryPath = join(directory, "data/ci/instances/e2e/auth/credentials.v1.json")
   const registry = readFileSync(registryPath, "utf8")
   for (const secret of [ownerSecret, issued.secret, expiring.secret]) {
@@ -419,7 +512,7 @@ try {
     "credential_revoked",
   )
   console.log(
-    "auth e2e passed: bootstrap, issue/retry, isolation, denial, idle revocation/expiry, restart, recovery, session isolation, shared-credential revocation, self-revocation acknowledgement, unauthenticated bypass rejection",
+    "auth e2e passed: bootstrap, issue/retry, isolation, denial, idle revocation/expiry, restart, recovery, session isolation, shared-credential revocation, self-revocation acknowledgement, unauthenticated bypass rejection, typed administration denial, identity/restriction snapshots, lost issuance response and durable explicit retry",
   )
 } finally {
   for (const client of clients) client.close()

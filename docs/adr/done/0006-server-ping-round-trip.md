@@ -1,5 +1,11 @@
 # 0006. Prove the session link with `server.ping` before chat RPCs
 
+## Purpose
+
+Prove that a client request can carry a payload through the server and return
+the matching response. This completed development spike established the RPC
+path; the current authenticated gateway is covered by ADR 0010.
+
 - **Date:** 2026-09-04
 - **Status:** accepted
 

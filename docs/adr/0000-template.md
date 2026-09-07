@@ -1,5 +1,11 @@
 # NNNN. <short decision, as a statement>
 
+## Purpose
+
+Explain in two or three plain-language sentences what this decision enables,
+why it exists, and how it relates to nearby decisions. Describe the purpose,
+not an implementation claim; the status and folder track progress.
+
 - **Date:** YYYY-MM-DD
 - **Status:** proposed | accepted | superseded by [NNNN](NNNN-....md)
 

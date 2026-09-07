@@ -1,5 +1,11 @@
 # 0001. Product state lives in Redux Toolkit
 
+## Purpose
+
+Keep product state and actions in Redux so both the UI and agents can drive
+Nessa through the same operations. Keep operating-system and window effects
+outside that state.
+
 - **Date:** 2026-08-31
 - **Status:** accepted
 

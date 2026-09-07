@@ -1,5 +1,11 @@
 # 0003. Panel chrome is its own vertical
 
+## Purpose
+
+Give the floating panel its own home for window layout, appearance, and host
+coordination. Conversation behavior stays independent so other surfaces can
+reuse it.
+
 - **Date:** 2026-09-01
 - **Status:** accepted
 

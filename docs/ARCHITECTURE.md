@@ -173,21 +173,20 @@ connect/health. When chat arrives it is a remote `ConversationGateway`, not an
 addition to the local session adapter. See
 [adr/0002-conversation-vertical-and-gateway.md](adr/done/0002-conversation-vertical-and-gateway.md).
 
-**Proposed direction for agent turns:** [adr/0007-nessa-session-protocol-and-authorities.md](adr/todo/0007-nessa-session-protocol-and-authorities.md) —
-Nessa Session Protocol as the only client wire, discovery before agent session
-creation, registered bindings, and a new Rust agent normalizer against a shared
-payload schema. Its [collaboration contract](design/surfaces-and-collaboration.md)
-adds one conversation across CLI/panel/desktop surfaces and attributed peer
-messages with scoped local credentials. [Sequence diagrams and MCP](design/collaboration-sequences-and-mcp.md)
-show shared surfaces and an authenticated external `NessaMCP` adapter using
-`NessaClient` for every gateway operation. [ADR 0008](adr/todo/0008-reusable-event-stream-crate.md) proposes a
-standalone generic Rust crate for streaming, replay, pluggable decoding, and
-local persistence. That crate is being implemented outside this repository; Nessa
-will consume it as a dependency, not implement another stream runtime. [ADR 0009](adr/todo/0009-agent-harnesses-and-optional-tools.md)
-preserves external harnesses, allows Nessa’s internal agent, and exposes optional
-MCP/CLI tools through the shared client. These are `proposed`, not implemented. See the
-[contract design](design/session-and-stream-contracts.md) before widening the
-protocol catalog.
+**Proposed direction for agent turns:** [ADR 0008](adr/todo/0008-agent-client-api.md)
+proposes a reusable Rust `nessa-sdk` runtime embedded by the server, local ACP
+execution, discovery and normalization. The existing NessaClient calls server APIs.
+[ADR 0009](adr/todo/0009-reusable-event-stream-crate.md) proposes integrating the
+existing external event-stream library for durable records, replay and recovery.
+[ADR 0011](adr/todo/0011-nessa-session-protocol-and-authorities.md) owns shared
+conversation attachment, authorized transcript delivery and collaboration inboxes;
+see its [collaboration contract](design/surfaces-and-collaboration.md).
+[Sequence diagrams and MCP](design/collaboration-sequences-and-mcp.md) describe
+shared surfaces and an authenticated external adapter. Optional MCP/CLI tools and
+external harness boundaries remain in [ADR 0012](adr/todo/0012-agent-harnesses-and-optional-tools.md).
+These records remain proposed. See the [contract design](design/session-and-stream-contracts.md)
+before widening the protocol catalog. [ADR 0007](adr/done/0007-authentication-delivery.md)
+records completed local auth API coverage and measured operating bounds.
 
 **Identity/access contracts** (`crates/nessa-auth`) — reusable library, no binary.
 Owns domain identities/memberships/credential metadata, boundary DTO validation,

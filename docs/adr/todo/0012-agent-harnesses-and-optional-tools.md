@@ -1,9 +1,15 @@
-# 0009. Separate agent harnesses from optional Nessa tools
+# 0012. Separate agent harnesses from optional Nessa tools
+
+## Purpose
+
+Let agents use optional Nessa MCP or CLI tools to access authorized Nessa
+conversations and collaborators. Preserve each external agent’s own harness,
+loop, and tools.
 
 - **Date:** 2026-09-04
 - **Status:** proposed
-- **Related:** [0007](0007-nessa-session-protocol-and-authorities.md) (product wire,
-  identity, authorization), [0008](0008-reusable-event-stream-crate.md) (streams)
+- **Related:** [0011](0011-nessa-session-protocol-and-authorities.md) (product wire,
+  identity, authorization), [0009](0009-reusable-event-stream-crate.md) (streams)
 - **Integration details:** [MCP sequences and tools](../../design/collaboration-sequences-and-mcp.md)
 
 ## Context
@@ -14,7 +20,7 @@ Users must be able to keep, disable, replace, or remove Nessa tools
 independently of their agent. Nessa will also have its own internal
 agent/harness, initially using the same optional product tools as other agents.
 Tool packages should be developable and releasable outside Nessa. This is a
-dependency and extension boundary, separate from ADR 0007's wire design.
+dependency and extension boundary, separate from ADR 0011's wire design.
 
 ## Decision
 
@@ -122,7 +128,7 @@ instances.
 We must test supported harness/MCP versions, configuration isolation, selected
 tool profiles, removal, and capability loss. Some providers may not expose all
 desired host controls; report that limitation instead of modifying their
-internals. ADR 0007 owns commands and authorization; this record owns harness
+internals. ADR 0011 owns commands and authorization; this record owns harness
 preservation and the optional MCP/CLI extension model, and the distinct Nessa
 internal harness. Package location/name and release versioning are
 implementation choices; no agent configurations change here.

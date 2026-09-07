@@ -4,7 +4,7 @@ This is the original detailed implementation plan, retained for rationale and
 acceptance criteria. It is reference material, not the active work queue.
 
 - **Implemented:** [ADR 0010](../../adr/done/0010-local-authentication.md) owns the local library, registry, gateway, SDK, and CLI slice.
-- **Remaining:** [ADR 0011](../../adr/todo/0011-authentication-delivery.md) tracks auth delivery gaps; [ADR 0007](../../adr/todo/0007-nessa-session-protocol-and-authorities.md) tracks the larger session scope.
+- **Remaining:** [ADR 0007](../../adr/done/0007-authentication-delivery.md) tracks auth delivery gaps; [ADR 0011](../../adr/todo/0011-nessa-session-protocol-and-authorities.md) tracks the larger session scope.
 - **Current behavior:** [local guide](../../guides/local-auth.md) and [gateway review](../../reviews/local-auth-gateway.md).
 - **Dependency on external stream crate:** none for credential storage.
 
@@ -425,7 +425,7 @@ Neither command is an MCP tool or an unauthenticated network endpoint.
 The online admin CLI uses a profile referencing protected credentials, constructs
 its own `NessaClient`, and invokes typed credential APIs. It has no local direct
 registry mutation path while the server is serving. This is a narrow admin CLI,
-not implementation of all ADR 0009 product tools.
+not implementation of all ADR 0012 product tools.
 
 `credential.issue` commits verifier/metadata before returning a secret once.
 Persist an issuance receipt keyed by issuer principal + command ID + canonical
@@ -598,7 +598,7 @@ a custom policy language, or the external event-stream crate into this slice.
    protected output, surface typed errors, and preserve the untouched spike mode.
    Demonstrate an actual owner → restricted client → revoke lifecycle.
 5. **Integration and documentation:** run appropriate repo checks, record platform
-   limitations, and update ADR 0007's credential track to completed. Keep 0007 in
+   limitations, and update ADR 0011's credential track to completed. Keep 0011 in
    todo because stream-dependent work is still outstanding.
 
 ## Acceptance matrix
@@ -656,4 +656,4 @@ client stays attached, and verify denial survives restart. Compatibility fixture
 and the acceptance matrix pass. No stream runtime or conversation placeholder was
 built to get there. Existing spike routes/hello remain unchanged, and tests replace
 the credential provider without removing server middleware. Implementation can start with checkpoint 1 after this plan is
-reviewed; no additional ADR is needed for this feature under ADR 0007.
+reviewed; no additional ADR is needed for this feature under ADR 0011.

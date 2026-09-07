@@ -1,5 +1,11 @@
 # 0005. On-disk client data is namespaced; only `prod` uses the bare path
 
+## Purpose
+
+Keep local settings, credentials, and caches separated by stage and instance.
+Development worktrees and test runs can coexist without overwriting everyday
+production data.
+
 - **Date:** 2026-09-03
 - **Status:** accepted
 

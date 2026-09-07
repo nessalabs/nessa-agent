@@ -12,9 +12,9 @@ Implementation decisions and unfinished work are tracked in the ADR folders.
 ## Decisions and work tracking
 
 - [Done: ADR 0010 — local authentication](../../adr/done/0010-local-authentication.md).
-- [Todo: ADR 0011 — authentication delivery](../../adr/todo/0011-authentication-delivery.md).
-- [Todo: ADR 0007 — session protocol and bindings](../../adr/todo/0007-nessa-session-protocol-and-authorities.md).
-- [Todo: ADR 0009 — harnesses and optional tools](../../adr/todo/0009-agent-harnesses-and-optional-tools.md).
+- [Todo: ADR 0007 — authentication delivery](../../adr/done/0007-authentication-delivery.md).
+- [Todo: ADR 0011 — session protocol and bindings](../../adr/todo/0011-nessa-session-protocol-and-authorities.md).
+- [Todo: ADR 0012 — harnesses and optional tools](../../adr/todo/0012-agent-harnesses-and-optional-tools.md).
 
 ## Using and reviewing the implementation
 
