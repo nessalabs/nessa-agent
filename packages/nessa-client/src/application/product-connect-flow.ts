@@ -59,6 +59,10 @@ export async function runProductHandshake(
       challenge.maxVersion,
     )
   }
+  const remainingMs = challenge.expiresAt * 1_000 - Date.now()
+  if (remainingMs <= 0) {
+    throw new RetryableConnectError("session.challenge expired")
+  }
   const payload = await session.request(
     ProductMethod.SessionAuthenticate,
     {
@@ -68,7 +72,7 @@ export async function runProductHandshake(
       credential: options.auth.credential,
       client: { id: options.client.id },
     },
-    Math.min(options.config.requestTimeoutMs, 10_000),
+    Math.min(options.config.requestTimeoutMs, remainingMs),
   )
   return assertProductSessionReady(payload)
 }

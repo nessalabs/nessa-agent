@@ -64,20 +64,42 @@ pub struct RevokeCredentialRequest {
     pub revoked_at: u64,
 }
 
+/// Lifecycle failures distinguish rejected commands from unavailable storage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CredentialAdminError {
+    /// Request identity or payload conflicts with existing state; do not retry unchanged.
+    Conflict,
+    /// A configured resource limit prevents this command.
+    Capacity,
+    /// The requested credential does not exist.
+    NotFound,
+    /// The authority could not read or durably commit its state.
+    Unavailable,
+}
+impl std::fmt::Display for CredentialAdminError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+impl std::error::Error for CredentialAdminError {}
+
 /// Managed-credential operations remain separate from credential verification.
 pub trait CredentialAdmin: Send + Sync {
     /// Commit issuance before returning a one-time secret.
     fn issue<'a>(
         &'a self,
         request: IssueCredentialRequest,
-    ) -> PortFuture<'a, IssueCredentialOutcome>;
+    ) -> PortFuture<'a, IssueCredentialOutcome, CredentialAdminError>;
     /// Return secret-free metadata for the requested organization.
     fn list<'a>(
         &'a self,
         request: ListCredentialsRequest,
-    ) -> PortFuture<'a, Vec<CredentialMetadataDto>>;
+    ) -> PortFuture<'a, Vec<CredentialMetadataDto>, CredentialAdminError>;
     /// Commit an idempotent revocation and return the registry revision.
-    fn revoke<'a>(&'a self, request: RevokeCredentialRequest) -> PortFuture<'a, u64>;
+    fn revoke<'a>(
+        &'a self,
+        request: RevokeCredentialRequest,
+    ) -> PortFuture<'a, u64, CredentialAdminError>;
 }
 
 /// Read the current committed authorization revision without exposing storage.

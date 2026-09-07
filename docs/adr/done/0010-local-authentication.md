@@ -447,7 +447,7 @@ gateway, then saves the revocation as described above.
 Further requests using that token are rejected. An idle connection is checked
 every second, and a separate timer closes it when its session expires. Revocation
 remains in effect after restart. If the owner revokes the token they are currently
-using, their connection closes before they receive the success response.
+using, the admitted revoke request returns its success response, then their connection closes.
 
 ## Where to find this in the code
 
@@ -612,3 +612,24 @@ Closing a connection with a large pending batch leaves peers using the same toke
 and different tokens usable. Revoking a shared credential closes every connection
 using it while other credentials continue to authorize health requests. The batch
 size is a test fixture, not a session limit or the registry credential-capacity limit.
+
+### Review corrections
+
+Restricted offline surfaces are integration principals with member membership.
+Only a surface explicitly granted `credential.manage` receives admin membership.
+Reprovisioning updates that role and revokes old surface credentials atomically.
+The registry records `ownerMembershipId`; recovery never chooses an arbitrary admin.
+Issuance rejects empty grants. Registered method names remain descriptive metadata,
+with authorization checked separately for every protected request.
+
+Credential administration preserves conflict, capacity, and not-found errors as
+`credential_conflict`, `credential_capacity`, and `credential_not_found`. They are
+command rejections, distinct from `credential_store_unavailable`. Issue receipt
+capacity is checked before persistence, including when credential capacity remains.
+
+One monotonic handshake deadline covers challenge delivery and authentication.
+The wire deadline uses Unix seconds rounded up from millisecond wall time; the
+SDK uses it to bound its wait. Expiry is retryable `handshake_timeout` (4006).
+Automatic Node credential loading accepts numeric loopback only. All remote URLs
+require TLS, including development, and URL user information is rejected.
+Runtime config uses the same private-file checks as credential storage.

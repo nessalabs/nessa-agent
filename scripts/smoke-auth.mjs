@@ -16,7 +16,7 @@ import { createServer } from "node:net"
 import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { WebSocket } from "ws"
-import { NessaClient, NessaRpcError } from "@nessa/client"
+import { NessaClient, NessaMutationError, NessaRpcError } from "@nessa/client"
 
 globalThis.WebSocket = WebSocket
 const root = fileURLToPath(new URL("../", import.meta.url))
@@ -132,7 +132,9 @@ try {
   assert.equal(readFileSync(ownerPath, "utf8").trim(), ownerSecret)
   const configPath = join(env.NESSA_DATA_DIR, "ci", "instances", "e2e", "config.json")
   // Offline commands and serving use the same file; invalid values never default.
-  writeFileSync(configPath, JSON.stringify({ registry: { maxCredentials: 0 } }))
+  writeFileSync(configPath, JSON.stringify({ registry: { maxCredentials: 0 } }), {
+    mode: 0o600,
+  })
   const invalidConfig = spawnSync(
     binary,
     [
@@ -215,6 +217,24 @@ try {
   assert.ok(!("secret" in retry))
   await assert.rejects(
     owner.credentials.issue({ ...request, expiresAt: request.expiresAt + 1 }),
+    (error) =>
+      error instanceof NessaMutationError &&
+      error.cause instanceof NessaRpcError &&
+      error.cause.code === "credential_conflict",
+  )
+  await assert.rejects(
+    owner.credentials.issue({ ...request, requestId: "empty-grants", grants: [] }),
+    (error) =>
+      error instanceof NessaMutationError &&
+      error.cause instanceof NessaRpcError &&
+      error.cause.code === "invalid_request",
+  )
+  await assert.rejects(
+    owner.credentials.revoke("missing-credential", "missing-revoke"),
+    (error) =>
+      error instanceof NessaMutationError &&
+      error.cause instanceof NessaRpcError &&
+      error.cause.code === "credential_not_found",
   )
   await assert.rejects(
     owner.credentials.issue({

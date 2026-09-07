@@ -4,14 +4,14 @@ use crate::protocol::{
     health_check_message, EventFrame, OutgoingMessage, RequestFrame, ResponseFrame,
     MAX_PAYLOAD_BYTES,
 };
-use axum::extract::ws::{CloseFrame, Message, WebSocket};
+use axum::extract::ws::{CloseFrame, Message};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use nessa_auth::{
     application::{
         authorization::AuthorizeAction,
         credential_admin::{
-            IssueCredentialOutcome, IssueCredentialRequest, ListCredentialsRequest,
-            RevokeCredentialRequest,
+            CredentialAdminError, IssueCredentialOutcome, IssueCredentialRequest,
+            ListCredentialsRequest, RevokeCredentialRequest,
         },
         ports::{AccessError, CredentialEvidence, Decision},
         session::{AuthenticateSession, AuthenticatedSession},
@@ -20,7 +20,7 @@ use nessa_auth::{
 };
 use serde_json::json;
 use std::time::Duration;
-use tokio::time::{interval, timeout, MissedTickBehavior};
+use tokio::time::{interval, timeout, timeout_at, Instant, MissedTickBehavior};
 use uuid::Uuid;
 
 const PRODUCT_METHODS: [&str; 6] = [
@@ -33,12 +33,20 @@ const PRODUCT_METHODS: [&str; 6] = [
 ];
 
 /// Run one mandatory-authentication product session.
-pub async fn handle_socket(mut socket: WebSocket, state: ProductRouteState) {
+pub async fn handle_socket<S>(mut socket: S, state: ProductRouteState)
+where
+    S: Stream<Item = Result<Message, axum::Error>> + Sink<Message> + Unpin,
+{
+    let deadline = Instant::now() + state.settings.handshake_timeout;
     let nonce = Uuid::new_v4().to_string();
+    // Wire timestamps use seconds. Round up from millisecond wall time so the
+    // advertisement never truncates the authentication window. Only the shared
+    // monotonic deadline below enforces it, including challenge delivery.
     let challenge_expires_at = state
         .clock
-        .unix_seconds()
-        .saturating_add(state.settings.handshake_timeout.as_millis().div_ceil(1000) as u64);
+        .unix_milliseconds()
+        .saturating_add(state.settings.handshake_timeout.as_millis() as u64)
+        .div_ceil(1000);
     let challenge = SessionChallenge {
         min_version: PRODUCT_VERSION,
         max_version: PRODUCT_VERSION,
@@ -49,25 +57,24 @@ pub async fn handle_socket(mut socket: WebSocket, state: ProductRouteState) {
         Ok(frame) => OutgoingMessage::Event(frame),
         Err(_) => return,
     };
-    if send(state.settings.write_timeout, &mut socket, challenge)
-        .await
-        .is_err()
-    {
-        return;
-    }
-
-    let authenticated = timeout(
-        state.settings.handshake_timeout,
-        receive_authentication(&mut socket, &state, &nonce, challenge_expires_at),
-    )
+    let authenticated = timeout_at(deadline, async {
+        send(state.settings.write_timeout, &mut socket, challenge)
+            .await
+            .map_err(|_| (String::new(), "temporarily_unavailable"))?;
+        receive_authentication(&mut socket, &state, &nonce, deadline).await
+    })
     .await;
     let (request_id, session) = match authenticated {
         Ok(Ok(value)) => value,
         Ok(Err((request_id, code))) => {
-            let _ = send_error(state.settings.write_timeout, &mut socket, &request_id, code).await;
+            if code != "handshake_timeout" {
+                let _ =
+                    send_error(state.settings.write_timeout, &mut socket, &request_id, code).await;
+            }
             let reason = match code {
                 "protocol_incompatible" => SessionCloseReason::ProtocolIncompatible,
                 "temporarily_unavailable" => SessionCloseReason::TemporaryUnavailable,
+                "handshake_timeout" => SessionCloseReason::HandshakeTimeout,
                 _ => SessionCloseReason::AuthenticationFailed,
             };
             close_session(state.settings.write_timeout, &mut socket, reason).await;
@@ -111,15 +118,21 @@ pub async fn handle_socket(mut socket: WebSocket, state: ProductRouteState) {
     run_authenticated(socket, state, session).await;
 }
 
-async fn receive_authentication(
-    socket: &mut WebSocket,
+async fn receive_authentication<S>(
+    socket: &mut S,
     state: &ProductRouteState,
     nonce: &str,
-    challenge_expires_at: u64,
-) -> Result<(String, AuthenticatedSession), (String, &'static str)> {
+    deadline: Instant,
+) -> Result<(String, AuthenticatedSession), (String, &'static str)>
+where
+    S: Stream<Item = Result<Message, axum::Error>> + Unpin,
+{
     let Some(Ok(Message::Text(text))) = socket.next().await else {
         return Err((String::new(), "unauthorized"));
     };
+    if Instant::now() >= deadline {
+        return Err((String::new(), "handshake_timeout"));
+    }
     if text.len() > MAX_PAYLOAD_BYTES as usize {
         return Err((String::new(), "unauthorized"));
     }
@@ -137,11 +150,7 @@ async fn receive_authentication(
     if !params.supports_v1() {
         return Err((frame.id, "protocol_incompatible"));
     }
-    if params.nonce != nonce
-        || params.client.id.is_empty()
-        || params.client.id.len() > 256
-        || state.clock.unix_seconds() >= challenge_expires_at
-    {
+    if params.nonce != nonce || params.client.id.is_empty() || params.client.id.len() > 256 {
         return Err((frame.id, "unauthorized"));
     }
     let evidence = CredentialEvidence::new(params.credential.into_bytes())
@@ -163,7 +172,19 @@ async fn receive_authentication(
             },
         )
     })?;
+    if Instant::now() >= deadline {
+        return Err((frame.id, "handshake_timeout"));
+    }
     Ok((frame.id, session))
+}
+
+fn credential_admin_code(error: CredentialAdminError) -> &'static str {
+    match error {
+        CredentialAdminError::Conflict => "credential_conflict",
+        CredentialAdminError::Capacity => "credential_capacity",
+        CredentialAdminError::NotFound => "credential_not_found",
+        CredentialAdminError::Unavailable => "credential_store_unavailable",
+    }
 }
 
 async fn run_authenticated<S>(
@@ -340,6 +361,7 @@ async fn dispatch_authorized(
                 || params
                     .expires_at
                     .is_some_and(|expiry| expiry <= now || expiry > 9_007_199_254_740_991)
+                || params.grants.is_empty()
                 || !grants_supported
             {
                 return failure(&frame.id, "invalid_request");
@@ -378,7 +400,7 @@ async fn dispatch_authorized(
                         secret_unavailable: true,
                     },
                 ),
-                Err(_) => failure(&frame.id, "credential_store_unavailable"),
+                Err(error) => failure(&frame.id, credential_admin_code(error)),
             }
         }
         "credential.list" => {
@@ -395,7 +417,7 @@ async fn dispatch_authorized(
                 .await
             {
                 Ok(credentials) => success(&frame.id, &CredentialListResult { credentials }),
-                Err(_) => failure(&frame.id, "credential_store_unavailable"),
+                Err(error) => failure(&frame.id, credential_admin_code(error)),
             }
         }
         "credential.revoke" => {
@@ -418,6 +440,9 @@ async fn dispatch_authorized(
             };
             let target = match state.access.read(&target_id).await {
                 Ok(snapshot) => snapshot,
+                Err(AccessError::InvalidCredential) => {
+                    return failure(&frame.id, "credential_not_found")
+                }
                 Err(_) => return failure(&frame.id, "credential_store_unavailable"),
             };
             if target.credential.organization_id() != session.context().organization_id()
@@ -441,7 +466,7 @@ async fn dispatch_authorized(
                         revision,
                     },
                 ),
-                Err(_) => failure(&frame.id, "credential_store_unavailable"),
+                Err(error) => failure(&frame.id, credential_admin_code(error)),
             }
         }
         _ => failure(&frame.id, "unknown_method"),
@@ -527,9 +552,9 @@ fn failure(request_id: &str, code: &str) -> OutgoingMessage {
     OutgoingMessage::Response(ResponseFrame::failure(request_id, code, code))
 }
 
-async fn send_error(
+async fn send_error<S: Sink<Message> + Unpin>(
     write_timeout: Duration,
-    socket: &mut WebSocket,
+    socket: &mut S,
     request_id: &str,
     code: &str,
 ) -> Result<(), ()> {
@@ -653,8 +678,8 @@ mod tests {
     }
 
     impl Clock for Authority {
-        fn unix_seconds(&self) -> u64 {
-            self.now.load(Ordering::SeqCst)
+        fn unix_milliseconds(&self) -> u64 {
+            self.now.load(Ordering::SeqCst) * 1000
         }
     }
 
@@ -744,6 +769,90 @@ mod tests {
             method: method.into(),
             params: json!({}),
         }
+    }
+
+    struct RejectingAdmin(CredentialAdminError);
+    impl nessa_auth::application::credential_admin::CredentialAdmin for RejectingAdmin {
+        fn issue<'a>(
+            &'a self,
+            _: IssueCredentialRequest,
+        ) -> PortFuture<'a, IssueCredentialOutcome, CredentialAdminError> {
+            Box::pin(async { Err(self.0) })
+        }
+        fn list<'a>(
+            &'a self,
+            _: ListCredentialsRequest,
+        ) -> PortFuture<
+            'a,
+            Vec<nessa_auth::application::dto::CredentialMetadataDto>,
+            CredentialAdminError,
+        > {
+            Box::pin(async { Err(self.0) })
+        }
+        fn revoke<'a>(
+            &'a self,
+            _: RevokeCredentialRequest,
+        ) -> PortFuture<'a, u64, CredentialAdminError> {
+            Box::pin(async { Err(self.0) })
+        }
+    }
+
+    fn issue_params() -> serde_json::Value {
+        json!({
+            "requestId": "issue",
+            "principal": {"id": "reader", "kind": "integration"},
+            "membership": {"id": "reader", "principalId": "reader",
+                "organizationId": "organization", "role": "member", "state": "active"},
+            "grants": [{"action": "server.read",
+                "resource": {"organizationId": "organization", "id": "gateway-resource"}}]
+        })
+    }
+
+    #[tokio::test]
+    async fn administration_reports_typed_rejections_from_a_substitute_adapter() {
+        for (error, code) in [
+            (CredentialAdminError::Conflict, "credential_conflict"),
+            (CredentialAdminError::Capacity, "credential_capacity"),
+            (CredentialAdminError::NotFound, "credential_not_found"),
+            (
+                CredentialAdminError::Unavailable,
+                "credential_store_unavailable",
+            ),
+        ] {
+            let (state, _) = fixture(MembershipRole::Admin);
+            let state = state.with_admin(Arc::new(RejectingAdmin(error)));
+            let session = authenticate(&state).await;
+            for (method, params) in [
+                ("credential.issue", issue_params()),
+                ("credential.list", json!({})),
+                (
+                    "credential.revoke",
+                    json!({"requestId": "revoke", "credentialId": "credential"}),
+                ),
+            ] {
+                let mut frame = request("command", method);
+                frame.params = params;
+                let OutgoingMessage::Response(response) = dispatch(&state, &session, frame).await
+                else {
+                    panic!("response expected")
+                };
+                assert_eq!(response.error.unwrap().code, code);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_grants_are_rejected_before_calling_administration() {
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_admin(Arc::new(RejectingAdmin(CredentialAdminError::Unavailable)));
+        let session = authenticate(&state).await;
+        let mut frame = request("empty", "credential.issue");
+        frame.params = issue_params();
+        frame.params["grants"] = json!([]);
+        let OutgoingMessage::Response(response) = dispatch(&state, &session, frame).await else {
+            panic!("response expected")
+        };
+        assert_eq!(response.error.unwrap().code, "invalid_request");
     }
 
     #[tokio::test]
@@ -1006,6 +1115,86 @@ mod tests {
                 .unwrap()
         }
     }
+    #[tokio::test(start_paused = true)]
+    async fn crossing_a_wall_second_does_not_reject_an_in_window_authentication() {
+        struct MillisecondClock(AtomicU64);
+        impl Clock for MillisecondClock {
+            fn unix_milliseconds(&self) -> u64 {
+                self.0.load(Ordering::SeqCst)
+            }
+        }
+        let (mut state, _) = fixture(MembershipRole::Member);
+        let clock = Arc::new(MillisecondClock(AtomicU64::new(100_999)));
+        state.clock = clock.clone();
+        state.settings.handshake_timeout = Duration::from_secs(1);
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(handle_socket(socket, state));
+        let Message::Text(challenge) = peer.message().await else {
+            panic!("challenge expected")
+        };
+        let challenge: serde_json::Value = serde_json::from_str(&challenge).unwrap();
+        assert_eq!(challenge["payload"]["expiresAt"], 102);
+        tokio::time::advance(Duration::from_millis(500)).await;
+        // The old independent seconds check rejected this while its timer still ran.
+        clock.0.store(101_499, Ordering::SeqCst);
+        peer.input
+            .send(Ok(Message::Text(
+                json!({
+                    "type": "req", "id": "auth", "method": "session.authenticate", "params": {
+                        "minVersion": 1, "maxVersion": 1, "nonce": challenge["payload"]["nonce"],
+                        "credential": "secret", "client": {"id": "test"}
+                    }
+                })
+                .to_string()
+                .into(),
+            )))
+            .unwrap();
+        assert_success(peer.message().await, "auth");
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn elapsed_handshake_closes_with_retryable_timeout() {
+        let (mut state, _) = fixture(MembershipRole::Member);
+        state.settings.handshake_timeout = Duration::from_secs(1);
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(handle_socket(socket, state));
+        assert!(matches!(peer.message().await, Message::Text(_)));
+        tokio::time::advance(Duration::from_millis(1001)).await;
+        let Message::Close(Some(close)) = peer.message().await else {
+            panic!("close expected")
+        };
+        assert_eq!(close.code, 4006);
+        let reason: serde_json::Value = serde_json::from_str(&close.reason).unwrap();
+        assert_eq!(reason["code"], "handshake_timeout");
+        assert_eq!(reason["retryable"], true);
+        task.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn challenge_write_consumes_the_same_handshake_budget() {
+        let (mut state, _) = fixture(MembershipRole::Member);
+        state.settings.handshake_timeout = Duration::from_secs(1);
+        state.settings.write_timeout = Duration::from_secs(5);
+        let (release, gate) = tokio::sync::oneshot::channel();
+        let (socket, mut peer) = test_socket(Some(gate));
+        let task = tokio::spawn(handle_socket(socket, state));
+        peer.writing.recv().await.unwrap();
+        tokio::time::advance(Duration::from_millis(1001)).await;
+        tokio::task::yield_now().await;
+        release.send(()).unwrap();
+        // The cancelled write may have queued the challenge; it must not start a new window.
+        let mut message = peer.message().await;
+        if matches!(message, Message::Text(_)) {
+            message = peer.message().await;
+        }
+        let Message::Close(Some(close)) = message else {
+            panic!("close expected")
+        };
+        assert_eq!(close.code, 4006);
+        task.await.unwrap();
+    }
+
     fn assert_success(message: Message, id: &str) {
         let Message::Text(text) = message else {
             panic!("expected successful response")

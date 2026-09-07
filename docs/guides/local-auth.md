@@ -133,13 +133,38 @@ omitted, using its stage and `NESSA_DATA_DIR` / `NESSA_INSTANCE` namespace. A cu
 `CredentialSource` can use another host's private storage. The desktop panel injects
 its native source. Browser callers must supply a source or explicit credential.
 Loading fails clearly if the assigned file is missing or insecure. No owner token
-is used as a fallback. Local file credentials are only loaded for loopback URLs.
+is used as a fallback. Local file credentials are only loaded for numeric loopback
+URLs (`127.0.0.1` or `::1`); `localhost` is not resolved or trusted for automatic
+loading. Remote connections require `wss:` in every stage, including development.
+URLs containing user information are rejected.
+
+Surface principals have kind `integration`. Provisioning assigns `member` unless the
+selected grants include `credential.manage`, which requires `admin`. Reprovisioning
+replaces the surface membership role and revokes its previous credentials in one
+commit. Owner recovery uses the registry's explicit `ownerMembershipId`, independent
+of record order. The current registry contract requires this field; there is no
+legacy fallback or automatic data migration.
+
+Issuance requires at least one supported grant. The method list in `auth.session`
+describes registered RPCs; it does not mean the caller may use them. Each protected
+request still checks its exact grants and current membership.
+
+Credential RPC failures distinguish `credential_conflict` (changed payload or
+conflicting identity), `credential_capacity` (configured limit),
+`credential_not_found`, and `credential_store_unavailable`. The first three are
+command rejections and are not automatically retried. Mutations retain their
+`requestId` in `NessaMutationError`; inspect its `cause` for the RPC error. Raise
+capacity or change a conflicting command deliberately rather than blindly retrying.
 
 ## Configure limits without rebuilding
 
 Create `config.json` beside the namespace's `auth` directory. For default local
 development this is `$HOME/.nessa/dev/config.json`. For an explicit instance it is
 `<root>/<stage>/instances/<instance>/config.json`; omit the `prod` stage segment.
+Create this file with the same private permissions as credential files: current OS
+user ownership, a single link, and mode `0600` on Unix or a private DACL on Windows.
+Symlinks and unsafe existing files fail startup. On Unix, create a new config with
+`(umask 077; cat > "$HOME/.nessa/dev/config.json")` and enter the JSON, then Ctrl-D.
 The following values are the defaults:
 
 ```json
@@ -166,7 +191,11 @@ issuance or owner recovery. Lowering limits below existing contents rejects open
 the registry and never removes records. Increasing write deadlines can increase how
 long that connection waits for its own output. Other clients do not share its write
 lock or wait for it. State checks bound idle revocation detection; command checks
-remain mandatory.
+remain mandatory. The handshake budget includes challenge delivery and is enforced
+by one monotonic timer. The advertised Unix-second deadline rounds up from
+millisecond wall time; expiry closes with retryable `handshake_timeout` (4006).
+The SDK bounds its authentication wait by that deadline and its configured request
+timeout.
 
 ## Operation admission and revocation
 

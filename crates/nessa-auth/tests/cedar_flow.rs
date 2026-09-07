@@ -91,8 +91,8 @@ impl TestClock {
 }
 
 impl Clock for TestClock {
-    fn unix_seconds(&self) -> u64 {
-        self.0.load(Ordering::SeqCst)
+    fn unix_milliseconds(&self) -> u64 {
+        self.0.load(Ordering::SeqCst) * 1000
     }
 }
 

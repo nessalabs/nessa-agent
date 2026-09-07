@@ -9,11 +9,11 @@ use nessa_auth::{
     adapters::{cedar::CedarPolicyEvaluator, local::LocalCredentialStore},
     application::{
         credential_admin::{
-            CredentialAdmin, IssueCredentialOutcome, IssueCredentialRequest,
+            CredentialAdmin, CredentialAdminError, IssueCredentialOutcome, IssueCredentialRequest,
             ListCredentialsRequest, RevokeCredentialRequest,
         },
         dto::CredentialMetadataDto,
-        ports::{AccessError, Clock, PortFuture},
+        ports::{Clock, PortFuture},
     },
     domain::{AudienceId, OrganizationId, ResourceId},
 };
@@ -25,10 +25,12 @@ use std::{
 /// Wall time for authentication. Health's monotonic uptime remains a separate port.
 pub(super) struct SystemClock;
 impl Clock for SystemClock {
-    fn unix_seconds(&self) -> u64 {
+    fn unix_milliseconds(&self) -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_secs())
+            .map_or(0, |elapsed| {
+                u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+            })
     }
 }
 
@@ -97,34 +99,37 @@ impl CredentialAdmin for LocalAdmin {
     fn issue<'a>(
         &'a self,
         request: IssueCredentialRequest,
-    ) -> PortFuture<'a, IssueCredentialOutcome> {
+    ) -> PortFuture<'a, IssueCredentialOutcome, CredentialAdminError> {
         let store = self.store.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || store.issue_sync(request))
                 .await
-                .map_err(|_| AccessError::Unavailable)?
-                .map_err(|_| AccessError::Unavailable)
+                .map_err(|_| CredentialAdminError::Unavailable)?
+                .map_err(CredentialAdminError::from)
         })
     }
     fn list<'a>(
         &'a self,
         request: ListCredentialsRequest,
-    ) -> PortFuture<'a, Vec<CredentialMetadataDto>> {
+    ) -> PortFuture<'a, Vec<CredentialMetadataDto>, CredentialAdminError> {
         let store = self.store.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || store.list_sync(&request))
                 .await
-                .map_err(|_| AccessError::Unavailable)?
-                .map_err(|_| AccessError::Unavailable)
+                .map_err(|_| CredentialAdminError::Unavailable)?
+                .map_err(CredentialAdminError::from)
         })
     }
-    fn revoke<'a>(&'a self, request: RevokeCredentialRequest) -> PortFuture<'a, u64> {
+    fn revoke<'a>(
+        &'a self,
+        request: RevokeCredentialRequest,
+    ) -> PortFuture<'a, u64, CredentialAdminError> {
         let store = self.store.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || store.revoke_sync(request))
                 .await
-                .map_err(|_| AccessError::Unavailable)?
-                .map_err(|_| AccessError::Unavailable)
+                .map_err(|_| CredentialAdminError::Unavailable)?
+                .map_err(CredentialAdminError::from)
         })
     }
 }

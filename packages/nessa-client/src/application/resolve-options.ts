@@ -19,7 +19,7 @@ function productUrl(url: string): string {
 }
 
 /**
- * True for ws/wss URLs whose host is loopback.
+ * True for ws/wss URLs whose host is a numeric loopback address.
  * Throws {@link StageConfigError} for non-WebSocket or unparseable URLs.
  */
 export function isLoopbackWebSocketUrl(url: string): boolean {
@@ -32,14 +32,17 @@ export function isLoopbackWebSocketUrl(url: string): boolean {
   if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
     throw new StageConfigError(`url must use ws: or wss: (got ${parsed.protocol})`)
   }
+  if (parsed.username || parsed.password) {
+    throw new StageConfigError("WebSocket urls must not contain user information")
+  }
   const host = parsed.hostname.replace(/^\[|\]$/g, "")
-  return host === "127.0.0.1" || host === "::1" || host === "localhost"
+  return host === "127.0.0.1" || host === "::1"
 }
 
 /**
  * Validate stage/URL policy and resolve defaults. Product credentials are always
  * loaded before resolution.
- * Non-dev requires an explicit URL and non-loopback connections require wss.
+ * Non-dev requires an explicit URL. Non-loopback connections require wss in every stage.
  */
 export function resolveConnectOptions(
   options: NessaClientConnectOptions,
@@ -57,7 +60,7 @@ export function resolveConnectOptions(
 
   const loopback = isLoopbackWebSocketUrl(url)
 
-  if (!stageAllowsDefaultUrl(stage) && !loopback && !url.startsWith("wss:")) {
+  if (!loopback && new URL(url).protocol !== "wss:") {
     throw new StageConfigError(`non-loopback ${stage} urls must use wss: (got ${url})`)
   }
 

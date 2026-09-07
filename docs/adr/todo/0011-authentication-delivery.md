@@ -158,3 +158,14 @@ platform work or unrelated future providers to be implemented again.
 [ADR 0010](../done/0010-local-authentication.md) describes the working auth system.
 The [local guide](../../guides/local-auth.md) explains how to use it today, and the
 [gateway review](../../reviews/local-auth-gateway.md) records its current limits.
+
+### Defaults retained after the local-auth review
+
+The panel still defaults to `credential.manage` with no credential expiry; operators
+can restrict `--chat-grants` and set expiry explicitly. Revisit that default as part
+of the credential settings flow. Idle invalidation still polls at one-second
+intervals by default, with writes bounded separately; already-admitted requests
+finish. Measure connection quotas and revision-driven invalidation before changing
+that model. `conversation.write` currently authorizes only the gateway's temporary
+`conversation.echo`; real conversation operations need conversation resource scope
+before they are introduced. These are delivery decisions, not implemented features.
