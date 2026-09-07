@@ -208,7 +208,9 @@ impl LocalCredentialStore {
         let lock_path = path.with_extension("lock");
         let lock = private_open(&lock_path, true)?;
         lock.try_lock_exclusive().map_err(|error| {
-            if error.kind() == io::ErrorKind::WouldBlock {
+            // Windows reports ERROR_LOCK_VIOLATION rather than WouldBlock.
+            // Match the adapter's native contention code without hiding other I/O errors.
+            if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() {
                 LocalStoreError::Locked
             } else {
                 LocalStoreError::Io(error)
@@ -1250,10 +1252,14 @@ mod tests {
         let store = LocalCredentialStore::open(&path).unwrap();
         assert!(!store.is_initialized());
         let outcome = store.bootstrap(bootstrap()).unwrap();
-        assert!(matches!(
-            LocalCredentialStore::open(&path),
-            Err(LocalStoreError::Locked)
-        ));
+        let error = match LocalCredentialStore::open(&path) {
+            Ok(_) => panic!("a second store acquired the exclusive registry lock"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(error, LocalStoreError::Locked),
+            "unexpected lock error: {error:?}"
+        );
         let json = fs::read_to_string(&path).unwrap();
         let token = std::str::from_utf8(outcome.evidence.expose_bytes()).unwrap();
         assert!(!json.contains(token));
