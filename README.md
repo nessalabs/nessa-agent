@@ -4,7 +4,7 @@ A menu bar agent: a transparent, floating chat panel built with Tauri 2, React 1
 TypeScript, and the [Nessa UI](https://github.com/nessalabs/nessa_ui) design system.
 
 The window has no titlebar and no Dock icon. It lives behind the menu bar item —
-click it to summon the panel, click again (or click away, in a release build) to
+click it to summon the panel, click again to
 dismiss it, or press **⌘⇧A** from anywhere. Summoning it hands the caret
 straight to the composer. The tab strip doubles as the titlebar — the gaps
 around the tabs drag the window; everything else lives in the tray menu.
@@ -104,18 +104,18 @@ that does have `/dev/dri`:
 WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 just dev
 ```
 
-A testing-shaped `.deb` is `just fast`. A shipping `.deb` is `just release`.
+A testing-shaped `.deb` is `just release fast`. A shipping `.deb` is `just release`.
 
 ### macOS
 
-`just dev` is `tauri dev`. `just fast` writes a `.app` (no dmg). `just release`
+`just dev` is `tauri dev`. `just release fast` writes a `.app` (no dmg). `just release`
 writes a `.dmg`.
 
 ### Windows
 
 Windows recipes in the justfile have **not been run on a Windows machine yet**:
-`just fast` and `just release` ask Tauri for `nsis`. The justfile uses
-`cmd.exe` so Git's `sh` is not required. Please verify `just dev`, `just fast`,
+`just release fast` and `just release` ask Tauri for `nsis`. The justfile uses
+`cmd.exe` so Git's `sh` is not required. Please verify `just dev`, `just release fast`,
 and `just release` there.
 
 | Command | What it does |
@@ -124,7 +124,7 @@ and `just release` there.
 | `just server` | Local `nessa-server` (stage=dev defaults) |
 | `just dev` | Desktop app in dev mode (falls back to the browser UI with no display) |
 | `just web` | The UI in a browser, no Tauri |
-| `just fast` | Testing-shaped release — slow opts off (`.app` / `.deb` / NSIS) |
+| `just release fast` | Testing-shaped release — slow opts off (`.app` / `.deb` / NSIS) |
 | `just release` | Shipping bundle — fat LTO, stripped (`.dmg` / `.deb` / NSIS) |
 | `pnpm app` | `tauri dev`, no host defaults |
 | `pnpm app:build` | The shipping bundle for every Linux format (`.deb` + `.rpm` + AppImage) |
@@ -207,11 +207,14 @@ configured geometry is applied once, at startup, by `apply_configured_size`.
 Every agent starts here rather than running `git worktree` by hand:
 
 ```bash
-./scripts/worktree.sh create add-something   # branch + worktree, ready to build
-./scripts/worktree.sh clean                  # rebuild this crate, keep deps
-./scripts/worktree.sh list
-./scripts/worktree.sh remove add-something   # the branch is kept
+just worktree create add-something   # branch + worktree, ready to build
+just worktree clean                  # rebuild this crate, keep deps
+just worktree list
+just worktree remove add-something   # the branch is kept
 ```
+
+These commands use `scripts/worktree.sh` on macOS and Linux. After entering the
+new checkout, run `just release fast` to build a fast release.
 
 A fresh worktree does not pay for a rebuild. It shares the main checkout's
 workspace `target/`, so cargo reuses the ~500 already-compiled dependency crates
@@ -227,7 +230,7 @@ not preventable — cargo has no notion of a protected shared target. It is
 **bounded** rather than fixed: sccache's cache lives in
 `~/Library/Caches/Mozilla.sccache`, outside the target directory entirely, so
 the worst case is one ~45 s rebuild rather than a cold one. Use
-`./scripts/worktree.sh clean` instead: it runs
+`just worktree clean` instead: it runs
 `cargo clean -p nessa-app -p nessa-server`, which drops only this repo's crates
 — the things that are actually stale after a code change — and rebuilds in
 **4 s** with every dependency intact.
@@ -242,10 +245,10 @@ testing does not cost a shipping build.
 
 | | Artifact | Compile | What it is |
 | --- | --- | --- | --- |
-| `just fast` | ~9 MB `.app` / a `.deb` | ~45 s warm | `opt-level=1`, no LTO, no strip, no dmg / AppImage |
+| `just release fast` | ~9 MB `.app` / a `.deb` | ~45 s warm | `opt-level=1`, no LTO, no strip, no dmg / AppImage |
 | `just release` | 6.5 MB `.app` inside a `.dmg` / a `.deb` | ~2 min | `opt-level=3`, fat LTO, one codegen unit, stripped |
 
-`just fast` / `pnpm app:fast` overrides the release profile with
+`just release fast` / `pnpm app:fast` overrides the release profile with
 `CARGO_PROFILE_RELEASE_*` env vars rather than defining a second profile, so
 there is one definition and no chance of the two drifting. (The Tauri CLI has
 no `--profile` flag, so a real second cargo profile could not be selected
@@ -332,12 +335,12 @@ frost, and it fills the window edge to edge, because the effect is clipped to an
 panel. Since the effect is window-level, the clear surface has to turn it off
 natively too, which is what the `set_frosted` command is for.
 
-### Hide-on-blur
+### Working alongside other apps
 
-A menu bar panel normally dismisses when you click away, but that would hide the
-window every time you open devtools. It is therefore release-only — see
-`on_window_event` on the macOS host in
-[src-tauri/src/platform/macos/mod.rs](src-tauri/src/platform/macos/mod.rs).
+The panel stays open when you click away or open Spotlight, in both development
+and release builds. It appears across desktop Spaces, with macOS fullscreen
+auxiliary behavior enabled to allow it alongside fullscreen apps. Use the tray
+item or summon shortcut to toggle it closed.
 
 ## The Nessa UI dependency
 
