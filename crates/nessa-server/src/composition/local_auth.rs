@@ -88,8 +88,8 @@ fn setup_error(error: impl std::fmt::Display) -> RunError {
     RunError::Authentication(error.to_string())
 }
 
-/// Move durable lifecycle writes off Tokio's socket workers. The product admission
-/// gate bounds concurrent calls; cancellation never rolls back a committed write.
+/// Move durable lifecycle writes off Tokio's socket workers. The store serializes
+/// mutations; cancellation never rolls back a committed write.
 struct LocalAdmin {
     store: Arc<LocalCredentialStore>,
 }
