@@ -1,8 +1,8 @@
 # Session and stream contracts — proposed design
 
 This is the implementation baseline for proposed ADRs
-[0007](../adr/todo/0007-nessa-session-protocol-and-authorities.md) and
-[0008](../adr/todo/0008-reusable-event-stream-crate.md). Names below are proposed;
+[0011](../adr/todo/0011-nessa-session-protocol-and-authorities.md) and
+[0009](../adr/todo/0009-reusable-event-stream-crate.md). Names below are proposed;
 wire schemas, catalogs, Rust APIs, and implementations have not landed.
 The current S1 protocol continues to operate unchanged until its negotiated
 extension is implemented. [Surfaces and collaboration](surfaces-and-collaboration.md)
@@ -226,7 +226,7 @@ services actually implemented with gateway workspace and access policy checks.
 The gateway owns workspace authorization, command/stream access checks, binding
 selection, secret lookup, process supervision and cleanup. The provider binding
 owns supported protocol correlation and provider-specific host integration, not
-the external harness execution loop. [ADR 0009](../adr/todo/0009-agent-harnesses-and-optional-tools.md)
+the external harness execution loop. [ADR 0012](../adr/todo/0012-agent-harnesses-and-optional-tools.md)
 keeps external harnesses unmodified and defines MCP/CLI tools for both them and
 Nessa’s own internal agent. No arbitrary executable
 or secret from a client intent; no raw credentials in discovery, event records,
@@ -236,7 +236,8 @@ typed failure until an explicit attachment/chunking contract exists.
 
 ## Generic crate contract
 
-The crate is being implemented outside this repository. The following are Nessa
+The [event-stream library](https://github.com/nessalabs/event-stream) exists outside
+this repository; its Nessa integration and verification remain in ADR 0009. The following are Nessa
 consumer requirements and conceptual APIs to reconcile with that external crate,
 not instructions to implement another stream runtime in this workspace.
 
@@ -309,18 +310,17 @@ fallback. Retention must not be enabled until state restoration is designed.
 
 ## Implementation gates and open implementation choices
 
-The independent tracks in [ADR 0007](../adr/todo/0007-nessa-session-protocol-and-authorities.md)
-can complete before the external crate. Start with scoped credential issuance,
-local registry persistence, authentication/authorization, expiry/revocation, and
-NessaClient permission negotiation. Discovery/preflight and read-only MCP/CLI
-adapters then have real gateway operations to exercise. Shared payload schemas
-and Rust semantic normalization use complete decoded fixtures, without duplicating
-the external crate's framing or stream implementation.
+Local credential issuance, persistence, authentication/authorization, and
+revocation are implemented under ADR 0010. Auth API readiness and operating bounds belong to
+ADR 0007. ADR 0008 owns discovery/preflight, payload normalization, and agent
+execution; ADR 0012 owns optional MCP/CLI packaging. ADR 0011 owns shared
+attachment, transcript subscriptions, and collaboration. These scopes integrate
+the existing external event-stream library through ADR 0009.
 
 The remaining integration order is:
 
-1. Obtain the separately implemented stream crate’s package/version and public
-   contract. Verify its guarantees against the consumer requirements above;
+1. Pin a reviewed revision of `nessalabs/event-stream` and inspect its public
+   contract (the current manifest is `event-stream` 0.1.0, unpublished). Verify its guarantees against the consumer requirements above;
    resolve differences with the external crate before integrating it. Storage
    selection and implementation remain in that separate project.
 2. Define the agent payload schema with TS/Rust generation and shared fixtures,

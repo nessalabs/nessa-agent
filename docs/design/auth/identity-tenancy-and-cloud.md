@@ -1,10 +1,10 @@
 # Identity, tenancy, and cloud authorization
 
 - **State:** reference for proposed broader identity integration; local foundations implemented in [ADR 0010](../../adr/done/0010-local-authentication.md)
-- **Work tracking:** [ADR 0011](../../adr/todo/0011-authentication-delivery.md)
+- **Work tracking:** [ADR 0007](../../adr/done/0007-authentication-delivery.md)
 - **Research date:** 2026-09-04
 - **Implementation slice:** [Scoped authentication](scoped-authentication.md)
-- **Parent:** [ADR 0007](../../adr/todo/0007-nessa-session-protocol-and-authorities.md)
+- **Parent:** [ADR 0011](../../adr/todo/0011-nessa-session-protocol-and-authorities.md)
 
 Nessa should support local and hosted individual use, with hosted deployment the
 expected path for most team/enterprise users. Deployment location and customer

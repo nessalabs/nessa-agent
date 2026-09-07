@@ -246,3 +246,19 @@ consult the latest PR checks for the current revision's status.
 
 The implementation follows Microsoft's [file security API](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights)
 and [handle-based security inspection](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-getsecurityinfo).
+
+## Supported operating range and retention
+
+The [ADR 0007 readiness review](../reviews/auth-api-readiness.md) measures the
+default 1,000-credential registry, 64 local authenticated connections and eight
+concurrent credential mutation callers on a reference Mac. It includes latency,
+response sizes, memory, exact workload and limits on extrapolation. Run
+`pnpm auth:measure` on deployment hardware before increasing these bounds.
+These are measured bounds, not a connection quota or latency guarantee.
+
+Retain revoked/expired records and mutation receipts for the registry lifetime.
+There is no automatic cleanup. Leave capacity headroom for rotation and recovery;
+raise configured limits deliberately if necessary, never delete registry records
+to unblock a mutation. Keep the original request ID for explicit retries, including
+revoke retries, to avoid consuming additional receipts. See the review for the
+full retention decision and typed failure handling.

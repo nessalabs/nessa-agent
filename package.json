@@ -38,7 +38,8 @@
     "auth:e2e": "cargo build -p nessa-server && tsx scripts/smoke-auth.mjs",
     "client:docs": "pnpm protocol:generate && typedoc --options typedoc.client.json",
     "client:docs:json": "pnpm protocol:generate && typedoc --options typedoc.client.json --json docs/generated/client-api.json",
-    "client:docs:check": "pnpm client:docs:json && node scripts/check-client-docs.mjs"
+    "client:docs:check": "pnpm client:docs:json && node scripts/check-client-docs.mjs",
+    "auth:measure": "cargo build -p nessa-server && tsx scripts/measure-auth.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

@@ -1,8 +1,8 @@
 # Collaboration sequences and Nessa MCP — proposed protocols
 
-Companion to [ADR 0007](../adr/todo/0007-nessa-session-protocol-and-authorities.md),
+Companion to [ADR 0011](../adr/todo/0011-nessa-session-protocol-and-authorities.md),
 [surface/collaboration rules](surfaces-and-collaboration.md), and
-[session/stream rules](session-and-stream-contracts.md). [ADR 0009](../adr/todo/0009-agent-harnesses-and-optional-tools.md) owns the
+[session/stream rules](session-and-stream-contracts.md). [ADR 0012](../adr/todo/0012-agent-harnesses-and-optional-tools.md) owns the
 external-harness preservation, the internal Nessa agent, and optional MCP/CLI packages. All method names and
 examples are proposals, not existing endpoints. Tokens in diagrams are symbolic;
 no real credentials belong in these documents or model-visible tool arguments.
@@ -284,7 +284,7 @@ cancel tool and its normal gateway permission check.
 
 ## Harness ownership, packaging, and tool selection
 
-Per ADR 0009, external provider agents remain in their own harnesses whether
+Per ADR 0012, external provider agents remain in their own harnesses whether
 Nessa-launched or independently launched. Nessa’s internal agent may have its own
 harness, initially using the same optional MCP/CLI interfaces and scoped grants.
 A Nessa-managed session means Nessa manages its product identity and supported

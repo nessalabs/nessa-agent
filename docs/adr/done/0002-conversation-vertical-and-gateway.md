@@ -1,5 +1,11 @@
 # 0002. Conversation is a vertical; the server will own the rules
 
+## Purpose
+
+Keep conversation behavior, data access, and presentation together in one
+feature. The UI displays state and calls a gateway; server-side execution rules
+are delivered by ADR 0008.
+
 - **Date:** 2026-08-31
 - **Status:** accepted
 - **Updated:** 2026-09-04 — `sendDraft` uses temporary `conversation.echo` via
