@@ -1,12 +1,17 @@
-import { NessaClient, type HealthResult, type HelloOk, type PingResult } from "@nessa/client"
+import {
+  NessaClient,
+  type HealthResult,
+  type ProductSessionReady,
+  type CredentialSource,
+  type Stage,
+} from "@nessa/client"
 
 import { host } from "../../../host"
 
 export type EstablishedDevSession = {
   client: NessaClient
-  hello: HelloOk
+  hello: ProductSessionReady
   health: HealthResult
-  ping: PingResult
 }
 
 /** Thrown when connect succeeded but a post-connect probe failed. */
@@ -22,21 +27,20 @@ export class SessionHealthError extends Error {
 
 export type ConnectDevSessionDeps = {
   connect?: typeof NessaClient.connect
+  credentialSource?: CredentialSource
+  stage?: Stage
 }
 
-/**
- * Open a stage=dev session against the local nessa-server defaults
- * (`ws://127.0.0.1:7420`, `dev-token`), then probe `server.health` and
- * `server.ping` (ADR 0006) through `NessaClient`.
- *
- * Closes the socket if a probe fails so callers never see a leaked session.
- */
+/** Authenticate the chat surface and verify authorized gateway health. */
 export async function connectDevSession(
   deps: ConnectDevSessionDeps = {},
 ): Promise<EstablishedDevSession> {
   const connect = deps.connect ?? NessaClient.connect.bind(NessaClient)
   const client = await connect({
-    stage: "dev",
+    profile: "product",
+    stage: deps.stage ?? "dev",
+    url: "ws://127.0.0.1:7420/session",
+    credentialSource: deps.credentialSource,
     role: "surface",
     surface: { kind: "panel", instance: crypto.randomUUID() },
     client: {
@@ -47,12 +51,7 @@ export async function connectDevSession(
   })
   try {
     const health = await client.server.health()
-    const nonce = crypto.randomUUID()
-    const ping = await client.server.ping(nonce)
-    if (ping.nonce !== nonce) {
-      throw new Error("ping nonce mismatch")
-    }
-    return { client, hello: client.session, health, ping }
+    return { client, hello: client.productSession, health }
   } catch (error) {
     client.close()
     throw new SessionHealthError(

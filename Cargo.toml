@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/nessa-server", "src-tauri"]
+members = ["crates/nessa-server", "crates/nessa-auth", "crates/nessa-local-storage", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"

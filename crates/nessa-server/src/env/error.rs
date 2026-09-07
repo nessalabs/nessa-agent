@@ -25,6 +25,7 @@ impl std::error::Error for ReadError {}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum EnvironmentError {
+    Backend(&'static str),
     Read {
         variable: &'static str,
         source: ReadError,
@@ -50,6 +51,7 @@ pub enum EnvironmentError {
 impl fmt::Display for EnvironmentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Backend(message) => write!(f, "{message}"),
             Self::Read { variable, source } => write!(f, "{variable}: {source}"),
             Self::InvalidPort { variable, value } => {
                 write!(f, "{variable} must be a valid TCP port, got {value:?}")

@@ -3,19 +3,13 @@
  * Regenerate: `pnpm protocol:generate`
  */
 export type {
-  AuthToken,
   ClientInfo,
   ClientRole,
-  ConnectChallenge,
-  ConnectParams,
   EchoParams,
   EchoResult,
   EventFrame,
   GatewayError,
   HealthResult,
-  HelloOk,
-  PingParams,
-  PingResult,
   ReqFrame,
   ResFrame,
   Scope,
@@ -33,10 +27,14 @@ import type { EventFrame, ReqFrame, ResFrame } from "../generated/protocol.js"
 /** Any JSON message on the WebSocket. */
 export type Frame = ReqFrame | ResFrame | EventFrame
 
-import type { ConnectChallenge } from "../generated/protocol.js"
-import { Event } from "../generated/catalog.js"
+export type {
+  ProductSessionReady,
+  SessionAuthenticateParams,
+  SessionChallenge,
+} from "./product-types.js"
+export { ProductEvent, ProductMethod } from "./product-types.js"
 
 /** Server push events the client understands today. */
 export type ClientEventMap = {
-  [Event.ConnectChallenge]: ConnectChallenge
+  "session.challenge": import("./product-types.js").SessionChallenge
 }

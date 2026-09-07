@@ -5,37 +5,27 @@
     "HealthResult": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["ok", "runtimeStatus", "uptimeMs"],
+      "required": [
+        "ok",
+        "runtimeStatus",
+        "uptimeMs"
+      ],
       "properties": {
-        "ok": { "type": "boolean" },
-        "runtimeStatus": { "$ref": "common.json#/$defs/RuntimeStatus" },
-        "uptimeMs": { "type": "integer", "minimum": 0 }
-      }
-    },
-    "PingParams": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["nonce"],
-      "properties": {
-        "nonce": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Client-chosen value; the result must echo it."
+        "ok": {
+          "type": "boolean",
+          "description": "Whether the health probe succeeded."
+        },
+        "runtimeStatus": {
+          "$ref": "common.json#/$defs/RuntimeStatus",
+          "description": "Current runtime availability reported by the gateway."
+        },
+        "uptimeMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Time since server startup in milliseconds."
         }
-      }
-    },
-    "PingResult": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["ok", "nonce"],
-      "properties": {
-        "ok": { "type": "boolean", "const": true },
-        "nonce": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Echo of PingParams.nonce."
-        }
-      }
+      },
+      "description": "Gateway health response from client.server.health(). On product connections, access is authorized by the server."
     }
   }
 }

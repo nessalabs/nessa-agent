@@ -1,0 +1,48 @@
+name: Local authentication platforms
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  local-auth:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server
+      - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server --all-targets -- -D warnings
+      - run: cargo test -p nessa-app surface_credential
+        if: runner.os == 'Windows'
+      - run: cargo build -p nessa-server
+      # Auth/SDK checks do not need the desktop UI's separate repository. Use an
+      # isolated minimal npm harness so this job has no UI checkout credentials.
+      - name: Prepare SDK integration harness
+        shell: python
+        run: |
+          import json, pathlib, shutil
+          root = pathlib.Path('.ci-auth')
+          root.mkdir()
+          shutil.copytree('packages/nessa-client', root / 'packages/nessa-client')
+          shutil.copytree('scripts', root / 'scripts')
+          target = root / 'target/debug'
+          target.mkdir(parents=True)
+          binary = 'nessa-server.exe' if '${{ runner.os }}' == 'Windows' else 'nessa-server'
+          shutil.copy2(pathlib.Path('target/debug') / binary, target / binary)
+          (root / 'package.json').write_text(json.dumps({'private': True, 'type': 'module', 'dependencies': {'tsx': '^4.20.0', 'ws': '^8.18.0', '@nessa/client': 'file:./packages/nessa-client'}}))
+      - run: npm install --ignore-scripts
+        working-directory: .ci-auth
+      - run: node --import tsx scripts/smoke-windows-private-files.ts
+        working-directory: .ci-auth
+        if: runner.os == 'Windows'
+      - run: node --import tsx scripts/smoke-auth.mjs
+        working-directory: .ci-auth

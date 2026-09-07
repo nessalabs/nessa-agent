@@ -1,9 +1,7 @@
 import type { EventFrame, Frame, ResFrame } from "./types.js"
 
 export {
-  assertConnectChallenge,
   assertHealthResult,
-  assertHelloOk,
   parseEventFrame,
   parseResponseFrame,
   parseWireMessage,

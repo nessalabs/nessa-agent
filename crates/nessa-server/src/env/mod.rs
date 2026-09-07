@@ -1,17 +1,17 @@
 //! Runtime configuration — sole gateway for process env and stage policy.
 //!
 //! Nothing else in the crate reads `std::env` or `env!` for config. Stage drives
-//! auth policy (dev may use a default token; ci/alpha/prod require `NESSA_TOKEN`).
+//! runtime behavior. Serving requires the local auth registry in every stage;
 //! Tests inject config via `MockEnv` instead of mutating the real environment.
 //!
 //! ```text
-//! NESSA_STAGE / NESSA_HOST / NESSA_PORT / NESSA_TOKEN
+//! NESSA_STAGE / NESSA_HOST / NESSA_PORT
 //!        │
 //!        ▼
 //!   Environment::load(source)
 //!        │
 //!        ├──► composition (bind addr, stage log)
-//!        └──► app::AppState (expected auth token, version)
+//!        └──► app::AppState (stage, version, uptime)
 //! ```
 
 mod config;
@@ -20,9 +20,14 @@ mod error;
 mod source;
 mod stage;
 
-pub use config::key::{HOST, PORT, STAGE, TOKEN};
+pub use config::key::{HOST, PORT, STAGE};
 pub use config::VERSION;
 pub use environment::Environment;
 pub use error::EnvironmentError;
 pub use source::MockEnv;
 pub use stage::Stage;
+
+mod backend;
+pub use backend::UptimeBackend;
+
+mod paths;

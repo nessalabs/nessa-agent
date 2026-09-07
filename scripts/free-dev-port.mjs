@@ -26,7 +26,8 @@ function listeners(port) {
     for (const line of out.split(/\r?\n/)) {
       // TCP    127.0.0.1:1420    0.0.0.0:0    LISTENING    1234
       // Prefer `:1420` as its own port field, not a prefix of `:14200`.
-      if (!new RegExp(`:${port}(?:\\s|$)`).test(line) || !/LISTENING/i.test(line)) continue
+      if (!new RegExp(`:${port}(?:\\s|$)`).test(line) || !/LISTENING/i.test(line))
+        continue
       const pid = Number(line.trim().split(/\s+/).at(-1))
       if (Number.isFinite(pid) && pid > 0) pids.add(pid)
     }
@@ -114,7 +115,9 @@ for (const port of ports) {
       console.error(`→ freeing :${port} (nessa vite pid ${row.pid})`)
       killPid(row.pid)
       if (!(await waitUntilFree(port, row.pid))) {
-        console.error(`→ pid ${row.pid} still listening on :${port} after SIGTERM; sending SIGKILL`)
+        console.error(
+          `→ pid ${row.pid} still listening on :${port} after SIGTERM; sending SIGKILL`,
+        )
         try {
           if (process.platform === "win32") killPid(row.pid)
           else process.kill(row.pid, "SIGKILL")
@@ -129,7 +132,8 @@ for (const port of ports) {
       continue
     }
 
-    const label = row.command.length > 120 ? `${row.command.slice(0, 117)}...` : row.command
+    const label =
+      row.command.length > 120 ? `${row.command.slice(0, 117)}...` : row.command
     console.error(`→ port ${port} is already in use by pid ${row.pid}, not a Nessa vite:`)
     console.error(`  ${label}`)
     console.error(

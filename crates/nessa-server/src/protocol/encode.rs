@@ -1,50 +1,7 @@
-use super::defaults::default_shortcuts;
-use super::frames::{EventFrame, OutgoingMessage, ResponseFrame};
-use super::generated_catalog::event;
-use super::generated_types::{
-    ConnectChallenge, EchoResult, HealthResult, HelloOk, PingResult, RuntimeStatus, Scope,
-    ServerPolicy,
-};
+use super::frames::{OutgoingMessage, ResponseFrame};
+use super::generated_types::{EchoResult, HealthResult, RuntimeStatus};
 
-pub const PROTOCOL_VERSION: i64 = 1;
 pub const MAX_PAYLOAD_BYTES: i64 = 65_536;
-
-/// `connect.challenge` event sent when a client opens the WebSocket.
-pub fn connect_challenge_message(
-    nonce: String,
-    seq: u64,
-) -> Result<OutgoingMessage, serde_json::Error> {
-    let payload = ConnectChallenge {
-        nonce,
-        protocol: PROTOCOL_VERSION,
-    };
-    Ok(OutgoingMessage::Event(EventFrame::push(
-        event::CONNECT_CHALLENGE,
-        &payload,
-        seq,
-        0,
-    )?))
-}
-
-/// Successful `connect` RPC reply.
-pub fn connect_success_message(
-    request_id: &str,
-    server_version: &str,
-) -> Result<OutgoingMessage, serde_json::Error> {
-    let payload = HelloOk {
-        protocol: PROTOCOL_VERSION,
-        scopes: vec![Scope::ServerRead],
-        server_version: server_version.to_string(),
-        runtime_status: RuntimeStatus::Ready,
-        policy: ServerPolicy {
-            max_payload_bytes: MAX_PAYLOAD_BYTES,
-        },
-        shortcuts: default_shortcuts(),
-    };
-    Ok(OutgoingMessage::Response(ResponseFrame::success(
-        request_id, &payload,
-    )?))
-}
 
 /// Successful `server.health` RPC reply.
 pub fn health_check_message(
@@ -61,22 +18,8 @@ pub fn health_check_message(
     )?))
 }
 
-/// Successful `server.ping` RPC reply (echo).
-pub fn ping_echo_message(
-    request_id: &str,
-    nonce: String,
-) -> Result<OutgoingMessage, serde_json::Error> {
-    let payload = PingResult { ok: true, nonce };
-    Ok(OutgoingMessage::Response(ResponseFrame::success(
-        request_id, &payload,
-    )?))
-}
-
 /// Successful `conversation.echo` RPC reply.
-pub fn echo_message(
-    request_id: &str,
-    text: String,
-) -> Result<OutgoingMessage, serde_json::Error> {
+pub fn echo_message(request_id: &str, text: String) -> Result<OutgoingMessage, serde_json::Error> {
     let payload = EchoResult { text };
     Ok(OutgoingMessage::Response(ResponseFrame::success(
         request_id, &payload,

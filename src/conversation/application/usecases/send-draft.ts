@@ -1,9 +1,5 @@
 import type { BusyConversation, IdleConversation, UserTurn } from "../../model"
-import {
-  findConversation,
-  replaceConversation,
-  takeTurnId,
-} from "../internal/ids"
+import { findConversation, replaceConversation, takeTurnId } from "../internal/ids"
 import type { LocalTabs } from "../local-tabs"
 
 /**
@@ -60,10 +56,7 @@ export function completeEcho(
   const next: IdleConversation = {
     id: conv.id,
     title: conv.title,
-    turns: [
-      ...turns,
-      { id: taken.id, from: "assistant", text: echoText },
-    ],
+    turns: [...turns, { id: taken.id, from: "assistant", text: echoText }],
     draft: conv.draft,
     phase: "idle",
   }
@@ -88,16 +81,11 @@ export function failSend(
 
   const taken = takeTurnId(tabs)
   const message =
-    detail && detail.trim().length > 0
-      ? detail.trim()
-      : "Couldn't reach the server."
+    detail && detail.trim().length > 0 ? detail.trim() : "Couldn't reach the server."
   const next: IdleConversation = {
     id: conv.id,
     title: conv.title,
-    turns: [
-      ...turns,
-      { id: taken.id, from: "assistant", text: message },
-    ],
+    turns: [...turns, { id: taken.id, from: "assistant", text: message }],
     draft: conv.draft,
     phase: "idle",
   }

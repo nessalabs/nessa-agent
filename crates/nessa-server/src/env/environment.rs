@@ -9,8 +9,12 @@ pub struct Environment {
     pub stage: Stage,
     pub bind_host: String,
     pub port: u16,
-    pub auth_token: String,
     pub version: &'static str,
+    /// Uptime selection affects health reporting, never authentication deadlines.
+    pub uptime_backend: super::UptimeBackend,
+    /// Private product auth directory, resolved from typed startup configuration.
+    /// None is valid for isolated config tests; serving requires a data root.
+    pub auth_directory: Option<std::path::PathBuf>,
 }
 
 impl Environment {
@@ -36,20 +40,54 @@ impl Environment {
             None => default::PORT,
         };
 
-        let auth_token = resolve_auth_token(source, stage)?;
+        let uptime_backend = super::UptimeBackend::parse(
+            stage,
+            read_optional(source, key::UPTIME_BACKEND)?.as_deref(),
+            read_optional(source, key::UPTIME_FIXED_MS)?.as_deref(),
+        )?;
+        let auth_directory = load_auth_directory(source, stage)?;
 
         Ok(Self {
             stage,
             bind_host,
             port,
-            auth_token,
             version: config::VERSION,
+            uptime_backend,
+            auth_directory,
         })
+    }
+
+    /// Resolve offline administration paths for the selected stage and instance.
+    pub fn auth_directory_from_system() -> Result<std::path::PathBuf, EnvironmentError> {
+        let source = super::source::SystemEnv;
+        load_auth_directory(&source, load_stage(&source)?)?.ok_or(EnvironmentError::Backend(
+            "set NESSA_DATA_DIR or the OS home directory (USERPROFILE on Windows, HOME on Unix) for local credentials",
+        ))
     }
 
     pub fn listen_addr(&self) -> String {
         format_socket_addr(&self.bind_host, self.port)
     }
+}
+
+fn load_auth_directory(
+    source: &impl EnvSource,
+    stage: Stage,
+) -> Result<Option<std::path::PathBuf>, EnvironmentError> {
+    super::paths::auth_directory(
+        read_optional(source, key::DATA_DIR)?.as_deref(),
+        read_optional(
+            source,
+            if cfg!(windows) {
+                "USERPROFILE"
+            } else {
+                key::HOME
+            },
+        )?
+        .as_deref(),
+        stage.as_str(),
+        read_optional(source, key::INSTANCE)?.as_deref(),
+    )
 }
 
 fn format_socket_addr(host: &str, port: u16) -> String {
@@ -64,20 +102,6 @@ fn load_stage(source: &impl EnvSource) -> Result<Stage, EnvironmentError> {
     match read_optional(source, key::STAGE)? {
         Some(value) => Stage::parse(&value).map_err(EnvironmentError::InvalidStage),
         None => Ok(Stage::Dev),
-    }
-}
-
-fn resolve_auth_token(source: &impl EnvSource, stage: Stage) -> Result<String, EnvironmentError> {
-    match read_optional(source, key::TOKEN)? {
-        Some(value) if value.is_empty() => Err(EnvironmentError::Empty {
-            variable: key::TOKEN,
-        }),
-        Some(value) => Ok(value),
-        None if stage.allows_default_auth() => Ok(default::DEV_AUTH_TOKEN.to_string()),
-        None => Err(EnvironmentError::Required {
-            variable: key::TOKEN,
-            stage,
-        }),
     }
 }
 
@@ -122,7 +146,7 @@ fn is_loopback(host: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::env::{MockEnv, HOST, PORT, STAGE, TOKEN, VERSION};
+    use crate::env::{MockEnv, HOST, PORT, STAGE, VERSION};
 
     #[test]
     fn dev_stage_defaults_when_env_unset() {
@@ -130,7 +154,6 @@ mod tests {
         assert_eq!(config.stage, Stage::Dev);
         assert_eq!(config.bind_host, "127.0.0.1");
         assert_eq!(config.port, 7420);
-        assert_eq!(config.auth_token, "dev-token");
         assert_eq!(config.version, VERSION);
     }
 
@@ -140,25 +163,17 @@ mod tests {
             &MockEnv::new()
                 .set(STAGE, "alpha")
                 .set(HOST, "127.0.0.1")
-                .set(PORT, "8080")
-                .set(TOKEN, "secret"),
+                .set(PORT, "8080"),
         )
         .expect("explicit env");
         assert_eq!(config.stage, Stage::Alpha);
         assert_eq!(config.port, 8080);
-        assert_eq!(config.auth_token, "secret");
     }
 
     #[test]
-    fn alpha_requires_auth_credential() {
-        let error = Environment::load(&MockEnv::new().set(STAGE, "alpha")).unwrap_err();
-        assert_eq!(
-            error,
-            EnvironmentError::Required {
-                variable: TOKEN,
-                stage: Stage::Alpha,
-            }
-        );
+    fn alpha_configuration_uses_local_auth() {
+        let config = Environment::load(&MockEnv::new().set(STAGE, "alpha")).unwrap();
+        assert_eq!(config.stage, Stage::Alpha);
     }
 
     #[test]
@@ -169,13 +184,8 @@ mod tests {
 
     #[test]
     fn alpha_rejects_remote_bind_without_override() {
-        let error = Environment::load(
-            &MockEnv::new()
-                .set(STAGE, "alpha")
-                .set(HOST, "0.0.0.0")
-                .set(TOKEN, "secret"),
-        )
-        .unwrap_err();
+        let error = Environment::load(&MockEnv::new().set(STAGE, "alpha").set(HOST, "0.0.0.0"))
+            .unwrap_err();
         assert!(matches!(error, EnvironmentError::InsecureBind { .. }));
     }
 
@@ -187,8 +197,7 @@ mod tests {
 
     #[test]
     fn dev_rejects_non_loopback_bind() {
-        let error = Environment::load(&MockEnv::new().set(HOST, "0.0.0.0").set(TOKEN, "explicit"))
-            .unwrap_err();
+        let error = Environment::load(&MockEnv::new().set(HOST, "0.0.0.0")).unwrap_err();
         assert!(matches!(error, EnvironmentError::InsecureBind { .. }));
     }
 

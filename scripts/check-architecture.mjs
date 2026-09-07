@@ -49,6 +49,17 @@ for (const file of walk(src)) {
   const text = readFileSync(file, "utf8")
   const path = rel(file)
   const imports = importedPaths(text)
+  const inComposition = path.startsWith("src/composition/")
+  if (
+    !inComposition &&
+    path !== "src/main.tsx" &&
+    path !== "src/store.ts" &&
+    !path.endsWith(".test.ts")
+  ) {
+    if (imports.some((item) => /(?:^|\/)composition(?:\/|$)/.test(item))) {
+      fail(file, "features must not import the composition root")
+    }
+  }
 
   const inConversationRules =
     path.startsWith("src/conversation/model/") ||
@@ -106,6 +117,7 @@ for (const file of walk(src)) {
         /(?:^|\/)conversation$/.test(item) || /(?:^|\/)conversation\/index$/.test(item)
       const slice = /conversation\/adapters\/store\/slice$/.test(item)
       const identity = /conversation\/model$/.test(item)
+      if (inComposition && /\/(?:adapters\/|application\/ports$)/.test(item)) continue
       if (path === "src/store.ts" && slice) continue
       if (path === "src/icon-preview.tsx" && identity) continue
       if (barrel) continue
@@ -120,6 +132,7 @@ for (const file of walk(src)) {
       if (!/(?:^|[./])session(?:\/|$)/.test(item)) continue
       const barrel = /(?:^|\/)session$/.test(item) || /(?:^|\/)session\/index$/.test(item)
       const slice = /session\/adapters\/store\/slice$/.test(item)
+      if (inComposition && /\/(?:adapters\/|application\/ports$)/.test(item)) continue
       if (path === "src/store.ts" && slice) continue
       if (barrel) continue
       fail(file, "other modules import the session barrel, not its internals")

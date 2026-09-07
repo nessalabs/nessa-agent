@@ -8,7 +8,13 @@ import "./styles.css"
 
 import { App } from "./panel"
 import { SessionLifecycle } from "./session"
-import { store } from "./store"
+import { makeStore } from "./store"
+import { createDependencies } from "./composition/dependencies"
+
+import { environmentFromVite } from "./env/vite"
+
+const dependencies = createDependencies({ environment: environmentFromVite() })
+const store = makeStore(dependencies)
 
 const container = document.getElementById("root")
 if (!container) throw new Error("missing #root")
@@ -17,7 +23,7 @@ createRoot(container).render(
   <React.StrictMode>
     <Provider store={store}>
       <App />
-      <SessionLifecycle />
+      {dependencies.usesLocalSession && <SessionLifecycle dependencies={dependencies} />}
     </Provider>
   </React.StrictMode>,
 )

@@ -1,0 +1,39 @@
+{
+  "SessionChallenge": {
+    "minVersion": 1,
+    "maxVersion": 1,
+    "nonce": "fixture-nonce",
+    "expiresAt": 200
+  },
+  "SessionAuthenticateParams": {
+    "minVersion": 1,
+    "maxVersion": 1,
+    "nonce": "fixture-nonce",
+    "credential": "synthetic-test-credential",
+    "client": {
+      "id": "fixture"
+    }
+  },
+  "ProductSessionReady": {
+    "version": 1,
+    "gatewayId": "gateway",
+    "principalId": "owner",
+    "organizationId": "personal",
+    "membershipId": "member",
+    "credentialId": "owner-credential",
+    "audienceId": "gateway",
+    "expiresAt": 200,
+    "grants": [],
+    "methods": ["server.health"]
+  },
+  "CredentialRevokeParams": {
+    "requestId": "revoke-1",
+    "credentialId": "reader-1"
+  },
+  "CredentialListParams": {},
+  "SessionTermination": {
+    "code": "gateway_overloaded",
+    "retryable": true,
+    "retryAfterMs": 1500
+  }
+}

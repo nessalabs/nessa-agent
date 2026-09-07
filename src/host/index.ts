@@ -9,6 +9,8 @@
 export type { CompositorKind } from "./features"
 export { host } from "./resolve"
 export {
+  hasNativeHost,
+  loadAssignedSurfaceCredential,
   flushCompositor,
   onFocusComposer,
   onLiveResize,

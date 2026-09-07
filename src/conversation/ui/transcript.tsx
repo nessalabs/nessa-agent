@@ -62,9 +62,7 @@ export function Transcript({
             animateMount={animateMount}
           />
         ))}
-        {conversation.phase === "thinking" ? (
-          <Thinking motion={animateMount} />
-        ) : null}
+        {conversation.phase === "thinking" ? <Thinking motion={animateMount} /> : null}
       </div>
     </div>
   )

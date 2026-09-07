@@ -4,61 +4,119 @@
   "$defs": {
     "ClientRole": {
       "type": "string",
-      "enum": ["surface"]
+      "enum": [
+        "surface"
+      ],
+      "description": "Caller role metadata; authorization comes from the credential and membership."
     },
     "Scope": {
       "type": "string",
-      "enum": ["server.read"]
+      "enum": [
+        "server.read"
+      ],
+      "description": "Shared server-read scope name. Product grants carry exact actions and resources."
     },
     "SurfaceKind": {
       "type": "string",
-      "enum": ["panel", "web", "desktop", "cli"]
+      "enum": [
+        "panel",
+        "web",
+        "desktop",
+        "cli"
+      ],
+      "description": "Kinds of surfaces that can describe a connection."
     },
     "RuntimeStatus": {
       "type": "string",
-      "enum": ["ready", "starting", "unavailable", "error"]
+      "enum": [
+        "ready",
+        "starting",
+        "unavailable",
+        "error"
+      ],
+      "description": "Server-reported runtime availability states."
     },
     "SurfaceInfo": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "instance"],
+      "required": [
+        "kind",
+        "instance"
+      ],
       "properties": {
-        "kind": { "$ref": "#/$defs/SurfaceKind" },
-        "instance": { "type": "string", "minLength": 1 }
-      }
+        "kind": {
+          "$ref": "#/$defs/SurfaceKind",
+          "description": "Kind of user-facing surface."
+        },
+        "instance": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identifier distinguishing instances of this surface."
+        }
+      },
+      "description": "Describes the connecting UI or CLI; verified identity comes from its credential."
     },
     "ClientInfo": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "version", "platform"],
+      "required": [
+        "id",
+        "version",
+        "platform"
+      ],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "version": { "type": "string", "minLength": 1 },
-        "platform": { "type": "string", "minLength": 1 }
-      }
-    },
-    "AuthToken": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["token", "nonce"],
-      "properties": {
-        "token": { "type": "string", "minLength": 1 },
-        "nonce": {
+        "id": {
           "type": "string",
           "minLength": 1,
-          "description": "Echo of connect.challenge nonce — binds this connect RPC to the open socket."
+          "description": "Client application or instance identifier."
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Client software version."
+        },
+        "platform": {
+          "$ref": "#/$defs/ClientPlatform",
+          "description": "Runtime or host platform. Use other when none applies."
         }
-      }
+      },
+      "description": "Application metadata supplied when connecting. The product handshake sends only id."
     },
     "GatewayError": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["code", "message"],
+      "required": [
+        "code",
+        "message"
+      ],
       "properties": {
-        "code": { "type": "string", "minLength": 1 },
-        "message": { "type": "string" },
-        "details": {}
-      }
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Machine-readable error identifier."
+        },
+        "message": {
+          "type": "string",
+          "description": "Server-provided explanation of the rejection."
+        },
+        "details": {
+          "description": "Optional structured context; its shape depends on the error code.",
+          "tsType": "unknown"
+        }
+      },
+      "description": "Structured server rejection carried by a response frame and exposed as NessaRpcError."
+    },
+    "ClientPlatform": {
+      "type": "string",
+      "description": "Runtime and host platform identifiers used in client metadata.",
+      "enum": [
+        "node",
+        "browser",
+        "macos",
+        "linux",
+        "windows",
+        "other"
+      ]
     }
   }
 }

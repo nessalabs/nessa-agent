@@ -17,7 +17,9 @@ pub fn run() -> std::process::ExitCode {
         }
     };
 
-    match runtime.block_on(CompositionRoot::serve()) {
+    match runtime.block_on(CompositionRoot::run(
+        &std::env::args().skip(1).collect::<Vec<_>>(),
+    )) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => error.report(),
     }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { NessaRpcError } from "../application/rpc-error.js"
+import { NessaConnectionClosedError } from "../application/connection-closed-error.js"
 import { WireSession } from "./wire-session.js"
 
 describe("WireSession", () => {
@@ -75,5 +76,24 @@ describe("WireSession", () => {
       code: "unauthorized",
       message: "invalid auth token",
     })
+  })
+
+  it("rejects every pending request with the typed close code and reason", async () => {
+    const socket = {
+      readyState: 1,
+      send: () => {},
+      addEventListener: () => {},
+      close: () => {},
+    } as unknown as WebSocket
+    const session = new WireSession(socket)
+    const first = session.request("server.health", {})
+    const second = session.request("credential.list", {})
+
+    session.dispatchClose(4001, "unauthorized")
+
+    for (const pending of [first, second]) {
+      await expect(pending).rejects.toBeInstanceOf(NessaConnectionClosedError)
+      await expect(pending).rejects.toMatchObject({ code: 4001, reason: "unauthorized" })
+    }
   })
 })

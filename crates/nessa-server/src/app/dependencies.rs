@@ -7,6 +7,20 @@ pub struct RuntimeDependencies {
     pub clock: Arc<dyn Clock>,
 }
 
+impl RuntimeDependencies {
+    pub fn fixed_uptime(milliseconds: u64) -> Self {
+        Self {
+            clock: Arc::new(FixedClock(milliseconds)),
+        }
+    }
+}
+struct FixedClock(u64);
+impl Clock for FixedClock {
+    fn elapsed_ms(&self) -> u64 {
+        self.0
+    }
+}
+
 impl Default for RuntimeDependencies {
     fn default() -> Self {
         Self {

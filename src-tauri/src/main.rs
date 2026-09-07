@@ -8,6 +8,7 @@ mod platform;
 mod settings;
 mod shortcut;
 mod shortcuts;
+mod surface_credential;
 mod tray;
 
 use std::sync::Mutex;
@@ -25,10 +26,12 @@ fn main() {
             platform::set_frosted,
             platform::panel_size,
             platform::flush_compositor,
+            surface_credential::load_surface_credential,
             shortcuts::load_shortcuts,
             shortcuts::apply_shortcuts,
         ])
         .setup(|app| {
+            app.manage(surface_credential::SurfaceCredential::from_environment());
             platform::current().configure_app(app.handle());
 
             // A missing tray is survivable. On Linux especially, GNOME without

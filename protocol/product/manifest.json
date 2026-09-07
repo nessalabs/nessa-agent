@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "path": "/session",
+  "methods": {
+    "session.authenticate": "SessionAuthenticateParams",
+    "auth.session": null,
+    "server.health": null,
+    "credential.issue": "CredentialIssueParams",
+    "credential.list": null,
+    "credential.revoke": "CredentialRevokeParams",
+    "conversation.echo": null
+  },
+  "events": {
+    "session.challenge": "SessionChallenge"
+  }
+}

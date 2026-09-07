@@ -99,7 +99,7 @@ Ready:
   pnpm app
 
 Local data for this worktree lands under the app config dir at
-dev-\$NESSA_INSTANCE (see docs/adr/0005-stage-scoped-local-data.md).
+dev-\$NESSA_INSTANCE (see docs/adr/done/0005-stage-scoped-local-data.md).
 
 EOF
 }

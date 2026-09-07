@@ -11,16 +11,12 @@
  */
 
 export const Method = {
-  Connect: "connect",
   ConversationEcho: "conversation.echo",
   ServerHealth: "server.health",
-  ServerPing: "server.ping",
 } as const
 
 export type MethodName = (typeof Method)[keyof typeof Method]
 
-export const Event = {
-  ConnectChallenge: "connect.challenge",
-} as const
+export const Event = {} as const
 
 export type EventName = (typeof Event)[keyof typeof Event]

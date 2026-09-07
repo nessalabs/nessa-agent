@@ -33,11 +33,6 @@ impl Stage {
             Self::Prod => "prod",
         }
     }
-
-    /// Only local dev may start without an explicit auth credential in env.
-    pub fn allows_default_auth(self) -> bool {
-        matches!(self, Self::Dev)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,16 +49,3 @@ impl fmt::Display for InvalidStage {
 }
 
 impl std::error::Error for InvalidStage {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_dev_allows_default_auth() {
-        assert!(Stage::Dev.allows_default_auth());
-        assert!(!Stage::Alpha.allows_default_auth());
-        assert!(!Stage::Ci.allows_default_auth());
-        assert!(!Stage::Prod.allows_default_auth());
-    }
-}

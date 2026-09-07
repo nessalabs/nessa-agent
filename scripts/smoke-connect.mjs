@@ -2,14 +2,42 @@
 /**
  * End-to-end smoke: Rust nessa-server + @nessa/client connect + server.health.
  */
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const port = 19_421
-const token = "smoke-token"
+const directory = mkdtempSync(join(tmpdir(), "nessa-session-smoke-"))
+const serverEnv = {
+  ...process.env,
+  NESSA_STAGE: "ci",
+  NESSA_PORT: String(port),
+  NESSA_DATA_DIR: directory,
+  NESSA_INSTANCE: "session-smoke",
+}
+const init = spawnSync(
+  "cargo",
+  [
+    "run",
+    "-q",
+    "-p",
+    "nessa-server",
+    "--",
+    "auth",
+    "init",
+    "--owner-token-file",
+    join(directory, "owner.token"),
+  ],
+  { cwd: root, env: serverEnv, encoding: "utf8" },
+)
+if (init.status !== 0) {
+  rmSync(directory, { recursive: true, force: true })
+  throw new Error(`local smoke bootstrap failed: ${init.stderr}`)
+}
 
 async function waitForHealth(url, attempts = 40) {
   for (let i = 0; i < attempts; i += 1) {
@@ -26,12 +54,7 @@ async function waitForHealth(url, attempts = 40) {
 
 const server = spawn("cargo", ["run", "-q", "-p", "nessa-server"], {
   cwd: root,
-  env: {
-    ...process.env,
-    NESSA_STAGE: "ci",
-    NESSA_PORT: String(port),
-    NESSA_TOKEN: token,
-  },
+  env: serverEnv,
   stdio: ["ignore", "pipe", "pipe"],
 })
 
@@ -48,7 +71,8 @@ try {
     role: "surface",
     surface: { kind: "panel", instance: "smoke" },
     client: { id: "smoke", version: "0.1.0", platform: "node" },
-    auth: { token },
+    profile: "product",
+    auth: { credential: readFileSync(join(directory, "owner.token"), "utf8").trim() },
   })
 
   const health = await client.server.health()
@@ -63,7 +87,9 @@ try {
   console.error("smoke-connect failed:", error instanceof Error ? error.message : error)
 } finally {
   server.kill("SIGTERM")
-  await new Promise((resolve) => server.once("exit", resolve))
+  if (server.exitCode === null)
+    await new Promise((resolve) => server.once("exit", resolve))
+  rmSync(directory, { recursive: true, force: true })
 }
 
 process.exit(failed ? 1 : 0)

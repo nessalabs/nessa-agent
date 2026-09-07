@@ -5,44 +5,117 @@
     "ReqFrame": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "id", "method", "params"],
+      "required": [
+        "type",
+        "id",
+        "method",
+        "params"
+      ],
       "properties": {
-        "type": { "const": "req" },
-        "id": { "type": "string", "minLength": 1 },
-        "method": { "type": "string", "minLength": 1 },
-        "params": {}
-      }
+        "type": {
+          "const": "req",
+          "description": "Request frame discriminator."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Correlation identifier echoed by the response."
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Registered RPC method name."
+        },
+        "params": {
+          "description": "Method-specific request payload.",
+          "tsType": "unknown"
+        }
+      },
+      "description": "Low-level RPC envelope. SDK API methods create these frames and correlate responses by id."
     },
     "ResFrame": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "id", "ok"],
+      "required": [
+        "type",
+        "id",
+        "ok"
+      ],
       "properties": {
-        "type": { "const": "res" },
-        "id": { "type": "string", "minLength": 1 },
-        "ok": { "type": "boolean" },
-        "payload": {},
-        "error": { "$ref": "common.json#/$defs/GatewayError" }
-      }
+        "type": {
+          "const": "res",
+          "description": "Response frame discriminator."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identifier of the request being answered."
+        },
+        "ok": {
+          "type": "boolean",
+          "description": "Whether the operation succeeded."
+        },
+        "payload": {
+          "description": "Method-specific result on success.",
+          "tsType": "unknown"
+        },
+        "error": {
+          "$ref": "common.json#/$defs/GatewayError",
+          "description": "Structured rejection on failure."
+        }
+      },
+      "description": "RPC response envelope matched to a pending request. Failed responses become NessaRpcError."
     },
     "EventFrame": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "event", "payload", "seq", "stateVersion"],
+      "required": [
+        "type",
+        "event",
+        "payload",
+        "seq",
+        "stateVersion"
+      ],
       "properties": {
-        "type": { "const": "event" },
-        "event": { "type": "string", "minLength": 1 },
-        "payload": {},
-        "seq": { "type": "integer", "minimum": 0 },
-        "stateVersion": { "type": "integer", "minimum": 0 }
-      }
+        "type": {
+          "const": "event",
+          "description": "Event frame discriminator."
+        },
+        "event": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Protocol event name."
+        },
+        "payload": {
+          "description": "Event-specific data.",
+          "tsType": "unknown"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Server event sequence number."
+        },
+        "stateVersion": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Server state version associated with the event."
+        }
+      },
+      "description": "Unsolicited protocol event delivered to matching client.on subscribers."
     },
     "Frame": {
       "oneOf": [
-        { "$ref": "#/$defs/ReqFrame" },
-        { "$ref": "#/$defs/ResFrame" },
-        { "$ref": "#/$defs/EventFrame" }
-      ]
+        {
+          "$ref": "#/$defs/ReqFrame"
+        },
+        {
+          "$ref": "#/$defs/ResFrame"
+        },
+        {
+          "$ref": "#/$defs/EventFrame"
+        }
+      ],
+      "description": "Union of request, response, and event envelopes. Narrow on type before reading frame-specific fields."
     }
   }
 }

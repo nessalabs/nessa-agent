@@ -1,0 +1,21 @@
+[package]
+name = "nessa-auth"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.89"
+description = "Provider-neutral identity and access contracts for Nessa"
+publish = false
+
+[dependencies]
+nessa-local-storage = { path = "../nessa-local-storage" }
+serde = { version = "1", features = ["derive"] }
+
+serde_json = "1"
+cedar-policy = { version = "=4.12.0", default-features = false }
+base64 = "0.22"
+fs2 = "0.4"
+getrandom = "0.3"
+sha2 = "0.10"
+subtle = "2.6"
+tempfile = "3"
+libc = "0.2"

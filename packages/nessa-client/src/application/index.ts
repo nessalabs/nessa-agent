@@ -8,23 +8,29 @@
  * waitForConnectChallenge(session)
  *      │
  *      ▼
- * runConnectHandshake(session, options) ──► HelloOk
+ * runProductHandshake(session, options) ──► ProductSessionReady
  * ```
  */
-export { runConnectHandshake, waitForConnectChallenge } from "./connect-flow.js"
 export type { EventHandler, NessaClientEvents } from "./events.js"
-export type { NessaClientConnectOptions } from "./options.js"
+export type { NessaClientConnectOptions, ProductConnectOptions } from "./options.js"
 export {
   isLoopbackWebSocketUrl,
   resolveConnectOptions,
+  type ResolvedProductConnectOptions,
   type ResolvedConnectOptions,
 } from "./resolve-options.js"
 export { NessaRpcError } from "./rpc-error.js"
+export { NessaConnectionClosedError } from "./connection-closed-error.js"
 export {
-  DEV_AUTH_TOKEN,
   isStage,
-  stageAllowsDefaultAuth,
+  stageAllowsDefaultUrl,
   StageConfigError,
   STAGES,
-  type Stage,
+  Stage,
 } from "./stage.js"
+
+export { NessaProtocolCompatibilityError } from "./protocol-compatibility-error.js"
+
+export type { ProductConnectRetryOptions } from "./connect-retry.js"
+
+export { NessaClientConfig, type NessaClientConfigOptions } from "./client-config.js"

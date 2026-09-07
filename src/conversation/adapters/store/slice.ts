@@ -1,12 +1,8 @@
 import { createAsyncThunk, createSlice, type PayloadAction } from "@reduxjs/toolkit"
 
 import { emptyLocalTabs } from "../../application/local-tabs"
-import {
-  beginSend,
-  completeEcho,
-  failSend,
-} from "../../application/usecases/send-draft"
-import { getSessionClient } from "../../../session"
+import { beginSend, completeEcho, failSend } from "../../application/usecases/send-draft"
+import type { ConversationEffects } from "../../application/ports"
 import { localConversationGateway as gateway } from "../gateway/local"
 
 export type SendDraftArg = {
@@ -14,25 +10,21 @@ export type SendDraftArg = {
   id?: string
 }
 
-export const sendDraft = createAsyncThunk(
-  "conversation/sendDraft",
-  async (input: SendDraftArg, { rejectWithValue }) => {
-    const text = input.text.trim()
-    if (!text) {
-      return rejectWithValue("empty draft")
-    }
+export const sendDraft = createAsyncThunk<
+  { text: string },
+  SendDraftArg,
+  { extra: { conversation: ConversationEffects }; rejectValue: string }
+>("conversation/sendDraft", async (input: SendDraftArg, { rejectWithValue, extra }) => {
+  const text = input.text.trim()
+  if (!text) {
+    return rejectWithValue("empty draft")
+  }
 
-    const client = getSessionClient()
-    if (!client) {
-      return rejectWithValue("not connected")
-    }
-
-    const result = await client.conversation.echo(text)
-    return {
-      text: result.text,
-    }
-  },
-)
+  const result = await extra.conversation.echo(text)
+  return {
+    text: result.text,
+  }
+})
 
 const conversationSlice = createSlice({
   name: "conversation",
@@ -73,9 +65,7 @@ const conversationSlice = createSlice({
         if (action.payload === "empty draft") return state
         const id = action.meta.arg.id ?? state.activeId
         const detail =
-          typeof action.payload === "string"
-            ? action.payload
-            : action.error.message
+          typeof action.payload === "string" ? action.payload : action.error.message
         return failSend(state, id, detail)
       })
   },

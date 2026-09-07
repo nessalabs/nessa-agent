@@ -1,0 +1,639 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "nessa://protocol/product/v1",
+  "title": "NessaProductProtocol",
+  "$defs": {
+    "SessionChallenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minVersion": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Lowest protocol version accepted by the gateway."
+        },
+        "maxVersion": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Highest protocol version accepted by the gateway."
+        },
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Single-handshake challenge value to return unchanged when authenticating."
+        },
+        "expiresAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Challenge expiry as Unix seconds."
+        }
+      },
+      "required": [
+        "minVersion",
+        "maxVersion",
+        "nonce",
+        "expiresAt"
+      ],
+      "description": "Server challenge received before authentication. The SDK checks version overlap, then returns the nonce with credential evidence; callers normally use NessaClient.connect instead of building this payload."
+    },
+    "ProductClientMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Identifier of the connecting client application or instance."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "description": "Caller identification sent during the product handshake. This metadata does not grant permissions."
+    },
+    "SessionAuthenticateParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minVersion": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Lowest protocol version supported by this client."
+        },
+        "maxVersion": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Highest protocol version supported by this client."
+        },
+        "nonce": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Nonce from the current SessionChallenge; a reconnect obtains a new one."
+        },
+        "credential": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384,
+          "description": "Opaque secret credential evidence. Send only during authentication; do not log it."
+        },
+        "client": {
+          "$ref": "#/$defs/ProductClientMetadata",
+          "description": "Descriptive client metadata, separate from authenticated identity."
+        }
+      },
+      "required": [
+        "minVersion",
+        "maxVersion",
+        "nonce",
+        "credential",
+        "client"
+      ],
+      "description": "Wire request for session.authenticate. NessaClient.connect builds this after validating the server challenge; a successful response is ProductSessionReady."
+    },
+    "ProductSessionReady": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1,
+          "description": "Negotiated product protocol version."
+        },
+        "gatewayId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Identifier of the connected gateway."
+        },
+        "principalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Authenticated human, integration, or agent identity."
+        },
+        "organizationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Organization in which this session operates."
+        },
+        "membershipId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Membership connecting the principal to this organization."
+        },
+        "credentialId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Credential used to authenticate this connection."
+        },
+        "audienceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Gateway audience to which the credential is bound."
+        },
+        "expiresAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Exclusive Unix seconds, or null for no expiry."
+        },
+        "grants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProductGrant"
+          },
+          "maxItems": 16,
+          "description": "Current credential restrictions; not permanent authorization."
+        },
+        "methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 16,
+          "description": "Registered product methods; permission is checked for every command."
+        }
+      },
+      "required": [
+        "version",
+        "gatewayId",
+        "principalId",
+        "organizationId",
+        "membershipId",
+        "credentialId",
+        "audienceId",
+        "expiresAt",
+        "grants",
+        "methods"
+      ],
+      "description": "Authenticated connection snapshot returned by the product handshake and auth.session(). Links the principal, organization membership, credential, and gateway. It describes current restrictions; the server checks current authorization again for every command."
+    },
+    "ProductPrincipal": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Stable identifier for this identity."
+        },
+        "kind": {
+          "$ref": "#/$defs/PrincipalKind",
+          "description": "Category of actor; this alone does not grant access."
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "x-rust-type": "nessa_auth::application::dto::PrincipalInputDto",
+      "description": "Identity that acts in the product: a human, integration, or agent. A principal needs an active organization membership and an appropriate credential to access the gateway."
+    },
+    "ProductMembership": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Stable identifier of this membership."
+        },
+        "principalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Principal associated with the membership."
+        },
+        "organizationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Organization the principal belongs to."
+        },
+        "role": {
+          "$ref": "#/$defs/MembershipRole",
+          "description": "Organization role evaluated by authorization policy."
+        },
+        "state": {
+          "$ref": "#/$defs/MembershipState",
+          "description": "Whether the membership is active or disabled."
+        }
+      },
+      "required": [
+        "id",
+        "principalId",
+        "organizationId",
+        "role",
+        "state"
+      ],
+      "x-rust-type": "nessa_auth::application::dto::MembershipInputDto",
+      "description": "Relationship between a principal and an organization. The role participates in authorization and disabled membership prevents access."
+    },
+    "ProductResource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "organizationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Organization owning the resource; must match the credential organization."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Resource identifier, such as the gateway ID for server operations."
+        }
+      },
+      "required": [
+        "organizationId",
+        "id"
+      ],
+      "x-rust-type": "nessa_auth::application::dto::ResourceDto",
+      "description": "Organization-scoped authorization target used by ProductGrant. The gateway resolves the actual resource for each operation before checking policy."
+    },
+    "ProductGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Authorization action, for example server.read. This is a policy action rather than an RPC method name such as server.health."
+        },
+        "resource": {
+          "$ref": "#/$defs/ProductResource",
+          "description": "Exact organization-scoped target on which this action is requested."
+        }
+      },
+      "required": [
+        "action",
+        "resource"
+      ],
+      "x-rust-type": "nessa_auth::application::dto::CredentialGrantDto",
+      "description": "One action/resource restriction on a credential. Used in credential issuance, credential metadata, and authenticated session snapshots. A grant is not a standalone permission: current membership and server policy must also allow the operation.\n\nFor example, { action: \"server.read\", resource: { organizationId: \"personal\", id: \"gateway\" } } scopes server-read access to that gateway; use the actual organization and gateway identifiers from your installation."
+    },
+    "ProductCredentialMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Identifier used to revoke this credential."
+        },
+        "principalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Identity authenticated by the credential."
+        },
+        "organizationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Organization in which the credential applies."
+        },
+        "audienceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Gateway audience allowed to accept this credential."
+        },
+        "issuedAt": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Creation time in Unix seconds."
+        },
+        "expiresAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Exclusive Unix seconds, or null for no expiry."
+        },
+        "revokedAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Revocation time in Unix seconds, or null if not revoked."
+        },
+        "grants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProductGrant"
+          },
+          "maxItems": 16,
+          "description": "Action/resource restrictions evaluated along with current server policy."
+        }
+      },
+      "required": [
+        "id",
+        "principalId",
+        "organizationId",
+        "audienceId",
+        "issuedAt",
+        "expiresAt",
+        "revokedAt",
+        "grants"
+      ],
+      "x-rust-type": "nessa_auth::application::dto::CredentialMetadataDto",
+      "description": "Non-secret description of a credential returned by issue and list operations. Describes who it authenticates, its gateway audience, lifetime, and grant restrictions; it cannot itself authenticate a connection."
+    },
+    "CredentialIssueParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Idempotency key identifying this issuance operation."
+        },
+        "principal": {
+          "$ref": "#/$defs/ProductPrincipal",
+          "description": "Identity the new credential will authenticate."
+        },
+        "membership": {
+          "$ref": "#/$defs/ProductMembership",
+          "description": "Organization membership associated with that principal."
+        },
+        "expiresAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Exclusive Unix seconds, or null for no expiry."
+        },
+        "grants": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProductGrant"
+          },
+          "minItems": 1,
+          "maxItems": 16,
+          "description": "Requested action/resource restrictions; at least one is required."
+        }
+      },
+      "required": [
+        "requestId",
+        "principal",
+        "membership",
+        "grants"
+      ],
+      "description": "Wire input for issuing a scoped credential. Prefer client.credentials.issue, whose IssueCredentialParams allows the SDK to generate requestId. Reuse the same ID and inputs when explicitly retrying an uncertain result."
+    },
+    "CredentialListParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "required": [],
+      "description": "Empty wire input for credential.list. The SDK list() method supplies this object."
+    },
+    "CredentialRevokeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Idempotency key to reuse for retries of this revocation."
+        },
+        "credentialId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Identifier of the credential to revoke."
+        }
+      },
+      "required": [
+        "requestId",
+        "credentialId"
+      ],
+      "description": "Wire input for credential.revoke. Prefer client.credentials.revoke to generate and preserve the request ID."
+    },
+    "IssuedCredentialResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "credential": {
+          "$ref": "#/$defs/ProductCredentialMetadata",
+          "description": "Non-secret metadata for the issued credential."
+        },
+        "secret": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384,
+          "description": "One-time credential evidence accepted by product connect auth. It is not replayed on a duplicate request."
+        }
+      },
+      "required": [
+        "credential",
+        "secret"
+      ],
+      "description": "First successful issuance response. Contains secret evidence only once; keep it in private storage before discarding the result."
+    },
+    "ExistingCredentialResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "credential": {
+          "$ref": "#/$defs/ProductCredentialMetadata",
+          "description": "Metadata for the previously issued credential."
+        },
+        "secretUnavailable": {
+          "type": "boolean",
+          "const": true,
+          "description": "Always true: this response does not contain a usable secret."
+        }
+      },
+      "required": [
+        "credential",
+        "secretUnavailable"
+      ],
+      "description": "Response when the issuance request ID already completed. Metadata is returned, but the original secret cannot be recovered by retrying."
+    },
+    "CredentialListResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "credentials": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ProductCredentialMetadata"
+          },
+          "maxItems": 1000,
+          "description": "Non-secret credential records returned by the gateway."
+        }
+      },
+      "required": [
+        "credentials"
+      ],
+      "description": "Credentials visible to the authorized caller, without secret evidence."
+    },
+    "CredentialRevokeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "credentialId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Identifier of the revoked credential."
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Authorization-state revision returned by the mutation."
+        }
+      },
+      "required": [
+        "credentialId",
+        "revision"
+      ],
+      "description": "Acknowledgement of a credential revocation."
+    },
+    "SessionCloseReason": {
+      "type": "string",
+      "enum": [
+        "authentication_failed",
+        "credential_revoked",
+        "credential_expired",
+        "authorization_lost",
+        "protocol_incompatible",
+        "handshake_timeout",
+        "temporary_unavailable",
+        "gateway_restarting",
+        "gateway_overloaded",
+        "server_shutdown",
+        "transport_interrupted"
+      ],
+      "x-close-policy": {
+        "authentication_failed": {
+          "webSocketCode": 4001,
+          "retryable": false
+        },
+        "credential_revoked": {
+          "webSocketCode": 4002,
+          "retryable": false
+        },
+        "credential_expired": {
+          "webSocketCode": 4003,
+          "retryable": false
+        },
+        "authorization_lost": {
+          "webSocketCode": 4004,
+          "retryable": false
+        },
+        "protocol_incompatible": {
+          "webSocketCode": 4005,
+          "retryable": false
+        },
+        "handshake_timeout": {
+          "webSocketCode": 4006,
+          "retryable": true
+        },
+        "temporary_unavailable": {
+          "webSocketCode": 4010,
+          "retryable": true
+        },
+        "gateway_restarting": {
+          "webSocketCode": 1012,
+          "retryable": true
+        },
+        "gateway_overloaded": {
+          "webSocketCode": 1013,
+          "retryable": true
+        },
+        "server_shutdown": {
+          "webSocketCode": 1000,
+          "retryable": false
+        },
+        "transport_interrupted": {
+          "webSocketCode": 1006,
+          "retryable": true
+        }
+      },
+      "description": "Product session termination reasons used to determine whether connection recovery is allowed. Revocation, expiry, authorization loss, and incompatible protocols are terminal; transient transport and gateway failures may retry."
+    },
+    "PrincipalKind": {
+      "type": "string",
+      "enum": [
+        "human",
+        "integration",
+        "agent"
+      ],
+      "description": "Supported categories of authenticated actors: human users, integrations, and agents."
+    },
+    "MembershipRole": {
+      "type": "string",
+      "enum": [
+        "admin",
+        "member"
+      ],
+      "description": "Organization roles understood by product authorization policy."
+    },
+    "MembershipState": {
+      "type": "string",
+      "enum": [
+        "active",
+        "disabled"
+      ],
+      "description": "Membership availability. Disabled membership prevents access even when credential evidence is valid."
+    },
+    "SessionTermination": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/SessionCloseReason",
+          "description": "Product reason corresponding to the WebSocket close code."
+        },
+        "retryable": {
+          "type": "boolean",
+          "description": "Whether the reason permits connection recovery; cannot override numeric-code policy."
+        },
+        "retryAfterMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60000,
+          "description": "Optional server delay hint in milliseconds, bounded to 60,000."
+        }
+      },
+      "required": [
+        "code",
+        "retryable"
+      ],
+      "description": "Structured WebSocket close reason. The SDK derives retry policy from the numeric close code and accepts matching, bounded server delay hints."
+    }
+  }
+}

@@ -1,7 +1,11 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
 
-import { makeStore } from "../../../store"
-import { setSessionClient } from "../../../session/adapters/client/handle"
+import { makeStore as buildStore } from "../../../store"
+import { createDependencies } from "../../../composition/dependencies"
+let dependencies = createDependencies()
+const makeStore = () => buildStore(dependencies)
+const setSessionClient: typeof dependencies.session.set = (client) =>
+  dependencies.session.set(client)
 import {
   closeConversation,
   openConversation,
@@ -30,7 +34,7 @@ function agent(store: ReturnType<typeof makeStore>) {
 
 describe("conversation tabs store", () => {
   beforeEach(() => {
-    setSessionClient(null)
+    dependencies = createDependencies()
   })
   afterEach(() => {
     setSessionClient(null)
@@ -119,9 +123,7 @@ describe("conversation tabs store", () => {
     expect(first!.draft).toBe("hello from the store")
     expect(second!.draft).toBe("second tab")
     run.activate("c0")
-    const open = run
-      .tabs()
-      .conversations.find((item) => item.id === run.tabs().activeId)
+    const open = run.tabs().conversations.find((item) => item.id === run.tabs().activeId)
     expect(open!.draft).toBe("hello from the store")
   })
 })
