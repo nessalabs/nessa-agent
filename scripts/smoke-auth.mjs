@@ -135,7 +135,9 @@ try {
   const writeConfig = async (config) => {
     const json = JSON.stringify(config)
     if (process.platform === "win32") {
-      if (!existsSync(configPath)) await windowsPrivateFile("reserve", configPath)
+      // This adapter deliberately writes once. Each offline fixture gets a new file.
+      rmSync(configPath, { force: true })
+      await windowsPrivateFile("reserve", configPath)
       await windowsPrivateFile("write", configPath, json)
     } else {
       writeFileSync(configPath, json, { mode: 0o600 })
