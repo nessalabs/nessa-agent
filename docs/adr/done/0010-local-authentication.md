@@ -3,7 +3,7 @@
 - **Date:** 2026-09-06
 - **Status:** accepted and implemented for the local library, gateway, SDK, and command-line tool.
 - **Part of:** [ADR 0007 — session protocol](../todo/0007-nessa-session-protocol-and-authorities.md).
-- **Still to do:** [ADR 0011 — authentication delivery](../todo/0011-authentication-delivery.md).
+- **Still to do:** [ADR 0011 — remaining local auth workflows](../todo/0011-authentication-delivery.md).
 
 ## What we decided
 
@@ -519,9 +519,9 @@ Current limits:
   current SID and LocalSystem. Gateway and native desktop adapters share
   `nessa-local-storage`; the Node adapter uses a Windows PowerShell Win32 bridge.
   Existing unsafe permissions, reparse points, and hard-linked files are rejected.
-  macOS runtime checks pass and the Windows storage crate cross-compiles. Windows
-  and Linux runtime validation is delegated to the checked-in platform CI workflow;
-  its results are still required for release validation. Windows uses flushed files
+  Windows, Linux, and macOS runtime checks passed in the
+  [platform CI run](https://github.com/nessalabs/nessa-agent/actions/runs/34085966204),
+  including Windows native and Node credential loading. Windows uses flushed files
   and write-through replacement, without claiming Unix directory-fsync semantics.
 
 Rust tests cover identity, permissions, storage, and gateway behavior.

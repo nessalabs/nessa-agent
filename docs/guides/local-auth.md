@@ -209,12 +209,11 @@ directory-fsync or universal power-loss guarantees. Token output is flushed befo
 success is reported. OS administrators and processes running as the same account
 remain outside the separation provided by these files.
 
-The macOS checks and full gateway/SDK lifecycle pass locally. The Windows storage
-crate and its tests cross-compile with Clippy, but Windows execution has not been
-validated on this macOS host. `.github/workflows/local-auth.yml` runs Rust tests,
-ACL rejection tests, and the real gateway/SDK lifecycle on Windows, Linux, and
-macOS. Windows and Linux runner results are required before claiming release
-validation.
+The full gateway/SDK lifecycle passes on Windows, Linux, and macOS in the
+[platform CI run](https://github.com/nessalabs/nessa-agent/actions/runs/34085966204).
+That run also covers native Windows credential loading and Node ACL rejection
+checks. `.github/workflows/local-auth.yml` keeps these checks on subsequent changes;
+consult the latest PR checks for the current revision's status.
 
 The implementation follows Microsoft's [file security API](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights)
 and [handle-based security inspection](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-getsecurityinfo).
