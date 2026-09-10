@@ -58,7 +58,7 @@ All attached surfaces see committed prompts, collaboration messages, turn state,
 and approval resolutions. Drafts, selected tab, scroll, and local read markers
 remain per surface in v1; they do not overwrite another surface. Owner-authorized
 surfaces may submit/control turns concurrently, but the coordinator serializes
-commands, enforces one active turn, and arbitrates approval races. Same command ID
+commands, enforces one active turn, and arbitrates approval races. Same `requestId`
 retries share a receipt; identical text under different IDs is not deduplicated.
 A surface reconciles its optimistic message with the committed ID instead of
 rendering an echo twice. “Handoff to desktop” means attach plus navigation; it
@@ -148,7 +148,7 @@ credentials until the new principal/grant checks are implemented.
 
 ## Message ingress, attribution, and receipts
 
-`conversation.message` accepts a stable `commandId`, target conversation, body,
+`conversation.message` accepts a stable `requestId`, target conversation, body,
 optional `replyToMessageId`, and delivery intent (`record_only`, `next_turn`, or
 `start_if_idle`). The body is bounded, versioned text in v1; rich attachments need
 a separate contract. The sender supplies no trusted author identity. Gateway
@@ -211,7 +211,7 @@ write to a socket as “read by agent.” A separate recipient response/explicit
 acknowledgement is required to claim a reply or application-level consumption;
 no inference from an open UI. Uncertain provider delivery after a crash is marked
 unknown with its interrupted attempt, not automatically redelivered into a new
-turn. Owner review can explicitly resubmit with a new command ID.
+turn. Owner review can explicitly resubmit with a new `requestId`.
 
 Inbox size, message size, sender rate, and pending-message lifetime are bounded
 by advertised gateway policy. Reject before acceptance if over quota; expire

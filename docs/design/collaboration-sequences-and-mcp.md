@@ -65,7 +65,7 @@ and grants; never mutate a shared instance's token per request. Dispose the owne
 client when its adapter session ends and reauthenticate on reconnect. This closes
 the subscription/connection, not the shared conversation or its running turn.
 A replacement client instance with the same grant preserves product identities,
-command IDs, and applied cursors; connection identity is not conversation identity.
+`requestId`s, and applied cursors; connection identity is not conversation identity.
 
 | Boundary | Suggested protocol |
 | --- | --- |
@@ -98,8 +98,8 @@ sequenceDiagram
     G-->>CLI: HelloOk + effective permissions
     CLI->>G: bindings.list
     G-->>CLI: Available bindings + catalog revision
-    CLI->>G: conversation.open(commandId, bindingId, workspace)
-    G->>S: Commit open intent and conversation identity
+    CLI->>G: conversation.create(requestId, bindingId, workspace)
+    G->>S: Commit create intent and conversation identity
     G->>P: Initialize one provider session
     P-->>G: Effective capabilities
     G->>S: Commit conversation ready
@@ -117,7 +117,7 @@ sequenceDiagram
     User->>App: Open C in the full app
     App->>G: connect + attach + subscribe to C
     Note over CLI,App: One conversation and provider. independent drafts and scroll
-    CLI->>G: turn.prompt(commandId, C, text)
+    CLI->>G: turn.prompt(requestId, C, text)
     G->>S: Commit turn acceptance
     G-->>CLI: Accepted turnId T
     G->>P: Run T
@@ -151,7 +151,7 @@ sequenceDiagram
     M->>SDK: Connect with scoped credential
     SDK->>G: Authenticate as A
     A->>M: MCP tool call to message B
-    M->>SDK: conversation.message(B, commandId, next_turn, body)
+    M->>SDK: conversation.message(B, requestId, next_turn, body)
     SDK->>G: Nessa wire request
     G->>G: Verify credential, source A, target, inbox policy
     G->>S: Commit message and receipt
@@ -210,7 +210,7 @@ sequenceDiagram
     G-->>SDK: Only authorized targets
     SDK-->>M: Typed result or connection event
     M-->>Host: Structured tool result
-    Host->>M: tools/call nessa_send_message(C, commandId, body)
+    Host->>M: tools/call nessa_send_message(C, requestId, body)
     M->>SDK: conversation.message with command arguments
     SDK->>G: Typed Nessa request with scoped authentication
     G->>G: Revalidate grant and resource policy
@@ -249,7 +249,7 @@ sequenceDiagram
     participant G as Gateway
     participant S as Stream store
     actor Owner
-    E->>M: send_message(commandId X)
+    E->>M: send_message(requestId X)
     M->>SDK: conversation.message(X)
     SDK->>G: Typed Nessa request with scoped authentication
     G->>S: Commit message M and receipt for X
@@ -387,7 +387,7 @@ the current grant and resource. A guessed hidden tool name does not bypass polic
 | `nessa_send_message` | `conversation.message` | `conversation.message`; start intent additionally needs `turn.start` |
 | `nessa_message_status` | `message.status` | Authenticated receipt owner, or target reader |
 | `nessa_show_conversation` | `surface.show_conversation` (proposed navigation command) | Target read + `surface.navigate` on selected surface |
-| `nessa_open_conversation` | `conversation.open` (create new thread) | `conversation.create` for workspace/binding |
+| `nessa_open_conversation` | `conversation.create` | `conversation.create` for workspace/binding |
 | `nessa_list_bindings` | `bindings.list` | Only binding metadata permitted for this principal |
 | `nessa_start_turn` | `conversation.message(start_if_idle)` | Message + start grants; preserves external sender attribution |
 | `nessa_cancel_turn` | `turn.cancel` | `turn.control` on target |
@@ -416,7 +416,7 @@ Native Nessa request, after connection authentication:
   "id": "rpc-41",
   "method": "conversation.message",
   "params": {
-    "commandId": "cmd-review-17",
+    "requestId": "cmd-review-17",
     "conversationId": "conv-target",
     "body": { "type": "text", "text": "The parser review is ready." },
     "delivery": "next_turn"
@@ -434,7 +434,7 @@ Equivalent MCP tool call, after adapter authentication and MCP initialization:
   "params": {
     "name": "nessa_send_message",
     "arguments": {
-      "commandId": "cmd-review-17",
+      "requestId": "cmd-review-17",
       "conversationId": "conv-target",
       "body": { "type": "text", "text": "The parser review is ready." },
       "delivery": "next_turn"
@@ -443,9 +443,9 @@ Equivalent MCP tool call, after adapter authentication and MCP initialization:
 }
 ```
 
-The adapter must preserve `commandId` across retries. Do not derive it from the
+The adapter must preserve `requestId` across retries. Do not derive it from the
 MCP JSON-RPC ID or generate a fresh one each time a tool is retried. The authenticated
-caller is responsible for reusing a command ID after uncertain acceptance.
+caller is responsible for reusing a `requestId` after uncertain acceptance.
 
 Example MCP success envelope using a declared output schema:
 

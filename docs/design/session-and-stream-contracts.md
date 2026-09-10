@@ -59,7 +59,7 @@ The generic package has no dependency on any box above it or on WebSocket.
    Missing binaries, credentials, compatible versions, or policy permission
    produce explicit setup/error UI. Cached availability is not sufficient after
    reconnect; stale catalog state disables creation until refreshed.
-4. `conversation.open` takes `bindingId`, `catalogRevision`, a server-authorized
+4. `conversation.create` takes `bindingId`, `catalogRevision`, a server-authorized
    workspace reference, and requested configuration/required capabilities.
    The client never submits executable paths, shell commands, or credential env.
    It selects an explicit binding, including any server-advertised default.
@@ -67,12 +67,12 @@ The generic package has no dependency on any box above it or on WebSocket.
    A changed catalog returns `catalog_stale` for refresh. Other typed failures
    include `binding_unavailable`, `authentication_required`, and
    `capability_unavailable`; none is a reason to destroy the Nessa connection.
-6. Provider initialization refines effective session capabilities. Open returns
+6. Provider initialization refines effective session capabilities. Create returns
    only when ready, or cleans up partial startup and returns a typed failure.
    Startup has a deadline compatible with the SDK request timeout. A retry uses
-   the same command ID to recover the original open operation, including an
+   the same `requestId` to recover the original create operation, including an
    in-progress status; it must not start another provider.
-   Required features missing at init fail open; optional features update the UI.
+   Required features missing at init fail create; optional features update the UI.
 
 The UI check prevents knowingly unsupported requests. Server checks cover races
 and non-UI clients. Discovery may run bounded non-mutating probes, but never a
@@ -148,29 +148,31 @@ failure; do not silently skip them or advance the projection checkpoint.
   independent of replaying Nessa history.
 - An **event stream** is generic; terminals/workflows need no conversation ID.
 
-Proposed methods: `bindings.list`, `conversation.open`, `conversation.attach`,
-`turn.prompt`, `turn.cancel`, `approval.respond`, `stream.subscribe`, and
-`stream.unsubscribe`. Collaboration adds `conversation.list`,
-`conversation.message`, and `message.status`, plus owner credential issuance and
-revocation operations. Their scopes and delivery semantics are specified in the
+Proposed methods: `bindings.list`, `conversation.create`, `conversation.attach`,
+`conversation.get`, `turn.prompt`, `turn.cancel`, `approval.respond`,
+`stream.subscribe`, and `stream.unsubscribe`. Collaboration adds
+`conversation.list`, `conversation.message`, and `message.status`, plus owner
+credential issuance and revocation operations. Their scopes and delivery
+semantics are specified in the
 [collaboration contract](surfaces-and-collaboration.md). Steering is deferred
-until a binding proves its semantics.
+until a binding proves its semantics. Mutation identity is `requestId`, matching
+the shipped credential contract and [ADR 0008](../adr/todo/0008-agent-client-api.md).
 Attach locates an authorized existing conversation and its stream; subscribe
 replays it. Neither implicitly starts a provider or repeats a prompt. The next
 prompt may continue a saved provider session only when the binding can prove
 that support; otherwise return `provider_resume_unavailable`, never silently
 start a fresh context under the old conversation.
 
-Every mutating command carries a client-generated stable `commandId`, distinct
+Every mutating command carries a client-generated stable `requestId`, distinct
 from the socket RPC correlation ID. Scope deduplication to authenticated principal
-and operation target (open is principal-scoped). Same ID and canonical input return
+and operation target (create is principal-scoped). Same ID and canonical input return
 the original acceptance/result; a changed input returns `idempotency_conflict`.
 Persist receipts and accepted intent before effects. For v1, make a single
 command-accepted record contain the canonical command, allocated identities, and
 acceptance response; derive the receipt index from that record on recovery. Do
-not acknowledge a separate receipt before the accepted intent commits. Open uses
+not acknowledge a separate receipt before the accepted intent commits. Create uses
 a principal-scoped control stream so deduplication precedes conversation allocation.
-Event-append deduplication alone does not implement command deduplication.
+Event-append deduplication alone does not implement mutation deduplication.
 
 `turn.prompt` returns acceptance with `turnId` promptly; it does not hold an RPC
 open for the model's entire run. Exactly one active turn per conversation in v1;
@@ -193,7 +195,7 @@ from running indefinitely.
 On server restart, replay committed state and command receipts. Any accepted or
 running attempt whose provider outcome cannot be established becomes interrupted;
 never automatically rerun an uncertain tool action. Commit that reconciliation
-before accepting further prompts. A retry of its command ID returns the same
+before accepting further prompts. A retry of its `requestId` returns the same
 attempt, not a new execution. A new turn requires a new command. This is not
 exactly-once execution across a crash and an external side effect.
 
@@ -207,7 +209,7 @@ The first supported bindings must supply representable choices; otherwise fail
 explicitly or cancel the request. Approval events may decorate the transcript,
 but pending state and replies do not depend on transcript rows or raw payloads.
 
-`approval.respond` selects a choice with a command ID. Validate owner, pending
+`approval.respond` selects a choice with a `requestId`. Validate owner, pending
 status, turn, and offered choice. Persist the decision before forwarding it.
 Identical retries return its receipt; conflicting, expired, or stale decisions
 are typed failures. Multi-client races have one authoritative winner. Denial
@@ -224,9 +226,10 @@ pinned by fixtures before coding. Only advertise ACP host filesystem/terminal
 services actually implemented with gateway workspace and access policy checks.
 
 The gateway owns workspace authorization, command/stream access checks, binding
-selection, secret lookup, process supervision and cleanup. The provider binding
-owns supported protocol correlation and provider-specific host integration, not
-the external harness execution loop. [ADR 0012](../adr/todo/0012-agent-harnesses-and-optional-tools.md)
+selection, and secret lookup. Process supervision and cleanup are host-injected
+facilities composed into nessa-sdk. The provider binding owns supported protocol
+correlation and provider-specific host integration, not the external harness
+execution loop. [ADR 0012](../adr/todo/0012-agent-harnesses-and-optional-tools.md)
 keeps external harnesses unmodified and defines MCP/CLI tools for both them and
 Nessa’s own internal agent. No arbitrary executable
 or secret from a client intent; no raw credentials in discovery, event records,

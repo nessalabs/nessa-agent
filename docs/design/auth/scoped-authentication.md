@@ -428,10 +428,10 @@ registry mutation path while the server is serving. This is a narrow admin CLI,
 not implementation of all ADR 0012 product tools.
 
 `credential.issue` commits verifier/metadata before returning a secret once.
-Persist an issuance receipt keyed by issuer principal + command ID + canonical
+Persist an issuance receipt keyed by issuer principal + `requestId` + canonical
 request. Retrying does not mint a second credential. If the original secret was
 lost with its response, return `secret_unavailable` plus that credential's public
-metadata; revoke it and issue with a new command ID. Do not persist recoverable
+metadata; revoke it and issue with a new `requestId`. Do not persist recoverable
 plaintext just to replay an issuance response. A CLI failing to save its returned
 secret attempts revocation and clearly reports whether cleanup succeeded. Bootstrap
 file-write failure has the same explicit orphan-credential/recovery handling;

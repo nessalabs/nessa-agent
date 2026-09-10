@@ -12,7 +12,7 @@ NessaClient connection exist, with a temporary `conversation.echo()` operation.
 Build `nessa-sdk` as the reusable Rust runtime embedded in the server. Agent
 execution, selection, preflight, and authoritative lifecycle live on the server
 side. NessaClient sends API requests and observes server results/events. The UI
-chooses whether follow-up input queues, steers, or interrupts active work.
+chooses whether follow-up input queues, steers, or cancels active work.
 
 Nessa should grow into a **superset of supported features across integrations**. A shared lifecycle is the starting point, not a ceiling on functionality. Add typed operations for capabilities such as structured output, approval requests, forks, checkpoints, subagents, and artifacts as real integrations earn them. A capability being part of Nessa's API does not mean every backend can provide it. Unsupported requests must explain what is missing before work starts where possible.
 
@@ -133,9 +133,8 @@ Do not add all future engines or sandbox implementations in the first ACP slice.
 ## Server operation contracts
 
 The server API exposes discovery, conversation creation/retrieval, turn submission,
-steering, interruption, interaction responses, and status/event/result retrieval.
-The Rust SDK owns their execution semantics. API names and payloads are finalized
-with the protocol; this research does not prescribe a TypeScript SDK interface.
+steering, cancel, interaction responses, and status/event/result retrieval.
+The Rust SDK owns their execution semantics. Wire names follow ADR 0008.
 
 Creation resolves registered agent/model selection and workspace/profile context
 inside the SDK, including preflight and effective configuration. Missing or
@@ -239,10 +238,10 @@ External harnesses retain their prompts, tools, config files, credentials, appro
 
 ## Delivery and validation
 
-1. Review ADR 0008, the reusable nessa-sdk runtime boundary, and the lifecycle/selection semantics here. Settle naming before widening the generated protocol catalog; do not retain competing aliases or add speculative version bumps.
+1. Review ADR 0008, the reusable nessa-sdk runtime boundary, and the lifecycle/selection semantics here. Wire and mutation names are settled there (`requestId`, `conversation.create`, `turn.cancel`); do not retain competing aliases or add speculative version bumps.
 2. Implement discovery and preflight for one local Claude ACP binding with explicit setup/unavailable states. Confirm the actual package release and protocol capabilities.
-3. Introduce nessa-sdk with typed injected ports, compose it in the server, and route NessaClient calls through gateway adapters. Integrate the external stream dependency on the server, then deliver the server conversation/turn APIs, internal selection/preflight and mutation deduplication, events/status/results, correlated interactions, interruption, and safe unknown-outcome handling. Expose steering with an honest capability result; the first ACP binding may reject it as unsupported. Keep follow-up queue policy in the UI.
-4. Test the real Claude path and adapter substitution: independent applications, rejected configuration, policy denial, tool interactions, stream gaps/reconnect, duplicate request IDs, process failure, and cleanup. Cover two surfaces racing to send, steering after completion, unsupported steering, interrupt/completion races, event correlation by turn ID, and UI queue dispatch only after terminal state. Test nessa-sdk without sockets and two independently composed SDK runtimes and clients for state and credential isolation. A substitutable test adapter proves the application seam; it does not count as another supported production provider.
+3. Introduce nessa-sdk with typed injected ports, compose it in the server, and route NessaClient calls through gateway adapters. Integrate the external stream dependency on the server, then deliver the server conversation/turn APIs, internal selection/preflight and mutation deduplication, events/status/results, correlated interactions, cancel, and safe unknown-outcome handling. Expose steering with an honest capability result; the first ACP binding may reject it as unsupported. Keep follow-up queue policy in the UI.
+4. Test the real Claude path and adapter substitution: independent applications, rejected configuration, policy denial, tool interactions, stream gaps/reconnect, duplicate request IDs, process failure, and cleanup. Cover two surfaces racing to send, steering after completion, unsupported steering, cancel/completion races, event correlation by turn ID, and UI queue dispatch only after terminal state. Test nessa-sdk without sockets and two independently composed SDK runtimes and clients for state and credential isolation. A substitutable test adapter proves the application seam; it does not count as another supported production provider.
 5. Add another binding when needed. OpenCode or Kimi ACP can test harness variation; a later direct SDK/service integration tests transport variation. Add a capability contract when a real feature needs it.
 
 The open implementation choices are the concrete Claude adapter release, which of its optional capabilities to ship first, and the external stream crate's actual API. Supporting all providers and every feature is a direction for incremental work, not the acceptance criterion for the first ACP slice.

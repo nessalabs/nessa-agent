@@ -77,7 +77,7 @@ federation and arbitrary provider-session import are outside the first delivery.
 | Local credentials, authentication, and gateway policy foundation | 0010 — implemented; API readiness and operating bounds are in 0007; UI is deferred |
 | Binding discovery/preflight, event schema/normalization, conversation/turn lifecycle, provenance, first ACP execution, and runtime recovery | 0008 |
 | Existing event-stream dependency, durable adapter integration, committed ordering and replay contract verification | 0009 |
-| Authorized conversation listing/attachment, shared transcript subscriptions, collaboration inbox receipts and delivery, and cross-surface behavior | 0011 |
+| Authorized conversation listing/attachment (including origin `surfaceId` filter with authorization before pagination), shared transcript subscriptions, collaboration inbox receipts and delivery, and cross-surface behavior | 0011 |
 | Optional MCP/CLI packaging and preservation of external harness behavior | 0012 |
 
 These are cooperating scopes, not separate implementations of the same runtime.
