@@ -2,90 +2,171 @@
 
 ## Purpose
 
-Use the existing event-stream library to persist ordered events and replay
-them when clients reconnect. This ADR covers Nessa integration and verification;
-the library is developed in its own repository.
+Let the runtime and gateway read the same saved conversation history. That history
+also records which commands were accepted, so a lost reply does not cause work to
+run twice. Connect the existing stream library through a small adapter.
+ADR 0008 owns conversation behavior; ADR 0011 owns delivery to clients.
 
-- **Date:** 2026-09-04
+- **Date:** 2026-09-04; revised 2026-09-07
 - **Status:** proposed Nessa integration — external implementation exists; Nessa integration remains
 - **Library:** [nessalabs/event-stream](https://github.com/nessalabs/event-stream)
-- **Related:** [0011 — shared sessions](0011-nessa-session-protocol-and-authorities.md),
-  [0005 — local data roots](../done/0005-stage-scoped-local-data.md),
-  [0008 — agent runtime](0008-agent-client-api.md)
+- **Related:** [0008 — runtime](0008-agent-client-api.md),
+  [0011 — shared access](0011-nessa-session-protocol-and-authorities.md),
+  [0005 — local data roots](../done/0005-stage-scoped-local-data.md)
 
 ## Current state
 
-The standalone Rust library exists in the linked repository. Its current
-[Cargo manifest](https://github.com/nessalabs/event-stream/blob/main/Cargo.toml)
-identifies package `event-stream` version `0.1.0`, with publishing disabled.
-Its [README](https://github.com/nessalabs/event-stream#readme) documents memory
-storage, an optional SQLite adapter, cursor tokens, replay/live subscriptions,
-and a decoder path. The SQLite feature uses bundled `rusqlite`; the earlier
-`minisqlite` candidate is no longer the integration assumption.
+Checked 2026-09-07: the upstream [README](https://github.com/nessalabs/event-stream#readme)
+describes a memory runtime, optional SQLite adapter using bundled `rusqlite`,
+cursor tokens, and replay/live subscriptions. Its
+[manifest](https://github.com/nessalabs/event-stream/blob/main/Cargo.toml) identifies
+unpublished package `event-stream` 0.1.0. Release and performance checks are still
+incomplete. Nessa's manifests and lockfile do not yet include the library. The
+requirements below still need to be tested in Nessa.
 
-Checked 2026-09-07: the upstream README still marks implementation/release checks
-and performance qualification as incomplete. Existing code is not evidence that
-every Nessa durability requirement has passed. Nessa's Cargo manifests and lockfile
-do not yet include this dependency. Remaining work here is **integrating and
-verifying the existing library**, not building it again inside Nessa.
+## One instance, one record source
 
-## Decision
+The server's startup code opens the local storage adapter and creates one stream
+runtime for that store. It passes the SDK and gateway small interfaces defined by
+their application modules. Both use the same runtime. Conversations and subscribers
+share it instead of reopening the same files. Separate application instances get
+separate stores and dependencies.
 
-Consume `event-stream` through typed, application-owned ports and concrete adapters
-constructed by Nessa composition. Select and pin a reviewed upstream revision
-when integrating; do not assume the manifest version is a published release.
-The upstream implementation/API is authoritative for library behavior. Reconcile
-any mismatch with Nessa's requirements explicitly before declaring integration done.
+For example, two windows watching one conversation should see the same saved
+record 43. Opening the second window must not start another writer or another
+agent. See [why we use semantic records](../../ARCHITECTURE.md#why-append-semantic-records-to-the-stream)
+for the reason to put this API above SQLite.
+
+```mermaid
+flowchart LR
+    SDK[SDK coordinator] -->|Append records| Stream[One stream runtime]
+    Stream <-->|Save and read| Store[SQLite adapter]
+    Stream -->|Saved records and subscriptions| Gateway[Gateway delivery adapter]
+```
 
 | Owner | Responsibility |
 | --- | --- |
-| External event-stream library | Generic immutable records, append retry semantics, committed ordering, cursors, bounded replay/live delivery, injected storage, and library lifecycle |
-| nessa-sdk under ADR 0008 | Conversation/turn meaning, agent payload normalization, mutation admission/receipts, recovery decisions, and policy contracts |
-| Nessa composition and adapters | Dependency construction, durable local storage configuration, payload translation, bounds, and explicit draining/shutdown |
-| Gateway under ADR 0011 | Authorized subscriptions, client delivery, shared-surface attachment, and access/revocation behavior |
+| External library and store adapter | Save each record completely or not at all; handle append retries, record order, cursor checks, read/subscription limits, replay followed by live updates, and opening/closing the store |
+| `nessa-sdk` under 0008 | Define what records mean; accept commands; build state and receipt lookups from records; translate provider updates; decide how to recover |
+| Nessa composition | Choose the stage/instance path, adapter, and limits; create dependencies and shut them down in the right order |
+| Gateway under 0011 | Check access, translate records to wire messages, limit socket delivery, and close subscriptions |
 
-The generic library does not gain Nessa conversation types, authorization, provider
-SDKs, or an agent loop. Nessa must not create a competing cursor allocator, replay
-runtime, or journal to work around unverified integration assumptions. An opaque
-append alone does not establish atomic conversation admission and its mutation
-receipt; ADR 0008's adapter integration must demonstrate that contract.
+The Nessa adapter translates types and errors using the library's actual public
+API. The library already owns cursor allocation, replay buffering, its write-ahead
+log, and subscription scheduling; do not implement those again in Nessa. Keep
+Nessa conversation, policy, provider, UI, and WebSocket types out of the generic
+library. Expose only the operations the runtime and gateway need.
 
-Nessa commits locally under the stage/instance root from ADR 0005. Use the library's
-actual ownership/exclusivity contract; the first Nessa integration does not assume
-multiple processes can write the same store. Tests may inject memory storage, but
-production process-restart durability requires the verified durable adapter.
+The first production store is local SQLite under ADR 0005's stage/instance root.
+Only one runtime may own that store at a time. Use memory storage to test replacing
+adapters. Other stores, replication, snapshots, history retention rules, raw-input
+capture, and generic decoders wait for a real need. The ACP binding already parses
+its protocol; do not parse its decoded records again.
 
-Future cloud replication must consume committed local records without gating
-local use on cloud availability. Remote-store substitution alone is not offline
-sync. Upstream optional replication, retention, and snapshot features do not make
-those features part of this Nessa delivery automatically.
+## Commit and read contract
 
-## Integration and completion criteria
+ADR 0008 defines one record for each accepted command. It contains the input in
+its standard form, verified information about who sent it, the allocated IDs, and
+the acceptance response. A **commit** means storage confirms that the whole
+record was saved. Commit before starting work or replying that it was accepted.
 
-1. Pin the reviewed dependency revision/features and record the supported storage
-   and platform guarantees. Check upstream completion evidence and any open findings.
-2. Implement narrow Nessa adapters against the real API and compose local durable
-   storage with finite resource limits, error handling, and explicit shutdown.
-3. Verify append retries, ordering, exclusive cursor replay, replay/live handoff,
-   slow consumers, missing history, ownership conflicts, and restart persistence.
-   Confirm atomicity needed by SDK admission/receipt recovery; do not assume it.
-4. Test adapter substitution and independent runtime/store isolation. Exercise
-   the real durable path on Nessa's supported platforms and document its limits.
-5. Connect committed SDK records to the gateway subscription path and demonstrate
-   reconnect/replay with real conversation execution under ADRs 0011 and 0008.
+That record is also the **receipt**: proof of what Nessa accepted. State and receipt
+indexes are views rebuilt from the records. Saving acceptance and its receipt in
+one record avoids coordinating separate writes to separate databases.
 
-The library does not promise recovery of provider output never committed or
-exactly-once external tool effects. A process-restart test does not establish a
-power-loss guarantee. Document the evidence actually obtained.
+For example, Nessa may save a prompt and start the agent just before the socket
+disconnects. Retrying with the same `requestId` retrieves the saved acceptance;
+it does not start a second turn.
 
-Keep this record in `todo/` until Nessa's integration is verified. Upstream release
-status and Nessa integration status are separate; no new stream implementation or
-unrelated upstream roadmap phase is scheduled by this ADR.
+The integration must demonstrate:
+
+- Retrying an append with the same event ID and bytes returns the original record
+  and cursor. Different bytes with that ID fail. Keep both unchanged on retries.
+  An event ID identifies one record; `requestId` identifies one product command
+  that changes state. Preventing duplicate records does not enforce the SDK's
+  rules for accepting commands.
+- Reads and subscriptions use saved records. A live notification tells readers
+  to check the store; it does not carry a separate authoritative copy. Never send
+  a provider update to the transcript before saving it.
+- A **cursor** marks a position in one stream. Subscriptions return records after
+  that position, then keep delivering new records in order, with no gap between
+  replay and live updates. Let the library handle that changeover.
+- Return specific errors for a cursor from another stream incarnation (a different
+  lifetime of the stream), a cursor ahead of saved history, missing history, or a
+  subscriber that falls behind. Socket sequence numbers are not saved-history
+  cursors. The creation control stream and conversation streams have no shared
+  ordering or transaction.
+- Keep receipts and duplicate-detection history for the store's lifetime in this
+  delivery. If storage reaches its limit, return a typed error. Do not silently
+  delete history or make earlier retry IDs stop working.
+
+Pin a reviewed library revision and test these requirements. Fix missing behavior
+in the library or revise the architecture before relying on it. Do not build a
+competing local implementation. Other features on the library's roadmap do not
+need to finish before this Nessa integration can ship.
+
+## Failure and lifecycle boundaries
+
+| Condition | Required Nessa behavior |
+| --- | --- |
+| Append definitely rejected | Return a typed error; do not return a success receipt or start the provider for that command |
+| Unsure whether the record was saved | Keep the same event ID and input. Pause affected new commands and check the store before starting or retrying work. A timeout alone does not prove the write failed |
+| Storage unavailable during execution | Limit buffered output, slow the producer where supported, then stop and clean up affected work within a deadline. Cleanup must run even if writes fail; never claim a final outcome was saved when it was not |
+| Slow subscriber | Close its subscription when it exceeds the limit. It can resume from its last applied cursor. Its socket must not delay the producer or other clients |
+| Process restart | Load saved records and rebuild indexes. Let the SDK save recovery decisions for uncertain attempts before accepting new work |
+| Another owner opens the same store | Fail startup clearly; never silently create a second writer or switch to memory |
+
+If a failure affects one stream, block that conversation's coordinator. If it
+affects the whole store, block all writers to that store. The adapter must prove
+which case applies. Reads can continue only if it can still return valid saved
+records. Do not add a global network or command lock to hide these boundaries.
+
+The server's startup/shutdown code owns this shutdown order:
+
+1. Stop accepting new work.
+2. Let SDK coordinators finish or cancel provider tasks and clean up their
+   processes within a deadline, following
+   [ADR 0008](0008-agent-client-api.md#interruption-and-resource-cleanup).
+3. Save the outcomes that can be confirmed, then stop record producers.
+4. Flush pending writes, close the stream runtime, and release the store.
+
+Closing subscriptions and sockets has a deadline too. Cleanup must still run if
+storage fails. If cleanup cannot be confirmed, report the failure and prevent
+reuse of the affected binding. Releasing a store lock does not prove old processes
+have exited. If an outcome could not be saved, check it during startup recovery;
+do not report that it was saved. The SDK, binding, and host facilities supervise
+processes. The generic stream library handles records.
+
+Test each durability claim separately. Surviving a process restart does not prove
+survival after a power loss. The store cannot recover output it never saved, and
+it cannot guarantee that an external tool action happened exactly once. Record
+the tested platform/storage guarantees and limits.
+
+## Delivery and completion
+
+1. Pin the dependency and enabled features. Review its public APIs and durability
+   evidence. Give the local adapter explicit limits and an owner that closes it.
+2. Implement Nessa's small record/read adapters. Through real SQLite, test saving
+   a whole acceptance record, recovering control and primary streams (including
+   pending or empty creations), identical append retries, cursor errors, writes
+   during the replay/live changeover, and exclusive store ownership.
+3. Verify lost acknowledgements, storage failures, slow subscribers, restart and
+   shutdown, and independent application/store isolation on supported platforms.
+   Measure performance with Nessa's expected workload and record the limits.
+
+This ADR can finish with a small test producer and subscriber in Nessa. A live
+Claude binding, collaboration inbox, and MCP package are not required. The library
+tests its general algorithms; Nessa tests that its adapter preserves the behavior
+Nessa needs. ADR 0008's real conversation tests and ADR 0011's gateway/client replay
+tests then check the full path. They need not repeat the entire library test suite.
+
+Keep this ADR in `todo/` until that integration evidence exists. Supporting
+[session/stream requirements](../../design/session-and-stream-contracts.md) refine
+these requirements; their API sketches are not a second library to implement.
 
 ## Consequences
 
-Nessa reuses existing storage and replay infrastructure while retaining its own
-application semantics. The work is dependency review, adapter wiring, and failure
-verification. Detailed consumer requirements remain in the
-[session and stream design](../../design/session-and-stream-contracts.md); reconcile
-its proposed signatures with the real dependency rather than freezing a second API.
+Saving one set of records avoids keeping two independent stores in sync and
+building replay twice. We still need to verify the dependency, design records
+that can rebuild SDK state, and handle failures within clear limits. This is enough
+to support the first conversation without waiting for the library's whole roadmap.

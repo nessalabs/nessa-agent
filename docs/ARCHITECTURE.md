@@ -174,24 +174,102 @@ addition to the local session adapter. See
 [adr/0002-conversation-vertical-and-gateway.md](adr/done/0002-conversation-vertical-and-gateway.md).
 
 **Proposed direction for agent turns:** [ADR 0008](adr/todo/0008-agent-client-api.md)
-proposes a reusable Rust `nessa-sdk` runtime embedded by the server, local ACP
-execution, discovery and normalization. The existing NessaClient calls server APIs.
-[ADR 0009](adr/todo/0009-reusable-event-stream-crate.md) proposes integrating the
-existing external event-stream library for durable records, replay and recovery.
-[ADR 0011](adr/todo/0011-nessa-session-protocol-and-authorities.md) owns shared
-conversation attachment, authorized transcript delivery and collaboration inboxes;
-see its [collaboration contract](design/surfaces-and-collaboration.md).
-[Sequence diagrams and MCP](design/collaboration-sequences-and-mcp.md) describe
-shared surfaces and an authenticated external adapter. Optional MCP/CLI tools and
-external harness boundaries remain in [ADR 0012](adr/todo/0012-agent-harnesses-and-optional-tools.md).
-These records remain proposed. See the [contract design](design/session-and-stream-contracts.md)
-before widening the protocol catalog. [ADR 0007](adr/done/0007-authentication-delivery.md)
-records completed local auth API coverage and measured operating bounds.
+adds a reusable Rust `nessa-sdk` library inside the server. One coordinator owns
+each conversation's commands and state. A configured Claude ACP binding connects
+it to the agent. The existing NessaClient sends commands and receives saved
+records over one WebSocket.
+
+[ADR 0009](adr/todo/0009-reusable-event-stream-crate.md) connects the external
+stream library and local SQLite. Together they provide one saved history for
+conversation state and command receipts. The gateway delivers records from that
+history after they are saved, so live views and replay agree.
+
+The [runtime class supplement](design/agent-runtime-classes-and-sequences.md)
+shows the proposed DDD split: Conversation aggregate for invariants, application
+coordinator for effects, immutable EffectiveCapabilities built from startup-parsed
+model metadata JSON and declared binding/configuration facts, and host/provider
+adapters. Commands validate the snapshot locally; the model catalog is plain data. The host authorizes resource
+actions before SDK access; Conversation owns lifecycle rules.
+[Domain events](design/agent-runtime-classes-and-sequences.md#domain-events-and-durable-records)
+are mapped to committed semantic records before state is applied or effects run.
+Replay rebuilds state without executing agents or tools.
+[ADR 0008](adr/todo/0008-agent-client-api.md#one-canonical-turn-state) owns the sole
+turn-state definition. Health observations and resource readiness do not create
+another turn lifecycle.
+
+Each kind of state has one owner:
+
+| Concern | Owner |
+| --- | --- |
+| Accept turns/input, resolve interactions, change turn state, and build receipt lookups | SDK conversation coordinator |
+| Save/order records, assign cursors, replay then deliver live updates, and own storage | One configured stream runtime per durable store |
+| Identify callers and check product permissions | Existing auth application, used through gateway/SDK application interfaces |
+| Resolve resources, translate wire messages, and deliver allowed data within limits | Gateway adapters |
+| Recover a connection | Each separately configured NessaClient instance |
+| Build transcript/control state from records and track the last applied cursor | One conversation view owner per client scope |
+| Run the model and tools | External harness through its supported binding |
+| Stop work and clean up owned processes | SDK/binding using injected host facilities; keep the binding unavailable if cleanup is uncertain |
+| Translate tool arguments and results | Optional MCP/CLI adapters calling NessaClient |
+
+[ADR 0011](adr/todo/0011-nessa-session-protocol-and-authorities.md) phase A lets
+clients open a shared view by reading and subscribing. It needs no saved
+attachment lease. Phase B adds messages waiting for a future turn to the same SDK
+coordinator and history. Receiving a message does not automatically start work.
+
+Waiting for a provider, tool, or socket must not block Stop and approval commands.
+Reading history, reconnecting, and removing optional tools never silently start
+or stop a turn.
+
+Build the required 0009 adapter/store integration first. Then deliver the complete
+0008 + 0011 phase A conversation. After that, phase B collaboration and
+[0012's](adr/todo/0012-agent-harnesses-and-optional-tools.md) initial stdio read tools
+can ship independently. A tool wraps an operation that already works; it cannot
+be required to implement that operation. More providers, HTTP MCP, a CLI adapter,
+remote pairing/navigation, and a Nessa-owned agent loop are deferred.
+
+The [contract design](design/session-and-stream-contracts.md),
+[collaboration rules](design/surfaces-and-collaboration.md), and
+[sequences](design/collaboration-sequences-and-mcp.md) explain these proposed
+boundaries in more detail. [ADR 0007](adr/done/0007-authentication-delivery.md)
+records completed local auth coverage and measured limits. The proposed runtime
+and collaboration features are not implemented yet.
 
 **Identity/access contracts** (`crates/nessa-auth`) — reusable library, no binary.
 Owns domain identities/memberships/credential metadata, boundary DTO validation,
 and injected session authentication contracts. Embedded Cedar evaluates product policies through the application port. The local credential backend and guarded `/session` gateway are implemented.
 See [local authentication](adr/done/0010-local-authentication.md) for setup and current limits. See the [crate guide](../crates/nessa-auth/README.md).
+
+## Why append semantic records to the stream?
+
+In the proposed agent runtime, a **semantic record** describes something that
+happened in Nessa: a turn was accepted, text was added, a tool finished, or a turn
+completed. The binding translates provider updates into Nessa's own types. The
+SDK appends those records along with its decisions about turn state. Clients can
+understand the history without knowing which provider produced it.
+
+```mermaid
+flowchart TD
+    Agent["Agent updates via ACP or another binding"] --> SDK["SDK: Nessa semantic records"]
+    SDK -->|"Append"| Stream["Event stream library"]
+    Stream <-->|"Durable storage"| DB["SQLite adapter"]
+    Stream -->|"Committed replay and live records"| Gateway["Gateway"]
+    Gateway -->|"WebSocket"| Client["NessaClient / UI"]
+```
+
+Save each record before delivering it. Live updates, reconnects, and rebuilt
+conversation state then use the same committed history (records the store confirms
+it saved). A client that last applied record 42 can replay records 43 onward,
+then continue live without rerunning the agent. The stream and SQLite adapter are
+libraries inside the server process.
+
+SQLite stores the records. The stream library adds record ordering, cursors
+(bookmarks in history), safe append retries, and replay followed by live updates.
+We would otherwise need to build that behavior on database tables ourselves.
+Building conversation state and command-receipt lookups from this history also
+avoids separate writes drifting apart. Authentication and settings keep their
+existing storage. [ADR 0008](adr/todo/0008-agent-client-api.md) defines record
+meaning; [ADR 0009](adr/todo/0009-reusable-event-stream-crate.md) defines the storage
+and delivery guarantees that still need to be verified.
 
 ## Gateway authorization
 
