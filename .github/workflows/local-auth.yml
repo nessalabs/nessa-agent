@@ -19,8 +19,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server
-      - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server --all-targets -- -D warnings
+      - run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk
+      - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings
       - run: cargo test -p nessa-app surface_credential
         if: runner.os == 'Windows'
       - run: cargo build -p nessa-server

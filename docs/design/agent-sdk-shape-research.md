@@ -1,18 +1,21 @@
 # nessa-sdk server runtime research
 
-Research checked 2026-09-07 (UTC). This document supports
-[proposed ADR 0008](../adr/todo/0008-agent-client-api.md), the authoritative proposal
+Third-party research checked 2026-09-07 (UTC); Nessa design alignment updated
+2026-09-11. This document supports
+[accepted ADR 0008](../adr/todo/0008-agent-client-api.md), the authoritative design
 for one reusable Rust agent runtime embedded in the server. NessaClient calls
 server APIs; no TypeScript SDK is planned. The third-party examples below are
 research references, not proposed Nessa client interfaces. Today the gateway and
 NessaClient connection exist, with a temporary `conversation.echo()` operation.
+The Rust model metadata catalog is implemented; conversation execution and the
+Claude ACP binding remain planned. See the [SDK guide](../../crates/nessa-sdk/README.md).
 
 ## Recommendation
 
 Build `nessa-sdk` as the reusable Rust runtime embedded in the server. Agent
 execution, selection, preflight, and authoritative lifecycle live on the server
 side. NessaClient sends API requests and observes server results/events. The UI
-chooses whether follow-up input queues, steers, or cancels active work.
+chooses whether follow-up input queues, steers, or stops active work.
 
 Nessa should grow into a **superset of supported features across integrations**. A shared lifecycle is the starting point, not a ceiling on functionality. Add typed operations for capabilities such as structured output, approval requests, forks, checkpoints, subagents, and artifacts as real integrations earn them. A capability being part of Nessa's API does not mean every backend can provide it. Unsupported requests must explain what is missing before work starts where possible.
 
@@ -76,11 +79,17 @@ No source reviewed establishes universal cross-provider resume or durable replay
 | Integration provider | How the server reaches the agent | `acp`; later a registered SDK worker or service adapter |
 | Agent | The harness or configured agent to run | Claude agent, OpenCode, Kimi Code, a Nessa-owned agent |
 | Model provider | The inference service used by that agent, if exposed | Anthropic, OpenAI, DeepSeek, Moonshot |
-| Model | A selection advertised by that binding | Opaque model option value from discovery |
+| Model | An exact provider/model entry in the injected metadata catalog | A configured OpenAI or Anthropic model ID |
 | Binding | One installed integration for one agent, with its actual capabilities | Server-owned binding ID |
 | Execution profile | Server-owned workspace, process, credentials, and permitted settings | A local workspace profile |
 
-`agent` identifies a catalog entry scoped to an available binding; `model` identifies an advertised choice for that agent. The normal create call does not repeat an integration provider or nested configuration already known from that selection. nessa-sdk resolves catalog metadata such as `provider: "acp"`, binding ID, workspace/profile, and configuration internally. If the selection is ambiguous or lacks required workspace/profile context, creation returns a typed error rather than choosing silently. A separate model-provider choice belongs only to bindings that expose it; ACP does not guarantee a universal vendor/model pair.
+The host configures available agent bindings and their model selection. The model
+catalog is separate from the integration registry: its provider identifies the
+inference service, not an ACP transport. Selection uses an exact provider/model
+key from the immutable JSON catalog. A missing entry is a configuration error;
+it does not trigger provider discovery. Binding adapters translate configured
+selection into their native controls. ACP does not guarantee a universal
+vendor/model pair. Missing or ambiguous workspace/profile context fails explicitly.
 
 Backend factories remain selected and injected at server composition. A request chooses among already registered bindings; it cannot construct an arbitrary backend. This preserves [typed dependency injection](dependency-injection.md), including its rule against choosing infrastructure implementations from request parameters. Future bindings are added explicitly, without a global service locator.
 
@@ -88,16 +97,17 @@ Backend factories remain selected and injected at server composition. A request 
 
 Build `nessa-sdk` as a Rust agent runtime library embedded in the server.
 NessaClient calls the authenticated server API, whose handlers invoke the SDK. Another authorized Rust host can embed the library
-with its own injected adapters. These remain proposals, not existing packages.
+with its own injected adapters. The crate currently implements model metadata;
+the execution architecture below remains planned.
 
 ```mermaid
 flowchart TD
     UI["Panel, CLI, or another surface"] --> Client["NessaClient<br/>Server API calls"]
     Client --> Gateway["Nessa gateway<br/>Authentication and product authorization"]
     Gateway --> SDK["nessa-sdk<br/>Agent runtime, lifecycle, and commands"]
-    Host["Other authorized Rust host"] --> SDK
+    Host["Other Rust host<br/>Own application authorization"] --> SDK
     SDK --> Bindings["Injected bindings<br/>ACP first; workers and model adapters later"]
-    SDK --> Records["Injected durable journal and stream ports"]
+    SDK --> Records["Injected committed record port"]
 ```
 
 | Component | Owns |
@@ -105,11 +115,13 @@ flowchart TD
 | UI/orchestrator | Pickers, presentation, pending input, and queue/steer/stop decisions |
 | NessaClient | Server API calls, request IDs, authentication, connection/reconnection, event observation, and remote command reconciliation |
 | Nessa gateway | Wire translation, authenticated caller context, and Nessa product authorization before SDK invocation |
-| nessa-sdk | Selection/preflight through bindings, effective run configuration, conversation/turn admission and lifecycle, execution coordination, policy contracts, normalized events/results, durable receipts and recovery semantics |
+| nessa-sdk | Selection/preflight through bindings, effective run configuration, conversation/turn admission and lifecycle, execution coordination, normalized events/results, durable receipts and recovery semantics |
 | Host composition and adapters | Concrete bindings, credentials, OS facilities, optional isolation implementations, storage backends, and owned resource startup/shutdown |
 
 The SDK owns typed application ports and DTOs. Host composition injects bindings,
-policy, persistence/events, content, time, and required execution facilities.
+persistence/events, content, time, and required execution facilities. Host
+application entry points enforce resource/action authorization before SDK access;
+the SDK receives verified action context, not policy grants or an auth interface.
 Domain rules do not depend on transport, UI, provider SDKs, or application DTOs.
 Each runtime instance is independent; no global backend or service locator is
 introduced. Tests can replace the ports without sockets or real agent processes.
@@ -121,8 +133,8 @@ external stream dependency. SDK event observers and client projections do not
 become competing sources of truth.
 
 NessaClient shares its existing authenticated connection for API calls and event
-subscriptions. Direct Rust embedding supplies trusted caller context and policy
-through explicit composition. No TypeScript SDK is planned.
+subscriptions. Direct Rust embedding enforces access policy and supplies trusted action context
+through its own application boundary. No TypeScript SDK is planned.
 
 External ACP harnesses keep their own loops and tools. For Nessa-owned agents,
 the runtime can coordinate model calls and tools through injected adapters.
@@ -132,8 +144,8 @@ Do not add all future engines or sandbox implementations in the first ACP slice.
 
 ## Server operation contracts
 
-The server API exposes discovery, conversation creation/retrieval, turn submission,
-steering, cancel, interaction responses, and status/event/result retrieval.
+The planned server API exposes configured capabilities, conversation creation/retrieval,
+turn submission, steering, Stop, interaction responses, and status/event/result retrieval.
 The Rust SDK owns their execution semantics. Wire names follow ADR 0008.
 
 Creation resolves registered agent/model selection and workspace/profile context
@@ -155,7 +167,8 @@ resume a provider process.
 
 The UI owns its follow-up queue and decides when to submit it. The server admits
 one active turn atomically and rejects competing new turns with `turn_busy`.
-Stop-and-send waits for the terminal outcome. Peer inbox `next_turn` delivery is
+Stop-and-send waits for both the terminal outcome and confirmed binding readiness.
+Failed cleanup keeps the draft and shows the error. Peer inbox `next_turn` delivery is
 a separate contract and does not authorize starting a future turn. See
 [surfaces and collaboration](surfaces-and-collaboration.md).
 
@@ -176,7 +189,15 @@ for delivery and validation requirements.
 
 ## How the superset grows
 
-Expose a small lifecycle plus capability-specific namespaces. Model capability metadata as supported/unsupported/conditional with constraints and reasons, rather than one `supportsEverything` flag. Conditions can depend on the model, selected mode, installed adapter, current session, and Nessa policy. The server remains authoritative at command time.
+Expose a small lifecycle plus typed feature operations as real integrations need
+them. Model metadata uses required booleans for supported/unsupported features.
+A planned factory combines the selected entry with binding restrictions and
+configured agent settings into one immutable `EffectiveCapabilities` snapshot.
+Restrictions can disable features; they cannot enable a model feature marked
+false. The UI reads that snapshot and SDK commands validate against it locally.
+Host authorization and conversation lifecycle checks remain separate decisions.
+The catalog's context window is the published model ceiling; a harness's configured
+window may be narrower. The implemented catalog does not read harness settings.
 
 | Feature family | Nessa representation to grow toward | What must stay honest |
 | --- | --- | --- |
@@ -193,15 +214,15 @@ Expose a small lifecycle plus capability-specific namespaces. Model capability m
 
 Promote a feature to a common API when its meaning can be stated and tested across relevant bindings. Preserve distinct semantics through typed variants when they differ. An adapter can expose a namespaced feature before it becomes common. Extensions still use Nessa authorization, validation, attribution, and event normalization. They are not a tunnel around the gateway.
 
-Rust bindings use typed configuration and explicit capability variants. Runtime discovery supplies available values and constraints. Future extension schemas must be validated at the boundary and mapped to application-owned DTOs. Do not create a universal `Record<string, any>` or ship empty adapters for every vendor now.
+Rust bindings use typed configuration and declared support. Required protocol setup does not populate or override model metadata. Commands perform no capability discovery or negotiation. Future extension schemas must be validated at the boundary and mapped to application-owned DTOs. Do not create a universal `Record<string, any>` or ship empty adapters for every vendor now.
 
 ## ACP mapping for the first slice
 
 The [ACP prompt lifecycle](https://agentclientprotocol.com/protocol/v1/prompt-turn) separates setup, prompt submission, session updates, permission interaction, and terminal completion. Map that lifecycle into Nessa's turn model. A stream of text alone loses tool progress and user interaction.
 
-[ACP session configuration](https://agentclientprotocol.com/protocol/v1/session-config-options) advertises option IDs, values, ordering, and current state. Prefer `configOptions`; use `session/set_config_option` to apply supported choices and consume the full returned configuration. Option categories help presentation but are not required for correctness. Do not assume an option is literally named `model` or that its value is a portable model ID. The binding maps the public model convenience field to the actual advertised option. Older or extension-only controls require an explicit tested adapter mapping.
+[ACP session configuration](https://agentclientprotocol.com/protocol/v1/session-config-options) advertises option IDs, values, ordering, and current state. Prefer `configOptions`; use `session/set_config_option` to apply supported choices and consume the full returned configuration. Option categories help presentation but are not required for correctness. Do not assume an option is literally named `model` or that its value is a portable model ID. The binding maps the configured model selection to the actual native option. These protocol values do not replace Nessa model metadata. Implement only the selected adapter contract; compatibility support requires an explicit request.
 
-The first implementation should allow configuration changes while idle. Mid-turn changes are a separately advertised capability with defined effective-turn semantics. Requested settings and effective settings are both recorded. A provider-reported fallback is visible to the caller; Nessa does not silently route to another provider.
+Install configuration and its capability snapshot at a serialized command boundary. Keep them stable for an accepted turn; changes apply to future work. Record requested and effective settings. If the configured integration cannot deliver the selected configuration, return an explicit error; do not substitute another model or provider.
 
 The concrete Claude ACP binding must pass a compatibility probe before it is advertised as ready: initialize, authentication/setup, session creation, advertised configuration, prompt/update completion, permission response, cancellation, and process cleanup. Test resume only if advertised. Pin the selected adapter/protocol dependency during implementation and record its supported optional extensions. This research does not establish compatibility with every release.
 
@@ -219,7 +240,7 @@ flowchart LR
   Stream --> Gateway
 ```
 
-NessaClient calls nessa-sdk through the authenticated gateway. The gateway owns product authorization and wire translation. The SDK application owns conversation/turn identities, admission, and execution coordination; NessaClient receives the observed state through the API. Binding adapters feed provider events into Nessa's Rust normalizer, which produces the canonical event payloads defined by the shared schema. The external stream dependency owns committed ordering and replay under [ADR 0009](../adr/todo/0009-reusable-event-stream-crate.md). Use its real API when available; do not implement a temporary second stream runtime or claim that today's `client.on()` replays missed events.
+NessaClient calls nessa-sdk through the authenticated gateway. The gateway owns product authorization and wire translation. The pure conversation aggregate decides transitions and returns domain events. The application commits them, applies committed state, then starts effects; replay applies records without agent or tool calls. The SDK application coordinates conversation/turn identities and admission; NessaClient receives the observed state through the API. Binding adapters feed provider events into Nessa's Rust normalizer, which produces the canonical event payloads defined by the shared schema. The external stream dependency owns committed ordering and replay under [ADR 0009](../adr/todo/0009-reusable-event-stream-crate.md). Use its real API when available; do not implement a temporary second stream runtime or claim that today's `client.on()` replays missed events.
 
 Rust cannot directly import a TypeScript or Python agent SDK. A future SDK integration may use a supervised worker with a typed protocol, or call an existing service through an adapter. Composition owns startup/shutdown, bounded calls, crash handling, and credentials. Browser clients do not spawn agent processes or receive model secrets. All local use remains possible without hosted Nessa signup.
 
@@ -238,10 +259,27 @@ External harnesses retain their prompts, tools, config files, credentials, appro
 
 ## Delivery and validation
 
-1. Review ADR 0008, the reusable nessa-sdk runtime boundary, and the lifecycle/selection semantics here. Wire and mutation names are settled there (`requestId`, `conversation.create`, `turn.cancel`); do not retain competing aliases or add speculative version bumps.
-2. Implement discovery and preflight for one local Claude ACP binding with explicit setup/unavailable states. Confirm the actual package release and protocol capabilities.
-3. Introduce nessa-sdk with typed injected ports, compose it in the server, and route NessaClient calls through gateway adapters. Integrate the external stream dependency on the server, then deliver the server conversation/turn APIs, internal selection/preflight and mutation deduplication, events/status/results, correlated interactions, cancel, and safe unknown-outcome handling. Expose steering with an honest capability result; the first ACP binding may reject it as unsupported. Keep follow-up queue policy in the UI.
-4. Test the real Claude path and adapter substitution: independent applications, rejected configuration, policy denial, tool interactions, stream gaps/reconnect, duplicate request IDs, process failure, and cleanup. Cover two surfaces racing to send, steering after completion, unsupported steering, cancel/completion races, event correlation by turn ID, and UI queue dispatch only after terminal state. Test nessa-sdk without sockets and two independently composed SDK runtimes and clients for state and credential isolation. A substitutable test adapter proves the application seam; it does not count as another supported production provider.
-5. Add another binding when needed. OpenCode or Kimi ACP can test harness variation; a later direct SDK/service integration tests transport variation. Add a capability contract when a real feature needs it.
+The metadata foundation is complete: strict JSON loading, validated domain values,
+exact selection, and immutable catalog queries are implemented with 22 tests and
+Rust 1.89 support. Effective capability construction and host wiring remain planned.
+
+1. Verify one concrete Claude ACP adapter release and the external stream library's
+   real local SQLite adapter. Test required controls, process cleanup, atomic
+   acceptance records, append retries, and reads after restart before building on them.
+2. Deliver one complete conversation through the SDK, authenticated gateway,
+   NessaClient, and panel. Add the required aggregate, injected ports, effective
+   capability factory, saved receipts/events, interactions, Stop, retrieval, and
+   origin metadata. Follow ADR 0008 and the generated protocol for wire names;
+   retain `requestId` as the mutation identity and add no aliases or version bumps.
+3. Verify recovery, races, and reuse: lost replies, duplicate/conflicting request IDs,
+   replay without effects, storage failures, slow subscribers, process failure,
+   cleanup, and two isolated SDK instances. Test host authorization at every entry
+   point separately from SDK capability and lifecycle validation. Stop-and-send
+   requires terminal state and confirmed binding readiness; cleanup failure retains
+   the draft. Unsupported steering starts no replacement work.
+4. Add another binding when needed. OpenCode or Kimi ACP can test harness variation;
+   a later direct SDK/service integration tests transport variation. Test adapters
+   prove substitution, not production-provider support. Add feature contracts when
+   a real integration needs them.
 
 The open implementation choices are the concrete Claude adapter release, which of its optional capabilities to ship first, and the external stream crate's actual API. Supporting all providers and every feature is a direction for incremental work, not the acceptance criterion for the first ACP slice.

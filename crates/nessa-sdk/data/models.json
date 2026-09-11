@@ -1,0 +1,173 @@
+{
+  "verifiedOn": "2026-09-11",
+  "models": [
+    {
+      "provider": "openai",
+      "modelId": "gpt-6-astra",
+      "displayName": "GPT-6 Astra",
+      "input": {
+        "text": true,
+        "image": true,
+        "audio": false
+      },
+      "output": {
+        "text": true,
+        "image": false,
+        "audio": false
+      },
+      "toolUse": true,
+      "reasoning": true,
+      "maxContextWindowTokens": 1050000,
+      "maxOutputTokens": 128000,
+      "knowledgeCutoff": "2026-04-30",
+      "documentationUrl": "https://developers.openai.com/api/docs/models/gpt-6-astra"
+    },
+    {
+      "provider": "openai",
+      "modelId": "gpt-5.6-sol",
+      "displayName": "GPT-5.6 Sol",
+      "input": {
+        "text": true,
+        "image": true,
+        "audio": false
+      },
+      "output": {
+        "text": true,
+        "image": false,
+        "audio": false
+      },
+      "toolUse": true,
+      "reasoning": true,
+      "maxContextWindowTokens": 1050000,
+      "maxOutputTokens": 128000,
+      "knowledgeCutoff": "2026-02-16",
+      "documentationUrl": "https://developers.openai.com/api/docs/models/gpt-5.6-sol"
+    },
+    {
+      "provider": "openai",
+      "modelId": "gpt-5.6-terra",
+      "displayName": "GPT-5.6 Terra",
+      "input": {
+        "text": true,
+        "image": true,
+        "audio": false
+      },
+      "output": {
+        "text": true,
+        "image": false,
+        "audio": false
+      },
+      "toolUse": true,
+      "reasoning": true,
+      "maxContextWindowTokens": 1050000,
+      "maxOutputTokens": 128000,
+      "knowledgeCutoff": "2026-02-16",
+      "documentationUrl": "https://developers.openai.com/api/docs/models/gpt-5.6-terra"
+    },
+    {
+      "provider": "openai",
+      "modelId": "gpt-5.6-luna",
+      "displayName": "GPT-5.6 Luna",
+      "input": {
+        "text": true,
+        "image": true,
+        "audio": false
+      },
+      "output": {
+        "text": true,
+        "image": false,
+        "audio": false
+      },
+      "toolUse": true,
+      "reasoning": true,
+      "maxContextWindowTokens": 1050000,
+      "maxOutputTokens": 128000,
+      "knowledgeCutoff": "2026-02-16",
+      "documentationUrl": "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
+    },
+    {
+      "provider": "anthropic",
+      "modelId": "claude-fable-5-1",
+      "displayName": "Claude Fable 5.1",
+      "input": {
+        "text": true,
+        "image": true,
+        "audio": false
+      },
+      "output": {
+        "text": true,
+        "image": false,
+        "audio": false
+      },
+      "toolUse": true,
+      "reasoning": true,
+      "maxContextWindowTokens": 1000000,
+      "maxOutputTokens": 128000,
+      "knowledgeCutoff": "2026-06",
+      "documentationUrl": "https://platform.claude.com/docs/en/models/fable-5-1/overview"
+    },
+    {
+      "provider": "anthropic",
+      "modelId": "claude-opus-5",
+      "displayName": "Claude Opus 5",
+      "input": {
+        "text": true,
+        "image": true,
+        "audio": false
+      },
+      "output": {
+        "text": true,
+        "image": false,
+        "audio": false
+      },
+      "toolUse": true,
+      "reasoning": true,
+      "maxContextWindowTokens": 1000000,
+      "maxOutputTokens": 128000,
+      "knowledgeCutoff": "2026-05",
+      "documentationUrl": "https://platform.claude.com/docs/en/models/opus-5/overview"
+    },
+    {
+      "provider": "anthropic",
+      "modelId": "claude-sonnet-5",
+      "displayName": "Claude Sonnet 5",
+      "input": {
+        "text": true,
+        "image": true,
+        "audio": false
+      },
+      "output": {
+        "text": true,
+        "image": false,
+        "audio": false
+      },
+      "toolUse": true,
+      "reasoning": true,
+      "maxContextWindowTokens": 1000000,
+      "maxOutputTokens": 128000,
+      "knowledgeCutoff": "2026-01",
+      "documentationUrl": "https://platform.claude.com/docs/en/models/sonnet-5/overview"
+    },
+    {
+      "provider": "anthropic",
+      "modelId": "claude-haiku-4-5-20251001",
+      "displayName": "Claude Haiku 4.5",
+      "input": {
+        "text": true,
+        "image": true,
+        "audio": false
+      },
+      "output": {
+        "text": true,
+        "image": false,
+        "audio": false
+      },
+      "toolUse": true,
+      "reasoning": true,
+      "maxContextWindowTokens": 200000,
+      "maxOutputTokens": 64000,
+      "knowledgeCutoff": "2025-02",
+      "documentationUrl": "https://platform.claude.com/docs/en/models/haiku-4-5/overview"
+    }
+  ]
+}
