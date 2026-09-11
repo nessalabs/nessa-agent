@@ -8,11 +8,11 @@ to accept, tracks each turn, and records who started or controlled it. Saved
 records flow through the event stream and gateway back to clients.
 
 - **Date:** 2026-09-07
-- **Status:** accepted direction — implementation started with model metadata; conversation execution remains planned
+- **Status:** accepted direction — model metadata slice complete; conversation execution remains planned
 - **Review supplement:** [Runtime classes and sequences](../../design/agent-runtime-classes-and-sequences.md) — proposed responsibilities, operations, and failure flows; no implementation code
 - **Supporting research:** [Server runtime research](../../design/agent-sdk-shape-research.md)
 
-## Proposal for approval
+## Accepted direction
 
 Build **`nessa-sdk`, a reusable Rust library**. Nessa's server embeds it to run
 and control agents. Other Rust servers, CLIs, and background applications can
@@ -28,8 +28,30 @@ The first delivery is one complete local Claude conversation through ACP:
 create it, send a prompt, save and display updates, answer required approvals,
 interrupt work, and reconnect. It also recovers known state after restart and
 records the creator and originating surface. More providers and a general workflow
-engine can wait. Approval covers this architecture and scope. The ADR remains
-proposed until reviewed; editing it does not authorize implementation.
+engine can wait. This records the accepted architecture and scope. Model metadata is delivered
+as the first slice; the complete conversation flow remains to be implemented.
+
+## Delivery status
+
+**Model metadata — complete (2026-09-11).** The implemented
+[`nessa-sdk` catalog](../../../crates/nessa-sdk/README.md) includes:
+
+- One editable JSON file with eight current general-purpose OpenAI/Anthropic models.
+- Pure domain model entities, validated value objects, and catalog uniqueness rules,
+  separated from application DTO/mapping/query code and JSON infrastructure.
+- Shared Date and Url value objects backed by parsing libraries, and a closed
+  model provider type for OpenAI and Anthropic.
+- Strict loading, exact model selection, immutable catalog snapshots, and a local
+  example that prints all metadata or a selected model without provider access.
+- A pure token occupancy calculation using the window stored in TokenLimits.
+- 22 passing tests across common values, domain, application, and infrastructure;
+  Clippy/format checks pass. The SDK builds with its declared Rust 1.89 minimum.
+
+**Remaining:** host startup/server/UI wiring, effective capability construction,
+configured harness limits, provider bindings, conversation aggregates/coordinators,
+record persistence/replay, controls, and cleanup. The catalog's context window is
+still the published model ceiling, not a Codex default or discovered runtime limit.
+The complete ADR stays in `todo` until its conversation delivery is implemented.
 
 ## Context and current behavior
 
