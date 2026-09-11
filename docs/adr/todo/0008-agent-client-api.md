@@ -8,7 +8,7 @@ to accept, tracks each turn, and records who started or controlled it. Saved
 records flow through the event stream and gateway back to clients.
 
 - **Date:** 2026-09-07
-- **Status:** proposed — awaiting review and approval; implementation has not started
+- **Status:** accepted direction — implementation started with model metadata; conversation execution remains planned
 - **Review supplement:** [Runtime classes and sequences](../../design/agent-runtime-classes-and-sequences.md) — proposed responsibilities, operations, and failure flows; no implementation code
 - **Supporting research:** [Server runtime research](../../design/agent-sdk-shape-research.md)
 
@@ -151,7 +151,8 @@ another support state. Reject duplicate provider/model keys and malformed entrie
 Selecting a model without an entry returns a configuration error asking for that
 entry to be added. It does not trigger a lookup or discovery process.
 
-For example, this illustrates the file shape using a fictional model:
+For example, this abbreviated entry illustrates the feature fields using a
+fictional model (see the implemented catalog below for all required metadata):
 
 ```json
 {
@@ -170,7 +171,14 @@ For example, this illustrates the file shape using a fictional model:
 Adding a model or correcting its capabilities means editing this file. Keep it
 as data; provider request formatting and quirks stay in adapters. Add explicit
 limits or further feature fields only when an integration needs them. The example
-is proposed documentation, not a new implemented catalog or a real model claim.
+is illustrative, not a real model claim. The first implemented slice is
+[`nessa-sdk` model metadata](../../../crates/nessa-sdk/README.md), with the current
+catalog in [`data/models.json`](../../../crates/nessa-sdk/data/models.json).
+`maxContextWindowTokens` describes the published model ceiling; it is not the
+configured/default window of a Codex or other harness binding. Local config and
+user settings belong to the binding's execution configuration and can narrow the
+effective window. This metadata slice does not read harness settings or implement
+the effective capability factory yet.
 
 `ModelMetadata` is the parsed entry. `EffectiveCapabilities` is the small immutable
 object used internally for the selected execution configuration. Build it with a

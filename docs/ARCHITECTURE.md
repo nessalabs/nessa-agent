@@ -167,6 +167,16 @@ are written here.
 
 ## What is deliberately not here yet
 
+**Implemented SDK foundation:** `crates/nessa-sdk` contains the model metadata
+catalog: JSON data for the current OpenAI and Claude general-purpose models,
+typed loading/validation, listing, and exact provider/model selection. Pure domain
+entities and value objects own invariants; application use cases map DTOs and
+query the catalog; infrastructure parses JSON. Host
+composition supplies a reader and owns the resulting immutable snapshot. The
+[SDK guide](../crates/nessa-sdk/README.md) shows how to inspect it. The server and
+UI do not consume this catalog yet; bindings and effective capabilities are not
+implemented.
+
 There is no agent runtime, no chat RPCs, no persistence for conversations, no
 settings UI. The panel already opens a `stage=dev` `@nessa/client` session for
 connect/health. When chat arrives it is a remote `ConversationGateway`, not an
