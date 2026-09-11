@@ -2371,6 +2371,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nessa-sdk"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
 name = "nessa-server"
 version = "0.1.0"
 dependencies = [

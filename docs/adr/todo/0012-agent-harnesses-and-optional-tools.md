@@ -2,133 +2,170 @@
 
 ## Purpose
 
-Let agents use optional Nessa MCP or CLI tools to access authorized Nessa
-conversations and collaborators. Preserve each external agent’s own harness,
-loop, and tools.
+Let agents use working Nessa operations as optional tools. The tools call the
+existing product API; they do not add another system for running agents, checking
+permissions, or retrying work. The first Nessa conversation must work before any
+optional tools are installed.
 
-- **Date:** 2026-09-04
-- **Status:** proposed
-- **Related:** [0011](0011-nessa-session-protocol-and-authorities.md) (product wire,
-  identity, authorization), [0009](0009-reusable-event-stream-crate.md) (streams)
-- **Integration details:** [MCP sequences and tools](../../design/collaboration-sequences-and-mcp.md)
+- **Date:** 2026-09-04; revised 2026-09-07
+- **Status:** proposed — optional tool packages are not implemented
+- **Related:** [0008 — runtime/bindings](0008-agent-client-api.md),
+  [0011 — shared operations](0011-nessa-session-protocol-and-authorities.md),
+  [0010 — authentication](../done/0010-local-authentication.md)
+- **Integration examples:** [Client/MCP sequences](../../design/collaboration-sequences-and-mcp.md)
 
-## Context
+## Two directions, different responsibilities
 
-Nessa should let Claude, Codex, and other agents interact with Nessa threads,
-surfaces, and collaborators without becoming a replacement for their harness.
-Users must be able to keep, disable, replace, or remove Nessa tools
-independently of their agent. Nessa will also have its own internal
-agent/harness, initially using the same optional product tools as other agents.
-Tool packages should be developable and releasable outside Nessa. This is a
-dependency and extension boundary, separate from ADR 0011's wire design.
-
-## Decision
-
-**Provider harnesses remain externally owned and unmodified.** Claude runs in
-its Claude harness, Codex in its Codex harness. Their execution loop, built-in
-tools, context management, configuration, model credentials, and permission
-policy remain theirs. Nessa does not patch/fork their runtime, intercept
-internal tool dispatch, rewrite their system instructions, or recreate those
-harnesses around a model API. A provider SDK qualifies only if it preserves that
-harness; a model/Agents SDK is not automatically equivalent to the corresponding
-coding agent product.
-
-**Nessa has its own agent without replacing external harnesses.** The internal
-agent's execution loop belongs to Nessa and may evolve independently. Initially
-it consumes the same MCP or CLI tools and scoped grants as external agents; it
-gets no implicit owner token, direct database access, or private handler
-shortcut. The rule against modifying a provider harness does not prohibit
-Nessa's own harness.
-
-**One product operation catalog, two optional tool interfaces.** Expose Nessa
-capabilities through MCP tools and a shell-friendly CLI, both backed by the same
-public `NessaClient` methods and generated schemas. Agents may use either
-according to their harness and user preference. MCP provides structured
-discovery and calls; the CLI provides commands with structured JSON results and
-exit codes for agents that already run shell tools. Neither is the product
-implementation.
-
-Use these interfaces to list/create/show threads, read authorized history,
-message sessions, and control Nessa-owned resources within an explicit grant.
-Preserve existing built-in provider tools: “Nessa capabilities are tools” does
-not mean all harness behavior must be rewritten as Nessa tools. There is no
-hidden runtime injection or requirement to install MCP when the configured CLI
-is sufficient.
-
-**Separate the two directions.** A gateway binding may start/attach to a
-harness, send user input, observe output, and relay supported lifecycle/approval
-operations through its supported external interface (e.g. ACP). That is host
-integration. Agent-initiated Nessa product operations take this path:
+A **harness** is the program that runs an agent's model and tools. A **binding**
+is Nessa's adapter to that program. An **MCP adapter** lets that agent call Nessa
+product tools through the Model Context Protocol. These calls travel in two
+directions:
 
 ```text
-External harness or Nessa internal agent
-    → optional Nessa MCP tools OR Nessa CLI commands
-    → scoped NessaClient instance
-    → Nessa Session Protocol
-    → gateway authorization and product handlers
+NessaClient → gateway → nessa-sdk → ACP binding → external agent
+                          ▲                         │
+                          │                         │ optional Nessa tool call
+                          └─ gateway ← NessaClient ← MCP adapter
 ```
 
-The binding is not an agent implementation. Unsupported host controls remain
-unavailable; optional MCP cannot imply access to a harness's full transcript or
-internal state. Nessa owns its conversations, routing, and event history; it
-does not override harness policy. A Nessa token grants gateway access, not
-permission to bypass the provider's sandbox or tool approvals.
+In the first direction, Nessa asks the agent to work and controls its turn.
+ADR 0008 owns the binding, turn state, task supervision, and Nessa records.
+In the second direction, the agent asks Nessa to do something, such as read a
+conversation. The optional tool translates that request into an ordinary
+permission-checked API call. A future CLI can make the same calls without MCP.
 
-**Make extension packages independent and removable.** Start with a separately
-packaged `NessaMCP` and CLI using public `NessaClient` APIs and configurable
-tool groups (discovery/read, collaboration, creation/control). Add separately
-installable MCP servers when distinct capabilities justify separate dependencies
-or releases; do not require a server per tool. No gateway internals, provider
-runtime imports, or Nessa UI dependency in these packages. Third parties can
-implement their own MCP/CLI packages against the same versioned client and
-scoped gateway contract.
+The external harness keeps its model/tool loop, built-in tools, context, model
+credentials, and permission checks. Nessa does not patch that loop, intercept
+private tool calls, rewrite system instructions, or replace the harness with a
+model API call. Nessa checks access to its operations; the provider checks access
+to its own operations. Neither credential bypasses the other system's checks.
+Controls that the harness cannot support remain unavailable.
 
-**Users choose the installed and exposed capabilities.** The configured tool
-allowlist, current gateway grant, implemented capability, and harness policy all
-constrain availability. Check the server allowlist on calls as well as
-discovery; a stale cached tool cannot bypass removal. Use normal MCP or
-shell-tool configuration and preserve unrelated tools/settings. Removing MCP
-removes that interface; disabling the capability across both paths requires
-narrowing/revoking its gateway grant. Never auto-fallback from a denied MCP call
-to CLI to evade a tool policy. Each execution path remains subject to the
-harness policy and an explicitly configured credential/profile. Nessa-created
-sessions use the user's selected integration profile; creating a session is not
-consent to enable every tool. An external session is configured explicitly by
-its user. No auto-reinstallation or forced enablement after removal, restart, or
-upgrade.
+A future Nessa-owned agent may have its own loop, but this ADR does not build it
+or wait for it. Such an agent would call the same public APIs with its own limited
+permissions. It would not get an owner token, write directly to the database, or
+skip the API by calling private command handlers.
 
-Tool installation/configuration, scoped credential issuance, and
-provider/session creation are separate operations. Removing an interface
-disables its tools without breaking the harness's ordinary work or native Nessa
-surfaces; another interface works only if separately enabled. Revocation blocks
-future authorized calls; removal does not roll back committed messages or
-completed effects. In-flight accepted work follows the product's explicit
-cancellation policy.
+## One operation implementation
 
-## Alternatives considered
+The SDK behind the gateway owns product commands, state changes, and receipts
+(the saved responses proving which commands were accepted). `NessaClient` owns
+typed calls, connections, wire validation, and matching replies to requests.
+The MCP/CLI adapter has four jobs: validate its arguments, check its enabled tool
+list, call NessaClient, and format the result.
 
-- **Patch providers or build a unified replacement harness:** couples Nessa to
-  provider internals and takes over behavior the user wants to preserve.
-- **Inject Nessa tools directly into each provider runtime:** creates a second
-  extension path users cannot manage through their chosen tool interface.
-- **Require all Nessa tools for every session:** prevents minimal/read-only setups
-  and makes optional collaboration a dependency of ordinary agent execution.
-- **Implement MCP and CLI behavior separately:** duplicates authorization, retries,
-  and lifecycle rules; both call the same client contract.
-- **Bundle tool implementation into gateway internals:** prevents independent
-  releases and bypasses the shared public client contract.
+Use the existing generated schemas for product arguments, results, and errors.
+A tool can have a convenient name, but it must call an existing operation with
+tested resource checks. It cannot introduce new behavior, duplicate turn rules,
+or pass arbitrary provider methods and options through the API.
+
+Keep the product `requestId` unchanged when retrying the same command after an
+uncertain result. A transport request ID identifies one network attempt; it does
+not replace the product's retry ID. Preserve typed errors. Do not add a tool-owned
+queue, receipt store, automatic prompt replay, busy-turn retry loop, or cursor
+allocator. A receipt proves acceptance. It does not prove the turn finished, the
+model used a message, or a window displayed it.
+
+For example, if a tool sends a message and loses the reply, it retries with the
+same `requestId`. Nessa returns the original receipt. Generating another ID could
+record the same message twice.
+
+MCP cancellation, timeout, closed stdio, and CLI exit stop waiting or observing.
+They do not undo a saved command or cancel a Nessa turn. Use the explicit
+`turn.cancel` operation when allowed. If the connection closes while Nessa may
+be accepting a command, check the result using its original `requestId`.
+
+`turn.cancel` follows [ADR 0008's cleanup contract](0008-agent-client-api.md#interruption-and-resource-cleanup).
+The tool must make clear whether Nessa accepted Stop or has confirmed that work
+and cleanup finished. Closing an MCP request or killing a CLI does not prove the
+target stopped. The SDK/binding owns that cleanup. Stopping a turn also releases
+adapter processes and requests that belong only to it. A shared profile adapter
+keeps its host-managed lifetime. None of these actions undoes a message or turn
+already accepted independently by another conversation.
+
+An agent may call a Nessa tool while its own turn is running. The coordinator
+must still handle reads, approvals, Stop, and allowed inbox requests. A tool must
+not wait for a new turn on the same busy conversation, or wait for an outcome that
+requires the tool itself to return. Otherwise the agent waits for the tool while
+the tool waits for the agent, and neither can finish. Return a receipt, a read
+result with size/time limits, or `turn_busy`. Never hold the lock for accepting
+commands while waiting for a tool or network response.
+
+## Minimal package and credential scope
+
+Start with one separately packaged local MCP adapter using **stdio**: the host
+communicates with the adapter process through standard input and output. Give it
+its own NessaClient. It needs no gateway HTTP MCP endpoint, OAuth exchange service,
+plugin registry, copied event store, or provider-specific execution framework.
+Use the chosen MCP SDK's connection and cleanup support. Test its protocol version
+and features with the actual target host before claiming support.
+
+Startup code creates one client for each attached principal/profile. A principal
+is the authenticated caller; a profile chooses the tools exposed to it. Do not
+borrow the panel's client, change a shared client's token, or fetch credentials
+from a global service locator. Closing the adapter closes its own subscriptions
+and connection. Accepted conversation work remains owned by the runtime.
+
+Use ADR 0010's protected local credential sources and explicit provisioning.
+Keep secrets out of tool arguments, results, prompts, URLs, and command-line flags.
+The adapter cannot grant itself more access or trust caller-supplied author fields.
+A call must pass both checks: the profile enables the tool and the gateway permits
+its effect on the target resource.
+
+The first profile reads allowed conversation metadata and history in limited
+pages. Add create/start/cancel after those runtime operations pass acceptance
+checks. Add message/status after ADR 0011 phase B. Approval responses need explicit
+opt-in and their own permission. A large tool catalog and remote window navigation
+can wait; they are not needed for the first useful package.
+
+## Optional installation and removal
+
+Users explicitly choose the tools/profile for a session. Installing tools,
+issuing credentials, and starting the provider are separate operations. Ordinary
+Claude execution through ACP works with no Nessa MCP package installed.
+
+Check the enabled tool list both when listing tools and when calling one. A host
+may remember a tool after removal; calling it must fail locally. The gateway also
+checks current access. Removal stops new calls through that interface. It does
+not undo accepted work, revoke another profile, or disable other enabled
+interfaces. To withdraw the permission across interfaces, revoke it at the gateway
+under ADR 0010's rules: previously allowed work may finish, later checks deny it.
+Only the runtime owns explicit turn cancellation.
+
+Keep unrelated harness tools, settings, and model configuration unchanged.
+Refreshing a tool list must not restart an active harness without an explicit
+operation. Do not enable tools automatically after restart/upgrade or retry a
+denied MCP action through a CLI. If removal requires a host reload, say so; an
+outdated tool list still grants no permission.
+
+## Delivery and completion
+
+1. Once ADR 0011 phase A's read APIs work, deliver the stdio read profile. Test
+   installation/removal with one real MCP host and a pinned SDK/protocol profile.
+   Native conversations must continue to work without the adapter.
+2. Add selected control and collaboration tools as their product operations land.
+   Check that direct wire calls and MCP calls preserve the same receipts, errors,
+   author information, and current permissions.
+3. Add an automation CLI only when a real caller needs it. It calls NessaClient
+   directly, emits structured output, and keeps `--request-id` for explicit
+   retries. MCP and CLI do not need identical feature sets before either ships.
+
+Verify two adapters with separate permissions and clients; access changes after
+listing tools; lost receipts; cancellation/closure after a command is saved;
+calls to removed tools; read limits; calls back into a busy runtime; and preserving
+configuration during installation/removal. Reuse the SDK's turn tests and the
+gateway's policy tests. Each package tests its own mapping and isolation instead
+of rebuilding those rules or repeating their entire test suites. An optional tool
+failure must not take down the gateway or another agent.
+
+Keep this ADR proposed/in `todo/` until there is test evidence for the first
+package and any selected tool groups. Later CLI support, HTTP MCP hosting,
+automatic installation, provider-session import, remote pairing, and Nessa's own
+harness remain deferred; they do not prevent the first package from finishing.
 
 ## Consequences
 
-Agents retain their existing harness behavior. Users can remove Nessa
-integration and keep using the agent. MCP and CLI packages can evolve
-independently while all gateway access still passes through scoped `NessaClient`
-instances.
-
-We must test supported harness/MCP versions, configuration isolation, selected
-tool profiles, removal, and capability loss. Some providers may not expose all
-desired host controls; report that limitation instead of modifying their
-internals. ADR 0011 owns commands and authorization; this record owns harness
-preservation and the optional MCP/CLI extension model, and the distinct Nessa
-internal harness. Package location/name and release versioning are
-implementation choices; no agent configurations change here.
+The runtime can ship before optional tools, and tools can ship before peer
+messaging. Small adapters can be developed independently against the public client.
+Each new interface reuses working operations while the SDK keeps ownership of
+agent execution and conversation state.
