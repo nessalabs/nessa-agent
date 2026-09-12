@@ -409,9 +409,9 @@ Proposed local commands (new commands, not implemented yet):
 ```text
 nessa-server auth init --owner-token-file <new-private-path>
 nessa-server auth recover-owner --owner-token-file <new-private-path>
-nessa-auth issue --profile owner --principal <id> --scope server.read --token-file <new-private-path> --command-id <id> --json
+nessa-auth issue --profile owner --principal <id> --scope server.read --token-file <new-private-path> --request-id <id> --json
 nessa-auth list --profile owner --json
-nessa-auth revoke --profile owner --credential <id> --command-id <id> --json
+nessa-auth revoke --profile owner --credential <id> --request-id <id> --json
 ```
 
 `init` runs offline, creates the registry only when absent, and writes the one-time

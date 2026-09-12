@@ -159,7 +159,7 @@ reconciliation. The server commits admission before acknowledging success and
 never treats reconnecting as permission to rerun an uncertain prompt.
 
 Steering targets one active turn and may be unsupported. A steering receipt does
-not prove model consumption. Interrupt acknowledgement does not prove completion
+not prove model consumption. Stop acknowledgement does not prove completion
 or roll back tool effects. Closing a client connection does not stop execution.
 Server state and committed records are authoritative; client projections identify
 stale state and stream gaps. Retrieval/replay does not implicitly restart or
