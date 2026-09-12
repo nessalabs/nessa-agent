@@ -1,5 +1,5 @@
 use super::value_objects::ModelKey;
-use crate::domain::common::value_objects::{DateError, UrlError};
+use crate::domain::common::value_objects::{DateError, TokenLimitsError, UrlError};
 use std::{error::Error, fmt};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -10,6 +10,7 @@ pub enum MetadataError {
     },
     InvalidDate(DateError),
     InvalidUrl(UrlError),
+    InvalidTokenLimits(TokenLimitsError),
     UnsupportedProvider(String),
     EmptyCatalog,
     Duplicate(ModelKey),
@@ -20,6 +21,7 @@ impl fmt::Display for MetadataError {
             Self::Invalid { field, reason } => write!(f, "{field}: {reason}"),
             Self::InvalidDate(error) => error.fmt(f),
             Self::InvalidUrl(error) => error.fmt(f),
+            Self::InvalidTokenLimits(error) => error.fmt(f),
             Self::UnsupportedProvider(provider) => {
                 write!(f, "unsupported model provider: {provider}")
             }
@@ -49,5 +51,11 @@ impl From<DateError> for MetadataError {
 impl From<UrlError> for MetadataError {
     fn from(error: UrlError) -> Self {
         Self::InvalidUrl(error)
+    }
+}
+
+impl From<TokenLimitsError> for MetadataError {
+    fn from(error: TokenLimitsError) -> Self {
+        Self::InvalidTokenLimits(error)
     }
 }

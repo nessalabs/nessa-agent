@@ -5,6 +5,7 @@
 //! Date --> model knowledge cutoff
 //!      --> catalog verification date (requires day precision)
 //! Url  --> model documentation source (requires HTTPS)
+//! TokenLimits --> published model ceilings / configured execution budgets
 //! ```
 //! Arrows show uses. Each feature adds its own requirements around shared values.
 
@@ -13,3 +14,6 @@ pub use date::{Date, DateError};
 
 mod url;
 pub use url::{Url, UrlError};
+
+mod token_limits;
+pub use token_limits::{TokenLimits, TokenLimitsError};

@@ -1,6 +1,7 @@
+use crate::domain::common::value_objects::TokenLimits;
 use crate::domain::model_metadata::{
     entities::ModelMetadata,
-    value_objects::{Modalities, ModelFeatures, ModelKey, TokenLimits},
+    value_objects::{Modalities, ModelFeatures, ModelKey},
 };
 use std::{error::Error, fmt};
 

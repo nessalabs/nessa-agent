@@ -1,3 +1,4 @@
+use nessa_sdk::domain::common::value_objects::TokenLimits;
 use nessa_sdk::domain::{
     common::value_objects::{Date, Url},
     effective_capabilities::value_objects::{
@@ -6,9 +7,7 @@ use nessa_sdk::domain::{
     },
     model_metadata::{
         entities::ModelMetadata,
-        value_objects::{
-            Modalities, ModelDescription, ModelFeatures, ModelKey, ModelProvider, TokenLimits,
-        },
+        value_objects::{Modalities, ModelDescription, ModelFeatures, ModelKey, ModelProvider},
     },
 };
 

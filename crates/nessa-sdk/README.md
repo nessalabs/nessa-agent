@@ -85,7 +85,8 @@ use nessa_sdk::application::dto::EffectiveCapabilitiesDto;
 use nessa_sdk::domain::effective_capabilities::value_objects::{
     BindingRestrictions, CapabilityRequirement, EffectiveCapabilities, Modality,
 };
-use nessa_sdk::domain::model_metadata::value_objects::{Modalities, ModelFeatures, TokenLimits};
+use nessa_sdk::domain::common::value_objects::TokenLimits;
+use nessa_sdk::domain::model_metadata::value_objects::{Modalities, ModelFeatures};
 
 // `model` is a borrowed ModelMetadata. These limits must fit that model.
 let text = Modalities::new(true, false, false)?;
@@ -149,10 +150,11 @@ domain/
     value_objects/
       date.rs           Date, DateError
       url.rs            Url, UrlError
+      token_limits.rs   TokenLimits, TokenLimitsError
   model_metadata/
     value_objects/
       identity.rs       ModelProvider, ModelKey
-      capabilities.rs   Modalities, ModelFeatures, TokenLimits
+      capabilities.rs   Modalities, ModelFeatures
       description.rs    ModelDescription
     entities/
       model.rs          ModelMetadata
@@ -163,7 +165,7 @@ domain/
 ```
 
 Consumers import the feature and role explicitly, such as
-`domain::model_metadata::value_objects::TokenLimits`. Related value objects share
+`domain::common::value_objects::TokenLimits`. Related value objects share
 files; domain features do not accumulate in a flat namespace.
 
 Each `mod.rs` is a module guide with plain-English context and ASCII diagrams,
@@ -183,6 +185,12 @@ hold the validated values. Neither value performs network or clock I/O.
 Application mapping accepts only `openai` and `anthropic` from DTOs. Unknown
 providers and aliases fail import/selection; adding another provider requires an
 explicit domain change. Model IDs remain provider-scoped strings.
+
+`TokenLimits` and `TokenLimitsError` belong to the common domain. Positive
+context/output ceilings and output bounded by context apply equally to published
+metadata, binding declarations, and configured execution limits. Invalid metadata
+imports wrap the common error with metadata context; binding configuration uses
+the common error directly.
 
 `TokenLimits::context_usage_percent(used_tokens)` returns
 `used_tokens / self.max_context_window * 100`. It uses the window already stored
@@ -205,8 +213,8 @@ are excluded from this domain threshold. It uses a fresh temporary target and
 removes only that directory; the normal/shared build target is untouched.
 This stable-toolchain measurement does not report branch coverage.
 
-Measured after this slice: **35 SDK tests pass**, and domain coverage is
-**348/348 lines, 58/58 functions, and 425/425 regions**. Effective capabilities
+Measured after this slice: **36 SDK tests pass**, and domain coverage is
+**364/364 lines, 60/60 functions, and 445/445 regions**. Effective capabilities
 contributes 107 lines, 10 functions, and 161 regions, all covered. The application
 mapping file, including the new snapshot projection, separately measures
 55/55 lines, 5/5 functions, and 103/103 regions; it is not part of the domain gate.

@@ -262,7 +262,7 @@ External harnesses retain their prompts, tools, config files, credentials, appro
 The metadata foundation is complete: strict JSON loading, validated domain values,
 exact selection, and immutable catalog queries are implemented with 22 tests and
 Rust 1.89 support. Pure effective capability construction and validation are also
-implemented, bringing the SDK to 35 tests. Host wiring and harness settings readers
+implemented, bringing the SDK to 36 tests. Host wiring and harness settings readers
 remain planned.
 
 1. Verify one concrete Claude ACP adapter release and the external stream library's

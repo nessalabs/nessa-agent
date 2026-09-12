@@ -1,5 +1,6 @@
 //! Explicit DTO/domain translation; constructors remain the only invariant owners.
 use super::dto::{EffectiveCapabilitiesDto, ModalitiesDto, ModelMetadataDto};
+use crate::domain::common::value_objects::TokenLimits;
 use crate::domain::common::value_objects::{Date, Url};
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::domain::model_metadata::{
@@ -7,7 +8,6 @@ use crate::domain::model_metadata::{
     value_objects::Modalities,
     value_objects::ModelDescription,
     value_objects::ModelFeatures,
-    value_objects::TokenLimits,
     value_objects::{ModelKey, ModelProvider},
     MetadataError,
 };

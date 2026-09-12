@@ -52,7 +52,7 @@ snapshots from selected model metadata, typed binding declarations, and validate
 configured limits. Features intersect; settings exceeding model/binding ceilings
 fail explicitly. Pure validation checks required modalities/features and supplied
 input plus reserved output budgets. Application DTOs project that same snapshot.
-All 35 SDK tests pass. The domain coverage gate requires and measures 100%
+All 36 SDK tests pass. The domain coverage gate requires and measures 100%
 lines/functions/regions across every SDK domain context, including error
 diagnostics; tests cover independent modality combinations, limits, and isolation.
 Application tests verify projection isolation. No provider or settings reader is

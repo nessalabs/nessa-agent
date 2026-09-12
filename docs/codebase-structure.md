@@ -174,7 +174,8 @@ patterns for actual backend integrations without adding a service locator.
 groups the feature into `value_objects/`, `entities/`, and `aggregates/`. Related
 value objects share identity, capabilities, and description files; the catalog
 aggregate owns model uniqueness rules. `domain/common/value_objects/` supplies
-shared Date and Url values backed by pure parsing libraries. `application/`
+shared Date and Url values backed by pure parsing libraries, plus feature-independent
+TokenLimits and its validation error. `application/`
 owns DTOs, explicit mappings, and import/list/select use cases. The JSON reader
 adapter lives in `infrastructure/model_metadata_json.rs`. Composition chooses and opens the catalog
 file, then injects the immutable result. See the [SDK guide](../crates/nessa-sdk/README.md).

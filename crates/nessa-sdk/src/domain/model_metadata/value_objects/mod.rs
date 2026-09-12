@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! identity.rs      ModelProvider + ModelKey (provider + model ID)
-//! capabilities.rs  Modalities + ModelFeatures + TokenLimits
+//! capabilities.rs  Modalities + ModelFeatures
 //! description.rs   ModelDescription (uses common Date)
 //!                         |
 //!                         v
@@ -16,6 +16,6 @@
 mod capabilities;
 mod description;
 mod identity;
-pub use capabilities::{Modalities, ModelFeatures, TokenLimits};
+pub use capabilities::{Modalities, ModelFeatures};
 pub use description::ModelDescription;
 pub use identity::{ModelKey, ModelProvider};
