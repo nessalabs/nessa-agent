@@ -9,6 +9,20 @@ pub struct ModalitiesDto {
     pub audio: bool,
 }
 
+/// Projection of the same immutable snapshot used for command validation.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectiveCapabilitiesDto {
+    pub provider: String,
+    pub model_id: String,
+    pub input: ModalitiesDto,
+    pub output: ModalitiesDto,
+    pub tool_use: bool,
+    pub reasoning: bool,
+    pub context_window_tokens: u32,
+    pub max_output_tokens: u32,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelMetadataDto {

@@ -1,3 +1,4 @@
+use nessa_sdk::domain::common::value_objects::TokenLimits;
 use nessa_sdk::domain::common::value_objects::{Date, Url};
 use nessa_sdk::domain::model_metadata::{
     aggregates::Catalog,
@@ -5,7 +6,6 @@ use nessa_sdk::domain::model_metadata::{
     value_objects::Modalities,
     value_objects::ModelDescription,
     value_objects::ModelFeatures,
-    value_objects::TokenLimits,
     value_objects::{ModelKey, ModelProvider},
     MetadataError,
 };
@@ -46,16 +46,6 @@ fn model_identity_is_provider_scoped_and_preserves_exact_ids() {
         ModelKey::new(ModelProvider::OpenAi, "Model".into()).unwrap(),
         ModelKey::new(ModelProvider::OpenAi, "model".into()).unwrap()
     );
-}
-
-#[test]
-fn token_limits_cannot_be_zero_or_exceed_the_model_window() {
-    for (context, output) in [(0, 0), (0, 1), (100, 0), (100, 101)] {
-        assert!(TokenLimits::new(context, output).is_err());
-    }
-    let limits = TokenLimits::new(100, 100).unwrap();
-    assert_eq!(limits.max_context_window(), 100);
-    assert_eq!(limits.max_output(), 100);
 }
 
 #[test]
@@ -153,9 +143,49 @@ fn separate_catalogs_keep_independent_model_facts() {
 }
 
 #[test]
-fn context_usage_uses_the_instances_window() {
-    let limits = TokenLimits::new(200_000, 128_000).unwrap();
-    for (used, percentage) in [(0, 0.0), (50_000, 25.0), (200_000, 100.0), (250_000, 125.0)] {
-        assert_eq!(limits.context_usage_percent(used), percentage);
+fn catalog_keeps_its_verification_date_and_reports_domain_failures() {
+    let catalog = Catalog::new(verified_on(), vec![model(ModelProvider::OpenAi, false)]).unwrap();
+    assert_eq!(catalog.verified_on(), &verified_on());
+    let invalid_date = MetadataError::from(Date::new("2026-02-30".into()).unwrap_err());
+    let invalid_url = MetadataError::from(Url::new("relative").unwrap_err());
+    let cases = [
+        (
+            Modalities::new(false, false, false).unwrap_err(),
+            "modalities: must support at least one modality",
+        ),
+        (
+            MetadataError::from(TokenLimits::new(0, 1).unwrap_err()),
+            "maximum context window: must be positive",
+        ),
+        (
+            invalid_date,
+            "expected a valid calendar date in YYYY-MM or YYYY-MM-DD format",
+        ),
+        (
+            invalid_url,
+            "invalid absolute URL: relative URL without a base",
+        ),
+        (
+            ModelProvider::try_from("unknown").unwrap_err(),
+            "unsupported model provider: unknown",
+        ),
+        (
+            Catalog::new(verified_on(), vec![]).unwrap_err(),
+            "a model catalog must contain at least one model",
+        ),
+        (
+            Catalog::new(
+                verified_on(),
+                vec![
+                    model(ModelProvider::OpenAi, true),
+                    model(ModelProvider::OpenAi, false),
+                ],
+            )
+            .unwrap_err(),
+            "duplicate model: openai/test-model",
+        ),
+    ];
+    for (error, message) in cases {
+        assert_eq!(error.to_string(), message);
     }
 }

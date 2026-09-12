@@ -8,7 +8,7 @@ to accept, tracks each turn, and records who started or controlled it. Saved
 records flow through the event stream and gateway back to clients.
 
 - **Date:** 2026-09-07
-- **Status:** accepted direction — model metadata slice complete; conversation execution remains planned
+- **Status:** accepted direction — model metadata and effective capabilities complete; conversation execution remains planned
 - **Review supplement:** [Runtime classes and sequences](../../design/agent-runtime-classes-and-sequences.md) — proposed responsibilities, operations, and failure flows; no implementation code
 - **Supporting research:** [Server runtime research](../../design/agent-sdk-shape-research.md)
 
@@ -47,8 +47,19 @@ as the first slice; the complete conversation flow remains to be implemented.
 - 22 passing tests across common values, domain, application, and infrastructure;
   Clippy/format checks pass. The SDK builds with its declared Rust 1.89 minimum.
 
-**Remaining:** host startup/server/UI wiring, effective capability construction,
-configured harness limits, provider bindings, conversation aggregates/coordinators,
+**Effective capabilities — complete (2026-09-11).** The SDK now builds immutable
+snapshots from selected model metadata, typed binding declarations, and validated
+configured limits. Features intersect; settings exceeding model/binding ceilings
+fail explicitly. Pure validation checks required modalities/features and supplied
+input plus reserved output budgets. Application DTOs project that same snapshot.
+All 36 SDK tests pass. The domain coverage gate requires and measures 100%
+lines/functions/regions across every SDK domain context, including error
+diagnostics; tests cover independent modality combinations, limits, and isolation.
+Application tests verify projection isolation. No provider or settings reader is
+implemented in this slice.
+
+**Remaining:** host startup/server/UI wiring, harness settings readers,
+provider bindings, conversation aggregates/coordinators,
 record persistence/replay, controls, and cleanup. The catalog's context window is
 still the published model ceiling, not a Codex default or discovered runtime limit.
 The complete ADR stays in `todo` until its conversation delivery is implemented.
@@ -199,8 +210,8 @@ catalog in [`data/models.json`](../../../crates/nessa-sdk/data/models.json).
 `maxContextWindowTokens` describes the published model ceiling; it is not the
 configured/default window of a Codex or other harness binding. Local config and
 user settings belong to the binding's execution configuration and can narrow the
-effective window. This metadata slice does not read harness settings or implement
-the effective capability factory yet.
+effective window. The implemented effective capability factory accepts typed
+limits; reading harness settings remains the binding/composition responsibility.
 
 `ModelMetadata` is the parsed entry. `EffectiveCapabilities` is the small immutable
 object used internally for the selected execution configuration. Build it with a

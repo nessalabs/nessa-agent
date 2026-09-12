@@ -10,4 +10,5 @@
 //! Arrows mean "depends on". More domain features belong beside model_metadata.
 
 pub mod common;
+pub mod effective_capabilities;
 pub mod model_metadata;

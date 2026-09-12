@@ -7,7 +7,7 @@ for one reusable Rust agent runtime embedded in the server. NessaClient calls
 server APIs; no TypeScript SDK is planned. The third-party examples below are
 research references, not proposed Nessa client interfaces. Today the gateway and
 NessaClient connection exist, with a temporary `conversation.echo()` operation.
-The Rust model metadata catalog is implemented; conversation execution and the
+The Rust model metadata catalog and pure effective capability snapshots are implemented; conversation execution and the
 Claude ACP binding remain planned. See the [SDK guide](../../crates/nessa-sdk/README.md).
 
 ## Recommendation
@@ -97,7 +97,7 @@ Backend factories remain selected and injected at server composition. A request 
 
 Build `nessa-sdk` as a Rust agent runtime library embedded in the server.
 NessaClient calls the authenticated server API, whose handlers invoke the SDK. Another authorized Rust host can embed the library
-with its own injected adapters. The crate currently implements model metadata;
+with its own injected adapters. The crate currently implements model metadata and effective capabilities;
 the execution architecture below remains planned.
 
 ```mermaid
@@ -191,7 +191,7 @@ for delivery and validation requirements.
 
 Expose a small lifecycle plus typed feature operations as real integrations need
 them. Model metadata uses required booleans for supported/unsupported features.
-A planned factory combines the selected entry with binding restrictions and
+The implemented factory combines the selected entry with binding restrictions and
 configured agent settings into one immutable `EffectiveCapabilities` snapshot.
 Restrictions can disable features; they cannot enable a model feature marked
 false. The UI reads that snapshot and SDK commands validate against it locally.
@@ -261,14 +261,16 @@ External harnesses retain their prompts, tools, config files, credentials, appro
 
 The metadata foundation is complete: strict JSON loading, validated domain values,
 exact selection, and immutable catalog queries are implemented with 22 tests and
-Rust 1.89 support. Effective capability construction and host wiring remain planned.
+Rust 1.89 support. Pure effective capability construction and validation are also
+implemented, bringing the SDK to 36 tests. Host wiring and harness settings readers
+remain planned.
 
 1. Verify one concrete Claude ACP adapter release and the external stream library's
    real local SQLite adapter. Test required controls, process cleanup, atomic
    acceptance records, append retries, and reads after restart before building on them.
 2. Deliver one complete conversation through the SDK, authenticated gateway,
-   NessaClient, and panel. Add the required aggregate, injected ports, effective
-   capability factory, saved receipts/events, interactions, Stop, retrieval, and
+   NessaClient, and panel. Add the required aggregate, injected ports, the existing effective
+   capability snapshot, saved receipts/events, interactions, Stop, retrieval, and
    origin metadata. Follow ADR 0008 and the generated protocol for wire names;
    retain `requestId` as the mutation identity and add no aliases or version bumps.
 3. Verify recovery, races, and reuse: lost replies, duplicate/conflicting request IDs,

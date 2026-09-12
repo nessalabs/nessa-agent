@@ -1,4 +1,4 @@
-//! Reusable agent application contracts. Currently implements model metadata only.
+//! Reusable agent contracts: model metadata and effective capability validation.
 pub mod application;
 pub mod domain;
 pub mod infrastructure;

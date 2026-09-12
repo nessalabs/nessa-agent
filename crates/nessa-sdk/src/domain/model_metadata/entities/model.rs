@@ -1,4 +1,5 @@
-use super::super::value_objects::{ModelDescription, ModelFeatures, ModelKey, TokenLimits};
+use super::super::value_objects::{ModelDescription, ModelFeatures, ModelKey};
+use crate::domain::common::value_objects::TokenLimits;
 
 /// Model entity, identified by its exact provider/model key.
 /// Its metadata is an immutable snapshot constructed from validated value objects.

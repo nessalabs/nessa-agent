@@ -55,3 +55,13 @@ fn importing_typed_dtos_cannot_bypass_domain_invariants() {
     assert!(ModelMetadata::try_from(input.clone()).is_err());
     assert!(ModelCatalog::from_metadata("2026-09-11".into(), vec![input]).is_err());
 }
+
+#[test]
+fn typed_import_rejects_malformed_documentation_urls_at_the_domain_boundary() {
+    let mut input = dto();
+    input.documentation_url = "relative/model".into();
+    assert!(matches!(
+        ModelMetadata::try_from(input),
+        Err(nessa_sdk::domain::model_metadata::MetadataError::InvalidUrl(_))
+    ));
+}
