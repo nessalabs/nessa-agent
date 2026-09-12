@@ -61,10 +61,10 @@ Nessa's transport. Putting them into the TypeScript client would make each clien
 responsible for server behavior and leave no reusable server library.
 
 Today the authenticated WebSocket gateway and NessaClient connection exist. The
-temporary `conversation.echo()` operation returns the supplied text. The new Rust
-crate, agent execution, and durable conversation/turn operations are planned
-features. WebSocket communication already works; the stream integration adds
-durable history and replay after reconnect.
+temporary `conversation.echo()` operation returns the supplied text. The Rust crate
+implements model metadata. Agent execution and durable conversation/turn operations
+remain planned features. WebSocket communication already works; the stream
+integration adds durable history and replay after reconnect.
 
 ## Architecture and ownership
 

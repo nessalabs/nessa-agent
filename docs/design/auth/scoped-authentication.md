@@ -409,9 +409,9 @@ Proposed local commands (new commands, not implemented yet):
 ```text
 nessa-server auth init --owner-token-file <new-private-path>
 nessa-server auth recover-owner --owner-token-file <new-private-path>
-nessa-auth issue --profile owner --principal <id> --scope server.read --token-file <new-private-path> --command-id <id> --json
+nessa-auth issue --profile owner --principal <id> --scope server.read --token-file <new-private-path> --request-id <id> --json
 nessa-auth list --profile owner --json
-nessa-auth revoke --profile owner --credential <id> --command-id <id> --json
+nessa-auth revoke --profile owner --credential <id> --request-id <id> --json
 ```
 
 `init` runs offline, creates the registry only when absent, and writes the one-time
@@ -428,10 +428,10 @@ registry mutation path while the server is serving. This is a narrow admin CLI,
 not implementation of all ADR 0012 product tools.
 
 `credential.issue` commits verifier/metadata before returning a secret once.
-Persist an issuance receipt keyed by issuer principal + command ID + canonical
+Persist an issuance receipt keyed by issuer principal + `requestId` + canonical
 request. Retrying does not mint a second credential. If the original secret was
 lost with its response, return `secret_unavailable` plus that credential's public
-metadata; revoke it and issue with a new command ID. Do not persist recoverable
+metadata; revoke it and issue with a new `requestId`. Do not persist recoverable
 plaintext just to replay an issuance response. A CLI failing to save its returned
 secret attempts revocation and clearly reports whether cleanup succeeded. Bootstrap
 file-write failure has the same explicit orphan-credential/recovery handling;
