@@ -12,7 +12,17 @@ use nessa_sdk::{
 use std::{collections::BTreeMap, error::Error, fs::File, path::PathBuf, time::Duration};
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
+    if let Err(error) = run().await {
+        tracing::error!(%error, "Claude example failed");
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() != 8 {
         return Err("usage: claude_acp CATALOG NODE ACP_ENTRY WORKSPACE MODEL INPUT_TOKENS PROMPT MODE(text|stop|stop-write|deny-write|verify-write)".into());
@@ -43,6 +53,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     let workspace = std::fs::canonicalize(PathBuf::from(&args[3]))?;
+    // Admission window (input + reserved output), then per-response output cap.
+    // These small smoke-test values are not model defaults or elapsed-time limits.
+    let limits = TokenLimits::new(100_000, 1000)?;
     let binding = ClaudeAcpBinding::new(
         ClaudeAcpConfig {
             executable: PathBuf::from(&args[1]),
@@ -51,23 +64,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
             workspace: workspace.clone(),
             file_tools: mode.ends_with("write"),
             startup_timeout: Duration::from_secs(45),
-            prompt_timeout: Duration::from_secs(90),
+            prompt_timeout: None,
             shutdown_grace: Duration::from_secs(3),
             kill_timeout: Duration::from_secs(2),
             event_capacity: 256,
             max_frame_bytes: 1024 * 1024,
         },
         &model,
-        TokenLimits::new(100_000, 1000)?,
+        limits,
     )?;
     let mut opened = binding.open().await?;
-    println!("Ready: {}", opened.capabilities.model().model_id());
+    tracing::info!(
+        model = opened.capabilities.model().model_id(),
+        "Binding ready"
+    );
     let agent = std::sync::Arc::new(Agent::new(opened.session, opened.capabilities));
     let input = Prompt {
         execution_id: "smoke".into(),
         text: utf8(6)?.into(),
         input_tokens: utf8(5)?.parse()?,
-        reserved_output_tokens: 1000,
+        reserved_output_tokens: limits.max_output(),
     };
     let executing = agent.clone();
     let pending = tokio::spawn(async move { executing.prompt(input).await });
@@ -93,10 +109,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     update: BindingUpdate::Text(text),
                     ..
                 } => {
-                    print!("{text}");
+                    tracing::info!(%text, "Agent text");
                     if mode == "stop" && !requested_stop && !text.is_empty() {
                         requested_stop = true;
-                        println!("\nStop: {:?}", agent.stop().await?);
+                        tracing::info!(cleanup = ?agent.stop().await?, "Stopped after text");
                     }
                 }
                 nessa_sdk::application::agent_binding::BindingEvent {
@@ -104,7 +120,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     ..
                 } => {
                     if mode == "stop-write" {
-                        println!("\nStop with pending permission: {:?}", agent.stop().await?);
+                        tracing::info!(cleanup = ?agent.stop().await?, "Stopped with pending permission");
                         continue;
                     }
                     let allow_once = mode == "verify-write"
@@ -121,14 +137,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     if allow_once {
                         allowed += 1;
                     }
-                    println!(
-                        "\nPermission: {}",
-                        if allow_once {
-                            "allowed exact smoke write once"
-                        } else {
-                            "denied"
-                        }
-                    );
+                    tracing::info!(allow_once, "Permission answered");
                 }
                 nessa_sdk::application::agent_binding::BindingEvent {
                     update: BindingUpdate::Finished(_),
@@ -157,7 +166,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
     let cleanup = agent.stop().await;
-    println!("\nOutcome: {outcome:?}; cleanup: {cleanup:?}; exact writes allowed: {allowed}");
+    tracing::info!(
+        ?outcome,
+        ?cleanup,
+        exact_writes_allowed = allowed,
+        "Execution finished"
+    );
     outcome?;
     cleanup?;
     if let Some(error) = stream_failure {

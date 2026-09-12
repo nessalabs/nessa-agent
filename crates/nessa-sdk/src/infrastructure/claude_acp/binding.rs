@@ -24,7 +24,9 @@ pub struct ClaudeAcpConfig {
     pub workspace: PathBuf,
     pub file_tools: bool,
     pub startup_timeout: Duration,
-    pub prompt_timeout: Duration,
+    /// None leaves execution unbounded in time (the default policy).
+    /// Some sets an explicit total runtime limit, not a stuck-agent detector.
+    pub prompt_timeout: Option<Duration>,
     pub shutdown_grace: Duration,
     pub kill_timeout: Duration,
     pub event_capacity: usize,
@@ -56,11 +58,11 @@ impl ClaudeAcpBinding {
         }
         if [
             config.startup_timeout,
-            config.prompt_timeout,
             config.shutdown_grace,
             config.kill_timeout,
         ]
         .iter()
+        .chain(config.prompt_timeout.iter())
         .any(|duration| {
             duration.is_zero() || tokio::time::Instant::now().checked_add(*duration).is_none()
         }) || !(1..=4096).contains(&config.event_capacity)

@@ -44,7 +44,7 @@ fn fixture_configuration(mode: &str, capacity: usize) -> (TempDir, ClaudeAcpConf
         workspace: root.path().to_path_buf(),
         file_tools: true,
         startup_timeout: Duration::from_secs(2),
-        prompt_timeout: Duration::from_millis(700),
+        prompt_timeout: Some(Duration::from_millis(700)),
         shutdown_grace: Duration::from_millis(100),
         kill_timeout: Duration::from_millis(300),
         event_capacity: capacity,
@@ -479,4 +479,30 @@ fn native_configuration_cannot_enable_model_false_tools_or_extended_limits() {
     assert!(
         ClaudeAcpBinding::new(config, &model, TokenLimits::new(200_000, 64_000).unwrap()).is_ok()
     );
+}
+
+#[tokio::test]
+async fn unlimited_prompt_survives_a_day_and_still_accepts_stop() {
+    let (root, mut config, model) = fixture_configuration("stall", 16);
+    config.prompt_timeout = None;
+    let binding =
+        ClaudeAcpBinding::new(config, &model, TokenLimits::new(900, 100).unwrap()).unwrap();
+    let mut opened = binding.open().await.unwrap();
+    let active = start(&opened, "long-running").await;
+    assert_eq!(
+        next(&mut opened).await,
+        BindingUpdate::Text("running".into())
+    );
+    // Only advance time after real process startup, so virtual startup deadlines
+    // cannot race the operating system launching the fixture.
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(24 * 60 * 60)).await;
+    tokio::task::yield_now().await;
+    tokio::time::resume();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!root.path().join("cancel-observed").exists());
+    assert!(!active.is_finished());
+    opened.session.stop().await.unwrap();
+    assert_eq!(active.await.unwrap().unwrap(), PromptOutcome::Cancelled);
+    assert_gone(&root, "pid");
 }

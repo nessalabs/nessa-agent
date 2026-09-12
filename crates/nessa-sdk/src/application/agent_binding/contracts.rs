@@ -128,6 +128,10 @@ pub struct BindingEvent {
     pub execution_id: String,
     pub update: BindingUpdate,
 }
+/// One provider-independent observation carried by a BindingEvent.
+/// Adapters translate provider messages into these variants; consumers render or
+/// record them. This enum does not execute tools, decide permissions, or own
+/// Conversation state. Finished orders the terminal observation after its output.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BindingUpdate {
     Finished(Result<PromptOutcome, BindingError>),

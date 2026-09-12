@@ -75,7 +75,7 @@ struct Worker {
     active: Option<ActivePrompt>,
     permissions: HashMap<String, Permission>,
     tool_names: HashMap<String, String>,
-    deadline: Instant,
+    deadline: Option<Instant>,
     stopping: bool,
     deferred_outcome: Option<PromptOutcome>,
 }
@@ -96,7 +96,7 @@ pub(super) async fn run(
         buffer: Vec::new(),
         limit: config.max_frame_bytes,
     };
-    let deadline = Instant::now() + config.startup_timeout;
+    let deadline = Some(Instant::now() + config.startup_timeout);
     let mut worker = Worker {
         scope,
         reader,
@@ -206,7 +206,7 @@ impl Worker {
             }
             let message = tokio::select! { biased;
                 _ = self.stop.changed() => return Err(BindingError::Closed),
-                _ = tokio::time::sleep_until(self.deadline) => return Err(BindingError::Deadline),
+                _ = wait_for_deadline(self.deadline) => return Err(BindingError::Deadline),
                 message = self.reader.next() => message?,
             };
             if let Some(method) = message.method {
@@ -274,7 +274,7 @@ impl Worker {
                 tokio::select! { biased;
                     _ = self.stop.changed(), if !self.stopping => Input::Stop,
                     _ = self.events.closed() => Input::ConsumerGone,
-                    _ = tokio::time::sleep_until(self.deadline), if self.active.is_some() || self.stopping => Input::Deadline,
+                    _ = wait_for_deadline(self.deadline), if self.active.is_some() || self.stopping => Input::Deadline,
                     command = self.commands.recv(), if !self.stopping => Input::Command(command),
                     message = self.reader.next() => Input::Message(message),
                 }
@@ -290,7 +290,7 @@ impl Worker {
                         json!({"sessionId":self.session}),
                     ))
                     .await?;
-                    self.deadline = Instant::now() + self.config.shutdown_grace;
+                    self.deadline = Some(Instant::now() + self.config.shutdown_grace);
                     if self.active.is_none() {
                         return Ok(());
                     }
@@ -340,7 +340,10 @@ impl Worker {
                     reply,
                 });
                 self.tool_names.clear();
-                self.deadline = Instant::now() + self.config.prompt_timeout;
+                self.deadline = self
+                    .config
+                    .prompt_timeout
+                    .map(|limit| Instant::now() + limit);
                 self.send(wire::request(
                     id,
                     "session/prompt",
@@ -573,5 +576,13 @@ impl Worker {
                 .await?;
         }
         Ok(())
+    }
+}
+
+/// No artificial far-future timestamp: no configured limit means no timer.
+async fn wait_for_deadline(deadline: Option<Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
     }
 }

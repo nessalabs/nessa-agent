@@ -81,6 +81,12 @@ The host supplies a new identity for each attempt; this port does not implement
 request deduplication or durable acceptance. Only one prompt may be active per
 session; a second returns `Busy`. Commands and
 events use bounded channels. Frames and persistent identifiers have size limits.
+`prompt_timeout: None` is the default policy: a prompt has no elapsed-time cutoff.
+A host can explicitly opt into a total runtime limit with `Some(duration)`.
+Elapsed runtime or quiet output is not a stuck-agent diagnosis. Startup, protocol
+writes, and cleanup keep their separate deadlines, and Stop remains available
+throughout an unlimited prompt. Health assessment is separate future work.
+
 Output queue overflow is a binding failure; events are not silently dropped while
 execution continues. The worker tears down the scope, then the reader reports the
 failure after previously queued events. Advisory usage/plan/metadata extensions
@@ -129,7 +135,16 @@ npm ci --prefix crates/nessa-sdk/harnesses/claude-acp --ignore-scripts --no-audi
 
 [The Rust example](../examples/claude_acp.rs) performs explicit composition using
 normal local Claude authentication. It does not extract or copy credentials. It
-uses a 100,000-token admission window and a 1,000-token output reservation:
+uses a 100,000-token admission window and a 1,000-token output reservation, and no
+prompt timeout. `TokenLimits::new(context_window, max_output)` validates those
+positive budgets and requires output to fit within context. In this example,
+input plus 1,000 reserved output tokens must fit within 100,000. The output ceiling
+is per model response, not a lifetime token budget for the agent; the context
+value is local admission configuration, not a measurement or an instruction to
+resize the harness's context. These small values are smoke-test settings, not
+production defaults. Both examples emit structured `tracing` events, with the
+subscriber installed by example composition:
+
 
 ```sh
 cargo run -p nessa-sdk --example claude_acp -- \
@@ -161,7 +176,7 @@ On **2026-09-12, macOS**, the real Rust adapter with the pinned harness and exac
 | Stop after first streamed text | `Cancelled` after cleanup without force |
 | Stop with pending Write permission | `Cancelled`; requested file absent |
 
-Automated validation passes **56 SDK tests**, Clippy, formatting, and the declared
+Automated validation passes **57 SDK tests**, Clippy, formatting, and the declared
 Rust 1.89 build. The domain coverage gate remains **364/364 lines, 60/60 functions,
 and 445/445 regions**. The shared local-storage/auth/server test and Clippy checks
 also pass; this change adds no domain exclusions.

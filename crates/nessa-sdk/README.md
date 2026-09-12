@@ -46,7 +46,7 @@ cargo run -p nessa-sdk --example models -- crates/nessa-sdk/data/models.json ope
 cargo test -p nessa-sdk
 ```
 
-The example prints all metadata as JSON, or a single exact provider/model entry.
+The example logs JSON metadata through `tracing`, either the catalog or one exact provider/model entry.
 It needs no credentials and performs no provider requests.
 
 Host composition opens its selected file and calls
@@ -150,7 +150,7 @@ capability snapshot before provider dispatch; host authorization remains require
 
 Tests exercise domain invariants without JSON, application projection/import and
 execution adapter substitution, JSON loading, and the Claude protocol/process
-boundary. The current SDK suite has 56 tests; live provider checks are recorded
+boundary. The current SDK suite has 57 tests; live provider checks are recorded
 separately in the binding guide.
 
 ```text
