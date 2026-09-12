@@ -23,6 +23,14 @@ jobs:
       - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings
       - run: cargo test -p nessa-app surface_credential
         if: runner.os == 'Windows'
+      - name: Install SDK domain coverage tools
+        if: runner.os == 'Linux'
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --version 0.6.16 --locked
+      - name: Require complete SDK domain coverage
+        if: runner.os == 'Linux'
+        run: bash scripts/check-sdk-domain-coverage.sh
       - run: cargo build -p nessa-server
       # Auth/SDK checks do not need the desktop UI's separate repository. Use an
       # isolated minimal npm harness so this job has no UI checkout credentials.

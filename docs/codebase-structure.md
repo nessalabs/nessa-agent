@@ -170,7 +170,7 @@ patterns for actual backend integrations without adding a service locator.
 
 ## Agent SDK foundation
 
-`crates/nessa-sdk` currently owns model metadata only. `domain/model_metadata/`
+`crates/nessa-sdk` owns model metadata and immutable effective capability snapshots. `domain/model_metadata/`
 groups the feature into `value_objects/`, `entities/`, and `aggregates/`. Related
 value objects share identity, capabilities, and description files; the catalog
 aggregate owns model uniqueness rules. `domain/common/value_objects/` supplies
@@ -178,7 +178,10 @@ shared Date and Url values backed by pure parsing libraries. `application/`
 owns DTOs, explicit mappings, and import/list/select use cases. The JSON reader
 adapter lives in `infrastructure/model_metadata_json.rs`. Composition chooses and opens the catalog
 file, then injects the immutable result. See the [SDK guide](../crates/nessa-sdk/README.md).
-Conversation domain rules and execution adapters are not implemented yet.
+`domain/effective_capabilities/value_objects/` intersects binding/model features,
+validates configured limits, and checks input requirements locally. Application
+DTOs project the same snapshot. Conversation lifecycle rules, harness settings
+readers, and execution adapters are not implemented yet.
 
 ## Identity and access library
 

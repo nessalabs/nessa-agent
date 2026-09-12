@@ -54,7 +54,9 @@ impl ModelFeatures {
     }
 }
 
-/// Published ceilings, never a harness's configured/default context window.
+/// Positive token ceilings with output bounded by the context window.
+/// Model metadata uses published ceilings; effective capabilities use validated
+/// execution limits. The owner determines which window this value describes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TokenLimits {
     max_context_window: u32,

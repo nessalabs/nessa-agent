@@ -174,8 +174,10 @@ entities and value objects own invariants; application use cases map DTOs and
 query the catalog; infrastructure parses JSON. Host
 composition supplies a reader and owns the resulting immutable snapshot. The
 [SDK guide](../crates/nessa-sdk/README.md) shows how to inspect it. The server and
-UI do not consume this catalog yet; bindings and effective capabilities are not
-implemented.
+UI do not consume this catalog yet. Immutable effective capabilities now combine
+model facts with typed binding restrictions and configured limits, validate input
+requirements locally, and expose application DTO projections. Bindings and harness
+settings readers are not implemented.
 
 There is no agent runtime, no chat RPCs, no persistence for conversations, no
 settings UI. The panel already opens a `stage=dev` `@nessa/client` session for

@@ -53,3 +53,27 @@ fn urls_are_reusable_across_schemes_and_have_canonical_value_equality() {
     }
     assert_eq!(Url::new("https://example.com").unwrap().scheme(), "https");
 }
+
+#[test]
+fn date_and_url_diagnostics_preserve_actionable_parse_errors() {
+    let date = Date::new("2026-02-30".into()).unwrap_err();
+    assert_eq!(
+        date.to_string(),
+        "expected a valid calendar date in YYYY-MM or YYYY-MM-DD format"
+    );
+    assert!(std::error::Error::source(&date).is_none());
+    let whitespace = Url::new("https://example.com/has space").unwrap_err();
+    assert_eq!(
+        whitespace.to_string(),
+        "URL must not contain whitespace or control characters"
+    );
+    assert!(std::error::Error::source(&whitespace).is_none());
+    let invalid = Url::new("relative/path").unwrap_err();
+    let source =
+        std::error::Error::source(&invalid).expect("URL parser errors preserve their source");
+    assert_eq!(source.to_string(), "relative URL without a base");
+    assert_eq!(
+        invalid.to_string(),
+        "invalid absolute URL: relative URL without a base"
+    );
+}

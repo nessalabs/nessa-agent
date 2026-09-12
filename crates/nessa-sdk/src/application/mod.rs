@@ -1,4 +1,5 @@
-//! The application imports model metadata and answers list/select requests.
+//! The application imports model metadata, answers list/select requests, and
+//! projects effective capability snapshots for consumers.
 //! It translates boundary DTOs into domain objects and projects results back to
 //! DTOs. The domain constructors remain the owners of metadata rules.
 //!

@@ -1,6 +1,7 @@
 //! Explicit DTO/domain translation; constructors remain the only invariant owners.
-use super::dto::{ModalitiesDto, ModelMetadataDto};
+use super::dto::{EffectiveCapabilitiesDto, ModalitiesDto, ModelMetadataDto};
 use crate::domain::common::value_objects::{Date, Url};
+use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::domain::model_metadata::{
     entities::ModelMetadata,
     value_objects::Modalities,
@@ -23,6 +24,20 @@ impl From<Modalities> for ModalitiesDto {
             text: value.text(),
             image: value.image(),
             audio: value.audio(),
+        }
+    }
+}
+impl From<&EffectiveCapabilities> for EffectiveCapabilitiesDto {
+    fn from(snapshot: &EffectiveCapabilities) -> Self {
+        Self {
+            provider: snapshot.model().provider().as_str().into(),
+            model_id: snapshot.model().model_id().into(),
+            input: snapshot.features().input().into(),
+            output: snapshot.features().output().into(),
+            tool_use: snapshot.features().tool_use(),
+            reasoning: snapshot.features().reasoning(),
+            context_window_tokens: snapshot.limits().max_context_window(),
+            max_output_tokens: snapshot.limits().max_output(),
         }
     }
 }
