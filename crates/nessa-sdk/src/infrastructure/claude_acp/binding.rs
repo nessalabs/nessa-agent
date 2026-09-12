@@ -1,4 +1,5 @@
 use super::{process::ProcessScope, worker};
+use crate::domain::agent_execution::value_objects::*;
 use crate::{
     application::agent_binding::*,
     domain::{

@@ -11,3 +11,5 @@ mod service;
 pub use contracts::*;
 pub(crate) use service::validate_prompt;
 pub use service::Agent;
+
+mod mapping;

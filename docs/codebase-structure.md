@@ -182,7 +182,10 @@ adapter lives in `infrastructure/model_metadata_json.rs`. Composition chooses an
 file, then injects the immutable result. See the [SDK guide](../crates/nessa-sdk/README.md).
 `domain/effective_capabilities/value_objects/` intersects binding/model features,
 validates configured limits, and checks input requirements locally. Application
-DTOs project the same snapshot. `application/agent_binding/` owns execution ports,
+DTOs project the same snapshot. `domain/agent_execution/` owns validated execution
+identities, prompt text and message fragments, file-tool values, tool observation
+entities, and once-only permission-request entities. `application/agent_binding/`
+maps boundary DTOs into those values and owns execution ports,
 typed observations/controls, and the capability admission use case.
 `infrastructure/claude_acp/` implements the pinned local adapter, bounded protocol
 worker, and restricted Unix process supervision. Host composition supplies model,

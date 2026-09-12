@@ -98,7 +98,7 @@ for line in sys.stdin:
         elif mode in ("permission", "permission-stop", "unknown-tool"):
             update({"sessionUpdate": "tool_call", **tool("Bash" if mode == "unknown-tool" else "Write")})
             send({"id": permission_id, "method": "session/request_permission", "params": {
-                "sessionId": session, "toolCall": tool(), "options": [
+                "sessionId": session, "toolCall": {key: value for key, value in tool().items() if key != "title"}, "options": [
                     {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
                     {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"},
                     {"optionId": "never-choose", "kind": "allow_always", "name": "Always"}]}})

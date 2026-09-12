@@ -38,6 +38,35 @@ It must keep the event reader draining, and await `stop()` before shutting down
 its async runtime. Dropping every session handle requests cleanup but cannot
 provide an awaited cleanup guarantee after the runtime itself has stopped.
 
+## Reusable execution domain
+
+`domain::agent_execution` owns provider-independent concepts, grouped by DDD role:
+
+- `value_objects`: validated `ExecutionId`, `ToolCallId`, `PermissionId`,
+  `PromptText`, and `FilePath`; `MessageChunk`, `ToolCallUpdate`, `FileLocation`,
+  `ToolContent`, `FileToolInput`, `PromptOutcome`, and permission decisions/states.
+- `entities::ToolCall`: holds one execution's observed tool state. `apply` rejects
+  updates for another execution or tool and preserves omitted fields. Explicit
+  empty collections replace previous values. It observes tools; it never runs them.
+- `entities::PermissionRequest`: binds an ID, execution, tool, and proposed input.
+  `answer` rejects another execution and any second resolution; `cancel` closes a
+  pending request. An invalid answer leaves it pending. Host authorization is a
+  separate prerequisite, and no permanent grant is represented.
+
+`Prompt::to_domain` and `PermissionAnswer::to_domain` map application boundary
+DTOs into these validated values. The worker uses the domain entities while
+keeping RPC IDs, ACP option IDs, tool-name metadata, and process effects outside
+of them. Permission observations include the tool state merged so far; normal
+tool events remain sparse updates. Paths are untrusted descriptions, never
+filesystem access or authorization. Wire ID/frame bounds remain adapter rules.
+
+`MessageChunk` models streamed text or thought fragments, including empty or
+whitespace-only fragments. `PromptText` instead requires nonblank submitted text.
+A complete conversation message entity needs transcript identity and lifecycle;
+those are not supplied by this binding, and remain conversation work. Likewise,
+`BindingUpdate` remains an application delivery envelope, not a persisted domain
+event or an aggregate root.
+
 ## Supported native profile
 
 - Unix process groups; Windows configuration is rejected before starting a child.

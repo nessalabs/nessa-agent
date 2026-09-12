@@ -1,6 +1,5 @@
-use super::{
-    AgentSession, BindingError, BindingFuture, PermissionAnswer, Prompt, PromptOutcome, StopOutcome,
-};
+use super::{AgentSession, BindingError, BindingFuture, PermissionAnswer, Prompt, StopOutcome};
+use crate::domain::agent_execution::value_objects::*;
 use crate::domain::effective_capabilities::value_objects::{
     CapabilityRequirement, EffectiveCapabilities, Modality,
 };
@@ -29,7 +28,10 @@ impl Agent {
         })
     }
     pub fn answer_permission(&self, answer: PermissionAnswer) -> BindingFuture<'_, ()> {
-        self.session.answer_permission(answer)
+        Box::pin(async move {
+            answer.to_domain()?;
+            self.session.answer_permission(answer).await
+        })
     }
     pub fn stop(&self) -> BindingFuture<'_, StopOutcome> {
         self.session.stop()
@@ -41,14 +43,7 @@ pub(crate) fn validate_prompt(
     input: &Prompt,
     capabilities: &EffectiveCapabilities,
 ) -> Result<(), BindingError> {
-    if input.text.trim().is_empty()
-        || input.execution_id.trim().is_empty()
-        || input.execution_id.len() > 256
-    {
-        return Err(BindingError::InvalidInput(
-            "text and a bounded execution ID are required".into(),
-        ));
-    }
+    input.to_domain()?;
     capabilities
         .validate(
             &[CapabilityRequirement::Input(Modality::Text)],

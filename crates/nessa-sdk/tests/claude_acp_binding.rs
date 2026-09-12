@@ -1,4 +1,5 @@
 #![cfg(unix)]
+use nessa_sdk::domain::agent_execution::value_objects::*;
 use nessa_sdk::{
     application::{
         agent_binding::*,
@@ -118,7 +119,10 @@ async fn streams_two_prompts_with_one_immutable_session_and_repeated_stop() {
     for input in ["first", "second"] {
         let event = opened.events.next().await.unwrap().unwrap();
         assert_eq!(event.execution_id, input);
-        assert_eq!(event.update, BindingUpdate::Text(input.into()));
+        assert_eq!(
+            event.update,
+            BindingUpdate::Message(MessageChunk::Text(input.into()))
+        );
         let terminal = opened.events.next().await.unwrap().unwrap();
         assert_eq!(terminal.execution_id, input);
         assert_eq!(
@@ -151,7 +155,10 @@ async fn isolated_bindings_and_stop_during_streaming() {
     assert_eq!(active.await.unwrap().unwrap(), PromptOutcome::Cancelled);
     assert_gone(&root_a, "pid");
     let active = start(&b, "unaffected").await;
-    assert_eq!(next(&mut b).await, BindingUpdate::Text("unaffected".into()));
+    assert_eq!(
+        next(&mut b).await,
+        BindingUpdate::Message(MessageChunk::Text("unaffected".into()))
+    );
     assert_eq!(active.await.unwrap().unwrap(), PromptOutcome::Completed);
     b.session.stop().await.unwrap();
     assert_gone(&root_b, "pid");
@@ -164,18 +171,21 @@ async fn permission_is_typed_once_only_and_can_be_denied() {
         let mut opened = binding.open().await.unwrap();
         let active = start(&opened, "write").await;
         assert!(matches!(next(&mut opened).await, BindingUpdate::Tool(_)));
-        let BindingUpdate::PermissionRequested { id, input, .. } = next(&mut opened).await else {
+        let BindingUpdate::PermissionRequested { id, input, tool } = next(&mut opened).await else {
             panic!("expected permission");
         };
+        assert_eq!(tool.title().as_deref(), Some("Write fixture.txt"));
         assert_eq!(
             *input,
             FileToolInput::Write {
-                path: std::fs::canonicalize(root.path())
-                    .unwrap()
-                    .join("fixture.txt")
-                    .to_str()
-                    .unwrap()
-                    .into(),
+                path: FilePath::new(
+                    std::fs::canonicalize(root.path())
+                        .unwrap()
+                        .join("fixture.txt")
+                        .to_str()
+                        .unwrap()
+                )
+                .unwrap(),
                 content: "fixture".into()
             }
         );
@@ -209,9 +219,9 @@ async fn permission_is_typed_once_only_and_can_be_denied() {
         let BindingUpdate::Tool(patch) = next(&mut opened).await else {
             panic!("expected sparse patch")
         };
-        assert_eq!(patch.title, None);
-        assert_eq!(patch.content, Some(vec![]));
-        assert_eq!(patch.locations, None);
+        assert_eq!(patch.title().clone(), None);
+        assert_eq!(patch.content().clone(), Some(vec![]));
+        assert_eq!(patch.locations().clone(), None);
         opened.session.stop().await.unwrap();
         assert_gone(&root, "pid");
     }
@@ -367,7 +377,7 @@ async fn force_stops_a_term_resistant_parent_and_reaps_its_child() {
     let active = start(&opened, "long").await;
     assert_eq!(
         next(&mut opened).await,
-        BindingUpdate::Text("running".into())
+        BindingUpdate::Message(MessageChunk::Text("running".into()))
     );
     let cleanup = timeout(Duration::from_secs(3), opened.session.stop())
         .await
@@ -397,7 +407,10 @@ async fn known_completion_wins_a_later_stop_without_rewriting_the_result() {
     let (root, binding) = fixture_binding("echo", 16);
     let mut opened = binding.open().await.unwrap();
     let active = start(&opened, "done").await;
-    assert_eq!(next(&mut opened).await, BindingUpdate::Text("done".into()));
+    assert_eq!(
+        next(&mut opened).await,
+        BindingUpdate::Message(MessageChunk::Text("done".into()))
+    );
     opened.session.stop().await.unwrap();
     assert_eq!(active.await.unwrap().unwrap(), PromptOutcome::Completed);
     assert_gone(&root, "pid");
@@ -491,7 +504,7 @@ async fn unlimited_prompt_survives_a_day_and_still_accepts_stop() {
     let active = start(&opened, "long-running").await;
     assert_eq!(
         next(&mut opened).await,
-        BindingUpdate::Text("running".into())
+        BindingUpdate::Message(MessageChunk::Text("running".into()))
     );
     // Only advance time after real process startup, so virtual startup deadlines
     // cannot race the operating system launching the fixture.

@@ -1,8 +1,7 @@
 //! Explicit host composition for a local smoke run. Permissions default to deny.
+use nessa_sdk::domain::agent_execution::value_objects::*;
 use nessa_sdk::{
-    application::agent_binding::{
-        Agent, AgentBinding, BindingUpdate, FileToolInput, PermissionAnswer, Prompt,
-    },
+    application::agent_binding::{Agent, AgentBinding, BindingUpdate, PermissionAnswer, Prompt},
     domain::{common::value_objects::TokenLimits, model_metadata::entities::ModelMetadata},
     infrastructure::{
         claude_acp::{ClaudeAcpBinding, ClaudeAcpConfig},
@@ -106,7 +105,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         match event {
             Ok(Some(event)) => match event {
                 nessa_sdk::application::agent_binding::BindingEvent {
-                    update: BindingUpdate::Text(text),
+                    update: BindingUpdate::Message(MessageChunk::Text(text)),
                     ..
                 } => {
                     tracing::info!(%text, "Agent text");
@@ -126,7 +125,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     let allow_once = mode == "verify-write"
                         && allowed == 0
                         && matches!(*input,
-                        FileToolInput::Write {ref path,ref content} if std::path::Path::new(path) == workspace.join("nessa-binding-smoke.txt") && content == "Nessa binding smoke test\n");
+                        FileToolInput::Write {ref path,ref content} if std::path::Path::new(path.as_str()) == workspace.join("nessa-binding-smoke.txt") && content == "Nessa binding smoke test\n");
                     agent
                         .answer_permission(PermissionAnswer {
                             execution_id: "smoke".into(),

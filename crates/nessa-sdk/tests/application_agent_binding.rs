@@ -1,3 +1,4 @@
+use nessa_sdk::domain::agent_execution::value_objects::*;
 use nessa_sdk::{
     application::{
         agent_binding::*,
@@ -157,4 +158,55 @@ async fn adapter_substitution_keeps_instances_and_controls_isolated() {
     );
     assert_eq!(online.stop().await.unwrap(), StopOutcome { forced: false });
     assert_eq!(offline.stop().await, Err(BindingError::CleanupUncertain));
+}
+
+#[test]
+fn execution_dtos_map_to_validated_domain_values() {
+    let mut prompt = Prompt {
+        execution_id: "run".into(),
+        text: " exact text \n".into(),
+        input_tokens: 1,
+        reserved_output_tokens: 1,
+    };
+    let (id, text) = prompt.to_domain().unwrap();
+    assert_eq!(id.as_str(), "run");
+    assert_eq!(text.as_str(), prompt.text);
+    prompt.text = " \n".into();
+    assert!(matches!(
+        prompt.to_domain(),
+        Err(BindingError::InvalidInput(_))
+    ));
+    prompt.execution_id.clear();
+    assert!(matches!(
+        prompt.to_domain(),
+        Err(BindingError::InvalidInput(_))
+    ));
+    for allow_once in [true, false] {
+        let mut answer = PermissionAnswer {
+            execution_id: "run".into(),
+            id: "permission".into(),
+            allow_once,
+        };
+        let (execution, id, decision) = answer.to_domain().unwrap();
+        assert_eq!(execution.as_str(), "run");
+        assert_eq!(id.as_str(), "permission");
+        assert_eq!(
+            decision,
+            if allow_once {
+                PermissionDecision::AllowOnce
+            } else {
+                PermissionDecision::RejectOnce
+            }
+        );
+        answer.id.clear();
+        assert!(matches!(
+            answer.to_domain(),
+            Err(BindingError::InvalidInput(_))
+        ));
+        answer.execution_id.clear();
+        assert!(matches!(
+            answer.to_domain(),
+            Err(BindingError::InvalidInput(_))
+        ));
+    }
 }

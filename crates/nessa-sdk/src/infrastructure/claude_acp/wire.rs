@@ -1,4 +1,5 @@
 use crate::application::agent_binding::*;
+use crate::domain::agent_execution::value_objects::*;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -119,7 +120,7 @@ pub(super) fn outcome(value: &Value) -> Result<PromptOutcome, BindingError> {
 pub(super) fn tool_call(
     value: &Value,
     names: &mut HashMap<String, String>,
-) -> Result<ToolCall, BindingError> {
+) -> Result<ToolCallUpdate, BindingError> {
     let id = identifier(value, "toolCallId")?.to_owned();
     if let Some(name) = value
         .pointer("/_meta/claudeCode/toolName")
@@ -181,10 +182,7 @@ pub(super) fn tool_call(
                                 .ok_or_else(|| protocol("invalid location line"))
                         })
                         .transpose()?;
-                    Ok(FileLocation {
-                        path: string(location, "path")?.to_owned(),
-                        line,
-                    })
+                    Ok(FileLocation::new(path(string(location, "path")?)?, line))
                 })
                 .collect::<Result<Vec<_>, BindingError>>()
         })
@@ -204,7 +202,7 @@ pub(super) fn tool_call(
                         _ => return Err(protocol("invalid diff old text")),
                     };
                     result.push(ToolContent::Diff {
-                        path: string(item, "path")?.to_owned(),
+                        path: path(string(item, "path")?)?,
                         old,
                         new: item
                             .get("newText")
@@ -230,17 +228,21 @@ pub(super) fn tool_call(
             Ok::<_, BindingError>(result)
         })
         .transpose()?;
-    Ok(ToolCall {
-        id,
+    Ok(ToolCallUpdate::new(
+        ToolCallId::new(id).map_err(|error| protocol(&error.to_string()))?,
         title,
         kind,
         status,
         locations,
         content,
-    })
+    ))
 }
 
 /// Deserialize every admitted input field; an unfamiliar schema cannot be allowed.
+fn path(value: impl Into<String>) -> Result<FilePath, BindingError> {
+    FilePath::new(value).map_err(|error| protocol(&error.to_string()))
+}
+
 pub(super) fn file_input(name: &str, value: &Value) -> Result<FileToolInput, BindingError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -304,7 +306,7 @@ pub(super) fn file_input(name: &str, value: &Value) -> Result<FileToolInput, Bin
         "Read" => {
             let v: Read = parse(value)?;
             Ok(FileToolInput::Read {
-                path: v.file_path,
+                path: path(v.file_path)?,
                 offset: v.offset,
                 limit: v.limit,
                 pages: v.pages,
@@ -313,14 +315,14 @@ pub(super) fn file_input(name: &str, value: &Value) -> Result<FileToolInput, Bin
         "Write" => {
             let v: Write = parse(value)?;
             Ok(FileToolInput::Write {
-                path: v.file_path,
+                path: path(v.file_path)?,
                 content: v.content,
             })
         }
         "Edit" => {
             let v: Edit = parse(value)?;
             Ok(FileToolInput::Edit {
-                path: v.file_path,
+                path: path(v.file_path)?,
                 old: v.old_string,
                 new: v.new_string,
                 replace_all: v.replace_all,
@@ -330,14 +332,14 @@ pub(super) fn file_input(name: &str, value: &Value) -> Result<FileToolInput, Bin
             let v: Glob = parse(value)?;
             Ok(FileToolInput::Glob {
                 pattern: v.pattern,
-                path: v.path,
+                path: v.path.map(path).transpose()?,
             })
         }
         "Grep" => {
             let v: Grep = parse(value)?;
             Ok(FileToolInput::Grep {
                 pattern: v.pattern,
-                path: v.path,
+                path: v.path.map(path).transpose()?,
                 glob: v.glob,
                 file_type: v.file_type,
                 output_mode: v.output_mode,
@@ -373,7 +375,7 @@ mod tests {
                 "Read",
                 json!({"file_path":"/a","offset":2,"limit":5,"pages":"1-2"}),
                 FileToolInput::Read {
-                    path: "/a".into(),
+                    path: FilePath::new("/a").unwrap(),
                     offset: Some(2),
                     limit: Some(5),
                     pages: Some("1-2".into()),
@@ -383,7 +385,7 @@ mod tests {
                 "Write",
                 json!({"file_path":"/a","content":"new"}),
                 FileToolInput::Write {
-                    path: "/a".into(),
+                    path: FilePath::new("/a").unwrap(),
                     content: "new".into(),
                 },
             ),
@@ -391,7 +393,7 @@ mod tests {
                 "Edit",
                 json!({"file_path":"/a","old_string":"old","new_string":"new"}),
                 FileToolInput::Edit {
-                    path: "/a".into(),
+                    path: FilePath::new("/a").unwrap(),
                     old: "old".into(),
                     new: "new".into(),
                     replace_all: false,
@@ -430,6 +432,9 @@ mod tests {
                 json!({"file_path":"/a","content":"x","command":"true"}),
             ),
             ("Read", json!({"file_path":"/a","offset":-1})),
+            ("Write", json!({"file_path":"","content":"x"})),
+            ("Read", json!({"file_path":"a\0b"})),
+            ("Glob", json!({"pattern":"*","path":""})),
         ] {
             assert!(file_input(name, &input).is_err());
         }
@@ -440,16 +445,22 @@ mod tests {
         let mut names = HashMap::new();
         let tool = tool_call(&json!({"toolCallId":"a","_meta":{"claudeCode":{"toolName":"Write"}},"content":[{"type":"diff","path":"/a","oldText":null,"newText":"new"}]}),&mut names).unwrap();
         assert_eq!(
-            tool.content,
+            tool.content().clone(),
             Some(vec![ToolContent::Diff {
-                path: "/a".into(),
+                path: FilePath::new("/a").unwrap(),
                 old: None,
                 new: "new".into()
             }])
         );
         let patch = tool_call(&json!({"toolCallId":"a","content":[]}), &mut names).unwrap();
-        assert_eq!(patch.content, Some(vec![]));
-        assert_eq!(patch.locations, None);
+        assert_eq!(patch.content().clone(), Some(vec![]));
+        assert_eq!(patch.locations().clone(), None);
+        assert!(tool_call(&json!({"toolCallId":" "}), &mut names).is_err());
+        assert!(tool_call(
+            &json!({"toolCallId":"a", "locations":[{"path":""}]}),
+            &mut names
+        )
+        .is_err());
         assert!(tool_call(
             &json!({"toolCallId":"a","_meta":{"claudeCode":{"toolName":"Edit"}}}),
             &mut names

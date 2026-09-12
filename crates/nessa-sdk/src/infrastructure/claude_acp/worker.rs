@@ -3,6 +3,8 @@ use super::{
     process::ProcessScope,
     wire::{self, Envelope, RpcId},
 };
+use crate::domain::agent_execution::entities::{PermissionRequest, ToolCall};
+use crate::domain::agent_execution::value_objects::*;
 use crate::{
     application::agent_binding::*,
     domain::effective_capabilities::value_objects::EffectiveCapabilities,
@@ -19,10 +21,11 @@ use tokio::{
 type PromptReply = oneshot::Sender<Result<PromptOutcome, BindingError>>;
 struct ActivePrompt {
     id: i64,
-    execution_id: String,
+    execution_id: ExecutionId,
     reply: PromptReply,
 }
 struct Permission {
+    request: PermissionRequest,
     wire_id: RpcId,
     allow: String,
     reject: String,
@@ -73,7 +76,8 @@ struct Worker {
     sequence: i64,
     permission_sequence: u64,
     active: Option<ActivePrompt>,
-    permissions: HashMap<String, Permission>,
+    permissions: HashMap<PermissionId, Permission>,
+    tools: HashMap<ToolCallId, ToolCall>,
     tool_names: HashMap<String, String>,
     deadline: Option<Instant>,
     stopping: bool,
@@ -110,6 +114,7 @@ pub(super) async fn run(
         permission_sequence: 0,
         active: None,
         permissions: HashMap::new(),
+        tools: HashMap::new(),
         tool_names: HashMap::new(),
         deadline,
         stopping: false,
@@ -325,7 +330,10 @@ impl Worker {
                 }
                 let validation = validate_prompt(&input, &self.capabilities);
                 let validation = validation.and_then(|()| {
-                    if input.text.trim().is_empty() || input.reserved_output_tokens != self.capabilities.limits().max_output() {
+                    if input.execution_id.len() > 256 {
+                        return Err(BindingError::InvalidInput("execution ID exceeds binding limit".into()));
+                    }
+                    if input.reserved_output_tokens != self.capabilities.limits().max_output() {
                         Err(BindingError::InvalidInput("output reservation must equal this binding's configured output ceiling".into()))
                     } else { Ok(()) }
                 });
@@ -333,13 +341,15 @@ impl Worker {
                     let _ = reply.send(Err(error));
                     return Ok(());
                 }
+                let (execution_id, text) = input.to_domain()?;
                 let id = self.next_id()?;
                 self.active = Some(ActivePrompt {
                     id,
-                    execution_id: input.execution_id.clone(),
+                    execution_id,
                     reply,
                 });
                 self.tool_names.clear();
+                self.tools.clear();
                 self.deadline = self
                     .config
                     .prompt_timeout
@@ -347,7 +357,7 @@ impl Worker {
                 self.send(wire::request(
                     id,
                     "session/prompt",
-                    json!({"sessionId":self.session,"prompt":[{"type":"text","text":input.text}]}),
+                    json!({"sessionId":self.session,"prompt":[{"type":"text","text":text.as_str()}]}),
                 ))
                 .await?;
             }
@@ -359,18 +369,25 @@ impl Worker {
                     let _ = reply.send(Err(BindingError::Closed));
                     return Ok(());
                 }
-                if self
-                    .active
-                    .as_ref()
-                    .is_none_or(|active| active.execution_id != answer.execution_id)
-                {
-                    let _ = reply.send(Err(BindingError::StalePermission));
-                    return Ok(());
-                }
-                if let Some(permission) = self.permissions.remove(&answer.id) {
+                let (execution_id, permission_id, decision) = match answer.to_domain() {
+                    Ok(values) => values,
+                    Err(error) => {
+                        let _ = reply.send(Err(error));
+                        return Ok(());
+                    }
+                };
+                if let Some(permission) = self.permissions.get_mut(&permission_id) {
+                    if permission.request.answer(&execution_id, decision).is_err() {
+                        let _ = reply.send(Err(BindingError::StalePermission));
+                        return Ok(());
+                    }
+                    let permission = self
+                        .permissions
+                        .remove(&permission_id)
+                        .expect("resolved permission");
                     let response = wire::selected(
                         &permission.wire_id,
-                        if answer.allow_once {
+                        if decision == PermissionDecision::AllowOnce {
                             &permission.allow
                         } else {
                             &permission.reject
@@ -449,7 +466,7 @@ impl Worker {
             .ok_or_else(|| wire::protocol("event has no execution"))?;
         self.events
             .try_send(BindingEvent {
-                execution_id: active.execution_id.clone(),
+                execution_id: active.execution_id.as_str().to_owned(),
                 update,
             })
             .map_err(|_| BindingError::Backpressure)
@@ -497,24 +514,26 @@ impl Worker {
                 .ok_or_else(|| wire::protocol("invalid text content"))?
                 .to_owned();
             self.emit(if kind == "agent_message_chunk" {
-                BindingUpdate::Text(text)
+                BindingUpdate::Message(MessageChunk::Text(text))
             } else {
-                BindingUpdate::Thought(text)
+                BindingUpdate::Message(MessageChunk::Thought(text))
             })
         } else {
             if !self.config.file_tools {
                 return Err(wire::protocol("tool event in a text-only binding"));
             }
             let tool = wire::tool_call(update, &mut self.tool_names)?;
+            self.observe_tool(&tool)?;
             self.emit(BindingUpdate::Tool(tool))
         }
     }
-    async fn permission(&mut self, id: RpcId, params: Value) -> Result<(), BindingError> {
+    async fn permission(&mut self, wire_id: RpcId, params: Value) -> Result<(), BindingError> {
         self.check_session(&params)?;
         if self.stopping || self.active.is_none() || !self.config.file_tools {
-            return self.send(wire::permission_cancel(&id)).await;
+            return self.send(wire::permission_cancel(&wire_id)).await;
         }
-        if self.permissions.len() >= 128 || self.permissions.values().any(|p| p.wire_id == id) {
+        if self.permissions.len() >= 128 || self.permissions.values().any(|p| p.wire_id == wire_id)
+        {
             return Err(wire::protocol("permission request limit or duplicate ID"));
         }
         let tool = params
@@ -532,6 +551,13 @@ impl Worker {
                 .ok_or_else(|| wire::protocol("missing tool input"))?,
         )?;
         let tool = wire::tool_call(tool, &mut self.tool_names)?;
+        self.observe_tool(&tool)?;
+        let tool = self
+            .tools
+            .get(tool.id())
+            .expect("observed permission tool")
+            .observation()
+            .clone();
         let options = params
             .get("options")
             .and_then(Value::as_array)
@@ -552,26 +578,65 @@ impl Worker {
             }
             Ok(wire::identifier(matches[0], "optionId")?.to_owned())
         };
-        let permission = Permission {
-            wire_id: id,
-            allow: option("allow_once")?,
-            reject: option("reject_once")?,
-        };
         self.permission_sequence = self
             .permission_sequence
             .checked_add(1)
             .ok_or_else(|| wire::protocol("permission ID exhausted"))?;
         let id = self.permission_sequence.to_string();
-        self.permissions.insert(id.clone(), permission);
+        let permission_id =
+            PermissionId::new(id.clone()).map_err(|error| wire::protocol(&error.to_string()))?;
+        let execution_id = self
+            .active
+            .as_ref()
+            .expect("active permission")
+            .execution_id
+            .clone();
+        let request = PermissionRequest::new(
+            permission_id.clone(),
+            execution_id,
+            tool.id().clone(),
+            input.clone(),
+        );
+        let permission = Permission {
+            request,
+            wire_id,
+            allow: option("allow_once")?,
+            reject: option("reject_once")?,
+        };
+        self.permissions.insert(permission_id, permission);
         self.emit(BindingUpdate::PermissionRequested {
             id,
             tool,
             input: Box::new(input),
         })
     }
+    fn observe_tool(&mut self, update: &ToolCallUpdate) -> Result<(), BindingError> {
+        let execution_id = &self
+            .active
+            .as_ref()
+            .ok_or_else(|| wire::protocol("tool without execution"))?
+            .execution_id;
+        if let Some(tool) = self.tools.get_mut(update.id()) {
+            tool.apply(execution_id, update.clone())
+                .map_err(|error| wire::protocol(&error.to_string()))?;
+        } else {
+            if self.tools.len() >= 4096 {
+                return Err(wire::protocol("tool count limit exceeded"));
+            }
+            self.tools.insert(
+                update.id().clone(),
+                ToolCall::new(execution_id.clone(), update.clone()),
+            );
+        }
+        Ok(())
+    }
     async fn cancel_permissions(&mut self) -> Result<(), BindingError> {
         let permissions = std::mem::take(&mut self.permissions);
-        for permission in permissions.into_values() {
+        for mut permission in permissions.into_values() {
+            permission
+                .request
+                .cancel()
+                .map_err(|error| wire::protocol(&error.to_string()))?;
             self.send(wire::permission_cancel(&permission.wire_id))
                 .await?;
         }

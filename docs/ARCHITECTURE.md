@@ -177,7 +177,9 @@ composition supplies a reader and owns the resulting immutable snapshot. The
 UI do not consume this catalog yet. Immutable effective capabilities now combine
 model facts with typed binding restrictions and configured limits, validate input
 requirements locally, and expose application DTO projections. The local Claude
-ACP binding now implements application-owned execution ports, typed streaming and
+ACP binding uses reusable `domain/agent_execution` value objects and entities for
+messages, scoped tool observations, and permission resolution, behind application-owned
+execution ports. It provides typed streaming and
 file-tool permissions, and Stop with restricted Unix process supervision. Its
 [guide](../crates/nessa-sdk/docs/claude-acp.md) records the supported profile and
 macOS live checks. Harness settings readers remain future work.
