@@ -4,6 +4,7 @@ use super::{
     wire::{self, Envelope, RpcId},
 };
 use crate::domain::agent_execution::entities::{PermissionRequest, ToolCall};
+use crate::domain::agent_execution::events::*;
 use crate::domain::agent_execution::value_objects::*;
 use crate::{
     application::agent_binding::*,
@@ -27,8 +28,6 @@ struct ActivePrompt {
 struct Permission {
     request: PermissionRequest,
     wire_id: RpcId,
-    allow: String,
-    reject: String,
 }
 struct Reader {
     stdout: ChildStdout,
@@ -71,7 +70,7 @@ struct Worker {
     capabilities: EffectiveCapabilities,
     commands: mpsc::Receiver<Command>,
     stop: watch::Receiver<bool>,
-    events: mpsc::Sender<BindingEvent>,
+    events: mpsc::Sender<AgentTurnEvent>,
     session: String,
     sequence: i64,
     permission_sequence: u64,
@@ -92,7 +91,7 @@ pub(super) async fn run(
     commands: mpsc::Receiver<Command>,
     stop: watch::Receiver<bool>,
     finished: watch::Sender<Option<Completion>>,
-    events: mpsc::Sender<BindingEvent>,
+    events: mpsc::Sender<AgentTurnEvent>,
     ready: oneshot::Sender<Result<(), BindingError>>,
 ) {
     let reader = Reader {
@@ -161,11 +160,18 @@ pub(super) async fn run(
         } else {
             Err(result.clone().err().unwrap_or(BindingError::Closed))
         };
-        if let Err(error) = worker.emit(BindingUpdate::Finished(outcome.clone())) {
-            if failure.is_none() {
-                failure = Some(error);
-            }
-        }
+        let outcome = match outcome {
+            Ok(value) => match worker.emit(AgentTurnUpdate::Finished(value)) {
+                Ok(()) => Ok(value),
+                Err(error) => {
+                    if failure.is_none() {
+                        failure = Some(error.clone());
+                    }
+                    Err(error)
+                }
+            },
+            Err(error) => Err(error),
+        };
         let active = worker.active.take().expect("active prompt");
         let _ = active.reply.send(outcome);
     }
@@ -320,7 +326,7 @@ impl Worker {
     }
     async fn command(&mut self, command: Command) -> Result<(), BindingError> {
         match command {
-            Command::Prompt(input, reply) => {
+            Command::PromptRequest(input, reply) => {
                 if reply.is_closed() {
                     return Ok(());
                 }
@@ -341,7 +347,7 @@ impl Worker {
                     let _ = reply.send(Err(error));
                     return Ok(());
                 }
-                let (execution_id, text) = input.to_domain()?;
+                let execution_id = input.execution_id()?;
                 let id = self.next_id()?;
                 self.active = Some(ActivePrompt {
                     id,
@@ -357,7 +363,7 @@ impl Worker {
                 self.send(wire::request(
                     id,
                     "session/prompt",
-                    json!({"sessionId":self.session,"prompt":[{"type":"text","text":text.as_str()}]}),
+                    json!({"sessionId":self.session,"prompt":[{"type":"text","text":input.prompt.text().as_str()}]}),
                 ))
                 .await?;
             }
@@ -369,7 +375,7 @@ impl Worker {
                     let _ = reply.send(Err(BindingError::Closed));
                     return Ok(());
                 }
-                let (execution_id, permission_id, decision) = match answer.to_domain() {
+                let (execution_id, permission_id, option_id) = match answer.to_domain() {
                     Ok(values) => values,
                     Err(error) => {
                         let _ = reply.send(Err(error));
@@ -377,7 +383,11 @@ impl Worker {
                     }
                 };
                 if let Some(permission) = self.permissions.get_mut(&permission_id) {
-                    if permission.request.answer(&execution_id, decision).is_err() {
+                    if permission
+                        .request
+                        .answer(&execution_id, &option_id)
+                        .is_err()
+                    {
                         let _ = reply.send(Err(BindingError::StalePermission));
                         return Ok(());
                     }
@@ -385,14 +395,7 @@ impl Worker {
                         .permissions
                         .remove(&permission_id)
                         .expect("resolved permission");
-                    let response = wire::selected(
-                        &permission.wire_id,
-                        if decision == PermissionDecision::AllowOnce {
-                            &permission.allow
-                        } else {
-                            &permission.reject
-                        },
-                    );
+                    let response = wire::selected(&permission.wire_id, option_id.as_str());
                     let result = self.send(response).await;
                     let _ = reply.send(result.clone());
                     result?;
@@ -435,7 +438,6 @@ impl Worker {
         }
         if let Some(error) = message.error {
             let error = BindingError::Provider { code: error.code };
-            let _ = self.emit(BindingUpdate::Finished(Err(error.clone())));
             let active = self.active.take().expect("validated active prompt");
             let _ = active.reply.send(Err(error.clone()));
             return Err(error);
@@ -449,26 +451,22 @@ impl Worker {
             // Never publish cancellation from protocol evidence alone.
             self.deferred_outcome = Some(result);
         } else {
-            let published = self.emit(BindingUpdate::Finished(Ok(result)));
+            self.emit(AgentTurnUpdate::Finished(result))?;
             let active = self.active.take().expect("validated active prompt");
             let _ = active.reply.send(Ok(result));
-            published?;
         }
         timeout(self.config.shutdown_grace, self.cancel_permissions())
             .await
             .map_err(|_| BindingError::Deadline)??;
         Ok(())
     }
-    fn emit(&self, update: BindingUpdate) -> Result<(), BindingError> {
+    fn emit(&self, update: AgentTurnUpdate) -> Result<(), BindingError> {
         let active = self
             .active
             .as_ref()
             .ok_or_else(|| wire::protocol("event has no execution"))?;
         self.events
-            .try_send(BindingEvent {
-                execution_id: active.execution_id.as_str().to_owned(),
-                update,
-            })
+            .try_send(AgentTurnEvent::new(active.execution_id.clone(), update))
             .map_err(|_| BindingError::Backpressure)
     }
     fn check_session(&self, params: &Value) -> Result<(), BindingError> {
@@ -514,9 +512,9 @@ impl Worker {
                 .ok_or_else(|| wire::protocol("invalid text content"))?
                 .to_owned();
             self.emit(if kind == "agent_message_chunk" {
-                BindingUpdate::Message(MessageChunk::Text(text))
+                AgentTurnUpdate::Message(MessageChunk::Text(text))
             } else {
-                BindingUpdate::Message(MessageChunk::Thought(text))
+                AgentTurnUpdate::Message(MessageChunk::Thought(text))
             })
         } else {
             if !self.config.file_tools {
@@ -524,7 +522,7 @@ impl Worker {
             }
             let tool = wire::tool_call(update, &mut self.tool_names)?;
             self.observe_tool(&tool)?;
-            self.emit(BindingUpdate::Tool(tool))
+            self.emit(AgentTurnUpdate::Tool(tool))
         }
     }
     async fn permission(&mut self, wire_id: RpcId, params: Value) -> Result<(), BindingError> {
@@ -562,22 +560,24 @@ impl Worker {
             .get("options")
             .and_then(Value::as_array)
             .ok_or_else(|| wire::protocol("missing permission options"))?;
-        let mut option_ids = std::collections::HashSet::new();
-        for option in options {
-            if !option_ids.insert(wire::identifier(option, "optionId")?) {
-                return Err(wire::protocol("duplicate permission option ID"));
-            }
-        }
-        let option = |kind| -> Result<String, BindingError> {
-            let matches: Vec<_> = options
-                .iter()
-                .filter(|option| option.get("kind").and_then(Value::as_str) == Some(kind))
-                .collect();
-            if matches.len() != 1 {
-                return Err(wire::protocol("requires one once-only permission option"));
-            }
-            Ok(wire::identifier(matches[0], "optionId")?.to_owned())
-        };
+        let options = options
+            .iter()
+            .map(|option| {
+                let decision = match wire::string(option, "kind")? {
+                    "allow_once" => PermissionDecision::AllowOnce,
+                    "reject_once" => PermissionDecision::RejectOnce,
+                    "allow_always" => PermissionDecision::AllowAlways,
+                    "reject_always" => PermissionDecision::RejectAlways,
+                    _ => return Err(wire::protocol("unknown permission option kind")),
+                };
+                let id = PermissionOptionId::new(wire::identifier(option, "optionId")?)
+                    .map_err(|error| wire::protocol(&error.to_string()))?;
+                PermissionOption::new(id, wire::string(option, "name")?, decision)
+                    .map_err(|error| wire::protocol(&error.to_string()))
+            })
+            .collect::<Result<Vec<_>, BindingError>>()?;
+        let options = PermissionOptions::new(options, &self.config.permissions)
+            .map_err(|error| wire::protocol(&error.to_string()))?;
         self.permission_sequence = self
             .permission_sequence
             .checked_add(1)
@@ -596,18 +596,15 @@ impl Worker {
             execution_id,
             tool.id().clone(),
             input.clone(),
+            options.clone(),
         );
-        let permission = Permission {
-            request,
-            wire_id,
-            allow: option("allow_once")?,
-            reject: option("reject_once")?,
-        };
-        self.permissions.insert(permission_id, permission);
-        self.emit(BindingUpdate::PermissionRequested {
-            id,
+        let permission = Permission { request, wire_id };
+        self.permissions.insert(permission_id.clone(), permission);
+        self.emit(AgentTurnUpdate::PermissionRequested {
+            id: permission_id,
             tool,
             input: Box::new(input),
+            options,
         })
     }
     fn observe_tool(&mut self, update: &ToolCallUpdate) -> Result<(), BindingError> {

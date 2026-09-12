@@ -7,6 +7,10 @@ pub enum ExecutionError {
     DifferentTool,
     DifferentExecution,
     PermissionResolved,
+    NoPermissionOptions,
+    DuplicatePermissionOption,
+    DuplicatePermissionDecision,
+    UnknownPermissionOption,
 }
 impl fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

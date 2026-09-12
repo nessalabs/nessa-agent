@@ -8,6 +8,7 @@ pub struct PermissionRequest {
     execution_id: ExecutionId,
     tool_id: ToolCallId,
     input: FileToolInput,
+    options: PermissionOptions,
     state: PermissionState,
 }
 impl PermissionRequest {
@@ -16,12 +17,14 @@ impl PermissionRequest {
         execution_id: ExecutionId,
         tool_id: ToolCallId,
         input: FileToolInput,
+        options: PermissionOptions,
     ) -> Self {
         Self {
             id,
             execution_id,
             tool_id,
             input,
+            options,
             state: PermissionState::Pending,
         }
     }
@@ -37,22 +40,33 @@ impl PermissionRequest {
     pub fn input(&self) -> &FileToolInput {
         &self.input
     }
-    pub fn state(&self) -> PermissionState {
-        self.state
+    pub fn options(&self) -> &PermissionOptions {
+        &self.options
+    }
+    pub fn state(&self) -> &PermissionState {
+        &self.state
     }
     pub fn answer(
         &mut self,
         execution_id: &ExecutionId,
-        decision: PermissionDecision,
-    ) -> Result<(), ExecutionError> {
+        option_id: &PermissionOptionId,
+    ) -> Result<PermissionDecision, ExecutionError> {
         if execution_id != &self.execution_id {
             return Err(ExecutionError::DifferentExecution);
         }
         if self.state != PermissionState::Pending {
             return Err(ExecutionError::PermissionResolved);
         }
-        self.state = PermissionState::Answered(decision);
-        Ok(())
+        let decision = self
+            .options
+            .find(option_id)
+            .ok_or(ExecutionError::UnknownPermissionOption)?
+            .decision();
+        self.state = PermissionState::Answered {
+            option_id: option_id.clone(),
+            decision,
+        };
+        Ok(decision)
     }
     pub fn cancel(&mut self) -> Result<(), ExecutionError> {
         if self.state != PermissionState::Pending {

@@ -4,9 +4,14 @@ mod identity;
 mod message;
 mod permission;
 mod tool;
-pub use identity::{ExecutionId, PermissionId, ToolCallId};
+pub use identity::{ExecutionId, PermissionId, PermissionOptionId, ToolCallId};
 pub use message::{MessageChunk, PromptOutcome, PromptText};
-pub use permission::{PermissionDecision, PermissionState};
+pub use permission::{
+    PermissionConfig, PermissionDecision, PermissionOption, PermissionOptions, PermissionState,
+};
 pub use tool::{
     FileLocation, FilePath, FileToolInput, ToolCallUpdate, ToolContent, ToolKind, ToolStatus,
 };
+
+mod prompt;
+pub use prompt::Prompt;

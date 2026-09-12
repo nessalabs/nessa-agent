@@ -1,4 +1,6 @@
-use super::{AgentSession, BindingError, BindingFuture, PermissionAnswer, Prompt, StopOutcome};
+use super::{
+    AgentSession, BindingError, BindingFuture, PermissionAnswer, PromptRequest, StopOutcome,
+};
 use crate::domain::agent_execution::value_objects::*;
 use crate::domain::effective_capabilities::value_objects::{
     CapabilityRequirement, EffectiveCapabilities, Modality,
@@ -21,7 +23,7 @@ impl Agent {
     pub fn capabilities(&self) -> &EffectiveCapabilities {
         &self.capabilities
     }
-    pub fn prompt(&self, input: Prompt) -> BindingFuture<'_, PromptOutcome> {
+    pub fn prompt(&self, input: PromptRequest) -> BindingFuture<'_, PromptOutcome> {
         Box::pin(async move {
             validate_prompt(&input, &self.capabilities)?;
             self.session.prompt(input).await
@@ -40,10 +42,10 @@ impl Agent {
 
 /// Boundary structure is checked here; capability rules stay in the domain.
 pub(crate) fn validate_prompt(
-    input: &Prompt,
+    input: &PromptRequest,
     capabilities: &EffectiveCapabilities,
 ) -> Result<(), BindingError> {
-    input.to_domain()?;
+    input.execution_id()?;
     capabilities
         .validate(
             &[CapabilityRequirement::Input(Modality::Text)],

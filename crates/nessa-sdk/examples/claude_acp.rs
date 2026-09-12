@@ -1,7 +1,9 @@
 //! Explicit host composition for a local smoke run. Permissions default to deny.
+use nessa_sdk::domain::agent_execution::builders::PromptBuilder;
+use nessa_sdk::domain::agent_execution::events::*;
 use nessa_sdk::domain::agent_execution::value_objects::*;
 use nessa_sdk::{
-    application::agent_binding::{Agent, AgentBinding, BindingUpdate, PermissionAnswer, Prompt},
+    application::agent_binding::{Agent, AgentBinding, PermissionAnswer, PromptRequest},
     domain::{common::value_objects::TokenLimits, model_metadata::entities::ModelMetadata},
     infrastructure::{
         claude_acp::{ClaudeAcpBinding, ClaudeAcpConfig},
@@ -62,6 +64,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             environment,
             workspace: workspace.clone(),
             file_tools: mode.ends_with("write"),
+            permissions: PermissionConfig::once_only(),
             startup_timeout: Duration::from_secs(45),
             prompt_timeout: None,
             shutdown_grace: Duration::from_secs(3),
@@ -78,9 +81,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
         "Binding ready"
     );
     let agent = std::sync::Arc::new(Agent::new(opened.session, opened.capabilities));
-    let input = Prompt {
+    let input = PromptRequest {
         execution_id: "smoke".into(),
-        text: utf8(6)?.into(),
+        prompt: PromptBuilder::new().text(utf8(6)?).build()?,
         input_tokens: utf8(5)?.parse()?,
         reserved_output_tokens: limits.max_output(),
     };
@@ -103,20 +106,16 @@ async fn run() -> Result<(), Box<dyn Error>> {
             event = opened.events.next() => event,
         };
         match event {
-            Ok(Some(event)) => match event {
-                nessa_sdk::application::agent_binding::BindingEvent {
-                    update: BindingUpdate::Message(MessageChunk::Text(text)),
-                    ..
-                } => {
+            Ok(Some(event)) => match event.into_update() {
+                AgentTurnUpdate::Message(MessageChunk::Text(text)) => {
                     tracing::info!(%text, "Agent text");
                     if mode == "stop" && !requested_stop && !text.is_empty() {
                         requested_stop = true;
                         tracing::info!(cleanup = ?agent.stop().await?, "Stopped after text");
                     }
                 }
-                nessa_sdk::application::agent_binding::BindingEvent {
-                    update: BindingUpdate::PermissionRequested { id, input, .. },
-                    ..
+                AgentTurnUpdate::PermissionRequested {
+                    id, input, options, ..
                 } => {
                     if mode == "stop-write" {
                         tracing::info!(cleanup = ?agent.stop().await?, "Stopped with pending permission");
@@ -129,8 +128,22 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     agent
                         .answer_permission(PermissionAnswer {
                             execution_id: "smoke".into(),
-                            id,
-                            allow_once,
+                            id: id.as_str().to_owned(),
+                            option_id: options
+                                .choices()
+                                .iter()
+                                .find(|option| {
+                                    option.decision()
+                                        == if allow_once {
+                                            PermissionDecision::AllowOnce
+                                        } else {
+                                            PermissionDecision::RejectOnce
+                                        }
+                                })
+                                .ok_or("required once-only permission option missing")?
+                                .id()
+                                .as_str()
+                                .to_owned(),
                         })
                         .await?;
                     if allow_once {
@@ -138,10 +151,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     }
                     tracing::info!(allow_once, "Permission answered");
                 }
-                nessa_sdk::application::agent_binding::BindingEvent {
-                    update: BindingUpdate::Finished(_),
-                    ..
-                } => {
+                AgentTurnUpdate::Finished(_) => {
                     break match resolved.take() {
                         Some(result) => result,
                         None => pending.as_mut().await?,

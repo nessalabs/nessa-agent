@@ -14,7 +14,7 @@ session. There are no global backend handles, environment reads in the adapter,
 model aliases, automatic retries, or fallback models.
 
 `application::agent_binding` owns the object-safe `AgentBinding`, `AgentSession`,
-and `BindingEvents` ports. `OpenedBinding` returns the session, one event reader,
+and `AgentTurnEvents` ports. `OpenedBinding` returns the session, one event reader,
 and the effective capability snapshot created for that exact configuration.
 `Agent` coordinates capability admission through domain validation before calling
 the injected session. The Claude port also validates direct callers. Provider
@@ -28,7 +28,7 @@ host composition --> selected model + config --> ClaudeAcpBinding
 caller --> Agent --> AgentSession <-------------- worker
                        |                           |
                  permission / Stop           bounded ACP stdio
-caller <----------- BindingEvents <---------------+
+caller <----------- AgentTurnEvents <---------------+
 ```
 
 Arrows show construction, calls, and observations. The worker owns protocol
@@ -42,30 +42,64 @@ provide an awaited cleanup guarantee after the runtime itself has stopped.
 
 `domain::agent_execution` owns provider-independent concepts, grouped by DDD role:
 
-- `value_objects`: validated `ExecutionId`, `ToolCallId`, `PermissionId`,
-  `PromptText`, and `FilePath`; `MessageChunk`, `ToolCallUpdate`, `FileLocation`,
-  `ToolContent`, `FileToolInput`, `PromptOutcome`, and permission decisions/states.
+- `value_objects`: immutable `Prompt`, validated `PromptText`, execution/tool/permission
+  identities, message fragments, file paths and locations, tool kinds/status/content,
+  `ToolCallUpdate`, `FileToolInput`, outcomes, and permission configuration/choices.
+- `builders::PromptBuilder`: composes text from supplied sources in insertion order
+  and validates the completed prompt. It preserves all text and adds no implicit
+  separators. Source loading and tool-schema serialization remain outside the domain;
+  typed tool-schema content can be added when that contract is implemented.
 - `entities::ToolCall`: holds one execution's observed tool state. `apply` rejects
-  updates for another execution or tool and preserves omitted fields. Explicit
-  empty collections replace previous values. It observes tools; it never runs them.
-- `entities::PermissionRequest`: binds an ID, execution, tool, and proposed input.
-  `answer` rejects another execution and any second resolution; `cancel` closes a
-  pending request. An invalid answer leaves it pending. Host authorization is a
-  separate prerequisite, and no permanent grant is represented.
+  updates for another execution or tool, preserves omitted fields, and replaces
+  collections explicitly supplied as empty. It never runs a tool.
+- `entities::PermissionRequest`: binds the request, execution, tool, input, and
+  configured offered options. Answers must select an offered option ID in the
+  correct execution. A request can resolve only once; invalid answers leave it
+  pending. `cancel` closes a pending request. Host authorization is separate.
+- `events::AgentTurnEvent` and `AgentTurnUpdate`: immutable execution-correlated
+  observations for messages, tools, permissions, and completion. They contain no
+  provider/transport errors or persistence machinery. `AgentTurnEvents` is only
+  the application reader port; delivery failures use its error result.
 
-`Prompt::to_domain` and `PermissionAnswer::to_domain` map application boundary
-DTOs into these validated values. The worker uses the domain entities while
-keeping RPC IDs, ACP option IDs, tool-name metadata, and process effects outside
-of them. Permission observations include the tool state merged so far; normal
-tool events remain sparse updates. Paths are untrusted descriptions, never
-filesystem access or authorization. Wire ID/frame bounds remain adapter rules.
+`Prompt` holds reusable content; `PromptRequest` carries it with execution ID and
+caller-supplied token admission counts. Application mapping validates execution
+metadata. Blank prompt content cannot reach the port because domain construction
+already rejects it. For example:
 
-`MessageChunk` models streamed text or thought fragments, including empty or
-whitespace-only fragments. `PromptText` instead requires nonblank submitted text.
-A complete conversation message entity needs transcript identity and lifecycle;
-those are not supplied by this binding, and remain conversation work. Likewise,
-`BindingUpdate` remains an application delivery envelope, not a persisted domain
-event or an aggregate root.
+```rust
+use nessa_sdk::domain::agent_execution::builders::PromptBuilder;
+
+let prompt = PromptBuilder::new()
+    .text("Review the proposed change.")
+    .text("\n\n")
+    .text("Focus on permission handling.")
+    .build()?;
+```
+
+`PermissionDecision` represents allow/reject once and allow/reject always.
+`PermissionConfig` controls which kinds can be offered; it grants nothing by
+itself. `PermissionOptions` validates option identities and filters choices through
+that configuration. Multiple choices can have the same kind but different scopes,
+so `PermissionAnswer` selects an exact `option_id`, not an allow/deny boolean.
+The request records that option ID with its decision. Domain resolution records
+intent; adapters or authorization services apply the effect.
+
+The current Claude profile requires `PermissionConfig::once_only()` or a subset
+of its decision kinds. It rejects persistent configuration before spawning: the
+pinned adapter's persistent options can write durable rules or change permission
+modes, and their structured scopes are not exposed by this binding yet. Other
+adapters can reuse the full domain model. No persistent grant is silently treated
+as a once-only grant.
+
+The worker keeps RPC IDs and process effects outside the domain and uses domain
+entities for observation merging and permission resolution. Permission events
+include the tool state merged so far and the exact configured options. Normal
+tool events remain sparse. Paths are untrusted descriptions, never filesystem
+access or authorization; wire size bounds remain adapter rules.
+
+`MessageChunk` models streamed text or thought fragments, including empty and
+whitespace-only fragments. A complete conversation message entity still needs
+transcript identity and lifecycle, which this binding does not own.
 
 ## Supported native profile
 
@@ -105,7 +139,7 @@ enabled; there is no switch that opts into those unsupported modes here.
 
 Each prompt carries a host-owned `execution_id`. Every observation and terminal
 `Finished` update carries that ID, so queued updates cannot be attributed to the
-next prompt. Permission answers must match both execution and interaction IDs.
+next prompt. Permission answers must match execution, request, and offered option IDs.
 The host supplies a new identity for each attempt; this port does not implement
 request deduplication or durable acceptance. Only one prompt may be active per
 session; a second returns `Busy`. Commands and
@@ -133,7 +167,10 @@ cancellation. An unknown stop reason is a protocol failure. Drain the ordered
 `Finished` update as well as awaiting the prompt result: a result future can be
 ready before its preceding text has been consumed. Admission rejections can
 return without an event; fatal stream failure closes the scope and resolves any
-pending prompt. Stream exhaustion alone does not establish success.
+pending prompt. A full queue that prevents terminal delivery fails both the
+prompt and reader; no successful completion is reported without its event.
+Transport failures produce port errors rather than fabricated domain completion
+events. Stream exhaustion alone does not establish success.
 
 Stop closes admission and pending permissions, sends ACP cancellation, and waits
 within the configured grace period. It then closes stdin, allows harness teardown,

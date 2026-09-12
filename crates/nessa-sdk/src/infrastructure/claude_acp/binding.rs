@@ -1,4 +1,5 @@
 use super::{process::ProcessScope, worker};
+use crate::domain::agent_execution::events::*;
 use crate::domain::agent_execution::value_objects::*;
 use crate::{
     application::agent_binding::*,
@@ -24,6 +25,7 @@ pub struct ClaudeAcpConfig {
     pub environment: BTreeMap<OsString, OsString>,
     pub workspace: PathBuf,
     pub file_tools: bool,
+    pub permissions: PermissionConfig,
     pub startup_timeout: Duration,
     /// None leaves execution unbounded in time (the default policy).
     /// Some sets an explicit total runtime limit, not a stuck-agent detector.
@@ -46,6 +48,11 @@ impl ClaudeAcpBinding {
     ) -> Result<Self, BindingError> {
         if !cfg!(unix) {
             return Err(BindingError::Unsupported("native Claude process supervision requires Unix; Windows needs an owned Job Object adapter".into()));
+        }
+        if config.permissions.allows(PermissionDecision::AllowAlways)
+            || config.permissions.allows(PermissionDecision::RejectAlways)
+        {
+            return Err(BindingError::Unsupported("persistent Claude permissions require modeled durable rule scopes; this adapter currently supports once-only choices".into()));
         }
         if model.key().provider() != ModelProvider::Anthropic {
             return Err(BindingError::Configuration(
@@ -133,7 +140,10 @@ impl AgentBinding for ClaudeAcpBinding {
 }
 
 pub(super) enum Command {
-    Prompt(Prompt, oneshot::Sender<Result<PromptOutcome, BindingError>>),
+    PromptRequest(
+        PromptRequest,
+        oneshot::Sender<Result<PromptOutcome, BindingError>>,
+    ),
     Answer(PermissionAnswer, oneshot::Sender<Result<(), BindingError>>),
 }
 #[derive(Clone)]
@@ -152,14 +162,14 @@ impl Drop for Session {
     }
 }
 impl AgentSession for Session {
-    fn prompt(&self, input: Prompt) -> BindingFuture<'_, PromptOutcome> {
+    fn prompt(&self, input: PromptRequest) -> BindingFuture<'_, PromptOutcome> {
         Box::pin(async move {
             if *self.stop.borrow() {
                 return Err(BindingError::Closed);
             }
             let (sender, receiver) = oneshot::channel();
             self.commands
-                .try_send(Command::Prompt(input, sender))
+                .try_send(Command::PromptRequest(input, sender))
                 .map_err(|error| match error {
                     mpsc::error::TrySendError::Full(_) => BindingError::Busy,
                     mpsc::error::TrySendError::Closed(_) => BindingError::Closed,
@@ -199,12 +209,12 @@ impl AgentSession for Session {
     }
 }
 struct Events {
-    receiver: mpsc::Receiver<BindingEvent>,
+    receiver: mpsc::Receiver<AgentTurnEvent>,
     completion: watch::Receiver<Option<Completion>>,
     exhausted: bool,
 }
-impl BindingEvents for Events {
-    fn next(&mut self) -> BindingFuture<'_, Option<BindingEvent>> {
+impl AgentTurnEvents for Events {
+    fn next(&mut self) -> BindingFuture<'_, Option<AgentTurnEvent>> {
         Box::pin(async move {
             if self.exhausted {
                 return Ok(None);

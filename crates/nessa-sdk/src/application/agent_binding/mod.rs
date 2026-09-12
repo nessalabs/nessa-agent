@@ -1,5 +1,6 @@
 //! Agent execution is an injected application port. These types describe Nessa
-//! input, observations, and controls; they do not expose a provider protocol.
+//! requests and controls; domain types own prompts and agent-turn observations.
+//! No provider protocol enters this layer.
 //!
 //! caller --> Agent --> capability validation --> AgentSession
 //!                                             <-- observations

@@ -1,4 +1,4 @@
-//! Identity-bearing tool observations and once-only permission requests.
+//! Identity-bearing tool observations and scoped permission requests.
 //! Tools merge sparse observations; permission requests own resolution state.
 mod permission_request;
 mod tool_call;

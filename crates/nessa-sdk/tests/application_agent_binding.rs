@@ -1,3 +1,4 @@
+use nessa_sdk::domain::agent_execution::builders::PromptBuilder;
 use nessa_sdk::domain::agent_execution::value_objects::*;
 use nessa_sdk::{
     application::{
@@ -22,7 +23,7 @@ struct RecordingSession {
     prompts: AtomicUsize,
 }
 impl AgentSession for RecordingSession {
-    fn prompt(&self, _input: Prompt) -> BindingFuture<'_, PromptOutcome> {
+    fn prompt(&self, _input: PromptRequest) -> BindingFuture<'_, PromptOutcome> {
         Box::pin(async move {
             self.prompts.fetch_add(1, Ordering::SeqCst);
             Ok(PromptOutcome::Completed)
@@ -37,7 +38,7 @@ impl AgentSession for RecordingSession {
 }
 struct OfflineSession;
 impl AgentSession for OfflineSession {
-    fn prompt(&self, _input: Prompt) -> BindingFuture<'_, PromptOutcome> {
+    fn prompt(&self, _input: PromptRequest) -> BindingFuture<'_, PromptOutcome> {
         Box::pin(async { Err(BindingError::Closed) })
     }
     fn answer_permission(&self, _answer: PermissionAnswer) -> BindingFuture<'_, ()> {
@@ -81,22 +82,22 @@ async fn capability_admission_is_independent_of_provider_or_transport() {
         prompts: AtomicUsize::new(0),
     });
     let agent = Agent::new(session.clone(), capabilities());
-    let input = Prompt {
+    let input = PromptRequest {
         execution_id: "execution".into(),
-        text: "hello".into(),
+        prompt: PromptBuilder::new().text("hello").build().unwrap(),
         input_tokens: 900,
         reserved_output_tokens: 100,
     };
     for rejected in [
-        Prompt {
+        PromptRequest {
             input_tokens: 901,
             ..input.clone()
         },
-        Prompt {
-            text: " \n".into(),
+        PromptRequest {
+            execution_id: " \n".into(),
             ..input.clone()
         },
-        Prompt {
+        PromptRequest {
             reserved_output_tokens: 0,
             ..input.clone()
         },
@@ -121,9 +122,9 @@ async fn adapter_substitution_keeps_instances_and_controls_isolated() {
     });
     let online = Agent::new(recording.clone(), capabilities());
     let offline = Agent::new(Arc::new(OfflineSession), capabilities());
-    let input = Prompt {
+    let input = PromptRequest {
         execution_id: "execution".into(),
-        text: "hello".into(),
+        prompt: PromptBuilder::new().text("hello").build().unwrap(),
         input_tokens: 1,
         reserved_output_tokens: 100,
     };
@@ -141,7 +142,7 @@ async fn adapter_substitution_keeps_instances_and_controls_isolated() {
             .answer_permission(PermissionAnswer {
                 execution_id: "write".into(),
                 id: "1".into(),
-                allow_once: true
+                option_id: "approve-one".into()
             })
             .await,
         Err(BindingError::StalePermission)
@@ -151,7 +152,7 @@ async fn adapter_substitution_keeps_instances_and_controls_isolated() {
             .answer_permission(PermissionAnswer {
                 execution_id: "write".into(),
                 id: "1".into(),
-                allow_once: true
+                option_id: "approve-one".into()
             })
             .await,
         Err(BindingError::Closed)
@@ -162,42 +163,38 @@ async fn adapter_substitution_keeps_instances_and_controls_isolated() {
 
 #[test]
 fn execution_dtos_map_to_validated_domain_values() {
-    let mut prompt = Prompt {
+    let mut request = PromptRequest {
         execution_id: "run".into(),
-        text: " exact text \n".into(),
+        prompt: PromptBuilder::new()
+            .text(" exact text ")
+            .text("\n")
+            .build()
+            .unwrap(),
         input_tokens: 1,
         reserved_output_tokens: 1,
     };
-    let (id, text) = prompt.to_domain().unwrap();
-    assert_eq!(id.as_str(), "run");
-    assert_eq!(text.as_str(), prompt.text);
-    prompt.text = " \n".into();
+    assert_eq!(request.execution_id().unwrap().as_str(), "run");
+    assert_eq!(request.prompt.text().as_str(), " exact text \n");
+    request.execution_id.clear();
     assert!(matches!(
-        prompt.to_domain(),
-        Err(BindingError::InvalidInput(_))
-    ));
-    prompt.execution_id.clear();
-    assert!(matches!(
-        prompt.to_domain(),
+        request.execution_id(),
         Err(BindingError::InvalidInput(_))
     ));
     for allow_once in [true, false] {
         let mut answer = PermissionAnswer {
             execution_id: "run".into(),
             id: "permission".into(),
-            allow_once,
+            option_id: if allow_once { "allow" } else { "reject" }.into(),
         };
-        let (execution, id, decision) = answer.to_domain().unwrap();
+        let (execution, id, option_id) = answer.to_domain().unwrap();
         assert_eq!(execution.as_str(), "run");
         assert_eq!(id.as_str(), "permission");
-        assert_eq!(
-            decision,
-            if allow_once {
-                PermissionDecision::AllowOnce
-            } else {
-                PermissionDecision::RejectOnce
-            }
-        );
+        assert_eq!(option_id.as_str(), answer.option_id);
+        answer.option_id.clear();
+        assert!(matches!(
+            answer.to_domain(),
+            Err(BindingError::InvalidInput(_))
+        ));
         answer.id.clear();
         assert!(matches!(
             answer.to_domain(),

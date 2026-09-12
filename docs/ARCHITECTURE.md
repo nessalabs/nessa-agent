@@ -178,7 +178,8 @@ UI do not consume this catalog yet. Immutable effective capabilities now combine
 model facts with typed binding restrictions and configured limits, validate input
 requirements locally, and expose application DTO projections. The local Claude
 ACP binding uses reusable `domain/agent_execution` value objects and entities for
-messages, scoped tool observations, and permission resolution, behind application-owned
+prompts/builders, messages, scoped tool observations, permission requests and
+configuration, and AgentTurnEvent observations, behind application-owned
 execution ports. It provides typed streaming and
 file-tool permissions, and Stop with restricted Unix process supervision. Its
 [guide](../crates/nessa-sdk/docs/claude-acp.md) records the supported profile and

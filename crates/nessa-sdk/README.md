@@ -133,10 +133,13 @@ inferred from model facts.
   capability snapshot, typed requirements, and local validation errors.
 - `domain/agent_execution/`: reusable message fragments, prompt text, identities,
   file-tool descriptions, and execution outcomes in `value_objects/`; `entities/`
-  owns sparse tool observation merging and scoped, once-only permission resolution.
+  owns sparse tool observation merging and scoped permission-request resolution.
+  `builders/` constructs immutable prompts from text sources; `events/` owns
+  `AgentTurnEvent` and `AgentTurnUpdate`. Permission configuration and exact
+  options model both once-only and persistent decision kinds.
   These types are used by the adapter and can also serve another binding or a
   transcript consumer without importing ACP or application contracts.
-- `application/agent_binding/`: Nessa execution ports/events and the `Agent`
+- `application/agent_binding/`: Nessa execution ports and request DTOs and the `Agent`
   admission use case. Hosts inject sessions and authorize calls; no ACP types or
   process handles enter this layer.
 - `application/`: catalog import/list/select use cases, capability projections, DTOs, and explicit
@@ -155,7 +158,7 @@ capability snapshot before provider dispatch; host authorization remains require
 
 Tests exercise domain invariants without JSON, application projection/import and
 execution adapter substitution, JSON loading, and the Claude protocol/process
-boundary. The current SDK suite has 62 tests; live provider checks are recorded
+boundary. The current SDK suite has 67 tests; live provider checks are recorded
 separately in the binding guide.
 
 ```text
@@ -168,9 +171,14 @@ domain/
   agent_execution/
     value_objects/
       identity.rs       ExecutionId, ToolCallId, PermissionId
+      prompt.rs         Prompt
       message.rs        PromptText, MessageChunk, PromptOutcome
       tool.rs           ToolCallUpdate, FilePath, FileLocation, FileToolInput, content
-      permission.rs     PermissionDecision, PermissionState
+      permission.rs     PermissionConfig, PermissionOption(s), decisions/state
+    builders/
+      prompt_builder.rs PromptBuilder: compose supplied text
+    events/
+      agent_turn_event.rs AgentTurnEvent, AgentTurnUpdate
     entities/
       tool_call.rs      ToolCall: merge observations within one execution
       permission_request.rs  PermissionRequest: resolve once for its execution

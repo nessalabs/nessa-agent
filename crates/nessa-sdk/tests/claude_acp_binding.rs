@@ -1,4 +1,6 @@
 #![cfg(unix)]
+use nessa_sdk::domain::agent_execution::builders::PromptBuilder;
+use nessa_sdk::domain::agent_execution::events::*;
 use nessa_sdk::domain::agent_execution::value_objects::*;
 use nessa_sdk::{
     application::{
@@ -44,6 +46,7 @@ fn fixture_configuration(mode: &str, capacity: usize) -> (TempDir, ClaudeAcpConf
         environment: BTreeMap::new(),
         workspace: root.path().to_path_buf(),
         file_tools: true,
+        permissions: PermissionConfig::once_only(),
         startup_timeout: Duration::from_secs(2),
         prompt_timeout: Some(Duration::from_millis(700)),
         shutdown_grace: Duration::from_millis(100),
@@ -60,10 +63,10 @@ fn fixture_binding(mode: &str, capacity: usize) -> (TempDir, ClaudeAcpBinding) {
         ClaudeAcpBinding::new(config, &model, TokenLimits::new(900, 100).unwrap()).unwrap(),
     )
 }
-fn prompt(text: &str) -> Prompt {
-    Prompt {
+fn prompt(text: &str) -> PromptRequest {
+    PromptRequest {
         execution_id: text.into(),
-        text: text.into(),
+        prompt: PromptBuilder::new().text(text).build().unwrap(),
         input_tokens: 10,
         reserved_output_tokens: 100,
     }
@@ -76,13 +79,13 @@ async fn start(
     let input = prompt(text);
     tokio::spawn(async move { session.prompt(input).await })
 }
-async fn next(opened: &mut OpenedBinding) -> BindingUpdate {
+async fn next(opened: &mut OpenedBinding) -> AgentTurnUpdate {
     timeout(Duration::from_secs(3), opened.events.next())
         .await
         .unwrap()
         .unwrap()
         .unwrap()
-        .update
+        .into_update()
 }
 fn assert_gone(root: &TempDir, file: &str) {
     let pid: i32 = std::fs::read_to_string(root.path().join(file))
@@ -118,16 +121,16 @@ async fn streams_two_prompts_with_one_immutable_session_and_repeated_stop() {
     }
     for input in ["first", "second"] {
         let event = opened.events.next().await.unwrap().unwrap();
-        assert_eq!(event.execution_id, input);
+        assert_eq!(event.execution_id().as_str(), input);
         assert_eq!(
-            event.update,
-            BindingUpdate::Message(MessageChunk::Text(input.into()))
+            event.update().clone(),
+            AgentTurnUpdate::Message(MessageChunk::Text(input.into()))
         );
         let terminal = opened.events.next().await.unwrap().unwrap();
-        assert_eq!(terminal.execution_id, input);
+        assert_eq!(terminal.execution_id().as_str(), input);
         assert_eq!(
-            terminal.update,
-            BindingUpdate::Finished(Ok(PromptOutcome::Completed))
+            terminal.update().clone(),
+            AgentTurnUpdate::Finished(PromptOutcome::Completed)
         );
     }
     let first = opened.session.stop().await.unwrap();
@@ -157,7 +160,7 @@ async fn isolated_bindings_and_stop_during_streaming() {
     let active = start(&b, "unaffected").await;
     assert_eq!(
         next(&mut b).await,
-        BindingUpdate::Message(MessageChunk::Text("unaffected".into()))
+        AgentTurnUpdate::Message(MessageChunk::Text("unaffected".into()))
     );
     assert_eq!(active.await.unwrap().unwrap(), PromptOutcome::Completed);
     b.session.stop().await.unwrap();
@@ -170,8 +173,14 @@ async fn permission_is_typed_once_only_and_can_be_denied() {
         let (root, binding) = fixture_binding("permission", 16);
         let mut opened = binding.open().await.unwrap();
         let active = start(&opened, "write").await;
-        assert!(matches!(next(&mut opened).await, BindingUpdate::Tool(_)));
-        let BindingUpdate::PermissionRequested { id, input, tool } = next(&mut opened).await else {
+        assert!(matches!(next(&mut opened).await, AgentTurnUpdate::Tool(_)));
+        let AgentTurnUpdate::PermissionRequested {
+            id,
+            input,
+            tool,
+            options,
+        } = next(&mut opened).await
+        else {
             panic!("expected permission");
         };
         assert_eq!(tool.title().as_deref(), Some("Write fixture.txt"));
@@ -191,9 +200,34 @@ async fn permission_is_typed_once_only_and_can_be_denied() {
         );
         let answer = PermissionAnswer {
             execution_id: "write".into(),
-            id,
-            allow_once: allow,
+            id: id.as_str().to_owned(),
+            option_id: options
+                .choices()
+                .iter()
+                .find(|option| {
+                    option.decision()
+                        == if allow {
+                            PermissionDecision::AllowOnce
+                        } else {
+                            PermissionDecision::RejectOnce
+                        }
+                })
+                .unwrap()
+                .id()
+                .as_str()
+                .to_owned(),
         };
+        assert_eq!(options.choices().len(), 2);
+        assert_eq!(
+            opened
+                .session
+                .answer_permission(PermissionAnswer {
+                    option_id: "never-choose".into(),
+                    ..answer.clone()
+                })
+                .await,
+            Err(BindingError::StalePermission)
+        );
         assert_eq!(
             opened
                 .session
@@ -216,7 +250,7 @@ async fn permission_is_typed_once_only_and_can_be_denied() {
         );
         assert_eq!(active.await.unwrap().unwrap(), PromptOutcome::Completed);
         assert_eq!(root.path().join("fixture.txt").exists(), allow);
-        let BindingUpdate::Tool(patch) = next(&mut opened).await else {
+        let AgentTurnUpdate::Tool(patch) = next(&mut opened).await else {
             panic!("expected sparse patch")
         };
         assert_eq!(patch.title().clone(), None);
@@ -233,7 +267,7 @@ async fn stop_cancels_pending_permission_before_cleanup() {
     let mut opened = binding.open().await.unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
-    let BindingUpdate::PermissionRequested { id, .. } = next(&mut opened).await else {
+    let AgentTurnUpdate::PermissionRequested { id, .. } = next(&mut opened).await else {
         panic!("expected permission")
     };
     opened.session.stop().await.unwrap();
@@ -249,8 +283,8 @@ async fn stop_cancels_pending_permission_before_cleanup() {
             .session
             .answer_permission(PermissionAnswer {
                 execution_id: "write".into(),
-                id,
-                allow_once: true
+                id: id.as_str().to_owned(),
+                option_id: "approve-one".into()
             })
             .await,
         Err(BindingError::Closed)
@@ -327,15 +361,15 @@ async fn admission_rejects_invalid_input_without_using_provider() {
     let (root, binding) = fixture_binding("echo", 16);
     let opened = binding.open().await.unwrap();
     for invalid in [
-        Prompt {
-            text: "".into(),
+        PromptRequest {
+            execution_id: "".into(),
             ..prompt("x")
         },
-        Prompt {
+        PromptRequest {
             input_tokens: 801,
             ..prompt("x")
         },
-        Prompt {
+        PromptRequest {
             reserved_output_tokens: 99,
             ..prompt("x")
         },
@@ -377,7 +411,7 @@ async fn force_stops_a_term_resistant_parent_and_reaps_its_child() {
     let active = start(&opened, "long").await;
     assert_eq!(
         next(&mut opened).await,
-        BindingUpdate::Message(MessageChunk::Text("running".into()))
+        AgentTurnUpdate::Message(MessageChunk::Text("running".into()))
     );
     let cleanup = timeout(Duration::from_secs(3), opened.session.stop())
         .await
@@ -409,7 +443,7 @@ async fn known_completion_wins_a_later_stop_without_rewriting_the_result() {
     let active = start(&opened, "done").await;
     assert_eq!(
         next(&mut opened).await,
-        BindingUpdate::Message(MessageChunk::Text("done".into()))
+        AgentTurnUpdate::Message(MessageChunk::Text("done".into()))
     );
     opened.session.stop().await.unwrap();
     assert_eq!(active.await.unwrap().unwrap(), PromptOutcome::Completed);
@@ -504,7 +538,7 @@ async fn unlimited_prompt_survives_a_day_and_still_accepts_stop() {
     let active = start(&opened, "long-running").await;
     assert_eq!(
         next(&mut opened).await,
-        BindingUpdate::Message(MessageChunk::Text("running".into()))
+        AgentTurnUpdate::Message(MessageChunk::Text("running".into()))
     );
     // Only advance time after real process startup, so virtual startup deadlines
     // cannot race the operating system launching the fixture.
@@ -518,4 +552,37 @@ async fn unlimited_prompt_survives_a_day_and_still_accepts_stop() {
     opened.session.stop().await.unwrap();
     assert_eq!(active.await.unwrap().unwrap(), PromptOutcome::Cancelled);
     assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn terminal_delivery_failure_is_reported_by_both_prompt_and_event_reader() {
+    let (root, binding) = fixture_binding("echo", 1);
+    let mut opened = binding.open().await.unwrap();
+    assert_eq!(
+        opened.session.prompt(prompt("full")).await,
+        Err(BindingError::Backpressure)
+    );
+    assert_eq!(
+        next(&mut opened).await,
+        AgentTurnUpdate::Message(MessageChunk::Text("full".into()))
+    );
+    assert_eq!(opened.events.next().await, Err(BindingError::Backpressure));
+    assert_eq!(opened.events.next().await, Ok(None));
+    opened.session.stop().await.unwrap();
+    assert_gone(&root, "pid");
+}
+
+#[test]
+fn persistent_permission_configuration_requires_supported_durable_scopes() {
+    for decision in [
+        PermissionDecision::AllowAlways,
+        PermissionDecision::RejectAlways,
+    ] {
+        let (_root, mut config, model) = fixture_configuration("permission", 16);
+        config.permissions = PermissionConfig::new(vec![decision]).unwrap();
+        assert!(matches!(
+            ClaudeAcpBinding::new(config, &model, TokenLimits::new(900, 100).unwrap()),
+            Err(BindingError::Unsupported(_))
+        ));
+    }
 }
