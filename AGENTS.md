@@ -69,3 +69,6 @@ TypeScript composition factory and Rust `RuntimeDependencies` examples.
   unnecessary protocol/schema/package version bumps. Update current callers, tests,
   documentation, and local development data directly. Keep one current contract.
   Compatibility support or a version transition requires an explicit user request.
+
+- Use `tracing` for Rust diagnostics and example output. Do not use `print!`,
+  `println!`, `eprint!`, or `eprintln!`; composition initializes the subscriber.

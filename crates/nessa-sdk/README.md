@@ -1,9 +1,11 @@
 # Nessa SDK
 
 The first implemented slice of [ADR 0008](../../docs/adr/todo/0008-agent-client-api.md)
-includes the model metadata catalog and pure effective capability snapshots.
-Conversation execution, bindings, harness settings readers, and gateway/UI
-integration are still future work.
+includes model metadata, pure effective capability snapshots, and a local Claude
+ACP execution binding. See the [Claude binding guide](docs/claude-acp.md) for typed
+streaming, file permissions, Stop, process supervision, setup, and verified limits.
+The Conversation aggregate/coordinator, durable execution records, harness settings
+readers, and gateway/UI integration remain future work.
 
 ## Model data
 
@@ -44,7 +46,7 @@ cargo run -p nessa-sdk --example models -- crates/nessa-sdk/data/models.json ope
 cargo test -p nessa-sdk
 ```
 
-The example prints all metadata as JSON, or a single exact provider/model entry.
+The example logs JSON metadata through `tracing`, either the catalog or one exact provider/model entry.
 It needs no credentials and performs no provider requests.
 
 Host composition opens its selected file and calls
@@ -129,20 +131,35 @@ inferred from model facts.
   infrastructure dependencies.
 - `domain/effective_capabilities/value_objects/`: immutable binding restrictions,
   capability snapshot, typed requirements, and local validation errors.
+- `domain/agent_execution/`: reusable message fragments, prompt text, identities,
+  file-tool descriptions, and execution outcomes in `value_objects/`; `entities/`
+  owns sparse tool observation merging and scoped permission-request resolution.
+  `builders/` constructs immutable prompts from text sources; `events/` owns
+  `AgentTurnEvent` and `AgentTurnUpdate`. Permission configuration and exact
+  options model both once-only and persistent decision kinds.
+  These types are used by the adapter and can also serve another binding or a
+  transcript consumer without importing ACP or application contracts.
+- `application/agent_binding/`: Nessa execution ports and request DTOs and the `Agent`
+  admission use case. Hosts inject sessions and authorize calls; no ACP types or
+  process handles enter this layer.
 - `application/`: catalog import/list/select use cases, capability projections, DTOs, and explicit
   mappings to/from domain types. Import calls domain constructors; query results
   are projections. Application errors add entry context and setup guidance.
+- `infrastructure/claude_acp/`: the pinned local Claude adapter, bounded stdio
+  worker, wire translation, and restricted native process supervision.
 - `infrastructure/`: JSON parsing into application input DTOs, including required
   fields, unknown fields, and read errors. The host owns filesystem selection and
   injects the loaded catalog at composition.
 
 The catalog aggregate is an immutable snapshot of model facts. It has no saved lifecycle,
-so there is no repository or event machinery. Conversation aggregates and their
-execution remain future work. When execution lands, commands must use the
-capability snapshot before acceptance, and host authorization remains required.
+so there is no repository or event machinery. Conversation aggregates and durable
+command acceptance remain future work. The implemented execution port checks its
+capability snapshot before provider dispatch; host authorization remains required.
 
-Tests exercise domain invariants without JSON, application projection/import
-without infrastructure, and JSON parsing/file loading at the infrastructure edge.
+Tests exercise domain invariants without JSON, application projection/import and
+execution adapter substitution, JSON loading, and the Claude protocol/process
+boundary. The current SDK suite has 67 tests; live provider checks are recorded
+separately in the binding guide.
 
 ```text
 domain/
@@ -151,6 +168,20 @@ domain/
       date.rs           Date, DateError
       url.rs            Url, UrlError
       token_limits.rs   TokenLimits, TokenLimitsError
+  agent_execution/
+    value_objects/
+      identity.rs       ExecutionId, ToolCallId, PermissionId
+      prompt.rs         Prompt
+      message.rs        PromptText, MessageChunk, PromptOutcome
+      tool.rs           ToolCallUpdate, FilePath, FileLocation, FileToolInput, content
+      permission.rs     PermissionConfig, PermissionOption(s), decisions/state
+    builders/
+      prompt_builder.rs PromptBuilder: compose supplied text
+    events/
+      agent_turn_event.rs AgentTurnEvent, AgentTurnUpdate
+    entities/
+      tool_call.rs      ToolCall: merge observations within one execution
+      permission_request.rs  PermissionRequest: resolve once for its execution
   model_metadata/
     value_objects/
       identity.rs       ModelProvider, ModelKey
@@ -213,7 +244,7 @@ are excluded from this domain threshold. It uses a fresh temporary target and
 removes only that directory; the normal/shared build target is untouched.
 This stable-toolchain measurement does not report branch coverage.
 
-Measured after this slice: **36 SDK tests pass**, and domain coverage is
+Measured after the metadata/capability slice: **36 SDK tests passed**, and domain coverage is
 **364/364 lines, 60/60 functions, and 445/445 regions**. Effective capabilities
 contributes 107 lines, 10 functions, and 161 regions, all covered. The application
 mapping file, including the new snapshot projection, separately measures
