@@ -8,7 +8,7 @@ to accept, tracks each turn, and records who started or controlled it. Saved
 records flow through the event stream and gateway back to clients.
 
 - **Date:** 2026-09-07
-- **Status:** accepted direction — model metadata and effective capabilities complete; conversation execution remains planned
+- **Status:** accepted direction — model metadata, effective capabilities, and restricted Claude binding complete; Conversation coordination remains planned
 - **Review supplement:** [Runtime classes and sequences](../../design/agent-runtime-classes-and-sequences.md) — proposed responsibilities, operations, and failure flows; no implementation code
 - **Supporting research:** [Server runtime research](../../design/agent-sdk-shape-research.md)
 
@@ -58,9 +58,20 @@ diagnostics; tests cover independent modality combinations, limits, and isolatio
 Application tests verify projection isolation. No provider or settings reader is
 implemented in this slice.
 
-**Remaining:** host startup/server/UI wiring, harness settings readers,
-provider bindings, conversation aggregates/coordinators,
-record persistence/replay, controls, and cleanup. The catalog's context window is
+**Restricted Claude binding — complete (2026-09-12).** Application-owned execution
+ports now support session creation, typed text/file-tool observations, once-only
+permissions, and Stop. The pinned Claude ACP adapter verifies exact model/default
+mode, bounds protocol work, and owns one Unix process group per opened binding.
+Stop closes that binding, cancels interactions, and verifies cleanup before
+reporting cancellation. The [binding guide](../../../crates/nessa-sdk/docs/claude-acp.md)
+records live macOS checks and fixture tests. File tools are supported; shell,
+delegation, MCP, extended context, and Windows execution are rejected/not exposed
+until their stronger host/configuration contracts are implemented. This is not the
+Conversation aggregate or its durable control flow.
+
+**Remaining:** host startup/server/UI wiring, harness settings readers, additional
+execution profiles/providers, conversation aggregates/coordinators, record
+persistence/replay, and durable controls/recovery. The catalog's context window is
 still the published model ceiling, not a Codex default or discovered runtime limit.
 The complete ADR stays in `todo` until its conversation delivery is implemented.
 
@@ -73,8 +84,9 @@ responsible for server behavior and leave no reusable server library.
 
 Today the authenticated WebSocket gateway and NessaClient connection exist. The
 temporary `conversation.echo()` operation returns the supplied text. The Rust crate
-implements model metadata. Agent execution and durable conversation/turn operations
-remain planned features. WebSocket communication already works; the stream
+implements model metadata, capability admission, and a standalone restricted
+Claude ACP execution binding. Durable conversation/turn operations and their
+coordinator remain planned features. WebSocket communication already works; the stream
 integration adds durable history and replay after reconnect.
 
 ## Architecture and ownership

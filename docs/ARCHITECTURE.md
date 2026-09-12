@@ -176,10 +176,13 @@ composition supplies a reader and owns the resulting immutable snapshot. The
 [SDK guide](../crates/nessa-sdk/README.md) shows how to inspect it. The server and
 UI do not consume this catalog yet. Immutable effective capabilities now combine
 model facts with typed binding restrictions and configured limits, validate input
-requirements locally, and expose application DTO projections. Bindings and harness
-settings readers are not implemented.
+requirements locally, and expose application DTO projections. The local Claude
+ACP binding now implements application-owned execution ports, typed streaming and
+file-tool permissions, and Stop with restricted Unix process supervision. Its
+[guide](../crates/nessa-sdk/docs/claude-acp.md) records the supported profile and
+macOS live checks. Harness settings readers remain future work.
 
-There is no agent runtime, no chat RPCs, no persistence for conversations, no
+There is no Conversation coordinator, no chat RPCs, no persistence for conversations, no
 settings UI. The panel already opens a `stage=dev` `@nessa/client` session for
 connect/health. When chat arrives it is a remote `ConversationGateway`, not an
 addition to the local session adapter. See
