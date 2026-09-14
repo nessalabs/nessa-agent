@@ -43,7 +43,8 @@ or surface credentials. Platform preparation still runs before Tauri starts.
 
 `desktop.html` mounts `src/desktop/main.tsx`, which directly composes the design
 system's AppShell frame and Sidebar with a single Home link and an empty main
-area. SidebarProvider owns collapse state and the optional Cmd/Ctrl+B shortcut.
+area. The app controls SidebarProvider from its shared layout; the provider supplies
+the optional Cmd/Ctrl+B shortcut.
 The reusable `src/desktop/ui/window-titlebar.tsx` stays in this app. It accepts
 leading/trailing slots, optional labeled history actions, height, and native-control
 inset. It renders design-system Buttons and forwards native header props; it does
