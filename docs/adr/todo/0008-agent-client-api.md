@@ -1025,6 +1025,9 @@ request.
 
 Additional review gates for these clarified contracts:
 
+Apply the repository-wide [agreement across fields and layers gate](../../../CODING_STANDARDS.md#agreement-across-fields-and-layers)
+to this checklist, including related facts that cross a module or layer boundary.
+
 - Pure aggregate decisions return domain events without performing effects or
   mutating committed state. Failed/uncertain writes cannot start a provider.
   Replay rebuilds the same state and receipts with zero agent/tool calls. Related

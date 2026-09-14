@@ -189,3 +189,24 @@ fn catalog_keeps_its_verification_date_and_reports_domain_failures() {
         assert_eq!(error.to_string(), message);
     }
 }
+
+#[test]
+fn model_description_preserves_human_and_provider_metadata() {
+    let model = model(ModelProvider::Anthropic, true);
+    assert_eq!(model.description().display_name(), "Test model");
+    assert_eq!(model.description().knowledge_cutoff().as_str(), "2026-01");
+    assert_eq!(
+        model.description().documentation_url().as_str(),
+        "https://example.com/model"
+    );
+    assert_eq!(model.key().provider().as_str(), "anthropic");
+}
+
+#[test]
+fn provider_names_parse_into_the_closed_provider_set() {
+    assert_eq!(ModelProvider::try_from("openai"), Ok(ModelProvider::OpenAi));
+    assert_eq!(
+        ModelProvider::try_from("anthropic"),
+        Ok(ModelProvider::Anthropic)
+    );
+}

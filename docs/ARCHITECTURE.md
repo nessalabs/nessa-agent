@@ -180,11 +180,12 @@ are written here.
 | OS-specific window behaviour | `platform/` — add a method on `Host`, implement it in the OS folder |
 | Shell behaviour that differs per OS | `src/host/` — add a field on `HostFeatures`, set it on each host |
 | Anything that talks to the host | `src/host/window.ts` — and only there |
+| Execution/session, tool, permission, and scheduling invariants | `crates/nessa-sdk/src/domain/agent_execution/`; see [the domain map](../crates/nessa-sdk/src/domain/agent_execution/mod.rs) |
 | The agent runtime, when it lands | A new context; see *Growing a new context* in [codebase-structure.md](codebase-structure.md) |
 
-## What is deliberately not here yet
+## Model metadata and capabilities
 
-**Implemented SDK foundation:** `crates/nessa-sdk` contains the model metadata
+`crates/nessa-sdk` contains the model metadata
 catalog: JSON data for the current OpenAI and Claude general-purpose models,
 typed loading/validation, listing, and exact provider/model selection. Pure domain
 entities and value objects own invariants; application use cases map DTOs and
@@ -195,6 +196,22 @@ UI do not consume this catalog yet. Immutable effective capabilities now combine
 model facts with typed binding restrictions and configured limits, validate input
 requirements locally, and expose application DTO projections. Bindings and harness
 settings readers are not implemented.
+
+## Execution domain foundation
+
+The [SDK execution domain](../crates/nessa-sdk/src/domain/agent_execution/mod.rs)
+owns execution/session identities, immutable prompts and tool values, tool and
+permission entities, and a live session consistency boundary. Tools and reviews
+belong to that session; scheduling value objects describe admitted invocation
+order and lifecycle evidence. Domain code performs no provider, storage, or clock
+effects. See the [repository map](codebase-structure.md#agent-sdk-foundation) and
+[domain tests](../crates/nessa-sdk/tests/domain/agent_execution/mod.rs).
+
+This is implemented domain behavior. Agent orchestration and concrete execution
+providers are separate application/infrastructure responsibilities, not implied
+by the domain types.
+
+## What is deliberately not here yet
 
 There is no agent runtime, no chat RPCs, no persistence for conversations, no
 settings UI. The panel already opens a `stage=dev` `@nessa/client` session for

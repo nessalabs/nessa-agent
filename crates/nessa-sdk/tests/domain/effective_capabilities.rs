@@ -326,3 +326,17 @@ fn errors_explain_unsupported_inputs_and_budget_configuration_without_provider_a
         assert!(std::error::Error::source(&error).is_none());
     }
 }
+
+#[test]
+fn effective_feature_snapshot_exposes_only_the_intersection() {
+    let model = model("one", features(true, false, true, false));
+    let snapshot = EffectiveCapabilities::new(
+        &model,
+        binding(features(false, false, true, false)),
+        limits(600, 100),
+    )
+    .unwrap();
+    assert!(!snapshot.features().input().image());
+    assert!(!snapshot.features().reasoning());
+    assert!(snapshot.features().tool_use());
+}
