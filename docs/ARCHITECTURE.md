@@ -52,11 +52,25 @@ Reuse it with AppShell by placing it before AppShellBody and passing a
 SidebarTrigger in `leading`. Each consuming app must configure its own native
 window and drag permissions. No changes to `nessa_ui` are required.
 
-Browser composition uses `ui/browser-titlebar.tsx` instead: the existing Nessa
-app icon and name toggle the open sidebar, and a compact logo reopens it when
-collapsed. Hover and keyboard focus reveal the sidebar glyph. The mobile drawer
-includes the same logo control, so its overlay cannot hide the only close button.
-Native desktop composition retains the approved traffic-light row.
+Browser composition uses `ui/browser-titlebar.tsx` instead. Expanded navigation
+shows static Nessa identity at the top and a close toggle in the sidebar footer
+beside NessaStudio. Collapsed navigation shows a plain reopen icon in the header;
+there is no hover replacement. Native desktop composition retains its fixed
+traffic-light row. Both surfaces have a far-right sidebar toggle.
+
+`ui/desktop-app.tsx` composes two existing Sidebar components inside the design
+system's SplitView panels. SplitView owns pointer capture, accessible separators,
+keyboard resizing, and collapse snapping. Both sidebars have a 160px expanded
+minimum and 40% maximum; dragging below the 80px halfway threshold snaps closed.
+The app's `useSidebarLayout` owns one percentage layout for width/visibility and
+remembers expanded widths for toggle reopening. It does not maintain a second
+independent open state. Sidebars stay inline for resizing, including in browsers.
+Closed panels are inert and hidden from assistive technology.
+
+Borders highlight softly in a neutral foreground color on hover, keyboard focus,
+and drag. Regular drag resizing tracks the pointer immediately; collapse and
+toggle transitions animate for 180ms and respect reduced motion. The center
+reserves 160px; very narrow browser windows may not fit two expanded sidebars.
 
 This surface mounts no product store, session lifecycle, or backend connection.
 Its stylesheet is separate from floating-panel styles. Vite builds both HTML
@@ -72,8 +86,7 @@ pnpm desktop
 Browser-only preview: `pnpm desktop:dev`, then open
 `http://127.0.0.1:1438/desktop.html`. The strict dedicated port fails if occupied;
 it never terminates another worktree's server. `pnpm desktop:build` packages the
-same surface through Tauri. The native minimum width is 800px; smaller browser
-viewports use the design system's mobile sidebar. No content features or layout
+same surface through Tauri. The native minimum width is 800px. No content features or layout
 persistence are implemented. Restart `pnpm desktop` after changing the Tauri
 overlay configuration: the CLI watcher can retain the previous merged config.
 

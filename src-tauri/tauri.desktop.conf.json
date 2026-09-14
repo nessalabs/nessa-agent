@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Nessa Desktop",
+  "productName": "Nessa",
   "identifier": "so.nessa.desktop",
   "build": {
     "beforeDevCommand": "pnpm desktop:dev",

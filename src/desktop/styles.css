@@ -17,3 +17,49 @@ body {
 [data-host="macos"] {
   --desktop-window-controls-inset: 79px;
 }
+
+/* SplitView owns sizing, capture, keyboard resizing, and collapse snapping. */
+.desktop-sidebar[data-slot="sidebar"] {
+  position: relative;
+  inset: auto;
+  height: 100%;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+}
+
+.desktop-sidebar [data-slot="sidebar-content"] {
+  min-width: 150px;
+}
+
+.desktop-split > [data-slot="split-view-panel"] {
+  transition: flex-grow 180ms ease-out;
+}
+
+.desktop-split:has([data-resizing])
+  > [data-slot="split-view-panel"]:not([data-collapsed]) {
+  transition: none;
+}
+
+.desktop-sidebar-edge[data-slot="split-view-separator"] {
+  background: color-mix(in oklab, var(--foreground) 12%, transparent);
+  transition:
+    background-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.desktop-sidebar-edge[data-slot="split-view-separator"]:is(
+    :hover,
+    :focus-visible,
+    [data-resizing]
+  ) {
+  background: color-mix(in oklab, var(--foreground) 65%, transparent);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--foreground) 20%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .desktop-split > [data-slot="split-view-panel"],
+  .desktop-sidebar-edge[data-slot="split-view-separator"] {
+    transition: none;
+  }
+}
