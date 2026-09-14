@@ -55,6 +55,8 @@ Shortcuts are a typed document with a dedicated on-disk file.
 | `panel.newTab` | Open a conversation tab |
 | `panel.closeTab` | Close the active tab |
 | `panel.activateTab` | Switch to a tab; args select which |
+| `panel.previousTab` | Switch to the previous open tab |
+| `panel.nextTab` | Switch to the next open tab |
 
 Each row: `keys`, `action`, optional `args`, `scope` (`global` | `focused`),
 `surface` (`desktop` | `browser` | `*`).
@@ -66,9 +68,12 @@ Each row: `keys`, `action`, optional `args`, `scope` (`global` | `focused`),
 | `panel.newTab` | `CmdOrCtrl+T`, `CmdOrCtrl+N` | `CmdOrCtrl+Shift+T` |
 | `panel.closeTab` | `CmdOrCtrl+W` | `CmdOrCtrl+Shift+W` |
 | `panel.activateTab` `{ "index": 0…8 }` | `CmdOrCtrl+1`…`9` | `CmdOrCtrl+Shift+1`…`9` |
+| `panel.previousTab` | `CmdOrCtrl+Shift+H` | `CmdOrCtrl+Shift+H` |
+| `panel.nextTab` | `CmdOrCtrl+Shift+L` | `CmdOrCtrl+Shift+L` |
 | `panel.summon` | `CmdOrCtrl+Shift+D` (global) | — |
 
 Index `0` is the first open tab. Too few tabs → no-op. Ignore key-repeat.
+Previous/next navigation wraps at either end of the open-tab list.
 
 **Args now, so we do not forget later:** v1 uses `{ "index": N }`. Later
 settings may use `{ "conversationId": "…" }` so e.g. Cmd+1 always goes to a
@@ -120,3 +125,15 @@ Depends on [0005](0005-stage-scoped-local-data.md) for the config root.
 
 **Out of scope for that PR:** settings UI, per-user override merge, mid-session
 push without reconnect, reopening a closed tab from a `conversationId` binding.
+
+
+## Current local cache behavior
+
+The host reads an existing valid v1 `shortcuts.json` unchanged. New bindings in
+bundled defaults are seeded only when that file is absent; upgrading the app does
+not merge them into an existing document. To enable previous/next navigation in
+an existing configuration, append bindings for `panel.previousTab` and
+`panel.nextTab` with `scope: "focused"`, `surface: "*"`, and the desired `keys`.
+Their bundled keys are `CmdOrCtrl+Shift+H` and `CmdOrCtrl+Shift+L`. Restart the app
+after editing the file, or apply the updated document through the host's existing
+`apply_shortcuts` command. Keep the other configured bindings intact.

@@ -19,9 +19,10 @@ const bundledDefaults = defaults as ShortcutsDocument
 export function useTabShortcuts(actions: {
   openTab: () => void
   closeActiveTab: () => void
+  moveActiveTab: (direction: -1 | 1) => void
   activateTab: (target: { index?: number; conversationId?: string }) => void
 }) {
-  const { openTab, closeActiveTab, activateTab } = actions
+  const { openTab, closeActiveTab, moveActiveTab, activateTab } = actions
   const [shortcuts, setShortcuts] = useState<ShortcutsDocument>(bundledDefaults)
 
   useEffect(() => {
@@ -44,12 +45,12 @@ export function useTabShortcuts(actions: {
       if (!matched) return
 
       event.preventDefault()
-      dispatchFocused(matched, { openTab, closeActiveTab, activateTab })
+      dispatchFocused(matched, { openTab, closeActiveTab, moveActiveTab, activateTab })
     }
 
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [shortcuts, openTab, closeActiveTab, activateTab])
+  }, [shortcuts, openTab, closeActiveTab, moveActiveTab, activateTab])
 }
 
 function dispatchFocused(
@@ -57,12 +58,15 @@ function dispatchFocused(
   actions: {
     openTab: () => void
     closeActiveTab: () => void
+    moveActiveTab: (direction: -1 | 1) => void
     activateTab: (target: { index?: number; conversationId?: string }) => void
   },
 ) {
   if (matched.action === "panel.newTab") actions.openTab()
   else if (matched.action === "panel.closeTab") actions.closeActiveTab()
-  else
+  else if (matched.action === "panel.previousTab") actions.moveActiveTab(-1)
+  else if (matched.action === "panel.nextTab") actions.moveActiveTab(1)
+  else if (matched.action === "panel.activateTab")
     actions.activateTab({
       index: matched.index,
       conversationId: matched.conversationId,

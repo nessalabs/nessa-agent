@@ -24,6 +24,7 @@ import { useFlushOnTurn } from "../adapters/compositor-flush"
 import { useEdgeReveal } from "../adapters/edge-reveal"
 import { useHostPanel } from "../adapters/host-panel"
 import { useSurface, type Surface } from "../adapters/surface"
+import { adjacentTabIndex } from "../adapters/tab-shortcuts"
 import { useTabShortcuts } from "../adapters/use-tab-shortcuts"
 import { useComposer } from "./use-composer"
 
@@ -100,8 +101,16 @@ export function App() {
       chat.setActive(next.id)
     },
   )
+  const moveActiveTab = React.useEffectEvent((direction: -1 | 1) => {
+    const index = adjacentTabIndex(
+      chat.conversations.length,
+      chat.conversations.findIndex((item) => item.id === chat.active.id),
+      direction,
+    )
+    if (index !== undefined) activateTab({ index })
+  })
   useHostPanel(surface, toggleSurface, composerRef)
-  useTabShortcuts({ openTab, closeActiveTab, activateTab })
+  useTabShortcuts({ openTab, closeActiveTab, moveActiveTab, activateTab })
   useFlushOnTurn(
     host.flushOnTurn,
     `${chat.active.id}:${chat.active.phase}:${chat.active.turns.length}`,

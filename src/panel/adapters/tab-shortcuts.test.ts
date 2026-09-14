@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import type { ShortcutsDocument } from "@nessa/client"
 
-import { matchFocusedShortcut, parseAccelerator } from "./tab-shortcuts"
+import { adjacentTabIndex, matchFocusedShortcut, parseAccelerator } from "./tab-shortcuts"
 
 const sample: ShortcutsDocument = {
   version: 1,
@@ -157,5 +157,72 @@ describe("matchFocusedShortcut", () => {
         "desktop",
       ),
     ).toBeNull()
+  })
+})
+
+describe("relative tab navigation", () => {
+  const navigation: ShortcutsDocument = {
+    version: 1,
+    bindings: [
+      {
+        keys: "CmdOrCtrl+Shift+H",
+        action: "panel.previousTab",
+        scope: "focused",
+        surface: "*",
+      },
+      {
+        keys: "CmdOrCtrl+Shift+L",
+        action: "panel.nextTab",
+        scope: "focused",
+        surface: "*",
+      },
+    ],
+  }
+  it.each(["desktop", "browser"] as const)("matches both directions on %s", (surface) => {
+    expect(
+      matchFocusedShortcut(
+        chord({ key: "H", metaKey: true, shiftKey: true }),
+        navigation,
+        surface,
+      ),
+    ).toEqual({ action: "panel.previousTab" })
+    expect(
+      matchFocusedShortcut(
+        chord({ key: "L", metaKey: true, shiftKey: true }),
+        navigation,
+        surface,
+      ),
+    ).toEqual({ action: "panel.nextTab" })
+    expect(
+      matchFocusedShortcut(chord({ key: "h", metaKey: true }), navigation, surface),
+    ).toBeNull()
+  })
+  it("uses configured chords instead of hardcoded keys", () => {
+    const custom: ShortcutsDocument = {
+      version: 1,
+      bindings: [{ ...navigation.bindings[0]!, keys: "Cmd+Alt+J" }],
+    }
+    expect(
+      matchFocusedShortcut(
+        chord({ key: "H", metaKey: true, shiftKey: true }),
+        custom,
+        "desktop",
+      ),
+    ).toBeNull()
+    expect(
+      matchFocusedShortcut(
+        chord({ key: "j", metaKey: true, altKey: true }),
+        custom,
+        "desktop",
+      ),
+    ).toEqual({ action: "panel.previousTab" })
+  })
+  it("moves through open tabs and wraps in both directions", () => {
+    expect(adjacentTabIndex(3, 1, -1)).toBe(0)
+    expect(adjacentTabIndex(3, 1, 1)).toBe(2)
+    expect(adjacentTabIndex(3, 0, -1)).toBe(2)
+    expect(adjacentTabIndex(3, 2, 1)).toBe(0)
+    expect(adjacentTabIndex(1, 0, 1)).toBe(0)
+    expect(adjacentTabIndex(0, -1, 1)).toBeUndefined()
   })
 })

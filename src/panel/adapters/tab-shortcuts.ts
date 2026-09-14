@@ -10,6 +10,7 @@ import { host } from "../../host"
 export type FocusedPanelAction =
   | { action: "panel.newTab" }
   | { action: "panel.closeTab" }
+  | { action: "panel.previousTab" | "panel.nextTab" }
   | { action: "panel.activateTab"; index?: number; conversationId?: string }
 
 type KeyChord = {
@@ -110,6 +111,7 @@ function toFocusedAction(binding: ShortcutBinding): FocusedPanelAction | null {
   const action = binding.action as ShortcutAction
   if (action === "panel.newTab") return { action: "panel.newTab" }
   if (action === "panel.closeTab") return { action: "panel.closeTab" }
+  if (action === "panel.previousTab" || action === "panel.nextTab") return { action }
   if (action === "panel.activateTab") {
     const index =
       typeof binding.args?.index === "number" && Number.isInteger(binding.args.index)
@@ -147,4 +149,14 @@ export function matchFocusedShortcut(
 
 export function chordSurface(): "desktop" | "browser" {
   return host.kind === "browser" ? "browser" : "desktop"
+}
+
+/** Resolve a neighboring open tab, wrapping at either end; empty lists have no target. */
+export function adjacentTabIndex(
+  count: number,
+  activeIndex: number,
+  direction: -1 | 1,
+): number | undefined {
+  if (count === 0 || activeIndex < 0 || activeIndex >= count) return undefined
+  return (activeIndex + direction + count) % count
 }
