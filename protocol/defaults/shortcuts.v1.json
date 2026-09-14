@@ -203,13 +203,13 @@
       "keys": "CmdOrCtrl+Shift+H",
       "action": "panel.previousTab",
       "scope": "focused",
-      "surface": "*"
+      "surface": "desktop"
     },
     {
       "keys": "CmdOrCtrl+Shift+L",
       "action": "panel.nextTab",
       "scope": "focused",
-      "surface": "*"
+      "surface": "desktop"
     }
   ]
 }

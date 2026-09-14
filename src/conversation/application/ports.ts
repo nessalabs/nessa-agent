@@ -12,6 +12,7 @@ export interface ConversationGateway {
   openConversation(tabs: LocalTabs): LocalTabs
   closeConversation(tabs: LocalTabs, conversationId: string): LocalTabs
   setDraft(tabs: LocalTabs, input: { draft: MessageContent; id?: string }): LocalTabs
+  moveActive(tabs: LocalTabs, direction: -1 | 1): LocalTabs
   setActive(tabs: LocalTabs, conversationId: string): LocalTabs
 }
 

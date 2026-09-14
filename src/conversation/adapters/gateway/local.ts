@@ -3,6 +3,7 @@ import {
   closeConversation,
   openConversation,
   setActive,
+  moveActive,
   setDraft,
   stopGenerating,
 } from "../../application/usecases"
@@ -14,4 +15,5 @@ export const localConversationGateway: ConversationGateway = {
   closeConversation,
   setDraft,
   setActive,
+  moveActive,
 }

@@ -150,13 +150,3 @@ export function matchFocusedShortcut(
 export function chordSurface(): "desktop" | "browser" {
   return host.kind === "browser" ? "browser" : "desktop"
 }
-
-/** Resolve a neighboring open tab, wrapping at either end; empty lists have no target. */
-export function adjacentTabIndex(
-  count: number,
-  activeIndex: number,
-  direction: -1 | 1,
-): number | undefined {
-  if (count === 0 || activeIndex < 0 || activeIndex >= count) return undefined
-  return (activeIndex + direction + count) % count
-}

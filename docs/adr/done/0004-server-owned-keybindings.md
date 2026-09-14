@@ -68,8 +68,8 @@ Each row: `keys`, `action`, optional `args`, `scope` (`global` | `focused`),
 | `panel.newTab` | `CmdOrCtrl+T`, `CmdOrCtrl+N` | `CmdOrCtrl+Shift+T` |
 | `panel.closeTab` | `CmdOrCtrl+W` | `CmdOrCtrl+Shift+W` |
 | `panel.activateTab` `{ "index": 0…8 }` | `CmdOrCtrl+1`…`9` | `CmdOrCtrl+Shift+1`…`9` |
-| `panel.previousTab` | `CmdOrCtrl+Shift+H` | `CmdOrCtrl+Shift+H` |
-| `panel.nextTab` | `CmdOrCtrl+Shift+L` | `CmdOrCtrl+Shift+L` |
+| `panel.previousTab` | `CmdOrCtrl+Shift+H` | — |
+| `panel.nextTab` | `CmdOrCtrl+Shift+L` | — |
 | `panel.summon` | `CmdOrCtrl+Shift+D` (global) | — |
 
 Index `0` is the first open tab. Too few tabs → no-op. Ignore key-repeat.
@@ -133,7 +133,9 @@ The host reads an existing valid v1 `shortcuts.json` unchanged. New bindings in
 bundled defaults are seeded only when that file is absent; upgrading the app does
 not merge them into an existing document. To enable previous/next navigation in
 an existing configuration, append bindings for `panel.previousTab` and
-`panel.nextTab` with `scope: "focused"`, `surface: "*"`, and the desired `keys`.
+`panel.nextTab` with `scope: "focused"`, `surface: "desktop"`, and the desired `keys`.
 Their bundled keys are `CmdOrCtrl+Shift+H` and `CmdOrCtrl+Shift+L`. Restart the app
 after editing the file, or apply the updated document through the host's existing
 `apply_shortcuts` command. Keep the other configured bindings intact.
+
+The relative-tab defaults are desktop-only because Safari reserves Cmd+Shift+H for its home page. Browser bindings may be configured explicitly with a chord supported by the browser.

@@ -31,6 +31,9 @@ const conversationSlice = createSlice({
   name: "conversation",
   initialState: emptyLocalTabs(),
   reducers: {
+    moveActive(state, action: PayloadAction<-1 | 1>) {
+      return gateway.moveActive(state, action.payload)
+    },
     setActive(state, action: PayloadAction<string>) {
       return gateway.setActive(state, action.payload)
     },
@@ -74,6 +77,7 @@ const conversationSlice = createSlice({
 
 export const {
   setActive,
+  moveActive,
   setDraft,
   openConversation,
   closeConversation,

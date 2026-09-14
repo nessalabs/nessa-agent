@@ -1,8 +1,9 @@
+import defaults from "../../../protocol/defaults/shortcuts.v1.json"
 import { describe, expect, it } from "vitest"
 
 import type { ShortcutsDocument } from "@nessa/client"
 
-import { adjacentTabIndex, matchFocusedShortcut, parseAccelerator } from "./tab-shortcuts"
+import { matchFocusedShortcut, parseAccelerator } from "./tab-shortcuts"
 
 const sample: ShortcutsDocument = {
   version: 1,
@@ -55,7 +56,7 @@ const sample: ShortcutsDocument = {
       keys: "CmdOrCtrl+Shift+D",
       action: "panel.summon",
       scope: "global",
-      surface: "*",
+      surface: "desktop",
     },
   ],
 }
@@ -168,17 +169,17 @@ describe("relative tab navigation", () => {
         keys: "CmdOrCtrl+Shift+H",
         action: "panel.previousTab",
         scope: "focused",
-        surface: "*",
+        surface: "desktop",
       },
       {
         keys: "CmdOrCtrl+Shift+L",
         action: "panel.nextTab",
         scope: "focused",
-        surface: "*",
+        surface: "desktop",
       },
     ],
   }
-  it.each(["desktop", "browser"] as const)("matches both directions on %s", (surface) => {
+  it.each(["desktop"] as const)("matches both directions on %s", (surface) => {
     expect(
       matchFocusedShortcut(
         chord({ key: "H", metaKey: true, shiftKey: true }),
@@ -217,12 +218,16 @@ describe("relative tab navigation", () => {
       ),
     ).toEqual({ action: "panel.previousTab" })
   })
-  it("moves through open tabs and wraps in both directions", () => {
-    expect(adjacentTabIndex(3, 1, -1)).toBe(0)
-    expect(adjacentTabIndex(3, 1, 1)).toBe(2)
-    expect(adjacentTabIndex(3, 0, -1)).toBe(2)
-    expect(adjacentTabIndex(3, 2, 1)).toBe(0)
-    expect(adjacentTabIndex(1, 0, 1)).toBe(0)
-    expect(adjacentTabIndex(0, -1, 1)).toBeUndefined()
-  })
+})
+
+it("does not capture the desktop navigation chords in browsers", () => {
+  for (const key of ["H", "L"]) {
+    expect(
+      matchFocusedShortcut(
+        chord({ key, metaKey: true, shiftKey: true }),
+        defaults as ShortcutsDocument,
+        "browser",
+      ),
+    ).toBeNull()
+  }
 })

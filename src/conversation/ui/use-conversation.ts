@@ -5,6 +5,7 @@ import {
   openConversation,
   sendDraft,
   setActive,
+  moveActive,
   setDraft,
   stopGenerating,
 } from "../adapters/store/slice"
@@ -19,6 +20,7 @@ export function useConversation() {
   return {
     conversations,
     active,
+    moveActive: (direction: -1 | 1) => dispatch(moveActive(direction)),
     setActive: (id: string) => dispatch(setActive(id)),
     submit: (content: MessageContent) => {
       const text = contentText(content).trim()
