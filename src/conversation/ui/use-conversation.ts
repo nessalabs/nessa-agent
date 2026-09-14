@@ -1,3 +1,4 @@
+import { contentText, type MessageContent } from "../model"
 import { activeConversation } from "../application/queries/active-conversation"
 import {
   closeConversation,
@@ -19,16 +20,16 @@ export function useConversation() {
     conversations,
     active,
     setActive: (id: string) => dispatch(setActive(id)),
-    submit: () => {
-      const text = active.draft.trim()
-      if (!text) return
-      void dispatch(sendDraft({ text, id: active.id }))
+    submit: (content: MessageContent) => {
+      const text = contentText(content).trim()
+      if (!text || active.phase !== "idle") return
+      void dispatch(sendDraft({ content, id: active.id }))
     },
     openConversation: () => {
       dispatch(openConversation())
     },
     closeConversation: (id: string) => dispatch(closeConversation(id)),
-    setDraft: (draft: string) => dispatch(setDraft({ draft })),
+    setDraft: (draft: MessageContent) => dispatch(setDraft({ draft })),
     stopGenerating: () => dispatch(stopGenerating()),
   }
 }

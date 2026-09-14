@@ -1,3 +1,4 @@
+import { contentText, type MessageContent } from "../../model"
 import { createAsyncThunk, createSlice, type PayloadAction } from "@reduxjs/toolkit"
 
 import { emptyLocalTabs } from "../../application/local-tabs"
@@ -6,7 +7,7 @@ import type { ConversationEffects } from "../../application/ports"
 import { localConversationGateway as gateway } from "../gateway/local"
 
 export type SendDraftArg = {
-  text: string
+  content: MessageContent
   id?: string
 }
 
@@ -15,8 +16,8 @@ export const sendDraft = createAsyncThunk<
   SendDraftArg,
   { extra: { conversation: ConversationEffects }; rejectValue: string }
 >("conversation/sendDraft", async (input: SendDraftArg, { rejectWithValue, extra }) => {
-  const text = input.text.trim()
-  if (!text) {
+  const text = contentText(input.content)
+  if (!text.trim()) {
     return rejectWithValue("empty draft")
   }
 
@@ -33,7 +34,7 @@ const conversationSlice = createSlice({
     setActive(state, action: PayloadAction<string>) {
       return gateway.setActive(state, action.payload)
     },
-    setDraft(state, action: PayloadAction<{ draft: string; id?: string }>) {
+    setDraft(state, action: PayloadAction<{ draft: MessageContent; id?: string }>) {
       return gateway.setDraft(state, action.payload)
     },
     openConversation(state) {
@@ -53,7 +54,7 @@ const conversationSlice = createSlice({
     builder
       .addCase(sendDraft.pending, (state, action) => {
         return beginSend(state, {
-          text: action.meta.arg.text,
+          content: action.meta.arg.content,
           conversationId: action.meta.arg.id,
         })
       })

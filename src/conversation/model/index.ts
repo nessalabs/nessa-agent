@@ -11,3 +11,10 @@ export {
   type Turn,
   type UserTurn,
 } from "./types"
+
+export {
+  contentText,
+  textContent,
+  type MessageContent,
+  type MessagePart,
+} from "./content"

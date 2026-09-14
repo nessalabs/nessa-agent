@@ -1,3 +1,4 @@
+import { textContent } from "../../model"
 import { describe, expect, it } from "vitest"
 
 import { conversation } from "../../model"
@@ -39,8 +40,8 @@ describe("closeTab", () => {
 describe("withDraft", () => {
   it("writes the draft without touching phase or turns", () => {
     const current = conversation("c0")
-    const next = withDraft(current, "halfway")
-    expect(next.draft).toBe("halfway")
+    const next = withDraft(current, textContent("halfway"))
+    expect(next.draft).toEqual(textContent("halfway"))
     expect(next.phase).toBe("idle")
     expect(next.turns).toEqual([])
   })

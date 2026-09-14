@@ -1,3 +1,4 @@
+import { contentText, type MessageContent } from "../../model"
 import type { BusyConversation, IdleConversation, UserTurn } from "../../model"
 import { findConversation, replaceConversation, takeTurnId } from "../internal/ids"
 import type { LocalTabs } from "../local-tabs"
@@ -8,20 +9,21 @@ import type { LocalTabs } from "../local-tabs"
  */
 export function beginSend(
   tabs: LocalTabs,
-  input: { text: string; conversationId?: string },
+  input: { content: MessageContent; conversationId?: string },
 ): LocalTabs {
   const id = input.conversationId ?? tabs.activeId
   const conv = findConversation(tabs, id)
   if (!conv || conv.phase !== "idle") return tabs
 
-  const text = input.text.trim()
-  if (!text) return tabs
+  const text = contentText(input.content)
+  if (!text.trim()) return tabs
 
   const taken = takeTurnId(tabs)
   const userTurn: UserTurn = {
     id: taken.id,
     from: "user",
     text,
+    content: input.content,
     receipt: "sending",
   }
 
@@ -29,7 +31,7 @@ export function beginSend(
     id: conv.id,
     title: conv.turns.length === 0 ? text.slice(0, 48) : conv.title,
     turns: [...conv.turns, userTurn],
-    draft: "",
+    draft: [],
     phase: "thinking",
     pending: "",
   }

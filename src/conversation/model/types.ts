@@ -1,9 +1,12 @@
+import type { MessageContent } from "./content"
+
 export type Receipt = "sending" | "delivered"
 
 export type UserTurn = {
   id: string
   from: "user"
   text: string
+  content: MessageContent
   receipt: Receipt
 }
 
@@ -19,7 +22,7 @@ export type IdleConversation = {
   id: string
   title: string
   turns: Turn[]
-  draft: string
+  draft: MessageContent
   phase: "idle"
 }
 
@@ -27,7 +30,7 @@ export type BusyConversation = {
   id: string
   title: string
   turns: Turn[]
-  draft: string
+  draft: MessageContent
   phase: "thinking" | "streaming"
   pending: string
 }
@@ -37,5 +40,5 @@ export type Conversation = IdleConversation | BusyConversation
 export type Phase = Conversation["phase"]
 
 export function conversation(id: string): IdleConversation {
-  return { id, title: "New chat", turns: [], phase: "idle", draft: "" }
+  return { id, title: "New chat", turns: [], phase: "idle", draft: [] }
 }

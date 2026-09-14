@@ -1,3 +1,4 @@
+import { textContent } from "../conversation/model"
 import { describe, expect, it } from "vitest"
 import { createDependencies } from "./dependencies"
 import { makeStore } from "../store"
@@ -12,13 +13,15 @@ describe("application dependency scope", () => {
       createDependencies({ conversation: { echo: async () => ({ text: "second" }) } }),
     )
     const [a, b] = await Promise.all([
-      first.dispatch(sendDraft({ text: "hello" })),
-      second.dispatch(sendDraft({ text: "hello" })),
+      first.dispatch(sendDraft({ content: textContent("hello") })),
+      second.dispatch(sendDraft({ content: textContent("hello") })),
     ])
     expect(a.payload).toEqual({ text: "first" })
     expect(b.payload).toEqual({ text: "second" })
     const disconnected = makeStore()
-    const failure = await disconnected.dispatch(sendDraft({ text: "hello" }))
+    const failure = await disconnected.dispatch(
+      sendDraft({ content: textContent("hello") }),
+    )
     expect(sendDraft.rejected.match(failure)).toBe(true)
   })
 })
