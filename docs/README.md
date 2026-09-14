@@ -1,9 +1,11 @@
 # docs
 
-Project-specific documentation for Nessa. The general engineering skills that
-used to live here now live in **[nessalabs/skills](https://github.com/nessalabs/skills)**
-and are linked into this repo at `.claude/skills/`, so an agent working here
-picks them up automatically.
+Project-specific documentation for Nessa. All contributors follow the
+[canonical coding standards](../CODING_STANDARDS.md), including the
+[organization gate](../CODING_STANDARDS.md#organization-across-the-repository).
+Keep guides with their feature, distinguish current contracts from proposals,
+and update indexes and links whenever files move. Extend the authoritative guide
+instead of creating a competing copy.
 
 | Document | What it is for |
 | --- | --- |
@@ -39,7 +41,7 @@ Authentication: [design references and primer](design/auth/README.md),
 Completed local decisions are in [ADR 0010](adr/done/0010-local-authentication.md);
 auth API readiness and operating bounds are in [ADR 0007](adr/done/0007-authentication-delivery.md).
 
-- [Coding standards](coding-standards.md): one current contract, no compatibility shims or unnecessary version bumps.
+- [Coding standards](../CODING_STANDARDS.md): one current contract, no compatibility shims or unnecessary version bumps.
 
 Agent invocation: [SDK shape research](design/agent-sdk-shape-research.md) and
 [proposed ADR 0008](adr/todo/0008-agent-client-api.md), covering local ACP first and

@@ -13,10 +13,11 @@ use nessa_auth::{
             CredentialAdminError, IssueCredentialOutcome, IssueCredentialRequest,
             ListCredentialsRequest, RevokeCredentialRequest,
         },
-        ports::{AccessError, CredentialEvidence, Decision},
-        session::{AuthenticateSession, AuthenticatedSession},
+        dto::{CredentialGrantDto, MembershipRoleDto, MembershipStateDto, ResourceDto},
+        ports::{AccessError, AccessSnapshot, CredentialEvidence, Decision},
+        session::{AuthenticateSession, AuthenticatedSession, ReadCurrentSession},
     },
-    domain::Action,
+    domain::{Action, CredentialId},
 };
 use serde_json::json;
 use std::time::Duration;
@@ -350,14 +351,8 @@ async fn dispatch_authorized(
                 || params.request_id.len() > 200
                 || params.membership.organization_id != context.organization_id().as_str()
                 || params.membership.principal_id != params.principal.id
-                || !matches!(
-                    params.membership.role,
-                    nessa_auth::application::dto::MembershipRoleDto::Member
-                )
-                || !matches!(
-                    params.membership.state,
-                    nessa_auth::application::dto::MembershipStateDto::Active
-                )
+                || !matches!(params.membership.role, MembershipRoleDto::Member)
+                || !matches!(params.membership.state, MembershipStateDto::Active)
                 || params
                     .expires_at
                     .is_some_and(|expiry| expiry <= now || expiry > 9_007_199_254_740_991)
@@ -434,7 +429,7 @@ async fn dispatch_authorized(
             {
                 return failure(&frame.id, "invalid_request");
             }
-            let target_id = match nessa_auth::domain::CredentialId::new(&params.credential_id) {
+            let target_id = match CredentialId::new(&params.credential_id) {
                 Ok(id) => id,
                 Err(_) => return failure(&frame.id, "invalid_request"),
             };
@@ -504,15 +499,15 @@ fn correlatable_invalid_request(text: &str) -> Option<OutgoingMessage> {
 fn session_ready(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
-    snapshot: &nessa_auth::application::ports::AccessSnapshot,
+    snapshot: &AccessSnapshot,
 ) -> SessionReady {
     let grants = snapshot
         .credential
         .grants()
         .iter()
-        .map(|grant| nessa_auth::application::dto::CredentialGrantDto {
+        .map(|grant| CredentialGrantDto {
             action: grant.action().as_str().to_owned(),
-            resource: nessa_auth::application::dto::ResourceDto {
+            resource: ResourceDto {
                 organization_id: grant.resource().organization_id().as_str().to_owned(),
                 id: grant.resource().id().as_str().to_owned(),
             },
@@ -532,8 +527,8 @@ fn session_ready(
 async fn current_snapshot(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
-) -> Result<nessa_auth::application::ports::AccessSnapshot, AccessError> {
-    nessa_auth::application::session::ReadCurrentSession {
+) -> Result<AccessSnapshot, AccessError> {
+    ReadCurrentSession {
         access: state.access.as_ref(),
         clock: state.clock.as_ref(),
     }
@@ -629,12 +624,17 @@ mod tests {
     use crate::{app::ports::Clock as UptimeClock, product::ProductDependencies};
     use nessa_auth::{
         adapters::cedar::CedarPolicyEvaluator,
-        application::ports::{
-            AccessReader, AccessSnapshot, Clock, CredentialVerifier, PortFuture, VerifiedCredential,
+        application::{
+            credential_admin::CredentialAdmin,
+            dto::CredentialMetadataDto,
+            ports::{
+                AccessReader, AccessSnapshot, Clock, CredentialVerifier, PolicyEvaluator,
+                PortFuture, VerifiedCredential,
+            },
         },
         domain::{
-            AudienceId, Credential, CredentialId, Grant, Membership, MembershipId, MembershipRole,
-            MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
+            AudienceId, AuthContext, Credential, CredentialId, Grant, Membership, MembershipId,
+            MembershipRole, MembershipStatus, OrganizationId, PrincipalId, Resource, ResourceId,
         },
     };
     use std::sync::{
@@ -772,7 +772,7 @@ mod tests {
     }
 
     struct RejectingAdmin(CredentialAdminError);
-    impl nessa_auth::application::credential_admin::CredentialAdmin for RejectingAdmin {
+    impl CredentialAdmin for RejectingAdmin {
         fn issue<'a>(
             &'a self,
             _: IssueCredentialRequest,
@@ -782,11 +782,7 @@ mod tests {
         fn list<'a>(
             &'a self,
             _: ListCredentialsRequest,
-        ) -> PortFuture<
-            'a,
-            Vec<nessa_auth::application::dto::CredentialMetadataDto>,
-            CredentialAdminError,
-        > {
+        ) -> PortFuture<'a, Vec<CredentialMetadataDto>, CredentialAdminError> {
             Box::pin(async { Err(self.0) })
         }
         fn revoke<'a>(
@@ -892,10 +888,10 @@ mod tests {
     }
 
     struct UnavailablePolicy;
-    impl nessa_auth::application::ports::PolicyEvaluator for UnavailablePolicy {
+    impl PolicyEvaluator for UnavailablePolicy {
         fn evaluate(
             &self,
-            _: &nessa_auth::domain::AuthContext,
+            _: &AuthContext,
             _: &Action,
             _: &Resource,
             _: &AccessSnapshot,
@@ -1258,10 +1254,10 @@ mod tests {
         authority: Arc<Authority>,
         policy: CedarPolicyEvaluator,
     }
-    impl nessa_auth::application::ports::PolicyEvaluator for RevokeAfterAdmission {
+    impl PolicyEvaluator for RevokeAfterAdmission {
         fn evaluate(
             &self,
-            context: &nessa_auth::domain::AuthContext,
+            context: &AuthContext,
             action: &Action,
             resource: &Resource,
             snapshot: &AccessSnapshot,

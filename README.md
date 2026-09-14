@@ -198,6 +198,8 @@ rather than merged with new defaults. Append the following entries to their
 ]
 ```
 
+The relative-tab defaults are desktop-only because Safari reserves Cmd+Shift+H for its home page. Browser bindings may be configured explicitly with a chord supported by the browser.
+
 A shortcut
 that will not parse, or that another app already owns, is reported and skipped
 rather than fatal: the tray icon still opens the panel
@@ -288,6 +290,21 @@ the win is the ~500 dependency crates, which is where the time goes.
 
 Dev builds use `debug = "line-tables-only"`: full debug info is the single
 biggest cost in a Tauri rebuild, and line tables still give a readable backtrace.
+
+For a full Rust workspace check, including the desktop production feature, build
+the frontend first:
+
+```sh
+pnpm build
+cargo check --workspace --all-targets --all-features --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-targets --all-features --locked
+```
+
+Tauri's `custom-protocol` feature embeds `dist/` at compile time. Direct Cargo
+commands do not run Tauri's `beforeBuildCommand`, so a fresh checkout needs
+`pnpm build` before enabling that feature. The ordinary development check,
+`cargo check --workspace --all-targets --locked`, does not need the bundle.
 
 ### The edit cycle
 
@@ -469,6 +486,13 @@ Gateway access uses local credentials at `/session`. The panel automatically loa
 its assigned surface credential. Credentials have no expiry by default; grants and
 optional expiry are configurable per surface. Namespace `config.json` controls
 registry limits and session deadlines without rebuilding. See the
-[local auth guide](docs/guides/local-auth.md) and [coding standards](docs/coding-standards.md).
+[local auth guide](docs/guides/local-auth.md) and [coding standards](CODING_STANDARDS.md).
 
-The relative-tab defaults are desktop-only because Safari reserves Cmd+Shift+H for its home page. Browser bindings may be configured explicitly with a chord supported by the browser.
+## Contributing
+
+Every change follows [CODING_STANDARDS.md](CODING_STANDARDS.md), including the
+[organization gate](CODING_STANDARDS.md#organization-across-the-repository).
+Inspect the owning feature before editing, and keep its source, tests, scripts,
+configuration, and documentation organized together. Update module maps and links
+when responsibilities move; verify the resulting layout and relevant checks.
+See [codebase structure](docs/codebase-structure.md) for the repository map.

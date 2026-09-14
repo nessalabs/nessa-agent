@@ -14,6 +14,7 @@ use crate::{
         dto::{
             CredentialGrantDto, CredentialMetadataDto, MembershipInputDto, MembershipRoleDto,
             MembershipStateDto, OrganizationInputDto, PrincipalInputDto, PrincipalKindDto,
+            ResourceDto,
         },
         ports::{
             AccessError, AccessReader, AccessSnapshot, CredentialEvidence, CredentialVerifier,
@@ -489,7 +490,7 @@ impl LocalCredentialStore {
             .into_iter()
             .map(|action| CredentialGrantDto {
                 action,
-                resource: crate::application::dto::ResourceDto {
+                resource: ResourceDto {
                     organization_id: membership.organization_id.clone(),
                     id: audience_id.clone(),
                 },
@@ -1187,6 +1188,7 @@ fn sync_directory(path: &Path) -> Result<(), LocalStoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::MembershipRole;
     use crate::{
         application::dto::{CredentialGrantDto, PrincipalKindDto, ResourceDto},
         domain::AudienceId,
@@ -1473,10 +1475,7 @@ mod tests {
             .all(|(_, role)| *role == MembershipRoleDto::Member));
         // Role and revocations are published coherently to active readers.
         let snapshot = ready(store.read(&CredentialId::new("chat-two").unwrap())).unwrap();
-        assert_eq!(
-            snapshot.membership.role(),
-            crate::domain::MembershipRole::Member
-        );
+        assert_eq!(snapshot.membership.role(), MembershipRole::Member);
 
         let audience = AudienceId::new("gateway-1").unwrap();
         assert_eq!(

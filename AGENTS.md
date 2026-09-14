@@ -1,8 +1,17 @@
 # Working in Nessa
 
-Read `docs/codebase-structure.md` and `docs/ARCHITECTURE.md` for repository boundaries.
+Read [CODING_STANDARDS.md](CODING_STANDARDS.md), `docs/codebase-structure.md`,
+and `docs/ARCHITECTURE.md` before making changes. `CODING_STANDARDS.md` is the
+single coding standards document; update it rather than creating another copy.
 For dependency wiring, follow `docs/design/dependency-injection.md` and the existing
 TypeScript composition factory and Rust `RuntimeDependencies` examples.
+
+## Organization checks
+
+Apply [repository-wide organization standards](CODING_STANDARDS.md#organization-across-the-repository)
+before editing and before reporting completion. They cover source, tests, scripts,
+configuration, and documentation, including work delegated to other agents.
+Inspect the resulting layout and verify module maps, moved links, and checks.
 
 ## Pure DDD boundaries
 
@@ -30,11 +39,30 @@ TypeScript composition factory and Rust `RuntimeDependencies` examples.
 - Test domain invariants directly without JSON, databases, providers, or an
   application runtime. Test application orchestration/projections separately, and
   test infrastructure parsing and substitution at its boundary.
+- Hard audit rule: consequential state transitions must retain their target,
+  before/after meaning, causal lifecycle reason, and known initiator. Bulk cleanup,
+  cancellation, timeout, failure, and drop paths are not exceptions. Carry domain
+  evidence through application-owned audit ports; never silently discard it or
+  rely solely on a lossy UI stream or diagnostic log. Require verified caller
+  attribution for explicit actions; label automatic/provider causes honestly.
+  Report audit delivery failures while still performing necessary cleanup. Keep
+  local decisions distinct from confirmed external effects. Returned permission
+  decisions must be audited independently of response futures, including successful
+  allows/denials and caller loss after admission. Validate restored lifecycle and
+  correlation evidence through domain rules. A change fails review
+  without regression tests for cause/correlation, every affected lifecycle path,
+  and audit-sink failure. Follow [CODING_STANDARDS.md](CODING_STANDARDS.md#audit-evidence-is-part-of-the-behavior) for the audit checklist.
 - Group domain code by feature/context first (for example,
   `domain/model_metadata/`), then by DDD role: `value_objects/`, `entities/`, and
   `aggregates/` where those roles exist. The folder should make each type's role
   clear. Value objects are immutable and validated at construction; aggregate
   roots own their consistency boundaries.
+- Within a large context, group by responsibility before DDD role (for example,
+  `agent_execution/tools/entities/`). Use the same feature vocabulary in
+  application, infrastructure, tests, and documentation where that responsibility
+  exists; do not invent empty counterparts or split one consistency boundary into
+  independent aggregates. Update module diagrams, navigation, and review links
+  whenever files or ownership move.
 - Reserve `mod.rs` for module documentation, declarations, and re-exports. Put
   structs, enums, functions, implementations, and tests in named files. Describe
   each module in simple plain English: what it owns, why it exists, and how it
@@ -53,7 +81,23 @@ TypeScript composition factory and Rust `RuntimeDependencies` examples.
   type. Avoid a flat domain directory that mixes unrelated features. Moving a DTO
   into a `domain` directory or adding empty layer folders is not a DDD refactor.
 
+- Value-object review gate: reject in-place mutation APIs (including private
+  mutators, mutable references, and interior mutability) on domain value objects.
+  Changes produce replacement values; entities and aggregates own mutable state
+  and identity checks. Keep sparse update inputs distinct from accumulated
+  snapshots so omitted fields cannot be mistaken for unknown state.
+
 ## Dependency and compatibility rules
+
+- Import Rust types at the top of the owning file/module and use their short names
+  in signatures, implementations, and expressions. Group imports from the same module in one brace import, such as
+  `use crate::application::agent_execution::executions::{ExecutionEvent, ExecutionRequest, ExecutionUpdate};`.
+  Let rustfmt wrap long groups; do not repeat one path on separate lines per type.
+  Do not scatter long qualified type paths or function-local imports. Preserve conditional compilation and keep
+  test-only imports at the top of their test module. Alias only real name collisions.
+  Conventional qualified module functions/macros, hygienic `$crate` macro paths,
+  and required trait-disambiguation syntax are exceptions. Apply this to generators
+  as well as handwritten code; see [Rust imports](CODING_STANDARDS.md#rust-imports-and-type-names).
 
 - Use typed constructor/factory injection. No global service locator or mutable
   process-wide client/backend handles.
@@ -69,6 +113,30 @@ TypeScript composition factory and Rust `RuntimeDependencies` examples.
   unnecessary protocol/schema/package version bumps. Update current callers, tests,
   documentation, and local development data directly. Keep one current contract.
   Compatibility support or a version transition requires an explicit user request.
+
+- Use `tracing` for SDK diagnostics and examples; executable composition must
+  initialize its subscriber. Other binaries adopt this rule only when tracing is
+  wired into their composition. Preserve the desktop host's existing stderr
+  diagnostics until that migration is implemented so startup failures remain visible.
+
+## Public SDK documentation
+
+- Follow [SDK API documentation](CODING_STANDARDS.md#sdk-api-documentation) for
+  `crates/nessa-sdk`. New or changed public modules, types, traits, variants,
+  fields, constructors, and methods require useful Rustdoc. Explain every
+  parameter, results/errors, ownership, lifecycle, and relevant effect guarantees.
+  Include compilable examples for entry points. Document why resource handles
+  such as storage leases exist and what acquisition, close, and drop mean.
+- Review documentation with the implementation and tests; run `cargo doc -p
+  nessa-sdk --no-deps` with Rustdoc warnings denied. Add scoped `missing_docs`
+  enforcement to fully documented modules; do not hide gaps with blanket allows
+  or describe planned behavior as an implemented guarantee.
+
+- Verify SDK lifecycle/concurrency guarantees with deterministic interleavings
+  (barriers/channels), cancellation and failure coverage, and real adapter tests.
+  Use controlled clocks for time-based behavior; optional seeded jitter supplements
+  reproducible cases. Do not rely on random sleeps or introduce test controls into
+  production configuration. See the SDK documentation standards for this gate.
 
 ## Reviewing rich content changes
 

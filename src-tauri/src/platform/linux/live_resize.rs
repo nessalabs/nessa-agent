@@ -49,13 +49,16 @@ pub fn watch(window: &tauri::WebviewWindow) -> Result<(), String> {
             let live = live.clone();
             let target = target.clone();
             let end_slot = end.clone();
-            *end.borrow_mut() = Some(glib::timeout_add_local_once(Duration::from_millis(160), move || {
-                *end_slot.borrow_mut() = None;
-                if live.get() {
-                    live.set(false);
-                    let _ = target.emit(host::RESIZE_ENDED, ());
-                }
-            }));
+            *end.borrow_mut() = Some(glib::timeout_add_local_once(
+                Duration::from_millis(160),
+                move || {
+                    *end_slot.borrow_mut() = None;
+                    if live.get() {
+                        live.set(false);
+                        let _ = target.emit(host::RESIZE_ENDED, ());
+                    }
+                },
+            ));
         }
     });
 
@@ -77,8 +80,7 @@ fn arm_west_handle(gtk_window: &gtk::ApplicationWindow) {
         if event.button() != 1 {
             return Propagation::Proceed;
         }
-        if gtk_window.is_decorated() || !gtk_window.is_resizable() || gtk_window.is_maximized()
-        {
+        if gtk_window.is_decorated() || !gtk_window.is_resizable() || gtk_window.is_maximized() {
             return Propagation::Proceed;
         }
         let Some(gdk_window) = gtk_window.window() else {

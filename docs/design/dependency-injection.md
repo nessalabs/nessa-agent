@@ -75,6 +75,11 @@ See [identity and tenancy](auth/identity-tenancy-and-cloud.md) for migration bou
 
 ## Checks for contributors and agents
 
+Apply the [repository-wide organization gate](../../CODING_STANDARDS.md#organization-across-the-repository)
+to dependency changes too: put ports with their consuming application feature,
+adapters with their boundary, wiring in composition, and substitution tests with
+the feature they exercise. Update module maps and guidance when seams move.
+
 - Concrete backend construction belongs at composition or in its adapter factory.
 - Feature effects use application-owned ports, not global getters or string lookup.
 - React, Redux, client SDKs, and infrastructure types stay out of domain rules.

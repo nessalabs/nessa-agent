@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { format, resolveConfig } from "prettier"
 import { spawnSync } from "node:child_process"
+import { validateExternalRustTypes } from "./product-protocol/rust-types.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const schema = JSON.parse(readFileSync(resolve(root, "protocol/product/v1.json"), "utf8"))
@@ -11,10 +12,15 @@ const manifest = JSON.parse(
   readFileSync(resolve(root, "protocol/product/manifest.json"), "utf8"),
 )
 const snake = (name) => name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)
+validateExternalRustTypes(schema.$defs)
+const externalRustTypes = new Set()
+const rustTypeName = (value) => value.split("::").at(-1)
 function type(node, rust) {
   if (node.$ref) {
     const name = node.$ref.split("/").at(-1)
-    return rust ? (schema.$defs[name]["x-rust-type"] ?? name) : name
+    const externalType = schema.$defs[name]["x-rust-type"]
+    if (rust && externalType) externalRustTypes.add(externalType)
+    return rust ? (externalType ? rustTypeName(externalType) : name) : name
   }
   if (node.enum && !rust) return node.enum.map(JSON.stringify).join(" | ")
   if (Array.isArray(node.type) && rust)
@@ -39,6 +45,7 @@ let ts =
   "/* eslint-disable */\n/* Generated from protocol/product/v1.json and manifest.json. Do not edit. */\n"
 let rs =
   "//! Generated from protocol/product/v1.json. Do not edit.\n//! Bounds are validated at the transport boundary; these are payload types only.\n#![allow(dead_code)]\nuse serde::{Deserialize, Serialize};\n"
+rs += "__EXTERNAL_RUST_IMPORTS__"
 for (const [name, def] of Object.entries(schema.$defs)) {
   ts += doc(def.description)
   if (def.enum) {
@@ -85,6 +92,20 @@ ts = await format(ts, {
   ...(await resolveConfig(resolve(root, "prettier.config.js"))),
   parser: "typescript",
 })
+let imports = ""
+const rustImports = new Map()
+for (const externalType of externalRustTypes) {
+  const separator = externalType.lastIndexOf("::")
+  const module = externalType.slice(0, separator)
+  const name = externalType.slice(separator + 2)
+  const names = rustImports.get(module) ?? []
+  names.push(name)
+  rustImports.set(module, names)
+}
+for (const [module, names] of rustImports) {
+  imports += `use ${module}::{${names.sort().join(", ")}};\n`
+}
+rs = rs.replace("__EXTERNAL_RUST_IMPORTS__", imports)
 const formatted = spawnSync("rustfmt", ["--edition", "2021"], {
   input: rs,
   encoding: "utf8",

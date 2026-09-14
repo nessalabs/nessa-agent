@@ -1,10 +1,21 @@
 # Codebase structure
 
-The general rules live in the **`system-architect`** skill
-([structure reference](../.claude/skills/system-architect/references/structure.md)) —
-layout, dependency direction, the generic absences, boundaries between runtimes,
-and how to grow a module. This file is only the part that is specific to Nessa,
-and it is the part that changes as Nessa grows.
+The repository rules live in [AGENTS.md](../AGENTS.md) and the
+[coding standards](../CODING_STANDARDS.md). This guide maps those dependency and
+ownership rules to Nessa's current modules and changes as the codebase grows.
+
+## Organization applies to every change
+
+The [organization standards](../CODING_STANDARDS.md#organization-across-the-repository)
+are required for all languages and layers. Source files, tests, scripts,
+configuration, and documentation belong with the feature or boundary they serve.
+Use shared locations only for responsibilities that are actually shared.
+
+Keep the feature vocabulary consistent across those locations. Preserve existing
+consistency boundaries, give each module a clear map, and update navigation and
+callers when moving files. Review the resulting tree and verify affected links
+and checks before considering the change complete. A new folder alone does not
+establish an architectural boundary.
 
 ## Today
 
@@ -46,8 +57,8 @@ where a wrong number in the right slot compiles happily.
 
 ## The absences
 
-The generic list is in the skill. These are the Nessa-specific ones, and they
-must stay true:
+The [coding standards](../CODING_STANDARDS.md) define the repository-wide gates.
+These additional Nessa-specific invariants must stay true:
 
 1. `domain/` contains no `tauri`, `serde`-transport, async-runtime, or
    filesystem import.

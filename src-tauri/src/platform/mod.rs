@@ -18,10 +18,10 @@ use tauri::{AppHandle, Manager, WebviewWindow, Window, WindowEvent};
 use crate::host::PanelSize;
 use crate::settings::Settings;
 
-#[cfg(target_os = "macos")]
-mod macos;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod other;
 
@@ -113,11 +113,7 @@ pub fn bind_window(window: &WebviewWindow, settings: &Settings) {
 /// natively as well as in CSS. The tray's check mark is reflected from the
 /// same call, which keeps the frontend the single source of truth.
 #[tauri::command]
-pub fn set_frosted(
-    app: AppHandle,
-    window: WebviewWindow,
-    frosted: bool,
-) -> Result<(), String> {
+pub fn set_frosted(app: AppHandle, window: WebviewWindow, frosted: bool) -> Result<(), String> {
     current().set_frosted(&window, frosted)?;
 
     if let Some(item) = app.try_state::<crate::tray::SurfaceMenuItem>() {
@@ -144,9 +140,7 @@ pub fn flush_compositor(window: WebviewWindow) -> Result<(), String> {
 
 /// The display the panel is on, falling back to the primary one — the same
 /// choice `panel::anchor_to_edge` makes when it places the panel.
-pub(crate) fn current_monitor(
-    window: &WebviewWindow,
-) -> Result<Option<tauri::Monitor>, String> {
+pub(crate) fn current_monitor(window: &WebviewWindow) -> Result<Option<tauri::Monitor>, String> {
     let current = window.current_monitor().map_err(|e| e.to_string())?;
     match current {
         Some(monitor) => Ok(Some(monitor)),

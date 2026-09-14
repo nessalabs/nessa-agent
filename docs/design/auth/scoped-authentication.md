@@ -4,7 +4,8 @@ This is the original detailed implementation plan, retained for rationale and
 acceptance criteria. It is reference material, not the active work queue.
 
 - **Implemented:** [ADR 0010](../../adr/done/0010-local-authentication.md) owns the local library, registry, gateway, SDK, and CLI slice.
-- **Remaining:** [ADR 0007](../../adr/done/0007-authentication-delivery.md) tracks auth delivery gaps; [ADR 0011](../../adr/todo/0011-nessa-session-protocol-and-authorities.md) tracks the larger session scope.
+- **Verified:** [ADR 0007](../../adr/done/0007-authentication-delivery.md) records completed auth readiness and operating-bound checks.
+- **Remaining:** [ADR 0011](../../adr/todo/0011-nessa-session-protocol-and-authorities.md) tracks the larger shared session scope.
 - **Current behavior:** [local guide](../../guides/local-auth.md) and [gateway review](../../reviews/local-auth-gateway.md).
 - **Dependency on external stream crate:** none for credential storage.
 
@@ -15,6 +16,7 @@ the shared token setting have been removed.
 The independent server data-root adapter and product schemas already exist under
 `crates/nessa-server/src/env/paths.rs` and `protocol/product/`. Future-tense steps
 below are historical planning language, not evidence of missing implementation.
+Current connection handling lives in [product/socket.rs](../../../crates/nessa-server/src/product/socket.rs).
 Use the ADRs above to distinguish completed scope from outstanding work.
 
 ## Deployment target
@@ -59,8 +61,8 @@ and no failure on `/session` falls back to the spike.
 | Area | Plan |
 | --- | --- |
 | [Existing AppState](../../../crates/nessa-server/src/app/state.rs) | Keep legacy shared-token state unchanged; no registry added to it |
-| [Existing connect middleware](../../../crates/nessa-server/src/connect/middleware/auth.rs) | Leave the spike's token comparison and hello flow unchanged |
-| [Existing WsSession](../../../crates/nessa-server/src/server/entrypoint/session.rs) | Keep spike state; introduce separate product connection state |
+| Original `connect/middleware/auth.rs` (removed) | Leave the spike's token comparison and hello flow unchanged |
+| Original `server/entrypoint/session.rs` (removed) | Keep spike state; introduce separate product connection state |
 | [Existing hello encoder](../../../crates/nessa-server/src/protocol/encode.rs) | Leave `HelloOk`, its scopes, and challenge semantics unchanged |
 | [HTTP router](../../../crates/nessa-server/src/server/entrypoint/http.rs) | Compose a separate `/session` route with route-local middleware dependencies |
 | New product middleware | Authenticate, construct AuthContext, check current grants, guard dispatch/output, and handle invalidation |
