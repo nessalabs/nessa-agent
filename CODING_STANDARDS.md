@@ -31,6 +31,133 @@ must apply these merge gates together with [AGENTS.md](AGENTS.md),
 
 If a gate fails, fix it in the same PR.
 
+## Local code review gate
+
+Use this gate when reviewing changes locally, including reviews delegated to
+subagents. Review the implementation against these standards, not just the PR
+summary or a previous reviewer’s conclusions. CI and coverage percentages are
+supporting evidence, not proof that a lifecycle contract holds.
+
+### Required review brief
+
+Give each reviewer the actual checkout, exact base and head, intended behavior,
+owned review scope, and this document. Include uncommitted changes explicitly;
+a head SHA alone does not identify a dirty working tree. Freeze the tree for final
+verification and do not restack, move fixtures, or invalidate shared build artifacts
+while checks are running. In a stack, review each PR against its
+intended base and verify the assembled behavior across the stack. Identify known
+findings to avoid duplicate reports, but require reviewers to test adjacent paths
+rather than assuming a prior fix covers them. Reviewers must disclose which
+files, boundaries, and checks they inspected and what remains unverified.
+
+Group independent reviewers by responsibility where useful: domain/API ownership;
+application and persistence correctness; and adversarial lifecycle/adapter tests.
+The adversarial reviewer must try to falsify the claimed guarantees with concrete
+inputs and interleavings. Keep ownership of code edits explicit so parallel
+reviewers do not overwrite each other. The coordinating agent verifies the final
+combined tree and each intermediate PR against its own required checks. Combined
+coverage does not prove an earlier domain-only slice meets its coverage gate.
+Check supported platform and feature combinations; test helpers must compile only
+where they are used. Read effective package metadata and explicit inheritance when
+checking toolchain support; a workspace default alone does not establish every
+member package's minimum version. Verify a claimed mismatch at the reviewed head.
+
+### Agreement across fields and layers
+
+This is a required check in every local review, including focused subagent reviews
+and the final combined review. Individually valid fields or records do not prove
+that their combination describes a possible execution.
+
+- Identify the related facts: identity/owner, stage/cause/result, actor/authority,
+  delivery/cleanup status, and live versus retained resource accounting. Name the
+  authoritative source for each and where their relationship is enforced.
+- Trace those facts together through domain decisions, application mapping,
+  adapter effects, persistence, restoration, and the consuming API/UI where those
+  layers exist. Check the enclosing record before declaring evidence missing;
+  do not duplicate authoritative data merely to make each fragment standalone.
+- Construct contradictions from otherwise valid values: a failed dispatch with
+  a successful result, evidence for another session, or uncertain cleanup without
+  retained resource ownership. Test rejection before effects or replacement of
+  prior evidence, including custom adapters and restored data.
+- Follow allowed replacements with later evidence, not only a checkpoint: after
+  success becomes local failure, test same and conflicting provider/terminal
+  outcomes and save/reload between steps. Check admission, dispatch, and terminal
+  prerequisites in both evidence orders.
+- Also prove valid combinations remain accepted. Distinct facts need not be equal:
+  a local close and a later provider failure can have different causes, and a saved
+  result may precede the final scheduling write. Preserve those meanings.
+- Every review report must state which relationships and boundaries were checked,
+  the enforcing code and regression evidence, and explicit exclusions. A review
+  fails this gate if it only lists individually validated types or isolated tests.
+
+- Exercise repeated writes against existing evidence, not just construction from
+  an empty record. Enumerate idempotent repeats, conflicting outcomes, and allowed
+  success-to-failure updates. A later record must not hide an invalid earlier one.
+- Inventory every public command that owns a receipt or consequential write,
+  including withdrawal and bulk cancellation during close. Verify its supervision covers removal from pending work,
+  persistence before/after commit, and final receipt delivery; do not infer coverage
+  from the invocation runner alone. Inject failure on an early item and verify
+  every remaining item retains its owner, causal evidence, and receipt.
+- Check failed preparation followed by attempted dispatch, and failed cleanup
+  followed by restoration or a later successful report. Work admission does not
+  imply provider readiness: fence controls during cleanup/restoration and at each
+  poll of already-admitted operations. Preserve cancellation attribution even
+  when input was saved but never reached provider dispatch.
+- Repeat cleanup after physical success with audit failure. Released resources
+  must not turn a retained failure into acknowledgement; test cached reports and
+  reports received through provider operations as well as direct close.
+
+### Review dimensions
+
+| Dimension | Required questions and evidence |
+| --- | --- |
+| Authority and identity | Can Clone, restoration, a detached handle, or a public constructor create another mutable dispatch/decision authority? Does every delayed command identify its intended execution, including bulk operations? Can an old callback affect a reused identity in a later run? Read-only evidence may be shared; mutable authority must have one owner. |
+| Domain invariants | Are legal transitions, sequence continuity, and stable correlation validated by their owning domain? Are cause/initiator combinations validated at the boundary that owns attribution? A valid individual record does not make a valid history. Enumerate accepted causes for each operation separately (permission cancellation, execution finish, session close); one valid cause enum is not valid at every lifecycle boundary. Execution-specific causes require execution correlation; idle attachment failures need their own meaning. Retain the first transition evidence needed to validate later settlement; a boolean closed flag loses the original cause. Keep a local closure distinct from a later independent execution failure: preserve both causes rather than requiring equality or leaving active state stranded. Check state after settlement as well as before it. Invalid input must leave authoritative state and prior evidence unchanged. |
+| Admission and concurrency | Identify the point at which the SDK owns a submitted command and the point at which close excludes new work. Exercise accepted commands overtaken by close, dropped waiters, queued work, native steering, preparation, hooks, and cleanup. Check incoming observations after close as well as outgoing commands; retaining an active execution for settlement does not authorize new state mutation. Inspect async lock waiters across select branches: handling one branch must not wait behind a suspended sibling future that only this task can poll. Cancellation between authority changes and their effects must not leave stale authority. Error publication belongs to that boundary too: a delayed old-generation failure must not revoke confirmed recovery of a new generation. Separate admission, delivery, and confirmed external effects. Trace every explicit and automatic shutdown caller through the same coordinator; test already-admitted controls as well as late arrivals. A control awaiting teardown must not prevent teardown from starting. Dropping a waiter must not release dispatch authority while provider work can continue; test both caller cancellation and task panic. |
+| Failure and cleanup | Raise admission barriers before asynchronous cleanup starts. Inspect direct and wrapped uncertain-cleanup results for every provider operation (preparation, execution, steering, answers, cancellation, and shutdown), repeated close, and successful recovery. No input may reach a context undergoing teardown; reopening requires confirmed cleanup. Include constructor failure and cancellation: ownership and exclusive leases must outlive any unconfirmed attachment, with a documented recovery path. Preserve the primary typed failure alongside audit and cleanup failures, including three-way failures; do not replace its cause with a generic runtime label. |
+| Observations and restoration | Check zero, one, duplicate, and contradictory terminal observations against settlement. Correlate cancellation/answer evidence with the exact earlier request, options, input, session, and execution; reject fabricated or repeated decisions. Test custom storage as well as built-in adapters so substitution cannot bypass validation. Before restoring a provider generation, account for its pending observations and failure delivery; an old reader failure must not be discovered only after replacement work is dispatched. Preserve diagnostic failure evidence without presenting it as successful authoritative history. Apply live count and payload limits to restored evidence. A terminal scheduling claim must retain its result, while a result saved before the terminal transition remains valid. State which transitions are absent from snapshots and validate only what the retained evidence can prove; never fabricate missing answers or reject a feasible sequential history as concurrent. |
+| Audit | Apply the [audit gate](#audit-evidence-is-part-of-the-behavior) to idle and active paths, empty collections, bulk cleanup, deadlines, provider loss, and dropped handles. Verify exact target, before/after meaning, cause, and known initiator. Test sink rejection/timeout and combined transport/cleanup failure; a returned object or UI event is not delivery to the required sink. |
+| Representation boundaries | Exercise external input before side effects: malformed or unsupported variants, non-UTF-8 OS paths, serialization failures, and platform differences. Validate before spawning or dispatching; a panic or dropped task must not replace a typed configuration error. Reject duplicate or contradictory policy-bearing keys before selecting their values, including nested JSON keys before map decoding can collapse them; test both entry orders and repeated equal values. Round trips alone do not cover hostile input. Inspect notifications during startup and restoration RPCs, not only the steady-state reader: ordering must not bypass negotiated model or permission policy. |
+| Resource bounds | Include retained identity text, collection elements, spare capacity where retained, and repeated copies (including collection keys separately from entity IDs) in budget analysis. Compare initial admission with sparse updates, replacement, and release. Validate or account for every retained identity at its owning boundary, including session identities copied into evidence; a text-length limit must not retain unbounded spare allocation capacity. Keep bounded pending capacity distinct from intentionally retained identity/history growth. Treat caller-supplied size/token estimates as untrusted: enforce actual retained-byte bounds before cloning, saving, or queueing external input, and test exact limits with multibyte text. Inspect constructor complexity before any later budget gate: avoid quadratic duplicate scans over untrusted collections. Compact immutable collections as well as their element text, and cover provider metadata and streamed output alongside input. Include recursive error diagnostics before their first clone or persistence; bounding diagnostics must preserve typed cleanup and failure meaning. |
+| Public surface and organization | Follow the naming, DDD, imports, module maps, and [SDK documentation gate](#sdk-api-documentation). Check every exported type, field, variant, method, and port, not just entry points. Public enum payloads are public mutable fields too: a value object must not expose owned String/Vec data that callers can grow through a mutable pattern match. Prefer private immutable storage with borrowed inspection; replacement remains explicit. Use scoped missing_docs enforcement. Remove unused dependencies and speculative abstractions; test real adapter substitution. |
+
+### Evidence and closure
+
+- For each finding, report severity, exact location, reachable trigger, violated
+  contract, expected versus actual behavior, and a minimal reproduction or clear
+  source path. A regression should exercise the reported trigger and distinguish
+  the broken behavior from the fix; assert typed outcomes and authoritative state,
+  not merely completion without a panic. Label uncertain hypotheses; a plausible narrative alone is not a
+  confirmed bug. Do not infer repository-wide absence from one file or one PR.
+- Test both sides of a boundary: before/after admission, before/after execution
+  completion, and before/during/after cleanup. Use deterministic gates and
+  controlled clocks; seeded jitter may supplement these tests. Compile-fail
+  examples can protect ownership restrictions. For supervised tasks, inject the
+  first panic at each effect-bearing phase, including admission/dispatch saves,
+  provider polling, and terminal persistence; a protected inner future does not
+  establish supervision of its outer task or receipt. Never add production test switches
+  merely to make a race reproducible.
+- For every fix, check the neighboring variants and other entry paths that enforce
+  the same contract: singular/bulk, direct/queued/steered, live/restored,
+  built-in/custom adapter, caller/provider/runtime, and success/failure/drop.
+  Apply only the dimensions relevant to the change and state exclusions. For a
+  shared dispatcher or validator, enumerate the variants it actually handles; a
+  helper name or one passing variant is not evidence that all payloads are checked.
+  Trace checks relative to the first clone, save, or effect at each entry point.
+- Address findings at every priority. Keep a disposition for each: fixed with
+  evidence, already covered with a precise source/test, or rejected with a
+  concrete explanation. Never dismiss a finding solely because it is low priority
+  or a suggested fix is inconvenient. Do not add unnecessary architecture merely
+  to satisfy an incorrect premise.
+- Re-run the failing reproduction after the fix and the appropriate affected
+  suites on the combined tree. Update callers, contracts, docs, and review links
+  together. A response claiming a fix must cite its implementation and validation;
+  resolve a review thread only after verifying that disposition.
+- A clean review report states the exact reviewed head, dimensions tested,
+  remaining limits, and unresolved findings. When external review is requested,
+  track its result against the current head; a prior-head approval or a human
+  reaction is not an automated approval of later changes.
+
 ## Organization across the repository
 
 These requirements apply to every contributor and every change: Rust and
@@ -111,7 +238,9 @@ following requirements blocks review; passing a happy-path test is insufficient.
 - Audit delivery must not depend on the UI event queue remaining available. Audit
   failure must be observable and must prevent a successful audited result; it must
   not prevent necessary resource cleanup. Diagnostic logs are not a durable audit
-  store. Document the supplied adapter's durability contract and remaining gaps.
+  store. Give every bulk record a usable bounded delivery attempt; an earlier
+  timeout must not silently consume all later records' deadlines. Document the
+  supplied adapter's durability contract and remaining gaps.
 - Distinguish intent/local state, attempted wire delivery, acknowledgement, and
   confirmed effects. Cancelling a permission does not prove a tool stopped or
   rolled back. Never relabel an already-resolved request during later cleanup.
@@ -172,6 +301,37 @@ For lifecycle and concurrency guarantees, test competing owners, resource releas
 initialization failure, cancellation of caller waits, and outstanding I/O where
 applicable. Prefer barriers, channels, and controlled scheduling to force races;
 use injected or paused clocks for actual deadlines. Seeded jitter can supplement
-these tests, but random sleeps must not be the only evidence. Test real adapter
+these tests, but random sleeps must not be the only evidence. Do not let paused
+Tokio time auto-advance OS process-exit or filesystem deadlines: use a handshake
+to advance the specific simulated deadline, then resume real time before awaiting
+real external progress. Test real adapter
 and cross-process exclusion where promised, and keep test controls out of public
 SDK configuration.
+
+### Session persistence checks
+
+Measure write growth and validation work with both longer history and smaller
+streaming chunks. Removing writes must not leave a full-history scan per chunk;
+use deterministic operation counts to verify incremental live checks and retain
+complete validation at persistence/restoration boundaries.
+Do not serialize unchanged history into every appended record. Bound retained streaming
+buffers by count and bytes; consequential transitions must not wait for more
+text. Keep storage acknowledgement distinct from observation. If live text is
+published before persistence, document that it may be lost and test the next save
+boundary. Publish consequential saved events only after acknowledgement. Test interrupted final writes,
+malformed complete records, retry after an uncertain save, and outstanding I/O
+retaining the writer lease. Check decoding before allocation: a validator that
+runs after deserialization does not bound the parser's strings or collections.
+Test early rejection of oversized fields and nested diagnostics alongside valid
+large records and long histories; do not replace per-value bounds with an
+unrelated total-conversation cap. Document remaining in-memory history and validation
+costs separately from bytes written to disk.
+
+## Machine-readable command output
+
+Primary command output, such as a JSON catalog intended for a pipe, is data rather
+than a diagnostic. Write it to standard output through the appropriate serializer
+or I/O writer without tracing metadata. Keep diagnostics on standard error through
+tracing and preserve a nonzero exit status on failure. Test documented commands
+with stdout and stderr captured separately; a logging-only test cannot verify the
+machine-readable output contract. This does not permit print macros for diagnostics.

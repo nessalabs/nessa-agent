@@ -13,6 +13,22 @@ before editing and before reporting completion. They cover source, tests, script
 configuration, and documentation, including work delegated to other agents.
 Inspect the resulting layout and verify module maps, moved links, and checks.
 
+## Local and delegated code review
+
+- Use the [local code review gate](CODING_STANDARDS.md#local-code-review-gate)
+  for every local review and include it in each review subagent’s brief. Supply
+  the exact checkout/base/head, scope, and known findings; require concrete
+  adversarial evidence and an explicit account of coverage and limitations.
+- Every review must apply
+  [agreement across fields and layers](CODING_STANDARDS.md#agreement-across-fields-and-layers):
+  trace related facts together, challenge contradictory combinations, and report
+  enforcing boundaries and regression
+  evidence. Include this requirement in every delegated review brief.
+- Apply the same gate to the combined changes after parallel work. Address every
+  priority, verify adjacent lifecycle paths, and retain a disposition for each
+  finding before resolving its thread. Keep the detailed checklist in the single
+  canonical standards document rather than copying it into separate review rules.
+
 ## Pure DDD boundaries
 
 - Follow pure domain-driven design. Organize new backend contexts into `domain`,
@@ -118,6 +134,8 @@ Inspect the resulting layout and verify module maps, moved links, and checks.
   initialize its subscriber. Other binaries adopt this rule only when tracing is
   wired into their composition. Preserve the desktop host's existing stderr
   diagnostics until that migration is implemented so startup failures remain visible.
+  Keep primary machine-readable command data on stdout via a serializer/I/O writer,
+  with tracing diagnostics on stderr; follow [command output](CODING_STANDARDS.md#machine-readable-command-output).
 
 ## Public SDK documentation
 

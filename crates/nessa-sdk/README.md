@@ -221,3 +221,19 @@ mapping file, including the new snapshot projection, separately measures
 Tests cover all 2,401 independent nonempty model/binding input/output modality
 combinations, boolean feature restrictions, configuration and input budget
 boundaries, error diagnostics, and snapshot isolation.
+
+## Execution domain
+
+`domain/agent_execution/` models reusable execution rules without providers or I/O.
+Sessions own the live execution, tool observations, and pending permissions as one
+consistency boundary. Tool entities replace immutable observation values using
+sparse updates. Permission identities prevent resolved requests from reopening
+within an execution; cancellation retains a typed lifecycle reason.
+
+The invocation queue protects FIFO/priority ordering, bounded admission, and
+validated scheduling transitions. Prompt values and builders retain supplied
+content and provenance. These primitives do not dispatch agents or persist
+conversations; application orchestration and adapters are separate consumers.
+
+Start with [the domain map](src/domain/agent_execution/mod.rs) and
+[feature-organized domain tests](tests/domain/agent_execution/mod.rs).

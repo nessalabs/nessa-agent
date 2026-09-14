@@ -181,19 +181,24 @@ patterns for actual backend integrations without adding a service locator.
 
 ## Agent SDK foundation
 
-`crates/nessa-sdk` owns model metadata and immutable effective capability snapshots. `domain/model_metadata/`
-groups the feature into `value_objects/`, `entities/`, and `aggregates/`. Related
-value objects share identity, capabilities, and description files; the catalog
-aggregate owns model uniqueness rules. `domain/common/value_objects/` supplies
-shared Date and Url values backed by pure parsing libraries, plus feature-independent
-TokenLimits and its validation error. `application/`
-owns DTOs, explicit mappings, and import/list/select use cases. The JSON reader
-adapter lives in `infrastructure/model_metadata_json.rs`. Composition chooses and opens the catalog
-file, then injects the immutable result. See the [SDK guide](../crates/nessa-sdk/README.md).
-`domain/effective_capabilities/value_objects/` intersects binding/model features,
-validates configured limits, and checks input requirements locally. Application
-DTOs project the same snapshot. Conversation lifecycle rules, harness settings
-readers, and execution adapters are not implemented yet.
+`crates/nessa-sdk` owns model metadata, immutable effective capability snapshots,
+and pure execution domain rules. Source and tests are grouped by layer and feature;
+see the [crate guide](../crates/nessa-sdk/README.md#ddd-layers) for the module map.
+
+| Location within the SDK | Responsibility |
+| --- | --- |
+| `domain/common/value_objects/` | Shared validated dates, URLs, and token limits. |
+| `domain/model_metadata/`, `domain/effective_capabilities/` | Model catalog invariants and immutable admission capabilities. |
+| `domain/agent_execution/` | Execution sessions, invocation ordering, tools, permissions, and prompts, grouped by responsibility and DDD role. |
+| `application/` model catalog and capability modules | Metadata DTO mapping, catalog queries, and capability projections. |
+| `infrastructure/model_metadata_json.rs` | Parsing catalog input supplied by composition. |
+| `tests/domain/agent_execution/` | Direct invariant tests without providers, JSON, storage, or an application runtime. |
+
+The live execution session is the consistency boundary for its tools and reviews;
+those children are not separate aggregates. Value objects are immutable; entities
+and aggregates own identity-bearing transitions. Scheduling models ordering and
+lifecycle evidence without dispatching effects. This foundation does not yet ship
+Agent orchestration, session persistence, or a concrete execution provider.
 
 ## Identity and access library
 
