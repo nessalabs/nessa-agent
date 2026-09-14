@@ -94,8 +94,8 @@ it closes only when there is no surplus. The left closes if 200px plus the
 workspace cannot fit. The shell itself has a 350px minimum width. Explicit
 right-open requests and right-edge resizing never change the left sidebar.
 
-The expand/restore button beside the right toggle fills the app window with the
-right panel. This is an in-app focus mode, not OS fullscreen: the native control
+The expand/restore button beside the right toggle is visible only while the
+right panel is open and fills the app window with that panel. This is an in-app focus mode, not OS fullscreen: the native control
 row stays available. A fixed content layer preserves the measured split layout
 underneath; restore (or Escape) reveals the previous widths and open states.
 Hidden workspace/navigation panels are inert and resize separators are hidden.

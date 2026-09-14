@@ -72,22 +72,28 @@ export function DesktopApp({
 
   const rightControls = (
     <div className="flex items-center gap-1">
-      <Button
-        variant="ghost"
-        size="icon"
-        className="size-8 text-muted-foreground"
-        aria-label={
-          rightMaximized ? "Restore right sidebar" : "Expand right sidebar to full window"
-        }
-        title={
-          rightMaximized ? "Restore right sidebar" : "Expand right sidebar to full window"
-        }
-        aria-pressed={rightMaximized}
-        aria-controls="right"
-        onClick={() => setRightMaximized((value) => !value)}
-      >
-        {rightMaximized ? <Minimize2 /> : <Maximize2 />}
-      </Button>
+      {rightOpen || rightMaximized ? (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-8 text-muted-foreground"
+          aria-label={
+            rightMaximized
+              ? "Restore right sidebar"
+              : "Expand right sidebar to full window"
+          }
+          title={
+            rightMaximized
+              ? "Restore right sidebar"
+              : "Expand right sidebar to full window"
+          }
+          aria-pressed={rightMaximized}
+          aria-controls="right"
+          onClick={() => setRightMaximized((value) => !value)}
+        >
+          {rightMaximized ? <Minimize2 /> : <Maximize2 />}
+        </Button>
+      ) : null}
       {rightToggle}
     </div>
   )
