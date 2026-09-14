@@ -1,0 +1,48 @@
+@import "../../node_modules/@nessa-ui/react/src/app.css";
+@source "./";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  font-family: var(--nessa-font-sans);
+}
+
+/* The header spans the whole window, so navigation never moves its trigger.
+   Reserve the native macOS traffic-light area without drawing replacement buttons. */
+.desktop-titlebar {
+  height: 42px;
+  padding-left: 8px;
+  border-bottom: 0;
+  gap: 0;
+  user-select: none;
+  -webkit-user-select: none;
+  flex-shrink: 0;
+}
+
+.desktop-navigation {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 32px;
+  color: var(--muted-foreground);
+}
+
+.desktop-navigation:disabled {
+  opacity: 0.45;
+}
+
+.desktop-navigation svg {
+  width: 16px;
+  height: 16px;
+}
+
+[data-host="macos"] .desktop-titlebar {
+  padding-left: 79px;
+}

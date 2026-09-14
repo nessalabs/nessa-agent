@@ -72,6 +72,10 @@ export default defineConfig({
   },
   resolve: {
     alias: [
+      {
+        find: "@nessa-ui/react/app-shell",
+        replacement: `${nessaUi}/composites/app-shell`,
+      },
       { find: /^@nessa-ui\/react\//, replacement: `${nessaUi}/components/` },
       // The package's own internal alias. Scoped to the two prefixes it
       // actually uses rather than a bare `@`, which would also capture any
@@ -92,6 +96,7 @@ export default defineConfig({
     minify: process.env.TAURI_ENV_DEBUG ? false : "esbuild",
     sourcemap: Boolean(process.env.TAURI_ENV_DEBUG),
     rollupOptions: {
+      input: { panel: resolve("index.html"), desktop: resolve("desktop.html") },
       treeshake: {
         // The package's own package.json declares that only its stylesheets
         // have side effects and its modules do not, but that field is not
@@ -99,8 +104,7 @@ export default defineConfig({
         // Rollup drop a component this app never imports along with the
         // stylesheet that component pulls in — which is what was still
         // shipping the whole KaTeX font set on MathBlock's behalf.
-        moduleSideEffects: (id: string) =>
-          !id.startsWith(nessaUi) || id.endsWith(".css"),
+        moduleSideEffects: (id: string) => !id.startsWith(nessaUi) || id.endsWith(".css"),
       },
     },
   },

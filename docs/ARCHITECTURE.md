@@ -23,6 +23,53 @@ resize, with a frost that can be turned off — and **the conversation surface**
 runtime will eventually drive. Today send uses a temporary `conversation.echo`
 RPC (your text comes back as the assistant reply) until real turn RPCs land.
 
+## Minimal desktop surface
+
+`pnpm desktop` launches a normal resizable window from
+`src-tauri/tauri.desktop.conf.json`. Its `desktop` window selects the desktop
+composition path in `main.rs`, leaving standard Tauri activation and close
+behavior in place. On macOS an overlay titlebar retains the native traffic lights;
+a fixed full-width AppShellHeader places the sidebar toggle beside them, without
+a title label or divider. Native controls use `trafficLightPosition` (16, 23)
+and the 42px header places the icon center at 21px. The installed Tao implementation
+keeps each 14px native button at y=9 inside its 37px titlebar container, placing
+its center at the same 21px. This was measured in the running macOS window;
+recheck native geometry when changing the Tauri/Tao version or macOS version.
+The inset is macOS-only; browser and other hosts use ordinary header padding.
+The surface uses the design system's dark theme. Back/forward controls are
+disabled because the single-view shell has no navigation history.
+Its drag region and double-click maximize have desktop-scoped capabilities. It does not initialize panel settings, tray, summon shortcuts,
+or surface credentials. Platform preparation still runs before Tauri starts.
+
+`desktop.html` mounts `src/desktop/main.tsx`, which directly composes the design
+system's AppShell frame and Sidebar with a single Home link and an empty main
+area. SidebarProvider owns collapse state and the optional Cmd/Ctrl+B shortcut.
+This surface mounts no product store, session lifecycle, or backend connection.
+Its stylesheet is separate from floating-panel styles. Vite builds both HTML
+entries. The existing panel launch remains `pnpm app`.
+
+From the repository root, use:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm desktop
+```
+
+Browser-only preview: `pnpm desktop:dev`, then open
+`http://127.0.0.1:1438/desktop.html`. The strict dedicated port fails if occupied;
+it never terminates another worktree's server. `pnpm desktop:build` packages the
+same surface through Tauri. The native minimum width is 800px; smaller browser
+viewports use the design system's mobile sidebar. No content features or layout
+persistence are implemented. Restart `pnpm desktop` after changing the Tauri
+overlay configuration: the CLI watcher can retain the previous merged config.
+
+This follows Tauri's [window customization guide](https://v2.tauri.app/learn/window-customization/)
+and [window configuration reference](https://v2.tauri.app/reference/config/#trafficlightposition).
+Overlay keeps `decorations: true` for real native controls and requires an HTML
+drag region; its geometry is not the same as a normal titlebar. macOS is the
+validated native target. Windows/Linux retain their native decorated titlebars;
+a fully custom titlebar on those platforms is outside this minimal surface.
+
 ## Code map
 
 **Rust host** (`src-tauri/src/`) — everything that is the operating system's

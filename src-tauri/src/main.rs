@@ -31,6 +31,12 @@ fn main() {
             shortcuts::apply_shortcuts,
         ])
         .setup(|app| {
+            // The desktop surface uses ordinary Tauri window behavior.
+            // It owns no panel settings, tray, shortcuts, or credentials.
+            if app.get_webview_window("desktop").is_some() {
+                return Ok(());
+            }
+
             app.manage(surface_credential::SurfaceCredential::from_environment());
             platform::current().configure_app(app.handle());
 
@@ -72,6 +78,9 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "desktop" {
+                return;
+            }
             match event {
                 // The window is the whole app, so closing it means dismissing the
                 // panel rather than tearing the process down.
