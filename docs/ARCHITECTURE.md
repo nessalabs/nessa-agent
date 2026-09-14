@@ -83,7 +83,7 @@ Closed panels are inert and hidden from assistive technology.
 
 Borders show a localized grey radial glow centered on the pointer during hover
 and drag, instead of highlighting the entire edge. Keyboard focus shows the same
-glow at the center. The gradient fades across a 180px vertical area. Regular drag resizing tracks the pointer immediately; collapse and
+glow at the center. The low-opacity gradient fades across a 220px vertical area. Regular drag resizing tracks the pointer immediately; collapse and
 toggle transitions animate for 180ms and respect reduced motion. The center
 reserves 350px. On window shrink, the right sidebar closes when its 160px
 minimum no longer fits; the left closes if 200px plus the workspace cannot fit.

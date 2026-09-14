@@ -53,9 +53,9 @@ body {
   inset: 0 -3px;
   pointer-events: none;
   background: radial-gradient(
-    ellipse 4px 90px at 50% var(--edge-glow-y, 50%),
-    rgb(210 210 210 / 85%) 0%,
-    rgb(180 180 180 / 35%) 35%,
+    ellipse 5px 110px at 50% var(--edge-glow-y, 50%),
+    rgb(200 200 200 / 50%) 0%,
+    rgb(180 180 180 / 18%) 40%,
     transparent 100%
   );
   opacity: 0;
