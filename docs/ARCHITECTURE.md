@@ -62,6 +62,8 @@ traffic-light row. The right sidebar toggle stays at the top-right in both open
 and collapsed states, in browsers and the native titlebar. Sidebars and
 their resize borders extend to the top of the window, underneath transparent
 window controls; native sidebar content begins below the 42px control row.
+Inline sidebars explicitly use z-index 0 at all widths so the design system
+mobile sidebar stacking level cannot cover the fixed header controls.
 
 `ui/desktop-app.tsx` composes two existing Sidebar components inside the design
 system's SplitView panels. SplitView owns pointer capture, accessible separators,
