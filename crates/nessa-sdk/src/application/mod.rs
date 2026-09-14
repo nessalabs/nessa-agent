@@ -1,5 +1,5 @@
-//! The application imports model metadata, answers list/select requests, and
-//! projects effective capability snapshots for consumers.
+//! The application imports model metadata, answers list/select requests, projects
+//! capability snapshots, and admits execution through injected agent ports.
 //! It translates boundary DTOs into domain objects and projects results back to
 //! DTOs. The domain constructors remain the owners of metadata rules.
 //!
@@ -8,9 +8,18 @@
 //!                                                |
 //! caller <-- output DTOs <-- list / select <------+
 //! ```
-//! Arrows show data flow. Composition supplies the catalog to ModelCatalog;
-//! this layer adds entry context and setup guidance to errors without doing I/O.
+//! ```text
+//! caller -> agent_execution::agents::Agent -> injected provider
+//! backend -> agent_execution::executions -> domain session
+//!                        |
+//!                        +-> permissions evidence + tools review input
+//! ```
+//! Arrows show data flow and calls. Composition supplies the catalog to ModelCatalog;
+//! this layer coordinates invocation, session snapshots, and provider calls.
+//! Infrastructure owns storage and provider I/O.
+//! Execution observations and controls use application-owned types.
 
+pub mod agent_execution;
 pub mod dto;
 mod mapping;
 pub mod model_catalog;

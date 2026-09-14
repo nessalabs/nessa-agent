@@ -181,21 +181,7 @@ are written here.
 | Shell behaviour that differs per OS | `src/host/` — add a field on `HostFeatures`, set it on each host |
 | Anything that talks to the host | `src/host/window.ts` — and only there |
 | Execution/session, tool, permission, and scheduling invariants | `crates/nessa-sdk/src/domain/agent_execution/`; see [the domain map](../crates/nessa-sdk/src/domain/agent_execution/mod.rs) |
-| The agent runtime, when it lands | A new context; see *Growing a new context* in [codebase-structure.md](codebase-structure.md) |
-
-## Model metadata and capabilities
-
-`crates/nessa-sdk` contains the model metadata
-catalog: JSON data for the current OpenAI and Claude general-purpose models,
-typed loading/validation, listing, and exact provider/model selection. Pure domain
-entities and value objects own invariants; application use cases map DTOs and
-query the catalog; infrastructure parses JSON. Host
-composition supplies a reader and owns the resulting immutable snapshot. The
-[SDK guide](../crates/nessa-sdk/README.md) shows how to inspect it. The server and
-UI do not consume this catalog yet. Immutable effective capabilities now combine
-model facts with typed binding restrictions and configured limits, validate input
-requirements locally, and expose application DTO projections. Bindings and harness
-settings readers are not implemented.
+| Agent invocation, session snapshots, queueing, and hooks | `crates/nessa-sdk/src/application/agent_execution/`; see the [SDK guides](../crates/nessa-sdk/docs/agent_execution/README.md) |
 
 ## Execution domain foundation
 
@@ -204,16 +190,40 @@ owns execution/session identities, immutable prompts and tool values, tool and
 permission entities, and a live session consistency boundary. Tools and reviews
 belong to that session; scheduling value objects describe admitted invocation
 order and lifecycle evidence. Domain code performs no provider, storage, or clock
-effects. See the [repository map](codebase-structure.md#agent-sdk-foundation) and
+effects. `InvocationHistory` validates agreement between delivery intent,
+scheduling, observations, and local settlement for both recording and restoration.
+See the [repository map](codebase-structure.md#agent-sdk-foundation) and
 [domain tests](../crates/nessa-sdk/tests/domain/agent_execution/mod.rs).
 
-This is implemented domain behavior. Agent orchestration and concrete execution
-providers are separate application/infrastructure responsibilities, not implied
-by the domain types.
+Application orchestration and infrastructure effects use these domain rules;
+their implemented contracts are described below.
+
+## Agent entry point and local sessions
+
+The [Rust SDK](../crates/nessa-sdk/README.md) exposes `Agent` as the public
+invocation/control entry point. It combines an injected `AgentProvider`, typed
+hooks, and a `SessionManager` with an exclusive storage lease. In-memory and private
+file adapters retain local snapshots. Model capabilities constrain input admission;
+negotiated operation capabilities describe native steering and context restoration.
+
+Agent owns sequential queueing, priority boundary steering, native injection,
+withdrawal, and idempotent submission recovery. The domain protects execution,
+tool, and permission invariants; adapters own provider translation and effects.
+Mandatory permission audit remains separate from session snapshots.
+The host supplies verified attribution and authorizes commands before SDK access.
+
+Behavior belongs in the [SDK guides](../crates/nessa-sdk/docs/agent_execution/README.md),
+especially [Agent/storage](../crates/nessa-sdk/docs/agent_execution/agent.md),
+[scheduling/retries](../crates/nessa-sdk/docs/agent_execution/scheduling.md), and
+[hooks](../crates/nessa-sdk/docs/agent_execution/hooks.md). The
+[structure guide](codebase-structure.md#agent-sdk-foundation) maps owning modules.
+This runtime uses injected provider ports, with test implementations; a production
+execution adapter is supplied separately. These local contracts do not provide shared gateway chat RPCs or the
+proposed conversation event stream described below.
 
 ## What is deliberately not here yet
 
-There is no agent runtime, no chat RPCs, no persistence for conversations, no
+There is no shared Conversation coordinator or chat RPCs yet, and no
 settings UI. The panel already opens a `stage=dev` `@nessa/client` session for
 connect/health. When chat arrives it is a remote `ConversationGateway`, not an
 addition to the local session adapter. See

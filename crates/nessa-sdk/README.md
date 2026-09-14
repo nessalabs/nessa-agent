@@ -1,9 +1,13 @@
 # Nessa SDK
 
 The first implemented slice of [ADR 0008](../../docs/adr/todo/0008-agent-client-api.md)
-includes the model metadata catalog and pure effective capability snapshots.
-Conversation execution, bindings, harness settings readers, and gateway/UI
-integration are still future work.
+includes the public Agent entry point, session storage, hooks, queueing/steering,
+idempotent retries, model metadata, and effective capability snapshots. Inject an
+AgentProvider to run conversations; test providers verify the port in this slice.
+See the [runtime guides](docs/agent_execution/README.md) for implemented behavior.
+Concrete provider adapters, shared gateway conversation coordination and its
+durable command stream, harness settings readers, and gateway/UI wiring are
+separate work.
 
 ## Model data
 
@@ -44,7 +48,9 @@ cargo run -p nessa-sdk --example models -- crates/nessa-sdk/data/models.json ope
 cargo test -p nessa-sdk
 ```
 
-The example prints all metadata as JSON, or a single exact provider/model entry.
+The example writes JSON to standard output, either the catalog or one exact
+provider/model entry. Diagnostics use tracing on standard error, so output can be
+piped directly to a JSON reader.
 It needs no credentials and performs no provider requests.
 
 Host composition opens its selected file and calls
@@ -113,11 +119,12 @@ feature requirement; it does not validate message structure.
 
 `application::dto::EffectiveCapabilitiesDto::from(&snapshot)` projects the same
 snapshot for future UI consumers. Changing that DTO cannot change validation.
-There is no resolver, discovery, global snapshot, or provider I/O. A future
-coordinator must install matching configuration and snapshot together and keep
-accepted turns stable; this slice does not enforce lifecycle or authorization.
-Steering, Stop, binding availability, and provider-specific settings are not
-inferred from model facts.
+This model-capability value performs no resolver, discovery, global-state, or
+provider I/O work. Agent separately exposes negotiated
+[operation capabilities](docs/agent_execution/agent.md#model-capabilities-and-provider-operations).
+The Agent and execution domain enforce local lifecycle rules; the host remains
+responsible for authorization. Native steering, context restoration, binding
+availability, and provider settings are not inferred from model facts.
 
 ## DDD layers
 
@@ -129,6 +136,13 @@ inferred from model facts.
   infrastructure dependencies.
 - `domain/effective_capabilities/value_objects/`: immutable binding restrictions,
   capability snapshot, typed requirements, and local validation errors.
+- `domain/agent_execution/`: sessions own execution/tool/permission consistency;
+  invocation queues own scheduling transitions; prompts retain provenance.
+- `application/agent_execution/`: Agent composes provider ports, hooks, leased
+  sessions, scheduling, and audited permission controllers. Domain state remains
+  authoritative; application DTOs project it.
+- `infrastructure/session_storage/`: memory snapshots and private JSONL changes
+  implement leased storage and validate restored history.
 - `application/`: catalog import/list/select use cases, capability projections, DTOs, and explicit
   mappings to/from domain types. Import calls domain constructors; query results
   are projections. Application errors add entry context and setup guidance.
@@ -137,9 +151,11 @@ inferred from model facts.
   injects the loaded catalog at composition.
 
 The catalog aggregate is an immutable snapshot of model facts. It has no saved lifecycle,
-so there is no repository or event machinery. Conversation aggregates and their
-execution remain future work. When execution lands, commands must use the
-capability snapshot before acceptance, and host authorization remains required.
+so it needs no repository or event machinery. Execution sessions and invocation
+queues already enforce their local lifecycle and scheduling invariants. Agent saves
+admission and settlement in local snapshots and checks capabilities before dispatch.
+Shared gateway conversation coordination and a durable command stream remain future
+work; host authorization is required today.
 
 Tests exercise domain invariants without JSON, application projection/import
 without infrastructure, and JSON parsing/file loading at the infrastructure edge.
@@ -237,3 +253,16 @@ conversations; application orchestration and adapters are separate consumers.
 
 Start with [the domain map](src/domain/agent_execution/mod.rs) and
 [feature-organized domain tests](tests/domain/agent_execution/mod.rs).
+
+## Agent runtime
+
+`Agent` is the public conversation entry point. Inject an `AgentProvider` and
+`SessionManager`, then invoke immediately or enqueue work. The manager owns an
+exclusive storage lease; memory/file adapters preserve admission and settlement
+evidence. Queueing, boundary/native steering, withdrawal, and idempotent retries
+share one owner. Mandatory permission audit is an independent injected port.
+
+Read [the runtime guides](docs/agent_execution/README.md) for composition,
+concurrency, hooks, persistence, and failure guarantees. Test providers exercise
+application behavior without model calls. Concrete execution adapters are supplied
+by host composition; gateway integration remains separate work.

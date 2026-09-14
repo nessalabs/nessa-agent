@@ -1,14 +1,9 @@
-//! Infrastructure translates external representations into application input.
-//! The JSON adapter handles parsing and read failures; it then calls the
-//! application import path so domain construction still validates the model facts.
+//! Infrastructure parses model metadata and implements session storage ports.
 //!
 //! ```text
-//! host opens chosen file
-//!         |
-//!         v
-//! reader --> JSON adapter --> application import --> domain constructors
+//! model JSON -> application catalog -> domain
+//! SessionManager -> session_storage -> leased memory / private files
 //! ```
-//! Arrows show the loading flow. The host chooses the file and loads it at startup.
-//! The adapter does not choose a default path, discover models, or watch for edits.
-
+//! Arrows show data translation and calls. Composition injects these adapters.
 pub mod model_metadata_json;
+pub mod session_storage;

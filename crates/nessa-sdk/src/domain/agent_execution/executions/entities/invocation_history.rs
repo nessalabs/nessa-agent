@@ -54,6 +54,7 @@ pub struct InvocationHistory {
     output_observed: bool,
     provider_reported: bool,
     cancellation: Option<InvocationCancellation>,
+    local_cancellation: Option<InvocationCancellation>,
     terminal_event: Option<ExecutionOutcome>,
     provider_result: Option<Result<ExecutionOutcome, ()>>,
     local_result: Option<Result<ExecutionOutcome, ()>>,
@@ -73,6 +74,7 @@ impl InvocationHistory {
             output_observed: false,
             provider_reported: false,
             cancellation: None,
+            local_cancellation: None,
             terminal_event: None,
             provider_result: None,
             local_result: None,
@@ -242,6 +244,11 @@ impl InvocationHistory {
         &mut self,
         result: Option<Result<ExecutionOutcome, ()>>,
     ) -> Result<(), InvocationHistoryError> {
+        if self.local_cancellation.is_some() && result.is_some() {
+            return Err(InvocationHistoryError(
+                "local cancellation cannot become a provider result",
+            ));
+        }
         if self.cancellation.is_some() {
             return Err(InvocationHistoryError(
                 "cancelled input cannot have a provider result",
@@ -267,6 +274,32 @@ impl InvocationHistory {
         )?;
         self.provider_reported = true;
         self.provider_result = result;
+        Ok(())
+    }
+
+    /// Retain the local stop that settled dispatched work without a provider reply.
+    /// The application supplies the stop captured by this invocation's owner, including
+    /// verified caller attribution. This records no external cancellation acknowledgement.
+    /// Undispatched input, an actual provider result, or a changed stop is rejected.
+    pub fn record_local_cancellation(
+        &mut self,
+        cancellation: InvocationCancellation,
+    ) -> Result<(), InvocationHistoryError> {
+        if self.provider_result.is_some()
+            || self
+                .local_cancellation
+                .is_some_and(|prior| prior != cancellation)
+            || self
+                .local_outcome
+                .is_some_and(|outcome| outcome != ExecutionOutcome::Cancelled)
+        {
+            return Err(InvocationHistoryError(
+                "local cancellation contradicts retained settlement",
+            ));
+        }
+        Self::validate_stop(self.last.as_ref(), Some(cancellation))?;
+        self.record_provider_result(None)?;
+        self.local_cancellation = Some(cancellation);
         Ok(())
     }
 
@@ -425,6 +458,23 @@ impl InvocationHistory {
         Ok(())
     }
 
+    fn validate_stop(
+        last: Option<&SchedulingTransition>,
+        cancellation: Option<InvocationCancellation>,
+    ) -> Result<(), InvocationHistoryError> {
+        if let (Some(last), Some(cancellation)) = (last, cancellation) {
+            if last.stage() == InvocationStage::Cancelled
+                && (last.cause() != cancellation.cause()
+                    || last.initiator() != cancellation.initiator())
+            {
+                return Err(InvocationHistoryError(
+                    "scheduling cancellation contradicts the invocation stop",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     // Validate every candidate against the same independent facts before mutation.
     // Missing final facts may still be assembled; checkpoints enforce completeness.
     fn validate_facts(
@@ -436,6 +486,7 @@ impl InvocationHistory {
         terminal: Option<ExecutionOutcome>,
         output_observed: bool,
     ) -> Result<(), InvocationHistoryError> {
+        Self::validate_stop(last, self.local_cancellation)?;
         if output_observed
             && last.is_some_and(|last| last.cause() == SchedulingCause::DispatchFailed)
         {
@@ -443,7 +494,7 @@ impl InvocationHistory {
                 "failed dispatch cannot retain provider output",
             ));
         }
-        if self.cancellation.is_some()
+        if (self.cancellation.is_some() || self.local_cancellation.is_some())
             && local.is_some_and(|outcome| outcome != ExecutionOutcome::Cancelled)
         {
             return Err(InvocationHistoryError(

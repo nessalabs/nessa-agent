@@ -1,10 +1,10 @@
-//! A local cancellation before an immediate invocation reaches its provider.
+//! A local invocation stop with its lifecycle cause and responsible initiator.
 #![deny(missing_docs)]
 
 use super::{SchedulingCause, SchedulingInitiator};
 use std::{error::Error, fmt};
 
-/// Immutable cause and initiator of cancelling an undispatched immediate input.
+/// Immutable cause and initiator of a local invocation stop.
 /// The containing invocation supplies its identity; the application retains the
 /// verified caller identity for caller-initiated cancellation. This value does
 /// not claim that the provider received or cancelled any work.
@@ -45,7 +45,7 @@ impl InvocationCancellation {
         Ok(Self { cause, initiator })
     }
 
-    /// Why this input was cancelled before provider dispatch.
+    /// Why the invocation owner stopped this input.
     pub fn cause(&self) -> SchedulingCause {
         self.cause
     }
