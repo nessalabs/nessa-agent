@@ -1,3 +1,4 @@
+import type { PointerEvent } from "react"
 import { ArrowLeft, ArrowRight, Home, PanelLeft, PanelRight } from "lucide-react"
 import { AppShell, AppShellBody, AppShellMain } from "@nessa-ui/react/app-shell"
 import { Button } from "@nessa-ui/react/button"
@@ -16,6 +17,13 @@ import type { HostKind } from "../../host/features"
 import { useSidebarLayout } from "../adapters/use-sidebar-layout"
 import { BrowserTitlebar } from "./browser-titlebar"
 import { WindowTitlebar } from "./window-titlebar"
+
+/** Track only the local glow position; SplitView continues to own dragging. */
+function positionEdgeGlow(event: PointerEvent<HTMLDivElement>) {
+  const edge = event.currentTarget
+  const y = event.clientY - edge.getBoundingClientRect().top
+  edge.style.setProperty("--edge-glow-y", `${y}px`)
+}
 
 /** Composes the existing shell, sidebars, and split view without product/backend state. */
 export function DesktopApp({
@@ -136,6 +144,11 @@ export function DesktopApp({
             </SplitViewPanel>
             <SplitViewSeparator
               className="desktop-sidebar-edge"
+              onPointerEnter={positionEdgeGlow}
+              onPointerMove={positionEdgeGlow}
+              onFocus={(event) =>
+                event.currentTarget.style.removeProperty("--edge-glow-y")
+              }
               aria-label="Resize left sidebar"
             />
             <SplitViewPanel id="center" minSize="350px" defaultSize="350px">
@@ -147,6 +160,11 @@ export function DesktopApp({
             </SplitViewPanel>
             <SplitViewSeparator
               className="desktop-sidebar-edge"
+              onPointerEnter={positionEdgeGlow}
+              onPointerMove={positionEdgeGlow}
+              onFocus={(event) =>
+                event.currentTarget.style.removeProperty("--edge-glow-y")
+              }
               aria-label="Resize right sidebar"
             />
             <SplitViewPanel

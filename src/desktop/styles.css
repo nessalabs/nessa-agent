@@ -43,23 +43,36 @@ body {
 
 .desktop-sidebar-edge[data-slot="split-view-separator"] {
   background: color-mix(in oklab, var(--foreground) 12%, transparent);
-  transition:
-    background-color 140ms ease,
-    box-shadow 140ms ease;
+  box-shadow: none;
+}
+
+/* Keep the hit target intact; this separate layer lights only near the pointer. */
+.desktop-sidebar-edge[data-slot="split-view-separator"]::before {
+  content: "";
+  position: absolute;
+  inset: 0 -3px;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 4px 90px at 50% var(--edge-glow-y, 50%),
+    rgb(210 210 210 / 85%) 0%,
+    rgb(180 180 180 / 35%) 35%,
+    transparent 100%
+  );
+  opacity: 0;
+  transition: opacity 140ms ease;
 }
 
 .desktop-sidebar-edge[data-slot="split-view-separator"]:is(
     :hover,
     :focus-visible,
     [data-resizing]
-  ) {
-  background: color-mix(in oklab, var(--foreground) 65%, transparent);
-  box-shadow: 0 0 8px color-mix(in oklab, var(--foreground) 20%, transparent);
+  )::before {
+  opacity: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .desktop-split > [data-slot="split-view-panel"],
-  .desktop-sidebar-edge[data-slot="split-view-separator"] {
+  .desktop-sidebar-edge[data-slot="split-view-separator"]::before {
     transition: none;
   }
 }

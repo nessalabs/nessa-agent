@@ -82,8 +82,9 @@ constraints, remembers expanded pixel widths for reopening, and owns width and
 visibility together. Sidebars stay inline, including in browsers.
 Closed panels are inert and hidden from assistive technology.
 
-Borders highlight softly in a neutral foreground color on hover, keyboard focus,
-and drag. Regular drag resizing tracks the pointer immediately; collapse and
+Borders show a localized grey radial glow centered on the pointer during hover
+and drag, instead of highlighting the entire edge. Keyboard focus shows the same
+glow at the center. The gradient fades across a 180px vertical area. Regular drag resizing tracks the pointer immediately; collapse and
 toggle transitions animate for 180ms and respect reduced motion. The center
 reserves 350px. On window shrink, the right sidebar closes when its 160px
 minimum no longer fits; the left closes if 200px plus the workspace cannot fit.
