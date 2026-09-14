@@ -151,7 +151,7 @@ export function DesktopApp({
               }
               aria-label="Resize left sidebar"
             />
-            <SplitViewPanel id="center" minSize="350px" defaultSize="350px">
+            <SplitViewPanel id="center" minSize="350px">
               <AppShellMain
                 id="home"
                 aria-label="Home"
@@ -169,6 +169,7 @@ export function DesktopApp({
             />
             <SplitViewPanel
               id="right"
+              defaultSize="400px"
               minSize="160px"
               collapsible
               collapsedSize={0}

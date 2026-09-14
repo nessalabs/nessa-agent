@@ -10,7 +10,7 @@ export function useSidebarLayout() {
   const groupRef = useRef<HTMLDivElement>(null)
   const availableWidth = useRef(0)
   const [layout, setLayout] = useState<SplitViewLayout>()
-  const expanded = useRef({ left: 200, right: 240 })
+  const expanded = useRef({ left: 200, right: 400 })
 
   const constrain = useCallback(
     (next: SplitViewLayout, width: number, priority: "left" | "right" = "left") => {
@@ -70,9 +70,7 @@ export function useSidebarLayout() {
       availableWidth.current = width
       setLayout((current) => {
         const left = current ? (current.left / 100) * previousWidth : 200
-        const right = current
-          ? (current.right / 100) * previousWidth
-          : Math.max(0, width - 550)
+        const right = current ? (current.right / 100) * previousWidth : 400
         return constrain(
           {
             left: (left / width) * 100,

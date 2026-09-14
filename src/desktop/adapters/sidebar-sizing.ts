@@ -2,7 +2,7 @@
 export function fitSidebarWidths(
   width: number,
   requestedLeft = 200,
-  requestedRight = width - 550,
+  requestedRight = 400,
   priority: "left" | "right" = "left",
 ) {
   let left = requestedLeft > 0 ? Math.min(450, Math.max(200, requestedLeft)) : 0

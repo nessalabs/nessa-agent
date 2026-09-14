@@ -70,9 +70,9 @@ system's SplitView panels. SplitView owns pointer capture, accessible separators
 keyboard resizing, and collapse snapping. The left sidebar defaults to 200px,
 with a 200px minimum and 450px maximum. The main workspace reserves at least
 350px. The right sidebar retains a 160px expanded minimum and can use all remaining
-space, with no percentage cap. Initially it receives usable width minus 200px
-(left) minus 350px (workspace); at a 1100px window with two 1px borders, that is
-548px. Its maximum while resizing is usable width minus the current left width
+space, with no percentage cap. It defaults to 400px, leaving the remainder for
+the workspace; at a 1100px window with two 1px borders, that is 200px left,
+498px workspace, and 400px right. Its maximum while resizing is usable width minus the current left width
 minus 350px. Dragging below the halfway threshold (100px left, 80px right) snaps
 that sidebar closed.
 

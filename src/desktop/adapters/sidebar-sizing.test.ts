@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest"
 import { fitSidebarWidths } from "./sidebar-sizing"
 
 describe("desktop pixel allocation", () => {
-  it("assigns the default remainder to the right after both borders", () => {
-    expect(fitSidebarWidths(1100 - 2)).toEqual({ left: 200, center: 350, right: 548 })
+  it("starts right at 400px and assigns the remainder to the workspace", () => {
+    expect(fitSidebarWidths(1100 - 2)).toEqual({ left: 200, center: 498, right: 400 })
   })
   it("bounds the left and lets the right consume only workspace surplus", () => {
     expect(fitSidebarWidths(1098, 900, 900)).toEqual({
@@ -38,9 +38,9 @@ describe("desktop pixel allocation", () => {
   })
   it("shrinks left instead of closing it when both expanded minima can fit", () => {
     expect(fitSidebarWidths(798, 450, 240, "right")).toEqual({
-      left: 288,
-      center: 350,
-      right: 160,
+      left: 200,
+      center: 358,
+      right: 240,
     })
   })
 })
