@@ -100,8 +100,12 @@ export function App() {
       chat.setActive(next.id)
     },
   )
+  const moveActiveTab = React.useEffectEvent((direction: -1 | 1) => {
+    closePaste()
+    chat.moveActive(direction)
+  })
   useHostPanel(surface, toggleSurface, composerRef)
-  useTabShortcuts({ openTab, closeActiveTab, activateTab })
+  useTabShortcuts({ openTab, closeActiveTab, moveActiveTab, activateTab })
   useFlushOnTurn(
     host.flushOnTurn,
     `${chat.active.id}:${chat.active.phase}:${chat.active.turns.length}`,

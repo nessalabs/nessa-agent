@@ -111,6 +111,10 @@ pub enum ShortcutAction {
     PanelCloseTab,
     #[serde(rename = "panel.activateTab")]
     PanelActivateTab,
+    #[serde(rename = "panel.previousTab")]
+    PanelPreviousTab,
+    #[serde(rename = "panel.nextTab")]
+    PanelNextTab,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

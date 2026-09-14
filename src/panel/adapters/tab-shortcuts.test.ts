@@ -1,3 +1,4 @@
+import defaults from "../../../protocol/defaults/shortcuts.v1.json"
 import { describe, expect, it } from "vitest"
 
 import type { ShortcutsDocument } from "@nessa/client"
@@ -55,7 +56,7 @@ const sample: ShortcutsDocument = {
       keys: "CmdOrCtrl+Shift+D",
       action: "panel.summon",
       scope: "global",
-      surface: "*",
+      surface: "desktop",
     },
   ],
 }
@@ -158,4 +159,75 @@ describe("matchFocusedShortcut", () => {
       ),
     ).toBeNull()
   })
+})
+
+describe("relative tab navigation", () => {
+  const navigation: ShortcutsDocument = {
+    version: 1,
+    bindings: [
+      {
+        keys: "CmdOrCtrl+Shift+H",
+        action: "panel.previousTab",
+        scope: "focused",
+        surface: "desktop",
+      },
+      {
+        keys: "CmdOrCtrl+Shift+L",
+        action: "panel.nextTab",
+        scope: "focused",
+        surface: "desktop",
+      },
+    ],
+  }
+  it.each(["desktop"] as const)("matches both directions on %s", (surface) => {
+    expect(
+      matchFocusedShortcut(
+        chord({ key: "H", metaKey: true, shiftKey: true }),
+        navigation,
+        surface,
+      ),
+    ).toEqual({ action: "panel.previousTab" })
+    expect(
+      matchFocusedShortcut(
+        chord({ key: "L", metaKey: true, shiftKey: true }),
+        navigation,
+        surface,
+      ),
+    ).toEqual({ action: "panel.nextTab" })
+    expect(
+      matchFocusedShortcut(chord({ key: "h", metaKey: true }), navigation, surface),
+    ).toBeNull()
+  })
+  it("uses configured chords instead of hardcoded keys", () => {
+    const custom: ShortcutsDocument = {
+      version: 1,
+      bindings: [{ ...navigation.bindings[0]!, keys: "Cmd+Alt+J" }],
+    }
+    expect(
+      matchFocusedShortcut(
+        chord({ key: "H", metaKey: true, shiftKey: true }),
+        custom,
+        "desktop",
+      ),
+    ).toBeNull()
+    expect(
+      matchFocusedShortcut(
+        chord({ key: "j", metaKey: true, altKey: true }),
+        custom,
+        "desktop",
+      ),
+    ).toEqual({ action: "panel.previousTab" })
+  })
+})
+
+it("does not capture the desktop navigation chords in browsers", () => {
+  for (const key of ["H", "L"]) {
+    expect(
+      matchFocusedShortcut(
+        chord({ key, metaKey: true, shiftKey: true }),
+        defaults as ShortcutsDocument,
+        "browser",
+      ),
+    ).toBeNull()
+  }
 })

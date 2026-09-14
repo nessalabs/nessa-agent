@@ -184,7 +184,21 @@ adds appear in it without resetting the values already there.
 **Shortcuts** live in a sibling `shortcuts.json` under the same stage-scoped
 root ([ADR 0004](docs/adr/done/0004-server-owned-keybindings.md)). The server owns
 defaults (`protocol/defaults/shortcuts.v1.json`); the host caches them so
-summon works before connect. Default summon is `CmdOrCtrl+Shift+D`. A shortcut
+summon works before connect. Default summon is `CmdOrCtrl+Shift+D`. Focused tab
+navigation uses `CmdOrCtrl+Shift+H` (previous) and `CmdOrCtrl+Shift+L` (next), on
+desktop only, wrapping from either end to the other. These are configurable `panel.previousTab` and
+`panel.nextTab` bindings. Existing valid `shortcuts.json` files are preserved
+rather than merged with new defaults. Append the following entries to their
+`bindings` array and restart the app to enable them for an existing configuration:
+
+```json
+[
+  { "keys": "CmdOrCtrl+Shift+H", "action": "panel.previousTab", "scope": "focused", "surface": "desktop" },
+  { "keys": "CmdOrCtrl+Shift+L", "action": "panel.nextTab", "scope": "focused", "surface": "desktop" }
+]
+```
+
+A shortcut
 that will not parse, or that another app already owns, is reported and skipped
 rather than fatal: the tray icon still opens the panel
 ([src-tauri/src/shortcut.rs](src-tauri/src/shortcut.rs)). Legacy
@@ -456,3 +470,5 @@ its assigned surface credential. Credentials have no expiry by default; grants a
 optional expiry are configurable per surface. Namespace `config.json` controls
 registry limits and session deadlines without rebuilding. See the
 [local auth guide](docs/guides/local-auth.md) and [coding standards](docs/coding-standards.md).
+
+The relative-tab defaults are desktop-only because Safari reserves Cmd+Shift+H for its home page. Browser bindings may be configured explicitly with a chord supported by the browser.
