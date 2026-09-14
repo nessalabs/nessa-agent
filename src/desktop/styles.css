@@ -77,3 +77,18 @@ body {
     transition: none;
   }
 }
+
+/* Fill the window without changing measured panel widths or saved layout. */
+[data-right-maximized] .desktop-split > :not(#right) {
+  visibility: hidden;
+}
+
+[data-right-maximized] .desktop-split > #right {
+  overflow: visible;
+}
+
+[data-right-maximized] .desktop-right-content {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+}

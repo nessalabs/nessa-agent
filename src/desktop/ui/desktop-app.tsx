@@ -1,5 +1,13 @@
-import type { PointerEvent } from "react"
-import { ArrowLeft, ArrowRight, Home, PanelLeft, PanelRight } from "lucide-react"
+import { useState, type PointerEvent } from "react"
+import {
+  ArrowLeft,
+  ArrowRight,
+  Home,
+  Maximize2,
+  Minimize2,
+  PanelLeft,
+  PanelRight,
+} from "lucide-react"
 import { AppShell, AppShellBody, AppShellMain } from "@nessa-ui/react/app-shell"
 import { Button } from "@nessa-ui/react/button"
 import {
@@ -43,32 +51,71 @@ export function DesktopApp({
     beginResize,
     rightMinWidth,
   } = useSidebarLayout()
+  const [rightMaximized, setRightMaximized] = useState(false)
   const rightToggle = (
     <Button
       variant="ghost"
       size="icon"
       className="size-8 text-muted-foreground"
       aria-label="Toggle right sidebar"
-      aria-expanded={rightOpen}
+      aria-expanded={rightOpen || rightMaximized}
       aria-controls="right"
       title="Toggle right sidebar"
-      onClick={() => setOpen("right", !rightOpen)}
+      onClick={() => {
+        setRightMaximized(false)
+        setOpen("right", rightMaximized ? false : !rightOpen)
+      }}
     >
       <PanelRight />
     </Button>
   )
 
+  const rightControls = (
+    <div className="flex items-center gap-1">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-8 text-muted-foreground"
+        aria-label={
+          rightMaximized ? "Restore right sidebar" : "Expand right sidebar to full window"
+        }
+        title={
+          rightMaximized ? "Restore right sidebar" : "Expand right sidebar to full window"
+        }
+        aria-pressed={rightMaximized}
+        aria-controls="right"
+        onClick={() => setRightMaximized((value) => !value)}
+      >
+        {rightMaximized ? <Minimize2 /> : <Maximize2 />}
+      </Button>
+      {rightToggle}
+    </div>
+  )
+
   return (
     <SidebarProvider
       data-host={hostKind}
-      open={leftOpen}
-      onOpenChange={(open) => setOpen("left", open)}
+      open={leftOpen && !rightMaximized}
+      onOpenChange={(open) => {
+        setRightMaximized(false)
+        setOpen("left", open)
+      }}
       sidebarWidth="100%"
       keyboardShortcut={{ key: "b", modifier: "mod" }}
     >
-      <AppShell className="relative h-svh w-full min-w-[350px]" maximizeShortcut={false}>
+      <AppShell
+        className="relative h-svh w-full min-w-[350px]"
+        data-right-maximized={rightMaximized || undefined}
+        onKeyDownCapture={(event) => {
+          if (event.key === "Escape" && rightMaximized) {
+            event.preventDefault()
+            setRightMaximized(false)
+          }
+        }}
+        maximizeShortcut={false}
+      >
         {browserSurface ? (
-          <BrowserTitlebar trailing={rightToggle} />
+          <BrowserTitlebar trailing={rightControls} />
         ) : (
           <WindowTitlebar
             className="absolute inset-x-0 top-0 z-20"
@@ -77,7 +124,10 @@ export function DesktopApp({
             windowControlsInset="var(--desktop-window-controls-inset, 8px)"
             height={42}
             leading={
-              <SidebarTrigger aria-expanded={leftOpen} aria-controls="left">
+              <SidebarTrigger
+                aria-expanded={leftOpen && !rightMaximized}
+                aria-controls="left"
+              >
                 <PanelLeft />
               </SidebarTrigger>
             }
@@ -85,7 +135,7 @@ export function DesktopApp({
               back: { label: "Go back", icon: <ArrowLeft />, disabled: true },
               forward: { label: "Go forward", icon: <ArrowRight />, disabled: true },
             }}
-            trailing={rightToggle}
+            trailing={rightControls}
           />
         )}
         <AppShellBody>
@@ -102,8 +152,8 @@ export function DesktopApp({
               maxSize="450px"
               collapsible
               collapsedSize={0}
-              inert={!leftOpen}
-              aria-hidden={!leftOpen}
+              inert={!leftOpen || rightMaximized}
+              aria-hidden={!leftOpen || rightMaximized}
             >
               <Sidebar
                 aria-label="Main navigation"
@@ -161,7 +211,12 @@ export function DesktopApp({
               onKeyDownCapture={() => beginResize("left")}
               aria-label="Resize left sidebar"
             />
-            <SplitViewPanel id="center" minSize="350px">
+            <SplitViewPanel
+              id="center"
+              minSize="350px"
+              inert={rightMaximized}
+              aria-hidden={rightMaximized}
+            >
               <AppShellMain
                 id="home"
                 aria-label="Home"
@@ -185,14 +240,14 @@ export function DesktopApp({
               minSize={`${rightMinWidth}px`}
               collapsible
               collapsedSize={0}
-              inert={!rightOpen}
-              aria-hidden={!rightOpen}
+              inert={!rightOpen && !rightMaximized}
+              aria-hidden={!rightOpen && !rightMaximized}
             >
               <SidebarProvider
-                open={rightOpen}
+                open={rightOpen || rightMaximized}
                 onOpenChange={(open) => setOpen("right", open)}
                 sidebarWidth="100%"
-                className="h-full min-h-0"
+                className="desktop-right-content h-full min-h-0"
               >
                 <Sidebar
                   side="right"
