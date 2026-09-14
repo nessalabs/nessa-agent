@@ -195,14 +195,13 @@ own current lifecycle and API contracts.
 | `application/agent_execution/providers/`, `hooks/` | Injected execution ports, operation capabilities, and typed invocation callbacks. |
 | `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, retained attachment resources, and snapshot evidence mapped through domain history rules. |
 | `application/agent_execution/executions/`, `permissions/`, `tools/` | Domain coordination, attributed decisions, and observation/review projections. |
+| `infrastructure/acp/`, `claude_acp/` | Shared transport lifecycle and provider-specific configuration/tool translation. |
 | `infrastructure/session_storage/` | Memory snapshots, incremental JSONL file persistence, and explicit evidence serialization. |
-| `infrastructure/model_metadata_json.rs` | Model catalog parsing. |
-| `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. |
+| `infrastructure/json_rpc/`, `process.rs`, `model_metadata_json.rs` | Framing, process supervision, and model catalog parsing. |
+| `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
 
 Composition chooses models, provider configuration, storage, and the required
-permission audit sink. Concrete execution providers implement the injected ports;
-this runtime slice tests substitution without shipping a production execution adapter.
-Agent owns admitted work; UI and future gateway code call
+permission audit sink. Agent owns admitted work; UI and future gateway code call
 its application contracts. Keep provider JSON, clock reads, filesystem access,
 and processes out of the domain. Do not create empty counterpart modules or split
 a live session's tool/permission consistency boundary into independent aggregates.

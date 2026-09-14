@@ -29,16 +29,18 @@ requested during planning and does not change implementation or approval status.
 
 | Priority | ADR | Remaining work |
 | --- | --- | --- |
-| 2 | [0008 — Reusable Rust agent SDK](todo/0008-agent-client-api.md) | Runtime boundaries, discovery/normalization, conversation/turn APIs and provenance, and local ACP execution |
+| 2 | [0008 — Reusable Rust agent SDK](todo/0008-agent-client-api.md) | Shared conversation/turn APIs, gateway integration, discovery, and durable event-stream coordination; local Agent/ACP, snapshots, hooks, and scheduling are implemented |
 | 3 | [0009 — Event-stream integration](todo/0009-reusable-event-stream-crate.md) | Integrate and verify the existing library for durable records, replay, and restart recovery |
 | 4 | [0011 — Shared conversations and collaboration](todo/0011-nessa-session-protocol-and-authorities.md) | Multiple-surface attachment, authorized transcript replay, and collaboration inboxes |
 | 5 | [0012 — Harnesses and optional tools](todo/0012-agent-harnesses-and-optional-tools.md) | Optional MCP/CLI interfaces while preserving external harness behavior |
 
-Auth API readiness and operating-bound work is complete. The Rust SDK remains
-proposed and requires its own approval; UI work is deferred separately and is not a prerequisite. Its initial boundary and
-binding work can proceed before stream integration, but durable execution and
-recovery require ADR 0009 during SDK delivery. The priority list is not a claim
-that the entire SDK can finish before its storage dependency is integrated.
+Auth API readiness and operating-bound work is complete. The
+[current Rust SDK](../../crates/nessa-sdk/docs/agent_execution/README.md) provides
+Agent composition, local session snapshots, hooks, scheduling, native steering,
+operation capabilities, and idempotent submission recovery. ADR 0008 stays in
+`todo` because its shared conversation/gateway scope is incomplete. ADR 0009 still
+owns durable stream integration and replay; local snapshot restoration does not
+complete that work. UI integration is also outstanding.
 
 Primers, research, and detailed auth designs live in
 [design/auth](../design/auth/README.md). Operational commands live in the

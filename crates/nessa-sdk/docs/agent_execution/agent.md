@@ -5,7 +5,7 @@ Construct one `Agent` for a conversation. Give it an execution provider and a
 the TypeScript gateway client does not yet expose agent chat RPCs.
 
 ```rust,ignore
-// Inject an Arc<dyn AgentProvider> supplied by host composition.
+let provider = Arc::new(ClaudeAcpProvider::new(config, &model, limits, audit)?);
 let storage = Arc::new(LocalFileStorage::new("./sessions")?);
 let manager = SessionManager::open(None, storage).await?; // Fresh local UUID v4.
 let session_id = manager.id().clone(); // Retain this key to reopen the conversation.
@@ -25,7 +25,7 @@ and explicit input/output token budgets. `verified_actor` is an `ActionContext`
 constructed by the host after authorization. The SDK does not guess token counts
 or treat a caller-supplied principal string as authenticated identity. See the
 [complete queued interaction](../../src/application/agent_execution/agents/agent.rs)
-for composition with any implementation of the provider port.
+and the [executable provider composition example](../../examples/claude_acp.rs) for composition.
 
 Omit the local key with `SessionManager::open(None, storage)` to create a fresh
 UUID v4 session. For a named or existing session, pass `Some(SessionId::new("test-session")?)`.
@@ -67,9 +67,9 @@ invocation boundary, and `steer` for provider-supported live injection. See
 
 `providers::AgentProvider` is the application port for a complete execution
 runtime. Its `ProviderIdentity` identifies the provider, exact model, and context
-configuration required for restoration. Provider adapters implement this port while owning their execution loop. This
-slice ships memory/file storage and validates runtime behavior with test providers;
-a concrete execution provider is supplied by host composition.
+configuration required for restoration. ACP implements this port through
+`ClaudeAcpProvider`. A future direct-model implementation can implement the same
+port while owning its model/tool loop. No direct-model adapter is shipped yet.
 `ProviderSession`, `ProviderSessionBackend`, and `ExecutionEventStream` are adapter
 contracts for adapter authors. Adapters construct the control/event pair, while
 ProviderSession runtime controls are crate-private. Applications invoke and control
@@ -93,8 +93,10 @@ budget; provider framing and model limits can impose lower bounds. Restored
 requests obey the same byte limit.
 
 `agent.operation_capabilities()` returns a separate `OperationCapabilities`
-snapshot with `native_steering` and `session_resume`. A provider implementation supplies these negotiated facts and must refresh them
-when reconnecting. Custom provider backends advertise neither
+snapshot with `native_steering` and `session_resume`. ACP fills this from the
+successful connection negotiation and rechecks it whenever the provider context
+is restored. During reconnection both fields are false until validation succeeds;
+closing retains the last negotiation. Custom provider backends advertise neither
 operation unless they explicitly implement this accessor.
 
 Support is a UI hint, not an admission permit: a supported operation can still
@@ -308,7 +310,8 @@ audit failure alone does not keep a background cleanup loop alive.
 The existing UI echo flow is still separate; wiring its authenticated commands to
 Agent remains gateway integration work. Test providers live in tests. The
 [Agent application tests](../../tests/application/agent_execution/agents.rs),
-[storage tests](../../tests/infrastructure/session_storage.rs) exercise
+[storage tests](../../tests/infrastructure/session_storage.rs), and
+[ACP Agent integration](../../tests/infrastructure/acp/contracts/agents.rs) exercise
 persistence, failures, reconstruction, close/resume, and hook behavior without
 calling a model.
 

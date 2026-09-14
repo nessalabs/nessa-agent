@@ -1,14 +1,12 @@
-# nessa-sdk server runtime research
+# SDK server runtime shape
 
-Third-party research checked 2026-09-07 (UTC); Nessa design alignment updated
-2026-09-11. This document supports
-[accepted ADR 0008](../adr/todo/0008-agent-client-api.md), the authoritative design
-for one reusable Rust agent runtime embedded in the server. NessaClient calls
-server APIs; no TypeScript SDK is planned. The third-party examples below are
-research references, not proposed Nessa client interfaces. Today the gateway and
-NessaClient connection exist, with a temporary `conversation.echo()` operation.
-The Rust model metadata catalog and pure effective capability snapshots are implemented; conversation execution and the
-Claude ACP binding remain planned. See the [SDK guide](../../crates/nessa-sdk/README.md).
+This document describes the proposed server conversation runtime under
+[ADR 0008](../../adr/todo/0008-agent-client-api.md). Model metadata, effective
+capabilities, Agent/session storage, invocation hooks, SDK queueing/removal, native
+ACP steering, operation capability discovery, and idempotent submission recovery
+are implemented. Shared conversation coordination, gateway turn commands, and UI integration remain
+proposed. The [execution guides](../../../crates/nessa-sdk/docs/agent_execution/README.md)
+describe the implemented public contract.
 
 ## Recommendation
 
@@ -19,57 +17,18 @@ chooses whether follow-up input queues, steers, or stops active work.
 
 Nessa should grow into a **superset of supported features across integrations**. A shared lifecycle is the starting point, not a ceiling on functionality. Add typed operations for capabilities such as structured output, approval requests, forks, checkpoints, subagents, and artifacts as real integrations earn them. A capability being part of Nessa's API does not mean every backend can provide it. Unsupported requests must explain what is missing before work starts where possible.
 
-Start with local ACP and a Claude agent binding. Interpret “Claude and Anthropic” here as the Claude agent using Anthropic models through an ACP adapter. A direct Anthropic Messages integration is a separate future model route. The [Claude ACP adapter](https://github.com/agentclientprotocol/claude-agent-acp) uses the Claude Agent SDK; it is not an ACP interface on the Anthropic Messages endpoint. Select and test a concrete adapter release during implementation.
+Start with local ACP and a Claude agent binding. Interpret “Claude and Anthropic” here as the Claude agent using Anthropic models through an ACP adapter. A direct Anthropic Messages integration is a separate future model route. The [Claude ACP adapter](https://github.com/agentclientprotocol/claude-agent-acp) uses the Claude Agent SDK; it is not an ACP interface on the Anthropic Messages endpoint. The current pinned release and verified native profile are recorded in the [Claude guide](../../../crates/nessa-sdk/docs/claude-acp.md).
 
-## What the SDKs teach us
+## Integration boundaries
 
-The comparison separates three kinds of integration:
+A model API produces messages and tool-call requests; an agent loop and its state
+still need an owner. An external harness owns its own loop, tools, workspace, and
+conversation context. Nessa's binding preserves those boundaries instead of
+silently substituting a direct model call for a harness operation.
 
-- **Model API:** generates messages and tool-call requests. Nessa must supply an agent loop if it wants an agent built on that API.
-- **Agent library:** supplies an orchestration loop inside an application or worker. Its tools, state, and lifecycle still need an owner.
-- **Agent harness or service:** owns a running agent, its workspace, tools, and conversation state. Nessa connects to it and preserves its behavior.
-
-The same company can offer more than one of these. Selecting “OpenAI” or “Anthropic” alone cannot identify the integration.
-
-The calls below are abbreviated examples of documented interfaces, not a complete API inventory. Model names are variables deliberately: this is a study of API shape, not a model catalog. Sources are official documentation or maintainer repositories. Documentation and default-branch source can move independently of package releases; no SDK compatibility was runtime-tested in this research.
-
-| Integration | Representative call shape | Lifecycle and configuration | Judgment for Nessa |
-| --- | --- | --- | --- |
-| Strands (Python agent library) | `Agent(model=model, tools=tools)`; `agent(prompt)`; `await agent.invoke_async(prompt)`; `agent.stream_async(prompt)` | An agent object supplies the loop; synchronous calls, async results, and event iteration are distinct interfaces. [Python quickstart](https://strandsagents.com/docs/user-guide/quickstart/python/), [agent interface](https://strandsagents.com/docs/api/python/strands.agent.base/) | Borrow the reusable agent/configuration idea and separate event/result views. A Nessa-owned Strands agent requires a worker and explicit state/tool ownership. |
-| OpenAI Responses (model API) | `client.responses.create({ model, input, stream: true })` | Typed output items and streamed events; continuation can use `previous_response_id`. Manual history must retain relevant non-message output items. [Official TypeScript SDK](https://github.com/openai/openai-node) | Borrow object arguments and typed content. A Responses call does not give Nessa the Codex harness. |
-| OpenAI Agents (TypeScript agent library) | `new Agent({ name, instructions, model })`; `await run(agent, input, { stream: true })` | Runner/model-provider configuration is separate from the agent. Results expose events, `completed`, state and interruptions; approval can pause execution and later resume that state. [Running agents](https://openai.github.io/openai-agents-js/guides/running-agents/), [streaming](https://openai.github.io/openai-agents-js/guides/streaming/) | Borrow a turn handle and correlated interactions. A paused stream is not necessarily a finished task. |
-| Codex SDK (agent harness) | `codex.startThread(options)`; `codex.resumeThread(id)`; `thread.run(input)`; `thread.runStreamed(input)` | A thread carries a native agent conversation across calls; running and streaming are separate helpers. [SDK source and examples](https://github.com/openai/codex/tree/main/sdk/typescript) | Borrow conversation/turn separation. Preserve native thread identity behind Nessa IDs; do not equate it with Responses continuation. |
-| Anthropic Messages (model API) | `client.messages.create({ model, max_tokens, messages })` | Request options carry model selection and message input; the result contains content blocks. [Official TypeScript SDK](https://github.com/anthropics/anthropic-sdk-typescript) | Familiar message input is useful, but this interface is not the Claude agent's workspace, tools, or session lifecycle. |
-| Claude Agent SDK (Python interactive client) | `ClaudeSDKClient(options)`; `await client.query(prompt)`; `client.receive_response()`; `await client.interrupt()` | A bidirectional client controls Claude Code conversations. Interactive controls include model and permission-mode changes; their availability depends on the streaming connection. [Maintainer client source](https://github.com/anthropics/claude-agent-sdk-python/blob/main/src/claude_agent_sdk/client.py) | Borrow explicit send/receive/control operations. Expose only controls supported by the selected ACP or SDK binding; the SDK's full surface is not automatically reachable over ACP. |
-| Vercel AI SDK (model abstraction and agent library) | `streamText({ model, prompt, tools })`; `new ToolLoopAgent({ model, tools })`; `agent.generate({ prompt })`; `agent.stream({ prompt })` | Rich stream results coexist with a text view; provider-specific options extend common parameters. Tool-loop agents add reusable orchestration. [streamText reference](https://ai-sdk.dev/docs/reference/ai-sdk-core/stream-text), [ToolLoopAgent](https://ai-sdk.dev/docs/reference/ai-sdk-core/tool-loop-agent) | Borrow typed options and rich events. Keep extensions validated; do not copy arbitrary provider options into Nessa's domain. |
-| OpenCode SDK (agent service client) | `createOpencode(...)` or `createOpencodeClient({ baseUrl })`; `client.session.create(...)`; `client.session.prompt(...)`; `client.event.subscribe()` | One factory starts a server/client pair; the other connects to an existing server. Sessions and event subscriptions have separate APIs; the SDK is generated from the server specification. [Official SDK guide](https://opencode.ai/docs/sdk/) | A useful model for Nessa's facade. Keep worker ownership separate from connecting a surface, and scope shared events to the correct conversation/turn. |
-| ACP (agent protocol) | `initialize`; `session/new`; `session/prompt`; `session/update`; `session/cancel` | Negotiated capabilities, native sessions, streamed updates, and reverse permission requests form a stateful protocol. [Prompt lifecycle](https://agentclientprotocol.com/protocol/v1/prompt-turn) | First binding transport. Nessa still owns its public API and durable event envelope. |
-| Kimi Code (agent harness) | `kimi acp`, then ACP session methods | The documented CLI exposes JSON-RPC over stdin/stdout with its own capability matrix and optional extensions. [Official ACP reference](https://www.kimi.com/code/docs/en/kimi-code-cli/reference/kimi-acp) | Another future ACP binding, distinct from calling a Moonshot/Kimi model API. Negotiate the installed release; do not assume the Claude binding's features. |
-| DeepSeek (model APIs) | Chat Completions accepts `{ model, messages, stream }`; Responses accepts `{ model, input, ... }` | Separate documented model endpoints and model-specific controls. Tool calls require the consuming application to handle tool execution. [Chat API](https://api-docs.deepseek.com/api/create-chat-completion/), [Responses API](https://api-docs.deepseek.com/api/create-response/), [tool calls](https://api-docs.deepseek.com/guides/tool_calls/) | Future direct model adapter or model choice inside another agent. Familiar wire syntax does not imply interchangeable reasoning, tools, state, or cancellation. |
-
-### A closer look at OpenCode
-
-The documented SDK form uses nested `path` and `body` arguments:
-
-```ts
-const result = await client.session.prompt({
-  path: { id: sessionId },
-  body: {
-    model: { providerID, modelID },
-    parts: [{ type: "text", text: prompt }],
-  },
-});
-const events = await client.event.subscribe();
-for await (const event of events.stream) handle(event);
-```
-
-This illustrates why integration provider and model provider should be separate concepts. OpenCode also exposes `session.promptAsync` and `session.abort` in its [generated SDK source](https://github.com/anomalyco/opencode/blob/dev/packages/sdk/js/src/gen/sdk.gen.ts). An asynchronous prompt acknowledgement is not completion; event correlation and terminal status remain necessary. Use one matching server/SDK release when implementing, rather than mixing these documented nested arguments with a different generated API version.
-
-### State and stopping differ across libraries
-
-Strands documents a `cancel_signal` for invocation methods in its [agent loop guide](https://strandsagents.com/docs/user-guide/concepts/agents/agent-loop/). OpenAI Agents uses run cancellation and exposes resumable state; its [session guide](https://openai.github.io/openai-agents-js/guides/sessions/) separately describes history persistence. Claude's interactive client has an interrupt command, while OpenCode has a session abort endpoint. These are related controls, but their cleanup, resumption, and persistence guarantees are not identical. Nessa must define its own observable outcomes and test each mapping.
-
-No source reviewed establishes universal cross-provider resume or durable replay of every streamed event. Those guarantees must come from Nessa's implemented contracts and its chosen stream dependency. Familiar SDK signatures are evidence for ergonomics, not evidence that all their execution semantics match.
+Configuration, terminal execution outcome, cleanup, and persisted history are
+separate facts. Cross-provider restoration or durable replay requires an explicit
+implemented contract, not a shared method name.
 
 ## Selection has several independent parts
 
@@ -91,14 +50,15 @@ it does not trigger provider discovery. Binding adapters translate configured
 selection into their native controls. ACP does not guarantee a universal
 vendor/model pair. Missing or ambiguous workspace/profile context fails explicitly.
 
-Backend factories remain selected and injected at server composition. A request chooses among already registered bindings; it cannot construct an arbitrary backend. This preserves [typed dependency injection](dependency-injection.md), including its rule against choosing infrastructure implementations from request parameters. Future bindings are added explicitly, without a global service locator.
+Backend factories remain selected and injected at server composition. A request chooses among already registered bindings; it cannot construct an arbitrary backend. This preserves [typed dependency injection](../dependency-injection.md), including its rule against choosing infrastructure implementations from request parameters. Future bindings are added explicitly, without a global service locator.
 
 ## Our own reusable runtime: nessa-sdk
 
 Build `nessa-sdk` as a Rust agent runtime library embedded in the server.
 NessaClient calls the authenticated server API, whose handlers invoke the SDK. Another authorized Rust host can embed the library
-with its own injected adapters. The crate currently implements model metadata and effective capabilities;
-the execution architecture below remains planned.
+with its own injected adapters. The crate implements model metadata, effective
+capabilities, and local execution. The conversation/server architecture below
+remains proposed.
 
 ```mermaid
 flowchart TD
@@ -112,7 +72,7 @@ flowchart TD
 
 | Component | Owns |
 | --- | --- |
-| UI/orchestrator | Pickers, presentation, pending input, and queue/steer/stop decisions |
+| UI/orchestrator | Pickers, presentation, unsent drafts, and explicit queue/steer/stop commands |
 | NessaClient | Server API calls, request IDs, authentication, connection/reconnection, event observation, and remote command reconciliation |
 | Nessa gateway | Wire translation, authenticated caller context, and Nessa product authorization before SDK invocation |
 | nessa-sdk | Selection/preflight through bindings, effective run configuration, conversation/turn admission and lifecycle, execution coordination, normalized events/results, durable receipts and recovery semantics |
@@ -165,15 +125,16 @@ Server state and committed records are authoritative; client projections identif
 stale state and stream gaps. Retrieval/replay does not implicitly restart or
 resume a provider process.
 
-The UI owns its follow-up queue and decides when to submit it. The server admits
+The UI owns unsent drafts; admitted follow-ups belong to the SDK Agent queue.
+The future gateway routes authenticated commands to that shared owner. The server admits
 one active turn atomically and rejects competing new turns with `turn_busy`.
 Stop-and-send waits for both the terminal outcome and confirmed binding readiness.
 Failed cleanup keeps the draft and shows the error. Peer inbox `next_turn` delivery is
 a separate contract and does not authorize starting a future turn. See
-[surfaces and collaboration](surfaces-and-collaboration.md).
+[surfaces and collaboration](../surfaces-and-collaboration.md).
 
 Detailed durability, cleanup, delivery, and acceptance requirements live in
-[ADR 0008](../adr/todo/0008-agent-client-api.md).
+[ADR 0008](../../adr/todo/0008-agent-client-api.md).
 
 ## Creator and surface metadata
 
@@ -184,7 +145,7 @@ derived from trusted context and claimed surface namespaces are validated.
 `surfaceId` identifies the stable surface; `surfaceInstanceId` identifies an
 individual registered instance. The UI owns visibility and grouping; authorization
 continues to govern access independently of origin filters. See
-[the ADR provenance contract](../adr/todo/0008-agent-client-api.md#creator-and-surface-provenance)
+[the ADR provenance contract](../../adr/todo/0008-agent-client-api.md#creator-and-surface-provenance)
 for delivery and validation requirements.
 
 ## How the superset grows
@@ -224,7 +185,7 @@ The [ACP prompt lifecycle](https://agentclientprotocol.com/protocol/v1/prompt-tu
 
 Install configuration and its capability snapshot at a serialized command boundary. Keep them stable for an accepted turn; changes apply to future work. Record requested and effective settings. If the configured integration cannot deliver the selected configuration, return an explicit error; do not substitute another model or provider.
 
-The concrete Claude ACP binding must pass a compatibility probe before it is advertised as ready: initialize, authentication/setup, session creation, advertised configuration, prompt/update completion, permission response, cancellation, and process cleanup. Test resume only if advertised. Pin the selected adapter/protocol dependency during implementation and record its supported optional extensions. This research does not establish compatibility with every release.
+The concrete Claude ACP binding must pass a compatibility probe before it is advertised as ready: initialize, authentication/setup, session creation, advertised configuration, prompt/update completion, permission response, cancellation, and process cleanup. Test resume only if advertised. Pin the selected adapter/protocol dependency during implementation and record its supported optional extensions. The selected native profile does not establish compatibility with every release.
 
 ## Ownership behind the facade
 
@@ -240,11 +201,13 @@ flowchart LR
   Stream --> Gateway
 ```
 
-NessaClient calls nessa-sdk through the authenticated gateway. The gateway owns product authorization and wire translation. The pure conversation aggregate decides transitions and returns domain events. The application commits them, applies committed state, then starts effects; replay applies records without agent or tool calls. The SDK application coordinates conversation/turn identities and admission; NessaClient receives the observed state through the API. Binding adapters feed provider events into Nessa's Rust normalizer, which produces the canonical event payloads defined by the shared schema. The external stream dependency owns committed ordering and replay under [ADR 0009](../adr/todo/0009-reusable-event-stream-crate.md). Use its real API when available; do not implement a temporary second stream runtime or claim that today's `client.on()` replays missed events.
+NessaClient calls nessa-sdk through the authenticated gateway. The gateway owns product authorization and wire translation. The pure conversation aggregate decides transitions and returns domain events. The application commits them, applies committed state, then starts effects; replay applies records without agent or tool calls. The SDK application coordinates conversation/turn identities and admission; NessaClient receives the observed state through the API. Binding adapters feed provider events into Nessa's Rust normalizer, which produces the canonical event payloads defined by the shared schema. The external stream dependency owns committed ordering and replay under [ADR 0009](../../adr/todo/0009-reusable-event-stream-crate.md). Use its real API when available; do not implement a temporary second stream runtime or claim that today's `client.on()` replays missed events.
 
 Rust cannot directly import a TypeScript or Python agent SDK. A future SDK integration may use a supervised worker with a typed protocol, or call an existing service through an adapter. Composition owns startup/shutdown, bounded calls, crash handling, and credentials. Browser clients do not spawn agent processes or receive model secrets. All local use remains possible without hosted Nessa signup.
 
-External harnesses retain their prompts, tools, config files, credentials, approval behavior, and agent loops under [ADR 0012](../adr/todo/0012-agent-harnesses-and-optional-tools.md). Nessa-owned agents may use Strands, OpenAI Agents, Vercel, or model APIs later. That is an explicit integration, not an accidental replacement for Claude Code, Codex, OpenCode, or Kimi Code.
+External harnesses retain their prompts, tools, configuration, credentials,
+approval behavior, and agent loops under [ADR 0012](../../adr/todo/0012-agent-harnesses-and-optional-tools.md).
+A Nessa-owned model/tool loop would be a separate explicit integration.
 
 ## Alternatives and judgment
 
@@ -259,15 +222,14 @@ External harnesses retain their prompts, tools, config files, credentials, appro
 
 ## Delivery and validation
 
-The metadata foundation is complete: strict JSON loading, validated domain values,
-exact selection, and immutable catalog queries are implemented with 22 tests and
-Rust 1.89 support. Pure effective capability construction and validation are also
-implemented, bringing the SDK to 36 tests. Host wiring and harness settings readers
-remain planned.
+The metadata, effective-capability, and local Claude ACP foundations are complete.
+The remaining delivery steps concern durable conversation behavior and host wiring.
+Harness settings readers remain proposed.
 
-1. Verify one concrete Claude ACP adapter release and the external stream library's
-   real local SQLite adapter. Test required controls, process cleanup, atomic
-   acceptance records, append retries, and reads after restart before building on them.
+1. Verify the external stream library's real local SQLite adapter. Test atomic
+   acceptance records, append retries, and reads after restart. Retain the current
+   execution binding's verified configuration, permission, restoration, and cleanup
+   contracts while adding durable coordination.
 2. Deliver one complete conversation through the SDK, authenticated gateway,
    NessaClient, and panel. Add the required aggregate, injected ports, the existing effective
    capability snapshot, saved receipts/events, interactions, Stop, retrieval, and
@@ -279,9 +241,10 @@ remain planned.
    point separately from SDK capability and lifecycle validation. Stop-and-send
    requires terminal state and confirmed binding readiness; cleanup failure retains
    the draft. Unsupported steering starts no replacement work.
-4. Add another binding when needed. OpenCode or Kimi ACP can test harness variation;
-   a later direct SDK/service integration tests transport variation. Test adapters
+4. Add another binding when a product use case requires it; a later direct
+   SDK/service integration must establish its own transport contract. Test adapters
    prove substitution, not production-provider support. Add feature contracts when
    a real integration needs them.
 
-The open implementation choices are the concrete Claude adapter release, which of its optional capabilities to ship first, and the external stream crate's actual API. Supporting all providers and every feature is a direction for incremental work, not the acceptance criterion for the first ACP slice.
+The remaining choices concern the durable stream integration and which additional
+provider capabilities concrete product use cases require.

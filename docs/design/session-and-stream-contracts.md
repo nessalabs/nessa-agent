@@ -22,7 +22,7 @@ NessaClient ⇄ WebSocket gateway → nessa-sdk coordinator ⇄ ACP binding / pr
 The binding reports updates and outcomes with the IDs of the work that produced
 them. Conversation decides domain events; the coordinator maps and commits semantic
 records, applies committed facts, then performs explicit effects. Replay only
-rebuilds state. See the [domain event contract](agent-runtime-classes-and-sequences.md#domain-events-and-durable-records). The gateway
+rebuilds state. See the [domain event contract](agent_execution/runtime-classes-and-sequences.md#domain-events-and-durable-records). The gateway
 reads saved records from that same stream runtime. One producer reads each
 provider session, so adding clients cannot duplicate its events. There is no
 separate live event bus, second store, or agent protocol on the client connection.
@@ -157,7 +157,7 @@ is built from metadata JSON parsed at startup, declared binding support, and age
 settings. Feature fields are booleans; a missing model is a configuration error.
 Clients read the object and new commands validate against it locally, with no
 capability discovery or metadata overrides. Conversation owns lifecycle rules; the host
-authorizes resource actions before calling the SDK. The [class supplement](agent-runtime-classes-and-sequences.md)
+authorizes resource actions before calling the SDK. The [class supplement](agent_execution/runtime-classes-and-sequences.md)
 shows the application/domain/adapter split. Steering's proposed `turn.steer`
 acceptance record and later delivery evidence follow 0008; no steering capability
 is advertised until the actual binding supports it. All accepted actions carry

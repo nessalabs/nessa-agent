@@ -215,10 +215,9 @@ The host supplies verified attribution and authorizes commands before SDK access
 Behavior belongs in the [SDK guides](../crates/nessa-sdk/docs/agent_execution/README.md),
 especially [Agent/storage](../crates/nessa-sdk/docs/agent_execution/agent.md),
 [scheduling/retries](../crates/nessa-sdk/docs/agent_execution/scheduling.md), and
-[hooks](../crates/nessa-sdk/docs/agent_execution/hooks.md). The
+[permissions](../crates/nessa-sdk/docs/agent_execution/permissions.md). The
 [structure guide](codebase-structure.md#agent-sdk-foundation) maps owning modules.
-This runtime uses injected provider ports, with test implementations; a production
-execution adapter is supplied separately. These local contracts do not provide shared gateway chat RPCs or the
+These implemented local contracts do not provide shared gateway chat RPCs or the
 proposed conversation event stream described below.
 
 ## What is deliberately not here yet
@@ -240,13 +239,13 @@ stream library and local SQLite. Together they provide one saved history for
 conversation state and command receipts. The gateway delivers records from that
 history after they are saved, so live views and replay agree.
 
-The [runtime class supplement](design/agent-runtime-classes-and-sequences.md)
+The [runtime class supplement](design/agent_execution/runtime-classes-and-sequences.md)
 shows the proposed DDD split: Conversation aggregate for invariants, application
 coordinator for effects, immutable EffectiveCapabilities built from startup-parsed
 model metadata JSON and declared binding/configuration facts, and host/provider
 adapters. Commands validate the snapshot locally; the model catalog is plain data. The host authorizes resource
 actions before SDK access; Conversation owns lifecycle rules.
-[Domain events](design/agent-runtime-classes-and-sequences.md#domain-events-and-durable-records)
+[Domain events](design/agent_execution/runtime-classes-and-sequences.md#domain-events-and-durable-records)
 are mapped to committed semantic records before state is applied or effects run.
 Replay rebuilds state without executing agents or tools.
 [ADR 0008](adr/todo/0008-agent-client-api.md#one-canonical-turn-state) owns the sole

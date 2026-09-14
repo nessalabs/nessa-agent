@@ -1,10 +1,13 @@
 # Agent runtime classes and sequences — review supplement to ADR 0008
 
-This is the proposed shape to review before implementation. It adds no Rust or
-TypeScript code and no new service. [ADR 0008](../adr/todo/0008-agent-client-api.md)
-owns the decisions, especially the [canonical turn state](../adr/todo/0008-agent-client-api.md#one-canonical-turn-state),
-[capability snapshots](../adr/todo/0008-agent-client-api.md#resolve-capabilities-once-validate-against-the-snapshot),
-and [Stop sequence](../adr/todo/0008-agent-client-api.md#interruption-and-resource-cleanup).
+This is the proposed shared conversation/gateway shape. The local
+[Agent, storage, hooks, and scheduling contracts](../../../crates/nessa-sdk/docs/agent_execution/README.md)
+are already implemented. Those concrete APIs remain authoritative; the classes
+and durable-event sequences here describe additional integration work. This document adds no Rust or
+TypeScript code and no new service. [ADR 0008](../../adr/todo/0008-agent-client-api.md)
+owns the decisions, especially the [canonical turn state](../../adr/todo/0008-agent-client-api.md#one-canonical-turn-state),
+[capability snapshots](../../adr/todo/0008-agent-client-api.md#resolve-capabilities-once-validate-against-the-snapshot),
+and [Stop sequence](../../adr/todo/0008-agent-client-api.md#interruption-and-resource-cleanup).
 The diagrams below explain which object does each job. “Class” means a conceptual
 role; Rust can implement it with structs and traits. Method names describe
 responsibilities, not final Rust signatures or extra wire endpoints.
@@ -12,7 +15,7 @@ responsibilities, not final Rust signatures or extra wire endpoints.
 ## Classes and their roles
 
 Keep one coordinator per conversation. Give each application its own dependencies
-through [typed constructor/factory injection](dependency-injection.md). None of
+through [typed constructor/factory injection](../dependency-injection.md). None of
 these classes is a process-wide mutable singleton.
 
 ```mermaid
@@ -92,8 +95,8 @@ history does not require provider capabilities.
 The metadata JSON is parsed at startup. A simple factory builds the selected
 capability object from that data, declared binding support, and agent settings.
 No resolver service, capability discovery, or unknown support state is needed. See ADR 0008's
-[metadata rules](../adr/todo/0008-agent-client-api.md#a-small-model-metadata-catalog)
-and [snapshot lifetime](../adr/todo/0008-agent-client-api.md#snapshot-lifetime-and-changes).
+[metadata rules](../../adr/todo/0008-agent-client-api.md#a-small-model-metadata-catalog)
+and [snapshot lifetime](../../adr/todo/0008-agent-client-api.md#snapshot-lifetime-and-changes).
 The coordinator replaces the capability object and matching configuration together
 when model/settings change. Metadata-file edits take effect on restart. Commands
 only read/validate that value. Updating configuration
@@ -218,7 +221,7 @@ proposal adds domain vocabulary and typed boundaries, not another execution syst
 ```mermaid
 classDiagram
     class ConversationCoordinator
-    class AgentBinding {
+    class AgentProvider {
         describeSupport()
         initialize()
         startTurn()
@@ -242,17 +245,17 @@ classDiagram
         forceTermination()
         confirmCleanup()
     }
-    ConversationCoordinator --> AgentBinding : injected port
+    ConversationCoordinator --> AgentProvider : injected port
     ConversationCoordinator --> ConversationRecords : injected port
     ConversationCoordinator --> HostExecution : supervised cleanup and observations
     HostApplication --> ResourceAuthorization : authorize before SDK calls
     HostApplication --> ConversationCoordinator : verified commands
-    AgentBinding --> HostExecution : owned execution facilities
+    AgentProvider --> HostExecution : owned execution facilities
 ```
 
 | Interface | Owner and limits |
 | --- | --- |
-| `AgentBinding` | Application-owned port implemented by the ACP adapter. Reports actual support, creates native context, starts one correlated turn, and maps supported controls. `steer` remains unavailable until verified. Provider callbacks carry turn and execution-scope IDs before entering queues |
+| `AgentProvider` | Application-owned port implemented by the ACP adapter. Reports actual support, creates native context, starts one correlated turn, and maps supported controls. The current SDK supports advertised native ACP steering; this proposed coordinator must map its own receipt/record contract onto that delivery operation. Provider callbacks carry turn and execution-scope IDs before entering queues |
 | `ConversationRecords` | Application-owned port implemented through the external stream library. Saves whole records, reads after a cursor, and subscribes to saved history. The library owns ordering, duplicate appends, storage, and replay/live handoff. No second receipt database |
 | `ResourceAuthorization` | Host application dependency, outside the SDK. Existing auth checks the verified actor, action, and resolved resource before SDK calls or record delivery. Direct hosts enforce their own access policy |
 | `HostExecution` | Host-owned adapter with an application-facing port. Owns process scopes, optional observations, termination, exit collection, and resource release. A scope belongs to the original conversation/turn and cannot be reused to kill a newer one |
@@ -313,7 +316,7 @@ command-processing loop.
 
 ## Steering the current turn
 
-The [steer record contract](../adr/todo/0008-agent-client-api.md#record-steering-as-an-action)
+The [steer record contract](../../adr/todo/0008-agent-client-api.md#record-steering-as-an-action)
 is proposed product behavior, not a claim about current ACP support. It uses the
 same stream infrastructure as normal input and a distinct semantic action.
 
@@ -356,7 +359,7 @@ The provider's later echo of input must not create a second human prompt in hist
 
 ## Stop, cleanup, and the next queued prompt
 
-[ADR 0008's Stop sequence](../adr/todo/0008-agent-client-api.md#interruption-and-resource-cleanup)
+[ADR 0008's Stop sequence](../../adr/todo/0008-agent-client-api.md#interruption-and-resource-cleanup)
 shows cancellation, approval retirement, graceful cleanup, forced termination,
 failed storage, and the already-final/duplicate branches. This diagram shows what
 a surface does around that server-owned flow:
@@ -465,6 +468,9 @@ session under the old identity, or repeat a tool/steer merely to discover what
 happened. Unrelated conversations may continue when the failure is isolated.
 
 ## Review checklist
+
+Apply the repository-wide [agreement across fields and layers gate](../../../CODING_STANDARDS.md#agreement-across-fields-and-layers)
+to this checklist, including related facts that cross a module or layer boundary.
 
 - One metadata JSON file parsed at startup and an immutable capability object;
   one domain TurnState definition;
