@@ -10,50 +10,47 @@ export function useSidebarLayout() {
   const groupRef = useRef<HTMLDivElement>(null)
   const availableWidth = useRef(0)
   const [layout, setLayout] = useState<SplitViewLayout>()
+  const resizingSide = useRef<"left" | "right">("left")
   const expanded = useRef({ left: 200, right: 400 })
 
-  const constrain = useCallback(
-    (next: SplitViewLayout, width: number, priority: "left" | "right" = "left") => {
-      const percent = (pixels: number) => (pixels / width) * 100
-      const { left, right } = fitSidebarWidths(
-        width,
-        (next.left / 100) * width,
-        (next.right / 100) * width,
-        priority,
-      )
-      return validatePanelGroupLayout({
-        layout: {
-          left: percent(left),
-          center: percent(width - left - right),
-          right: percent(right),
+  const constrain = useCallback((next: SplitViewLayout, width: number) => {
+    const percent = (pixels: number) => (pixels / width) * 100
+    const { left, right } = fitSidebarWidths(
+      width,
+      (next.left / 100) * width,
+      (next.right / 100) * width,
+    )
+    return validatePanelGroupLayout({
+      layout: {
+        left: percent(left),
+        center: percent(width - left - right),
+        right: percent(right),
+      },
+      panelConstraints: [
+        {
+          panelId: "left",
+          minSize: percent(200),
+          maxSize: percent(450),
+          collapsible: true,
+          collapsedSize: 0,
         },
-        panelConstraints: [
-          {
-            panelId: "left",
-            minSize: percent(200),
-            maxSize: percent(450),
-            collapsible: true,
-            collapsedSize: 0,
-          },
-          {
-            panelId: "center",
-            minSize: percent(350),
-            maxSize: 100,
-            collapsible: false,
-            collapsedSize: 0,
-          },
-          {
-            panelId: "right",
-            minSize: percent(160),
-            maxSize: 100,
-            collapsible: true,
-            collapsedSize: 0,
-          },
-        ],
-      })
-    },
-    [],
-  )
+        {
+          panelId: "center",
+          minSize: percent(350),
+          maxSize: 100,
+          collapsible: false,
+          collapsedSize: 0,
+        },
+        {
+          panelId: "right",
+          minSize: percent(Math.min(160, Math.max(0, width - left - 350))),
+          maxSize: 100,
+          collapsible: true,
+          collapsedSize: 0,
+        },
+      ],
+    })
+  }, [])
 
   useLayoutEffect(() => {
     const group = groupRef.current
@@ -87,13 +84,27 @@ export function useSidebarLayout() {
     return () => observer.disconnect()
   }, [constrain])
 
-  const changeLayout = useCallback((next: SplitViewLayout) => {
-    for (const side of ["left", "right"] as const) {
-      if (next[side] > 0)
-        expanded.current[side] = (next[side] / 100) * availableWidth.current
-    }
-    setLayout(next)
+  const beginResize = useCallback((side: "left" | "right") => {
+    resizingSide.current = side
   }, [])
+  const changeLayout = useCallback(
+    (next: SplitViewLayout) => {
+      setLayout((current) => {
+        // SplitView can propagate a drag across multiple neighbors. The right edge
+        // is scoped to workspace/right: never accept a change to left from it.
+        const fitted =
+          current && resizingSide.current === "right"
+            ? constrain({ ...next, left: current.left }, availableWidth.current)
+            : next
+        for (const side of ["left", "right"] as const) {
+          if (fitted[side] > 0)
+            expanded.current[side] = (fitted[side] / 100) * availableWidth.current
+        }
+        return fitted
+      })
+    },
+    [constrain],
+  )
   const setOpen = useCallback(
     (side: "left" | "right", open: boolean) => {
       setLayout((current) => {
@@ -110,7 +121,6 @@ export function useSidebarLayout() {
         return constrain(
           { ...current, [side]: size, center: current.center - size },
           availableWidth.current,
-          side,
         )
       })
     },
@@ -118,6 +128,11 @@ export function useSidebarLayout() {
   )
   return {
     groupRef,
+    beginResize,
+    rightMinWidth: Math.min(
+      160,
+      Math.max(0, availableWidth.current * (1 - (layout?.left ?? 0) / 100) - 350),
+    ),
     layout,
     changeLayout,
     setOpen,

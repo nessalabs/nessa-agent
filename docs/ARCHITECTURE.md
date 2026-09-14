@@ -69,12 +69,14 @@ mobile sidebar stacking level cannot cover the fixed header controls.
 system's SplitView panels. SplitView owns pointer capture, accessible separators,
 keyboard resizing, and collapse snapping. The left sidebar defaults to 200px,
 with a 200px minimum and 450px maximum. The main workspace reserves at least
-350px. The right sidebar retains a 160px expanded minimum and can use all remaining
-space, with no percentage cap. It defaults to 400px, leaving the remainder for
+350px. The right sidebar normally has a 160px expanded minimum, reduced to the
+available surplus in narrow windows so opening it never closes the left sidebar.
+It can use all remaining space, with no percentage cap. It defaults to 400px, leaving the remainder for
 the workspace; at a 1100px window with two 1px borders, that is 200px left,
 498px workspace, and 400px right. Its maximum while resizing is usable width minus the current left width
-minus 350px. Dragging below the halfway threshold (100px left, 80px right) snaps
-that sidebar closed.
+minus 350px. Right-edge pointer and keyboard changes preserve the current left
+width, preventing the design system resize propagation from collapsing it.
+Dragging below half the effective minimum snaps that sidebar closed.
 
 The app's `useSidebarLayout` measures usable width excluding separators, converts
 pixel defaults to the SplitView percentage layout, and preserves sidebar pixel
@@ -87,11 +89,10 @@ Borders show a localized grey radial glow centered on the pointer during hover
 and drag, instead of highlighting the entire edge. Keyboard focus shows the same
 glow at the center. The low-opacity gradient fades across a 220px vertical area. Regular drag resizing tracks the pointer immediately; collapse and
 toggle transitions animate for 180ms and respect reduced motion. The center
-reserves 350px. On window shrink, the right sidebar closes when its 160px
-minimum no longer fits; the left closes if 200px plus the workspace cannot fit.
-The shell itself has a 350px minimum width. An explicit right-open request
-shrinks the left sidebar first, or collapses it if both minima cannot fit, so
-opening is not silently undone by the default left-priority fitting rule.
+reserves 350px. On window shrink, the right sidebar fits the remaining surplus;
+it closes only when there is no surplus. The left closes if 200px plus the
+workspace cannot fit. The shell itself has a 350px minimum width. Explicit
+right-open requests and right-edge resizing never change the left sidebar.
 
 This surface mounts no product store, session lifecycle, or backend connection.
 Its stylesheet is separate from floating-panel styles. Vite builds both HTML

@@ -33,8 +33,16 @@ export function DesktopApp({
   hostKind: HostKind
   browserSurface: boolean
 }) {
-  const { groupRef, layout, changeLayout, setOpen, leftOpen, rightOpen } =
-    useSidebarLayout()
+  const {
+    groupRef,
+    layout,
+    changeLayout,
+    setOpen,
+    leftOpen,
+    rightOpen,
+    beginResize,
+    rightMinWidth,
+  } = useSidebarLayout()
   const rightToggle = (
     <Button
       variant="ghost"
@@ -149,6 +157,8 @@ export function DesktopApp({
               onFocus={(event) =>
                 event.currentTarget.style.removeProperty("--edge-glow-y")
               }
+              onPointerDownCapture={() => beginResize("left")}
+              onKeyDownCapture={() => beginResize("left")}
               aria-label="Resize left sidebar"
             />
             <SplitViewPanel id="center" minSize="350px">
@@ -165,12 +175,14 @@ export function DesktopApp({
               onFocus={(event) =>
                 event.currentTarget.style.removeProperty("--edge-glow-y")
               }
+              onPointerDownCapture={() => beginResize("right")}
+              onKeyDownCapture={() => beginResize("right")}
               aria-label="Resize right sidebar"
             />
             <SplitViewPanel
               id="right"
               defaultSize="400px"
-              minSize="160px"
+              minSize={`${rightMinWidth}px`}
               collapsible
               collapsedSize={0}
               inert={!rightOpen}

@@ -17,30 +17,23 @@ describe("desktop pixel allocation", () => {
       right: 548,
     })
   })
-  it("releases the right when its expanded minimum cannot fit", () => {
-    expect(fitSidebarWidths(663)).toEqual({ left: 200, center: 463, right: 0 })
+  it("fits right to the available workspace surplus without collapsing left", () => {
+    expect(fitSidebarWidths(663)).toEqual({ left: 200, center: 350, right: 113 })
   })
-  it("preserves explicitly collapsed sidebars and releases left on narrow windows", () => {
+  it("preserves explicitly collapsed sidebars", () => {
     expect(fitSidebarWidths(1098, 0, 0)).toEqual({ left: 0, center: 1098, right: 0 })
-    expect(fitSidebarWidths(500)).toEqual({ left: 0, center: 500, right: 0 })
   })
-  it("opens the requested right panel in a narrow browser by releasing left", () => {
-    expect(fitSidebarWidths(663, 200, 240, "right")).toEqual({
-      left: 0,
-      center: 423,
-      right: 240,
-    })
-    expect(fitSidebarWidths(663, 200, 240, "left")).toEqual({
-      left: 200,
-      center: 463,
-      right: 0,
-    })
+  it("stops right growth at the workspace minimum without moving left", () => {
+    for (const right of [400, 600, 1000]) {
+      expect(fitSidebarWidths(1098, 450, right)).toEqual({
+        left: 450,
+        center: 350,
+        right: 298,
+      })
+    }
+    expect(fitSidebarWidths(798, 400, 400)).toEqual({ left: 400, center: 350, right: 48 })
   })
-  it("shrinks left instead of closing it when both expanded minima can fit", () => {
-    expect(fitSidebarWidths(798, 450, 240, "right")).toEqual({
-      left: 200,
-      center: 358,
-      right: 240,
-    })
+  it("returns freed right-panel width to the workspace", () => {
+    expect(fitSidebarWidths(1098, 300, 0)).toEqual({ left: 300, center: 798, right: 0 })
   })
 })
