@@ -12,44 +12,48 @@ export function useSidebarLayout() {
   const [layout, setLayout] = useState<SplitViewLayout>()
   const expanded = useRef({ left: 200, right: 240 })
 
-  const constrain = useCallback((next: SplitViewLayout, width: number) => {
-    const percent = (pixels: number) => (pixels / width) * 100
-    const { left, right } = fitSidebarWidths(
-      width,
-      (next.left / 100) * width,
-      (next.right / 100) * width,
-    )
-    return validatePanelGroupLayout({
-      layout: {
-        left: percent(left),
-        center: percent(width - left - right),
-        right: percent(right),
-      },
-      panelConstraints: [
-        {
-          panelId: "left",
-          minSize: percent(200),
-          maxSize: percent(450),
-          collapsible: true,
-          collapsedSize: 0,
+  const constrain = useCallback(
+    (next: SplitViewLayout, width: number, priority: "left" | "right" = "left") => {
+      const percent = (pixels: number) => (pixels / width) * 100
+      const { left, right } = fitSidebarWidths(
+        width,
+        (next.left / 100) * width,
+        (next.right / 100) * width,
+        priority,
+      )
+      return validatePanelGroupLayout({
+        layout: {
+          left: percent(left),
+          center: percent(width - left - right),
+          right: percent(right),
         },
-        {
-          panelId: "center",
-          minSize: percent(350),
-          maxSize: 100,
-          collapsible: false,
-          collapsedSize: 0,
-        },
-        {
-          panelId: "right",
-          minSize: percent(160),
-          maxSize: 100,
-          collapsible: true,
-          collapsedSize: 0,
-        },
-      ],
-    })
-  }, [])
+        panelConstraints: [
+          {
+            panelId: "left",
+            minSize: percent(200),
+            maxSize: percent(450),
+            collapsible: true,
+            collapsedSize: 0,
+          },
+          {
+            panelId: "center",
+            minSize: percent(350),
+            maxSize: 100,
+            collapsible: false,
+            collapsedSize: 0,
+          },
+          {
+            panelId: "right",
+            minSize: percent(160),
+            maxSize: 100,
+            collapsible: true,
+            collapsedSize: 0,
+          },
+        ],
+      })
+    },
+    [],
+  )
 
   useLayoutEffect(() => {
     const group = groupRef.current
@@ -100,10 +104,15 @@ export function useSidebarLayout() {
           expanded.current[side] = (current[side] / 100) * availableWidth.current
           return { ...current, [side]: 0, center: current.center + current[side] }
         }
+        for (const panel of ["left", "right"] as const) {
+          if (current[panel] > 0)
+            expanded.current[panel] = (current[panel] / 100) * availableWidth.current
+        }
         const size = (expanded.current[side] / availableWidth.current) * 100
         return constrain(
           { ...current, [side]: size, center: current.center - size },
           availableWidth.current,
+          side,
         )
       })
     },

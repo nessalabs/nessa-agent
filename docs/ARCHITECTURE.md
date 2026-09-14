@@ -89,7 +89,9 @@ glow at the center. The low-opacity gradient fades across a 220px vertical area.
 toggle transitions animate for 180ms and respect reduced motion. The center
 reserves 350px. On window shrink, the right sidebar closes when its 160px
 minimum no longer fits; the left closes if 200px plus the workspace cannot fit.
-The shell itself has a 350px minimum width.
+The shell itself has a 350px minimum width. An explicit right-open request
+shrinks the left sidebar first, or collapses it if both minima cannot fit, so
+opening is not silently undone by the default left-priority fitting rule.
 
 This surface mounts no product store, session lifecycle, or backend connection.
 Its stylesheet is separate from floating-panel styles. Vite builds both HTML
