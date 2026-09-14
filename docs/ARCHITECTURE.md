@@ -64,8 +64,9 @@ window controls; native sidebar content begins below the 42px control row.
 
 `ui/desktop-app.tsx` composes two existing Sidebar components inside the design
 system's SplitView panels. SplitView owns pointer capture, accessible separators,
-keyboard resizing, and collapse snapping. Both sidebars have a 160px expanded
-minimum and 40% maximum; dragging below the 80px halfway threshold snaps closed.
+keyboard resizing, and collapse snapping. The left sidebar has a 220px expanded minimum and the right has a 160px minimum;
+both have a 40% maximum. Dragging below each halfway threshold (110px left,
+80px right) snaps that sidebar closed.
 The app's `useSidebarLayout` owns one percentage layout for width/visibility and
 remembers expanded widths for toggle reopening. It does not maintain a second
 independent open state. Sidebars stay inline for resizing, including in browsers.

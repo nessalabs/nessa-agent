@@ -79,7 +79,7 @@ export function DesktopApp({
           >
             <SplitViewPanel
               id="left"
-              minSize="160px"
+              minSize="220px"
               maxSize={40}
               collapsible
               collapsedSize={0}
