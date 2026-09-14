@@ -18,9 +18,10 @@ export function fromEditor(content: ChatComposerContent): MessageContent {
 
 /** Restore a draft with the original pasted payloads, not their display labels. */
 export function toEditor(content: MessageContent): ChatComposerContent {
+  const editable = content.filter((part) => part.type !== "file")
   return {
     text: contentText(content),
-    parts: content.map((part) =>
+    parts: editable.map((part) =>
       part.type === "text"
         ? part
         : {

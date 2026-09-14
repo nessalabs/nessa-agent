@@ -1,6 +1,12 @@
-import { contentText, type MessageContent } from "../../model"
+import {
+  contentText,
+  hasFileAttachments,
+  type FileAttachment,
+  type MessageContent,
+} from "../../model"
 import { createAsyncThunk, createSlice, type PayloadAction } from "@reduxjs/toolkit"
 
+import type { LocalTabs } from "../../application/local-tabs"
 import { emptyLocalTabs } from "../../application/local-tabs"
 import { beginSend, completeEcho, failSend } from "../../application/usecases/send-draft"
 import type { ConversationEffects } from "../../application/ports"
@@ -14,23 +20,52 @@ export type SendDraftArg = {
 export const sendDraft = createAsyncThunk<
   { text: string },
   SendDraftArg,
-  { extra: { conversation: ConversationEffects }; rejectValue: string }
->("conversation/sendDraft", async (input: SendDraftArg, { rejectWithValue, extra }) => {
-  const text = contentText(input.content)
-  if (!text.trim()) {
-    return rejectWithValue("empty draft")
+  {
+    state: { conversation: LocalTabs }
+    extra: { conversation: ConversationEffects }
+    rejectValue: { kind: "empty-draft" | "preview-only-files" }
   }
+>(
+  "conversation/sendDraft",
+  async (input: SendDraftArg, { rejectWithValue, extra, getState }) => {
+    const tabs = getState().conversation
+    const current = tabs.conversations.find(
+      (item) => item.id === (input.id ?? tabs.activeId),
+    )
+    if (
+      hasFileAttachments(input.content) ||
+      (current && hasFileAttachments(current.draft))
+    )
+      return rejectWithValue({ kind: "preview-only-files" })
+    const text = contentText(input.content)
+    if (!text.trim()) {
+      return rejectWithValue({ kind: "empty-draft" })
+    }
 
-  const result = await extra.conversation.echo(text)
-  return {
-    text: result.text,
-  }
-})
+    const result = await extra.conversation.echo(text)
+    return {
+      text: result.text,
+    }
+  },
+)
 
 const conversationSlice = createSlice({
   name: "conversation",
   initialState: emptyLocalTabs(),
   reducers: {
+    attachFiles(
+      state,
+      action: PayloadAction<{ files: FileAttachment[]; conversationId: string }>,
+    ) {
+      return gateway.attachFiles(
+        state,
+        action.payload.files,
+        action.payload.conversationId,
+      )
+    },
+    removeFile(state, action: PayloadAction<string>) {
+      return gateway.removeFile(state, action.payload)
+    },
     moveActive(state, action: PayloadAction<-1 | 1>) {
       return gateway.moveActive(state, action.payload)
     },
@@ -66,16 +101,17 @@ const conversationSlice = createSlice({
         return completeEcho(state, id, action.payload.text)
       })
       .addCase(sendDraft.rejected, (state, action) => {
-        if (action.payload === "empty draft") return state
+        if (action.payload) return state
         const id = action.meta.arg.id ?? state.activeId
-        const detail =
-          typeof action.payload === "string" ? action.payload : action.error.message
+        const detail = action.error.message
         return failSend(state, id, detail)
       })
   },
 })
 
 export const {
+  attachFiles,
+  removeFile,
   setActive,
   moveActive,
   setDraft,

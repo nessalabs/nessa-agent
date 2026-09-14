@@ -69,6 +69,8 @@ opinion rather than the product's.
 | `adapters/gateway/local.ts` | In-process UI-session gateway. Tomorrow this is the remote gateway. |
 | `adapters/store/` | Redux projection. Reducers call the gateway; they do not contain rules. |
 | `ui/` | Transcript, thinking pill, `useConversation`. Paints and dispatches. |
+| `model/attachments.ts` | Local file parts and per-file/draft budgets; file-bearing drafts cannot enter text-only sends. |
+| `application/usecases/attachments.ts` | Attach to the originating conversation and remove individual draft files. |
 | `model/identity.ts` | The agent's name, seed, and hue wheel. |
 
 **Session vertical** (`src/session/`) — WebSocket control-plane connection.
@@ -90,7 +92,18 @@ Chat adapters must use `getSessionClient()` from the session barrel — do not o
 | `model/` | `Surface` — frosted or clear. |
 | `adapters/` | Host subscriptions: colour scheme, edge reveal, panel frame, frost, remembered surface, compositor flush, config-driven tab shortcuts. |
 | `ui/app.tsx` | The chrome: stage, glow, resize handle, tab strip, composer. Renders; no effects. |
+| `adapters/attachment-resources.ts`, `adapters/dropped-image.ts`, `adapters/dropped-text.ts` | Bounded object-URL resources, remote image reads, and external drop representations. |
+| `adapters/use-drop-navigation-guard.ts` | Prevent dropped URLs from navigating the webview. |
+| `ui/use-file-attachments.ts` | Remote pending previews, originating conversation, and viewer state. Local files use synchronous object URLs. |
+| `adapters/dropped-folder.ts`, `ui/use-folder-drop.ts` | Bounded sequential folder traversal, cancellation, originating draft and pending-send guard. |
+| `ui/use-content-drop.ts`, `ui/use-attachment-menu.ts` | Drop acceptance/routing and menu geometry lifecycle, separate from rendering. |
+| `ui/attachment-preview.tsx`, `ui/attachment-icon.tsx`, `ui/add-attachment-menu.tsx` | Lazy shared file preview, file-kind icons, and composer Add menu. |
 | `ui/waveform-icon.tsx` | The voice glyph in the composer. |
+
+The composition root injects an attachment resource store into the panel. Redux
+keeps metadata and URLs; its subscription reconciles resource IDs after commands
+and revokes URLs removed from drafts, including closed conversations. The resource
+store shares the product store lifetime so React remounts do not invalidate previews.
 
 ## Boundaries
 

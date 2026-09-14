@@ -1,4 +1,4 @@
-import { type MessageContent } from "../model"
+import { type FileAttachment, type MessageContent } from "../model"
 import type { LocalTabs } from "./local-tabs"
 
 /**
@@ -8,6 +8,8 @@ import type { LocalTabs } from "./local-tabs"
  * `NessaClient`; these methods stay sync for UI-session tab ops.
  */
 export interface ConversationGateway {
+  attachFiles(tabs: LocalTabs, files: FileAttachment[], conversationId: string): LocalTabs
+  removeFile(tabs: LocalTabs, id: string): LocalTabs
   stopGenerating(tabs: LocalTabs, conversationId?: string): LocalTabs
   openConversation(tabs: LocalTabs): LocalTabs
   closeConversation(tabs: LocalTabs, conversationId: string): LocalTabs

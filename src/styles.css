@@ -479,3 +479,40 @@ body {
   background: transparent;
   text-decoration: underline;
 }
+
+/* File-drop feedback uses the same spectrum as the composer rim. The inset
+   ring stays inside the panel and never intercepts the dropped files. */
+.nessa-panel[data-dragging="true"],
+.nessa-panel[data-content-dragging="true"] {
+  position: relative;
+}
+.nessa-panel[data-dragging="true"]::after,
+.nessa-panel[data-content-dragging="true"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  border-radius: inherit;
+  padding: 2.5px;
+  background: conic-gradient(
+    var(--nessa-chat-rim-2),
+    var(--nessa-chat-rim-3),
+    var(--nessa-chat-rim-4),
+    var(--nessa-chat-rim-2)
+  );
+  mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+  mask-clip: content-box, border-box;
+  mask-composite: exclude;
+  -webkit-mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+  -webkit-mask-clip: content-box, border-box;
+  -webkit-mask-composite: xor;
+}
+
+/* Composer controls use the same soft fill for keyboard focus as hover,
+   avoiding persistent outer rings after a menu or native picker closes. */
+.nessa-composer .nessa-composer-control:focus-visible {
+  outline: none;
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}

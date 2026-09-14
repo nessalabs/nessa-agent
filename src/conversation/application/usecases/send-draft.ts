@@ -1,4 +1,4 @@
-import { contentText, type MessageContent } from "../../model"
+import { contentText, hasFileAttachments, type MessageContent } from "../../model"
 import type { BusyConversation, IdleConversation, UserTurn } from "../../model"
 import { findConversation, replaceConversation, takeTurnId } from "../internal/ids"
 import type { LocalTabs } from "../local-tabs"
@@ -13,7 +13,13 @@ export function beginSend(
 ): LocalTabs {
   const id = input.conversationId ?? tabs.activeId
   const conv = findConversation(tabs, id)
-  if (!conv || conv.phase !== "idle") return tabs
+  if (
+    !conv ||
+    conv.phase !== "idle" ||
+    hasFileAttachments(input.content) ||
+    hasFileAttachments(conv.draft)
+  )
+    return tabs
 
   const text = contentText(input.content)
   if (!text.trim()) return tabs

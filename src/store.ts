@@ -13,7 +13,7 @@ import { sessionReducer } from "./session/adapters/store/slice"
 import { createDependencies, type AppDependencies } from "./composition/dependencies"
 
 export function makeStore(dependencies: AppDependencies = createDependencies()) {
-  return configureStore({
+  const store = configureStore({
     middleware: (getDefaultMiddleware) =>
       getDefaultMiddleware({
         thunk: { extraArgument: { conversation: dependencies.conversation } },
@@ -23,6 +23,19 @@ export function makeStore(dependencies: AppDependencies = createDependencies()) 
       session: sessionReducer,
     },
   })
+  // The store lifetime owns resources; React remounts must not invalidate previews.
+  // Every command reconciles, including rejected attachment admissions.
+  store.subscribe(() => {
+    const ids = new Set(
+      store
+        .getState()
+        .conversation.conversations.flatMap((conversation) =>
+          conversation.draft.flatMap((part) => (part.type === "file" ? [part.id] : [])),
+        ),
+    )
+    dependencies.attachments.retain(ids)
+  })
+  return store
 }
 
 export type AppStore = ReturnType<typeof makeStore>

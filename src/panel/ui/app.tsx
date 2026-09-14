@@ -1,6 +1,10 @@
+import type { AttachmentResources } from "../adapters/attachment-resources"
 import * as React from "react"
-import { Plus, Square } from "lucide-react"
-import { ChatComposerAction } from "@nessa-ui/react/chat-composer"
+import { Square, X } from "lucide-react"
+import {
+  ChatComposerAction,
+  ChatComposerAttachments,
+} from "@nessa-ui/react/chat-composer"
 import { ChatTabs, type ChatTabItem } from "@nessa-ui/react/chat-tabs"
 import { PillComposer, PillComposerRow } from "@nessa-ui/react/pill-composer"
 import { ChatComposerMarkdownEditor } from "@nessa-ui/react/chat-composer-markdown-editor"
@@ -26,10 +30,18 @@ import { useHostPanel } from "../adapters/host-panel"
 import { useSurface, type Surface } from "../adapters/surface"
 import { useTabShortcuts } from "../adapters/use-tab-shortcuts"
 import { useComposer } from "./use-composer"
+import { useFileAttachments } from "./use-file-attachments"
+import { useFolderDrop } from "./use-folder-drop"
+import { useContentDrop } from "./use-content-drop"
+import { FileDropZone } from "@nessa-ui/react/file-drop-zone"
+import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 
+import { AddAttachmentMenu } from "./add-attachment-menu"
+import { AttachmentIcon } from "./attachment-icon"
 import { WaveformIcon } from "./waveform-icon"
 
 // Draft and stream updates must not reparse the unchanged pasted document.
+const AttachmentPreview = React.lazy(() => import("./attachment-preview"))
 const PastedMarkdown = React.memo(MessageMarkdown)
 
 /**
@@ -55,12 +67,22 @@ function panelClass(surface: Surface, compositor: CompositorKind): string {
     : `${base} relative overflow-visible rounded-[18px] border`
 }
 
-export function App() {
+export function App({
+  attachmentResources,
+}: {
+  attachmentResources: AttachmentResources
+}) {
   const scheme = useColorScheme()
   const ground = scheme === "dark" ? "ink" : "paper"
   const [surface, toggleSurface] = useSurface()
   const edge = useEdgeReveal()
   const chat = useConversation()
+  const attachments = useFileAttachments(chat, attachmentResources)
+  const folderDrop = useFolderDrop(
+    chat.active.id,
+    attachments.addFiles,
+    attachments.setError,
+  )
   const session = useSession()
   const {
     composerRef,
@@ -73,7 +95,13 @@ export function App() {
     changeContent,
     pressChip,
     pasteAttachment,
-  } = useComposer(chat)
+  } = useComposer(chat, (id) => attachments.isPending(id) || folderDrop.isPending(id))
+  const contentDrop = useContentDrop({
+    addFolderEntries: folderDrop.addFolderEntries,
+    addImageUrl: attachments.addImageUrl,
+    focusComposer,
+    pasteAttachment,
+  })
   const openTab = React.useEffectEvent(() => {
     closePaste()
     chat.openConversation()
@@ -151,29 +179,54 @@ export function App() {
         onPointerUp={edge.releaseResize}
         className={host.westHandleClass}
       />
-      <div
-        ref={edge.panelRef}
-        data-nessa-root
-        data-surface={surface}
-        data-host={host.kind}
-        data-frost={host.frost}
-        data-compositor={host.compositor}
-        className={panelClass(surface, host.compositor)}
-        onPointerMove={edge.onPointerMove}
-        onPointerLeave={edge.onPointerLeave}
+      <FileDropZone
+        asChild
+        onFiles={attachments.addFiles}
+        onRejectedFiles={() =>
+          attachments.setError(
+            "Some dropped files could not be attached. Try selecting them with +.",
+          )
+        }
+        maxFiles={20}
+        maxSize={20 * 1024 * 1024}
       >
-        {/* Lights the stretch of border nearest the pointer. Inert on
+        <div
+          ref={edge.panelRef}
+          data-nessa-root
+          data-content-dragging={contentDrop.dragging || undefined}
+          {...contentDrop.handlers}
+          data-surface={surface}
+          data-host={host.kind}
+          data-frost={host.frost}
+          data-compositor={host.compositor}
+          className={panelClass(surface, host.compositor)}
+          onPointerMove={edge.onPointerMove}
+          onPointerLeave={edge.onPointerLeave}
+        >
+          <input
+            ref={attachments.inputRef}
+            type="file"
+            multiple
+            className="hidden"
+            aria-label="Choose attachments"
+            onChange={(event) => {
+              const files = Array.from(event.currentTarget.files ?? [])
+              event.currentTarget.value = ""
+              void attachments.addFiles(files)
+            }}
+          />
+          {/* Lights the stretch of border nearest the pointer. Inert on
             purpose: it covers the whole panel, and anything interactive here
             would steal every click in the transcript. */}
-        <div
-          ref={edge.glowRef}
-          aria-hidden="true"
-          // Only a layout compositor gives the reveal up — see `panelClass`.
-          // Everywhere else clear is the surface that needs it most.
-          hidden={surface === "clear" && host.compositor === "layout"}
-          className="nessa-edge-reveal pointer-events-none"
-        />
-        {/* The tabs bar is the titlebar too: the gaps around the tabs drag the
+          <div
+            ref={edge.glowRef}
+            aria-hidden="true"
+            // Only a layout compositor gives the reveal up — see `panelClass`.
+            // Everywhere else clear is the surface that needs it most.
+            hidden={surface === "clear" && host.compositor === "layout"}
+            className="nessa-edge-reveal pointer-events-none"
+          />
+          {/* The tabs bar is the titlebar too: the gaps around the tabs drag the
             window, while the tabs themselves stay clickable.
         
             `deep` rather than a bare attribute. Bare means Tauri only drags on
@@ -182,112 +235,184 @@ export function App() {
             every press — there is no gap left to land on. `deep` drags from
             anywhere in the subtree, and Tauri still refuses over anything
             clickable, which is what keeps the tabs themselves tabs. */}
-        <div
-          data-tauri-drag-region="deep"
-          className="nessa-chrome shrink-0 px-2 pt-2 pb-1"
-        >
-          <ChatTabs
-            label="Conversations"
-            tabs={tabs}
-            value={chat.active.id}
-            onValueChange={(id) => {
-              closePaste()
-              chat.setActive(id)
-            }}
-            onClose={(id) => {
-              closePaste()
-              chat.closeConversation(id)
-            }}
-            onNew={() => {
-              closePaste()
-              chat.openConversation()
-              focusComposer()
-            }}
-            newTabLabel="New conversation"
-          />
-        </div>
-
-        {/* Keyed so a layout compositor drops the previous conversation's
-            tiles instead of leaving them over the wallpaper. */}
-        <div className="nessa-transcript-region relative flex min-h-0 flex-1 flex-col">
-          <Transcript
-            key={chat.active.id}
-            conversation={chat.active}
-            ground={ground}
-            animateMount={host.animateMount}
-            streamText={host.streamText}
-            emptyState={host.emptyState}
-            statusLabel={session.statusLabel}
-            onOpenPaste={openPaste}
-          />
-
-          {viewedPaste?.conversationId === chat.active.id && (
-            <Sheet
-              className="nessa-pasted-viewer"
-              label="Pasted text"
-              onClose={closePaste}
-              onReturnFocus={focusComposer}
-            >
-              <SheetHandle />
-              <SheetHeader>
-                <SheetExpand />
-                <SheetTitle>Pasted text</SheetTitle>
-                <SheetAction>Done</SheetAction>
-              </SheetHeader>
-              <SheetBody>
-                <PastedMarkdown className="select-text min-w-0 [&_p]:whitespace-pre-wrap">
-                  {viewedPaste.text}
-                </PastedMarkdown>
-              </SheetBody>
-            </Sheet>
-          )}
-        </div>
-        <div className="nessa-composer">
-          <PillComposer
-            key={chat.active.id}
-            expandable={viewedPaste === null}
-
-            generating={generating}
-            onSubmit={submit}
+          <div
+            data-tauri-drag-region="deep"
+            className="nessa-chrome shrink-0 px-2 pt-2 pb-1"
           >
-            <PillComposerRow>
-              <ChatComposerAction aria-label="Add attachment" title="Add attachment">
-                <Plus aria-hidden="true" />
-              </ChatComposerAction>
-              <ChatComposerMarkdownEditor
-                key={`${chat.active.id}:${chat.active.turns.filter((turn) => turn.from === "user").length}`}
-                ref={setComposerRef}
-                defaultContent={toEditor(chat.active.draft)}
-                onContentChange={changeContent}
-                onChipPress={pressChip}
-                pasteAttachmentMinLength={500}
-                onPasteAttachment={pasteAttachment}
-                placeholder="Ask me anything"
-                aria-label="Message"
-                maxHeight={240}
-              />
-              {/* Enter sends; Shift+Enter starts a new Markdown block.
+            <ChatTabs
+              label="Conversations"
+              tabs={tabs}
+              value={chat.active.id}
+              onValueChange={(id) => {
+                closePaste()
+                chat.setActive(id)
+              }}
+              onClose={(id) => {
+                closePaste()
+                chat.closeConversation(id)
+              }}
+              onNew={() => {
+                closePaste()
+                chat.openConversation()
+                focusComposer()
+              }}
+              newTabLabel="New conversation"
+            />
+          </div>
+
+          {/* Keyed so a layout compositor drops the previous conversation's
+            tiles instead of leaving them over the wallpaper. */}
+          <div className="nessa-transcript-region relative flex min-h-0 flex-1 flex-col">
+            <Transcript
+              key={chat.active.id}
+              conversation={chat.active}
+              ground={ground}
+              animateMount={host.animateMount}
+              streamText={host.streamText}
+              emptyState={host.emptyState}
+              statusLabel={session.statusLabel}
+              onOpenPaste={openPaste}
+            />
+
+            {attachments.viewed && (
+              <Sheet
+                className="nessa-pasted-viewer"
+                label={attachments.viewed.name}
+                onClose={attachments.close}
+                onReturnFocus={focusComposer}
+              >
+                <SheetHandle />
+                <SheetHeader>
+                  <SheetExpand />
+                  <SheetTitle>{attachments.viewed.name}</SheetTitle>
+                  <SheetAction>Done</SheetAction>
+                </SheetHeader>
+                <SheetBody>
+                  <React.Suspense fallback={<p role="status">Loading preview…</p>}>
+                    <AttachmentPreview file={attachments.viewed} />
+                  </React.Suspense>
+                </SheetBody>
+              </Sheet>
+            )}
+            {!attachments.viewed && viewedPaste?.conversationId === chat.active.id && (
+              <Sheet
+                className="nessa-pasted-viewer"
+                label="Pasted text"
+                onClose={closePaste}
+                onReturnFocus={focusComposer}
+              >
+                <SheetHandle />
+                <SheetHeader>
+                  <SheetExpand />
+                  <SheetTitle>Pasted text</SheetTitle>
+                  <SheetAction>Done</SheetAction>
+                </SheetHeader>
+                <SheetBody>
+                  <PastedMarkdown className="select-text min-w-0 [&_p]:whitespace-pre-wrap">
+                    {viewedPaste.text}
+                  </PastedMarkdown>
+                </SheetBody>
+              </Sheet>
+            )}
+          </div>
+          <div className="nessa-composer">
+            {attachments.error && (
+              <p role="alert" className="px-3 nessa-text-4 text-destructive">
+                {attachments.error}
+              </p>
+            )}
+            {attachments.reading && (
+              <p role="status" className="px-3 nessa-text-4 text-muted-foreground">
+                Reading files…
+              </p>
+            )}
+            <PillComposer
+              key={chat.active.id}
+              expandable={viewedPaste === null && attachments.viewed === null}
+
+              generating={generating}
+              onSubmit={submit}
+            >
+              <ChatComposerAttachments>
+                {attachments.pendingFiles.map((file, index) => (
+                  <span
+                    key={index}
+                    className="relative m-1 inline-flex"
+                    aria-label={`Reading ${file.name}`}
+                    aria-busy="true"
+                  >
+                    <ChatAttachmentTile
+                      label={file.name}
+                      imageSrc={file.previewUrl}
+                      icon={<AttachmentIcon name={file.name} mimeType={file.mimeType} />}
+                    />
+                  </span>
+                ))}
+                {attachments.files.map((file) => (
+                  <span key={file.id} className="relative m-1 inline-flex">
+                    <ChatAttachmentTile
+                      label={file.name}
+                      imageSrc={
+                        file.mimeType.startsWith("image/") ? file.previewUrl : undefined
+                      }
+                      icon={<AttachmentIcon name={file.name} mimeType={file.mimeType} />}
+                      onOpen={() => attachments.open(file)}
+                    />
+                    <button
+                      type="button"
+                      aria-label={`Remove ${file.name}`}
+                      title={`Remove ${file.name}`}
+                      onClick={() => attachments.remove(file.id)}
+                      className="absolute -right-1.5 -top-1.5 inline-flex size-5 items-center justify-center rounded-full bg-background text-foreground shadow-sm outline-none focus-visible:[outline-style:solid] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [&_svg]:size-3"
+                    >
+                      <X aria-hidden="true" />
+                    </button>
+                  </span>
+                ))}
+              </ChatComposerAttachments>
+              <PillComposerRow>
+                <AddAttachmentMenu
+                  disabled={attachments.reading}
+                  onChoose={attachments.chooseFiles}
+                />
+                <ChatComposerMarkdownEditor
+                  key={`${chat.active.id}:${chat.active.turns.filter((turn) => turn.from === "user").length}`}
+                  ref={setComposerRef}
+                  defaultContent={toEditor(chat.active.draft)}
+                  onContentChange={changeContent}
+                  onChipPress={pressChip}
+                  pasteAttachmentMinLength={500}
+                  onPasteAttachment={pasteAttachment}
+                  onPasteFiles={(files) => void attachments.addFiles(files)}
+                  placeholder="Ask me anything"
+                  aria-label="Message"
+                  maxHeight={240}
+                />
+                {/* Enter sends; Shift+Enter starts a new Markdown block.
                   Voice stays visible while typing and remains inert until wired. */}
-              {generating ? (
-                <ChatComposerAction
-                  aria-label="Stop generating"
-                  title="Stop generating"
-                  onClick={chat.stopGenerating}
-                >
-                  <Square aria-hidden="true" className="fill-current" />
-                </ChatComposerAction>
-              ) : (
-                <ChatComposerAction
-                  aria-label="Start voice input"
-                  title="Start voice input"
-                >
-                  <WaveformIcon className="size-[18px]" />
-                </ChatComposerAction>
-              )}
-            </PillComposerRow>
-          </PillComposer>
+                {generating ? (
+                  <ChatComposerAction
+                    className="nessa-composer-control"
+                    aria-label="Stop generating"
+                    title="Stop generating"
+                    onClick={chat.stopGenerating}
+                  >
+                    <Square aria-hidden="true" className="fill-current" />
+                  </ChatComposerAction>
+                ) : (
+                  <ChatComposerAction
+                    className="nessa-composer-control"
+                    aria-label="Start voice input"
+                    title="Start voice input"
+                  >
+                    <WaveformIcon className="size-[18px]" />
+                  </ChatComposerAction>
+                )}
+              </PillComposerRow>
+            </PillComposer>
+          </div>
         </div>
-      </div>
+      </FileDropZone>
     </div>
   )
 }

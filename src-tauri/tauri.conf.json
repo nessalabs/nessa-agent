@@ -19,6 +19,7 @@
     "windows": [
       {
         "label": "main",
+        "dragDropEnabled": false,
         "url": "index.html",
         "title": "Nessa",
         "width": 420,

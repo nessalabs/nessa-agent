@@ -3,7 +3,11 @@ import { defineConfig } from "vitest/config"
 
 export default defineConfig({
   resolve: {
+    dedupe: ["react", "react-dom"],
     alias: {
+      "@nessa-ui/react/file-preview": resolve(
+        "node_modules/@nessa-ui/react/src/components/file-preview/index.ts",
+      ),
       "@": resolve("node_modules/@nessa-ui/react/src"),
       "@nessa-ui/react/message-markdown": resolve(
         "node_modules/@nessa-ui/react/src/components/message-markdown.tsx",

@@ -18,3 +18,12 @@ export {
   type MessageContent,
   type MessagePart,
 } from "./content"
+
+export {
+  type FileAttachment,
+  MAX_ATTACHMENT_BYTES,
+  MAX_DRAFT_ATTACHMENT_BYTES,
+  MAX_DRAFT_ATTACHMENTS,
+  validDraftAttachments,
+  hasFileAttachments,
+} from "./attachments"

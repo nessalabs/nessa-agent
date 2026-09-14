@@ -7,7 +7,10 @@ import type {
 import { fromEditor, pastedTextLabel, type useConversation } from "../../conversation"
 
 /** Own editor lifecycle and pasted-viewer state; App only composes the surfaces. */
-export function useComposer(chat: ReturnType<typeof useConversation>) {
+export function useComposer(
+  chat: ReturnType<typeof useConversation>,
+  isAttachmentPending: (conversationId: string) => boolean,
+) {
   const composerRef = React.useRef<ChatComposerEditorHandle>(null)
   const setComposerRef = React.useCallback((editor: ChatComposerEditorHandle | null) => {
     composerRef.current = editor
@@ -26,10 +29,15 @@ export function useComposer(chat: ReturnType<typeof useConversation>) {
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const content = composerRef.current?.getContent()
+    if (isAttachmentPending(chat.active.id)) return
+    if (chat.active.draft.some((part) => part.type === "file")) return
     if (content) chat.submit(fromEditor(content))
   }
   function changeContent(content: ChatComposerContent) {
-    chat.setDraft(fromEditor(content))
+    chat.setDraft([
+      ...fromEditor(content),
+      ...chat.active.draft.filter((part) => part.type === "file"),
+    ])
   }
   function pressChip(chip: ChatComposerChip) {
     if (chip.textValue !== undefined) openPaste(chip.textValue)

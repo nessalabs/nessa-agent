@@ -22,7 +22,7 @@ if (!container) throw new Error("missing #root")
 createRoot(container).render(
   <React.StrictMode>
     <Provider store={store}>
-      <App />
+      <App attachmentResources={dependencies.attachments} />
       {dependencies.usesLocalSession && <SessionLifecycle dependencies={dependencies} />}
     </Provider>
   </React.StrictMode>,
