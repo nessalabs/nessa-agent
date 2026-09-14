@@ -1,4 +1,3 @@
-import { textContent } from "../conversation/model"
 import { describe, expect, it } from "vitest"
 import { loadEnvironment } from "./environment"
 import { createDependencies } from "../composition/dependencies"
@@ -55,7 +54,7 @@ describe("frontend environment", () => {
     })
     expect(dependencies.usesLocalSession).toBe(false)
     const result = await makeStore(dependencies).dispatch(
-      sendDraft({ content: textContent("hello") }),
+      sendDraft({ content: [{ type: "text", text: "hello" }] }),
     )
     expect(sendDraft.fulfilled.match(result)).toBe(scenario === "echo")
     expect(dependencies.session.get()).toBeNull()

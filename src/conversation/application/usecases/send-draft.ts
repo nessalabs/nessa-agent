@@ -4,7 +4,7 @@ import { findConversation, replaceConversation, takeTurnId } from "../internal/i
 import type { LocalTabs } from "../local-tabs"
 
 /**
- * Append a sending user turn from `text` and enter thinking.
+ * Append a sending user turn from ordered content and enter thinking.
  * Returns unchanged tabs when there is nothing to send.
  */
 export function beginSend(
@@ -22,14 +22,13 @@ export function beginSend(
   const userTurn: UserTurn = {
     id: taken.id,
     from: "user",
-    text,
     content: input.content,
     receipt: "sending",
   }
 
   const next: BusyConversation = {
     id: conv.id,
-    title: conv.turns.length === 0 ? text.slice(0, 48) : conv.title,
+    title: conv.turns.length === 0 ? text.trim().slice(0, 48) : conv.title,
     turns: [...conv.turns, userTurn],
     draft: [],
     phase: "thinking",

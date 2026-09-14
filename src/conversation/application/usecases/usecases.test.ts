@@ -23,7 +23,6 @@ describe("beginSend / completeEcho", () => {
       {
         id: "t1",
         from: "user",
-        text: "hey",
         content: textContent("hey"),
         receipt: "sending",
       },
@@ -36,12 +35,27 @@ describe("beginSend / completeEcho", () => {
       {
         id: "t1",
         from: "user",
-        text: "hey",
         content: textContent("hey"),
         receipt: "delivered",
       },
       { id: "t2", from: "assistant", text: "hey" },
     ])
+  })
+
+  it("trims only the initial title while retaining the original content", () => {
+    const content = textContent(" \n\t" + "a".repeat(60) + "\n  ")
+    const pending = beginSend(emptyLocalTabs(), { content })
+    const active = pending.conversations[0]!
+    expect(active.title).toBe("a".repeat(48))
+    expect(active.turns[0]).toEqual({
+      id: "t1",
+      from: "user",
+      content,
+      receipt: "sending",
+    })
+    const completed = completeEcho(pending, active.id, "reply")
+    const next = beginSend(completed, { content: textContent("different title") })
+    expect(next.conversations[0]!.title).toBe(active.title)
   })
 
   it("no-ops an empty draft", () => {
@@ -58,7 +72,6 @@ describe("beginSend / completeEcho", () => {
       {
         id: "t1",
         from: "user",
-        text: "hey",
         content: textContent("hey"),
         receipt: "delivered",
       },

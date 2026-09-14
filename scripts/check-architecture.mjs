@@ -50,6 +50,16 @@ for (const file of walk(src)) {
   const path = rel(file)
   const imports = importedPaths(text)
   const inComposition = path.startsWith("src/composition/")
+  // Test fixtures must not introduce model imports across the public boundary.
+  if (!path.startsWith("src/conversation/") && path.endsWith(".test.ts")) {
+    if (imports.some((item) => /(?:^|\/)conversation\/model(?:\/|$)/.test(item))) {
+      fail(
+        file,
+        "external tests use public contracts or literal fixtures, not conversation model internals",
+      )
+    }
+  }
+
   if (
     !inComposition &&
     path !== "src/main.tsx" &&

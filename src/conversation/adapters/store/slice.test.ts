@@ -69,7 +69,6 @@ describe("conversation tabs store", () => {
       {
         id: "t1",
         from: "user",
-        text: "hey",
         content: textContent("hey"),
         receipt: "delivered",
       },
@@ -93,7 +92,6 @@ describe("conversation tabs store", () => {
       {
         id: "t1",
         from: "user",
-        text: "hey",
         content: textContent("hey"),
         receipt: "delivered",
       },
@@ -169,6 +167,12 @@ it("preserves pasted-only content through tab switches, send, and a later draft"
   await sent
   const conversation = store.getState().conversation.conversations[0]!
   expect(conversation.draft).toEqual(textContent("next draft"))
-  expect(conversation.turns[0]).toMatchObject({ content, text: content[0]!.text })
+  expect(conversation.title).toBe("code\n\n<tag>")
+  expect(conversation.turns[0]).toEqual({
+    id: "t1",
+    from: "user",
+    content,
+    receipt: "delivered",
+  })
   deps.session.set(null)
 })

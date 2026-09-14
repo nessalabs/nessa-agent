@@ -135,7 +135,7 @@ and `just release` there.
 | `pnpm app` | `tauri dev`, no host defaults |
 | `pnpm app:build` | The shipping bundle for every Linux format (`.deb` + `.rpm` + AppImage) |
 | `pnpm typecheck` | `tsc --noEmit` |
-| `pnpm ui:types` | Pull the vendored `@nessa-ui/react` checkout forward |
+| `pnpm ui:types` | Reconcile the vendored UI with `nessa-ui-revision` |
 
 ### Settings
 
@@ -354,17 +354,16 @@ The chat kit lives in [`nessalabs/nessa_ui`](https://github.com/nessalabs/nessa_
 (`packages/react`). It is not on npm yet, so `pnpm install` links it from
 `.vendor/nessa_ui`. That directory is filled by `scripts/ensure-nessa-ui.mjs`
 before install: a sibling `nessa_ui` (or the original imessage worktree) is
-symlinked if present, otherwise the repo is cloned.
+symlinked when it contains the commit in `nessa-ui-revision`; otherwise the repo
+is cloned at that reviewed commit. Existing linked checkouts are never switched
+automatically. Update the revision file deliberately when adopting UI changes.
 
 ```
 "@nessa-ui/react": "link:.vendor/nessa_ui/packages/react"
 ```
 
-The composer integration requires the Markdown editor and pasted-chip support
-merged in Nessa UI PR #83 (`075d246b`). The local linked checkout was updated
-to that `origin/main` revision.
-
-To move the clone forward:
+The composer requires the shared Markdown AST extension and on-demand math/diagram
+renderers in the pinned UI revision. To reconcile a managed clone with that pin:
 
 ```bash
 pnpm ui:types

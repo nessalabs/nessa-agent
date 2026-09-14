@@ -5,7 +5,6 @@ export type Receipt = "sending" | "delivered"
 export type UserTurn = {
   id: string
   from: "user"
-  text: string
   content: MessageContent
   receipt: Receipt
 }
