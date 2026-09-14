@@ -1,6 +1,9 @@
 //! Generated from protocol/product/v1.json. Do not edit.
 //! Bounds are validated at the transport boundary; these are payload types only.
 #![allow(dead_code)]
+use nessa_auth::application::dto::{
+    CredentialGrantDto, CredentialMetadataDto, MembershipInputDto, PrincipalInputDto,
+};
 use serde::{Deserialize, Serialize};
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -35,18 +38,18 @@ pub struct ProductSessionReady {
     pub credential_id: String,
     pub audience_id: String,
     pub expires_at: Option<u64>,
-    pub grants: Vec<nessa_auth::application::dto::CredentialGrantDto>,
+    pub grants: Vec<CredentialGrantDto>,
     pub methods: Vec<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CredentialIssueParams {
     pub request_id: String,
-    pub principal: nessa_auth::application::dto::PrincipalInputDto,
-    pub membership: nessa_auth::application::dto::MembershipInputDto,
+    pub principal: PrincipalInputDto,
+    pub membership: MembershipInputDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<u64>,
-    pub grants: Vec<nessa_auth::application::dto::CredentialGrantDto>,
+    pub grants: Vec<CredentialGrantDto>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -60,19 +63,19 @@ pub struct CredentialRevokeParams {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IssuedCredentialResult {
-    pub credential: nessa_auth::application::dto::CredentialMetadataDto,
+    pub credential: CredentialMetadataDto,
     pub secret: String,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExistingCredentialResult {
-    pub credential: nessa_auth::application::dto::CredentialMetadataDto,
+    pub credential: CredentialMetadataDto,
     pub secret_unavailable: bool,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CredentialListResult {
-    pub credentials: Vec<nessa_auth::application::dto::CredentialMetadataDto>,
+    pub credentials: Vec<CredentialMetadataDto>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

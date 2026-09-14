@@ -5,6 +5,7 @@ use crate::{core::RunError, env::Environment};
 use nessa_auth::{
     adapters::local::{BootstrapRequest, LocalCredentialStore},
     application::{
+        credential_admin::IssueCredentialOutcome,
         dto::{
             CredentialGrantDto, MembershipInputDto, MembershipRoleDto, MembershipStateDto,
             OrganizationInputDto, PrincipalInputDto, PrincipalKindDto, ResourceDto,
@@ -249,10 +250,7 @@ fn provision(
             return Err(failure(error));
         }
     };
-    let nessa_auth::application::credential_admin::IssueCredentialOutcome::Issued {
-        evidence, ..
-    } = outcome
-    else {
+    let IssueCredentialOutcome::Issued { evidence, .. } = outcome else {
         return Err(failure(
             "surface credential already issued; secret unavailable",
         ));

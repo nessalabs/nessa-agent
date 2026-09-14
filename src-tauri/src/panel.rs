@@ -92,9 +92,8 @@ pub fn width_only_physical(
     current: PhysicalSize<u32>,
     scale: f64,
 ) -> Option<PhysicalSize<u32>> {
-    (current.height > 0).then(|| {
-        PhysicalSize::new((opening_width * scale).round() as u32, current.height)
-    })
+    (current.height > 0)
+        .then(|| PhysicalSize::new((opening_width * scale).round() as u32, current.height))
 }
 
 /// GTK reports `outer_size` as 0×0 before the window is realized. Feeding
@@ -160,10 +159,7 @@ pub fn frame_on(
         .height
         .saturating_sub(padding.unsigned_abs() * 2)
         .max(1);
-    let available_width = area
-        .width
-        .saturating_sub(padding.unsigned_abs() * 2)
-        .max(1);
+    let available_width = area.width.saturating_sub(padding.unsigned_abs() * 2).max(1);
 
     let height = if fill_height {
         available_height

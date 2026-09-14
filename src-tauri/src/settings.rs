@@ -17,18 +17,10 @@ use crate::local_data;
 /// `serde(default)` so a file written by an older build — or one a person has
 /// hand-edited down to a single key — still loads, with the missing keys
 /// filled from the defaults rather than failing the launch.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub panel: Panel,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            panel: Panel::default(),
-        }
-    }
 }
 
 /// The panel's geometry, in logical pixels. It opens in the lower right of the
@@ -129,10 +121,8 @@ mod tests {
 
     #[test]
     fn legacy_toggle_shortcut_is_ignored() {
-        let settings = parse(
-            r#"{ "toggleShortcut": "Alt+Space", "panel": { "width": 480 } }"#,
-        )
-        .unwrap();
+        let settings =
+            parse(r#"{ "toggleShortcut": "Alt+Space", "panel": { "width": 480 } }"#).unwrap();
         assert_eq!(settings.panel.width, 480.0);
     }
 

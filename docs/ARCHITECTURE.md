@@ -4,9 +4,13 @@ The map of this repository: what the pieces are, where a change goes, and what
 must stay true. Read this before your first change. Update it in the same change
 that invalidates it.
 
-For *how* to think about extending it, see the `system-architect` skill
-(`.claude/skills/system-architect/`). For the rules applied to this repo, see
-[codebase-structure.md](codebase-structure.md).
+For extension and dependency rules, see [AGENTS.md](../AGENTS.md),
+[coding standards](../CODING_STANDARDS.md), and
+[codebase structure](codebase-structure.md).
+
+Every change must meet the [repository-wide organization gate](../CODING_STANDARDS.md#organization-across-the-repository).
+Keep ownership maps, tests, and documentation aligned with the implementation;
+this applies equally to host, shell, server, SDK, and supporting scripts.
 
 ## The problem
 

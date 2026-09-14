@@ -20,13 +20,15 @@ pub fn register(app: &AppHandle, accelerator: &str) {
         }
     };
 
-    let registered = app.global_shortcut().on_shortcut(shortcut, |app, _, event| {
-        // Both edges are delivered; acting on the release too would toggle the
-        // panel straight back closed.
-        if event.state() == ShortcutState::Pressed {
-            crate::panel::toggle(app);
-        }
-    });
+    let registered = app
+        .global_shortcut()
+        .on_shortcut(shortcut, |app, _, event| {
+            // Both edges are delivered; acting on the release too would toggle the
+            // panel straight back closed.
+            if event.state() == ShortcutState::Pressed {
+                crate::panel::toggle(app);
+            }
+        });
 
     if let Err(error) = registered {
         eprintln!("[nessa] could not register {accelerator:?}: {error}");
@@ -34,12 +36,11 @@ pub fn register(app: &AppHandle, accelerator: &str) {
 }
 
 /// Drop the previous summon binding (if any) and register `next` when present.
-pub fn reregister_summon(
-    app: &AppHandle,
-    registration: &SummonRegistration,
-    next: Option<&str>,
-) {
-    let mut slot = registration.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+pub fn reregister_summon(app: &AppHandle, registration: &SummonRegistration, next: Option<&str>) {
+    let mut slot = registration
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(previous) = slot.take() {
         if let Err(error) = app.global_shortcut().unregister(previous.as_str()) {
             eprintln!("[nessa] could not unregister {previous:?}: {error}");

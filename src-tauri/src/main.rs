@@ -72,24 +72,19 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            match event {
-                // The window is the whole app, so closing it means dismissing the
-                // panel rather than tearing the process down.
-                WindowEvent::CloseRequested { api, .. } => {
-                    // With a tray, close dismisses the panel. Without one — Linux
-                    // with no StatusNotifierItem — close has to end the process,
-                    // or there is no quit path at all.
-                    let tray = window
-                        .app_handle()
-                        .try_state::<tray::Present>()
-                        .map(|state| state.0)
-                        .unwrap_or(false);
-                    if tray {
-                        api.prevent_close();
-                        let _ = window.hide();
-                    }
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                // With a tray, close dismisses the panel. Without one — Linux
+                // with no StatusNotifierItem — close has to end the process,
+                // or there is no quit path at all.
+                let tray = window
+                    .app_handle()
+                    .try_state::<tray::Present>()
+                    .map(|state| state.0)
+                    .unwrap_or(false);
+                if tray {
+                    api.prevent_close();
+                    let _ = window.hide();
                 }
-                _ => {}
             }
             platform::current().on_window_event(window, event);
         })

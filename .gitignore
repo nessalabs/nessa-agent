@@ -8,7 +8,8 @@ coverage/
 *.tsbuildinfo
 
 # --- Rust (Cargo workspace: nessa-server + src-tauri) ---
-/target/
+# Match both a build directory and a symlink to a shared build directory.
+/target
 src-tauri/target/
 
 # --- Tauri generated ---
