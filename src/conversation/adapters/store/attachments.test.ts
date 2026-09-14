@@ -12,7 +12,7 @@ it("rejects preview-file sends without contacting the backend or clearing the dr
     name: "a.txt",
     mimeType: "text/plain",
     size: 1,
-    dataUrl: "data:text/plain;base64,YQ==",
+    previewUrl: "blob:test-file",
   }
   store.dispatch(attachFiles({ files: [file], conversationId: "c0" }))
   const before = store.getState().conversation

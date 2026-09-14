@@ -1,3 +1,4 @@
+import { createAttachmentResources } from "../panel/adapters/attachment-resources"
 import { nativeCredentialSource } from "../session/adapters/client/credential-source"
 import type { CredentialSource } from "@nessa/client"
 import { loadEnvironment, type Environment } from "../env/environment"
@@ -19,6 +20,7 @@ export function createDependencies(
   const session = createSessionHandle()
   return {
     session,
+    attachments: createAttachmentResources(),
     usesLocalSession: config.conversation.backend === "local",
     connectSession:
       options.connectSession ??

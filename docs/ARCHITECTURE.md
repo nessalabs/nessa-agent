@@ -92,12 +92,18 @@ Chat adapters must use `getSessionClient()` from the session barrel — do not o
 | `model/` | `Surface` — frosted or clear. |
 | `adapters/` | Host subscriptions: colour scheme, edge reveal, panel frame, frost, remembered surface, compositor flush, config-driven tab shortcuts. |
 | `ui/app.tsx` | The chrome: stage, glow, resize handle, tab strip, composer. Renders; no effects. |
-| `adapters/read-attachment.ts`, `adapters/dropped-image.ts`, `adapters/dropped-text.ts` | Read bounded local/image bytes and decode external drop representations. |
+| `adapters/attachment-resources.ts`, `adapters/dropped-image.ts`, `adapters/dropped-text.ts` | Bounded object-URL resources, remote image reads, and external drop representations. |
 | `adapters/use-drop-navigation-guard.ts` | Prevent dropped URLs from navigating the webview. |
-| `ui/use-file-attachments.ts` | Pending previews, originating conversation, read lifecycle, and viewer state. |
+| `ui/use-file-attachments.ts` | Remote pending previews, originating conversation, and viewer state. Local files use synchronous object URLs. |
+| `adapters/dropped-folder.ts`, `ui/use-folder-drop.ts` | Bounded sequential folder traversal, cancellation, originating draft and pending-send guard. |
 | `ui/use-content-drop.ts`, `ui/use-attachment-menu.ts` | Drop acceptance/routing and menu geometry lifecycle, separate from rendering. |
 | `ui/attachment-preview.tsx`, `ui/attachment-icon.tsx`, `ui/add-attachment-menu.tsx` | Lazy shared file preview, file-kind icons, and composer Add menu. |
 | `ui/waveform-icon.tsx` | The voice glyph in the composer. |
+
+The composition root injects an attachment resource store into the panel. Redux
+keeps metadata and URLs; its subscription reconciles resource IDs after commands
+and revokes URLs removed from drafts, including closed conversations. The resource
+store shares the product store lifetime so React remounts do not invalidate previews.
 
 ## Boundaries
 

@@ -7,7 +7,7 @@ export type FileAttachment = {
   name: string
   mimeType: string
   size: number
-  dataUrl: string
+  previewUrl: string
 }
 
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024

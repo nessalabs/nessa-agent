@@ -11,7 +11,7 @@ it("accepts empty files and exact file limit, rejects invalid byte sizes", () =>
     id: "a",
     name: "a.txt",
     mimeType: "text/plain",
-    dataUrl: "data:text/plain;base64,",
+    previewUrl: "blob:test-empty",
     size: 0,
   }
   expect(validDraftAttachments([file])).toBe(true)

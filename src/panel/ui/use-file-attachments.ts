@@ -7,10 +7,13 @@ import {
   type useConversation,
 } from "../../conversation"
 import { readDroppedImage } from "../adapters/dropped-image"
-import { readAttachment } from "../adapters/read-attachment"
+import type { AttachmentResources } from "../adapters/attachment-resources"
 
 /** Coordinates local file selection and preview against the originating conversation. */
-export function useFileAttachments(chat: ReturnType<typeof useConversation>) {
+export function useFileAttachments(
+  chat: ReturnType<typeof useConversation>,
+  resources: AttachmentResources,
+) {
   const conversationsRef = React.useRef(chat.conversations)
   React.useLayoutEffect(() => {
     conversationsRef.current = chat.conversations
@@ -20,7 +23,6 @@ export function useFileAttachments(chat: ReturnType<typeof useConversation>) {
     conversationId: string
     files: { name: string; mimeType: string; previewUrl?: string }[]
   } | null>(null)
-  const pendingUrls = React.useRef<string[]>([])
   const download = React.useRef<AbortController | null>(null)
   const busyRef = React.useRef(false)
   const pendingConversation = React.useRef<string | null>(null)
@@ -36,8 +38,6 @@ export function useFileAttachments(chat: ReturnType<typeof useConversation>) {
     return () => {
       mounted.current = false
       download.current?.abort()
-      pendingUrls.current.forEach((url) => URL.revokeObjectURL(url))
-      pendingUrls.current = []
     }
   }, [])
   React.useEffect(() => {
@@ -56,7 +56,7 @@ export function useFileAttachments(chat: ReturnType<typeof useConversation>) {
   const files = chat.active.draft.filter(
     (part): part is FileAttachment => part.type === "file",
   )
-  async function addFiles(selected: readonly File[], targetId = chat.active.id) {
+  function addFiles(selected: readonly File[], targetId = chat.active.id) {
     if (!selected.length) return
     if (busyRef.current) {
       setError("Please wait for the selected files to finish loading.")
@@ -77,38 +77,21 @@ export function useFileAttachments(chat: ReturnType<typeof useConversation>) {
       setError("Attach up to 20 files, 20 MB each and 50 MB total per draft.")
       return
     }
-    busyRef.current = true
-    pendingConversation.current = conversationId
-    setPending({
-      conversationId,
-      files: selected.map((file) => {
-        const previewUrl = file.type.startsWith("image/")
-          ? URL.createObjectURL(file)
-          : undefined
-        if (previewUrl) pendingUrls.current.push(previewUrl)
-        return { name: file.name, mimeType: file.type, previewUrl }
-      }),
-    })
-    setReading(true)
+    if (!resources.canAdd(selected.reduce((total, file) => total + file.size, 0))) {
+      setError(
+        "Attachments can use up to 100 MB across conversations. Remove files or close a conversation first.",
+      )
+      return
+    }
     setError(null)
     try {
-      const attachments: FileAttachment[] = []
-      for (const file of selected) attachments.push(await readAttachment(file))
-      if (mounted.current) chat.attachFiles(attachments, conversationId)
+      // Object URLs are ready synchronously; no FileReader or duplicate thumbnail URLs.
+      chat.attachFiles(resources.add(selected), conversationId)
     } catch {
-      if (mounted.current)
-        setError("One of the files could not be read. Please select the files again.")
-    } finally {
-      busyRef.current = false
-      pendingConversation.current = null
-      pendingUrls.current.forEach((url) => URL.revokeObjectURL(url))
-      pendingUrls.current = []
-      if (mounted.current) {
-        setReading(false)
-        setPending(null)
-      }
+      setError("The files could not be attached. Please select them again.")
     }
   }
+
   async function addImageUrl(url: string) {
     if (busyRef.current) return
     const targetId = chat.active.id
@@ -128,7 +111,7 @@ export function useFileAttachments(chat: ReturnType<typeof useConversation>) {
       busyRef.current = false
       setReading(false)
       setPending(null)
-      await addFiles([file], targetId)
+      addFiles([file], targetId)
     } catch {
       if (mounted.current)
         setError(

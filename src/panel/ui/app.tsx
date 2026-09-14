@@ -1,3 +1,4 @@
+import type { AttachmentResources } from "../adapters/attachment-resources"
 import * as React from "react"
 import { Square, X } from "lucide-react"
 import {
@@ -30,6 +31,7 @@ import { useSurface, type Surface } from "../adapters/surface"
 import { useTabShortcuts } from "../adapters/use-tab-shortcuts"
 import { useComposer } from "./use-composer"
 import { useFileAttachments } from "./use-file-attachments"
+import { useFolderDrop } from "./use-folder-drop"
 import { useContentDrop } from "./use-content-drop"
 import { FileDropZone } from "@nessa-ui/react/file-drop-zone"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
@@ -65,13 +67,22 @@ function panelClass(surface: Surface, compositor: CompositorKind): string {
     : `${base} relative overflow-visible rounded-[18px] border`
 }
 
-export function App() {
+export function App({
+  attachmentResources,
+}: {
+  attachmentResources: AttachmentResources
+}) {
   const scheme = useColorScheme()
   const ground = scheme === "dark" ? "ink" : "paper"
   const [surface, toggleSurface] = useSurface()
   const edge = useEdgeReveal()
   const chat = useConversation()
-  const attachments = useFileAttachments(chat)
+  const attachments = useFileAttachments(chat, attachmentResources)
+  const folderDrop = useFolderDrop(
+    chat.active.id,
+    attachments.addFiles,
+    attachments.setError,
+  )
   const session = useSession()
   const {
     composerRef,
@@ -84,8 +95,9 @@ export function App() {
     changeContent,
     pressChip,
     pasteAttachment,
-  } = useComposer(chat, attachments.isPending)
+  } = useComposer(chat, (id) => attachments.isPending(id) || folderDrop.isPending(id))
   const contentDrop = useContentDrop({
+    addFolderEntries: folderDrop.addFolderEntries,
     addImageUrl: attachments.addImageUrl,
     focusComposer,
     pasteAttachment,
@@ -341,7 +353,7 @@ export function App() {
                     <ChatAttachmentTile
                       label={file.name}
                       imageSrc={
-                        file.mimeType.startsWith("image/") ? file.dataUrl : undefined
+                        file.mimeType.startsWith("image/") ? file.previewUrl : undefined
                       }
                       icon={<AttachmentIcon name={file.name} mimeType={file.mimeType} />}
                       onOpen={() => attachments.open(file)}

@@ -1,9 +1,12 @@
 import * as React from "react"
 import { droppedImageUrl } from "../adapters/dropped-image"
+import { droppedFolderEntries } from "../adapters/dropped-folder"
 import { droppedText } from "../adapters/dropped-text"
 import { useDropNavigationGuard } from "../adapters/use-drop-navigation-guard"
 
 type DropActions = {
+  addFolderEntries: (entries: FileSystemEntry[]) => void
+
   addImageUrl: (url: string) => Promise<void>
   focusComposer: () => void
   pasteAttachment: (text: string) => void
@@ -43,6 +46,13 @@ export function createContentDropHandlers(
     },
     onDropCapture(event: React.DragEvent<HTMLDivElement>) {
       setDragging(false)
+      const entries = droppedFolderEntries(event.dataTransfer)
+      if (entries) {
+        event.preventDefault()
+        event.stopPropagation()
+        actions.addFolderEntries(entries)
+        return
+      }
       // Native drags can advertise Files without providing any file bytes.
       if (event.dataTransfer.files.length > 0) return
       const imageUrl = droppedImageUrl(event.dataTransfer)

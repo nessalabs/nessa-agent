@@ -22,7 +22,7 @@ const file = (id: string, size = 1): FileAttachment => ({
   size,
   name: `${id}.txt`,
   mimeType: "text/plain",
-  dataUrl: "data:text/plain;base64,YQ==",
+  previewUrl: "blob:test-file",
 })
 
 describe("draft file previews", () => {

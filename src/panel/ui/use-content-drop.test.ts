@@ -6,6 +6,7 @@ afterEach(() => vi.unstubAllGlobals())
 
 function setup(types: string[], payload: Record<string, string> = {}, fileCount = 0) {
   const actions = {
+    addFolderEntries: vi.fn(),
     addImageUrl: vi.fn(async () => {}),
     focusComposer: vi.fn(),
     pasteAttachment: vi.fn(),
@@ -13,6 +14,7 @@ function setup(types: string[], payload: Record<string, string> = {}, fileCount 
   const setDragging = vi.fn()
   const event = {
     dataTransfer: {
+      items: [],
       types,
       files: { length: fileCount },
       getData: (type: string) => payload[type] ?? "",
@@ -110,6 +112,18 @@ it("pastes selected prose rather than the advertised inline-image URI", () => {
     "  Selected prose with an emoji\n",
   )
   expect(test.actions.addImageUrl).not.toHaveBeenCalled()
+  expect(test.event.preventDefault).toHaveBeenCalledOnce()
+  expect(test.event.stopPropagation).toHaveBeenCalledOnce()
+})
+
+it("intercepts folder entries before the shared component recursively expands files", () => {
+  const test = setup(["Files"], {}, 1)
+  const folder = { isDirectory: true } as FileSystemEntry
+  Object.assign(test.event.dataTransfer, {
+    items: [{ kind: "file", webkitGetAsEntry: () => folder }],
+  })
+  test.handlers.onDropCapture(test.dragEvent)
+  expect(test.actions.addFolderEntries).toHaveBeenCalledWith([folder])
   expect(test.event.preventDefault).toHaveBeenCalledOnce()
   expect(test.event.stopPropagation).toHaveBeenCalledOnce()
 })
