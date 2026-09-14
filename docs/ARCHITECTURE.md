@@ -58,9 +58,8 @@ shows a solid square and lowercase nessa identity inside the sidebar header,
 and a close toggle in the sidebar footer
 beside the square-mark nessaStudio wordmark. Collapsed navigation shows a plain reopen icon in the header;
 there is no hover replacement. Native desktop composition retains its fixed
-traffic-light row. In browsers, the open right sidebar has its toggle in the
-footer too; when collapsed its reopen toggle sits at the top-right. Native
-controls remain in the fixed titlebar. Sidebars and
+traffic-light row. The right sidebar toggle stays at the top-right in both open
+and collapsed states, in browsers and the native titlebar. Sidebars and
 their resize borders extend to the top of the window, underneath transparent
 window controls; native sidebar content begins below the 42px control row.
 

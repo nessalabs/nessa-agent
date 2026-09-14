@@ -60,7 +60,7 @@ export function DesktopApp({
     >
       <AppShell className="relative h-svh w-full min-w-[350px]" maximizeShortcut={false}>
         {browserSurface ? (
-          <BrowserTitlebar trailing={!rightOpen ? rightToggle : null} />
+          <BrowserTitlebar trailing={rightToggle} />
         ) : (
           <WindowTitlebar
             className="absolute inset-x-0 top-0 z-20"
@@ -188,11 +188,6 @@ export function DesktopApp({
                   className={`desktop-sidebar ${browserSurface ? "pt-14" : "pt-[42px]"}`}
                 >
                   <SidebarContent />
-                  {browserSurface && (
-                    <SidebarFooter className="flex-row items-center justify-end border-t border-border px-3 py-2">
-                      {rightToggle}
-                    </SidebarFooter>
-                  )}
                 </Sidebar>
               </SidebarProvider>
             </SplitViewPanel>
