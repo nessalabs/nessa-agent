@@ -29,7 +29,7 @@ RPC (your text comes back as the assistant reply) until real turn RPCs land.
 `src-tauri/tauri.desktop.conf.json`. Its `desktop` window selects the desktop
 composition path in `main.rs`, leaving standard Tauri activation and close
 behavior in place. On macOS an overlay titlebar retains the native traffic lights;
-a fixed full-width AppShellHeader places the sidebar toggle beside them, without
+a fixed full-width WindowTitlebar places the sidebar toggle beside them, without
 a title label or divider. Native controls use `trafficLightPosition` (16, 23)
 and the 42px header places the icon center at 21px. The installed Tao implementation
 keeps each 14px native button at y=9 inside its 37px titlebar container, placing
@@ -44,6 +44,20 @@ or surface credentials. Platform preparation still runs before Tauri starts.
 `desktop.html` mounts `src/desktop/main.tsx`, which directly composes the design
 system's AppShell frame and Sidebar with a single Home link and an empty main
 area. SidebarProvider owns collapse state and the optional Cmd/Ctrl+B shortcut.
+The reusable `src/desktop/ui/window-titlebar.tsx` stays in this app. It accepts
+leading/trailing slots, optional labeled history actions, height, and native-control
+inset. It renders design-system Buttons and forwards native header props; it does
+not detect the OS, call Tauri, control Sidebar state, or own navigation history.
+Reuse it with AppShell by placing it before AppShellBody and passing a
+SidebarTrigger in `leading`. Each consuming app must configure its own native
+window and drag permissions. No changes to `nessa_ui` are required.
+
+Browser composition uses `ui/browser-titlebar.tsx` instead: the existing Nessa
+app icon and name toggle the open sidebar, and a compact logo reopens it when
+collapsed. Hover and keyboard focus reveal the sidebar glyph. The mobile drawer
+includes the same logo control, so its overlay cannot hide the only close button.
+Native desktop composition retains the approved traffic-light row.
+
 This surface mounts no product store, session lifecycle, or backend connection.
 Its stylesheet is separate from floating-panel styles. Vite builds both HTML
 entries. The existing panel launch remains `pnpm app`.

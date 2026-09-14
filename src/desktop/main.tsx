@@ -1,15 +1,11 @@
 import * as React from "react"
 import { createRoot } from "react-dom/client"
 import { ArrowLeft, ArrowRight, Home, PanelLeft } from "lucide-react"
-import {
-  AppShell,
-  AppShellBody,
-  AppShellHeader,
-  AppShellMain,
-} from "@nessa-ui/react/app-shell"
+import { AppShell, AppShellBody, AppShellMain } from "@nessa-ui/react/app-shell"
 import {
   Sidebar,
   SidebarContent,
+  SidebarHeader,
   SidebarMenu,
   SidebarMenuItem,
   SidebarProvider,
@@ -17,10 +13,14 @@ import {
 } from "@nessa-ui/react/sidebar"
 
 import { host } from "../host"
+import { BrowserSidebarToggle, BrowserTitlebar } from "./ui/browser-titlebar"
+import { WindowTitlebar } from "./ui/window-titlebar"
 
 import "@fontsource-variable/geist"
 import "@fontsource-variable/geist-mono"
 import "./styles.css"
+
+const browserSurface = host.kind === "browser"
 
 const container = document.getElementById("root")
 if (!container) throw new Error("missing #root")
@@ -32,19 +32,31 @@ createRoot(container).render(
       keyboardShortcut={{ key: "b", modifier: "mod" }}
     >
       <AppShell className="h-svh w-full" maximizeShortcut={false}>
-        <AppShellHeader className="desktop-titlebar" data-tauri-drag-region>
-          <SidebarTrigger>
-            <PanelLeft />
-          </SidebarTrigger>
-          <button className="desktop-navigation" aria-label="Go back" disabled>
-            <ArrowLeft aria-hidden="true" />
-          </button>
-          <button className="desktop-navigation" aria-label="Go forward" disabled>
-            <ArrowRight aria-hidden="true" />
-          </button>
-        </AppShellHeader>
+        {browserSurface ? (
+          <BrowserTitlebar />
+        ) : (
+          <WindowTitlebar
+            data-tauri-drag-region
+            windowControlsInset="var(--desktop-window-controls-inset, 8px)"
+            height={42}
+            leading={
+              <SidebarTrigger>
+                <PanelLeft />
+              </SidebarTrigger>
+            }
+            navigation={{
+              back: { label: "Go back", icon: <ArrowLeft />, disabled: true },
+              forward: { label: "Go forward", icon: <ArrowRight />, disabled: true },
+            }}
+          />
+        )}
         <AppShellBody>
           <Sidebar aria-label="Main navigation" className="h-full">
+            {browserSurface && (
+              <SidebarHeader className="px-3 py-2">
+                <BrowserSidebarToggle />
+              </SidebarHeader>
+            )}
             <SidebarContent>
               <SidebarMenu>
                 <SidebarMenuItem asChild icon={<Home />} isActive>
