@@ -36,4 +36,16 @@ describe("desktop pixel allocation", () => {
   it("returns freed right-panel width to the workspace", () => {
     expect(fitSidebarWidths(1098, 300, 0)).toEqual({ left: 300, center: 798, right: 0 })
   })
+  it("gives the entire workspace to right when the workspace snaps closed", () => {
+    expect(fitSidebarWidths(1098, 200, 600, true)).toEqual({
+      left: 200,
+      center: 0,
+      right: 898,
+    })
+    expect(fitSidebarWidths(1098, 200, 548)).toEqual({
+      left: 200,
+      center: 350,
+      right: 548,
+    })
+  })
 })

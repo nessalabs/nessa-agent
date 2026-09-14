@@ -1,5 +1,5 @@
 import { fitSidebarWidths } from "./sidebar-sizing"
-import { useCallback, useLayoutEffect, useRef, useState } from "react"
+import { useCallback, useLayoutEffect, useRef, useState, type PointerEvent } from "react"
 import {
   validatePanelGroupLayout,
   type SplitViewLayout,
@@ -15,10 +15,11 @@ export function useSidebarLayout() {
 
   const constrain = useCallback((next: SplitViewLayout, width: number) => {
     const percent = (pixels: number) => (pixels / width) * 100
-    const { left, right } = fitSidebarWidths(
+    const { left, center, right } = fitSidebarWidths(
       width,
       (next.left / 100) * width,
       (next.right / 100) * width,
+      next.center === 0,
     )
     return validatePanelGroupLayout({
       layout: {
@@ -38,12 +39,14 @@ export function useSidebarLayout() {
           panelId: "center",
           minSize: percent(350),
           maxSize: 100,
-          collapsible: false,
+          collapsible: true,
           collapsedSize: 0,
         },
         {
           panelId: "right",
-          minSize: percent(Math.min(160, Math.max(0, width - left - 350))),
+          minSize: percent(
+            Math.min(160, Math.max(0, width - left - (center === 0 ? 0 : 350))),
+          ),
           maxSize: 100,
           collapsible: true,
           collapsedSize: 0,
@@ -71,7 +74,7 @@ export function useSidebarLayout() {
         return constrain(
           {
             left: (left / width) * 100,
-            center: ((width - left - right) / width) * 100,
+            center: current?.center === 0 ? 0 : ((width - left - right) / width) * 100,
             right: (right / width) * 100,
           },
           width,
@@ -83,6 +86,25 @@ export function useSidebarLayout() {
     observer.observe(group)
     return () => observer.disconnect()
   }, [constrain])
+
+  const snapWorkspace = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      const group = groupRef.current
+      if (!group || !event.currentTarget.hasPointerCapture(event.pointerId)) return
+      const leftWidth = availableWidth.current * ((layout?.left ?? 0) / 100)
+      const leftBorder = (group.children[1] as HTMLElement | undefined)?.offsetWidth ?? 0
+      const workspaceWidth =
+        event.clientX - group.getBoundingClientRect().left - leftWidth - leftBorder
+      if (workspaceWidth < 350) {
+        event.preventDefault()
+        setLayout(
+          (current) =>
+            current && { left: current.left, center: 0, right: 100 - current.left },
+        )
+      }
+    },
+    [layout?.left],
+  )
 
   const beginResize = useCallback((side: "left" | "right") => {
     resizingSide.current = side
@@ -129,9 +151,15 @@ export function useSidebarLayout() {
   return {
     groupRef,
     beginResize,
+    snapWorkspace,
+    workspaceCollapsed: layout?.center === 0,
     rightMinWidth: Math.min(
       160,
-      Math.max(0, availableWidth.current * (1 - (layout?.left ?? 0) / 100) - 350),
+      Math.max(
+        0,
+        availableWidth.current * (1 - (layout?.left ?? 0) / 100) -
+          (layout?.center === 0 ? 0 : 350),
+      ),
     ),
     layout,
     changeLayout,

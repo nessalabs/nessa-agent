@@ -50,6 +50,8 @@ export function DesktopApp({
     rightOpen,
     beginResize,
     rightMinWidth,
+    snapWorkspace,
+    workspaceCollapsed,
   } = useSidebarLayout()
   const [rightMaximized, setRightMaximized] = useState(false)
   const rightToggle = (
@@ -220,8 +222,10 @@ export function DesktopApp({
             <SplitViewPanel
               id="center"
               minSize="350px"
-              inert={rightMaximized}
-              aria-hidden={rightMaximized}
+              collapsible
+              collapsedSize={0}
+              inert={rightMaximized || workspaceCollapsed}
+              aria-hidden={rightMaximized || workspaceCollapsed}
             >
               <AppShellMain
                 id="home"
@@ -232,7 +236,10 @@ export function DesktopApp({
             <SplitViewSeparator
               className="desktop-sidebar-edge"
               onPointerEnter={positionEdgeGlow}
-              onPointerMove={positionEdgeGlow}
+              onPointerMove={(event) => {
+                positionEdgeGlow(event)
+                snapWorkspace(event)
+              }}
               onFocus={(event) =>
                 event.currentTarget.style.removeProperty("--edge-glow-y")
               }
