@@ -5,6 +5,7 @@ import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
+  SidebarHeader,
   SidebarMenu,
   SidebarMenuItem,
   SidebarProvider,
@@ -48,11 +49,13 @@ export function DesktopApp({
       sidebarWidth="100%"
       keyboardShortcut={{ key: "b", modifier: "mod" }}
     >
-      <AppShell className="h-svh w-full" maximizeShortcut={false}>
+      <AppShell className="relative h-svh w-full" maximizeShortcut={false}>
         {browserSurface ? (
           <BrowserTitlebar trailing={rightToggle} />
         ) : (
           <WindowTitlebar
+            className="absolute inset-x-0 top-0 z-20"
+            style={{ background: "transparent" }}
             data-tauri-drag-region
             windowControlsInset="var(--desktop-window-controls-inset, 8px)"
             height={42}
@@ -86,8 +89,15 @@ export function DesktopApp({
               <Sidebar
                 aria-label="Main navigation"
                 collapsible="none"
-                className="desktop-sidebar"
+                className={`desktop-sidebar ${browserSurface ? "" : "pt-[42px]"}`}
               >
+                <SidebarHeader className="flex h-14 shrink-0 flex-row items-center gap-3 px-5 py-0">
+                  <span
+                    aria-hidden="true"
+                    className="size-2.5 shrink-0 rounded-[1px] bg-foreground"
+                  />
+                  <span className="text-[26px] font-semibold tracking-tight">nessa</span>
+                </SidebarHeader>
                 <SidebarContent>
                   <SidebarMenu>
                     <SidebarMenuItem asChild icon={<Home />} isActive>
@@ -119,7 +129,11 @@ export function DesktopApp({
               aria-label="Resize left sidebar"
             />
             <SplitViewPanel id="center" minSize="160px">
-              <AppShellMain id="home" aria-label="Home" />
+              <AppShellMain
+                id="home"
+                aria-label="Home"
+                className={browserSurface ? "pt-14" : "pt-[42px]"}
+              />
             </SplitViewPanel>
             <SplitViewSeparator
               className="desktop-sidebar-edge"
@@ -144,7 +158,7 @@ export function DesktopApp({
                   side="right"
                   aria-label="Right sidebar"
                   collapsible="none"
-                  className="desktop-sidebar"
+                  className={`desktop-sidebar ${browserSurface ? "pt-14" : "pt-[42px]"}`}
                 >
                   <SidebarContent />
                 </Sidebar>

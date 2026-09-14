@@ -54,10 +54,13 @@ SidebarTrigger in `leading`. Each consuming app must configure its own native
 window and drag permissions. No changes to `nessa_ui` are required.
 
 Browser composition uses `ui/browser-titlebar.tsx` instead. Expanded navigation
-shows static Nessa identity at the top and a close toggle in the sidebar footer
+shows a solid square and lowercase nessa identity inside the sidebar header,
+and a close toggle in the sidebar footer
 beside NessaStudio. Collapsed navigation shows a plain reopen icon in the header;
 there is no hover replacement. Native desktop composition retains its fixed
-traffic-light row. Both surfaces have a far-right sidebar toggle.
+traffic-light row. Both surfaces have a far-right sidebar toggle. Sidebars and
+their resize borders extend to the top of the window, underneath transparent
+window controls; native sidebar content begins below the 42px control row.
 
 `ui/desktop-app.tsx` composes two existing Sidebar components inside the design
 system's SplitView panels. SplitView owns pointer capture, accessible separators,
