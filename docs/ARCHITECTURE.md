@@ -56,26 +56,38 @@ window and drag permissions. No changes to `nessa_ui` are required.
 Browser composition uses `ui/browser-titlebar.tsx` instead. Expanded navigation
 shows a solid square and lowercase nessa identity inside the sidebar header,
 and a close toggle in the sidebar footer
-beside NessaStudio. Collapsed navigation shows a plain reopen icon in the header;
+beside the square-mark nessaStudio wordmark. Collapsed navigation shows a plain reopen icon in the header;
 there is no hover replacement. Native desktop composition retains its fixed
-traffic-light row. Both surfaces have a far-right sidebar toggle. Sidebars and
+traffic-light row. In browsers, the open right sidebar has its toggle in the
+footer too; when collapsed its reopen toggle sits at the top-right. Native
+controls remain in the fixed titlebar. Sidebars and
 their resize borders extend to the top of the window, underneath transparent
 window controls; native sidebar content begins below the 42px control row.
 
 `ui/desktop-app.tsx` composes two existing Sidebar components inside the design
 system's SplitView panels. SplitView owns pointer capture, accessible separators,
-keyboard resizing, and collapse snapping. The left sidebar has a 220px expanded minimum and the right has a 160px minimum;
-both have a 40% maximum. Dragging below each halfway threshold (110px left,
-80px right) snaps that sidebar closed.
-The app's `useSidebarLayout` owns one percentage layout for width/visibility and
-remembers expanded widths for toggle reopening. It does not maintain a second
-independent open state. Sidebars stay inline for resizing, including in browsers.
+keyboard resizing, and collapse snapping. The left sidebar defaults to 200px,
+with a 200px minimum and 450px maximum. The main workspace reserves at least
+350px. The right sidebar retains a 160px expanded minimum and can use all remaining
+space, with no percentage cap. Initially it receives usable width minus 200px
+(left) minus 350px (workspace); at a 1100px window with two 1px borders, that is
+548px. Its maximum while resizing is usable width minus the current left width
+minus 350px. Dragging below the halfway threshold (100px left, 80px right) snaps
+that sidebar closed.
+
+The app's `useSidebarLayout` measures usable width excluding separators, converts
+pixel defaults to the SplitView percentage layout, and preserves sidebar pixel
+widths across window resizes. It uses the design system's layout validator for
+constraints, remembers expanded pixel widths for reopening, and owns width and
+visibility together. Sidebars stay inline, including in browsers.
 Closed panels are inert and hidden from assistive technology.
 
 Borders highlight softly in a neutral foreground color on hover, keyboard focus,
 and drag. Regular drag resizing tracks the pointer immediately; collapse and
 toggle transitions animate for 180ms and respect reduced motion. The center
-reserves 160px; very narrow browser windows may not fit two expanded sidebars.
+reserves 350px. On window shrink, the right sidebar closes when its 160px
+minimum no longer fits; the left closes if 200px plus the workspace cannot fit.
+The shell itself has a 350px minimum width.
 
 This surface mounts no product store, session lifecycle, or backend connection.
 Its stylesheet is separate from floating-panel styles. Vite builds both HTML

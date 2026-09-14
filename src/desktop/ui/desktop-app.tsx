@@ -25,7 +25,8 @@ export function DesktopApp({
   hostKind: HostKind
   browserSurface: boolean
 }) {
-  const { layout, changeLayout, setOpen, leftOpen, rightOpen } = useSidebarLayout()
+  const { groupRef, layout, changeLayout, setOpen, leftOpen, rightOpen } =
+    useSidebarLayout()
   const rightToggle = (
     <Button
       variant="ghost"
@@ -49,9 +50,9 @@ export function DesktopApp({
       sidebarWidth="100%"
       keyboardShortcut={{ key: "b", modifier: "mod" }}
     >
-      <AppShell className="relative h-svh w-full" maximizeShortcut={false}>
+      <AppShell className="relative h-svh w-full min-w-[350px]" maximizeShortcut={false}>
         {browserSurface ? (
-          <BrowserTitlebar trailing={rightToggle} />
+          <BrowserTitlebar trailing={!rightOpen ? rightToggle : null} />
         ) : (
           <WindowTitlebar
             className="absolute inset-x-0 top-0 z-20"
@@ -73,14 +74,16 @@ export function DesktopApp({
         )}
         <AppShellBody>
           <SplitView
+            ref={groupRef}
             className="desktop-split h-full w-full"
             layout={layout}
             onLayoutChange={changeLayout}
           >
             <SplitViewPanel
               id="left"
-              minSize="220px"
-              maxSize={40}
+              minSize="200px"
+              defaultSize="200px"
+              maxSize="450px"
               collapsible
               collapsedSize={0}
               inert={!leftOpen}
@@ -108,8 +111,15 @@ export function DesktopApp({
                   </SidebarMenu>
                 </SidebarContent>
                 <SidebarFooter className="flex-row items-center justify-between border-t border-border px-3 py-2">
-                  <span className="truncate text-sm text-muted-foreground">
-                    NessaStudio
+                  <span className="flex min-w-0 items-center gap-2 text-sm tracking-tight">
+                    <span
+                      aria-hidden="true"
+                      className="size-1.5 shrink-0 rounded-[1px] bg-foreground"
+                    />
+                    <span className="truncate">
+                      <span className="font-semibold">nessa</span>
+                      <span className="font-normal text-muted-foreground">Studio</span>
+                    </span>
                   </span>
                   {browserSurface && (
                     <SidebarTrigger
@@ -128,7 +138,7 @@ export function DesktopApp({
               className="desktop-sidebar-edge"
               aria-label="Resize left sidebar"
             />
-            <SplitViewPanel id="center" minSize="160px">
+            <SplitViewPanel id="center" minSize="350px" defaultSize="350px">
               <AppShellMain
                 id="home"
                 aria-label="Home"
@@ -142,7 +152,6 @@ export function DesktopApp({
             <SplitViewPanel
               id="right"
               minSize="160px"
-              maxSize={40}
               collapsible
               collapsedSize={0}
               inert={!rightOpen}
@@ -161,6 +170,11 @@ export function DesktopApp({
                   className={`desktop-sidebar ${browserSurface ? "pt-14" : "pt-[42px]"}`}
                 >
                   <SidebarContent />
+                  {browserSurface && (
+                    <SidebarFooter className="flex-row items-center justify-end border-t border-border px-3 py-2">
+                      {rightToggle}
+                    </SidebarFooter>
+                  )}
                 </Sidebar>
               </SidebarProvider>
             </SplitViewPanel>
