@@ -20,6 +20,7 @@ function pastedDocument(content: MessageContent) {
   const pastes = new Map<string, string>()
   const source = content
     .map((part, index) => {
+      if (part.type === "file") return ""
       if (part.type === "text") return part.text
       const token = `${prefix}${index}z`
       pastes.set(token, part.text)

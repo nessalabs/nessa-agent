@@ -69,6 +69,8 @@ opinion rather than the product's.
 | `adapters/gateway/local.ts` | In-process UI-session gateway. Tomorrow this is the remote gateway. |
 | `adapters/store/` | Redux projection. Reducers call the gateway; they do not contain rules. |
 | `ui/` | Transcript, thinking pill, `useConversation`. Paints and dispatches. |
+| `model/attachments.ts` | Local file parts and per-file/draft budgets; file-bearing drafts cannot enter text-only sends. |
+| `application/usecases/attachments.ts` | Attach to the originating conversation and remove individual draft files. |
 | `model/identity.ts` | The agent's name, seed, and hue wheel. |
 
 **Session vertical** (`src/session/`) — WebSocket control-plane connection.
@@ -90,6 +92,11 @@ Chat adapters must use `getSessionClient()` from the session barrel — do not o
 | `model/` | `Surface` — frosted or clear. |
 | `adapters/` | Host subscriptions: colour scheme, edge reveal, panel frame, frost, remembered surface, compositor flush, config-driven tab shortcuts. |
 | `ui/app.tsx` | The chrome: stage, glow, resize handle, tab strip, composer. Renders; no effects. |
+| `adapters/read-attachment.ts`, `adapters/dropped-image.ts`, `adapters/dropped-text.ts` | Read bounded local/image bytes and decode external drop representations. |
+| `adapters/use-drop-navigation-guard.ts` | Prevent dropped URLs from navigating the webview. |
+| `ui/use-file-attachments.ts` | Pending previews, originating conversation, read lifecycle, and viewer state. |
+| `ui/use-content-drop.ts`, `ui/use-attachment-menu.ts` | Drop acceptance/routing and menu geometry lifecycle, separate from rendering. |
+| `ui/attachment-preview.tsx`, `ui/attachment-icon.tsx`, `ui/add-attachment-menu.tsx` | Lazy shared file preview, file-kind icons, and composer Add menu. |
 | `ui/waveform-icon.tsx` | The voice glyph in the composer. |
 
 ## Boundaries

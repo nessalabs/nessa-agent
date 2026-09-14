@@ -496,3 +496,33 @@ Inspect the owning feature before editing, and keep its source, tests, scripts,
 configuration, and documentation organized together. Update module maps and links
 when responsibilities move; verify the resulting layout and relevant checks.
 See [codebase structure](docs/codebase-structure.md) for the repository map.
+
+## Local panel attachments
+
+Press **+**, then **Files** in the Add menu, to choose files, or drop files/folders anywhere on the panel. Nessa UI's
+FileDropZone expands dropped folders into files. Attachment tiles inside the composer open the shared
+FilePreview sheet; remove controls remove individual files. Unsupported preview
+formats retain their filename and download action. File previews load on demand. Clipboard images use the same attachment flow.
+Text and links dropped on the panel enter the composer. Website image drops
+fetch the explicitly dragged image when its host permits browser access; blocked
+images show an error so the user can save and drop the file instead. Drops never
+navigate the panel away from the app.
+
+Attachments belong to the conversation draft and survive tab switches, but are
+session-only. This feature does not upload files or send them to the text-only
+backend. A draft with files cannot be submitted; remove the files to send its text.
+Limits are 20 files per draft, 20 MiB per file, and 50 MiB total.
+
+The native window disables Tauri's consuming drag/drop handler so HTML file drops
+reach FileDropZone. The standard file input opens the operating-system picker;
+no filesystem or dialog plugin is required. Native behavior needs a rebuilt app.
+
+```mermaid
+flowchart LR
+  P["+ → Add menu → Files / panel drop zone"] --> R["Read selected files locally"]
+  R --> A["Conversation attach-files command"]
+  A --> D["Draft file parts with count/size limits"]
+  D --> V["Attachment tile → lazy FilePreview"]
+  D --> X["Remove file"]
+  D --> B["File-bearing draft blocks text-only send"]
+```

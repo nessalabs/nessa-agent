@@ -160,7 +160,7 @@ it("preserves pasted-only content through tab switches, send, and a later draft"
   store.dispatch(setActive("c0"))
   expect(store.getState().conversation.conversations[0]!.draft).toEqual(content)
   const sent = store.dispatch(sendDraft({ content, id: "c0" }))
-  expect(echo).toHaveBeenCalledWith(content[0]!.text)
+  expect(echo).toHaveBeenCalledWith("  code\n\n<tag>\t\n")
   expect(store.getState().conversation.conversations[0]!.draft).toEqual([])
   store.dispatch(setDraft({ draft: textContent("next draft"), id: "c0" }))
   finish({ text: "received" })
