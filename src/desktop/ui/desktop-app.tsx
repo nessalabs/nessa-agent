@@ -91,12 +91,12 @@ export function DesktopApp({
                 collapsible="none"
                 className={`desktop-sidebar ${browserSurface ? "" : "pt-[42px]"}`}
               >
-                <SidebarHeader className="flex h-14 shrink-0 flex-row items-center gap-3 px-5 py-0">
+                <SidebarHeader className="flex h-14 shrink-0 flex-row items-center gap-2 px-5 py-0">
                   <span
                     aria-hidden="true"
-                    className="size-2.5 shrink-0 rounded-[1px] bg-foreground"
+                    className="size-1.5 shrink-0 rounded-[1px] bg-foreground"
                   />
-                  <span className="text-[26px] font-semibold tracking-tight">nessa</span>
+                  <span className="text-base font-semibold tracking-tight">nessa</span>
                 </SidebarHeader>
                 <SidebarContent>
                   <SidebarMenu>
