@@ -28,7 +28,6 @@ if (!container) throw new Error("missing #root")
 createRoot(container).render(
   <React.StrictMode>
     <SidebarProvider
-      className="dark"
       data-host={host.kind}
       keyboardShortcut={{ key: "b", modifier: "mod" }}
     >
