@@ -5,6 +5,8 @@ import {
   ChatMessageActions,
   ChatMessageReceipt,
 } from "@nessa-ui/react/chat-bubbles"
+import { MessageContentView } from "./message-content"
+import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
 import { MessageStreamText } from "@nessa-ui/react/message"
 
 import { type Conversation, type Receipt, type Turn } from "../model"
@@ -18,6 +20,7 @@ export function Transcript({
   streamText,
   emptyState,
   statusLabel,
+  onOpenPaste,
 }: {
   conversation: Conversation
   ground: "paper" | "ink"
@@ -25,6 +28,7 @@ export function Transcript({
   streamText: boolean
   emptyState: boolean
   statusLabel: string
+  onOpenPaste: (text: string) => void
 }) {
   const logRef = React.useRef<HTMLDivElement>(null)
   const lastId = conversation.turns.at(-1)?.id
@@ -60,6 +64,7 @@ export function Transcript({
             turn={turn}
             streaming={turn.id === streamingId && streamText}
             animateMount={animateMount}
+            onOpenPaste={onOpenPaste}
           />
         ))}
         {conversation.phase === "thinking" ? <Thinking motion={animateMount} /> : null}
@@ -68,12 +73,14 @@ export function Transcript({
   )
 }
 
-function TurnRow({
+const TurnRow = React.memo(function TurnRow({
+  onOpenPaste,
   turn,
   streaming,
   animateMount,
 }: {
   turn: Turn
+  onOpenPaste: (text: string) => void
   streaming: boolean
   animateMount: boolean
 }) {
@@ -83,7 +90,13 @@ function TurnRow({
       animateIn={animateMount}
     >
       <ChatBubble>
-        {streaming ? <MessageStreamText text={turn.text} /> : turn.text}
+        {turn.from === "user" ? (
+          <MessageContentView content={turn.content} onOpenPaste={onOpenPaste} />
+        ) : streaming ? (
+          <MessageStreamText text={turn.text} />
+        ) : (
+          <MessageMarkdown>{turn.text}</MessageMarkdown>
+        )}
       </ChatBubble>
       {turn.from === "user" ? (
         <ChatMessageActions>
@@ -92,7 +105,7 @@ function TurnRow({
       ) : null}
     </ChatMessage>
   )
-}
+})
 
 function receiptLabel(receipt: Receipt) {
   return receipt === "delivered" ? "Delivered" : "Sending"

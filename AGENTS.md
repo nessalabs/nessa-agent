@@ -69,3 +69,16 @@ TypeScript composition factory and Rust `RuntimeDependencies` examples.
   unnecessary protocol/schema/package version bumps. Update current callers, tests,
   documentation, and local development data directly. Keep one current contract.
   Compatibility support or a version transition requires an explicit user request.
+
+## Reviewing rich content changes
+
+- Exercise representation boundaries, not only round trips: punctuation and escapes
+  next to structured parts, code/link/HTML contexts, adjacent parts, and empty or
+  whitespace-prefixed payloads. Rendered controls must remain reachable.
+- Keep one authoritative stored representation. Derive transport text and display
+  titles independently; preserving payload whitespace must not make labels blank.
+- Review new imports through their transitive startup cost. Reuse existing lazy
+  renderers for optional math, diagrams, and highlighting; dynamic chunks still
+  contribute to installed bundle size.
+- Check changed tests against module boundaries too. A green architecture check
+  covers only its implemented rules, not every requirement in this guide.

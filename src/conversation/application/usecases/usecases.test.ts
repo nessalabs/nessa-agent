@@ -1,3 +1,4 @@
+import { textContent } from "../../model"
 import { describe, expect, it } from "vitest"
 
 import { emptyLocalTabs } from "../local-tabs"
@@ -14,35 +15,66 @@ import {
 
 describe("beginSend / completeEcho", () => {
   it("appends a user turn then an echoed assistant reply", () => {
-    const pending = beginSend(emptyLocalTabs(), { text: "hey" })
+    const pending = beginSend(emptyLocalTabs(), { content: textContent("hey") })
     const active = pending.conversations.find((item) => item.id === pending.activeId)!
     expect(active.phase).toBe("thinking")
-    expect(active.draft).toBe("")
+    expect(active.draft).toEqual(textContent(""))
     expect(active.turns).toEqual([
-      { id: "t1", from: "user", text: "hey", receipt: "sending" },
+      {
+        id: "t1",
+        from: "user",
+        content: textContent("hey"),
+        receipt: "sending",
+      },
     ])
 
     const done = completeEcho(pending, pending.activeId, "hey")
     const idle = done.conversations.find((item) => item.id === done.activeId)!
     expect(idle.phase).toBe("idle")
     expect(idle.turns).toEqual([
-      { id: "t1", from: "user", text: "hey", receipt: "delivered" },
+      {
+        id: "t1",
+        from: "user",
+        content: textContent("hey"),
+        receipt: "delivered",
+      },
       { id: "t2", from: "assistant", text: "hey" },
     ])
   })
 
+  it("trims only the initial title while retaining the original content", () => {
+    const content = textContent(" \n\t" + "a".repeat(60) + "\n  ")
+    const pending = beginSend(emptyLocalTabs(), { content })
+    const active = pending.conversations[0]!
+    expect(active.title).toBe("a".repeat(48))
+    expect(active.turns[0]).toEqual({
+      id: "t1",
+      from: "user",
+      content,
+      receipt: "sending",
+    })
+    const completed = completeEcho(pending, active.id, "reply")
+    const next = beginSend(completed, { content: textContent("different title") })
+    expect(next.conversations[0]!.title).toBe(active.title)
+  })
+
   it("no-ops an empty draft", () => {
     const tabs = emptyLocalTabs()
-    expect(beginSend(tabs, { text: "  " })).toBe(tabs)
+    expect(beginSend(tabs, { content: textContent("  ") })).toBe(tabs)
   })
 
   it("failSend returns to idle with a failure reply", () => {
-    const pending = beginSend(emptyLocalTabs(), { text: "hey" })
+    const pending = beginSend(emptyLocalTabs(), { content: textContent("hey") })
     const failed = failSend(pending, pending.activeId, "not connected")
     const active = failed.conversations.find((item) => item.id === failed.activeId)!
     expect(active.phase).toBe("idle")
     expect(active.turns).toEqual([
-      { id: "t1", from: "user", text: "hey", receipt: "delivered" },
+      {
+        id: "t1",
+        from: "user",
+        content: textContent("hey"),
+        receipt: "delivered",
+      },
       { id: "t2", from: "assistant", text: "not connected" },
     ])
   })
@@ -50,7 +82,7 @@ describe("beginSend / completeEcho", () => {
 
 describe("stopGenerating", () => {
   it("is a no-op until stop RPCs exist", () => {
-    const drafted = setDraft(emptyLocalTabs(), { draft: "hello there" })
+    const drafted = setDraft(emptyLocalTabs(), { draft: textContent("hello there") })
     expect(stopGenerating(drafted)).toBe(drafted)
   })
 })
@@ -80,9 +112,9 @@ describe("openConversation / closeConversation", () => {
 describe("setActive / setDraft", () => {
   it("switches tabs and writes a draft on the open conversation", () => {
     const two = openConversation(emptyLocalTabs())
-    const drafted = setDraft(two, { draft: "note", id: "c0" })
+    const drafted = setDraft(two, { draft: textContent("note"), id: "c0" })
     expect(setActive(drafted, "c0").activeId).toBe("c0")
-    expect(drafted.conversations[0]!.draft).toBe("note")
+    expect(drafted.conversations[0]!.draft).toEqual(textContent("note"))
     expect(setActive(two, "missing")).toBe(two)
   })
 })

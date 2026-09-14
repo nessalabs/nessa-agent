@@ -7,7 +7,7 @@ import { usePanelFrame } from "./panel-frame"
 export function useHostPanel(
   surface: Surface,
   toggleSurface: () => void,
-  composer: React.RefObject<HTMLTextAreaElement | null>,
+  composer: React.RefObject<{ focus(): void } | null>,
 ) {
   usePanelFrame()
 

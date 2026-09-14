@@ -12,13 +12,15 @@ describe("application dependency scope", () => {
       createDependencies({ conversation: { echo: async () => ({ text: "second" }) } }),
     )
     const [a, b] = await Promise.all([
-      first.dispatch(sendDraft({ text: "hello" })),
-      second.dispatch(sendDraft({ text: "hello" })),
+      first.dispatch(sendDraft({ content: [{ type: "text", text: "hello" }] })),
+      second.dispatch(sendDraft({ content: [{ type: "text", text: "hello" }] })),
     ])
     expect(a.payload).toEqual({ text: "first" })
     expect(b.payload).toEqual({ text: "second" })
     const disconnected = makeStore()
-    const failure = await disconnected.dispatch(sendDraft({ text: "hello" }))
+    const failure = await disconnected.dispatch(
+      sendDraft({ content: [{ type: "text", text: "hello" }] }),
+    )
     expect(sendDraft.rejected.match(failure)).toBe(true)
   })
 })

@@ -33,11 +33,17 @@ implementation per OS, injected by `current()` — and in
   `ChatMessageReceipt` / `ChatTypingIndicator` from Nessa UI: sent bubbles right,
   received left, typing dots while the agent thinks, a streamed reveal as the
   reply arrives.
-- **The pill composer** — `PillComposer` / `PillComposerRow`, whose rim lights
-  with traveling iridescence while the agent works. Enter is the send affordance,
-  as the component intends, so the trailing slot carries a voice control instead —
-  inert until there is a runtime to transcribe into — which hands over to a stop
-  control while a reply is arriving.
+- **The Markdown pill composer** — `PillComposer` / `PillComposerRow` with
+  `ChatComposerMarkdownEditor`: headings, lists, links, and code blocks with a
+  language picker and syntax highlighting. Enter (or Mod+Enter) submits; Shift+Enter adds a block. The voice icon remains in place while
+  typing. Three rendered lines (two newline breaks) reveal an expand control; Minimize or Escape
+  returns to the compact composer. Large pastes (500+ characters) become pasted-text pills.
+  Click a draft or sent pill to expand the **Pasted text** viewer; it shows the
+  content with Markdown formatting while preserving the original text for sending. Ordered text/pasted parts stay
+  with each conversation's draft and user turns; the backend receives their
+  concatenated text, including the complete pasted payload. Drafts remain
+  in-memory and do not survive an app restart. Voice and stop controls retain
+  their existing runtime limitations.
 - **The agent's face** — `RandomAvatar`, a deterministic generative avatar
   painted from the seed `"nessa"`. The app icon is the same painting, rasterized
   (see [Regenerating the icon](#regenerating-the-icon)).
@@ -129,7 +135,7 @@ and `just release` there.
 | `pnpm app` | `tauri dev`, no host defaults |
 | `pnpm app:build` | The shipping bundle for every Linux format (`.deb` + `.rpm` + AppImage) |
 | `pnpm typecheck` | `tsc --noEmit` |
-| `pnpm ui:types` | Pull the vendored `@nessa-ui/react` checkout forward |
+| `pnpm ui:types` | Reconcile the vendored UI with `nessa-ui-revision` |
 
 ### Settings
 
@@ -348,13 +354,16 @@ The chat kit lives in [`nessalabs/nessa_ui`](https://github.com/nessalabs/nessa_
 (`packages/react`). It is not on npm yet, so `pnpm install` links it from
 `.vendor/nessa_ui`. That directory is filled by `scripts/ensure-nessa-ui.mjs`
 before install: a sibling `nessa_ui` (or the original imessage worktree) is
-symlinked if present, otherwise the repo is cloned.
+symlinked when it contains the commit in `nessa-ui-revision`; otherwise the repo
+is cloned at that reviewed commit. Existing linked checkouts are never switched
+automatically. Update the revision file deliberately when adopting UI changes.
 
 ```
 "@nessa-ui/react": "link:.vendor/nessa_ui/packages/react"
 ```
 
-To move the clone forward:
+The composer requires the shared Markdown AST extension and on-demand math/diagram
+renderers in the pinned UI revision. To reconcile a managed clone with that pin:
 
 ```bash
 pnpm ui:types

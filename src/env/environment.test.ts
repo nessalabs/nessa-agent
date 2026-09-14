@@ -53,7 +53,9 @@ describe("frontend environment", () => {
       ),
     })
     expect(dependencies.usesLocalSession).toBe(false)
-    const result = await makeStore(dependencies).dispatch(sendDraft({ text: "hello" }))
+    const result = await makeStore(dependencies).dispatch(
+      sendDraft({ content: [{ type: "text", text: "hello" }] }),
+    )
     expect(sendDraft.fulfilled.match(result)).toBe(scenario === "echo")
     expect(dependencies.session.get()).toBeNull()
   })

@@ -1,3 +1,4 @@
+import { textContent, type MessageContent } from "../../model"
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
 
 import { makeStore as buildStore } from "../../../store"
@@ -19,9 +20,11 @@ import {
 function agent(store: ReturnType<typeof makeStore>) {
   return {
     draft: (text: string, id?: string) =>
-      store.dispatch(setDraft(id ? { draft: text, id } : { draft: text })),
+      store.dispatch(
+        setDraft(id ? { draft: textContent(text), id } : { draft: textContent(text) }),
+      ),
     send: async (text: string, id?: string) => {
-      await store.dispatch(sendDraft(id ? { text, id } : { text }))
+      await store.dispatch(sendDraft({ content: textContent(text), id }))
     },
     open: () => store.dispatch(openConversation()),
     close: (id: string) => store.dispatch(closeConversation(id)),
@@ -61,9 +64,14 @@ describe("conversation tabs store", () => {
     await run.send("hey")
     const open = run.tabs().conversations[0]!
     expect(open.phase).toBe("idle")
-    expect(open.draft).toBe("")
+    expect(open.draft).toEqual(textContent(""))
     expect(open.turns).toEqual([
-      { id: "t1", from: "user", text: "hey", receipt: "delivered" },
+      {
+        id: "t1",
+        from: "user",
+        content: textContent("hey"),
+        receipt: "delivered",
+      },
       { id: "t2", from: "assistant", text: "hey" },
     ])
   })
@@ -81,7 +89,12 @@ describe("conversation tabs store", () => {
     const open = run.tabs().conversations[0]!
     expect(open.phase).toBe("idle")
     expect(open.turns).toEqual([
-      { id: "t1", from: "user", text: "hey", receipt: "delivered" },
+      {
+        id: "t1",
+        from: "user",
+        content: textContent("hey"),
+        receipt: "delivered",
+      },
       { id: "t2", from: "assistant", text: "offline" },
     ])
   })
@@ -90,7 +103,7 @@ describe("conversation tabs store", () => {
     const run = agent(makeStore())
     run.draft("hi")
     run.stop()
-    expect(run.tabs().conversations[0]!.draft).toBe("hi")
+    expect(run.tabs().conversations[0]!.draft).toEqual(textContent("hi"))
     expect(run.tabs().conversations[0]!.phase).toBe("idle")
   })
 
@@ -120,10 +133,46 @@ describe("conversation tabs store", () => {
     run.open()
     run.draft("second tab")
     const [first, second] = run.tabs().conversations
-    expect(first!.draft).toBe("hello from the store")
-    expect(second!.draft).toBe("second tab")
+    expect(first!.draft).toEqual(textContent("hello from the store"))
+    expect(second!.draft).toEqual(textContent("second tab"))
     run.activate("c0")
     const open = run.tabs().conversations.find((item) => item.id === run.tabs().activeId)
-    expect(open!.draft).toBe("hello from the store")
+    expect(open!.draft).toEqual(textContent("hello from the store"))
   })
+})
+
+it("preserves pasted-only content through tab switches, send, and a later draft", async () => {
+  let finish!: (value: { text: string }) => void
+  const echo = vi.fn(
+    () =>
+      new Promise<{ text: string }>((resolve) => {
+        finish = resolve
+      }),
+  )
+  const deps = createDependencies()
+  deps.session.set({ conversation: { echo } } as never)
+  const store = buildStore(deps)
+  const content: MessageContent = [
+    { type: "pasted-text", id: "paste", text: "  code\n\n<tag>\t\n" },
+  ]
+  store.dispatch(setDraft({ draft: content, id: "c0" }))
+  store.dispatch(openConversation())
+  store.dispatch(setActive("c0"))
+  expect(store.getState().conversation.conversations[0]!.draft).toEqual(content)
+  const sent = store.dispatch(sendDraft({ content, id: "c0" }))
+  expect(echo).toHaveBeenCalledWith(content[0]!.text)
+  expect(store.getState().conversation.conversations[0]!.draft).toEqual([])
+  store.dispatch(setDraft({ draft: textContent("next draft"), id: "c0" }))
+  finish({ text: "received" })
+  await sent
+  const conversation = store.getState().conversation.conversations[0]!
+  expect(conversation.draft).toEqual(textContent("next draft"))
+  expect(conversation.title).toBe("code\n\n<tag>")
+  expect(conversation.turns[0]).toEqual({
+    id: "t1",
+    from: "user",
+    content,
+    receipt: "delivered",
+  })
+  deps.session.set(null)
 })

@@ -1,11 +1,22 @@
 import * as React from "react"
 import { Plus, Square } from "lucide-react"
-import { ChatComposerAction, ChatComposerInput } from "@nessa-ui/react/chat-composer"
+import { ChatComposerAction } from "@nessa-ui/react/chat-composer"
 import { ChatTabs, type ChatTabItem } from "@nessa-ui/react/chat-tabs"
 import { PillComposer, PillComposerRow } from "@nessa-ui/react/pill-composer"
+import { ChatComposerMarkdownEditor } from "@nessa-ui/react/chat-composer-markdown-editor"
+import {
+  Sheet,
+  SheetHandle,
+  SheetHeader,
+  SheetExpand,
+  SheetTitle,
+  SheetAction,
+  SheetBody,
+} from "@nessa-ui/react/sheet"
+import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
 import { RandomAvatar } from "@nessa-ui/react/random-avatar"
 
-import { AGENT_HUES, Transcript, useConversation } from "../../conversation"
+import { AGENT_HUES, Transcript, useConversation, toEditor } from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
 import { useSession } from "../../session"
 import { useColorScheme } from "../adapters/color-scheme"
@@ -14,7 +25,12 @@ import { useEdgeReveal } from "../adapters/edge-reveal"
 import { useHostPanel } from "../adapters/host-panel"
 import { useSurface, type Surface } from "../adapters/surface"
 import { useTabShortcuts } from "../adapters/use-tab-shortcuts"
+import { useComposer } from "./use-composer"
+
 import { WaveformIcon } from "./waveform-icon"
+
+// Draft and stream updates must not reparse the unchanged pasted document.
+const PastedMarkdown = React.memo(MessageMarkdown)
 
 /**
  * The panel's shape.
@@ -46,12 +62,25 @@ export function App() {
   const edge = useEdgeReveal()
   const chat = useConversation()
   const session = useSession()
-  const composerRef = React.useRef<HTMLTextAreaElement>(null)
+  const {
+    composerRef,
+    setComposerRef,
+    viewedPaste,
+    closePaste,
+    openPaste,
+    focusComposer,
+    submit,
+    changeContent,
+    pressChip,
+    pasteAttachment,
+  } = useComposer(chat)
   const openTab = React.useEffectEvent(() => {
+    closePaste()
     chat.openConversation()
-    composerRef.current?.focus()
+    focusComposer()
   })
   const closeActiveTab = React.useEffectEvent(() => {
+    closePaste()
     chat.closeConversation(chat.active.id)
   })
   const activateTab = React.useEffectEvent(
@@ -59,6 +88,7 @@ export function App() {
       if (target.conversationId) {
         const open = chat.conversations.some((item) => item.id === target.conversationId)
         if (open) {
+          closePaste()
           chat.setActive(target.conversationId)
           return
         }
@@ -66,6 +96,7 @@ export function App() {
       if (typeof target.index !== "number") return
       const next = chat.conversations[target.index]
       if (!next) return
+      closePaste()
       chat.setActive(next.id)
     },
   )
@@ -75,11 +106,6 @@ export function App() {
     host.flushOnTurn,
     `${chat.active.id}:${chat.active.phase}:${chat.active.turns.length}`,
   )
-
-  function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    chat.submit()
-  }
 
   const generating = chat.active.phase !== "idle"
 
@@ -100,7 +126,7 @@ export function App() {
   }))
 
   return (
-    <div className="nessa-stage">
+    <div className="nessa-stage" data-host={host.kind}>
       {/* On the stage, not the panel: a positioned descendant of the panel
           makes WebKitGTK fill a layer from the panel origin with opaque
           white. The stage's bottom-right is the window, so window-size
@@ -160,11 +186,18 @@ export function App() {
             label="Conversations"
             tabs={tabs}
             value={chat.active.id}
-            onValueChange={chat.setActive}
-            onClose={chat.closeConversation}
+            onValueChange={(id) => {
+              closePaste()
+              chat.setActive(id)
+            }}
+            onClose={(id) => {
+              closePaste()
+              chat.closeConversation(id)
+            }}
             onNew={() => {
+              closePaste()
               chat.openConversation()
-              composerRef.current?.focus()
+              focusComposer()
             }}
             newTabLabel="New conversation"
           />
@@ -172,34 +205,65 @@ export function App() {
 
         {/* Keyed so a layout compositor drops the previous conversation's
             tiles instead of leaving them over the wallpaper. */}
-        <Transcript
-          key={chat.active.id}
-          conversation={chat.active}
-          ground={ground}
-          animateMount={host.animateMount}
-          streamText={host.streamText}
-          emptyState={host.emptyState}
-          statusLabel={session.statusLabel}
-        />
+        <div className="nessa-transcript-region relative flex min-h-0 flex-1 flex-col">
+          <Transcript
+            key={chat.active.id}
+            conversation={chat.active}
+            ground={ground}
+            animateMount={host.animateMount}
+            streamText={host.streamText}
+            emptyState={host.emptyState}
+            statusLabel={session.statusLabel}
+            onOpenPaste={openPaste}
+          />
 
+          {viewedPaste?.conversationId === chat.active.id && (
+            <Sheet
+              className="nessa-pasted-viewer"
+              label="Pasted text"
+              onClose={closePaste}
+              onReturnFocus={focusComposer}
+            >
+              <SheetHandle />
+              <SheetHeader>
+                <SheetExpand />
+                <SheetTitle>Pasted text</SheetTitle>
+                <SheetAction>Done</SheetAction>
+              </SheetHeader>
+              <SheetBody>
+                <PastedMarkdown className="select-text min-w-0 [&_p]:whitespace-pre-wrap">
+                  {viewedPaste.text}
+                </PastedMarkdown>
+              </SheetBody>
+            </Sheet>
+          )}
+        </div>
         <div className="nessa-composer">
-          <PillComposer generating={generating} onSubmit={submit}>
+          <PillComposer
+            key={chat.active.id}
+            expandable={viewedPaste === null}
+
+            generating={generating}
+            onSubmit={submit}
+          >
             <PillComposerRow>
               <ChatComposerAction aria-label="Add attachment" title="Add attachment">
                 <Plus aria-hidden="true" />
               </ChatComposerAction>
-              <ChatComposerInput
-                ref={composerRef}
-                value={chat.active.draft}
-                onChange={(event) => chat.setDraft(event.target.value)}
+              <ChatComposerMarkdownEditor
+                key={`${chat.active.id}:${chat.active.turns.filter((turn) => turn.from === "user").length}`}
+                ref={setComposerRef}
+                defaultContent={toEditor(chat.active.draft)}
+                onContentChange={changeContent}
+                onChipPress={pressChip}
+                pasteAttachmentMinLength={500}
+                onPasteAttachment={pasteAttachment}
                 placeholder="Ask me anything"
-                className="self-center"
-                autoFocus
+                aria-label="Message"
+                maxHeight={240}
               />
-              {/* Enter is the send affordance, as the pill intends, so the
-                  trailing slot carries voice instead — and hands over to the
-                  way to stop a reply while one is arriving. Voice is inert
-                  until there is a runtime to transcribe into. */}
+              {/* Enter sends; Shift+Enter starts a new Markdown block.
+                  Voice stays visible while typing and remains inert until wired. */}
               {generating ? (
                 <ChatComposerAction
                   aria-label="Stop generating"

@@ -249,11 +249,11 @@ body {
  * the form node (`requestSubmit`). While generating, the form owns a box
  * again so the traveling rim has a containing block the size of the pill.
  */
-[data-slot="pill-composer"] {
+.nessa-panel[data-compositor="layout"] [data-slot="pill-composer"] {
   display: contents;
 }
 
-[data-slot="pill-composer-row"] {
+.nessa-panel[data-compositor="layout"] [data-slot="pill-composer-row"] {
   padding: 6px;
   background-color: var(--card);
   border: 1px solid var(--border);
@@ -261,7 +261,7 @@ body {
   color: var(--card-foreground);
 }
 
-[data-slot="pill-composer"][data-generating] {
+.nessa-panel[data-compositor="layout"] [data-slot="pill-composer"][data-generating] {
   display: flex;
   flex-direction: column;
   position: relative;
@@ -271,7 +271,9 @@ body {
   border-radius: 999px;
 }
 
-[data-slot="pill-composer"][data-generating] [data-slot="pill-composer-row"] {
+.nessa-panel[data-compositor="layout"]
+  [data-slot="pill-composer"][data-generating]
+  [data-slot="pill-composer-row"] {
   padding: 0;
   background: none;
   border: none;
@@ -369,4 +371,111 @@ body {
   -webkit-mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
   -webkit-mask-clip: content-box, border-box;
   -webkit-mask-composite: xor;
+}
+
+/* A browser has no native desktop frost behind this transparent window.
+   Paint its canvas with the active theme instead of compositing dark tint
+   over the browser's default white canvas. Native hosts stay transparent. */
+.nessa-stage[data-host="browser"] {
+  background: var(--background);
+}
+
+/* A multiline editor is a rounded panel, not a tall ellipse. */
+.nessa-panel[data-compositor="layout"]
+  [data-slot="pill-composer"][data-multiline]
+  [data-slot="pill-composer-row"],
+.nessa-panel[data-compositor="layout"]
+  [data-slot="pill-composer"][data-generating][data-multiline] {
+  border-radius: var(--radius-3xl);
+}
+
+/* Keep the existing clear-window layout-compositor contract: the viewer
+   replaces the transcript in flow instead of adding a positioned layer. */
+.nessa-panel[data-compositor="layout"][data-surface="clear"] .nessa-transcript-region,
+.nessa-panel[data-compositor="layout"][data-surface="clear"] [data-slot="sheet"],
+.nessa-panel[data-compositor="layout"][data-surface="clear"] [data-slot="sheet-panel"] {
+  position: static;
+  transform: none !important;
+  box-shadow: none;
+}
+.nessa-panel[data-compositor="layout"][data-surface="clear"] [data-slot="sheet"] {
+  flex: 1;
+  min-height: 0;
+}
+.nessa-panel[data-compositor="layout"][data-surface="clear"]
+  .nessa-transcript-region:has([data-slot="sheet"])
+  > [role="log"],
+.nessa-panel[data-compositor="layout"][data-surface="clear"]
+  [data-slot="sheet-backdrop"] {
+  display: none;
+}
+
+[data-slot="pill-composer"]:not([data-multiline]) [data-slot="pill-composer-row"] {
+  align-items: center;
+}
+
+.nessa-panel[data-compositor="layout"]
+  [data-slot="pill-composer"]:has([data-slot="pill-composer-expand-control"]) {
+  display: flex;
+  position: static;
+}
+.nessa-panel[data-compositor="layout"] [data-slot="pill-composer-expand-control"] {
+  position: static;
+  align-self: flex-end;
+}
+.nessa-panel[data-compositor="layout"]:has([data-slot="pill-composer"][data-expanded])
+  .nessa-transcript-region {
+  display: none;
+}
+.nessa-panel[data-compositor="layout"] .nessa-composer:has([data-expanded]) {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.nessa-panel[data-compositor="layout"] [data-slot="pill-composer"][data-expanded] {
+  position: static;
+  flex: 1;
+}
+/* Anchor the empty hint to the exact same content origin as the first line. */
+[data-slot="chat-composer-markdown-editor"] [data-empty="true"]::before {
+  top: var(--spacing);
+  left: var(--spacing);
+}
+
+/* Expanded composer covers these controls; hide them from pointer and keyboard
+   access until the built-in Minimize/Escape action restores the compact form. */
+.nessa-panel:has([data-slot="pill-composer"][data-expanded]) .nessa-transcript-region,
+.nessa-panel:has([data-slot="pill-composer"][data-expanded]) .nessa-chrome {
+  visibility: hidden;
+}
+
+/* The pasted viewer floats above the composer rather than ending in a
+   full-width square edge. Never use foreground as a scrim: it is white
+   in dark mode and turns the entire transcript into a gray wash. */
+.nessa-pasted-viewer {
+  padding: calc(var(--spacing) * 3);
+}
+/* Keep click-to-dismiss without tinting the area outside the viewer. */
+.nessa-pasted-viewer [data-slot="sheet-backdrop"] {
+  background: transparent;
+}
+.nessa-pasted-viewer [data-slot="sheet-panel"] {
+  border-radius: var(--radius-3xl);
+  background: color-mix(in oklab, var(--card) 92%, transparent);
+  box-shadow: none;
+}
+/* CSS frost belongs only on hosts that do not have native vibrancy and
+   can composite it without WebKitGTK's opaque-layer artifacts. */
+.nessa-panel[data-frost="css"]:not([data-compositor="layout"])
+  .nessa-pasted-viewer
+  [data-slot="sheet-panel"] {
+  background: color-mix(in oklab, var(--card) 85%, transparent);
+  backdrop-filter: blur(120px);
+  -webkit-backdrop-filter: blur(120px);
+}
+.nessa-pasted-pill:hover,
+.nessa-pasted-pill:active {
+  color: inherit;
+  background: transparent;
+  text-decoration: underline;
 }
