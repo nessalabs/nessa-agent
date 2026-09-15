@@ -1,13 +1,17 @@
 //! Win32 handles bind validation and I/O to the same object. Creation supplies a
 //! protected DACL atomically; chmod and post-creation ACL repair are not used.
+//! Validated drive-absolute paths use normalized extended-length Win32 spelling.
+//! Device namespaces, reserved names, and trailing-dot/space ambiguities are
+//! rejected before conversion; long paths retain the same handle/ACL checks.
 use super::*;
 use std::{
-    ffi::c_void,
+    ffi::{c_void, OsStr},
     mem::{size_of, zeroed},
     os::windows::{
         ffi::OsStrExt,
         io::{AsRawHandle, FromRawHandle},
     },
+    path::{Component, PathBuf, Prefix},
     ptr::{null, null_mut},
 };
 use windows_sys::Win32::{
@@ -95,16 +99,18 @@ fn check(result: i32) -> io::Result<()> {
 }
 fn wide(path: &Path) -> io::Result<Vec<u16>> {
     if !path.is_absolute()
-        || !matches!(path.components().next(), Some(std::path::Component::Prefix(prefix)) if matches!(prefix.kind(), std::path::Prefix::Disk(_)))
+        || !matches!(path.components().next(), Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_)))
     {
         return Err(unsafe_file());
     }
     let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
     // Reject alternate data streams and device namespaces, as well as NULs.
     if wide.contains(&0)
-        || path
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
+        || path.components().any(|component| match component {
+            Component::ParentDir => true,
+            Component::Normal(name) => ambiguous_component(name),
+            _ => false,
+        })
         || path
             .as_os_str()
             .to_string_lossy()
@@ -113,7 +119,50 @@ fn wide(path: &Path) -> io::Result<Vec<u16>> {
     {
         return Err(unsafe_file());
     }
-    Ok(wide.into_iter().chain(Some(0)).collect())
+    // Win32's ordinary spelling has a total MAX_PATH limit even when each
+    // component is valid. Normalize separators and dot components before using
+    // the extended namespace, where Win32 no longer performs that normalization.
+    // Only validated drive-absolute paths reach this conversion; callers cannot
+    // supply device/UNC namespaces or alternate data streams through it.
+    let normalized: PathBuf = path.components().collect();
+    Ok(r"\\?\"
+        .encode_utf16()
+        .chain(normalized.as_os_str().encode_wide().map(|unit| {
+            if unit == u16::from(b'/') {
+                u16::from(b'\\')
+            } else {
+                unit
+            }
+        }))
+        .chain(Some(0))
+        .collect())
+}
+// DOS device names remain reserved with an extension. Verbatim paths must not
+// turn a previously device-resolved spelling into a newly created regular file.
+fn ambiguous_component(name: &OsStr) -> bool {
+    if name
+        .encode_wide()
+        .last()
+        .is_some_and(|unit| unit == u16::from(b'.') || unit == u16::from(b' '))
+    {
+        return true;
+    }
+    let text = name.to_string_lossy();
+    let stem = text
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(' ');
+    ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"]
+        .iter()
+        .any(|reserved| stem.eq_ignore_ascii_case(reserved))
+        || stem.get(..3).is_some_and(|prefix| {
+            (prefix.eq_ignore_ascii_case("COM") || prefix.eq_ignore_ascii_case("LPT"))
+                && matches!(
+                    &stem[3..],
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
+        })
 }
 fn information(file: &File) -> io::Result<BY_HANDLE_FILE_INFORMATION> {
     unsafe {
@@ -324,7 +373,64 @@ pub fn replace(from: &Path, to: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::windows::fs::symlink_file;
+    use std::{
+        io::{Read, Write},
+        os::windows::fs::symlink_file,
+    };
+
+    #[test]
+    fn win32_paths_use_normalized_extended_spelling_without_namespace_bypasses() {
+        let actual = wide(Path::new(r"C:/private/./session.jsonl")).unwrap();
+        assert_eq!(
+            String::from_utf16(&actual[..actual.len() - 1]).unwrap(),
+            r"\\?\C:\private\session.jsonl"
+        );
+        assert_eq!(actual.last(), Some(&0));
+        for invalid in [
+            r"C:\private\NUL.txt",
+            r"C:\private\com1",
+            r"C:\private\lpt¹.log",
+            r"C:\private\CONOUT$",
+            r"C:\private.\file",
+            r"C:\private\file ",
+            r"relative",
+            r"C:relative",
+            r"C:\private\..\other",
+            r"C:\private\file:stream",
+            r"\\server\share\file",
+            r"\\?\C:\private\file",
+            r"\\.\NUL",
+            "C:\\private\\nul\0",
+        ] {
+            assert!(wide(Path::new(invalid)).is_err(), "{invalid:?}");
+        }
+    }
+
+    #[test]
+    fn long_absolute_paths_support_private_creation_open_and_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("a".repeat(120)).join("b".repeat(120));
+        assert!(directory.as_os_str().encode_wide().count() > 260);
+        create_directory(&directory).unwrap();
+        verify_directory(&directory).unwrap();
+        let from = directory.join("s".repeat(213));
+        let to = directory.join("t".repeat(213));
+        let mut source = open(&from, OpenMode::CreateNew).unwrap();
+        source.write_all(b"replacement").unwrap();
+        source.sync_all().unwrap();
+        drop(source);
+        drop(open(&to, OpenMode::CreateNew).unwrap());
+        replace(&from, &to).unwrap();
+        let mut restored = open(&to, OpenMode::Read).unwrap();
+        let mut contents = String::new();
+        restored.read_to_string(&mut contents).unwrap();
+        assert_eq!(contents, "replacement");
+        assert_eq!(
+            open(&from, OpenMode::Read).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+
     fn replace_acl(file: &File, sddl: &str) {
         unsafe {
             let text: Vec<u16> = sddl.encode_utf16().chain(Some(0)).collect();

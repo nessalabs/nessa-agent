@@ -1,4 +1,4 @@
-use nessa_sdk::domain::common::value_objects::Date;
+use nessa_sdk::domain::{common::value_objects::Date, model_metadata::MetadataError};
 use nessa_sdk::{
     application::{
         dto::{ModalitiesDto, ModelMetadataDto},
@@ -62,6 +62,6 @@ fn typed_import_rejects_malformed_documentation_urls_at_the_domain_boundary() {
     input.documentation_url = "relative/model".into();
     assert!(matches!(
         ModelMetadata::try_from(input),
-        Err(nessa_sdk::domain::model_metadata::MetadataError::InvalidUrl(_))
+        Err(MetadataError::InvalidUrl(_))
     ));
 }

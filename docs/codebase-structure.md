@@ -181,24 +181,31 @@ patterns for actual backend integrations without adding a service locator.
 
 ## Agent SDK foundation
 
-`crates/nessa-sdk` owns model metadata, immutable effective capability snapshots,
-and pure execution domain rules. Source and tests are grouped by layer and feature;
-see the [crate guide](../crates/nessa-sdk/README.md#ddd-layers) for the module map.
+`crates/nessa-sdk` groups source and tests by layer, then feature. The
+[crate module map](../crates/nessa-sdk/README.md#ddd-layers) is the detailed source
+index; the [execution guides](../crates/nessa-sdk/docs/agent_execution/README.md)
+own current lifecycle and API contracts.
 
 | Location within the SDK | Responsibility |
 | --- | --- |
 | `domain/common/value_objects/` | Shared validated dates, URLs, and token limits. |
 | `domain/model_metadata/`, `domain/effective_capabilities/` | Model catalog invariants and immutable admission capabilities. |
-| `domain/agent_execution/` | Execution sessions, invocation ordering, tools, permissions, and prompts, grouped by responsibility and DDD role. |
-| `application/` model catalog and capability modules | Metadata DTO mapping, catalog queries, and capability projections. |
-| `infrastructure/model_metadata_json.rs` | Parsing catalog input supplied by composition. |
-| `tests/domain/agent_execution/` | Direct invariant tests without providers, JSON, storage, or an application runtime. |
+| `domain/agent_execution/` | Sessions, execution ordering, tools, permissions, and prompts; DDD roles beneath each feature. |
+| `application/agent_execution/agents/` | Public Agent, scheduling, submission retry recovery, and one lifecycle owner for work generations, active work, and shutdown. |
+| `application/agent_execution/providers/`, `hooks/` | Injected execution ports, operation capabilities, and typed invocation callbacks. |
+| `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, retained attachment resources, and snapshot evidence mapped through domain history rules. |
+| `application/agent_execution/executions/`, `permissions/`, `tools/` | Domain coordination, attributed decisions, and observation/review projections. |
+| `infrastructure/session_storage/` | Memory snapshots, incremental JSONL file persistence, and explicit evidence serialization. |
+| `infrastructure/model_metadata_json.rs` | Model catalog parsing. |
+| `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. |
 
-The live execution session is the consistency boundary for its tools and reviews;
-those children are not separate aggregates. Value objects are immutable; entities
-and aggregates own identity-bearing transitions. Scheduling models ordering and
-lifecycle evidence without dispatching effects. This foundation does not yet ship
-Agent orchestration, session persistence, or a concrete execution provider.
+Composition chooses models, provider configuration, storage, and the required
+permission audit sink. Concrete execution providers implement the injected ports;
+this runtime slice tests substitution without shipping a production execution adapter.
+Agent owns admitted work; UI and future gateway code call
+its application contracts. Keep provider JSON, clock reads, filesystem access,
+and processes out of the domain. Do not create empty counterpart modules or split
+a live session's tool/permission consistency boundary into independent aggregates.
 
 ## Identity and access library
 
@@ -210,5 +217,5 @@ providers. See [local authentication](adr/done/0010-local-authentication.md). Ho
 identity providers remain future adapters.
 
 `crates/nessa-local-storage` owns native OS private-file mechanics shared by the
-local auth adapter and the desktop credential adapter. It has no auth/domain policy
+local auth, SDK session storage, and desktop credential adapters. It has no auth/domain policy
 or Tauri dependency; callers inject the resulting adapters through composition.

@@ -1315,3 +1315,128 @@ fn local_cancelled_outcome_requires_causal_edge_before_differing_provider_result
         history.validate_checkpoint().unwrap();
     }
 }
+
+#[test]
+fn dispatched_local_cancellation_retains_first_stop_without_inventing_provider_result() {
+    let explicit =
+        InvocationCancellation::new(SchedulingCause::SessionClosed, SchedulingInitiator::Caller)
+            .unwrap();
+    let automatic = InvocationCancellation::new(
+        SchedulingCause::RunnerStopped,
+        SchedulingInitiator::Automatic,
+    )
+    .unwrap();
+    for mode in [
+        SubmissionMode::Immediate,
+        SubmissionMode::Queued,
+        SubmissionMode::BoundarySteering,
+        SubmissionMode::Steering,
+    ] {
+        let mut history = if mode == SubmissionMode::Immediate {
+            InvocationHistory::new(id("run"), mode)
+        } else {
+            scheduled(mode)
+        };
+        history.record_local_cancellation(explicit).unwrap();
+        history.record_local_cancellation(explicit).unwrap();
+        assert!(history.record_local_cancellation(automatic).is_err());
+        assert!(history
+            .record_provider_result(Some(Ok(ExecutionOutcome::Completed)))
+            .is_err());
+        assert!(history
+            .record_local_result(Ok(ExecutionOutcome::Completed))
+            .is_err());
+        history
+            .record_local_result(Ok(ExecutionOutcome::Cancelled))
+            .unwrap();
+        history.record_local_cancellation(explicit).unwrap();
+        history.record_local_result(Err(())).unwrap();
+        history.validate_checkpoint().unwrap();
+    }
+    let mut pending = InvocationHistory::new(id("run"), SubmissionMode::Queued);
+    assert!(pending.record_local_cancellation(automatic).is_err());
+    let mut cancelled = InvocationHistory::new(id("run"), SubmissionMode::Immediate);
+    cancelled.record_cancellation(explicit).unwrap();
+    assert!(cancelled.record_local_cancellation(explicit).is_err());
+    for provider in [Ok(ExecutionOutcome::Cancelled), Err(())] {
+        let mut history = InvocationHistory::new(id("run"), SubmissionMode::Immediate);
+        history.record_provider_result(Some(provider)).unwrap();
+        assert!(history.record_local_cancellation(automatic).is_err());
+        history.validate_checkpoint().unwrap();
+    }
+    let mut completed = InvocationHistory::new(id("run"), SubmissionMode::Immediate);
+    completed
+        .record_local_result(Ok(ExecutionOutcome::Completed))
+        .unwrap();
+    assert!(completed.record_local_cancellation(automatic).is_err());
+    assert_eq!(completed.local_outcome(), Some(ExecutionOutcome::Completed));
+}
+
+#[test]
+fn local_stop_and_scheduling_cancellation_agree_in_both_recording_orders() {
+    for mode in [
+        SubmissionMode::Queued,
+        SubmissionMode::BoundarySteering,
+        SubmissionMode::Steering,
+    ] {
+        for (cause, initiator, other) in [
+            (
+                SchedulingCause::SessionClosed,
+                SchedulingInitiator::Caller,
+                SchedulingCause::RunnerStopped,
+            ),
+            (
+                SchedulingCause::RunnerStopped,
+                SchedulingInitiator::Automatic,
+                SchedulingCause::SessionClosed,
+            ),
+        ] {
+            let kind = if mode == SubmissionMode::Queued {
+                InvocationKind::Queued
+            } else {
+                InvocationKind::Steering
+            };
+            let stop = InvocationCancellation::new(cause, initiator).unwrap();
+            let other_stop = InvocationCancellation::new(
+                other,
+                if other == SchedulingCause::SessionClosed {
+                    SchedulingInitiator::Caller
+                } else {
+                    SchedulingInitiator::Automatic
+                },
+            )
+            .unwrap();
+            for stop_first in [false, true] {
+                let mut history = scheduled(mode);
+                let valid = edge(
+                    kind,
+                    None,
+                    Some(InvocationStage::Running),
+                    InvocationStage::Cancelled,
+                    cause,
+                );
+                if stop_first {
+                    history.record_local_cancellation(stop).unwrap();
+                    assert!(history
+                        .schedule(edge(
+                            kind,
+                            None,
+                            Some(InvocationStage::Running),
+                            InvocationStage::Cancelled,
+                            other
+                        ))
+                        .is_err());
+                    history.schedule(valid).unwrap();
+                } else {
+                    history.schedule(valid).unwrap();
+                    assert!(history.record_local_cancellation(other_stop).is_err());
+                    history.record_local_cancellation(stop).unwrap();
+                }
+                history
+                    .record_local_result(Ok(ExecutionOutcome::Cancelled))
+                    .unwrap();
+                history.validate_checkpoint().unwrap();
+            }
+        }
+    }
+}

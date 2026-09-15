@@ -1,0 +1,383 @@
+//! Keeps the storage writer lease owned until the attached provider confirms cleanup.
+//! Explicit retry and automatic drop cleanup share the same resource owner.
+//! The first shutdown request remains authoritative until cleanup is confirmed;
+//! a subsequently armed attachment starts with its own handle-drop cause.
+
+use crate::application::agent_execution::{
+    agents::AgentError,
+    providers::{
+        CleanupReport, ExecutionEventStream, ProviderCleanup, ProviderSession, ResourceCleanup,
+        SessionCloseRequest,
+    },
+    sessions::SessionStorageLease,
+};
+use std::{
+    future::poll_fn,
+    panic::{catch_unwind, AssertUnwindSafe},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex as StateMutex,
+    },
+    task::Poll,
+    time::Duration,
+};
+use tokio::{runtime::Handle, sync::Mutex, time::sleep};
+
+pub(crate) struct AttachmentLease {
+    state: Mutex<AttachmentState>,
+    // Operation reports can confirm release while close is still awaiting I/O.
+    // This synchronous evidence also governs final handle drop.
+    cleanup_report: StateMutex<Option<CleanupReport>>,
+    pending: AtomicBool,
+    drop_reason: StateMutex<CleanupReason>,
+    runtime: Handle,
+}
+struct CleanupReason {
+    request: SessionCloseRequest,
+    started: bool,
+}
+impl CleanupReason {
+    fn new(request: SessionCloseRequest) -> Self {
+        Self {
+            request,
+            started: false,
+        }
+    }
+}
+enum AttachmentState {
+    Attached(Resources),
+    // An adapter panicked before transferring a cleanup handle. No retry can prove release.
+    UnknownOpen(Arc<dyn SessionStorageLease>),
+    // Releasing physical resources does not acknowledge failed audit delivery.
+    Cleaned(CleanupReport),
+}
+#[derive(Clone)]
+struct Resources {
+    target: CleanupTarget,
+    // This clone outlives the manager if attachment cleanup remains uncertain.
+    _lease: Arc<dyn SessionStorageLease>,
+    _events: Option<Arc<Mutex<Box<dyn ExecutionEventStream>>>>,
+}
+#[derive(Clone)]
+enum CleanupTarget {
+    Session(ProviderSession),
+    FailedOpen(Arc<dyn ProviderCleanup>),
+}
+impl Resources {
+    async fn cleanup(&self, reason: SessionCloseRequest) -> CleanupReport {
+        let operation = catch_unwind(AssertUnwindSafe(|| match &self.target {
+            CleanupTarget::Session(session) => session.shutdown(reason),
+            CleanupTarget::FailedOpen(cleanup) => cleanup.retry_cleanup(),
+        }));
+        let mut operation = match operation {
+            Ok(operation) => operation,
+            Err(payload) => {
+                std::mem::forget(payload);
+                return CleanupReport::unconfirmed(AgentError::CleanupUncertain);
+            }
+        };
+        let result = poll_fn(|context| {
+            match catch_unwind(AssertUnwindSafe(|| operation.as_mut().poll(context))) {
+                Ok(Poll::Pending) => Poll::Pending,
+                Ok(Poll::Ready(report)) => Poll::Ready(report),
+                Err(payload) => {
+                    std::mem::forget(payload);
+                    Poll::Ready(CleanupReport::unconfirmed(AgentError::CleanupUncertain))
+                }
+            }
+        })
+        .await;
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(operation))) {
+            std::mem::forget(payload);
+            let error = match result.resources() {
+                ResourceCleanup::Confirmed(_) => AgentError::CleanupUncertain,
+                ResourceCleanup::Unconfirmed(error) => AgentError::MultipleOperationFailures {
+                    first_error: Box::new(error.clone()),
+                    subsequent_error: Box::new(AgentError::CleanupUncertain),
+                },
+            };
+            // Future destruction cannot erase a report already returned by poll.
+            // Preserve audit/operation evidence while retaining resource ownership.
+            return result.with_resources(ResourceCleanup::Unconfirmed(error));
+        }
+        result
+    }
+}
+impl AttachmentLease {
+    pub(crate) fn new(lease: Arc<dyn SessionStorageLease>, session: ProviderSession) -> Self {
+        Self::with_target(lease, CleanupTarget::Session(session))
+    }
+    pub(crate) fn unknown_open(lease: Arc<dyn SessionStorageLease>) -> Self {
+        Self {
+            state: Mutex::new(AttachmentState::UnknownOpen(lease)),
+            cleanup_report: StateMutex::new(None),
+            pending: AtomicBool::new(true),
+            drop_reason: StateMutex::new(CleanupReason::new(SessionCloseRequest::SessionFailed)),
+            runtime: Handle::current(),
+        }
+    }
+    pub(crate) fn failed_open(
+        lease: Arc<dyn SessionStorageLease>,
+        cleanup: Arc<dyn ProviderCleanup>,
+    ) -> Self {
+        Self::with_target(lease, CleanupTarget::FailedOpen(cleanup))
+    }
+    fn with_target(lease: Arc<dyn SessionStorageLease>, target: CleanupTarget) -> Self {
+        Self {
+            state: Mutex::new(AttachmentState::Attached(Resources {
+                target,
+                _lease: lease,
+                _events: None,
+            })),
+            cleanup_report: StateMutex::new(None),
+            pending: AtomicBool::new(true),
+            drop_reason: StateMutex::new(CleanupReason::new(SessionCloseRequest::SessionFailed)),
+            runtime: Handle::current(),
+        }
+    }
+    pub(crate) async fn attached(&self, events: Arc<Mutex<Box<dyn ExecutionEventStream>>>) {
+        self.retain_events(events).await;
+        *self.drop_reason.lock().expect("attachment drop reason") =
+            CleanupReason::new(SessionCloseRequest::SessionHandlesDropped);
+    }
+    pub(crate) async fn retain_events(&self, events: Arc<Mutex<Box<dyn ExecutionEventStream>>>) {
+        let mut state = self.state.lock().await;
+        let AttachmentState::Attached(resources) = &mut *state else {
+            panic!("initialized attachment");
+        };
+        resources._events = Some(events);
+    }
+    pub(crate) async fn arm(
+        &self,
+        lease: Arc<dyn SessionStorageLease>,
+        session: ProviderSession,
+        events: Arc<Mutex<Box<dyn ExecutionEventStream>>>,
+    ) {
+        let mut state = self.state.lock().await;
+        let mut evidence = self
+            .cleanup_report
+            .lock()
+            .expect("attachment cleanup evidence");
+        if matches!(*state, AttachmentState::Cleaned(_))
+            || evidence.as_ref().is_some_and(CleanupReport::is_confirmed)
+        {
+            *evidence = None;
+            *state = AttachmentState::Attached(Resources {
+                target: CleanupTarget::Session(session),
+                _lease: lease,
+                _events: Some(events),
+            });
+            *self.drop_reason.lock().expect("attachment drop reason") =
+                CleanupReason::new(SessionCloseRequest::SessionHandlesDropped);
+            self.pending.store(true, Ordering::SeqCst);
+        }
+    }
+    /// Capture the first shutdown request before provider I/O. Later attempts
+    /// retire the same attachment and must preserve its cause and known initiator.
+    pub(crate) fn request_cleanup(&self, request: SessionCloseRequest) -> SessionCloseRequest {
+        let mut reason = self.drop_reason.lock().expect("attachment drop reason");
+        if !reason.started {
+            reason.request = request;
+            reason.started = true;
+        }
+        reason.request.clone()
+    }
+    pub(crate) fn confirm_cleanup(&self, report: &CleanupReport) -> CleanupReport {
+        debug_assert!(report.is_confirmed());
+        self.reconcile_cleanup(report.clone())
+    }
+    pub(crate) fn reconcile_cleanup(&self, report: CleanupReport) -> CleanupReport {
+        let mut evidence = self
+            .cleanup_report
+            .lock()
+            .expect("attachment cleanup evidence");
+        let report = match evidence.as_ref() {
+            Some(prior) => Self::merge_cleanup(prior, &report),
+            None => report,
+        };
+        *evidence = Some(report.clone());
+        if report.is_confirmed() {
+            self.pending.store(false, Ordering::SeqCst);
+        }
+        report
+    }
+    fn record_cleanup_attempt(&self, report: CleanupReport) -> CleanupReport {
+        let mut evidence = self
+            .cleanup_report
+            .lock()
+            .expect("attachment cleanup evidence");
+        // A real retry can acknowledge an earlier failed audit while resources
+        // remain owned. Independent operation confirmation is different: once
+        // confirmed, a competing close result cannot revoke that known release.
+        let report = match evidence.as_ref().filter(|prior| prior.is_confirmed()) {
+            Some(prior) => Self::merge_cleanup(prior, &report),
+            None => report,
+        };
+        *evidence = Some(report.clone());
+        if report.is_confirmed() {
+            self.pending.store(false, Ordering::SeqCst);
+        }
+        report
+    }
+    fn merge_cleanup(prior: &CleanupReport, report: &CleanupReport) -> CleanupReport {
+        if prior == report {
+            return prior.clone();
+        }
+        let audit = match (prior.audit(), report.audit()) {
+            (Err(first), Err(next)) => Err(Self::combine_failures(first.clone(), next.clone())),
+            (Err(error), _) | (_, Err(error)) => Err(error.clone()),
+            _ => Ok(()),
+        };
+        let mut failure = prior.operation_failure().cloned();
+        let superseded = match prior.resources() {
+            ResourceCleanup::Unconfirmed(error) if report.is_confirmed() => Some(error),
+            _ => None,
+        };
+        for error in report
+            .operation_failure()
+            .into_iter()
+            .chain(superseded)
+            .chain(match report.resources() {
+                ResourceCleanup::Unconfirmed(error) if prior.is_confirmed() => Some(error),
+                _ => None,
+            })
+        {
+            failure = Some(match failure {
+                Some(first) => Self::combine_failures(first, error.clone()),
+                None => error.clone(),
+            });
+        }
+        CleanupReport::new(
+            if prior.is_confirmed() {
+                prior.resources().clone()
+            } else {
+                report.resources().clone()
+            },
+            audit,
+        )
+        .with_operation_failure(failure)
+    }
+    // Re-observing a report adds no new failure. Flatten only this diagnostic
+    // grouping; other typed errors retain their own lifecycle meaning intact.
+    fn combine_failures(first: AgentError, next: AgentError) -> AgentError {
+        let mut pending = vec![next, first];
+        let mut failures = Vec::new();
+        while let Some(error) = pending.pop() {
+            match error {
+                AgentError::MultipleOperationFailures {
+                    first_error,
+                    subsequent_error,
+                } => {
+                    pending.push(*subsequent_error);
+                    pending.push(*first_error);
+                }
+                AgentError::DiagnosticLimit => return AgentError::DiagnosticLimit,
+                error if !failures.contains(&error) => failures.push(error),
+                _ => {}
+            }
+        }
+        let mut failures = failures.into_iter();
+        let first = failures.next().expect("at least one cleanup failure");
+        failures
+            .fold(first, |first, next| AgentError::MultipleOperationFailures {
+                first_error: Box::new(first),
+                subsequent_error: Box::new(next),
+            })
+            .bounded()
+    }
+    pub(crate) fn needs_cleanup(&self) -> bool {
+        self.pending.load(Ordering::SeqCst)
+    }
+    pub(crate) async fn cleanup(&self) -> CleanupReport {
+        let mut state = self.state.lock().await;
+        if let Some(report) = self
+            .cleanup_report
+            .lock()
+            .expect("attachment cleanup evidence")
+            .as_ref()
+            .filter(|report| report.is_confirmed())
+            .cloned()
+        {
+            return report;
+        }
+        let owned = match &*state {
+            AttachmentState::Attached(owned) => owned,
+            AttachmentState::Cleaned(report) => return report.clone(),
+            AttachmentState::UnknownOpen(_) => {
+                return CleanupReport::unconfirmed(AgentError::CleanupUncertain)
+            }
+        };
+        let reason = {
+            let mut reason = self.drop_reason.lock().expect("attachment drop reason");
+            reason.started = true;
+            reason.request.clone()
+        };
+        let result = self.record_cleanup_attempt(owned.cleanup(reason).await);
+        if result.is_confirmed() {
+            *state = AttachmentState::Cleaned(result.clone());
+            self.pending.store(false, Ordering::SeqCst);
+        }
+        result
+    }
+}
+// Runtime shutdown can cancel the last cleanup task. Without a surviving retry
+// owner, keep the writer fenced for this process rather than claiming release.
+struct CleanupOwner(Option<Resources>);
+impl Drop for CleanupOwner {
+    fn drop(&mut self) {
+        if let Some(resources) = self.0.take() {
+            std::mem::forget(resources);
+        }
+    }
+}
+impl Drop for AttachmentLease {
+    fn drop(&mut self) {
+        if self
+            .cleanup_report
+            .get_mut()
+            .expect("attachment cleanup evidence")
+            .as_ref()
+            .is_some_and(CleanupReport::is_confirmed)
+        {
+            return;
+        }
+        if let AttachmentState::UnknownOpen(lease) = self.state.get_mut() {
+            // No cleanup capability was transferred. Preserve exclusion for this
+            // process rather than treating caller/error/runtime drop as proof.
+            std::mem::forget(lease.clone());
+            return;
+        }
+        let AttachmentState::Attached(resources) = self.state.get_mut() else {
+            return;
+        };
+        // The task's clones retain the same resource owners after this value drops.
+        let mut owner = CleanupOwner(Some(resources.clone()));
+        let reason = self
+            .drop_reason
+            .get_mut()
+            .expect("attachment drop reason")
+            .request
+            .clone();
+        // The task owns plain resources, not another AttachmentLease. Runtime
+        // shutdown therefore cannot recursively spawn cleanup from a dropped task.
+        drop(self.runtime.spawn(async move {
+            let mut backoff = Duration::from_millis(100);
+            loop {
+                let report = owner.0.as_ref().expect("cleanup owner").cleanup(reason.clone()).await;
+                if report.is_confirmed() {
+                    if let Err(error) = report.into_result() {
+                        tracing::warn!(%error, "attachment cleanup completed with evidence failure");
+                    }
+                    owner.0.take();
+                    break;
+                }
+                if let Err(error) = report.into_result() {
+                    tracing::warn!(%error, "retaining session storage lease until attachment cleanup is confirmed");
+                }
+                sleep(backoff).await;
+                backoff = backoff.saturating_mul(2).min(Duration::from_secs(5));
+            }
+            // Releasing the owned resources releases this last protective lease clone.
+        }));
+    }
+}

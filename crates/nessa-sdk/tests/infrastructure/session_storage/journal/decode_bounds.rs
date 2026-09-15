@@ -1,0 +1,246 @@
+//! Decode-pass read counts distinguish early bounds from post-allocation validation.
+use super::{read, Loaded};
+use crate::application::agent_execution::sessions::StorageError;
+use crate::domain::agent_execution::{sessions::SessionId, tools::ToolContent};
+use serde_json::{json, Value};
+use std::{
+    cell::Cell,
+    io::{self, Cursor, Read, Seek, SeekFrom},
+    mem::size_of,
+    rc::Rc,
+};
+
+struct CountDecode {
+    bytes: Cursor<Vec<u8>>,
+    decoded: Rc<Cell<usize>>,
+    after_scan: bool,
+}
+impl Read for CountDecode {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        let count = self.bytes.read(out)?;
+        if self.after_scan {
+            self.decoded.set(self.decoded.get() + count);
+        }
+        Ok(count)
+    }
+}
+impl Seek for CountDecode {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        if matches!(position, SeekFrom::Start(0)) && self.bytes.position() != 0 {
+            self.after_scan = true;
+        }
+        self.bytes.seek(position)
+    }
+}
+fn metadata() -> Value {
+    json!({
+        "submission":"Immediate", "execution_id":"active", "user_message":"input",
+        "estimated_input_tokens":1, "reserved_output_tokens":1,
+        "actor":{"principal_id":"user","surface_id":"test","request_id":"invoke"},
+        "provider_report":null,"local_outcome":null,"cancellation":null,"result":null
+    })
+}
+fn record() -> Value {
+    json!({
+        "sequence":1,"id":"decode-bounds", "provider":{"name":"fixture","model_id":"model","context":"workspace"},
+        "provider_session_id":"provider", "invocation_count":1,
+        "invocations":[{"index":0,"metadata":metadata(),"events_from":0,"events":[],"scheduling_from":0,"scheduling":[]}]
+    })
+}
+fn load(bytes: Vec<u8>) -> (Result<Loaded, StorageError>, usize) {
+    let decoded = Rc::new(Cell::new(0));
+    let result = read(
+        CountDecode {
+            bytes: Cursor::new(bytes),
+            decoded: decoded.clone(),
+            after_scan: false,
+        },
+        &SessionId::new("decode-bounds").unwrap(),
+    );
+    (result, decoded.get())
+}
+fn encoded(value: &Value) -> Vec<u8> {
+    let mut bytes = serde_json::to_vec(value).unwrap();
+    bytes.push(b'\n');
+    bytes
+}
+
+#[test]
+fn oversized_provider_field_is_rejected_before_reading_its_owned_payload() {
+    // Put the attack field first and a valid, huge remainder after it. The initial
+    // completeness scan is deliberately excluded from this allocation-bound check.
+    for escaped in [false, true] {
+        let unit = if escaped { "\\u0061" } else { "a" };
+        let text = unit.repeat(2 * 1024 * 1024);
+        let bytes = format!("{{\"provider\":{{\"name\":\"{text}\",\"model_id\":\"model\",\"context\":\"workspace\"}},\"sequence\":1,\"id\":\"decode-bounds\",\"provider_session_id\":\"provider\",\"invocation_count\":0,\"invocations\":[]}}\n").into_bytes();
+        let length = bytes.len();
+        let (result, decoded) = load(bytes);
+        assert!(matches!(result, Err(StorageError::Corrupt(_))));
+        assert!(
+            decoded <= 64 * 1024,
+            "oversized field was read before its bound: {decoded}/{length}, escaped={escaped}"
+        );
+    }
+}
+
+#[test]
+fn valid_large_tool_string_and_many_invocation_changes_remain_loadable() {
+    let mut value = record();
+    value["invocations"][0]["events"] = json!([{
+        "execution_id":"active", "update":{"Tool":{
+            "id":"tool","title":"t".repeat(5 * 1024 * 1024),"kind":null,"status":null,"locations":null,"content":null
+        }}
+    }]);
+    assert!(
+        load(encoded(&value)).0.is_ok(),
+        "tool fields use their 32MiB aggregate budget, not the message chunk limit"
+    );
+    let mut changes = Vec::new();
+    for index in 0..4097 {
+        let mut change = record()["invocations"][0].clone();
+        change["index"] = json!(index);
+        change["metadata"]["execution_id"] = json!(format!("execution-{index}"));
+        changes.push(change);
+    }
+    value["invocation_count"] = json!(changes.len());
+    value["invocations"] = Value::Array(changes);
+    let loaded = load(encoded(&value))
+        .0
+        .expect("sequential history is not capped at per-invocation collection limits");
+    assert_eq!(loaded.snapshot.unwrap().invocations.len(), 4097);
+}
+
+#[test]
+fn diagnostic_depth_and_hook_collection_are_bounded_before_later_fields_are_read() {
+    for attack in ["depth", "hooks"] {
+        let mut value = record();
+        let error = if attack == "depth" {
+            let mut error = json!("Closed");
+            for _ in 0..32 {
+                error = json!({"ExecutionObservation":{"error":error,"execution_result":null}});
+            }
+            error
+        } else {
+            json!({"AfterInvocationHooks":{
+                "failures": (0..129).map(|index| json!({"index":index,"error":"Panicked"})).collect::<Vec<_>>(),
+                "execution_result":{"Ok":"Completed"}
+            }})
+        };
+        value["invocations"][0]["metadata"]["result"] = json!({"Err":error});
+        value["invocations"][0]["metadata"]["user_message"] = json!("p".repeat(1024 * 1024));
+        // Fix wire order explicitly. Value maps sort keys by default but preserve
+        // insertion order when another workspace package enables preserve_order.
+        let metadata = value["invocations"][0]["metadata"].as_object_mut().unwrap();
+        let result = serde_json::to_string(&metadata.remove("result").unwrap()).unwrap();
+        let remaining = serde_json::to_string(metadata).unwrap();
+        let ordered = format!("{{\"result\":{result},{}", &remaining[1..]);
+        value["invocations"][0]["metadata"] = json!("ordered-metadata");
+        let bytes = String::from_utf8(encoded(&value))
+            .unwrap()
+            .replace("\"ordered-metadata\"", &ordered)
+            .into_bytes();
+        let length = bytes.len();
+        let (result, decoded) = load(bytes);
+        assert!(matches!(result, Err(StorageError::Corrupt(_))), "{attack}");
+        assert!(
+            decoded <= 64 * 1024,
+            "diagnostic {attack} bound ran after later allocation: {decoded}/{length}"
+        );
+    }
+}
+
+#[test]
+fn escaped_provider_identity_counts_decoded_utf8_bytes() {
+    for (encoded_name, accepted) in [
+        ("\\u0061".repeat(256), true),
+        ("\\u0061".repeat(257), false),
+        ("\\ud83d\\ude00".repeat(64), true),
+        ("\\ud83d\\ude00".repeat(65), false),
+    ] {
+        let bytes = format!("{{\"sequence\":1,\"id\":\"decode-bounds\",\"provider\":{{\"name\":\"{encoded_name}\",\"model_id\":\"model\",\"context\":\"workspace\"}},\"provider_session_id\":\"provider\",\"invocation_count\":0,\"invocations\":[]}}\n").into_bytes();
+        assert_eq!(load(bytes).0.is_ok(), accepted);
+    }
+}
+
+#[test]
+fn unknown_object_keys_are_bounded_before_serde_builds_the_key() {
+    let key = "k".repeat(2 * 1024 * 1024);
+    let bytes = format!("{{\"{key}\":null}}\n").into_bytes();
+    let (result, decoded) = load(bytes);
+    assert!(matches!(result, Err(StorageError::Corrupt(_))));
+    assert!(
+        decoded <= 64 * 1024,
+        "unknown key allocation was not bounded: {decoded}"
+    );
+}
+
+#[test]
+fn invalid_change_indices_and_missing_metadata_stop_before_unbounded_history_building() {
+    for attack in ["duplicate", "gap", "missing"] {
+        let mut value = record();
+        let mut later = value["invocations"][0].clone();
+        later["metadata"]["user_message"] = json!("p".repeat(2 * 1024 * 1024));
+        match attack {
+            "duplicate" => value["invocations"].as_array_mut().unwrap().push(later),
+            "gap" => {
+                later["index"] = json!(1);
+                value["invocations"] = json!([later]);
+            }
+            _ => {
+                value["invocations"][0]["metadata"] = Value::Null;
+                later["index"] = json!(1);
+                value["invocations"].as_array_mut().unwrap().push(later);
+                value["invocation_count"] = json!(2);
+            }
+        }
+        let (result, decoded) = load(encoded(&value));
+        assert!(matches!(result, Err(StorageError::Corrupt(_))));
+        assert!(
+            decoded <= 64 * 1024,
+            "{attack} change list was materialized first: {decoded}"
+        );
+    }
+}
+
+#[test]
+fn valid_error_depth_and_hook_node_boundaries_are_not_narrowed_by_preflight() {
+    let mut depth = json!("Closed");
+    for _ in 0..31 {
+        depth = json!({"ExecutionObservation":{"error":depth,"execution_result":null}});
+    }
+    let hooks = json!({"AfterInvocationHooks":{
+        "failures": (0..127).map(|index| json!({"index":index,"error":"Panicked"})).collect::<Vec<_>>(),
+        "execution_result":{"Ok":"Completed"}
+    }});
+    for error in [depth, hooks] {
+        let mut value = record();
+        value["invocations"][0]["metadata"]["result"] = json!({"Err":error});
+        assert!(load(encoded(&value)).0.is_ok());
+    }
+}
+
+#[test]
+fn tool_collection_slots_are_bounded_before_reading_the_excess_element() {
+    let mut value = record();
+    value["invocations"][0]["events"] = json!([{
+        "execution_id":"active", "update":{"Tool":{
+            "id":"tool","title":null,"kind":null,"status":null,"locations":null,"content":[]
+        }}
+    }]);
+    let max_slots = 32 * 1024 * 1024 / size_of::<ToolContent>();
+    let items = "{\"Text\":\"\"},".repeat(max_slots);
+    let trailing_payload = "p".repeat(2 * 1024 * 1024);
+    let text = serde_json::to_string(&value).unwrap().replace(
+        "\"content\":[]",
+        &format!("\"content\":[{items}{{\"Text\":\"{trailing_payload}\"}}]"),
+    );
+    let prefix = text.find(&trailing_payload).unwrap();
+    let mut bytes = text.into_bytes();
+    bytes.push(b'\n');
+    let (result, decoded) = load(bytes);
+    assert!(matches!(result, Err(StorageError::Corrupt(_))));
+    assert!(
+        decoded <= prefix + 8192,
+        "excess collection element was decoded: {decoded}, prefix={prefix}"
+    );
+}

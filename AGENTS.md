@@ -105,6 +105,13 @@ Inspect the resulting layout and verify module maps, moved links, and checks.
 
 ## Dependency and compatibility rules
 
+- Lifecycle reviews must identify one owner for each transition and run shared
+  guarantees across applicable delivery modes. Preserve provider results, local
+  stop decisions, resource cleanup, and audit acknowledgement as separate typed
+  facts through storage and restoration. Diagnostic error shapes must not decide
+  admission or resource ownership. Apply the cross-field review gate in
+  `CODING_STANDARDS.md` to every local and delegated review.
+
 - Import Rust types at the top of the owning file/module and use their short names
   in signatures, implementations, and expressions. Group imports from the same module in one brace import, such as
   `use crate::application::agent_execution::executions::{ExecutionEvent, ExecutionRequest, ExecutionUpdate};`.
