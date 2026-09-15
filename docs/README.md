@@ -9,9 +9,12 @@ instead of creating a competing copy.
 
 | Document | What it is for |
 | --- | --- |
-| [../CODING_STANDARDS.md](../CODING_STANDARDS.md) | PR gating checklist for this repo — typed errors, boundaries, tests. Reviewers and agents check this before merge. |
+| [../CODING_STANDARDS.md](../CODING_STANDARDS.md) | Repository-wide merge gates: organization, typed errors, boundaries, tests, and audit evidence. Every contributor checks these before merge. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | The map of the code as it stands: what each file owns, the boundaries, the invariants, and where a given change goes. Read this first. |
 | [codebase-structure.md](codebase-structure.md) | The general structural rules applied to Nessa specifically — the target shape, the Nessa absences, the host/shell seam, and what the core must never learn. |
+| [Agent SDK](../crates/nessa-sdk/docs/agent_execution/README.md) | Current Agent API, session storage, hooks, queueing, steering, and retry contracts. |
+| [Agent execution design](design/agent_execution/README.md) | Ownership review and separately labeled future gateway/conversation proposals. |
+| [Authentication](design/auth/README.md) | Design references; [local usage](guides/local-auth.md) and [gateway review](reviews/local-auth-gateway.md). |
 | [adr/](adr/README.md) | Architecture decisions by implementation progress: [done](adr/done) and [todo](adr/todo). See the index for current scope and external work. |
 
 ## The skills
@@ -36,15 +39,9 @@ git clone https://github.com/nessalabs/skills.git ../skills && mkdir -p .claude/
 Proposed implementation contracts: [session and stream design](design/session-and-stream-contracts.md), [surfaces and collaboration](design/surfaces-and-collaboration.md),
 and [sequence diagrams and MCP](design/collaboration-sequences-and-mcp.md).
 
-Authentication: [design references and primer](design/auth/README.md),
-[local usage guide](guides/local-auth.md), and [gateway review](reviews/local-auth-gateway.md).
-Completed local decisions are in [ADR 0010](adr/done/0010-local-authentication.md);
+Completed authentication decisions are in [ADR 0010](adr/done/0010-local-authentication.md);
 auth API readiness and operating bounds are in [ADR 0007](adr/done/0007-authentication-delivery.md).
 
-- [Coding standards](../CODING_STANDARDS.md): one current contract, no compatibility shims or unnecessary version bumps.
-
-Agent invocation: [SDK shape research](design/agent-sdk-shape-research.md) and
-[proposed ADR 0008](adr/todo/0008-agent-client-api.md), covering local ACP first and
-one reusable Rust nessa-sdk runtime called through the server by the existing NessaClient, server conversation/turn APIs,
-client-owned request bookkeeping, UI-owned queueing, and
-a growing API across agent SDKs and services.
+The SDK owns admitted follow-up queueing and steering. UI drafts and the future
+gateway's authenticated routing are separate responsibilities. Read the current
+SDK guides before the proposed conversation contract in [ADR 0008](adr/todo/0008-agent-client-api.md).

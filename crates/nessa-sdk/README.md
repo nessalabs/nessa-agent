@@ -2,12 +2,13 @@
 
 The first implemented slice of [ADR 0008](../../docs/adr/todo/0008-agent-client-api.md)
 includes the public Agent entry point, session storage, hooks, queueing/steering,
-idempotent retries, model metadata, and effective capability snapshots. Inject an
-AgentProvider to run conversations; test providers verify the port in this slice.
-See the [runtime guides](docs/agent_execution/README.md) for implemented behavior.
-Concrete provider adapters, shared gateway conversation coordination and its
-durable command stream, harness settings readers, and gateway/UI wiring are
-separate work.
+idempotent retries, model metadata, and effective capability snapshots. A local
+Claude ACP adapter implements the execution provider port. See the [execution guides](docs/agent_execution/README.md) for lifecycle, permissions,
+prompts, and transport; the [Claude guide](docs/claude-acp.md) covers provider setup
+and verified native limits.
+Shared conversation coordination and its durable event stream, harness settings
+readers, and gateway/UI integration remain future work; local session snapshots
+are already implemented.
 
 ## Model data
 
@@ -121,10 +122,15 @@ feature requirement; it does not validate message structure.
 snapshot for future UI consumers. Changing that DTO cannot change validation.
 This model-capability value performs no resolver, discovery, global-state, or
 provider I/O work. Agent separately exposes negotiated
-[operation capabilities](docs/agent_execution/agent.md#model-capabilities-and-provider-operations).
-The Agent and execution domain enforce local lifecycle rules; the host remains
-responsible for authorization. Native steering, context restoration, binding
-availability, and provider settings are not inferred from model facts.
+[operation capabilities](docs/agent_execution/agent.md#model-capabilities-and-provider-operations). A future
+gateway coordinator must install matching configuration and snapshot together
+and keep accepted turns stable. The Agent and execution domain enforce local
+lifecycle rules; the host remains responsible for authorization.
+Native steering, context restoration, binding availability, and provider-specific
+settings are not inferred from model facts.
+
+See [the Agent entry point](docs/agent_execution/agent.md) for provider selection,
+automatic session storage, hooks, invocation, and UI integration.
 
 ## DDD layers
 
@@ -136,16 +142,27 @@ availability, and provider settings are not inferred from model facts.
   infrastructure dependencies.
 - `domain/effective_capabilities/value_objects/`: immutable binding restrictions,
   capability snapshot, typed requirements, and local validation errors.
-- `domain/agent_execution/`: sessions own execution/tool/permission consistency;
-  invocation queues own scheduling transitions; prompts retain provenance.
-- `application/agent_execution/`: Agent composes provider ports, hooks, leased
-  sessions, scheduling, and audited permission controllers. Domain state remains
-  authoritative; application DTOs project it.
-- `infrastructure/session_storage/`: memory snapshots and private JSONL changes
-  implement leased storage and validate restored history.
+- `domain/agent_execution/`: feature modules `sessions`, `executions`, `tools`,
+  `permissions`, and `prompts`, with DDD roles beneath each feature. Sessions own
+  live aggregate state; tools own immutable patches/snapshots and identity-bearing
+  observations; permissions own once-only decisions/cancellations; prompts own
+  attributed system instructions. Public imports name the feature explicitly.
+- `application/agent_execution/`: `agents` exposes `Agent` and its errors,
+  `providers` injected execution ports, `sessions` automatic snapshot management,
+  `hooks` typed callbacks registered on Agent,
+  `executions` the request/controller/event projections and mandatory execution audit port,
+  `permissions` attribution and answer/cancellation evidence, and `tools` the original review input. The controller
+  pairs input with accepted requests, bounds retention, and projects domain state.
+  No provider JSON or process handles enter this layer. See the
+  [execution guides](docs/agent_execution/README.md) for the current contracts.
 - `application/`: catalog import/list/select use cases, capability projections, DTOs, and explicit
   mappings to/from domain types. Import calls domain constructors; query results
   are projections. Application errors add entry context and setup guidance.
+- `infrastructure/claude_acp/`: Claude settings, model limits, system-prompt extension, and tool schemas.
+  Shared ACP exchange, JSON-RPC framing, and process supervision live in
+  `infrastructure/acp`, `infrastructure/json_rpc`, and `infrastructure/process.rs`.
+- `infrastructure/session_storage/`: in-memory snapshots and private JSONL session storage,
+  exclusive leases, and explicit JSON evidence mapping.
 - `infrastructure/`: JSON parsing into application input DTOs, including required
   fields, unknown fields, and read errors. The host owns filesystem selection and
   injects the loaded catalog at composition.
@@ -157,8 +174,10 @@ admission and settlement in local snapshots and checks capabilities before dispa
 Shared gateway conversation coordination and a durable command stream remain future
 work; host authorization is required today.
 
-Tests exercise domain invariants without JSON, application projection/import
-without infrastructure, and JSON parsing/file loading at the infrastructure edge.
+Tests exercise domain invariants without JSON, application projection/import and
+execution adapter substitution, JSON loading, and the Claude protocol/process
+boundary. Domain session, shared transport, and provider substitution tests run without
+a live provider; live checks are recorded separately in the binding guide.
 
 ```text
 domain/
@@ -167,6 +186,27 @@ domain/
       date.rs           Date, DateError
       url.rs            Url, UrlError
       token_limits.rs   TokenLimits, TokenLimitsError
+  agent_execution/
+    sessions/
+      aggregates/execution_session.rs
+      value_objects/identity.rs
+    executions/
+      aggregates/invocation_queue.rs
+      value_objects/identity.rs
+      value_objects/message.rs
+      value_objects/scheduling.rs
+      value_objects/transition.rs
+    tools/
+      entities/tool_call.rs
+      value_objects/identity.rs
+      value_objects/tool.rs
+    permissions/
+      entities/permission_request.rs
+      value_objects/identity.rs
+      value_objects/permission.rs
+    prompts/
+      builders/system_prompt_builder.rs
+      value_objects/prompt.rs
   model_metadata/
     value_objects/
       identity.rs       ModelProvider, ModelKey
@@ -180,8 +220,9 @@ domain/
     mod.rs
 ```
 
-Consumers import the feature and role explicitly, such as
-`domain::common::value_objects::TokenLimits`. Related value objects share
+Consumers import execution concepts through feature exports, such as
+`domain::agent_execution::tools::ToolCall`. Shared primitives keep their own boundary,
+for example `domain::common::value_objects::TokenLimits`. Related value objects share
 files; domain features do not accumulate in a flat namespace.
 
 Each `mod.rs` is a module guide with plain-English context and ASCII diagrams,
@@ -229,7 +270,7 @@ are excluded from this domain threshold. It uses a fresh temporary target and
 removes only that directory; the normal/shared build target is untouched.
 This stable-toolchain measurement does not report branch coverage.
 
-Measured after this slice: **36 SDK tests pass**, and domain coverage is
+Measured after the metadata/capability slice: **36 SDK tests passed**, and domain coverage is
 **364/364 lines, 60/60 functions, and 445/445 regions**. Effective capabilities
 contributes 107 lines, 10 functions, and 161 regions, all covered. The application
 mapping file, including the new snapshot projection, separately measures
@@ -238,31 +279,52 @@ Tests cover all 2,401 independent nonempty model/binding input/output modality
 combinations, boolean feature restrictions, configuration and input budget
 boundaries, error diagnostics, and snapshot isolation.
 
-## Execution domain
+Shared ACP execution infrastructure lives in `infrastructure/acp`, with provider
+profiles injected by `infrastructure::claude_acp::sessions::ClaudeAcpProvider`.
+`infrastructure::acp::sessions::AcpConfig` supplies
+common launch and runtime limits. JSON-RPC framing reuses the pinned event-stream
+codec; process ownership lives in `infrastructure/process.rs`. See the
+[session and boundary guide](docs/agent_execution/lifecycle.md).
 
-`domain/agent_execution/` models reusable execution rules without providers or I/O.
-Sessions own the live execution, tool observations, and pending permissions as one
-consistency boundary. Tool entities replace immutable observation values using
-sparse updates. Permission identities prevent resolved requests from reopening
-within an execution; cancellation retains a typed lifecycle reason.
+`ClaudeAcpProvider::new` requires an injected `ExecutionAudit`. The
+host chooses its storage and durability contract. Answer records retain exact
+decisions and attribution before wire effects, then their delivery observation.
+Cancellation records retain the
+original request, review input, reason, and client/provider/runtime origin.
+Explicit `Agent::close` calls require an `ActionContext`. Audit delivery is
+independent of the UI event reader, so dropping that reader does not discard
+cancellation evidence. The smoke example supplies an explicitly non-durable
+tracing sink and omits raw tool arguments from its output.
 
-The invocation queue protects FIFO/priority ordering, bounded admission, and
-validated scheduling transitions. Prompt values and builders retain supplied
-content and provenance. These primitives do not dispatch agents or persist
-conversations; application orchestration and adapters are separate consumers.
+The same `Session` client automatically restores a closed context before its next
+execution, using `session/resume` after verified cleanup. It never replaces missing
+history with a new conversation. Each restored connection gets fresh domain and
+wire state; permission IDs remain unique across those connections.
+`Agent::cancel_permission` supports attributed guard withdrawals with validated
+custom reason codes and explanations. See the guide's lifecycle and audit tables.
 
-Start with [the domain map](src/domain/agent_execution/mod.rs) and
-[feature-organized domain tests](tests/domain/agent_execution/mod.rs).
+Tool values have separate roles: `ToolCallUpdate` is immutable sparse input
+(`None` omits a field, an explicit empty value clears it); `ToolObservation`
+is an immutable snapshot (`None` means not yet observed). `ExecutionSession`
+constructs and updates its `ToolCall` entities after checking execution identity
+and session state. Callers borrow tools and may clone their observation snapshots.
+Providers build independent review snapshots with the consuming
+`ToolObservation::with_update` replacement operation; this carries no identity or
+session mutation authority. Unchanged payloads move without copying. Permission
+review events carry a separate `tool_id` and captured `observation`; later tool
+updates cannot change that review snapshot. These types describe provider-run
+tools; they do not define or execute tools.
 
-## Agent runtime
+`PermissionScope::request`, `session`, and `application` construct immutable
+scope values from validated identities. `PermissionScope::view` borrows those
+identities for inspection; changing scope requires a replacement value.
+Cancellation causes likewise expose immutable payloads through
+`PermissionCancellationReason::view`. A request owns its resolution state;
+`PermissionRequest::state` returns a borrowed `PermissionStateView` that keeps the
+selected option and decision tied to that request.
 
-`Agent` is the public conversation entry point. Inject an `AgentProvider` and
-`SessionManager`, then invoke immediately or enqueue work. The manager owns an
-exclusive storage lease; memory/file adapters preserve admission and settlement
-evidence. Queueing, boundary/native steering, withdrawal, and idempotent retries
-share one owner. Mandatory permission audit is an independent injected port.
-
-Read [the runtime guides](docs/agent_execution/README.md) for composition,
-concurrency, hooks, persistence, and failure guarantees. Test providers exercise
-application behavior without model calls. Concrete execution adapters are supplied
-by host composition; gateway integration remains separate work.
+Queue follow-ups with `Agent::enqueue`, prioritize a later correction with
+`enqueue_steering`, or use advertised native injection with `steer`. Pending
+inputs can be withdrawn through `remove_queued` without deleting their evidence.
+See [queueing and steering](docs/agent_execution/scheduling.md) for lifecycle,
+audit, and provider capability guarantees. Gateway wiring remains separate.

@@ -21,8 +21,11 @@ describes a memory runtime, optional SQLite adapter using bundled `rusqlite`,
 cursor tokens, and replay/live subscriptions. Its
 [manifest](https://github.com/nessalabs/event-stream/blob/main/Cargo.toml) identifies
 unpublished package `event-stream` 0.1.0. Release and performance checks are still
-incomplete. Nessa's manifests and lockfile do not yet include the library. The
-requirements below still need to be tested in Nessa.
+incomplete. As of 2026-09-12, the SDK pins revision
+`66ba7525260040d6265276692088dca6dae0737e` with only `codec` enabled and reuses
+`NewlineFramer` for bounded ACP JSON-RPC input. This is framing reuse, not this
+ADR's storage integration: no event runtime or durable store is constructed.
+The commit, replay, and lifecycle requirements below still need to be tested in Nessa.
 
 ## One instance, one record source
 

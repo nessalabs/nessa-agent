@@ -8,9 +8,9 @@ to accept, tracks each turn, and records who started or controlled it. Saved
 records flow through the event stream and gateway back to clients.
 
 - **Date:** 2026-09-07
-- **Status:** accepted direction — model metadata and effective capabilities complete; conversation execution remains planned
-- **Review supplement:** [Runtime classes and sequences](../../design/agent-runtime-classes-and-sequences.md) — proposed responsibilities, operations, and failure flows; no implementation code
-- **Supporting research:** [Server runtime research](../../design/agent-sdk-shape-research.md)
+- **Status:** accepted direction — local Agent/ACP execution, model and operation capabilities, hooks, session storage, scheduling, and retry recovery implemented; shared Conversation/gateway coordination remains planned
+- **Review supplement:** [Runtime classes and sequences](../../design/agent_execution/runtime-classes-and-sequences.md) — proposed responsibilities, operations, and failure flows; no implementation code
+- **Supporting research:** [Server runtime research](../../design/agent_execution/sdk-shape.md)
 
 ## Accepted direction
 
@@ -28,8 +28,11 @@ The first delivery is one complete local Claude conversation through ACP:
 create it, send a prompt, save and display updates, answer required approvals,
 interrupt work, and reconnect. It also recovers known state after restart and
 records the creator and originating surface. More providers and a general workflow
-engine can wait. This records the accepted architecture and scope. Model metadata is delivered
-as the first slice; the complete conversation flow remains to be implemented.
+engine can wait. This records the accepted architecture and scope. The local
+[Agent API](../../../crates/nessa-sdk/docs/agent_execution/agent.md) and
+[scheduling/retry contract](../../../crates/nessa-sdk/docs/agent_execution/scheduling.md)
+are implemented. The shared conversation flow, durable event stream, and gateway
+commands below remain proposed; their method names are not current SDK APIs.
 
 ## Delivery status
 
@@ -58,9 +61,20 @@ diagnostics; tests cover independent modality combinations, limits, and isolatio
 Application tests verify projection isolation. No provider or settings reader is
 implemented in this slice.
 
-**Remaining:** host startup/server/UI wiring, harness settings readers,
-provider bindings, conversation aggregates/coordinators,
-record persistence/replay, controls, and cleanup. The catalog's context window is
+**Restricted Claude binding — complete (2026-09-12).** Application-owned execution
+ports now support session creation, typed text/file-tool observations, once-only
+permissions, and Stop. The pinned Claude ACP adapter verifies exact model/default
+mode, bounds protocol work, and owns one Unix process group per opened binding.
+Stop closes that binding, cancels interactions, and verifies cleanup before
+reporting cancellation. The [binding guide](../../../crates/nessa-sdk/docs/claude-acp.md)
+records live macOS checks and fixture tests. File tools are supported; shell,
+delegation, MCP, extended context, and Windows execution are rejected/not exposed
+until their stronger host/configuration contracts are implemented. This is not the
+Conversation aggregate or its durable control flow.
+
+**Remaining:** host startup/server/UI wiring, harness settings readers, additional
+execution profiles/providers, conversation aggregates/coordinators, record
+persistence/replay, and durable controls/recovery. The catalog's context window is
 still the published model ceiling, not a Codex default or discovered runtime limit.
 The complete ADR stays in `todo` until its conversation delivery is implemented.
 
@@ -73,8 +87,9 @@ responsible for server behavior and leave no reusable server library.
 
 Today the authenticated WebSocket gateway and NessaClient connection exist. The
 temporary `conversation.echo()` operation returns the supplied text. The Rust crate
-implements model metadata. Agent execution and durable conversation/turn operations
-remain planned features. WebSocket communication already works; the stream
+implements model metadata, capability admission, and a standalone restricted
+Claude ACP execution binding. Durable conversation/turn operations and their
+coordinator remain planned features. WebSocket communication already works; the stream
 integration adds durable history and replay after reconnect.
 
 ## Architecture and ownership
@@ -204,7 +219,7 @@ fictional model (see the implemented catalog below for all required metadata):
 Adding a model or correcting its capabilities means editing this file. Keep it
 as data; provider request formatting and quirks stay in adapters. Add explicit
 limits or further feature fields only when an integration needs them. The example
-is illustrative, not a real model claim. The first implemented slice is
+is illustrative, not a real model claim. The implemented catalog is documented in
 [`nessa-sdk` model metadata](../../../crates/nessa-sdk/README.md), with the current
 catalog in [`data/models.json`](../../../crates/nessa-sdk/data/models.json).
 `maxContextWindowTokens` describes the published model ceiling; it is not the
@@ -246,7 +261,7 @@ already required for traceability; no extra catalog revision system is needed.
 
 Stop retains its host-cleanup path even when graceful protocol cancellation is
 unsupported. Capability flags cannot disable required cleanup.
-See the [class diagram and method guide](../../design/agent-runtime-classes-and-sequences.md#classes-and-their-roles).
+See the [class diagram and method guide](../../design/agent_execution/runtime-classes-and-sequences.md#classes-and-their-roles).
 
 ### Domain events describe the aggregate's decisions
 
@@ -270,7 +285,7 @@ Domain events, durable semantic records, wire records, and provider updates have
 separate types and owners, but do not create separate sources of truth. Keep one
 saved stream and a small typed event family. The generic stream library handles
 persistence/delivery, not domain decisions. No mediator or event-handler framework
-is needed. See [domain events and durable records](../../design/agent-runtime-classes-and-sequences.md#domain-events-and-durable-records)
+is needed. See [domain events and durable records](../../design/agent_execution/runtime-classes-and-sequences.md#domain-events-and-durable-records)
 for examples, the commit sequence, atomicity, and replay/failure rules.
 
 ## Rust library boundary and reuse
@@ -288,7 +303,7 @@ commits them, and calls injected effects. EffectiveCapabilities validates input 
 and binding support; Conversation owns the lifecycle rules. Host authorization
 happens before the SDK call.
 Keep the aggregate focused on runtime decisions, not the whole transcript.
-See [DDD boundaries](../../design/agent-runtime-classes-and-sequences.md#ddd-boundaries-without-extra-machinery)
+See [DDD boundaries](../../design/agent_execution/runtime-classes-and-sequences.md#ddd-boundaries-without-extra-machinery)
 for the class responsibilities and what we deliberately avoid adding.
 
 The application layer defines typed commands, results, errors, and **ports**:

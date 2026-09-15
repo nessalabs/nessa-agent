@@ -135,6 +135,14 @@ Timeouts, transport failures, and malformed replies are never converted to a new
 prompt because delivery may already have happened. Ambiguous steering or evidence
 failure stops waiting work with a retained `RunnerStopped` reason.
 
+The ACP adapter negotiates native steering support during initialization and uses
+`_session/steering` with host-owned idle delivery. Detached provider-started turns
+are rejected. One five-second deadline covers checking ready updates, writing,
+and response delivery; cancellation/close remains available. Queue admission stays in the SDK and normal prompts dispatch
+at invocation boundaries, preserving the current single-execution event mapping.
+A provider's internal prompt queue does not imply portable queue inspection,
+editing, or per-input event correlation.
+
 ## Removing waiting input
 
 Call `remove_queued(execution_id, verified_actor).await` for ordinary queued input
@@ -228,9 +236,10 @@ or a guarantee of background execution after the host exits.
 - [Domain ordering and bounds](../../tests/domain/agent_execution/scheduling.rs).
 - [Application concurrency and evidence](../../tests/application/agent_execution/scheduling.rs).
 - [Idempotent retries and receipt failures](../../tests/application/agent_execution/scheduling/retries.rs).
+- [ACP native steering](../../tests/infrastructure/acp/contracts/steering.rs).
 - [Storage mapping](../../src/infrastructure/session_storage/snapshot/scheduling.rs).
 
-Tests use deterministic gates and injected test providers, without model calls.
+Tests use deterministic gates and test-only ACP handlers, without model calls.
 
 Scheduling history validation belongs to the domain: `SchedulingTransition::validate_history`
 requires admission first, continuous prior/resulting stages, and stable invocation

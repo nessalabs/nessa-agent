@@ -21,6 +21,14 @@ operations are not implemented. Update the current wire schemas, generated types
 and callers together. This work needs no new session protocol, compatibility
 layer, or additional transport.
 
+The local [SDK Agent](../../../crates/nessa-sdk/docs/agent_execution/agent.md)
+already owns invocation, queueing/steering, and local snapshot/receipt recovery.
+This proposal adds authenticated multi-surface routing and shared history; it does
+not introduce a second queue owner. Agent clones share one live owner, while
+separate managers cannot concurrently hold the same local storage lease.
+
+The following table describes the proposed shared runtime:
+
 | State or decision | Single owner |
 | --- | --- |
 | Conversation/turn state, input selection, interactions, and command receipts | SDK conversation coordinator under 0008 |
