@@ -1,0 +1,122 @@
+use crate::conversation::{
+    application::{ConversationError, ConversationFuture, ConversationRepository},
+    domain::{Conversation, ConversationId},
+};
+use nessa_auth::domain::{OrganizationId, PrincipalId};
+use nessa_local_storage::{self as storage, OpenMode};
+use serde::{Deserialize, Serialize};
+use std::{
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredConversation {
+    id: String,
+    organization: String,
+    owner: String,
+    creator_surface: String,
+    creation_action: String,
+}
+/// Private create-once files bind conversation IDs to owners before any provider opens.
+pub struct LocalConversationRepository {
+    root: PathBuf,
+    writes: Arc<Mutex<()>>,
+}
+impl LocalConversationRepository {
+    /// The composition-selected directory must be private and owned by this OS user.
+    pub fn new(root: PathBuf) -> Result<Self, ConversationError> {
+        storage::create_directory(&root).map_err(|_| ConversationError::Metadata)?;
+        Ok(Self {
+            root,
+            writes: Arc::new(Mutex::new(())),
+        })
+    }
+}
+fn read(root: &Path, id: &ConversationId) -> Result<Option<Conversation>, ConversationError> {
+    let path = root.join(format!("{id}.json"));
+    let file = match storage::open(&path, OpenMode::Read) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(ConversationError::Metadata),
+    };
+    let mut bytes = Vec::new();
+    file.take(4097)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ConversationError::Metadata)?;
+    if bytes.len() > 4096 {
+        return Err(ConversationError::Metadata);
+    }
+    let value: StoredConversation =
+        serde_json::from_slice(&bytes).map_err(|_| ConversationError::Metadata)?;
+    let stored_id = ConversationId::new(&value.id).map_err(|_| ConversationError::Metadata)?;
+    if stored_id != *id {
+        return Err(ConversationError::Metadata);
+    }
+    Ok(Some(
+        Conversation::new(
+            stored_id,
+            OrganizationId::new(value.organization).map_err(|_| ConversationError::Metadata)?,
+            PrincipalId::new(value.owner).map_err(|_| ConversationError::Metadata)?,
+            value.creator_surface,
+            value.creation_action,
+        )
+        .map_err(|_| ConversationError::Metadata)?,
+    ))
+}
+impl ConversationRepository for LocalConversationRepository {
+    fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
+        let root = self.root.clone();
+        let id = id.clone();
+        let writes = self.writes.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let _guard = writes.lock().map_err(|_| ConversationError::Metadata)?;
+                read(&root, &id)
+            })
+            .await
+            .map_err(|_| ConversationError::Metadata)?
+        })
+    }
+    fn create(&self, conversation: Conversation) -> ConversationFuture<'_, Conversation> {
+        let root = self.root.clone();
+        let writes = self.writes.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let _guard = writes.lock().map_err(|_| ConversationError::Metadata)?;
+                if let Some(existing) = read(&root, conversation.id())? {
+                    return Ok(existing);
+                }
+                let value = StoredConversation {
+                    id: conversation.id().to_string(),
+                    organization: conversation.organization().as_str().into(),
+                    owner: conversation.owner().as_str().into(),
+                    creator_surface: conversation.creator_surface().into(),
+                    creation_action: conversation.creation_action().into(),
+                };
+                let bytes = serde_json::to_vec(&value).map_err(|_| ConversationError::Metadata)?;
+                if bytes.len() > 4096 {
+                    return Err(ConversationError::Metadata);
+                }
+                let path = root.join(format!("{}.json", conversation.id()));
+                match storage::open(&path, OpenMode::CreateNew) {
+                    Ok(mut file) => {
+                        file.write_all(&bytes)
+                            .and_then(|_| file.sync_all())
+                            .map_err(|_| ConversationError::Metadata)?;
+                        storage::sync_directory(&root).map_err(|_| ConversationError::Metadata)?;
+                        Ok(conversation)
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                        read(&root, conversation.id())?.ok_or(ConversationError::Metadata)
+                    }
+                    Err(_) => Err(ConversationError::Metadata),
+                }
+            })
+            .await
+            .map_err(|_| ConversationError::Metadata)?
+        })
+    }
+}

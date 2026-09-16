@@ -357,8 +357,8 @@ Initial method policy:
 | `credential.list` | Active organization admin with `credential.manage`, metadata only and paginated |
 | `credential.revoke` | Active organization admin with `credential.manage`, exact credential ID |
 
-`server.ping`, `conversation.echo`, and legacy `connect` are not installed on
-`/session`; their existing spike behavior remains on `/`. “Owner” below means the locally bootstrapped personal-organization admin, not a
+Retired spike methods and legacy `connect` are not installed on `/session`.
+“Owner” below means the locally bootstrapped personal-organization admin, not a
 global role or enterprise administrator. The initial owner credential has the explicit supported
 administrative scope set. An owner may issue only currently supported grants,
 within gateway policy, and cannot issue another administrative credential through
@@ -409,8 +409,8 @@ rotate/reset credentials rather than silently resurrect revoked grants.
 Proposed local commands (new commands, not implemented yet):
 
 ```text
-nessa-server auth init --owner-token-file <new-private-path>
-nessa-server auth recover-owner --owner-token-file <new-private-path>
+nessa auth init --local --owner-token-file <new-private-path>
+nessa auth recover-owner --local --owner-token-file <new-private-path>
 nessa-auth issue --profile owner --principal <id> --scope server.read --token-file <new-private-path> --request-id <id> --json
 nessa-auth list --profile owner --json
 nessa-auth revoke --profile owner --credential <id> --request-id <id> --json

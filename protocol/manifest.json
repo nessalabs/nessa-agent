@@ -3,21 +3,16 @@
   "transport": "websocket",
   "defaultUrl": "ws://127.0.0.1:7420",
   "phase": "authenticated-sessions",
-  "note": "Authenticated session methods are defined in product/manifest.json. conversation.echo remains a temporary round-trip stub.",
+  "note": "Authenticated session methods are defined in product/manifest.json.",
   "schemas": {
     "common": "schemas/v1/common.json",
     "frames": "schemas/v1/frames.json",
-    "server": "schemas/v1/server.json",
-    "conversation": "schemas/v1/conversation.json"
+    "server": "schemas/v1/server.json"
   },
   "methods": {
     "server.health": {
       "params": null,
       "result": "schemas/v1/server.json#/$defs/HealthResult"
-    },
-    "conversation.echo": {
-      "params": "schemas/v1/conversation.json#/$defs/EchoParams",
-      "result": "schemas/v1/conversation.json#/$defs/EchoResult"
     }
   },
   "events": {}

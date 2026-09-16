@@ -1,6 +1,11 @@
 //! Local product dependency factory. Provider choices stay outside route handlers.
 use crate::{
     app::ports::Clock as ServerClock,
+    browser_session::adapters::PersistentSessions,
+    conversation::{
+        application::{ConversationLimits, ConversationService},
+        infrastructure::LocalConversationRepository,
+    },
     core::RunError,
     env::Environment,
     product::{ProductDependencies, ProductRouteState},
@@ -17,6 +22,7 @@ use nessa_auth::{
     },
     domain::{AudienceId, OrganizationId, ResourceId},
 };
+use nessa_sdk::infrastructure::session_storage::LocalFileStorage;
 use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -38,19 +44,29 @@ impl Clock for SystemClock {
 pub(super) fn product_state(
     config: &Environment,
     uptime: Arc<dyn ServerClock>,
+    bundle: Option<&std::path::Path>,
 ) -> Result<ProductRouteState, RunError> {
     let directory = config
         .auth_directory
         .as_ref()
         .ok_or_else(|| RunError::Authentication("set NESSA_DATA_DIR or HOME".into()))?;
-    let settings = super::runtime_config::RuntimeConfig::load(directory)?;
+    let mut settings = super::runtime_config::RuntimeConfig::load(directory)?;
+    if let Some(bundle) = bundle {
+        super::desktop::configure(
+            &mut settings,
+            bundle,
+            directory
+                .parent()
+                .ok_or_else(|| setup_error("invalid data root"))?,
+        )?;
+    }
     let store = Arc::new(
         LocalCredentialStore::open_with_config(directory, "credentials.v1.json", settings.registry)
             .map_err(setup_error)?,
     );
     let identity = store.identity().map_err(|_| {
         RunError::Authentication(
-            "initialize local access with `nessa-server auth init --owner-token-file <new-path>`"
+            "initialize local access with `nessa auth init --local --owner-token-file <new-path>`"
                 .into(),
         )
     })?;
@@ -67,7 +83,7 @@ pub(super) fn product_state(
     let admin = Arc::new(LocalAdmin {
         store: store.clone(),
     });
-    Ok(ProductRouteState::new(
+    let mut product = ProductRouteState::new(
         gateway,
         organization,
         audience,
@@ -80,7 +96,41 @@ pub(super) fn product_state(
         },
     )
     .with_admin(admin)
-    .with_settings(settings.session()?))
+    .with_settings(settings.session()?)
+    .with_browser_sessions(Arc::new(
+        PersistentSessions::open(&directory.join("browser-sessions.jsonl")).map_err(setup_error)?,
+    ));
+    product.browser_http_allowed = config.browser_http_allowed();
+    if let Some(agent) = &settings.agent {
+        let root = directory
+            .parent()
+            .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
+            .join("conversations");
+        nessa_local_storage::create_directory(&root)
+            .map_err(|error| RunError::Agent(error.to_string()))?;
+        let provider = super::agent::provider(agent, &root, Arc::new(SystemClock))?;
+        let storage = Arc::new(
+            LocalFileStorage::new(root.join("sessions"))
+                .map_err(|error| RunError::Agent(error.to_string()))?,
+        );
+        let metadata = Arc::new(
+            LocalConversationRepository::new(root.join("metadata"))
+                .map_err(|error| RunError::Agent(error.to_string()))?,
+        );
+        let service = ConversationService::new(
+            provider,
+            storage,
+            metadata,
+            ConversationLimits {
+                reserved_output_tokens: agent.output_tokens,
+                ..ConversationLimits::default()
+            },
+            Some(agent.workspace.to_string_lossy().into_owned()),
+        )
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+        product = product.with_conversations(Arc::new(service));
+    }
+    Ok(product)
 }
 
 fn setup_error(error: impl std::fmt::Display) -> RunError {

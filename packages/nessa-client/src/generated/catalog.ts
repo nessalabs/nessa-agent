@@ -11,7 +11,6 @@
  */
 
 export const Method = {
-  ConversationEcho: "conversation.echo",
   ServerHealth: "server.health",
 } as const
 

@@ -34,7 +34,7 @@ export class NessaClient {
 
   /** Authorized gateway health. */
   readonly server: ServerApi
-  /** Authorized text round trip; currently returns the input without model generation. */
+  /** Authorized agent conversations, live views, and lifecycle controls. */
   readonly conversation: ConversationApi
   /** Issue, list, and revoke scoped product credentials, subject to server authorization. */
   readonly credentials: CredentialApi
@@ -48,7 +48,7 @@ export class NessaClient {
     newRequestId: () => string,
   ) {
     this.server = createServerApi(wire)
-    this.conversation = createConversationApi(wire)
+    this.conversation = createConversationApi(wire, newRequestId)
     this.credentials = createCredentialApi(wire, newRequestId)
     this.auth = createAuthApi(wire)
   }

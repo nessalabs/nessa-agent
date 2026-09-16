@@ -1,5 +1,12 @@
 # 0011. Shared conversations, surface attachment, and authorized collaboration
 
+> Current implementation: [gateway chat](../../guides/gateway-chat.md) uses the existing SDK Agent,
+> leased JSONL sessions, independent durable audit, and bounded replacement views.
+> NessaClient and the panel use authenticated conversation commands; retired spike
+> methods are absent. The exact durable cursor/event-store and broader collaboration design
+> below remains a proposal, not a prerequisite or description of the current chat API.
+
+
 ## Purpose
 
 Let allowed clients watch and control the same conversation. The SDK remains its
@@ -15,11 +22,11 @@ collaboration messages using the same runtime and saved records.
 
 ## Current state and ownership
 
-The authenticated gateway and NessaClient exist. The product protocol still uses
-temporary `conversation.echo`; saved conversation reads, subscriptions, and inbox
-operations are not implemented. Update the current wire schemas, generated types,
-and callers together. This work needs no new session protocol, compatibility
-layer, or additional transport.
+The authenticated gateway and NessaClient expose server-owned conversation creation,
+replacement-view reads, input submission, queue controls, permission controls, and
+close. Durable cursor subscriptions and inbox operations are not implemented. Update
+the current wire schemas, generated types, and callers together. This work needs no
+new session protocol, compatibility layer, or additional transport.
 
 The local [SDK Agent](../../../crates/nessa-sdk/docs/agent_execution/agent.md)
 already owns invocation, queueing/steering, and local snapshot/receipt recovery.

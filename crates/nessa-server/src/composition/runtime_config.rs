@@ -1,4 +1,5 @@
 //! File loading belongs to composition; consumers receive typed settings.
+use super::agent::AgentConfig;
 use crate::{core::RunError, product::SessionSettings};
 use nessa_auth::adapters::local::LocalStoreConfig;
 use serde::Deserialize;
@@ -9,6 +10,7 @@ use std::{io::Read, path::Path, time::Duration};
 pub(super) struct RuntimeConfig {
     pub registry: LocalStoreConfig,
     pub session: SessionConfig,
+    pub agent: Option<AgentConfig>,
 }
 
 #[derive(Debug, Deserialize)]

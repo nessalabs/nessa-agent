@@ -65,6 +65,11 @@ impl Environment {
         ))
     }
 
+    /// Plain browser HTTP is confined to numeric loopback in development and CI.
+    pub fn browser_http_allowed(&self) -> bool {
+        matches!(self.stage, Stage::Dev | Stage::Ci) && is_loopback(&self.bind_host)
+    }
+
     pub fn listen_addr(&self) -> String {
         format_socket_addr(&self.bind_host, self.port)
     }
@@ -147,6 +152,16 @@ fn is_loopback(host: &str) -> bool {
 mod tests {
     use super::*;
     use crate::env::{MockEnv, HOST, PORT, STAGE, VERSION};
+
+    #[test]
+    fn browser_http_requires_development_stage_and_loopback_bind() {
+        for stage in ["dev", "ci", "alpha", "prod"] {
+            let mut config = Environment::load(&MockEnv::new().set("NESSA_STAGE", stage)).unwrap();
+            assert_eq!(config.browser_http_allowed(), matches!(stage, "dev" | "ci"));
+            config.bind_host = "0.0.0.0".into();
+            assert!(!config.browser_http_allowed());
+        }
+    }
 
     #[test]
     fn dev_stage_defaults_when_env_unset() {

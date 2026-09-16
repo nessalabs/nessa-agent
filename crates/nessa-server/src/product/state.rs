@@ -1,15 +1,24 @@
+use crate::conversation::application::ConversationService;
 use nessa_auth::{
-    application::credential_admin::CredentialAdmin,
-    application::ports::{AccessReader, Clock, CredentialVerifier, PolicyEvaluator},
+    application::{
+        credential_admin::CredentialAdmin,
+        ports::{AccessReader, Clock, CredentialVerifier, PolicyEvaluator},
+    },
     domain::{AudienceId, Resource, ResourceId},
 };
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 /// Dependencies and trusted gateway selectors for the product route.
 ///
 /// This state is constructed only in composition.
 #[derive(Clone)]
 pub struct ProductRouteState {
+    pub(crate) browser_sessions: Option<Arc<dyn crate::browser_session::application::SessionStore>>,
+    pub(crate) browser_http_allowed: bool,
+    pub(crate) browser_session_id: Option<String>,
+    pub(crate) requests: Arc<Semaphore>,
+    pub(crate) controls: Arc<Semaphore>,
     pub(crate) settings: SessionSettings,
     pub(crate) gateway: Resource,
     pub(crate) audience: AudienceId,
@@ -17,6 +26,7 @@ pub struct ProductRouteState {
     pub(crate) access: Arc<dyn AccessReader>,
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) policy: Arc<dyn PolicyEvaluator>,
+    pub(crate) conversations: Option<Arc<ConversationService>>,
     pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
     pub(crate) uptime_clock: Arc<dyn crate::app::ports::Clock>,
 }
@@ -44,7 +54,12 @@ impl ProductRouteState {
         dependencies: ProductDependencies,
     ) -> Self {
         Self {
+            browser_sessions: None,
+            browser_session_id: None,
+            browser_http_allowed: false,
             settings: SessionSettings::default(),
+            requests: Arc::new(Semaphore::new(128)),
+            controls: Arc::new(Semaphore::new(32)),
             gateway: Resource::new(gateway_organization_id, gateway_id),
             audience,
             verifier: dependencies.verifier,
@@ -52,8 +67,17 @@ impl ProductRouteState {
             clock: dependencies.clock,
             policy: dependencies.policy,
             admin: None,
+            conversations: None,
             uptime_clock: dependencies.uptime_clock,
         }
+    }
+
+    pub fn with_browser_sessions(
+        mut self,
+        store: Arc<dyn crate::browser_session::application::SessionStore>,
+    ) -> Self {
+        self.browser_sessions = Some(store);
+        self
     }
 
     pub fn with_settings(mut self, settings: SessionSettings) -> Self {
@@ -64,6 +88,12 @@ impl ProductRouteState {
     /// Register credential lifecycle operations; missing administration fails closed.
     pub fn with_admin(mut self, admin: Arc<dyn CredentialAdmin>) -> Self {
         self.admin = Some(admin);
+        self
+    }
+
+    /// Share server-owned Agents across authenticated sockets. No socket owns cleanup.
+    pub fn with_conversations(mut self, service: Arc<ConversationService>) -> Self {
+        self.conversations = Some(service);
         self
     }
 

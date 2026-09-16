@@ -29,6 +29,7 @@ const init = spawnSync(
     "--",
     "auth",
     "init",
+    "--local",
     "--owner-token-file",
     join(directory, "owner.token"),
   ],
@@ -52,7 +53,7 @@ async function waitForHealth(url, attempts = 40) {
   throw new Error(`server did not become healthy at ${url}`)
 }
 
-const server = spawn("cargo", ["run", "-q", "-p", "nessa-server"], {
+const server = spawn("cargo", ["run", "-q", "-p", "nessa-server", "--", "server"], {
   cwd: root,
   env: serverEnv,
   stdio: ["ignore", "pipe", "pipe"],

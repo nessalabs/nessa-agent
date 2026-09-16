@@ -9,7 +9,7 @@ HTTP `/health` reports process liveness only.
 | --- | --- |
 | [product/manifest.json](product/manifest.json) | Authenticated method and event catalog |
 | [product/v1.json](product/v1.json) | Session, credential, and termination payloads |
-| [manifest.json](manifest.json) | Shared health and echo method schemas |
+| [manifest.json](manifest.json) | Shared health method schema |
 | [schemas/v1/](schemas/v1/) | Shared payloads, frames, and shortcut documents |
 | [defaults/](defaults/) | Bundled shortcut defaults |
 | [fixtures/v1/](fixtures/v1/) | Validated shared wire examples |
@@ -29,7 +29,8 @@ or schema version bump is needed merely to change this repository's current cont
 | `session.authenticate` | Credential proof and nonce; returns verified session |
 | `auth.session` | Current authenticated metadata |
 | `server.health` | Authorized health read (`server.read`) |
-| `conversation.echo` | Temporary text round trip (`conversation.write`) |
+| `conversation.create`, `conversation.read`, `conversation.send`, `conversation.steer` | Conversation creation, projection reads, and input submission |
+| `conversation.remove`, `conversation.reorder`, `conversation.answer`, `conversation.cancel`, `conversation.close` | Pending-work, permission, and lifecycle controls |
 | `credential.issue`, `credential.list`, `credential.revoke` | Credential administration (`credential.manage`) |
 
 Frames use `req`, `res`, and `event`. A transport `id` correlates a response with

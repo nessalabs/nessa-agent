@@ -17,7 +17,7 @@ const directory = mkdtempSync(join(tmpdir(), "nessa-auth-bounds-"))
 const binary = join(
   root,
   "target/debug",
-  process.platform === "win32" ? "nessa-server.exe" : "nessa-server",
+  process.platform === "win32" ? "nessa.exe" : "nessa",
 )
 const listener = createServer().listen(0, "127.0.0.1")
 await once(listener, "listening")
@@ -80,13 +80,21 @@ async function timed(values, action) {
   return result
 }
 try {
-  const init = spawnSync(binary, ["auth", "init", "--owner-token-file", ownerPath], {
-    env,
-    encoding: "utf8",
-  })
+  const init = spawnSync(
+    binary,
+    ["auth", "init", "--local", "--owner-token-file", ownerPath],
+    {
+      env,
+      encoding: "utf8",
+    },
+  )
   assert.equal(init.status, 0, init.stderr)
   const secret = readFileSync(ownerPath, "utf8").trim()
-  server = spawn(binary, [], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] })
+  server = spawn(binary, ["server"], {
+    cwd: root,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  })
   server.stdout.on("data", (bytes) => {
     logs += bytes
   })
