@@ -6,6 +6,18 @@ use serde_json::json;
 use std::process::Stdio;
 use tokio::io::duplex;
 
+#[tokio::test]
+async fn returning_a_frame_retains_following_incomplete_frame_state() {
+    let bytes = b"{\"jsonrpc\":\"2.0\",\"method\":\"ready\"}\n   ";
+    let mut reader = Reader::new(bytes.as_slice(), 256);
+
+    assert_eq!(
+        reader.next().await.unwrap().method.as_deref(),
+        Some("ready")
+    );
+    assert!(reader.frame_in_progress());
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn provider_pipe_probe_reads_flushed_bytes_before_reactor_notification() {

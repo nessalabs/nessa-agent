@@ -5,8 +5,7 @@ use super::lifecycle::{SessionLifecycle, WorkGeneration, WorkPermit};
 use super::submissions::{self, Settlement, SubmissionReceipt};
 use super::{Agent, AgentError};
 use crate::application::agent_execution::{
-    executions::{ExecutionAuditRecord, QueueOrderRecord},
-    executions::{ExecutionRequest, SubmissionMode},
+    executions::{ExecutionAuditRecord, ExecutionRequest, QueueOrderRecord, SubmissionMode},
     permissions::ActionContext,
     providers::{
         CloseOutcome, ProviderOperationFailure, ProviderSessionState, SessionCloseRequest,

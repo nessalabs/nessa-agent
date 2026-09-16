@@ -58,6 +58,13 @@ impl<R: AsyncRead + Unpin> Reader<R> {
     pub(crate) fn frame_in_progress(&self) -> bool {
         self.frame_in_progress
     }
+    fn frame_in_progress_after_consuming(current: bool, bytes: &[u8]) -> bool {
+        if let Some(last_newline) = bytes.iter().rposition(|byte| *byte == b'\n') {
+            last_newline + 1 < bytes.len()
+        } else {
+            current || !bytes.is_empty()
+        }
+    }
     pub(crate) async fn next(&mut self) -> Result<Envelope, AgentError> {
         self.decoding_yielded = false;
         loop {
@@ -79,7 +86,6 @@ impl<R: AsyncRead + Unpin> Reader<R> {
                 }
                 if let Some(frame) = step.items.into_iter().next() {
                     if !frame.item.as_bytes().iter().all(u8::is_ascii_whitespace) {
-                        self.frame_in_progress = false;
                         return parse(frame.item.as_bytes());
                     }
                 }
@@ -101,19 +107,23 @@ impl<R: AsyncRead + Unpin> Reader<R> {
                 }
                 self.frame_in_progress = true;
             }
-            // Remaining bytes were read with an earlier frame and already
-            // precede any command selected by the worker.
-            self.frame_in_progress = true;
-            let step = self
-                .framer
-                .decode(&self.bytes[self.offset..self.length], budget);
+            // The framer can consume bytes belonging to the following frame
+            // while returning the preceding one. Track the consumed prefix,
+            // including bytes retained privately by the framer.
+            let available = &self.bytes[self.offset..self.length];
+            let step = self.framer.decode(available, budget);
+            let consumed = step.consumed_bytes;
+            let frame_in_progress = Self::frame_in_progress_after_consuming(
+                self.frame_in_progress,
+                &available[..consumed],
+            );
             self.offset += step.consumed_bytes;
+            self.frame_in_progress = frame_in_progress;
             if matches!(step.state, DecodeState::Failed(_)) {
                 self.failure = Some(protocol("frame exceeds configured limit"));
             }
             if let Some(frame) = step.items.into_iter().next() {
                 if !frame.item.as_bytes().iter().all(u8::is_ascii_whitespace) {
-                    self.frame_in_progress = false;
                     return parse(frame.item.as_bytes());
                 }
             }
