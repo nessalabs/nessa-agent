@@ -364,10 +364,28 @@ pub fn create_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> 
     verify_directory(root)?;
     create_directory(&root.join(relative))
 }
+pub fn open_beneath(root: &Path, relative: &Path, mode: OpenMode) -> io::Result<File> {
+    if relative.components().next().is_none()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(unsafe_file());
+    }
+    verify_directory(root)?;
+    open(&root.join(relative), mode)
+}
 /// Windows does not expose Unix directory fsync semantics. Files are flushed
 /// before publication; replacement requests the platform's write-through move.
 pub fn sync_directory(_: &Path) -> io::Result<()> {
     Ok(())
+}
+pub fn sync_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> {
+    if relative.as_os_str().is_empty() {
+        verify_directory(root)
+    } else {
+        verify_directory(&root.join(relative))
+    }
 }
 pub fn replace(from: &Path, to: &Path) -> io::Result<()> {
     check_parents(from)?;
@@ -379,6 +397,19 @@ pub fn replace(from: &Path, to: &Path) -> io::Result<()> {
             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
         ))
     }
+}
+pub fn replace_beneath(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
+    if from.components().next().is_none()
+        || to.components().next().is_none()
+        || from
+            .components()
+            .chain(to.components())
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(unsafe_file());
+    }
+    verify_directory(root)?;
+    replace(&root.join(from), &root.join(to))
 }
 
 #[cfg(test)]

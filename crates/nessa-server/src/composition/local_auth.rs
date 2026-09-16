@@ -45,11 +45,8 @@ pub(super) fn product_state(
         .ok_or_else(|| RunError::Authentication("set NESSA_DATA_DIR or HOME".into()))?;
     let settings = super::runtime_config::RuntimeConfig::load(directory)?;
     let store = Arc::new(
-        LocalCredentialStore::open_with_config(
-            directory.join("credentials.v1.json"),
-            settings.registry,
-        )
-        .map_err(setup_error)?,
+        LocalCredentialStore::open_with_config(directory, "credentials.v1.json", settings.registry)
+            .map_err(setup_error)?,
     );
     let identity = store.identity().map_err(|_| {
         RunError::Authentication(

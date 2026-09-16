@@ -15,8 +15,8 @@ mod windows;
 use windows as platform;
 
 pub use platform::{
-    create_directory, create_directory_beneath, open, replace, sync_directory, verify_directory,
-    verify_file,
+    create_directory, create_directory_beneath, open, open_beneath, replace, replace_beneath,
+    sync_directory, sync_directory_beneath, verify_directory, verify_file,
 };
 
 #[derive(Clone, Copy)]
@@ -42,6 +42,7 @@ fn unsafe_file() -> io::Error {
 pub struct PrivateTempFile {
     file: File,
     path: PathBuf,
+    beneath: Option<(PathBuf, PathBuf)>,
 }
 impl PrivateTempFile {
     pub fn new_in(parent: &Path) -> io::Result<Self> {
@@ -52,7 +53,37 @@ impl PrivateTempFile {
             let name: String = random.iter().map(|b| format!("{b:02x}")).collect();
             let path = parent.join(format!(".nessa-{name}.tmp"));
             match open(&path, OpenMode::CreateNew) {
-                Ok(file) => return Ok(Self { file, path }),
+                Ok(file) => {
+                    return Ok(Self {
+                        file,
+                        path,
+                        beneath: None,
+                    })
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "could not reserve private temporary file",
+        ))
+    }
+    /// Reserve a private temporary file within `directory`, relative to a trusted root.
+    pub fn new_beneath(root: &Path, directory: &Path) -> io::Result<Self> {
+        for _ in 0..10 {
+            let mut random = [0u8; 16];
+            getrandom::fill(&mut random).map_err(|e| io::Error::other(e.to_string()))?;
+            let name: String = random.iter().map(|b| format!("{b:02x}")).collect();
+            let relative = directory.join(format!(".nessa-{name}.tmp"));
+            match open_beneath(root, &relative, OpenMode::CreateNew) {
+                Ok(file) => {
+                    return Ok(Self {
+                        file,
+                        path: root.join(&relative),
+                        beneath: Some((root.to_path_buf(), relative)),
+                    });
+                }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(e),
             }
@@ -70,6 +101,11 @@ impl PrivateTempFile {
     }
     pub fn persist(self, destination: &Path) -> io::Result<()> {
         replace(&self.path, destination)
+    }
+    /// Atomically publish this temporary file to a path beneath the same trusted root.
+    pub fn persist_beneath(self, destination: &Path) -> io::Result<()> {
+        let (root, relative) = self.beneath.as_ref().ok_or_else(unsafe_file)?;
+        replace_beneath(root, relative, destination)
     }
 }
 impl Drop for PrivateTempFile {

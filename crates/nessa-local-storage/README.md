@@ -14,4 +14,6 @@ write-through moves after file flush; Unix callers sync the containing directory
 
 Run `cargo test -p nessa-local-storage` and
 `cargo clippy -p nessa-local-storage --all-targets -- -D warnings` on each supported
-platform. The platform CI workflow also exercises the full auth registry and SDK.
+platform. Security-sensitive stores use the beneath-root operations so every
+intermediate directory and final publication stays bound to verified directory
+handles. The platform CI workflow also exercises the full auth registry and SDK.

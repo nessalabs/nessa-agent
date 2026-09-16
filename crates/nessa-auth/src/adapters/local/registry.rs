@@ -30,7 +30,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
     fmt,
-    fs::{self, File},
+    fs::File,
     io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::{
@@ -174,6 +174,7 @@ struct Registry {
 /// One-process owner of a local registry. Opening never bootstraps credentials.
 pub struct LocalCredentialStore {
     config: LocalStoreConfig,
+    root: PathBuf,
     path: PathBuf,
     _lock: File,
     registry: Mutex<Option<Registry>>,
@@ -189,26 +190,27 @@ pub struct LocalCredentialStore {
 }
 
 impl LocalCredentialStore {
-    /// Open `path` and acquire its sibling lifetime lock. A missing registry is
-    /// represented as uninitialized so only an explicit offline bootstrap creates it.
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, LocalStoreError> {
-        Self::open_with_config(path, LocalStoreConfig::default())
+    /// Open `path` beneath the already-private trusted `root` and acquire its
+    /// sibling lifetime lock. A missing registry is represented as uninitialized.
+    pub fn open(root: impl AsRef<Path>, path: impl AsRef<Path>) -> Result<Self, LocalStoreError> {
+        Self::open_with_config(root, path, LocalStoreConfig::default())
     }
 
     pub fn open_with_config(
+        root: impl AsRef<Path>,
         path: impl AsRef<Path>,
         config: LocalStoreConfig,
     ) -> Result<Self, LocalStoreError> {
         config.validate()?;
+        let root = root.as_ref().to_path_buf();
         let path = path.as_ref().to_path_buf();
         let parent = path.parent().ok_or(LocalStoreError::Corrupt)?;
-        create_private_directory(parent)?;
-        set_private_directory(parent)?;
-        if fs::symlink_metadata(parent)?.file_type().is_symlink() {
-            return Err(LocalStoreError::Corrupt);
+        set_private_directory(&root)?;
+        if !parent.as_os_str().is_empty() {
+            create_private_directory(&root, parent)?;
         }
         let lock_path = path.with_extension("lock");
-        let lock = private_open(&lock_path, true)?;
+        let lock = private_open(&root, &lock_path, true)?;
         lock.try_lock_exclusive().map_err(|error| {
             // Windows reports ERROR_LOCK_VIOLATION rather than WouldBlock.
             // Match the adapter's native contention code without hiding other I/O errors.
@@ -218,17 +220,14 @@ impl LocalCredentialStore {
                 LocalStoreError::Io(error)
             }
         })?;
-        let registry = match fs::symlink_metadata(&path) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink() || !metadata.is_file() {
-                    return Err(LocalStoreError::Corrupt);
-                }
+        let registry = match private_open(&root, &path, false) {
+            Ok(file) => {
+                let metadata = file.metadata()?;
                 if metadata.len() > config.max_registry_bytes {
                     return Err(LocalStoreError::Capacity);
                 }
                 let mut bytes = Vec::new();
-                private_open(&path, false)?
-                    .take(config.max_registry_bytes + 1)
+                file.take(config.max_registry_bytes + 1)
                     .read_to_end(&mut bytes)?;
                 if bytes.len() as u64 > config.max_registry_bytes {
                     return Err(LocalStoreError::Capacity);
@@ -238,11 +237,12 @@ impl LocalCredentialStore {
                 validate_registry(&registry, &config)?;
                 Some(registry)
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error.into()),
+            Err(LocalStoreError::Io(error)) if error.kind() == io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
         };
         Ok(Self {
             config,
+            root,
             path,
             _lock: lock,
             registry: Mutex::new(registry.clone()),
@@ -693,7 +693,7 @@ impl LocalCredentialStore {
     fn persist(&self, registry: &Registry) -> Result<(), LocalStoreError> {
         validate_registry(registry, &self.config)?;
         let parent = self.path.parent().ok_or(LocalStoreError::Corrupt)?;
-        let mut temporary = nessa_local_storage::PrivateTempFile::new_in(parent)?;
+        let mut temporary = nessa_local_storage::PrivateTempFile::new_beneath(&self.root, parent)?;
         let bytes = serde_json::to_vec(registry).map_err(|_| LocalStoreError::Corrupt)?;
         if bytes.len() as u64 > self.config.max_registry_bytes {
             return Err(LocalStoreError::Capacity);
@@ -707,7 +707,9 @@ impl LocalCredentialStore {
                 "injected pre-replace failure",
             )));
         }
-        temporary.persist(&self.path).map_err(LocalStoreError::Io)?;
+        temporary
+            .persist_beneath(&self.path)
+            .map_err(LocalStoreError::Io)?;
         if self.sync_registry_directory(parent).is_err() {
             // A readable rename is not proof of durability. Reopen once, verify the
             // entire expected state (including receipts), then sync file + directory.
@@ -728,11 +730,11 @@ impl LocalCredentialStore {
                 "injected directory sync failure",
             )));
         }
-        sync_directory(parent)
+        sync_directory_beneath(&self.root, parent)
     }
 
     fn reconcile_commit(&self, expected: &[u8], parent: &Path) -> Result<(), LocalStoreError> {
-        let mut file = private_open(&self.path, false)?;
+        let mut file = private_open(&self.root, &self.path, false)?;
         let mut actual = Vec::new();
         (&mut file)
             .take(self.config.max_registry_bytes + 1)
@@ -902,7 +904,7 @@ pub fn write_evidence_file(
     file.write_all(b"\n")?;
     file.flush()?;
     file.sync_all()?;
-    sync_directory(path.parent().ok_or(LocalStoreError::Corrupt)?)?;
+    nessa_local_storage::sync_directory(path.parent().ok_or(LocalStoreError::Corrupt)?)?;
     Ok(())
 }
 
@@ -1158,8 +1160,9 @@ fn issue_fingerprint(request: &IssueCredentialRequest) -> Result<String, LocalSt
     Ok(URL_SAFE_NO_PAD.encode(Sha256::digest(bytes)))
 }
 
-fn private_open(path: &Path, create: bool) -> Result<File, LocalStoreError> {
-    nessa_local_storage::open(
+fn private_open(root: &Path, path: &Path, create: bool) -> Result<File, LocalStoreError> {
+    nessa_local_storage::open_beneath(
+        root,
         path,
         if create {
             nessa_local_storage::OpenMode::OpenOrCreate
@@ -1168,7 +1171,12 @@ fn private_open(path: &Path, create: bool) -> Result<File, LocalStoreError> {
         },
     )
     .map_err(|error| {
-        if error.kind() == io::ErrorKind::PermissionDenied {
+        if error.kind() == io::ErrorKind::PermissionDenied
+            || matches!(
+                error.raw_os_error(),
+                Some(libc::ELOOP) | Some(libc::ENOTDIR)
+            )
+        {
             LocalStoreError::Corrupt
         } else {
             LocalStoreError::Io(error)
@@ -1178,11 +1186,11 @@ fn private_open(path: &Path, create: bool) -> Result<File, LocalStoreError> {
 fn set_private_directory(path: &Path) -> Result<(), LocalStoreError> {
     Ok(nessa_local_storage::verify_directory(path)?)
 }
-fn create_private_directory(path: &Path) -> Result<(), LocalStoreError> {
-    Ok(nessa_local_storage::create_directory(path)?)
+fn create_private_directory(root: &Path, path: &Path) -> Result<(), LocalStoreError> {
+    Ok(nessa_local_storage::create_directory_beneath(root, path)?)
 }
-fn sync_directory(path: &Path) -> Result<(), LocalStoreError> {
-    Ok(nessa_local_storage::sync_directory(path)?)
+fn sync_directory_beneath(root: &Path, path: &Path) -> Result<(), LocalStoreError> {
+    Ok(nessa_local_storage::sync_directory_beneath(root, path)?)
 }
 
 #[cfg(test)]
@@ -1193,7 +1201,10 @@ mod tests {
         application::dto::{CredentialGrantDto, PrincipalKindDto, ResourceDto},
         domain::AudienceId,
     };
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::{
+        fs,
         future::Future,
         task::{Context, Poll, Waker},
     };
@@ -1204,6 +1215,37 @@ mod tests {
             Poll::Ready(value) => value,
             Poll::Pending => panic!("local adapter unexpectedly yielded"),
         }
+    }
+
+    fn trusted_root(path: &Path) -> (&Path, &Path) {
+        let mut root = path.parent().unwrap();
+        while std::fs::symlink_metadata(root).is_err() {
+            root = root.parent().unwrap();
+        }
+        (root, path.strip_prefix(root).unwrap())
+    }
+
+    fn open_store(path: impl AsRef<Path>) -> Result<LocalCredentialStore, LocalStoreError> {
+        let path = path.as_ref();
+        let (root, relative) = trusted_root(path);
+        #[cfg(unix)]
+        if !fs::symlink_metadata(root).unwrap().file_type().is_symlink() {
+            fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        LocalCredentialStore::open(root, relative)
+    }
+
+    fn open_store_with_config(
+        path: impl AsRef<Path>,
+        config: LocalStoreConfig,
+    ) -> Result<LocalCredentialStore, LocalStoreError> {
+        let path = path.as_ref();
+        let (root, relative) = trusted_root(path);
+        #[cfg(unix)]
+        if !fs::symlink_metadata(root).unwrap().file_type().is_symlink() {
+            fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        LocalCredentialStore::open_with_config(root, relative, config)
     }
 
     fn grant(org: &str, action: &str) -> CredentialGrantDto {
@@ -1250,31 +1292,27 @@ mod tests {
             max_credentials: 2,
             ..small
         };
-        let store = LocalCredentialStore::open_with_config(&path, small).unwrap();
+        let store = open_store_with_config(&path, small).unwrap();
         store.bootstrap(bootstrap()).unwrap();
         assert!(matches!(
             store.recover_owner("next".into(), 110, None),
             Err(LocalStoreError::Capacity)
         ));
         drop(store);
-        let store = LocalCredentialStore::open_with_config(&path, larger).unwrap();
+        let store = open_store_with_config(&path, larger).unwrap();
         store.recover_owner("next".into(), 110, None).unwrap();
         drop(store);
-        assert!(LocalCredentialStore::open_with_config(&path, small).is_err());
-        assert!(LocalCredentialStore::open_with_config(&path, larger).is_ok());
-        let independent =
-            LocalCredentialStore::open(root.path().join("other/credentials.v1.json")).unwrap();
+        assert!(open_store_with_config(&path, small).is_err());
+        assert!(open_store_with_config(&path, larger).is_ok());
+        let independent = open_store(root.path().join("other/credentials.v1.json")).unwrap();
         independent.bootstrap(bootstrap()).unwrap();
         independent.recover_owner("next".into(), 110, None).unwrap();
         let tiny = LocalStoreConfig {
             max_registry_bytes: 16,
             ..LocalStoreConfig::default()
         };
-        let tiny_store = LocalCredentialStore::open_with_config(
-            root.path().join("tiny/credentials.v1.json"),
-            tiny,
-        )
-        .unwrap();
+        let tiny_store =
+            open_store_with_config(root.path().join("tiny/credentials.v1.json"), tiny).unwrap();
         assert!(matches!(
             tiny_store.bootstrap(bootstrap()),
             Err(LocalStoreError::Capacity)
@@ -1286,10 +1324,10 @@ mod tests {
     fn bootstrap_is_explicit_private_and_exclusively_locked() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("auth/credentials.v1.json");
-        let store = LocalCredentialStore::open(&path).unwrap();
+        let store = open_store(&path).unwrap();
         assert!(!store.is_initialized());
         let outcome = store.bootstrap(bootstrap()).unwrap();
-        let error = match LocalCredentialStore::open(&path) {
+        let error = match open_store(&path) {
             Ok(_) => panic!("a second store acquired the exclusive registry lock"),
             Err(error) => error,
         };
@@ -1315,7 +1353,7 @@ mod tests {
     fn verification_and_revocation_survive_restart() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("auth/credentials.v1.json");
-        let store = LocalCredentialStore::open(&path).unwrap();
+        let store = open_store(&path).unwrap();
         let outcome = store.bootstrap(bootstrap()).unwrap();
         let token = outcome.evidence.expose_bytes().to_vec();
         let audience = AudienceId::new("gateway-1").unwrap();
@@ -1332,7 +1370,7 @@ mod tests {
             })
             .unwrap();
         drop(store);
-        let reopened = LocalCredentialStore::open(&path).unwrap();
+        let reopened = open_store(&path).unwrap();
         assert_eq!(
             ready(reopened.verify(&CredentialEvidence::new(token).unwrap(), &audience)),
             Err(AccessError::InvalidCredential)
@@ -1343,7 +1381,7 @@ mod tests {
     fn authentication_reads_prior_snapshot_while_mutation_is_in_progress() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("auth/credentials.v1.json");
-        let store = LocalCredentialStore::open(&path).unwrap();
+        let store = open_store(&path).unwrap();
         let outcome = store.bootstrap(bootstrap()).unwrap();
         let mutation = store.registry.lock().unwrap();
 
@@ -1357,7 +1395,7 @@ mod tests {
     fn issue_is_idempotent_without_replaying_secret_and_notifies_revision() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("auth/credentials.v1.json");
-        let store = LocalCredentialStore::open(&path).unwrap();
+        let store = open_store(&path).unwrap();
         store.bootstrap(bootstrap()).unwrap();
         let receiver = store.subscribe().unwrap();
         let request = IssueCredentialRequest {
@@ -1409,8 +1447,7 @@ mod tests {
     #[test]
     fn surface_credentials_are_distinct_nonexpiring_and_reprovisioning_revokes_only_that_surface() {
         let root = tempfile::tempdir().unwrap();
-        let store =
-            LocalCredentialStore::open(root.path().join("auth/credentials.v1.json")).unwrap();
+        let store = open_store(root.path().join("auth/credentials.v1.json")).unwrap();
         let owner = store.bootstrap(bootstrap()).unwrap();
         let issue = |surface: &str, id: &str, grants: Vec<String>| {
             store
@@ -1490,7 +1527,7 @@ mod tests {
     fn owner_recovery_preserves_identity_and_revokes_previous_owner() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("auth/credentials.v1.json");
-        let store = LocalCredentialStore::open(&path).unwrap();
+        let store = open_store(&path).unwrap();
         let original = store.bootstrap(bootstrap()).unwrap();
         let original_token = original.evidence.expose_bytes().to_vec();
         store
@@ -1508,7 +1545,7 @@ mod tests {
         registry.memberships.reverse();
         registry.principals.reverse();
         fs::write(&path, serde_json::to_vec(&registry).unwrap()).unwrap();
-        let store = LocalCredentialStore::open(&path).unwrap();
+        let store = open_store(&path).unwrap();
 
         let identity = store.identity().unwrap();
         let recovered = store
@@ -1532,7 +1569,7 @@ mod tests {
     fn empty_grants_and_receipt_capacity_fail_without_changing_durable_state() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("auth/credentials.v1.json");
-        let store = LocalCredentialStore::open_with_config(
+        let store = open_store_with_config(
             &path,
             LocalStoreConfig {
                 max_receipts: 1,
@@ -1583,14 +1620,13 @@ mod tests {
         ));
         assert_eq!(fs::read(&path).unwrap(), full);
         drop(store);
-        assert!(LocalCredentialStore::open(&path).is_ok());
+        assert!(open_store(&path).is_ok());
     }
 
     #[test]
     fn administration_preserves_rejected_command_errors_through_the_port() {
         let root = tempfile::tempdir().unwrap();
-        let store =
-            LocalCredentialStore::open(root.path().join("auth/credentials.v1.json")).unwrap();
+        let store = open_store(root.path().join("auth/credentials.v1.json")).unwrap();
         store.bootstrap(bootstrap()).unwrap();
         let request = RevokeCredentialRequest {
             request_id: "revoke".into(),
@@ -1618,7 +1654,7 @@ mod tests {
     fn pre_replace_failure_keeps_prior_auth_and_allows_same_request_retry() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("auth/credentials.v1.json");
-        let store = LocalCredentialStore::open(&path).unwrap();
+        let store = open_store(&path).unwrap();
         let owner = store.bootstrap(bootstrap()).unwrap();
         let before = fs::read(&path).unwrap();
         let request = RevokeCredentialRequest {
@@ -1642,7 +1678,7 @@ mod tests {
     fn one_failed_sync_reconciles_without_reapplying_mutation_and_survives_reopen() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("auth/credentials.v1.json");
-        let store = LocalCredentialStore::open(&path).unwrap();
+        let store = open_store(&path).unwrap();
         let owner = store.bootstrap(bootstrap()).unwrap();
         let revisions = store.subscribe().unwrap();
         let request = RevokeCredentialRequest {
@@ -1663,7 +1699,7 @@ mod tests {
             Err(AccessError::InvalidCredential)
         );
         drop(store);
-        let reopened = LocalCredentialStore::open(&path).unwrap();
+        let reopened = open_store(&path).unwrap();
         assert_eq!(reopened.revoke_sync(request).unwrap(), 2);
     }
 
@@ -1671,7 +1707,7 @@ mod tests {
     fn reconciliation_rejects_unexpected_bytes_even_if_they_are_valid_json() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("auth/credentials.v1.json");
-        let store = LocalCredentialStore::open(&path).unwrap();
+        let store = open_store(&path).unwrap();
         store.bootstrap(bootstrap()).unwrap();
         assert!(matches!(
             store.reconcile_commit(b"{}", path.parent().unwrap()),
@@ -1683,7 +1719,7 @@ mod tests {
     fn post_replace_sync_uncertainty_latches_store_unavailable() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("auth/credentials.v1.json");
-        let store = LocalCredentialStore::open(&path).unwrap();
+        let store = open_store(&path).unwrap();
         let original = store.bootstrap(bootstrap()).unwrap();
         store.fail_directory_sync.store(true, Ordering::Release);
         assert!(store
@@ -1699,7 +1735,7 @@ mod tests {
             Err(AccessError::Unavailable)
         );
         drop(store);
-        let reopened = LocalCredentialStore::open(&path).unwrap();
+        let reopened = open_store(&path).unwrap();
         assert_eq!(
             ready(reopened.verify(&original.evidence, &AudienceId::new("gateway-1").unwrap())),
             Err(AccessError::InvalidCredential)
@@ -1710,7 +1746,7 @@ mod tests {
     fn malformed_registry_fails_instead_of_resetting_identity() {
         let root = tempfile::tempdir().unwrap();
         let auth = root.path().join("auth");
-        create_private_directory(&auth).unwrap();
+        nessa_local_storage::create_directory(&auth).unwrap();
         nessa_local_storage::open(
             &auth.join("credentials.v1.json"),
             nessa_local_storage::OpenMode::CreateNew,
@@ -1719,7 +1755,7 @@ mod tests {
         .write_all(b"{}")
         .unwrap();
         assert!(matches!(
-            LocalCredentialStore::open(auth.join("credentials.v1.json")),
+            open_store(auth.join("credentials.v1.json")),
             Err(LocalStoreError::Corrupt)
         ));
     }
@@ -1731,9 +1767,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let auth = root.path().join("auth");
         fs::create_dir(&auth).unwrap();
+        fs::set_permissions(&auth, fs::Permissions::from_mode(0o700)).unwrap();
         let registry = auth.join("credentials.v1.json");
         symlink(root.path().join("missing.json"), &registry).unwrap();
-        assert!(LocalCredentialStore::open(&registry).is_err());
+        assert!(open_store(&registry).is_err());
         assert!(fs::symlink_metadata(&registry)
             .unwrap()
             .file_type()
@@ -1744,11 +1781,25 @@ mod tests {
         fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
         let link = root.path().join("linked-auth");
         symlink(&target, &link).unwrap();
-        assert!(LocalCredentialStore::open(link.join("credentials.v1.json")).is_err());
+        assert!(open_store(link.join("credentials.v1.json")).is_err());
         assert_eq!(
             fs::metadata(target).unwrap().permissions().mode() & 0o777,
             0o755
         );
+
+        let outside = tempfile::tempdir().unwrap();
+        let redirected = outside.path().join("redirected");
+        fs::create_dir(&redirected).unwrap();
+        fs::set_permissions(&redirected, fs::Permissions::from_mode(0o700)).unwrap();
+        let intermediate = root.path().join("nested-link");
+        symlink(&redirected, &intermediate).unwrap();
+        assert!(LocalCredentialStore::open(
+            root.path(),
+            Path::new("nested-link/credentials.v1.json")
+        )
+        .is_err());
+        assert!(!redirected.join("credentials.lock").exists());
+        assert!(!redirected.join("credentials.v1.json").exists());
     }
 
     #[cfg(unix)]
@@ -1757,18 +1808,18 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("auth/credentials.v1.json");
-        let store = LocalCredentialStore::open(&path).unwrap();
+        let store = open_store(&path).unwrap();
         store.bootstrap(bootstrap()).unwrap();
         drop(store);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(LocalCredentialStore::open(&path).is_err());
+        assert!(open_store(&path).is_err());
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o644
         );
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         fs::hard_link(&path, root.path().join("shared.json")).unwrap();
-        assert!(LocalCredentialStore::open(&path).is_err());
+        assert!(open_store(&path).is_err());
     }
 
     #[cfg(unix)]
@@ -1777,13 +1828,13 @@ mod tests {
         use std::os::unix::fs::symlink;
         let root = tempfile::tempdir().unwrap();
         let auth = root.path().join("auth");
-        create_private_directory(&auth).unwrap();
+        nessa_local_storage::create_directory(&auth).unwrap();
         let target = root.path().join("target.json");
         fs::write(&target, b"{}").unwrap();
         let registry = auth.join("credentials.v1.json");
         symlink(target, &registry).unwrap();
         assert!(matches!(
-            LocalCredentialStore::open(registry),
+            open_store(registry),
             Err(LocalStoreError::Corrupt)
         ));
     }

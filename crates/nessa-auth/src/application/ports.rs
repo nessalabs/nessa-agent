@@ -26,6 +26,28 @@ impl CredentialEvidence {
         &self.0
     }
 }
+
+/// Opaque browser or host session proof. It contains no identity or authority.
+/// Deliberately no Serialize, Clone, Display, or derived Debug.
+pub struct SessionEvidence(Vec<u8>);
+impl SessionEvidence {
+    /// Take ownership of a bounded opaque session identifier.
+    pub fn new(bytes: Vec<u8>) -> Result<Self, AccessError> {
+        if bytes.is_empty() || bytes.len() > 16 * 1024 {
+            return Err(AccessError::InvalidCredential);
+        }
+        Ok(Self(bytes))
+    }
+    /// Borrow secret bytes for verification. Never log or serialize this slice.
+    pub fn expose_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+impl fmt::Debug for SessionEvidence {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SessionEvidence([REDACTED])")
+    }
+}
 impl fmt::Debug for CredentialEvidence {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("CredentialEvidence([REDACTED])")
@@ -81,6 +103,25 @@ pub trait CredentialVerifier: Send + Sync {
         evidence: &'a CredentialEvidence,
         audience: &'a AudienceId,
     ) -> PortFuture<'a, VerifiedCredential>;
+}
+
+/// Trusted result of resolving an opaque browser or host session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedSessionCredential {
+    /// Credential binding owned by the verified server-side session record.
+    pub credential_id: CredentialId,
+}
+
+/// Verifies an opaque browser or host session and resolves its credential binding.
+/// Implementations must validate the session ID and its deployment-specific
+/// constraints before returning. A raw credential ID is not session proof.
+pub trait SessionVerifier: Send + Sync {
+    /// Resolve verified opaque `evidence` for the server-selected `audience`.
+    fn verify_session<'a>(
+        &'a self,
+        evidence: &'a SessionEvidence,
+        audience: &'a AudienceId,
+    ) -> PortFuture<'a, VerifiedSessionCredential>;
 }
 
 /// Credential and membership must come from one committed authorization revision.
@@ -152,6 +193,12 @@ mod tests {
                 CredentialEvidence::new(b"private".to_vec()).unwrap()
             ),
             "CredentialEvidence([REDACTED])"
+        );
+        assert!(SessionEvidence::new(vec![]).is_err());
+        assert!(SessionEvidence::new(vec![0; 16 * 1024 + 1]).is_err());
+        assert_eq!(
+            format!("{:?}", SessionEvidence::new(b"private".to_vec()).unwrap()),
+            "SessionEvidence([REDACTED])"
         );
     }
 }

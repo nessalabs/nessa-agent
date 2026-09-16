@@ -42,7 +42,8 @@ pub(super) fn execute(args: &[String]) -> Result<(), RunError> {
     let directory = Environment::auth_directory_from_system()?;
     let settings = super::runtime_config::RuntimeConfig::load(&directory)?;
     let store = LocalCredentialStore::open_with_config(
-        directory.join("credentials.v1.json"),
+        &directory,
+        "credentials.v1.json",
         settings.registry,
     )
     .map_err(failure)?;
@@ -197,7 +198,8 @@ fn provision_command(args: &[String]) -> Result<(), RunError> {
     let directory = Environment::auth_directory_from_system()?;
     let settings = super::runtime_config::RuntimeConfig::load(&directory)?;
     let store = LocalCredentialStore::open_with_config(
-        directory.join("credentials.v1.json"),
+        &directory,
+        "credentials.v1.json",
         settings.registry,
     )
     .map_err(failure)?;
