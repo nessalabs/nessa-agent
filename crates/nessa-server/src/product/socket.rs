@@ -1,7 +1,7 @@
 use super::generated::{SessionCloseReason, SessionTermination};
 use super::{state::ProductRouteState, wire::*};
 use crate::browser_session::{
-    application::{invalidation_reason, ReadBrowserSession},
+    application::{invalidation_reason, BrowserSessionVerifier, ReadBrowserSession},
     domain::value_objects::RemovalReason,
 };
 #[cfg(test)]
@@ -20,8 +20,8 @@ use nessa_auth::{
             ListCredentialsRequest, RevokeCredentialRequest,
         },
         dto::{CredentialGrantDto, MembershipRoleDto, MembershipStateDto, ResourceDto},
-        ports::{AccessError, AccessSnapshot, CredentialEvidence, Decision},
-        session::{AuthenticateSession, AuthenticatedSession, ReadCurrentSession},
+        ports::{AccessError, AccessSnapshot, CredentialEvidence, Decision, SessionEvidence},
+        session::{AuthenticateSession, AuthenticatedSession, ReadCurrentSession, ResumeSession},
     },
     domain::{Action, CredentialId},
 };
@@ -176,18 +176,31 @@ where
             .browser_sessions
             .as_ref()
             .ok_or_else(|| (frame.id.clone(), "unauthorized"))?;
-        let session = ReadBrowserSession {
+        let expected_origin = state
+            .browser_session_origin
+            .as_deref()
+            .ok_or_else(|| (frame.id.clone(), "unauthorized"))?;
+        let _verified_record = ReadBrowserSession {
             store: store.as_ref(),
         }
         .execute(id, state.clock.unix_seconds())
         .await
         .map_err(|_| (frame.id.clone(), "temporarily_unavailable"))?
+        .filter(|session| session.origin() == expected_origin)
         .ok_or_else(|| (frame.id.clone(), "unauthorized"))?;
-        let identity = (ReadCurrentSession {
+        let evidence = SessionEvidence::new(id.as_bytes().to_vec())
+            .map_err(|_| (frame.id.clone(), "unauthorized"))?;
+        let verifier = BrowserSessionVerifier {
+            store: store.as_ref(),
+            expected_origin,
+            now: state.clock.unix_seconds(),
+        };
+        let identity = (ResumeSession {
+            verifier: &verifier,
             access: state.access.as_ref(),
             clock: state.clock.as_ref(),
         })
-        .resolve(session.credential_id(), &state.audience)
+        .execute(&evidence, &state.audience)
         .await;
         let identity = match identity {
             Ok((identity, _)) => identity,
@@ -650,11 +663,16 @@ async fn current_identity_inner(
             .browser_sessions
             .as_ref()
             .ok_or(AccessError::InvalidCredential)?;
+        let expected_origin = state
+            .browser_session_origin
+            .as_deref()
+            .ok_or(AccessError::InvalidCredential)?;
         let retained = ReadBrowserSession {
             store: store.as_ref(),
         }
         .execute(id, state.clock.unix_seconds())
         .await?
+        .filter(|session| session.origin() == expected_origin)
         .ok_or(AccessError::InvalidCredential)?;
         if retained.credential_id() != session.context().credential_id() {
             store
@@ -667,11 +685,18 @@ async fn current_identity_inner(
                 .await?;
             return Err(AccessError::IdentityMismatch);
         }
-        match (ReadCurrentSession {
+        let evidence = SessionEvidence::new(id.as_bytes().to_vec())?;
+        let verifier = BrowserSessionVerifier {
+            store: store.as_ref(),
+            expected_origin,
+            now: state.clock.unix_seconds(),
+        };
+        match (ResumeSession {
+            verifier: &verifier,
             access: state.access.as_ref(),
             clock: state.clock.as_ref(),
         })
-        .resolve(retained.credential_id(), &state.audience)
+        .execute(&evidence, &state.audience)
         .await
         {
             Ok(current) => return Ok(current),
@@ -1606,6 +1631,7 @@ mod tests {
         });
         state = state.with_browser_sessions(store);
         state.browser_session_id = Some("a".repeat(64));
+        state.browser_session_origin = Some("https://127.0.0.1:1443".into());
         state.policy = Arc::new(RemoveBrowserAfterAdmission {
             present,
             policy: CedarPolicyEvaluator::new().unwrap(),
@@ -1636,6 +1662,7 @@ mod tests {
         });
         state = state.with_browser_sessions(store);
         state.browser_session_id = Some("a".repeat(64));
+        state.browser_session_origin = Some("https://127.0.0.1:1443".into());
         state.access = Arc::new(RemoveBrowserAfterAuthorityRead { authority, present });
 
         let OutgoingMessage::Response(response) =

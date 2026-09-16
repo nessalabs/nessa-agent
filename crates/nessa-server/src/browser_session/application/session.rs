@@ -1,5 +1,7 @@
 use crate::browser_session::domain::value_objects::{Lifetime, RemovalReason};
-use nessa_auth::application::ports::{AccessError, PortFuture};
+use nessa_auth::application::ports::{
+    AccessError, PortFuture, SessionEvidence, SessionVerifier, VerifiedSessionCredential,
+};
 use nessa_auth::domain::CredentialId;
 
 const RENEWAL_INTERVAL_SECONDS: u64 = 60 * 60;
@@ -135,6 +137,37 @@ impl ReadBrowserSession<'_> {
         };
         self.store.remove(id.to_owned(), now, reason, None).await?;
         Ok(None)
+    }
+}
+
+/// Verify an opaque cookie session against the current server-side session store.
+/// The adapter binds the proof to the request origin and samples one injected time.
+#[derive(Clone, Copy)]
+pub struct BrowserSessionVerifier<'a> {
+    pub store: &'a dyn SessionStore,
+    pub expected_origin: &'a str,
+    pub now: u64,
+}
+impl SessionVerifier for BrowserSessionVerifier<'_> {
+    fn verify_session<'a>(
+        &'a self,
+        evidence: &'a SessionEvidence,
+        _: &'a nessa_auth::domain::AudienceId,
+    ) -> PortFuture<'a, VerifiedSessionCredential> {
+        Box::pin(async move {
+            let id = std::str::from_utf8(evidence.expose_bytes())
+                .ok()
+                .filter(|id| id.len() == 64 && id.as_bytes().iter().all(u8::is_ascii_hexdigit))
+                .ok_or(AccessError::InvalidCredential)?;
+            let session = ReadBrowserSession { store: self.store }
+                .execute(id, self.now)
+                .await?
+                .filter(|session| session.origin() == self.expected_origin)
+                .ok_or(AccessError::InvalidCredential)?;
+            Ok(VerifiedSessionCredential {
+                credential_id: session.credential_id().clone(),
+            })
+        })
     }
 }
 

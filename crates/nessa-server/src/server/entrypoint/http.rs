@@ -66,6 +66,8 @@ async fn browser_upgrade(
         return StatusCode::FORBIDDEN.into_response();
     }
     state.browser_session_id = browser::cookie(&headers).map(str::to_owned);
+    state.browser_session_origin =
+        browser::origin(&headers, state.browser_http_allowed).map(str::to_owned);
     ws.max_message_size(MAX_PAYLOAD_BYTES as usize)
         .max_frame_size(MAX_PAYLOAD_BYTES as usize)
         .on_upgrade(move |socket| crate::product::handle_socket(socket, state))

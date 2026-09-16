@@ -1,5 +1,5 @@
 use crate::browser_session::{
-    application::{invalidation_reason, ReadBrowserSession, SignIn},
+    application::{invalidation_reason, BrowserSessionVerifier, ReadBrowserSession, SignIn},
     domain::value_objects::RemovalReason,
 };
 use crate::product::ProductRouteState;
@@ -10,8 +10,8 @@ use axum::{
     Json,
 };
 use nessa_auth::application::{
-    ports::AccessError,
-    session::{AuthenticateSession, ReadCurrentSession},
+    ports::{AccessError, SessionEvidence},
+    session::{AuthenticateSession, ResumeSession},
 };
 use serde::Deserialize;
 use tokio::sync::oneshot;
@@ -226,25 +226,34 @@ pub async fn check(State(state): State<ProductRouteState>, headers: HeaderMap) -
     let operation_store = store.clone();
     let id = id.to_owned();
     let operation_id = id.clone();
-    let request_origin = origin(&headers, state.browser_http_allowed).map(str::to_owned);
+    let request_origin = origin(&headers, state.browser_http_allowed)
+        .expect("allowed browser request has an origin")
+        .to_owned();
     let (reply, result) = oneshot::channel();
     tokio::spawn(async move {
         let _permit = permit;
         let outcome = async {
             let now = operation_state.clock.unix_seconds();
-            let Some(session) = (ReadBrowserSession {
+            let Some(_session) = (ReadBrowserSession {
                 store: operation_store.as_ref(),
             })
             .execute(&operation_id, now)
             .await?
-            .filter(|session| Some(session.origin()) == request_origin.as_deref()) else {
+            .filter(|session| session.origin() == request_origin) else {
                 return Ok(None);
             };
-            let identity = match (ReadCurrentSession {
+            let evidence = SessionEvidence::new(operation_id.as_bytes().to_vec())?;
+            let verifier = BrowserSessionVerifier {
+                store: operation_store.as_ref(),
+                expected_origin: &request_origin,
+                now,
+            };
+            let identity = match (ResumeSession {
+                verifier: &verifier,
                 access: operation_state.access.as_ref(),
                 clock: operation_state.clock.as_ref(),
             })
-            .resolve(session.credential_id(), &operation_state.audience)
+            .execute(&evidence, &operation_state.audience)
             .await
             {
                 Ok((identity, _)) => identity,
@@ -303,24 +312,33 @@ pub async fn logout(State(state): State<ProductRouteState>, headers: HeaderMap) 
     let operation_state = state.clone();
     let operation_store = state.browser_sessions.clone();
     let id = cookie(&headers).map(str::to_owned);
-    let request_origin = origin(&headers, state.browser_http_allowed).map(str::to_owned);
+    let request_origin = origin(&headers, state.browser_http_allowed)
+        .expect("allowed browser request has an origin")
+        .to_owned();
     let (reply, removal) = oneshot::channel();
     tokio::spawn(async move {
         let _permit = permit;
         let outcome = async {
             if let (Some(store), Some(id)) = (&operation_store, id.as_deref()) {
-                if let Some(session) = (ReadBrowserSession {
+                if let Some(_session) = (ReadBrowserSession {
                     store: store.as_ref(),
                 })
                 .execute(id, operation_state.clock.unix_seconds())
                 .await?
-                .filter(|session| Some(session.origin()) == request_origin.as_deref())
+                .filter(|session| session.origin() == request_origin)
                 {
-                    let (reason, initiator) = match (ReadCurrentSession {
+                    let evidence = SessionEvidence::new(id.as_bytes().to_vec())?;
+                    let verifier = BrowserSessionVerifier {
+                        store: store.as_ref(),
+                        expected_origin: &request_origin,
+                        now: operation_state.clock.unix_seconds(),
+                    };
+                    let (reason, initiator) = match (ResumeSession {
+                        verifier: &verifier,
                         access: operation_state.access.as_ref(),
                         clock: operation_state.clock.as_ref(),
                     })
-                    .resolve(session.credential_id(), &operation_state.audience)
+                    .execute(&evidence, &operation_state.audience)
                     .await
                     {
                         Ok((identity, _)) => (

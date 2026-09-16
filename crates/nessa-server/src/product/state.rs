@@ -17,6 +17,7 @@ pub struct ProductRouteState {
     pub(crate) browser_sessions: Option<Arc<dyn crate::browser_session::application::SessionStore>>,
     pub(crate) browser_http_allowed: bool,
     pub(crate) browser_session_id: Option<String>,
+    pub(crate) browser_session_origin: Option<String>,
     pub(crate) requests: Arc<Semaphore>,
     pub(crate) controls: Arc<Semaphore>,
     pub(crate) settings: SessionSettings,
@@ -56,6 +57,7 @@ impl ProductRouteState {
         Self {
             browser_sessions: None,
             browser_session_id: None,
+            browser_session_origin: None,
             browser_http_allowed: false,
             settings: SessionSettings::default(),
             requests: Arc::new(Semaphore::new(128)),

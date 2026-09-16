@@ -4,7 +4,7 @@ use crate::browser_session::{
     entrypoint,
 };
 use crate::browser_session::{
-    application::{BrowserSession, SessionStore},
+    application::{BrowserSession, BrowserSessionVerifier, SessionStore},
     domain::value_objects::RemovalReason,
 };
 use axum::{
@@ -12,6 +12,7 @@ use axum::{
     http::{header, HeaderMap, StatusCode},
     Json,
 };
+use nessa_auth::application::ports::{SessionEvidence, SessionVerifier};
 use tokio::sync::{Notify, Semaphore};
 
 fn headers() -> HeaderMap {
@@ -40,6 +41,74 @@ fn set_browser_sessions(
 fn browser_session_id_encoding_preserves_all_256_random_bits() {
     assert_eq!(entrypoint::encode_session_id([0; 32]), "0".repeat(64));
     assert_eq!(entrypoint::encode_session_id([u8::MAX; 32]), "f".repeat(64));
+}
+
+#[tokio::test]
+async fn browser_session_verifier_rejects_forged_missing_foreign_and_expired_proof() {
+    let credential_id = CredentialId::new("credential").unwrap();
+    let store = MemorySessions::default();
+    let id = "a".repeat(64);
+    store
+        .insert(
+            id.clone(),
+            BrowserSession::new(
+                credential_id.clone(),
+                "https://127.0.0.1:1443".into(),
+                100,
+            )
+            .unwrap(),
+            None,
+            100,
+        )
+        .await
+        .unwrap();
+    let evidence = SessionEvidence::new(id.as_bytes().to_vec()).unwrap();
+    let verifier = BrowserSessionVerifier {
+        store: &store,
+        expected_origin: "https://127.0.0.1:1443",
+        now: 100,
+    };
+    assert_eq!(
+        verifier
+            .verify_session(&evidence, &AudienceId::new("gateway").unwrap())
+            .await
+            .unwrap()
+            .credential_id,
+        credential_id
+    );
+
+    let foreign = BrowserSessionVerifier {
+        expected_origin: "https://127.0.0.1:1555",
+        ..verifier
+    };
+    assert!(matches!(
+        foreign
+            .verify_session(&evidence, &AudienceId::new("gateway").unwrap())
+            .await,
+        Err(AccessError::InvalidCredential)
+    ));
+    assert!(store.get(id.clone()).await.unwrap().is_some());
+    for rejected in ["credential".to_owned(), "z".repeat(64), "b".repeat(64)] {
+        let proof = SessionEvidence::new(rejected.as_bytes().to_vec()).unwrap();
+        assert!(matches!(
+            verifier
+                .verify_session(&proof, &AudienceId::new("gateway").unwrap())
+                .await,
+            Err(AccessError::InvalidCredential)
+        ));
+    }
+
+    let expired = BrowserSessionVerifier {
+        now: 100 + crate::browser_session::domain::value_objects::IDLE_SECONDS,
+        ..verifier
+    };
+    assert!(matches!(
+        expired
+            .verify_session(&evidence, &AudienceId::new("gateway").unwrap())
+            .await,
+        Err(AccessError::InvalidCredential)
+    ));
+    assert!(store.get(id).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -82,6 +151,7 @@ async fn browser_login_cookie_restore_origin_binding_logout_and_expiry() {
     let identity = authenticate(&state).await;
     let mut socket_state = state.clone();
     socket_state.browser_session_id = entrypoint::cookie(&h).map(str::to_owned);
+    socket_state.browser_session_origin = Some("https://127.0.0.1:1443".into());
     assert!(current_snapshot(&socket_state, &identity).await.is_ok());
     assert_eq!(
         entrypoint::logout(State(state.clone()), h.clone())
@@ -129,6 +199,7 @@ async fn browser_session_reads_current_membership_role_grants_and_revision() {
     let identity = authenticate(&state).await;
     let mut socket_state = state;
     socket_state.browser_session_id = entrypoint::cookie(&with_cookie(cookie)).map(str::to_owned);
+    socket_state.browser_session_origin = Some("https://127.0.0.1:1443".into());
 
     let mut updated = snapshot(MembershipRole::Member, MembershipStatus::Active);
     updated.revision = 7;
@@ -206,11 +277,18 @@ async fn minimal_session_survives_restart_and_rejects_malformed_credential_ids()
     let store = PersistentSessions::open(&sessions_path).unwrap();
     let restored = store.get(id.clone()).await.unwrap().unwrap();
     assert_eq!(restored.credential_id(), &credential_id);
-    assert!((ReadCurrentSession {
+    let evidence = SessionEvidence::new(id.as_bytes().to_vec()).unwrap();
+    let verifier = BrowserSessionVerifier {
+        store: &store,
+        expected_origin: restored.origin(),
+        now: 100,
+    };
+    assert!((ResumeSession {
+        verifier: &verifier,
         access: state.access.as_ref(),
         clock: state.clock.as_ref(),
     })
-    .resolve(restored.credential_id(), &state.audience)
+    .execute(&evidence, &state.audience)
     .await
     .is_ok());
     drop(store);
@@ -1073,6 +1151,7 @@ async fn hostile_store_cannot_restore_an_expired_domain_session() {
     });
     set_browser_sessions(&mut state, store.clone());
     state.browser_session_id = Some("f".repeat(64));
+    state.browser_session_origin = Some("https://127.0.0.1:1443".into());
     clock.now.store(
         100 + crate::browser_session::domain::value_objects::IDLE_SECONDS,
         Ordering::SeqCst,
