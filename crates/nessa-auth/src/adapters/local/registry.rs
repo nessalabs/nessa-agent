@@ -1201,8 +1201,6 @@ mod tests {
         application::dto::{CredentialGrantDto, PrincipalKindDto, ResourceDto},
         domain::AudienceId,
     };
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
     use std::{
         fs,
         future::Future,
@@ -1218,9 +1216,9 @@ mod tests {
     }
 
     fn trusted_root(path: &Path) -> (&Path, &Path) {
-        let mut root = path.parent().unwrap();
-        while std::fs::symlink_metadata(root).is_err() {
-            root = root.parent().unwrap();
+        let root = path.parent().unwrap();
+        if fs::symlink_metadata(root).is_err() {
+            nessa_local_storage::create_directory(root).unwrap();
         }
         (root, path.strip_prefix(root).unwrap())
     }
@@ -1228,10 +1226,6 @@ mod tests {
     fn open_store(path: impl AsRef<Path>) -> Result<LocalCredentialStore, LocalStoreError> {
         let path = path.as_ref();
         let (root, relative) = trusted_root(path);
-        #[cfg(unix)]
-        if !fs::symlink_metadata(root).unwrap().file_type().is_symlink() {
-            fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
-        }
         LocalCredentialStore::open(root, relative)
     }
 
@@ -1241,11 +1235,18 @@ mod tests {
     ) -> Result<LocalCredentialStore, LocalStoreError> {
         let path = path.as_ref();
         let (root, relative) = trusted_root(path);
-        #[cfg(unix)]
-        if !fs::symlink_metadata(root).unwrap().file_type().is_symlink() {
-            fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();
-        }
         LocalCredentialStore::open_with_config(root, relative, config)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn inherited_temp_root_is_rejected_while_a_protected_child_is_accepted() {
+        let temporary = tempfile::tempdir().unwrap();
+        assert!(LocalCredentialStore::open(temporary.path(), "credentials.v1.json").is_err());
+
+        let trusted = temporary.path().join("trusted");
+        nessa_local_storage::create_directory(&trusted).unwrap();
+        assert!(LocalCredentialStore::open(&trusted, "credentials.v1.json").is_ok());
     }
 
     fn grant(org: &str, action: &str) -> CredentialGrantDto {
