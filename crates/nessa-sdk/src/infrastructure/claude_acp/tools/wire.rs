@@ -35,17 +35,24 @@ pub(in crate::infrastructure::claude_acp) const REVIEW_TOOLS: &[&str] = &[
     "TaskStop",
     "Skill",
 ];
-fn allowed_name(name: &str) -> bool {
+fn bounded_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 128
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        && !DISALLOWED_TOOLS.contains(&name)
+}
+fn enabled_name(name: &str, mcp_prefixes: &[String]) -> bool {
+    bounded_name(name)
+        && (REVIEW_TOOLS.contains(&name)
+            || mcp_prefixes
+                .iter()
+                .any(|prefix| name.starts_with(prefix) && name.len() > prefix.len()))
 }
 pub(in crate::infrastructure::claude_acp) fn tool_call(
     value: &Value,
     names: &mut HashMap<String, String>,
+    mcp_prefixes: &[String],
 ) -> Result<ToolCallUpdate, AgentError> {
     // Validate the complete representation before retaining provider name state.
     let update = acp_tool_call(value)?;
@@ -54,10 +61,12 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
         .pointer("/_meta/claudeCode/toolName")
         .and_then(Value::as_str)
     {
-        // Names are bounded before retention, including future native tool names.
-        // Together with 256-byte IDs and 4,096 entries, this bounds the map's
-        // string payload independently of incoming frame size.
-        if !allowed_name(name) {
+        // Only native tools included in the configured review policy and tools
+        // from configured MCP namespaces may reach Nessa's permission owner.
+        // Names are also bounded before retention; together with 256-byte IDs
+        // and 4,096 entries, this bounds the map's string payload independently
+        // of incoming frame size.
+        if !enabled_name(name, mcp_prefixes) {
             // A rejected name can occupy the entire frame. Do not copy it into
             // an error that teardown will retain and clone.
             return Err(AgentError::Unsupported(
@@ -78,6 +87,7 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
 pub(in crate::infrastructure::claude_acp) fn tool_input(
     name: &str,
     value: &Value,
+    mcp_prefixes: &[String],
 ) -> Result<ToolReviewInput, AgentError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -161,7 +171,7 @@ pub(in crate::infrastructure::claude_acp) fn tool_input(
                 return Err(protocol("conflicting search context fields"));
             }
         }
-        _ if allowed_name(name) && value.is_object() => {}
+        _ if enabled_name(name, mcp_prefixes) && value.is_object() => {}
         _ => return Err(protocol("permission for an invalid or disabled tool")),
     }
     Ok(ToolReviewInput {

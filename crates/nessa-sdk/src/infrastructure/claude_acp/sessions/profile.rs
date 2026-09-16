@@ -133,20 +133,7 @@ impl AcpProfile for ClaudeProfile {
         self.tool_names.clear();
     }
     fn tool_call(&mut self, value: &Value) -> Result<ToolCallUpdate, AgentError> {
-        if let Some(name) = value
-            .pointer("/_meta/claudeCode/toolName")
-            .and_then(Value::as_str)
-        {
-            if name.starts_with("mcp__")
-                && !self
-                    .mcp_prefixes
-                    .iter()
-                    .any(|prefix| name.starts_with(prefix))
-            {
-                return Err(protocol("tool belongs to an unconfigured MCP server"));
-            }
-        }
-        wire::tool_call(value, &mut self.tool_names)
+        wire::tool_call(value, &mut self.tool_names, &self.mcp_prefixes)
     }
     fn tool_input(&self, tool: &Value) -> Result<ToolReviewInput, AgentError> {
         let id = identifier(tool, "toolCallId")?;
@@ -158,6 +145,7 @@ impl AcpProfile for ClaudeProfile {
             name,
             tool.get("rawInput")
                 .ok_or_else(|| protocol("missing tool input"))?,
+            &self.mcp_prefixes,
         )
     }
 }
