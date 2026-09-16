@@ -1,7 +1,7 @@
 //! Authentication assembles identity only. Callers must authorize each operation
 //! against fresh state and own invalidation/expiry handling for open connections.
 use super::ports::{AccessError, AccessReader, Clock, CredentialEvidence, CredentialVerifier};
-use crate::domain::{AudienceId, AuthContext};
+use crate::domain::{AudienceId, AuthContext, CredentialId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Verified session identity plus the lifetime and state revision checked at entry.
@@ -42,6 +42,53 @@ pub struct ReadCurrentSession<'a> {
 }
 
 impl ReadCurrentSession<'_> {
+    /// Resolve a stored credential reference through one current committed snapshot.
+    ///
+    /// This is the authority boundary for opaque host sessions that retain only a
+    /// credential ID. It reconstructs identity from current registry state and
+    /// returns the exact snapshot used to construct the session.
+    pub async fn resolve(
+        &self,
+        credential_id: &CredentialId,
+        audience: &AudienceId,
+    ) -> Result<(AuthenticatedSession, super::ports::AccessSnapshot), AccessError> {
+        let snapshot = self.access.read(credential_id).await?;
+        let credential = &snapshot.credential;
+        let membership = &snapshot.membership;
+        let now = self.clock.unix_seconds();
+        if credential.revoked_at().is_some() {
+            return Err(AccessError::CredentialRevoked);
+        }
+        if credential.expires_at().is_some_and(|expiry| now >= expiry) {
+            return Err(AccessError::CredentialExpired);
+        }
+        if !credential.is_valid_at(now) {
+            return Err(AccessError::InvalidCredential);
+        }
+        if credential.id() != credential_id
+            || credential.audience_id() != audience
+            || credential.principal_id() != membership.principal_id()
+            || credential.organization_id() != membership.organization_id()
+        {
+            return Err(AccessError::IdentityMismatch);
+        }
+        if !membership.is_active() {
+            return Err(AccessError::InactiveMembership);
+        }
+        let session = AuthenticatedSession {
+            context: AuthContext::new(
+                credential.principal_id().clone(),
+                credential.organization_id().clone(),
+                membership.id().clone(),
+                credential.id().clone(),
+                credential.audience_id().clone(),
+            ),
+            expires_at: credential.expires_at(),
+            auth_revision: snapshot.revision,
+        };
+        Ok((session, snapshot))
+    }
+
     /// Reject revoked, expired, inactive, mismatched, or stale identity state.
     pub async fn execute(
         &self,
@@ -50,7 +97,7 @@ impl ReadCurrentSession<'_> {
         let context = session.context();
         let snapshot = self.access.read(context.credential_id()).await?;
         if snapshot.revision < session.auth_revision() {
-            return Err(AccessError::Unavailable);
+            return Err(AccessError::StaleRevision);
         }
         let credential = &snapshot.credential;
         let membership = &snapshot.membership;
@@ -243,6 +290,81 @@ mod tests {
             ),
         )
     }
+    #[test]
+    fn credential_id_resolves_current_identity_revision_and_audience() {
+        let adapter = fixture("org", MembershipStatus::Active);
+        let audience = AudienceId::new("local").unwrap();
+        let id = CredentialId::new("credential").unwrap();
+        let reader = ReadCurrentSession {
+            access: &adapter,
+            clock: &adapter,
+        };
+        let (session, snapshot) = ready(reader.resolve(&id, &audience)).unwrap();
+        assert_eq!(session.context().credential_id(), &id);
+        assert_eq!(session.context().membership_id().as_str(), "member");
+        assert_eq!(session.auth_revision(), snapshot.revision);
+        assert_eq!(session.expires_at(), Some(20));
+        assert!(matches!(
+            ready(reader.resolve(&id, &AudienceId::new("other").unwrap())),
+            Err(AccessError::IdentityMismatch)
+        ));
+        let mut expired = adapter;
+        expired.now = 20;
+        assert!(matches!(
+            ready(
+                ReadCurrentSession {
+                    access: &expired,
+                    clock: &expired,
+                }
+                .resolve(&id, &audience)
+            ),
+            Err(AccessError::CredentialExpired)
+        ));
+    }
+
+    #[test]
+    fn credential_id_resolution_rejects_current_revocation_membership_and_linkage() {
+        let audience = AudienceId::new("local").unwrap();
+        let id = CredentialId::new("credential").unwrap();
+        let mut revoked = fixture("org", MembershipStatus::Active);
+        revoked.snapshot.credential.revoke(10).unwrap();
+        assert!(matches!(
+            ready(
+                ReadCurrentSession {
+                    access: &revoked,
+                    clock: &revoked,
+                }
+                .resolve(&id, &audience)
+            ),
+            Err(AccessError::CredentialRevoked)
+        ));
+
+        let inactive = fixture("org", MembershipStatus::Disabled);
+        assert!(matches!(
+            ready(
+                ReadCurrentSession {
+                    access: &inactive,
+                    clock: &inactive,
+                }
+                .resolve(&id, &audience)
+            ),
+            Err(AccessError::InactiveMembership)
+        ));
+
+        let wrong = CredentialId::new("other-credential").unwrap();
+        let current = fixture("org", MembershipStatus::Active);
+        assert!(matches!(
+            ready(
+                ReadCurrentSession {
+                    access: &current,
+                    clock: &current,
+                }
+                .resolve(&wrong, &audience)
+            ),
+            Err(AccessError::IdentityMismatch)
+        ));
+    }
+
     #[test]
     fn independent_injected_adapters_do_not_share_identity_state() {
         let good = fixture("org", MembershipStatus::Active);

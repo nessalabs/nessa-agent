@@ -303,7 +303,7 @@ fn authorization_reloads_state_after_login() {
     fixture.store.replace(stale);
     assert_eq!(
         fixture.authorize(&session, "credential.manage", target()),
-        Err(AccessError::Unavailable)
+        Err(AccessError::StaleRevision)
     );
 
     fixture.store.replace(snapshot(

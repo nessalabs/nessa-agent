@@ -305,13 +305,13 @@ pub fn open(path: &Path, mode: OpenMode) -> io::Result<File> {
         bInheritHandle: 0,
     };
     let access = GENERIC_READ
-        | if matches!(mode, OpenMode::Read) {
+        | if matches!(mode, OpenMode::Read | OpenMode::ReadNonblocking) {
             0
         } else {
             GENERIC_WRITE
         };
     let disposition = match mode {
-        OpenMode::Read | OpenMode::ReadWrite => OPEN_EXISTING,
+        OpenMode::Read | OpenMode::ReadNonblocking | OpenMode::ReadWrite => OPEN_EXISTING,
         OpenMode::OpenOrCreate => OPEN_ALWAYS,
         OpenMode::CreateNew => CREATE_NEW,
     };
@@ -352,6 +352,17 @@ pub fn create_directory(path: &Path) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     verify_directory(path)
+}
+pub fn create_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> {
+    if relative.components().next().is_none()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(unsafe_file());
+    }
+    verify_directory(root)?;
+    create_directory(&root.join(relative))
 }
 /// Windows does not expose Unix directory fsync semantics. Files are flushed
 /// before publication; replacement requests the platform's write-through move.

@@ -45,6 +45,8 @@ pub enum AccessError {
     InactiveMembership,
     /// Credential, audience, or membership identifiers do not agree.
     IdentityMismatch,
+    /// Current authorization state predates the revision already verified for the session.
+    StaleRevision,
     /// A required verifier, store, or policy authority is unavailable.
     Unavailable,
     /// The selected adapter cannot perform this operation.

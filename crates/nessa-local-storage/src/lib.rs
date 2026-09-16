@@ -15,12 +15,18 @@ mod windows;
 use windows as platform;
 
 pub use platform::{
-    create_directory, open, replace, sync_directory, verify_directory, verify_file,
+    create_directory, create_directory_beneath, open, replace, sync_directory, verify_directory,
+    verify_file,
 };
 
 #[derive(Clone, Copy)]
 pub enum OpenMode {
     Read,
+    /// Opens an existing file for reads without waiting on special-file peers.
+    ///
+    /// The platform still verifies that the opened handle is a private,
+    /// single-linked regular file before returning it.
+    ReadNonblocking,
     ReadWrite,
     OpenOrCreate,
     CreateNew,
@@ -100,5 +106,60 @@ mod tests {
         assert_eq!(text, "replacement");
         std::fs::hard_link(&path, directory.join("alias")).unwrap();
         assert!(open(&path, OpenMode::Read).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nonblocking_reads_accept_private_files_and_reject_fifos_without_a_writer() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("private");
+        create_directory(&directory).unwrap();
+        let regular = directory.join("regular");
+        open(&regular, OpenMode::CreateNew)
+            .unwrap()
+            .write_all(b"value")
+            .unwrap();
+
+        let mut text = String::new();
+        open(&regular, OpenMode::ReadNonblocking)
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        assert_eq!(text, "value");
+
+        let fifo = directory.join("fifo");
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+        assert!(open(&fifo, OpenMode::ReadNonblocking).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_shared_directories_are_rejected_without_permission_repair() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        for mode in [0o755, 0o750] {
+            let directory = root.path().join(format!("shared-{mode:o}"));
+            std::fs::create_dir(&directory).unwrap();
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(mode)).unwrap();
+
+            assert!(verify_directory(&directory).is_err());
+            assert!(create_directory(&directory).is_err());
+            assert_eq!(
+                std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+                mode
+            );
+        }
+
+        let private = root.path().join("private");
+        create_directory(&private).unwrap();
+        assert_eq!(
+            std::fs::metadata(private).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
     }
 }
