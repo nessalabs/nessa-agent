@@ -1,9 +1,12 @@
 import { spawnSync } from "node:child_process"
 import { readdirSync } from "node:fs"
 
-const tests = readdirSync("scripts/desktop")
-  .filter((name) => name.endsWith(".test.mjs"))
-  .map((name) => `scripts/desktop/${name}`)
+const tests = [
+  "scripts/ensure-nessa-ui.test.mjs",
+  ...readdirSync("scripts/desktop")
+    .filter((name) => name.endsWith(".test.mjs"))
+    .map((name) => `scripts/desktop/${name}`),
+]
 const config = spawnSync("node", ["--test", ...tests], {
   stdio: "inherit",
 })

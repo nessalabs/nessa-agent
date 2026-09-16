@@ -4,12 +4,18 @@
  * Failures are the rule plus the file that broke it — not a style opinion.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
+import { execFileSync } from "node:child_process"
 import { dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
   hasImmediateCfg,
   hasNoImmediateCfg,
 } from "./architecture/platform-boundaries.mjs"
+import {
+  normalizedPath,
+  rustBoundaryViolations,
+  workspaceRustSourceRoots,
+} from "./architecture/rust-boundaries.mjs"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const src = join(root, "src")
@@ -26,11 +32,40 @@ function walk(dir) {
 }
 
 function rel(path) {
-  return relative(root, path)
+  return normalizedPath(relative(root, path))
 }
 
 function fail(path, rule) {
   failures.push(`${rel(path)}: ${rule}`)
+}
+
+function rustFiles(directory) {
+  const files = []
+  for (const name of readdirSync(directory)) {
+    const path = join(directory, name)
+    if (statSync(path).isDirectory()) files.push(...rustFiles(path))
+    else if (name.endsWith(".rs")) files.push(path)
+  }
+  return files
+}
+
+const metadata = JSON.parse(
+  execFileSync("cargo", ["metadata", "--no-deps", "--format-version", "1"], {
+    cwd: root,
+    encoding: "utf8",
+  }),
+)
+for (const rustRoot of workspaceRustSourceRoots(root, metadata)) {
+  const source = join(rustRoot, "src")
+  if (!existsSync(source)) continue
+  for (const file of rustFiles(source)) {
+    for (const violation of rustBoundaryViolations(
+      rel(file),
+      readFileSync(file, "utf8"),
+    )) {
+      fail(file, violation)
+    }
+  }
 }
 
 if (existsSync(join(src, "utils.ts")) || existsSync(join(src, "utils.tsx"))) {
