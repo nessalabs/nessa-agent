@@ -220,6 +220,7 @@ fn error_code(error: &ConversationError) -> &'static str {
         | ConversationError::Agent(AgentError::Storage(StorageError::IdentityMismatch)) => {
             "conversation_configuration_changed"
         }
+        ConversationError::Audit => "audit_unavailable",
         ConversationError::Metadata | ConversationError::Storage(_) => {
             "conversation_storage_unavailable"
         }

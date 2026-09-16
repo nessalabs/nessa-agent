@@ -1,5 +1,8 @@
 use crate::conversation::{
-    application::{ConversationError, ConversationFuture, ConversationRepository},
+    application::{
+        ConversationCreation, ConversationCreationDisposition, ConversationError,
+        ConversationFuture, ConversationRepository,
+    },
     domain::{Conversation, ConversationId},
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -80,14 +83,17 @@ impl ConversationRepository for LocalConversationRepository {
             .map_err(|_| ConversationError::Metadata)?
         })
     }
-    fn create(&self, conversation: Conversation) -> ConversationFuture<'_, Conversation> {
+    fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation> {
         let root = self.root.clone();
         let writes = self.writes.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
                 let _guard = writes.lock().map_err(|_| ConversationError::Metadata)?;
                 if let Some(existing) = read(&root, conversation.id())? {
-                    return Ok(existing);
+                    return Ok(ConversationCreation {
+                        conversation: existing,
+                        disposition: ConversationCreationDisposition::Existing,
+                    });
                 }
                 let value = StoredConversation {
                     id: conversation.id().to_string(),
@@ -107,10 +113,18 @@ impl ConversationRepository for LocalConversationRepository {
                             .and_then(|_| file.sync_all())
                             .map_err(|_| ConversationError::Metadata)?;
                         storage::sync_directory(&root).map_err(|_| ConversationError::Metadata)?;
-                        Ok(conversation)
+                        Ok(ConversationCreation {
+                            conversation,
+                            disposition: ConversationCreationDisposition::Created,
+                        })
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                        read(&root, conversation.id())?.ok_or(ConversationError::Metadata)
+                        read(&root, conversation.id())?
+                            .map(|conversation| ConversationCreation {
+                                conversation,
+                                disposition: ConversationCreationDisposition::Existing,
+                            })
+                            .ok_or(ConversationError::Metadata)
                     }
                     Err(_) => Err(ConversationError::Metadata),
                 }

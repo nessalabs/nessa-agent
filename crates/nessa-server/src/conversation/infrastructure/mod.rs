@@ -2,6 +2,9 @@
 mod repository;
 pub use repository::LocalConversationRepository;
 
+mod creation_audit;
+pub use creation_audit::DurableConversationCreationAudit;
+
 mod audit;
 mod audit_mapping;
 pub use audit::DurableExecutionAudit;

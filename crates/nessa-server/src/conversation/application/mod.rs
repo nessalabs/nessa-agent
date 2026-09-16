@@ -7,7 +7,11 @@ mod projection;
 mod service;
 mod view;
 pub use error::ConversationError;
-pub use ports::{ConversationFuture, ConversationRepository};
+pub use ports::{
+    ConversationCreation, ConversationCreationAudit, ConversationCreationAuditRecord,
+    ConversationCreationCause, ConversationCreationDisposition, ConversationFuture,
+    ConversationOwnershipState, ConversationRepository,
+};
 pub use service::{ConversationCaller, ConversationLimits, ConversationService, SubmissionMode};
 pub use view::{
     ConversationCapabilities, ConversationDisposition, ConversationMessage,

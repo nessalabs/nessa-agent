@@ -1,6 +1,8 @@
 //! Test-only provider and metadata ports; all scheduling runs through the real SDK Agent.
 use crate::conversation::application::{
-    ConversationFuture, ConversationLimits, ConversationRepository, ConversationService,
+    ConversationCreation, ConversationCreationAudit, ConversationCreationAuditRecord,
+    ConversationCreationDisposition, ConversationFuture, ConversationLimits,
+    ConversationRepository, ConversationService,
 };
 use crate::conversation::domain::{Conversation, ConversationId};
 use nessa_sdk::{
@@ -71,15 +73,39 @@ impl ConversationRepository for MemoryRepository {
         let value = self.records.lock().unwrap().get(id).cloned();
         Box::pin(async move { Ok(value) })
     }
-    fn create(&self, value: Conversation) -> ConversationFuture<'_, Conversation> {
-        let value = self
-            .records
-            .lock()
-            .unwrap()
-            .entry(value.id().clone())
-            .or_insert(value)
-            .clone();
-        Box::pin(async move { Ok(value) })
+    fn create(&self, value: Conversation) -> ConversationFuture<'_, ConversationCreation> {
+        let mut records = self.records.lock().unwrap();
+        let (conversation, disposition) = match records.entry(value.id().clone()) {
+            std::collections::hash_map::Entry::Occupied(entry) => (
+                entry.get().clone(),
+                ConversationCreationDisposition::Existing,
+            ),
+            std::collections::hash_map::Entry::Vacant(entry) => (
+                entry.insert(value).clone(),
+                ConversationCreationDisposition::Created,
+            ),
+        };
+        Box::pin(async move {
+            Ok(ConversationCreation {
+                conversation,
+                disposition,
+            })
+        })
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct AcceptingCreationAudit;
+impl ConversationCreationAudit for AcceptingCreationAudit {
+    fn record(&self, _: ConversationCreationAuditRecord) -> ConversationFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+pub(crate) struct TestClock;
+impl nessa_auth::application::ports::Clock for TestClock {
+    fn unix_milliseconds(&self) -> u64 {
+        1_700_000_000_123
     }
 }
 #[derive(Default)]
@@ -115,6 +141,8 @@ pub(crate) fn fixture(
         Arc::new(Provider(provider.clone())),
         storage.clone(),
         repository.clone(),
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
         limits,
         None,
     )

@@ -11,6 +11,7 @@ pub enum ConversationError {
     Capacity,
     Unavailable,
     Metadata,
+    Audit,
     /// Every failed owner is retained; successful cleanup of another owner never erases it.
     Retirement(Vec<(String, AgentError)>),
     /// Retirement attempted cleanup despite an unsettled admitted command.

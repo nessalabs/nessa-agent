@@ -1,12 +1,13 @@
 //! Shared conversation ownership and admission tests use real SDK scheduling.
 use super::{
-    ConversationCaller, ConversationDisposition, ConversationError, ConversationFuture,
-    ConversationLimits, ConversationMessageStatus, ConversationRepository, ConversationService,
-    SubmissionMode,
+    ConversationCaller, ConversationCreation, ConversationCreationAudit,
+    ConversationCreationAuditRecord, ConversationDisposition, ConversationError,
+    ConversationFuture, ConversationLimits, ConversationMessageStatus, ConversationOwnershipState,
+    ConversationRepository, ConversationService, SubmissionMode,
 };
 use crate::{
     conversation::domain::{Conversation, ConversationId},
-    conversation_test_support::{fixture, Provider},
+    conversation_test_support::{fixture, AcceptingCreationAudit, Provider, TestClock},
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::{
@@ -62,6 +63,125 @@ async fn completed(service: &ConversationService, id: &ConversationId, count: us
     })
     .await
     .unwrap();
+}
+
+struct RecordingCreationAudit {
+    records: Mutex<Vec<ConversationCreationAuditRecord>>,
+    reject: bool,
+    started: Notify,
+    gate: Mutex<Option<oneshot::Receiver<()>>>,
+}
+impl ConversationCreationAudit for RecordingCreationAudit {
+    fn record(&self, record: ConversationCreationAuditRecord) -> ConversationFuture<'_, ()> {
+        let gate = self.gate.lock().unwrap().take();
+        self.records.lock().unwrap().push(record);
+        self.started.notify_one();
+        Box::pin(async move {
+            if let Some(gate) = gate {
+                let _ = gate.await;
+            }
+            if self.reject {
+                Err(ConversationError::Audit)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_open() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let audit = Arc::new(RecordingCreationAudit {
+        records: Mutex::new(Vec::new()),
+        reject: true,
+        started: Notify::new(),
+        gate: Mutex::new(None),
+    });
+    let service = ConversationService::new(
+        Arc::new(Provider(provider.clone())),
+        storage,
+        repository.clone(),
+        audit.clone(),
+        Arc::new(TestClock),
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = id();
+    assert!(matches!(
+        service
+            .create(id.clone(), caller("panel", "create-1"))
+            .await,
+        Err(ConversationError::Audit)
+    ));
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+    assert!(repository.records.lock().unwrap().contains_key(&id));
+    let records = audit.records.lock().unwrap();
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(record.conversation_id, id);
+    assert_eq!(record.organization_id.as_str(), "org");
+    assert_eq!(record.owner_id.as_str(), "person");
+    assert_eq!(
+        (record.before, record.after),
+        (
+            ConversationOwnershipState::Absent,
+            ConversationOwnershipState::Owned
+        )
+    );
+    assert_eq!(
+        record.cause,
+        super::ConversationCreationCause::CallerRequested
+    );
+    assert_eq!(record.initiator_principal_id.as_str(), "person");
+    assert_eq!(record.initiator_surface_id, "panel");
+    assert_eq!(record.correlation_id, "create-1");
+    assert_eq!(record.requested_at_ms, 1_700_000_000_123);
+    assert_eq!(record.committed_at_ms, 1_700_000_000_123);
+    assert_eq!(record.observed_at_ms, 1_700_000_000_123);
+}
+
+#[tokio::test]
+async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let (release, gate) = oneshot::channel();
+    let audit = Arc::new(RecordingCreationAudit {
+        records: Mutex::new(Vec::new()),
+        reject: false,
+        started: Notify::new(),
+        gate: Mutex::new(Some(gate)),
+    });
+    let service = ConversationService::new(
+        Arc::new(Provider(provider.clone())),
+        storage,
+        repository,
+        audit.clone(),
+        Arc::new(TestClock),
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = id();
+    let caller_task = tokio::spawn({
+        let service = service.clone();
+        let id = id.clone();
+        async move { service.create(id, caller("panel", "caller-lost")).await }
+    });
+    audit.started.notified().await;
+    caller_task.abort();
+    release.send(()).unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        provider.opening.notified(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        audit.records.lock().unwrap()[0].correlation_id,
+        "caller-lost"
+    );
+    service.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -353,6 +473,8 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
         Arc::new(Provider(provider.clone())),
         storage.clone(),
         repository,
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
         ConversationLimits::default(),
         None,
     )
@@ -377,7 +499,7 @@ impl ConversationRepository for GatedCreateRepository {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>> {
         self.inner.load(id)
     }
-    fn create(&self, conversation: Conversation) -> ConversationFuture<'_, Conversation> {
+    fn create(&self, conversation: Conversation) -> ConversationFuture<'_, ConversationCreation> {
         let gate = self.gate.lock().unwrap().take();
         let inner = self.inner.clone();
         self.started.notify_one();
@@ -403,6 +525,8 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
         Arc::new(Provider(provider)),
         storage,
         repository.clone(),
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
         ConversationLimits::default(),
         None,
     )
@@ -458,6 +582,8 @@ async fn resource_free_provider_failure_retires_slot_for_retry() {
         provider.clone(),
         storage,
         repository,
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
         ConversationLimits::default(),
         None,
     )
@@ -507,6 +633,8 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
         provider.clone(),
         storage,
         repository,
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
         ConversationLimits::default(),
         None,
     )
@@ -569,6 +697,8 @@ async fn restart_restores_saved_messages_without_replaying_input() {
         Arc::new(Provider(provider.clone())),
         storage,
         repository,
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
         ConversationLimits::default(),
         None,
     )
@@ -600,6 +730,8 @@ async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
         Arc::new(Provider(provider)),
         Arc::new(PanickingStorage),
         repository,
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
         ConversationLimits::default(),
         None,
     )
@@ -750,6 +882,8 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
         Arc::new(Provider(provider)),
         Arc::new(HostileStorage),
         repository,
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
         ConversationLimits::default(),
         None,
     )

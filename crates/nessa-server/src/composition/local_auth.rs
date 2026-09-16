@@ -4,7 +4,7 @@ use crate::{
     browser_session::adapters::PersistentSessions,
     conversation::{
         application::{ConversationLimits, ConversationService},
-        infrastructure::LocalConversationRepository,
+        infrastructure::{DurableConversationCreationAudit, LocalConversationRepository},
     },
     core::RunError,
     env::Environment,
@@ -108,7 +108,8 @@ pub(super) fn product_state(
             .join("conversations");
         nessa_local_storage::create_directory(&root)
             .map_err(|error| RunError::Agent(error.to_string()))?;
-        let provider = super::agent::provider(agent, &root, Arc::new(SystemClock))?;
+        let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+        let provider = super::agent::provider(agent, &root, clock.clone())?;
         let storage = Arc::new(
             LocalFileStorage::new(root.join("sessions"))
                 .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -117,10 +118,16 @@ pub(super) fn product_state(
             LocalConversationRepository::new(root.join("metadata"))
                 .map_err(|error| RunError::Agent(error.to_string()))?,
         );
+        let creation_audit = Arc::new(
+            DurableConversationCreationAudit::new(root.join("audit").join("creation"))
+                .map_err(|error| RunError::Agent(error.to_string()))?,
+        );
         let service = ConversationService::new(
             provider,
             storage,
             metadata,
+            creation_audit,
+            clock,
             ConversationLimits {
                 reserved_output_tokens: agent.output_tokens,
                 ..ConversationLimits::default()

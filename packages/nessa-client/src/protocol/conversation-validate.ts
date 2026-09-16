@@ -87,6 +87,8 @@ export function conversationView(value: unknown, expected: string): Conversation
   const messages = items(item, "messages", 128)
   const messageIds = new Set<string>()
   const messageStatuses = new Map<string, string>()
+  const messageTexts = new Map<string, string>()
+  const toolPartIds = new Set<string>()
   for (const message of messages) {
     const executionId = identity(message, "executionId")
     if (messageIds.has(executionId))
@@ -111,12 +113,19 @@ export function conversationView(value: unknown, expected: string): Conversation
       if (!Number.isSafeInteger(part.offset) || (part.offset as number) <= previousOffset)
         throw new Error("Invalid part order")
       previousOffset = part.offset as number
-      oneOf(text(part, "kind"), ["text", "thought", "tool"])
+      const kind = text(part, "kind")
+      oneOf(kind, ["text", "thought", "tool"])
       text(part, "text")
-      text(part, "toolId", 256)
+      const toolId = text(part, "toolId", 256)
+      if (kind === "tool") {
+        if (!toolId.length) throw new Error("Conversation tool part has no tool identity")
+        toolPartIds.add(JSON.stringify([executionId, toolId]))
+      } else if (toolId.length) {
+        throw new Error("Conversation non-tool part has a tool identity")
+      }
       if (part.messageId !== undefined) identity(part, "messageId")
     }
-    text(message, "userText")
+    const userText = text(message, "userText")
     const status = text(message, "status")
     oneOf(status, [
       "queued",
@@ -137,6 +146,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     if (message.error !== undefined) text(message, "error", 2048, false)
     messageIds.add(executionId)
     messageStatuses.set(executionId, status)
+    messageTexts.set(executionId, userText)
   }
   const pendingIds = new Set<string>()
   for (const pending of items(item, "pending", 128)) {
@@ -149,8 +159,10 @@ export function conversationView(value: unknown, expected: string): Conversation
     if (status === undefined && !item.truncated)
       throw new Error("Pending execution is missing its message")
     pendingIds.add(executionId)
-    text(pending, "text", 8192)
+    const pendingText = text(pending, "text", 8192)
     oneOf(text(pending, "mode"), ["queued", "steering"])
+    if (!item.truncated && item.queueComplete && messageTexts.get(executionId) !== pendingText)
+      throw new Error("Pending execution contradicts its queued message")
   }
   const permissionIds = new Set<string>()
   for (const permission of items(item, "permissions", 64)) {
@@ -191,6 +203,16 @@ export function conversationView(value: unknown, expected: string): Conversation
     text(tool, "status", 64)
     text(tool, "details", 16384)
     text(tool, "input", 32768)
+  }
+  if (!item.truncated) {
+    for (const toolKey of toolIds) {
+      if (!toolPartIds.has(toolKey))
+        throw new Error("Conversation tool is orphaned from its message")
+    }
+    for (const toolKey of toolPartIds) {
+      if (!toolIds.has(toolKey))
+        throw new Error("Conversation tool part has no matching tool state")
+    }
   }
   if (item.runtime !== undefined) {
     const runtime = record(item.runtime)

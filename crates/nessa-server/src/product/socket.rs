@@ -200,7 +200,7 @@ where
                 }
                 return Err((
                     frame.id,
-                    if error == AccessError::Unavailable {
+                    if retryable_access_error(error) {
                         "temporarily_unavailable"
                     } else {
                         "unauthorized"
@@ -222,7 +222,7 @@ where
     .map_err(|error| {
         (
             frame.id.clone(),
-            if error == AccessError::Unavailable {
+            if retryable_access_error(error) {
                 "temporarily_unavailable"
             } else {
                 "unauthorized"
@@ -774,10 +774,15 @@ fn close_reason(error: AccessError) -> SessionCloseReason {
     match error {
         AccessError::CredentialRevoked => SessionCloseReason::CredentialRevoked,
         AccessError::CredentialExpired => SessionCloseReason::CredentialExpired,
-        AccessError::Unavailable => SessionCloseReason::TemporaryUnavailable,
-        AccessError::StaleRevision => SessionCloseReason::AuthorizationLost,
+        AccessError::Unavailable | AccessError::StaleRevision => {
+            SessionCloseReason::TemporaryUnavailable
+        }
         _ => SessionCloseReason::AuthorizationLost,
     }
+}
+
+fn retryable_access_error(error: AccessError) -> bool {
+    matches!(error, AccessError::Unavailable | AccessError::StaleRevision)
 }
 
 async fn close_session<S: Sink<Message> + Unpin>(
@@ -843,6 +848,7 @@ mod tests {
             (AccessError::CredentialExpired, "credential_expired", false),
             (AccessError::InactiveMembership, "authorization_lost", false),
             (AccessError::Unavailable, "temporary_unavailable", true),
+            (AccessError::StaleRevision, "temporary_unavailable", true),
         ] {
             let reason = close_reason(error);
             let value = serde_json::to_value(SessionTermination {

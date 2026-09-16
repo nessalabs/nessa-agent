@@ -22,7 +22,12 @@ async fn ownership_is_create_once_and_corrupt_records_fail_closed() {
         "create-original".into(),
     )
     .unwrap();
-    assert_eq!(repository.create(original.clone()).await.unwrap(), original);
+    let created = repository.create(original.clone()).await.unwrap();
+    assert_eq!(created.conversation, original);
+    assert_eq!(
+        created.disposition,
+        crate::conversation::application::ConversationCreationDisposition::Created
+    );
     let impostor = Conversation::new(
         id.clone(),
         OrganizationId::new("org").unwrap(),
@@ -31,7 +36,12 @@ async fn ownership_is_create_once_and_corrupt_records_fail_closed() {
         "overwrite".into(),
     )
     .unwrap();
-    assert_eq!(repository.create(impostor).await.unwrap(), original);
+    let existing = repository.create(impostor).await.unwrap();
+    assert_eq!(existing.conversation, original);
+    assert_eq!(
+        existing.disposition,
+        crate::conversation::application::ConversationCreationDisposition::Existing
+    );
     drop(repository);
     let repository = LocalConversationRepository::new(root.clone()).unwrap();
     assert_eq!(repository.load(&id).await.unwrap(), Some(original));
