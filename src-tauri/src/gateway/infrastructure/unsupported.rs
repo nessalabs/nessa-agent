@@ -2,11 +2,6 @@ use crate::gateway::application::{GatewayError, GatewayHost};
 use std::path::Path;
 pub(super) struct Unsupported;
 impl GatewayHost for Unsupported {
-    fn service_identity(&self, _: &str) -> Result<String, GatewayError> {
-        Err(GatewayError::Registration(
-            "Bundled gateway services currently require macOS".into(),
-        ))
-    }
     fn register(&self, _: &Path, _: &str) -> Result<String, GatewayError> {
         Err(GatewayError::Registration(
             "Bundled gateway services currently require macOS".into(),

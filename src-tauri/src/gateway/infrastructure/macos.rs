@@ -30,9 +30,6 @@ use staging::{launch_settings, stage_runtime};
 
 pub(super) struct Launchd;
 impl GatewayHost for Launchd {
-    fn service_identity(&self, stage: &str) -> Result<String, GatewayError> {
-        service_identity(stage).map_err(GatewayError::Registration)
-    }
     fn register(&self, runtime: &Path, stage: &str) -> Result<String, GatewayError> {
         register(runtime, stage).map_err(GatewayError::Registration)
     }
@@ -73,15 +70,7 @@ fn register(runtime: &Path, stage: &str) -> Result<String, String> {
     if !base.is_absolute() {
         return Err("NESSA_DATA_DIR must be absolute".into());
     }
-    let mut data = if stage == "prod" {
-        base.clone()
-    } else {
-        base.join(stage)
-    };
-    if let Some(instance) = &instance {
-        data = data.join("instances").join(instance);
-    }
-    nessa_local_storage::create_directory(&data).map_err(|e| e.to_string())?;
+    let data = prepare_data_directory(&base, stage, instance.as_deref())?;
     let log = data.join("logs/gateway.log");
     let label = format!(
         "so.nessa.gateway.{stage}{}",
@@ -299,6 +288,27 @@ fn register(runtime: &Path, stage: &str) -> Result<String, String> {
     forward_recovery(installation)?;
     Ok(service)
 }
+fn prepare_data_directory(
+    trusted_base: &Path,
+    stage: &str,
+    instance: Option<&str>,
+) -> Result<PathBuf, String> {
+    nessa_local_storage::create_directory(trusted_base).map_err(|error| error.to_string())?;
+    let mut relative = PathBuf::new();
+    if stage != "prod" {
+        relative.push(stage);
+    }
+    if let Some(instance) = instance {
+        relative.push("instances");
+        relative.push(instance);
+    }
+    if relative.as_os_str().is_empty() {
+        return Ok(trusted_base.to_path_buf());
+    }
+    nessa_local_storage::create_directory_beneath(trusted_base, &relative)
+        .map_err(|error| error.to_string())?;
+    Ok(trusted_base.join(relative))
+}
 #[derive(Deserialize)]
 struct RuntimeManifest {
     fingerprint: String,
@@ -384,32 +394,38 @@ fn finish_bootstrap(
         )),
     }
 }
-fn service_identity(stage: &str) -> Result<String, String> {
-    let instance = std::env::var("NESSA_INSTANCE").ok();
-    for value in std::iter::once(stage).chain(instance.as_deref()) {
-        if value.is_empty()
-            || !value
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
-        {
-            return Err("Invalid gateway namespace".into());
-        }
-    }
-    Ok(format!(
-        "gui/{}/so.nessa.gateway.{stage}{}",
-        unsafe { libc::getuid() },
-        instance.map(|v| format!(".{v}")).unwrap_or_default()
-    ))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{finish_bootstrap, incomplete_install_retry, runtime_fingerprint, service_matches};
+    use super::{
+        finish_bootstrap, incomplete_install_retry, prepare_data_directory, runtime_fingerprint,
+        service_matches,
+    };
     use serde_json::{json, Value};
     use std::{cell::Cell, fs, path::PathBuf};
 
     fn temporary_directory(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("nessa-gateway-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn non_production_data_rejects_a_symlinked_stage_without_touching_its_target() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root = temporary_directory("symlink-root");
+        let outside = temporary_directory("symlink-target");
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let base = root.join(".nessa");
+        nessa_local_storage::create_directory(&base).unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o700)).unwrap();
+        symlink(&outside, base.join("dev")).unwrap();
+
+        assert!(prepare_data_directory(&base, "dev", Some("worktree")).is_err());
+        assert!(!outside.join("instances/worktree").exists());
+        fs::remove_dir_all(&root).unwrap();
+        fs::remove_dir_all(&outside).unwrap();
     }
 
     #[test]

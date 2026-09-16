@@ -150,3 +150,31 @@ test("verification does not inherit artifact selectors without matching argument
   assert.equal(calls[1].options.env.NESSA_BUILD_TARGET, undefined)
   assert.equal(calls[1].options.env.NESSA_BUILD_BUNDLES, undefined)
 })
+
+test("runtime preparation is capability-scoped to macOS packaging", async () => {
+  const { prepareDesktopRuntime } = await import("./prepare.mjs")
+  for (const platform of ["linux", "win32"]) {
+    let loaded = false
+    assert.deepEqual(
+      await prepareDesktopRuntime({
+        platform,
+        loadManagedRuntime: async () => {
+          loaded = true
+        },
+      }),
+      { managedGateway: false },
+    )
+    assert.equal(loaded, false)
+  }
+  let loaded = false
+  assert.deepEqual(
+    await prepareDesktopRuntime({
+      platform: "darwin",
+      loadManagedRuntime: async () => {
+        loaded = true
+      },
+    }),
+    { managedGateway: true },
+  )
+  assert.equal(loaded, true)
+})
