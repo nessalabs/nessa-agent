@@ -97,17 +97,19 @@ describe("conversation view agreement", () => {
     }
 
     const permission = view()
-    permission.permissions = [
-      {
-        executionId: "running",
-        permissionId: "permission",
-        toolId: "tool",
-        title: "Review",
-        toolName: "write_file",
-        argumentsJson: "{}",
-        options: [{ id: "allow", label: "Allow", extra: true }],
-      },
-    ]
+    Object.assign(permission, {
+      permissions: [
+        {
+          executionId: "running",
+          permissionId: "permission",
+          toolId: "tool",
+          title: "Review",
+          toolName: "write_file",
+          argumentsJson: "{}",
+          options: [{ id: "allow", label: "Allow", extra: true }],
+        },
+      ],
+    })
     expect(() => conversationView(permission, "conversation")).toThrow("unknown fields")
   })
 
