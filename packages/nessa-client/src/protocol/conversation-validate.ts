@@ -194,7 +194,11 @@ export function conversationView(value: unknown, expected: string): Conversation
     pendingIds.add(executionId)
     const pendingText = text(pending, "text", 8192)
     oneOf(text(pending, "mode"), ["queued", "steering"])
-    if (!item.truncated && item.queueComplete && messageTexts.get(executionId) !== pendingText)
+    if (
+      !item.truncated &&
+      item.queueComplete &&
+      messageTexts.get(executionId) !== pendingText
+    )
       throw new Error("Pending execution contradicts its queued message")
   }
   const permissionIds = new Set<string>()
