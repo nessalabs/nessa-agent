@@ -159,5 +159,23 @@ export function hasNativeHost(): boolean {
 export async function loadAssignedSurfaceCredential(stage: string): Promise<string> {
   if (!inTauri) throw new Error("A native host is required for local credential storage")
   const { invoke } = await import("@tauri-apps/api/core")
-  return invoke<string>("load_surface_credential", { stage })
+  try {
+    return await invoke<string>("load_surface_credential", { stage })
+  } catch (error) {
+    // Tauri serializes command failures rather than constructing JS Errors.
+    // Preserve only the native boundary's safe message, never arbitrary payloads.
+    if (error instanceof Error) throw error
+    const message =
+      typeof error === "string"
+        ? error
+        : error && typeof error === "object" && "message" in error
+          ? error.message
+          : undefined
+    throw new Error(
+      typeof message === "string" && message.trim()
+        ? message
+        : "Could not load the desktop gateway credential.",
+      { cause: error },
+    )
+  }
 }

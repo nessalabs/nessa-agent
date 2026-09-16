@@ -1,0 +1,10 @@
+{
+  "name": "nessa-local-auth-ci",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@nessa/client": "file:./packages/nessa-client",
+    "tsx": "4.23.13",
+    "ws": "8.18.3"
+  }
+}

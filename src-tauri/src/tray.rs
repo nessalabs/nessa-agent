@@ -24,6 +24,7 @@ pub struct SurfaceMenuItem(pub CheckMenuItem<Wry>);
 
 /// Whether the tray item exists. Close-to-hide only makes sense when it does.
 pub struct Present(pub bool);
+struct QuitPolicyMenuItem(CheckMenuItem<Wry>);
 
 const TRAY_ID: &str = "nessa-tray";
 /// The menu bar icon, compiled in rather than resolved as a bundle resource so
@@ -41,14 +42,19 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let transparent = CheckMenuItemBuilder::with_id("surface", "Transparent")
         .checked(false)
         .build(app)?;
+    let stop_agents =
+        CheckMenuItemBuilder::with_id("stop-agents-on-quit", "Stop active agents when quitting")
+            .checked(crate::settings::load(app).stop_agents_on_quit)
+            .build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit Nessa").build(app)?;
     let menu = MenuBuilder::new(app)
         .items(&[&toggle, &transparent])
         .separator()
-        .items(&[&quit])
+        .items(&[&stop_agents, &quit])
         .build()?;
 
     app.manage(SurfaceMenuItem(transparent));
+    app.manage(QuitPolicyMenuItem(stop_agents));
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
@@ -60,6 +66,18 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             // The frontend owns the choice, so the click is only a request.
             "surface" => {
                 let _ = app.emit(host::TOGGLE_SURFACE, ());
+            }
+            "stop-agents-on-quit" => {
+                let mut settings = crate::settings::load(app);
+                settings.stop_agents_on_quit = !settings.stop_agents_on_quit;
+                match crate::settings::save(app, &settings) {
+                    Ok(()) => {
+                        if let Some(item) = app.try_state::<QuitPolicyMenuItem>() {
+                            let _ = item.0.set_checked(settings.stop_agents_on_quit);
+                        }
+                    }
+                    Err(error) => eprintln!("[nessa] could not save settings: {error}"),
+                }
             }
             "quit" => app.exit(0),
             _ => {}

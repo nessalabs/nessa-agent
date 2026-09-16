@@ -20,6 +20,9 @@ importers:
       '@nessa/client':
         specifier: link:packages/nessa-client
         version: link:packages/nessa-client
+      '@nessalabs/agent-stream':
+        specifier: link:.vendor/nessa_ui/packages/agent-stream
+        version: link:.vendor/nessa_ui/packages/agent-stream
       '@reduxjs/toolkit':
         specifier: ^2.12.0
         version: 2.12.0(react-redux@9.3.0(@types/react@19.2.18)(react@19.2.8)(redux@5.0.1))(react@19.2.8)

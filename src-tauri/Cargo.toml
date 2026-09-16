@@ -18,6 +18,7 @@ nessa-local-storage = { path = "../crates/nessa-local-storage" }
 tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 libc = "0.2"
 
 # The frosted surface is a native NSVisualEffectView rather than a CSS

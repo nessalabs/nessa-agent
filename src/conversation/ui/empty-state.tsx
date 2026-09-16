@@ -14,7 +14,7 @@ export function EmptyState({
   statusLabel: string
 }) {
   return (
-    <div className="flex flex-col items-center gap-2.5 py-6 text-center">
+    <div className="flex flex-col items-center gap-2.5 px-6 py-6 text-center">
       <RandomAvatar
         seed={seed}
         hues={AGENT_HUES}

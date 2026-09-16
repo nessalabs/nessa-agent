@@ -1,3 +1,4 @@
+import { ComposerDeliveryMode } from "@nessa-ui/react/composer-queue"
 import type { AttachmentResources } from "../adapters/attachment-resources"
 import * as React from "react"
 import { Square, X } from "lucide-react"
@@ -20,7 +21,16 @@ import {
 import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
 import { RandomAvatar } from "@nessa-ui/react/random-avatar"
 
-import { AGENT_HUES, Transcript, useConversation, toEditor } from "../../conversation"
+import {
+  ConversationTabMenu,
+  ConversationDetails,
+  AGENT_HUES,
+  ConversationQueue,
+  ConversationNotification,
+  Transcript,
+  useConversation,
+  toEditor,
+} from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
 import { useSession } from "../../session"
 import { useColorScheme } from "../adapters/color-scheme"
@@ -69,14 +79,25 @@ function panelClass(surface: Surface, compositor: CompositorKind): string {
 
 export function App({
   attachmentResources,
+  onSignOut,
+  sessionError,
 }: {
   attachmentResources: AttachmentResources
+  onSignOut?: () => void
+  sessionError?: string
 }) {
   const scheme = useColorScheme()
   const ground = scheme === "dark" ? "ink" : "paper"
   const [surface, toggleSurface] = useSurface()
   const edge = useEdgeReveal()
   const chat = useConversation()
+  const [tabDetails, setTabDetails] = React.useState<{
+    id: string
+    rename: boolean
+  } | null>(null)
+  const detailsConversation = chat.conversations.find(
+    (item) => item.id === tabDetails?.id,
+  )
   const attachments = useFileAttachments(chat, attachmentResources)
   const folderDrop = useFolderDrop(
     chat.active.id,
@@ -240,6 +261,18 @@ export function App({
             className="nessa-chrome shrink-0 px-2 pt-2 pb-1"
           >
             <ChatTabs
+              wrapTab={(tab, node) => (
+                <ConversationTabMenu
+                  key={tab.id}
+                  onDetails={() => {
+                    chat.setActive(tab.id)
+                    setTabDetails({ id: tab.id, rename: false })
+                  }}
+                  onRename={() => setTabDetails({ id: tab.id, rename: true })}
+                >
+                  {node}
+                </ConversationTabMenu>
+              )}
               label="Conversations"
               tabs={tabs}
               value={chat.active.id}
@@ -271,12 +304,13 @@ export function App({
               streamText={host.streamText}
               emptyState={host.emptyState}
               statusLabel={session.statusLabel}
+              gatewayAvailable={chat.gatewayAvailable}
               onOpenPaste={openPaste}
             />
 
             {attachments.viewed && (
               <Sheet
-                className="nessa-pasted-viewer"
+                className="nessa-detail-sheet"
                 label={attachments.viewed.name}
                 onClose={attachments.close}
                 onReturnFocus={focusComposer}
@@ -296,7 +330,7 @@ export function App({
             )}
             {!attachments.viewed && viewedPaste?.conversationId === chat.active.id && (
               <Sheet
-                className="nessa-pasted-viewer"
+                className="nessa-detail-sheet"
                 label="Pasted text"
                 onClose={closePaste}
                 onReturnFocus={focusComposer}
@@ -315,7 +349,39 @@ export function App({
               </Sheet>
             )}
           </div>
+          {tabDetails && detailsConversation && (
+            <ConversationDetails
+              key={`${tabDetails.id}:${tabDetails.rename}`}
+              conversation={detailsConversation}
+              rename={tabDetails.rename}
+              onClose={() => setTabDetails(null)}
+              onRename={(title) => chat.rename(tabDetails.id, title)}
+            />
+          )}
           <div className="nessa-composer">
+            <ConversationNotification
+              conversation={chat.active}
+              connection={session}
+              gatewayAvailable={chat.gatewayAvailable}
+            />
+            <ConversationQueue
+              key={chat.active.id}
+              conversation={chat.active}
+              gatewayAvailable={chat.gatewayAvailable}
+            />
+            {generating && chat.active.remote?.capabilities.steer && (
+              <ComposerDeliveryMode
+                className="mb-2"
+                value={chat.deliveryMode}
+                onValueChange={chat.setDeliveryMode}
+                disabled={!!chat.active.controlPending}
+              />
+            )}
+            {sessionError && (
+              <p role="alert" className="px-3 nessa-text-4 text-destructive">
+                {sessionError}
+              </p>
+            )}
             {attachments.error && (
               <p role="alert" className="px-3 nessa-text-4 text-destructive">
                 {attachments.error}
@@ -330,7 +396,7 @@ export function App({
               key={chat.active.id}
               expandable={viewedPaste === null && attachments.viewed === null}
 
-              generating={generating}
+              generating={false}
               onSubmit={submit}
             >
               <ChatComposerAttachments>
@@ -374,9 +440,10 @@ export function App({
                 <AddAttachmentMenu
                   disabled={attachments.reading}
                   onChoose={attachments.chooseFiles}
+                  onSignOut={onSignOut}
                 />
                 <ChatComposerMarkdownEditor
-                  key={`${chat.active.id}:${chat.active.turns.filter((turn) => turn.from === "user").length}`}
+                  key={`${chat.active.id}:${chat.active.turns.filter((turn) => turn.from === "user").length}:${chat.active.draftReset ?? 0}`}
                   ref={setComposerRef}
                   defaultContent={toEditor(chat.active.draft)}
                   onContentChange={changeContent}
@@ -393,8 +460,9 @@ export function App({
                 {generating ? (
                   <ChatComposerAction
                     className="nessa-composer-control"
-                    aria-label="Stop generating"
-                    title="Stop generating"
+                    aria-label="Stop active and queued work"
+                    title="Stop active and queued work"
+                    disabled={!chat.gatewayAvailable}
                     onClick={chat.stopGenerating}
                   >
                     <Square aria-hidden="true" className="fill-current" />

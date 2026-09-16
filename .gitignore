@@ -34,6 +34,9 @@ Thumbs.db
 
 # --- Project-specific ---
 
+# Local review notes and generated walkthroughs.
+scratchpad/
+
 # Rasterised icon intermediates: regenerate with scripts/render-icon.mjs
 src-tauri/icons/nessa-avatar.png
 
@@ -45,3 +48,6 @@ src-tauri/icons/nessa-avatar.png
 # Rebuild with pnpm client:docs or client:docs:json.
 docs/generated/client-api/
 docs/generated/client-api.json
+
+# Generated bundled gateway and provider runtime
+src-tauri/runtime/

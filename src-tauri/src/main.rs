@@ -1,6 +1,7 @@
 // The release build is a menu bar app with no console window on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod gateway;
 mod host;
 mod local_data;
 mod panel;
@@ -11,6 +12,7 @@ mod shortcuts;
 mod surface_credential;
 mod tray;
 
+use gateway::application::Gateway;
 use std::sync::Mutex;
 
 use tauri::{Manager, WindowEvent};
@@ -32,6 +34,14 @@ fn main() {
         ])
         .setup(|app| {
             app.manage(surface_credential::SurfaceCredential::from_environment());
+            if !cfg!(debug_assertions) {
+                let runtime = app.path().resource_dir()?.join("runtime");
+                app.manage(Gateway::bootstrap(
+                    gateway::infrastructure::current(),
+                    runtime,
+                    local_data::process_stage(),
+                ));
+            }
             platform::current().configure_app(app.handle());
 
             // A missing tray is survivable. On Linux especially, GNOME without
@@ -88,6 +98,17 @@ fn main() {
             }
             platform::current().on_window_event(window, event);
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Nessa");
+        .build(tauri::generate_context!())
+        .expect("error while building Nessa")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                if let Some(gateway) = app.try_state::<Gateway>() {
+                    if settings::load(app).stop_agents_on_quit {
+                        if let Err(error) = gateway.stop_agents() {
+                            eprintln!("[nessa] could not request agent shutdown: {error}");
+                        }
+                    }
+                }
+            }
+        });
 }

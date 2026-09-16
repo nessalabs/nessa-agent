@@ -29,6 +29,8 @@ export type ConnectDevSessionDeps = {
   connect?: typeof NessaClient.connect
   credentialSource?: CredentialSource
   stage?: Stage
+  clientId?: string
+  browserUrl?: string
 }
 
 /** Authenticate the chat surface and verify authorized gateway health. */
@@ -39,12 +41,13 @@ export async function connectDevSession(
   const client = await connect({
     profile: "product",
     stage: deps.stage ?? "dev",
-    url: "ws://127.0.0.1:7420/session",
+    url: deps.browserUrl ?? "ws://127.0.0.1:7420/session",
+    ...(deps.browserUrl ? { auth: { browserCookie: true as const } } : {}),
     credentialSource: deps.credentialSource,
     role: "surface",
     surface: { kind: "panel", instance: crypto.randomUUID() },
     client: {
-      id: "nessa-panel",
+      id: deps.clientId ?? "nessa-panel",
       version: "0.1.0",
       platform: host.kind,
     },

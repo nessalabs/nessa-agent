@@ -2,9 +2,9 @@
 # Windows recipes are written, not yet run on a Windows box.
 #
 #   just          list recipes
-#   just start    desktop app + local nessa-server
+#   just start    desktop app + local nessa server
 #   just dev      desktop app in dev mode (falls back to the browser UI)
-#   just server   local nessa-server only
+#   just server   local nessa server only
 #   just web      UI in a browser only; window controls no-op
 #   just release fast  testing-shaped release (macOS .app / Linux .deb / Windows nsis)
 #   just release  shipping bundle (macOS .dmg / Linux .deb / Windows nsis)
@@ -24,11 +24,11 @@ release-bundle := if os() == "macos" { "dmg" } else if os() == "windows" { "nsis
 default:
     @just --list
 
-# Local nessa-server (stage=dev defaults: 127.0.0.1:7420, token=dev-token).
+# Local gateway (stage=dev, 127.0.0.1:7420; run nessa auth init --local first).
 server:
     pnpm server:run
 
-# Desktop app + local nessa-server (always restarts :7420 so code changes load).
+# Desktop app + local nessa server (always restarts :7420 so code changes load).
 [unix]
 start:
     #!/usr/bin/env bash
@@ -112,15 +112,16 @@ dev:
 dev:
     pnpm app
 
-# Shipping bundle by default; `just release fast` builds with faster settings.
+# Shipping bundle by default; macOS builds seal and verify the completed bundle.
+# `just release fast` builds with faster settings.
 [unix]
 release mode="shipping":
-    {{if mode == "fast" { "CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_PROFILE_RELEASE_OPT_LEVEL=1 CARGO_PROFILE_RELEASE_STRIP=false " } else if mode == "shipping" { "" } else { error("Use just release or just release fast") }}}pnpm exec tauri build --bundles {{if mode == "fast" { fast-bundle } else { release-bundle }}}
+    {{if mode == "fast" { "CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_PROFILE_RELEASE_OPT_LEVEL=1 CARGO_PROFILE_RELEASE_STRIP=false " } else if mode == "shipping" { "" } else { error("Use just release or just release fast") }}}node scripts/desktop/build.mjs --bundles {{if mode == "fast" { fast-bundle } else { release-bundle }}}
 
 # Shipping bundle by default; `just release fast` builds with faster settings.
 [windows]
 release mode="shipping":
-    {{if mode == "fast" { "set CARGO_PROFILE_RELEASE_LTO=false&& set CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16&& set CARGO_PROFILE_RELEASE_OPT_LEVEL=1&& set CARGO_PROFILE_RELEASE_STRIP=false&& " } else if mode == "shipping" { "" } else { error("Use just release or just release fast") }}}pnpm exec tauri build --bundles {{if mode == "fast" { fast-bundle } else { release-bundle }}}
+    {{if mode == "fast" { "set CARGO_PROFILE_RELEASE_LTO=false&& set CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16&& set CARGO_PROFILE_RELEASE_OPT_LEVEL=1&& set CARGO_PROFILE_RELEASE_STRIP=false&& " } else if mode == "shipping" { "" } else { error("Use just release or just release fast") }}}node scripts/desktop/build.mjs --bundles {{if mode == "fast" { fast-bundle } else { release-bundle }}}
 
 # Manage feature worktrees: create <name>, list, remove <name>, or clean (requires Bash).
 [unix]

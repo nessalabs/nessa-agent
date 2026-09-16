@@ -1,5 +1,7 @@
 //! Native storage for the bundled chat surface. Renderer input never selects a file.
+use crate::gateway::application::Gateway;
 use std::{io::Read, path::PathBuf};
+use tauri::Manager;
 
 pub struct SurfaceCredential {
     path: Option<PathBuf>,
@@ -50,8 +52,9 @@ impl SurfaceCredential {
             .path
             .as_ref()
             .ok_or("Invalid native credential namespace")?;
-        let mut file = nessa_local_storage::open(path, nessa_local_storage::OpenMode::Read)
-            .map_err(|_| "Chat credential missing or unsafe; run local auth setup")?;
+        let mut file =
+            nessa_local_storage::open(path, nessa_local_storage::OpenMode::ReadNonblocking)
+                .map_err(|_| "Chat credential missing or unsafe; run local auth setup")?;
         if file
             .metadata()
             .map_err(|_| "Cannot inspect chat credential")?
@@ -74,13 +77,19 @@ impl SurfaceCredential {
 }
 
 #[tauri::command]
-pub fn load_surface_credential(
+pub async fn load_surface_credential(
     window: tauri::WebviewWindow,
     storage: tauri::State<'_, SurfaceCredential>,
     stage: String,
 ) -> Result<String, String> {
     if window.label() != "main" {
         return Err("Only the bundled chat surface can load this credential".into());
+    }
+    if let Some(gateway) = window.app_handle().try_state::<Gateway>() {
+        gateway
+            .wait_ready()
+            .await
+            .map_err(|error| error.to_string())?;
     }
     storage.read(&stage)
 }
@@ -116,6 +125,30 @@ mod tests {
             assert!(storage.read("ci").is_err());
         }
         drop(file);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_storage_rejects_a_fifo_without_waiting_for_a_writer() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "nessa-native-fifo-{}-{unique}.token",
+            std::process::id()
+        ));
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success());
+        let storage = SurfaceCredential {
+            path: Some(path.clone()),
+            stage: "ci".into(),
+        };
+        assert!(storage.read("ci").is_err());
         std::fs::remove_file(path).unwrap();
     }
 }

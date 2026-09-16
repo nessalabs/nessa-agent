@@ -1,26 +1,33 @@
 import { describe, expect, it } from "vitest"
 import { createDependencies } from "./dependencies"
+import { scenarioEffects } from "../conversation/adapters/scenario/effects"
 import { makeStore } from "../store"
 import { sendDraft } from "../conversation/adapters/store/slice"
 
 describe("application dependency scope", () => {
-  it("routes commands through each injected adapter without sharing state", async () => {
-    const first = makeStore(
-      createDependencies({ conversation: { echo: async () => ({ text: "first" }) } }),
-    )
+  it("routes real conversation operations through each injected adapter without sharing state", async () => {
+    const first = makeStore(createDependencies({ conversation: scenarioEffects("echo") }))
     const second = makeStore(
-      createDependencies({ conversation: { echo: async () => ({ text: "second" }) } }),
+      createDependencies({ conversation: scenarioEffects("echo") }),
     )
-    const [a, b] = await Promise.all([
-      first.dispatch(sendDraft({ content: [{ type: "text", text: "hello" }] })),
-      second.dispatch(sendDraft({ content: [{ type: "text", text: "hello" }] })),
+    await Promise.all([
+      first.dispatch(sendDraft({ content: [{ type: "text", text: "first" }] })),
+      second.dispatch(sendDraft({ content: [{ type: "text", text: "second" }] })),
     ])
-    expect(a.payload).toEqual({ text: "first" })
-    expect(b.payload).toEqual({ text: "second" })
-    const disconnected = makeStore()
-    const failure = await disconnected.dispatch(
-      sendDraft({ content: [{ type: "text", text: "hello" }] }),
+    expect(first.getState().conversation.conversations[0]!.turns[1]).toMatchObject({
+      text: "first",
+    })
+    expect(second.getState().conversation.conversations[0]!.turns[1]).toMatchObject({
+      text: "second",
+    })
+    expect(first.getState().conversation.conversations[0]!.serverConversationId).not.toBe(
+      second.getState().conversation.conversations[0]!.serverConversationId,
     )
-    expect(sendDraft.rejected.match(failure)).toBe(true)
+    const disconnected = makeStore()
+    await disconnected.dispatch(sendDraft({ content: [{ type: "text", text: "hello" }] }))
+    expect(disconnected.getState().conversation.conversations[0]!.turns[0]).toMatchObject(
+      { receipt: "failed" },
+    )
+    expect(disconnected.getState().conversation.conversations[0]!.turns).toHaveLength(1)
   })
 })
