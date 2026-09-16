@@ -328,6 +328,50 @@ async fn surfaces_share_one_agent_and_keep_original_creator() {
     service.shutdown().await.unwrap();
     assert_eq!(provider.close_calls.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation() {
+    let (service, provider, repository, storage) = fixture(ConversationLimits {
+        max_conversations: 1,
+        ..ConversationLimits::default()
+    });
+    let id = id();
+    service
+        .create(id.clone(), caller("panel", "original"))
+        .await
+        .unwrap();
+    service.shutdown().await.unwrap();
+    drop(service);
+    tokio::task::yield_now().await;
+
+    let restarted = ConversationService::new(
+        Arc::new(Provider(provider.clone())),
+        storage,
+        repository,
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
+        ConversationLimits {
+            max_conversations: 1,
+            ..ConversationLimits::default()
+        },
+        None,
+    )
+    .unwrap();
+    let mut foreign = caller("other-surface", "foreign-reopen");
+    foreign.principal_id = PrincipalId::new("intruder").unwrap();
+    assert!(matches!(
+        restarted.create(id.clone(), foreign).await,
+        Err(ConversationError::NotFound)
+    ));
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+
+    restarted
+        .create(id, caller("phone", "owner-reopen"))
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
+    restarted.shutdown().await.unwrap();
+}
 #[tokio::test]
 async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
     let (service, provider, _, _) = fixture(ConversationLimits::default());

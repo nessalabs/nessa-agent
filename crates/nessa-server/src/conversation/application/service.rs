@@ -100,11 +100,6 @@ struct Slot {
     ready: Notify,
     started: AtomicBool,
 }
-struct CreationWork {
-    proposed: Conversation,
-    caller: ConversationCaller,
-    requested_at_ms: u64,
-}
 struct Inner {
     workspace: Option<String>,
     provider: Arc<dyn AgentProvider>,
@@ -114,6 +109,7 @@ struct Inner {
     clock: Arc<dyn Clock>,
     limits: ConversationLimits,
     conversations: Mutex<HashMap<ConversationId, Arc<Slot>>>,
+    creation: Mutex<()>,
     retirement: OnceLock<ActionContext>,
     admission: RwLock<()>,
 }
@@ -166,6 +162,7 @@ impl ConversationService {
                 clock,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
+                creation: Mutex::new(()),
                 retirement: OnceLock::new(),
                 admission: RwLock::new(()),
             }),
@@ -193,55 +190,14 @@ impl ConversationService {
             )
             .map_err(|_| ConversationError::InvalidInput)?;
             let requested_at_ms = service.inner.clock.unix_milliseconds();
-            let (slot, owns_creation) = {
-                // Reserve capacity synchronously. The slot's detached supervisor
-                // owns metadata persistence, initialization, and waiter publication.
-                let mut owners = service.inner.conversations.lock().await;
-                if service.inner.retirement.get().is_some() {
-                    return Err(ConversationError::Unavailable);
+            // Serialize create/reopen decisions without holding the live-owner map
+            // across repository or audit I/O. Existing ownership is checked before
+            // this request can reserve capacity or open a provider.
+            let creation_guard = service.inner.creation.lock().await;
+            if let Some(record) = service.inner.metadata.load(&id).await? {
+                if !record.allows(&caller.organization_id, &caller.principal_id) {
+                    return Err(ConversationError::NotFound);
                 }
-                if !owners.contains_key(&id)
-                    && owners.len() >= service.inner.limits.max_conversations
-                {
-                    return Err(ConversationError::Capacity);
-                }
-                match owners.entry(id.clone()) {
-                    std::collections::hash_map::Entry::Occupied(entry) => {
-                        (entry.get().clone(), false)
-                    }
-                    std::collections::hash_map::Entry::Vacant(entry) => {
-                        let slot = Arc::new(Slot {
-                            value: OnceCell::new(),
-                            ready: Notify::new(),
-                            started: AtomicBool::new(false),
-                        });
-                        entry.insert(slot.clone());
-                        // Claim initialization before publishing the slot to any
-                        // concurrent shutdown or same-ID resolver.
-                        service.start_slot(
-                            id.clone(),
-                            slot.clone(),
-                            Some(CreationWork {
-                                proposed,
-                                caller: caller.clone(),
-                                requested_at_ms,
-                            }),
-                        );
-                        (slot, true)
-                    }
-                }
-            };
-            service.open_slot(&id, slot).await?;
-            let record = service
-                .inner
-                .metadata
-                .load(&id)
-                .await?
-                .ok_or(ConversationError::Metadata)?;
-            if !record.allows(&caller.organization_id, &caller.principal_id) {
-                return Err(ConversationError::NotFound);
-            }
-            if !owns_creation {
                 let committed_at_ms = service.inner.clock.unix_milliseconds();
                 service
                     .inner
@@ -253,16 +209,91 @@ impl ConversationService {
                         before: super::ConversationOwnershipState::Owned,
                         after: super::ConversationOwnershipState::Owned,
                         cause: super::ConversationCreationCause::IdempotentReopen,
-                        initiator_principal_id: caller.principal_id,
-                        initiator_surface_id: caller.surface_id,
-                        correlation_id: caller.action_id,
+                        initiator_principal_id: caller.principal_id.clone(),
+                        initiator_surface_id: caller.surface_id.clone(),
+                        correlation_id: caller.action_id.clone(),
                         requested_at_ms,
                         committed_at_ms,
                         observed_at_ms: service.inner.clock.unix_milliseconds(),
                     })
                     .await
                     .map_err(|_| ConversationError::Audit)?;
+                drop(creation_guard);
+                service.resolve(&id, &caller).await?;
+                return Ok(());
             }
+            {
+                let owners = service.inner.conversations.lock().await;
+                if service.inner.retirement.get().is_some() {
+                    return Err(ConversationError::Unavailable);
+                }
+                if !owners.contains_key(&id)
+                    && owners.len() >= service.inner.limits.max_conversations
+                {
+                    return Err(ConversationError::Capacity);
+                }
+            }
+            let outcome = service.inner.metadata.create(proposed).await?;
+            let record = &outcome.conversation;
+            if !record.allows(&caller.organization_id, &caller.principal_id) {
+                return Err(ConversationError::NotFound);
+            }
+            let committed_at_ms = service.inner.clock.unix_milliseconds();
+            let (before, cause) = match outcome.disposition {
+                super::ConversationCreationDisposition::Created => (
+                    super::ConversationOwnershipState::Absent,
+                    super::ConversationCreationCause::CallerRequested,
+                ),
+                super::ConversationCreationDisposition::Existing => (
+                    super::ConversationOwnershipState::Owned,
+                    super::ConversationCreationCause::IdempotentReopen,
+                ),
+            };
+            service
+                .inner
+                .creation_audit
+                .record(super::ConversationCreationAuditRecord {
+                    conversation_id: record.id().clone(),
+                    organization_id: record.organization().clone(),
+                    owner_id: record.owner().clone(),
+                    before,
+                    after: super::ConversationOwnershipState::Owned,
+                    cause,
+                    initiator_principal_id: caller.principal_id.clone(),
+                    initiator_surface_id: caller.surface_id.clone(),
+                    correlation_id: caller.action_id.clone(),
+                    requested_at_ms,
+                    committed_at_ms,
+                    observed_at_ms: service.inner.clock.unix_milliseconds(),
+                })
+                .await
+                .map_err(|_| ConversationError::Audit)?;
+            let slot = {
+                let mut owners = service.inner.conversations.lock().await;
+                if service.inner.retirement.get().is_some() {
+                    return Err(ConversationError::Unavailable);
+                }
+                if !owners.contains_key(&id)
+                    && owners.len() >= service.inner.limits.max_conversations
+                {
+                    return Err(ConversationError::Capacity);
+                }
+                match owners.entry(id.clone()) {
+                    std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        let slot = Arc::new(Slot {
+                            value: OnceCell::new(),
+                            ready: Notify::new(),
+                            started: AtomicBool::new(false),
+                        });
+                        entry.insert(slot.clone());
+                        service.start_slot(id.clone(), slot.clone());
+                        slot
+                    }
+                }
+            };
+            drop(creation_guard);
+            service.open_slot(&id, slot).await?;
             Ok(())
         })
         .await
@@ -298,7 +329,7 @@ impl ConversationService {
                     started: AtomicBool::new(false),
                 });
                 owners.insert(id.clone(), slot.clone());
-                self.start_slot(id.clone(), slot.clone(), None);
+                self.start_slot(id.clone(), slot.clone());
                 slot
             }
         };
@@ -310,11 +341,11 @@ impl ConversationService {
         slot: Arc<Slot>,
     ) -> Result<Arc<LiveConversation>, ConversationError> {
         if slot.value.get().is_none() {
-            self.start_slot(id.clone(), slot.clone(), None);
+            self.start_slot(id.clone(), slot.clone());
         }
         self.wait_for_slot(id, slot).await
     }
-    fn start_slot(&self, id: ConversationId, slot: Arc<Slot>, creation: Option<CreationWork>) {
+    fn start_slot(&self, id: ConversationId, slot: Arc<Slot>) {
         let service = self.clone();
         let owner = slot.clone();
         if !slot.started.swap(true, Ordering::SeqCst) {
@@ -323,67 +354,6 @@ impl ConversationService {
                     .value
                     .get_or_init(|| async {
                         let opening = async {
-                            if let Some(creation) = creation {
-                                let outcome = service
-                                    .inner
-                                    .metadata
-                                    .create(creation.proposed)
-                                    .await
-                                    .map_err(|cause| OpeningFailure {
-                                        cause,
-                                        _cleanup: None,
-                                        retryable: false,
-                                    })?;
-                                let record = &outcome.conversation;
-                                if !record.allows(
-                                    &creation.caller.organization_id,
-                                    &creation.caller.principal_id,
-                                ) {
-                                    return Err(OpeningFailure {
-                                        cause: ConversationError::NotFound,
-                                        _cleanup: None,
-                                        retryable: false,
-                                    });
-                                }
-                                let committed_at_ms = service.inner.clock.unix_milliseconds();
-                                let (before, cause) = match outcome.disposition {
-                                    super::ConversationCreationDisposition::Created => {
-                                        (
-                                            super::ConversationOwnershipState::Absent,
-                                            super::ConversationCreationCause::CallerRequested,
-                                        )
-                                    }
-                                    super::ConversationCreationDisposition::Existing => {
-                                        (
-                                            super::ConversationOwnershipState::Owned,
-                                            super::ConversationCreationCause::IdempotentReopen,
-                                        )
-                                    }
-                                };
-                                service
-                                    .inner
-                                    .creation_audit
-                                    .record(super::ConversationCreationAuditRecord {
-                                        conversation_id: record.id().clone(),
-                                        organization_id: record.organization().clone(),
-                                        owner_id: record.owner().clone(),
-                                        before,
-                                        after: super::ConversationOwnershipState::Owned,
-                                        cause,
-                                        initiator_principal_id: creation.caller.principal_id,
-                                        initiator_surface_id: creation.caller.surface_id,
-                                        correlation_id: creation.caller.action_id,
-                                        requested_at_ms: creation.requested_at_ms,
-                                        committed_at_ms,
-                                        observed_at_ms: service.inner.clock.unix_milliseconds(),
-                                    })
-                                    .await
-                                    .map_err(|_| OpeningFailure {
-                                        cause: ConversationError::Audit,
-                                        _cleanup: None,
-                                        retryable: false,
-                                    })?;
-                            }
                             let session_id =
                                 SessionId::new(id.to_string()).expect("UUID session key");
                             let manager = SessionManager::open(
@@ -873,7 +843,7 @@ impl ConversationService {
         // cannot consume another owner's cleanup opportunity. Timeout means only
         // unconfirmed cleanup; the slot and supervised SDK work remain owned.
         let attempts = slots.into_iter().map(|(id, slot)| async move {
-            self.start_slot(id.clone(), slot.clone(), None);
+            self.start_slot(id.clone(), slot.clone());
             let attempt = async {
                 loop {
                     let ready = slot.ready.notified();

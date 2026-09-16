@@ -12,6 +12,11 @@ function record(value: unknown): Record<string, unknown> {
     throw new Error("Invalid conversation response")
   return value as Record<string, unknown>
 }
+function exact(item: Record<string, unknown>, keys: readonly string[]) {
+  const allowed = new Set(keys)
+  if (Object.keys(item).some((key) => !allowed.has(key)))
+    throw new Error("Conversation response has unknown fields")
+}
 function text(
   item: Record<string, unknown>,
   key: string,
@@ -52,6 +57,7 @@ export function conversationId(
   expected: string,
 ): { conversationId: string } {
   const item = record(value)
+  exact(item, ["conversationId"])
   if (identity(item, "conversationId") !== expected)
     throw new Error("Conversation response belongs to another conversation")
   return { conversationId: expected }
@@ -61,6 +67,7 @@ export function conversationReceipt(
   executionId: string,
 ): ConversationReceipt {
   const item = record(value)
+  exact(item, ["executionId", "disposition"])
   if (identity(item, "executionId") !== executionId)
     throw new Error("Conversation receipt belongs to another execution")
   oneOf(text(item, "disposition"), ["queued", "injected", "settled"])
@@ -71,14 +78,29 @@ export function conversationMutation(
   requestId: string,
 ): ConversationMutationResult {
   const item = record(value)
+  exact(item, ["requestId", "applied"])
   if (identity(item, "requestId") !== requestId)
     throw new Error("Conversation receipt belongs to another action")
   flag(item, "applied")
   return item as unknown as ConversationMutationResult
 }
 export function conversationView(value: unknown, expected: string): ConversationView {
-  conversationId(value, expected)
   const item = record(value)
+  exact(item, [
+    "conversationId",
+    "revision",
+    "messages",
+    "pending",
+    "permissions",
+    "tools",
+    "capabilities",
+    "truncated",
+    "permissionViewError",
+    "queueComplete",
+    "runtime",
+  ])
+  if (identity(item, "conversationId") !== expected)
+    throw new Error("Conversation response belongs to another conversation")
   identity(item, "revision")
   flag(item, "truncated")
   flag(item, "queueComplete")
@@ -90,6 +112,15 @@ export function conversationView(value: unknown, expected: string): Conversation
   const messageTexts = new Map<string, string>()
   const toolPartIds = new Set<string>()
   for (const message of messages) {
+    exact(message, [
+      "executionId",
+      "userText",
+      "status",
+      "error",
+      "steeringTarget",
+      "parts",
+      "steeringOffset",
+    ])
     const executionId = identity(message, "executionId")
     if (messageIds.has(executionId))
       throw new Error("Conversation response repeats a message execution")
@@ -110,6 +141,7 @@ export function conversationView(value: unknown, expected: string): Conversation
       throw new Error("Invalid steering offset")
     let previousOffset = -1
     for (const part of items(message, "parts", 512)) {
+      exact(part, ["offset", "kind", "text", "toolId", "messageId"])
       if (!Number.isSafeInteger(part.offset) || (part.offset as number) <= previousOffset)
         throw new Error("Invalid part order")
       previousOffset = part.offset as number
@@ -150,6 +182,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   }
   const pendingIds = new Set<string>()
   for (const pending of items(item, "pending", 128)) {
+    exact(pending, ["executionId", "text", "mode"])
     const executionId = identity(pending, "executionId")
     if (pendingIds.has(executionId))
       throw new Error("Conversation response repeats a pending execution")
@@ -166,6 +199,15 @@ export function conversationView(value: unknown, expected: string): Conversation
   }
   const permissionIds = new Set<string>()
   for (const permission of items(item, "permissions", 64)) {
+    exact(permission, [
+      "executionId",
+      "permissionId",
+      "toolId",
+      "title",
+      "options",
+      "toolName",
+      "argumentsJson",
+    ])
     for (const key of ["executionId", "permissionId", "toolId"]) identity(permission, key)
     const permissionKey = JSON.stringify([
       permission.executionId,
@@ -186,6 +228,7 @@ export function conversationView(value: unknown, expected: string): Conversation
     if (!options.length) throw new Error("Permission response has no choices")
     const ids = new Set<string>()
     for (const option of options) {
+      exact(option, ["id", "label"])
       const id = identity(option, "id")
       if (ids.has(id)) throw new Error("Permission response repeats an option")
       ids.add(id)
@@ -194,6 +237,7 @@ export function conversationView(value: unknown, expected: string): Conversation
   }
   const toolIds = new Set<string>()
   for (const tool of items(item, "tools", 128)) {
+    exact(tool, ["executionId", "toolId", "title", "status", "details", "input"])
     identity(tool, "executionId")
     identity(tool, "toolId")
     const toolKey = JSON.stringify([tool.executionId, tool.toolId])
@@ -216,9 +260,11 @@ export function conversationView(value: unknown, expected: string): Conversation
   }
   if (item.runtime !== undefined) {
     const runtime = record(item.runtime)
+    exact(runtime, ["model", "provider", "workspace"])
     for (const key of ["model", "provider", "workspace"]) text(runtime, key, 4096)
   }
   const capabilities = record(item.capabilities)
+  exact(capabilities, ["queue", "steer", "resume", "permissions"])
   for (const key of ["queue", "steer", "resume", "permissions"]) flag(capabilities, key)
   return item as unknown as ConversationView
 }
@@ -228,6 +274,7 @@ export function conversationReorder(
   requestId: string,
 ): ConversationReorderResult {
   const item = record(value)
+  exact(item, ["requestId", "outcome"])
   if (identity(item, "requestId") !== requestId)
     throw new Error("Conversation reorder belongs to another action")
   oneOf(text(item, "outcome"), [

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest"
 
-import { conversationView } from "./conversation-validate.js"
+import {
+  conversationId,
+  conversationMutation,
+  conversationReceipt,
+  conversationReorder,
+  conversationView,
+} from "./conversation-validate.js"
 
 function view(): any {
   return {
@@ -73,5 +79,48 @@ describe("conversation view agreement", () => {
     value.truncated = true
     value.tools = []
     expect(() => conversationView(value, "conversation")).not.toThrow()
+  })
+
+  it("rejects unknown fields at the view and nested schema boundaries", () => {
+    const mutations = [
+      (value: any) => (value.extra = true),
+      (value: any) => (value.messages[0].extra = true),
+      (value: any) => (value.messages[1].parts[0].extra = true),
+      (value: any) => (value.pending[0].extra = true),
+      (value: any) => (value.tools[0].extra = true),
+      (value: any) => (value.capabilities.extra = true),
+    ]
+    for (const mutate of mutations) {
+      const value = view()
+      mutate(value)
+      expect(() => conversationView(value, "conversation")).toThrow("unknown fields")
+    }
+
+    const permission = view()
+    permission.permissions = [
+      {
+        executionId: "running",
+        permissionId: "permission",
+        toolId: "tool",
+        title: "Review",
+        toolName: "write_file",
+        argumentsJson: "{}",
+        options: [{ id: "allow", label: "Allow", extra: true }],
+      },
+    ]
+    expect(() => conversationView(permission, "conversation")).toThrow("unknown fields")
+  })
+
+  it("rejects unknown fields in receipts and control results", () => {
+    expect(() => conversationId({ conversationId: "c", extra: true }, "c")).toThrow()
+    expect(() =>
+      conversationReceipt({ executionId: "e", disposition: "queued", extra: true }, "e"),
+    ).toThrow()
+    expect(() =>
+      conversationMutation({ requestId: "r", applied: true, extra: true }, "r"),
+    ).toThrow()
+    expect(() =>
+      conversationReorder({ requestId: "r", outcome: "applied", extra: true }, "r"),
+    ).toThrow()
   })
 })

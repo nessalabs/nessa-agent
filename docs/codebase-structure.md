@@ -19,11 +19,11 @@ establish an architectural boundary.
 
 ## Today
 
-Nessa is a two-runtime desktop app: a Rust host (window, tray, shortcut,
-settings, OS integration) and a React shell (chat surface, composer, avatar).
-The conversation vertical has earned the split: the panel is a projection, and
-a server will own the commands. Other modules stay flat until they earn the
-same trigger — an invariant, a second consumer, or their own persistence.
+Nessa has a Rust desktop host (window, tray, settings, OS integration), a React
+shell (chat surface, composer, avatar), and a background gateway process.
+The conversation vertical has earned the split: clients are projections, and the
+gateway owns commands through the SDK Agent. Other modules stay flat until they
+earn the same trigger — an invariant, a second consumer, or their own persistence.
 
 ## Target shape
 
@@ -201,7 +201,7 @@ own current lifecycle and API contracts.
 | `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
 
 Composition chooses models, provider configuration, storage, and the required
-permission audit sink. Agent owns admitted work; UI and future gateway code call
+permission audit sink. Agent owns admitted work; UI adapters and gateway code call
 its application contracts. Keep provider JSON, clock reads, filesystem access,
 and processes out of the domain. Do not create empty counterpart modules or split
 a live session's tool/permission consistency boundary into independent aggregates.
@@ -218,3 +218,22 @@ identity providers remain future adapters.
 `crates/nessa-local-storage` owns native OS private-file mechanics shared by the
 local auth, SDK session storage, and desktop credential adapters. It has no auth/domain policy
 or Tauri dependency; callers inject the resulting adapters through composition.
+
+
+## Gateway conversation ownership
+
+`crates/nessa-server/src/conversation/` groups durable conversation identity/access
+(domain), shared Agent orchestration and bounded views (application), and private
+metadata/audit adapters (infrastructure). `product/conversation.rs` maps the
+canonical product wire contract; composition supplies provider, storage and audit.
+Tests follow those responsibilities under `crates/nessa-server/tests/conversation/`.
+Clients use NessaClient and never own SDK scheduling. See
+[gateway chat](guides/gateway-chat.md).
+
+## MCP tools
+
+`crates/nessa-mcp/src/mcp.rs` owns stdio transport and routing. Nessa-owned tools
+live under their feature name with domain, application and infrastructure owners;
+`shell/` contains command validation, runner/audit ports and the Shepherd adapter.
+All additional Nessa tools use this MCP boundary. See the
+[server guide](../crates/nessa-mcp/README.md).
