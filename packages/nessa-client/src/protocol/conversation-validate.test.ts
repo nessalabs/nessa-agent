@@ -8,7 +8,7 @@ import {
   conversationView,
 } from "./conversation-validate.js"
 
-function view(): any {
+function view() {
   return {
     conversationId: "conversation",
     revision: "1",
@@ -82,13 +82,13 @@ describe("conversation view agreement", () => {
   })
 
   it("rejects unknown fields at the view and nested schema boundaries", () => {
-    const mutations = [
-      (value: any) => (value.extra = true),
-      (value: any) => (value.messages[0].extra = true),
-      (value: any) => (value.messages[1].parts[0].extra = true),
-      (value: any) => (value.pending[0].extra = true),
-      (value: any) => (value.tools[0].extra = true),
-      (value: any) => (value.capabilities.extra = true),
+    const mutations: Array<(value: ReturnType<typeof view>) => void> = [
+      (value) => Object.assign(value, { extra: true }),
+      (value) => Object.assign(value.messages[0]!, { extra: true }),
+      (value) => Object.assign(value.messages[1]!.parts[0]!, { extra: true }),
+      (value) => Object.assign(value.pending[0]!, { extra: true }),
+      (value) => Object.assign(value.tools[0]!, { extra: true }),
+      (value) => Object.assign(value.capabilities, { extra: true }),
     ]
     for (const mutate of mutations) {
       const value = view()
