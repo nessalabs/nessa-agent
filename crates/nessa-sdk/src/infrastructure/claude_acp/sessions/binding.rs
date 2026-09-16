@@ -67,14 +67,14 @@ impl ClaudeAcpProvider {
         }
         let text = Modalities::new(true, false, false).expect("text modality is nonempty");
         let restrictions = BindingRestrictions::new(
-            ModelFeatures::new(text, text, config.file_tools, false),
+            ModelFeatures::new(text, text, config.tools_enabled, false),
             // This first profile deliberately excludes extended context and
             // larger output modes. These are binding ceilings, not model facts.
             TokenLimits::new(200_000, 64_000).expect("valid native profile ceilings"),
         );
         let capabilities = EffectiveCapabilities::new(model, restrictions, limits)
             .map_err(|e| AgentError::Configuration(e.to_string()))?;
-        if config.file_tools && !capabilities.features().tool_use() {
+        if config.tools_enabled && !capabilities.features().tool_use() {
             return Err(AgentError::Configuration(
                 "selected model does not support tools".into(),
             ));
@@ -140,7 +140,7 @@ impl AgentProvider for ClaudeAcpProvider {
                 Arc::new(move || ProcessScope::spawn(factory.launch_command())),
                 self.config.clone(),
                 self.capabilities.clone(),
-                ClaudeProfile::new(self.system_prompt.clone()),
+                ClaudeProfile::new(self.system_prompt.clone()).with_mcp_servers(&self.config),
                 self.audit.clone(),
                 restore,
             )

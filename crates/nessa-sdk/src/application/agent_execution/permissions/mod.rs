@@ -18,7 +18,10 @@ mod answer;
 mod approval;
 mod audit;
 mod cancellation;
-pub use answer::PermissionAnswer;
+pub use answer::{
+    PermissionAnswer, PermissionAnswerFailure, PermissionAnswerFuture, PermissionAnswerResult,
+    PermissionSelectionState,
+};
 pub use approval::{
     ActionContext, ApprovalAttribution, ApprovalBasis, ApprovalModeSnapshot, ApprovalRuleReference,
     PermissionResolution,

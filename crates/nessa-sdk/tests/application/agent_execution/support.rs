@@ -21,6 +21,13 @@ pub(super) use std::sync::{
     Arc, Mutex,
 };
 
+pub(super) struct AcceptingAudit;
+impl ExecutionAudit for AcceptingAudit {
+    fn record(&self, _record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
 pub(super) struct RecordingSession {
     pub(super) prompts: AtomicUsize,
 }
@@ -49,9 +56,10 @@ impl ProviderSessionBackend for RecordingSession {
         _answer: PermissionAnswer,
     ) -> ProviderOperationFuture<'_, PermissionResolution> {
         Box::pin(async {
-            Err(ProviderOperationFailure::new(
+            Err(ProviderOperationFailure::permission_answer(
                 AgentError::StalePermission,
                 ProviderSessionState::Usable,
+                PermissionSelectionState::Pending,
             ))
         })
     }
@@ -91,9 +99,10 @@ impl ProviderSessionBackend for OfflineSession {
         _answer: PermissionAnswer,
     ) -> ProviderOperationFuture<'_, PermissionResolution> {
         Box::pin(async {
-            Err(ProviderOperationFailure::new(
+            Err(ProviderOperationFailure::permission_answer(
                 AgentError::Closed,
                 ProviderSessionState::Usable,
+                PermissionSelectionState::Pending,
             ))
         })
     }
@@ -217,8 +226,13 @@ impl ProviderSessionBackend for InMemoryPermissionBackend {
         Box::pin(async move {
             let result: Result<PermissionResolution, AgentError> =
                 { async move { self.execution.lock().unwrap().answer_permission(answer) } }.await;
-            result
-                .map_err(|error| ProviderOperationFailure::new(error, ProviderSessionState::Usable))
+            result.map_err(|error| {
+                ProviderOperationFailure::permission_answer(
+                    error,
+                    ProviderSessionState::Usable,
+                    PermissionSelectionState::Pending,
+                )
+            })
         })
     }
     fn cancel_permission(
@@ -260,6 +274,9 @@ impl ProviderSessionBackend for InMemoryPermissionBackend {
                             }
                             ExecutionAuditRecord::Answered(_) => {
                                 panic!("close cannot answer permissions")
+                            }
+                            ExecutionAuditRecord::QueueReordered(_) => {
+                                panic!("close cannot reorder pending work")
                             }
                         }
                     }

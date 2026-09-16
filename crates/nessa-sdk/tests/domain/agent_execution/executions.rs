@@ -69,3 +69,25 @@ fn identities_and_prompt_text_preserve_meaning_and_reject_blank_values() {
     let error: &dyn std::error::Error = &ExecutionError::InvalidPath;
     assert!(error.source().is_none());
 }
+
+#[test]
+fn message_identity_preserves_exact_utf8_at_its_validated_byte_boundaries() {
+    assert_eq!(
+        MessageId::new(""),
+        Err(ExecutionError::EmptyValue("message ID"))
+    );
+    assert_eq!(
+        MessageId::new("x".repeat(MessageId::MAX_BYTES + 1)),
+        Err(ExecutionError::ValueTooLong {
+            field: "message ID",
+            max_bytes: MessageId::MAX_BYTES,
+        })
+    );
+
+    let exact = "é".repeat(MessageId::MAX_BYTES / 2);
+    let id = MessageId::new(exact.clone()).unwrap();
+    assert_eq!(id.as_str(), exact);
+    let chunk = MessageChunk::text("payload").with_message_id(id);
+    assert_eq!(chunk.message_id(), Some(exact.as_str()));
+    assert_eq!(chunk.payload_bytes(), exact.len() + "payload".len());
+}

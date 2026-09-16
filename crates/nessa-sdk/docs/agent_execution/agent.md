@@ -234,6 +234,27 @@ required independent audit sink. It retains answer selection, response-write
 observations, cancellation causes, and once-only live session closure (including idle closure). Snapshots do not replace that audit or
 claim to capture every permission decision and its authorization evidence.
 
+Run the ignored persistence workload when measuring save and restoration changes:
+
+```sh
+cargo test -p nessa-sdk --test infrastructure persistence_scale_with_repeated_checkpoints -- --ignored --nocapture
+cargo test -p nessa-sdk --test infrastructure concurrent_session_persistence_and_scheduler_delay -- --ignored --nocapture
+```
+
+The first workload builds deterministic histories of 100, 1,000, and 10,000
+invocations with ten checkpoints each, a 1,000-invocation history with 100 small
+checkpoints, and one 10,000-chunk streamed turn with 100 checkpoints. It reports
+cumulative save time, one full restoration time, and journal bytes. The second
+workload runs eight 100-invocation sessions concurrently and reports total wall
+time plus median and maximum task-start scheduling delay.
+
+The harness does not infer CPU time or peak memory from wall time. On macOS, wrap
+either command in `/usr/bin/time -lp`; on systems with GNU time, use
+`/usr/bin/time -v`. Those tools record process CPU and maximum resident memory for
+the complete test command. The harness has no timing, CPU, or memory assertion
+because results depend on the host and build profile. Record the command, host,
+profile, and tool output with any budget or result derived from it.
+
 ## UI and tests
 
 `invoke` drains provider output even without a subscriber. Subscribe before

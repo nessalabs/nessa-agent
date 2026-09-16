@@ -23,6 +23,7 @@ fn abandoned_file_operations_retain_the_lease_until_io_finishes() {
         let id = SessionId::new("abandoned").unwrap();
         let lease = runtime.block_on(storage.open(id.clone())).unwrap();
         let value = SessionSnapshot {
+            queue_history: Vec::new(),
             id: id.clone(),
             provider: ProviderIdentity::new("test", "test", "test").unwrap(),
             provider_session_id: ExecutionSessionId::new("provider").unwrap(),
@@ -161,6 +162,7 @@ async fn failed_append_and_sync_retry_reconcile_disk_before_acknowledgement() {
                 }),
             };
             let mut value = SessionSnapshot {
+                queue_history: Vec::new(),
                 id: store.id.clone(),
                 provider: ProviderIdentity::new("test", "test", "test").unwrap(),
                 provider_session_id: ExecutionSessionId::new("provider").unwrap(),

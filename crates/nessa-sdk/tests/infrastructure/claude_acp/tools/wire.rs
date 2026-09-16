@@ -117,7 +117,7 @@ fn provider_name_retention_is_bounded_by_allowlist_identity_and_entry_limits() {
         );
         assert_eq!(
             error,
-            AgentError::Unsupported("tool is outside the file-tool profile".into())
+            AgentError::Unsupported("tool is outside the configured tool profile".into())
         );
         assert!(names.is_empty());
     }
@@ -158,4 +158,50 @@ fn provider_name_retention_is_bounded_by_allowlist_identity_and_entry_limits() {
     )
     .is_err());
     assert!(names.is_empty());
+}
+
+#[test]
+fn native_web_and_mcp_inputs_are_preserved_and_unmanaged_shell_is_rejected() {
+    let mut names = HashMap::new();
+    for (name, kind, args) in [
+        (
+            "WebSearch",
+            "fetch",
+            json!({"query":"Rust Shepherd process supervision", "allowed_domains":["github.com"]}),
+        ),
+        (
+            "WebFetch",
+            "fetch",
+            json!({"url":"https://example.com", "prompt":"Summarize"}),
+        ),
+        (
+            "mcp__nessa__shell",
+            "other",
+            json!({"command":"printf '%s' ' a\\b '\n", "timeoutSeconds":5}),
+        ),
+        (
+            "Agent",
+            "think",
+            json!({"prompt":"Read project documentation", "description":"Inspect docs"}),
+        ),
+    ] {
+        tool_call(
+            &json!({"toolCallId":name,"kind":kind,"_meta":{"claudeCode":{"toolName":name}}}),
+            &mut names,
+        )
+        .unwrap();
+        assert_eq!(
+            tool_input(name, &args).unwrap().arguments_json,
+            args.to_string()
+        );
+    }
+    for name in DISALLOWED_TOOLS {
+        assert!(tool_call(
+            &json!({"toolCallId":"blocked","_meta":{"claudeCode":{"toolName":name}}}),
+            &mut names
+        )
+        .is_err());
+        assert!(tool_input(name, &json!({"command":"true"})).is_err());
+    }
+    assert!(tool_input("WebSearch", &json!("not an object")).is_err());
 }

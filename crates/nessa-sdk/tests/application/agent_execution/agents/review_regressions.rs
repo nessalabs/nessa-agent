@@ -71,6 +71,7 @@ impl AgentProvider for ProbeFactory {
                     ExecutionSessionId::new("review").unwrap(),
                     self.backend.clone(),
                     capabilities(),
+                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(TestEvents(self.receiver.lock().unwrap().take().unwrap())),
             })
@@ -542,10 +543,12 @@ async fn restored_scheduling_from_a_custom_store_is_validated_before_provider_op
     ];
     assert!(history.iter().all(|event| event.transition().is_ok()));
     storage.0.lock().unwrap().snapshot = Some(SessionSnapshot {
+        queue_history: Vec::new(),
         id: SessionId::new("conversation").unwrap(),
         provider: provider.identity(),
         provider_session_id: ExecutionSessionId::new("saved-context").unwrap(),
         invocations: vec![InvocationRecord {
+            target_event_offset: None,
             provider_report: None,
             local_cancellation: None,
             local_outcome: None,
@@ -1077,7 +1080,8 @@ async fn invoke_control(agent: &Agent, operation: ProviderControl) -> Result<(),
                 option_id: PermissionOptionId::new("allow").unwrap(),
             })
             .await
-            .map(|_| ()),
+            .map(|_| ())
+            .map_err(|failure| failure.into_parts().0),
         ProviderControl::CancelPermission => agent
             .cancel_permission(PermissionCancellationRequest {
                 execution_id: ExecutionId::new("active").unwrap(),

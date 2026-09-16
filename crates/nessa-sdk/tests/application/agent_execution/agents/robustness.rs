@@ -39,6 +39,7 @@ impl AgentProvider for ExhaustedProvider {
                     ExecutionSessionId::new("probe").unwrap(),
                     Arc::new(ExhaustedBackend(started.clone())),
                     capabilities(),
+                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(ExhaustedEvents {
                     failure: self.failure,
@@ -247,6 +248,7 @@ impl AgentProvider for StreamFailureProvider {
                         cleanup_failure: self.cleanup_failure,
                     }),
                     capabilities(),
+                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(ExhaustedEvents {
                     failure: true,

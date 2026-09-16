@@ -7,8 +7,42 @@ use crate::infrastructure::json_rpc::protocol;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
-pub(in crate::infrastructure::claude_acp) const FILE_TOOLS: &[&str] =
-    &["Read", "Write", "Edit", "Glob", "Grep"];
+// Native shell and mode changes must not bypass Nessa's execution and permission owners.
+pub(in crate::infrastructure::claude_acp) const DISALLOWED_TOOLS: &[&str] = &[
+    "Bash",
+    "BashOutput",
+    "KillShell",
+    "EnterPlanMode",
+    "ExitPlanMode",
+];
+pub(in crate::infrastructure::claude_acp) const REVIEW_TOOLS: &[&str] = &[
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "NotebookEdit",
+    "WebSearch",
+    "WebFetch",
+    "Agent",
+    "Task",
+    "TodoWrite",
+    "TaskCreate",
+    "TaskUpdate",
+    "TaskList",
+    "TaskGet",
+    "TaskOutput",
+    "TaskStop",
+    "Skill",
+];
+fn allowed_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        && !DISALLOWED_TOOLS.contains(&name)
+}
 pub(in crate::infrastructure::claude_acp) fn tool_call(
     value: &Value,
     names: &mut HashMap<String, String>,
@@ -20,14 +54,14 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
         .pointer("/_meta/claudeCode/toolName")
         .and_then(Value::as_str)
     {
-        // Only these fixed names are retained (currently at most five bytes).
+        // Names are bounded before retention, including future native tool names.
         // Together with 256-byte IDs and 4,096 entries, this bounds the map's
         // string payload independently of incoming frame size.
-        if !FILE_TOOLS.contains(&name) {
+        if !allowed_name(name) {
             // A rejected name can occupy the entire frame. Do not copy it into
             // an error that teardown will retain and clone.
             return Err(AgentError::Unsupported(
-                "tool is outside the file-tool profile".into(),
+                "tool is outside the configured tool profile".into(),
             ));
         }
         if names.get(&id).is_some_and(|old| old != name) {
@@ -127,7 +161,8 @@ pub(in crate::infrastructure::claude_acp) fn tool_input(
                 return Err(protocol("conflicting search context fields"));
             }
         }
-        _ => return Err(protocol("permission for an unknown tool")),
+        _ if allowed_name(name) && value.is_object() => {}
+        _ => return Err(protocol("permission for an invalid or disabled tool")),
     }
     Ok(ToolReviewInput {
         name: name.into(),

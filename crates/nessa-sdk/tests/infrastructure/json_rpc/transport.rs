@@ -2,7 +2,35 @@
 use super::*;
 use crate::infrastructure::json_rpc::RpcId;
 use serde_json::json;
+#[cfg(unix)]
+use std::process::Stdio;
 use tokio::io::duplex;
+
+#[cfg(unix)]
+#[tokio::test]
+async fn provider_pipe_probe_reads_flushed_bytes_before_reactor_notification() {
+    let directory = tempfile::tempdir().unwrap();
+    let marker = directory.path().join("flushed");
+    let mut command = tokio::process::Command::new("/bin/sh");
+    command
+        .args([
+            "-c",
+            "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":17,\"result\":null}'; : > \"$1\"; sleep 30",
+            "probe",
+            marker.to_str().unwrap(),
+        ])
+        .stdout(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    let mut reader = Reader::new(child.stdout.take().unwrap(), 256);
+    while !marker.exists() {
+        tokio::task::yield_now().await;
+    }
+
+    assert!(reader.read_ready_os_bytes().unwrap());
+    assert_eq!(reader.next().await.unwrap().id, Some(RpcId::Number(17)));
+    child.kill().await.unwrap();
+    child.wait().await.unwrap();
+}
 
 #[tokio::test]
 async fn fragmented_utf8_and_cancelled_reads_preserve_frame_boundaries() {

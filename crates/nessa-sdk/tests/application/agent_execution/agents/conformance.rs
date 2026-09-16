@@ -4,6 +4,7 @@
 use super::*;
 use std::{
     future::{poll_fn, Future},
+    sync::atomic::AtomicBool,
     task::Poll,
 };
 use tokio::{sync::Notify, task::JoinHandle, time::timeout};
@@ -33,8 +34,36 @@ impl Mode {
 }
 
 struct WorkflowProvider(Arc<WorkflowBackend>);
+#[derive(Default)]
+struct WorkflowAudit {
+    records: Mutex<Vec<ExecutionAuditRecord>>,
+    reject: AtomicBool,
+    panic: AtomicBool,
+    pause: Mutex<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>>,
+}
+impl ExecutionAudit for WorkflowAudit {
+    fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async move {
+            self.records.lock().unwrap().push(record);
+            if self.panic.load(Ordering::SeqCst) {
+                panic!("audit acknowledgement panicked");
+            }
+            let pause = self.pause.lock().unwrap().take();
+            if let Some((entered, release)) = pause {
+                let _ = entered.send(());
+                let _ = release.await;
+            }
+            if self.reject.load(Ordering::SeqCst) {
+                Err(AgentError::AuditFailure)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
 struct WorkflowEvents(mpsc::UnboundedReceiver<Option<ExecutionEvent>>);
 struct WorkflowBackend {
+    audit: Arc<WorkflowAudit>,
     output: mpsc::UnboundedSender<Option<ExecutionEvent>>,
     receiver: Mutex<Option<mpsc::UnboundedReceiver<Option<ExecutionEvent>>>>,
     dispatched: Notify,
@@ -62,6 +91,7 @@ impl AgentProvider for WorkflowProvider {
                     ExecutionSessionId::new("workflow-context").unwrap(),
                     self.0.clone(),
                     capabilities(),
+                    self.0.audit.clone(),
                 ),
                 events: Box::new(WorkflowEvents(
                     self.0.receiver.lock().unwrap().take().unwrap(),
@@ -226,6 +256,7 @@ async fn workflow_from_storage(
 fn workflow_backend() -> Arc<WorkflowBackend> {
     let (output, receiver) = mpsc::unbounded_channel();
     Arc::new(WorkflowBackend {
+        audit: Arc::new(WorkflowAudit::default()),
         output,
         receiver: Mutex::new(Some(receiver)),
         dispatched: Notify::new(),
@@ -466,3 +497,5 @@ mod unconfirmed_drain;
 mod local_cancellation;
 
 mod observation_boundary;
+
+mod queue_order;

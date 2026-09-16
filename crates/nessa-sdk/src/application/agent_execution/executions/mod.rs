@@ -1,14 +1,15 @@
 //! Execution requests and projections connect adapters to domain session state.
 //! The controller owns review-input pairing and resource limits, while the domain
 //! owns admission, observations, and permission transitions. The mandatory audit
-//! port retains session closure and permission evidence independently of events.
+//! port retains queue order, session closure, and permission evidence independently
+//! of events.
 //! Shared identity limits keep live admission and restored observations consistent.
 //!
 //! ```text
 //! adapter --> ExecutionController --> domain session
 //!                 |
 //!                 +--> ExecutionEvent
-//! adapter --> ExecutionAudit --> host-owned durable sink
+//! Agent / adapter --> ExecutionAudit --> host-owned durable sink
 //! ```
 //!
 //! Arrows mean calling the controller or domain, and constructing an event from
@@ -19,7 +20,9 @@ mod controller;
 mod events;
 pub(crate) mod limits;
 mod request;
-pub use audit::{ExecutionAudit, ExecutionAuditRecord, SessionClosureRecord};
+pub use audit::{
+    ExecutionAudit, ExecutionAuditRecord, QueueOrderCause, QueueOrderRecord, SessionClosureRecord,
+};
 pub use controller::ExecutionController;
 pub use events::{ExecutionEvent, ExecutionUpdate};
 pub use request::ExecutionRequest;

@@ -28,6 +28,11 @@ pub(super) enum Shape {
     Event,
     Update,
     Scheduling,
+    Reorders,
+    Reorder,
+    QueueEntries,
+    QueueEntry,
+    QueueIds,
     Tool,
     Review,
     Content,
@@ -51,6 +56,12 @@ impl Shape {
     }
     pub(super) fn field(self, key: &str) -> Self {
         match (self, key) {
+            (Record, "queue_history") => Reorders,
+            (_, "Reordered") => Reorder,
+            (Reorder, "before") => QueueEntries,
+            (Reorder, "after") => QueueIds,
+            (_, "Admitted" | "Selected" | "Removed") => QueueEntry,
+            (QueueEntry, "id") => Text(256),
             (Record, "provider") => Provider,
             (Record, "invocation_count") => Count,
             (Change, "index") => Index,
@@ -62,7 +73,7 @@ impl Shape {
             (Change, "metadata") => Metadata,
             (Change, "events") => Events,
             (Change, "scheduling") => Scheduling,
-            (Metadata, "execution_id") | (Event, "execution_id") => Text(256),
+            (Metadata, "execution_id") | (Event, "execution_id" | "message_id") => Text(256),
             (Metadata, "user_message") => Text(ExecutionRequest::MAX_MESSAGE_BYTES),
             (Event, "update") => Update,
             (Update, "Text" | "Thought") => Text(MAX_MESSAGE_CHUNK_BYTES),
@@ -103,6 +114,9 @@ impl Shape {
             Self::Changes => Self::Change,
             Self::Events => Self::Event,
             Self::Hooks => Self::Hook,
+            Self::Reorders => Self::Reorder,
+            Self::QueueEntries => Self::QueueEntry,
+            Self::QueueIds => Self::Text(256),
             _ => Self::Generic,
         }
     }
@@ -111,6 +125,8 @@ impl Shape {
             Self::Changes => usize::MAX,
             Self::Events => MAX_RETAINED_OUTPUT_EVENTS,
             Self::Hooks => 128,
+            Self::Reorders => usize::MAX,
+            Self::QueueEntries | Self::QueueIds => 64,
             // Collection slots alone cannot exceed the live 32 MiB tool/review
             // budget, even when every element carries an empty payload.
             Self::Content => LARGE_STRING / size_of::<ToolContent>(),

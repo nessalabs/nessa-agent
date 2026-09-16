@@ -70,10 +70,9 @@ async fn substituted_binding_preserves_each_actors_explicit_mode_or_rule_basis()
         assert_eq!(resolution.attribution(), &attribution);
         assert_eq!(resolution.input(), &review_input());
         assert_eq!(resolution.request().tool_id().as_str(), "tool");
-        assert_eq!(
-            agent.answer_permission(answer).await,
-            Err(AgentError::StalePermission)
-        );
+        let failure = agent.answer_permission(answer).await.unwrap_err();
+        assert_eq!(failure.error(), &AgentError::StalePermission);
+        assert_eq!(failure.selection(), PermissionSelectionState::Pending);
     }
 }
 
@@ -375,17 +374,17 @@ async fn substituted_backend_cannot_return_a_foreign_sessions_permission_as_succ
     // provider_agent exposes the "fixture" session; all nested request identities
     // and the supplied actor are nevertheless otherwise correct for the foreign review.
     let agent = reviewed_agent(backend.clone()).await;
-    assert!(matches!(
-        agent
-            .answer_permission(PermissionAnswer {
-                execution_id: request.execution_id().clone(),
-                id: request.id().clone(),
-                option_id: PermissionOptionId::new("allow").unwrap(),
-                attribution: attribution(),
-            })
-            .await,
-        Err(AgentError::Protocol(_))
-    ));
+    let failure = agent
+        .answer_permission(PermissionAnswer {
+            execution_id: request.execution_id().clone(),
+            id: request.id().clone(),
+            option_id: PermissionOptionId::new("allow").unwrap(),
+            attribution: attribution(),
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(failure.error(), AgentError::Protocol(_)));
+    assert_eq!(failure.selection(), PermissionSelectionState::Consumed);
     // Validation is of returned evidence, not a claim that the adapter effect was undone.
     assert!(matches!(
         backend

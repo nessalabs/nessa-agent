@@ -96,6 +96,29 @@ async fn worker_with_ready_frames(
     watch::Sender<Option<SessionCloseRequest>>,
     EventReceiver,
 ) {
+    worker_with_ready_frames_boundary(frames, prefix, false).await
+}
+async fn worker_with_flushed_ready_frames(
+    frames: &[Value],
+    prefix: &str,
+) -> (
+    Worker<PolicyProfile>,
+    mpsc::Sender<Command>,
+    watch::Sender<Option<SessionCloseRequest>>,
+    EventReceiver,
+) {
+    worker_with_ready_frames_boundary(frames, prefix, true).await
+}
+async fn worker_with_ready_frames_boundary(
+    frames: &[Value],
+    prefix: &str,
+    await_flush: bool,
+) -> (
+    Worker<PolicyProfile>,
+    mpsc::Sender<Command>,
+    watch::Sender<Option<SessionCloseRequest>>,
+    EventReceiver,
+) {
     let (_, mut config, capabilities) = profile_setup();
     config.max_frame_bytes = 16 * 1024;
     let mut bytes = serde_json::to_string(&json!({"jsonrpc":"2.0","method":"ready"})).unwrap();
@@ -106,13 +129,24 @@ async fn worker_with_ready_frames(
         bytes.push('\n');
     }
     let mut process = tokio::process::Command::new("/usr/bin/python3");
-    process.args(["-c", "import os,sys,json;os.write(1,sys.argv[1].encode());m=json.loads(sys.stdin.readline());print(json.dumps({'jsonrpc':'2.0','id':m['id'],'error':{'code':-32099,'message':'test prompt observed'}}),flush=True)", &bytes]);
+    let marker = await_flush.then(|| tempfile::tempdir().unwrap());
+    let marker_path = marker.as_ref().map(|marker| marker.path().join("flushed"));
+    if let Some(marker_path) = &marker_path {
+        process.args(["-c", "import sys,json;sys.stdout.buffer.write(sys.argv[1].encode());sys.stdout.buffer.flush();open(sys.argv[2],'w').close();m=json.loads(sys.stdin.readline());print(json.dumps({'jsonrpc':'2.0','id':m['id'],'error':{'code':-32099,'message':'test prompt observed'}}),flush=True)", &bytes, marker_path.to_str().unwrap()]);
+    } else {
+        process.args(["-c", "import sys,json;sys.stdout.buffer.write(sys.argv[1].encode());sys.stdout.buffer.flush();m=json.loads(sys.stdin.readline());print(json.dumps({'jsonrpc':'2.0','id':m['id'],'error':{'code':-32099,'message':'test prompt observed'}}),flush=True)", &bytes]);
+    }
     let mut scope = ProcessScope::spawn(process).unwrap();
     let mut reader = Reader::new(scope.stdout.take().unwrap(), config.max_frame_bytes);
     assert_eq!(
         reader.next().await.unwrap().method.as_deref(),
         Some("ready")
     );
+    if let Some(marker_path) = marker_path {
+        while !marker_path.exists() {
+            tokio::task::yield_now().await;
+        }
+    }
     let (sender, commands) = mpsc::channel(4);
     let (close, close_requested) = watch::channel(None);
     let (operation_capabilities, _) = watch::channel(OperationCapabilities::default());
@@ -177,7 +211,7 @@ async fn same_poll_policy_drift_prevents_prompt_and_native_steering_writes() {
         ] {
             for prefix in ["", "\n\n"] {
                 let (mut worker, commands, _close, _events) =
-                    worker_with_ready_frames(&[notification(update.clone())], prefix).await;
+                    worker_with_flushed_ready_frames(&[notification(update.clone())], prefix).await;
                 let mut execution =
                     ExecutionController::new(ExecutionSessionId::new("context").unwrap());
                 let (reply, result) = oneshot::channel();
@@ -289,14 +323,18 @@ impl ExecutionAudit for CloseAudit {
 #[tokio::test]
 async fn close_interrupts_ready_policy_backlog_without_dispatching_pending_prompt() {
     for reject_audit in [false, true] {
+        // The complete ready sequence fits one pipe write and reader buffer. The helper
+        // consumes only `ready`, leaving the policy frame readable before the
+        // command is admitted; no scheduler timing or sleep establishes the race.
         let frames = vec![
             notification(
                 json!({"sessionUpdate":"current_mode_update","currentModeId":"default"})
             );
-            64
+            1
         ];
-        let (mut worker, commands, close, _events) = worker_with_ready_frames(&frames, "").await;
-        worker.profile.close_after = Some((33, close));
+        let (mut worker, commands, close, _events) =
+            worker_with_flushed_ready_frames(&frames, "").await;
+        worker.profile.close_after = Some((1, close));
         let audit = Arc::new(CloseAudit {
             reject: reject_audit,
             records: Mutex::new(Vec::new()),
@@ -327,7 +365,7 @@ async fn close_interrupts_ready_policy_backlog_without_dispatching_pending_promp
             ProviderExecutionReply::Rejected(AgentError::Closed)
         ));
         assert_eq!(worker.sequence, 0);
-        assert_eq!(worker.profile.updates.load(Ordering::SeqCst), 33);
+        assert_eq!(worker.profile.updates.load(Ordering::SeqCst), 1);
         assert_eq!(
             worker.cancellation_cause,
             Some((
@@ -346,7 +384,7 @@ async fn exhausted_task_budget_does_not_hide_ready_policy_frames() {
         json!({"sessionUpdate":"current_mode_update","currentModeId":"bypassPermissions"}),
     );
     let (mut worker, _commands, _close, _events) =
-        worker_with_ready_frames(&[update], &" ".repeat(9000)).await;
+        worker_with_flushed_ready_frames(&[update], "").await;
     let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
     let (reply, result) = oneshot::channel();
     while tokio::task::coop::has_budget_remaining() {
@@ -374,14 +412,18 @@ async fn exhausted_task_budget_does_not_hide_ready_policy_frames() {
 
 #[tokio::test]
 async fn selected_operation_deadline_includes_ready_policy_validation() {
-    for dispatch in [Dispatch::Prompt, Dispatch::Steering] {
-        let frames = vec![
-            notification(
-                json!({"sessionUpdate":"current_mode_update","currentModeId":"default"})
-            );
-            64
-        ];
-        let (mut worker, commands, _close, _events) = worker_with_ready_frames(&frames, "").await;
+    // Repetition catches reactor-notification lag: every provider write is
+    // flushed before command admission, and none may be mistaken for quiescence.
+    for dispatch in [Dispatch::Prompt, Dispatch::Steering]
+        .into_iter()
+        .cycle()
+        .take(32)
+    {
+        let frames = Vec::new();
+        // The whitespace prefix starts an incomplete transport frame. Deadline
+        // advancement after the first poll deterministically wins before dispatch.
+        let (mut worker, commands, _close, _events) =
+            worker_with_flushed_ready_frames(&frames, &" ".repeat(500)).await;
         let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
         let (reply, result) = oneshot::channel();
         let (steer_reply, steer_result) = oneshot::channel();
@@ -442,7 +484,7 @@ async fn selected_operation_deadline_includes_ready_policy_validation() {
                 CancellationOrigin::Runtime
             ))
         );
-        assert_eq!(worker.sequence, 0);
+        assert_eq!(worker.sequence, 0, "{dispatch:?}");
         if matches!(dispatch, Dispatch::Prompt) {
             let ProviderExecutionReply::Finished(report) = result.await.unwrap() else {
                 panic!("deadline must fence attachment");
@@ -577,19 +619,20 @@ async fn dropped_selected_caller_leaves_context_available_for_next_request() {
     let frames =
         vec![
             notification(json!({"sessionUpdate":"current_mode_update","currentModeId":"default"}));
-            64
+            3
         ];
-    let (mut worker, _commands, _close, _events) = worker_with_ready_frames(&frames, "").await;
+    let (mut worker, _commands, _close, _events) =
+        worker_with_flushed_ready_frames(&frames, "").await;
     let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
     let (reply, result) = oneshot::channel();
-    worker.profile.drop_reply_after = Some((33, Mutex::new(Some(result))));
+    worker.profile.drop_reply_after = Some((3, Mutex::new(Some(result))));
     assert_eq!(
         worker
             .command(&mut execution, Command::ExecutionRequest(request(), reply))
             .await,
         Ok(())
     );
-    assert_eq!(worker.profile.updates.load(Ordering::SeqCst), 33);
+    assert_eq!(worker.profile.updates.load(Ordering::SeqCst), 3);
     assert_eq!(worker.sequence, 0);
     assert!(worker.active.is_none());
     assert!(!worker.closing);

@@ -13,14 +13,43 @@ use nessa_sdk::application::agent_execution::{
     executions::{ExecutionEvent, SubmissionMode},
     permissions::ActionContext,
     sessions::{
-        InvocationCancellationEvent, InvocationSchedulingEvent, SessionStorage, StorageError,
+        InvocationCancellationEvent, InvocationSchedulingEvent, QueueHistoryRecord,
+        SessionSnapshot, SessionStorage, StorageError,
     },
 };
 use nessa_sdk::domain::agent_execution::executions::{
-    ExecutionId, ExecutionOutcome, InvocationKind, InvocationStage, SchedulingCause,
+    ExecutionId, ExecutionOutcome, InvocationKind, InvocationStage, QueueMutation, SchedulingCause,
 };
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, LocalFileStorage};
 use std::sync::Arc;
+
+// These fixture invocations dispatch serially in vector order. This supplies
+// explicit scheduler evidence; it is never inferred when loading real storage.
+pub(super) fn fixture_dispatches(snapshot: &mut SessionSnapshot) {
+    assert!(snapshot.queue_history.is_empty());
+    for record in &snapshot.invocations {
+        if let Some(index) = record
+            .scheduling
+            .iter()
+            .position(|edge| edge.stage == InvocationStage::Running)
+        {
+            let id = record.request.execution_id.clone();
+            snapshot.queue_history.push(QueueHistoryRecord {
+                mutation: QueueMutation::Admitted {
+                    id: id.clone(),
+                    kind: record.scheduling[0].kind,
+                },
+                actor: Some(record.actor.clone()),
+                scheduling_length: Some(1),
+            });
+            snapshot.queue_history.push(QueueHistoryRecord {
+                mutation: QueueMutation::Selected { id },
+                actor: None,
+                scheduling_length: Some(index),
+            });
+        }
+    }
+}
 
 fn submitted() -> InvocationSchedulingEvent {
     InvocationSchedulingEvent {
@@ -162,6 +191,7 @@ async fn scheduling_round_trips_every_cause_stage_target_and_attribution() {
         })
         .collect();
     value.invocations.insert(0, active);
+    fixture_dispatches(&mut value);
     store.save(value.clone()).await.unwrap();
     assert_same(&store.load().await.unwrap().unwrap(), &value);
 }
@@ -565,8 +595,7 @@ async fn scheduling_preserves_valid_transient_results_and_cancellation_outcomes(
         Arc::new(LocalFileStorage::new(root.path().join("private")).unwrap()),
     ];
     for storage in stores {
-        let lease = storage.open(id("valid-results")).await.unwrap();
-        for (stage, cause, result) in [
+        for (case, (stage, cause, result)) in [
             (
                 InvocationStage::Queued,
                 SchedulingCause::Submitted,
@@ -597,8 +626,13 @@ async fn scheduling_preserves_valid_transient_results_and_cancellation_outcomes(
                     "failed injection write".into(),
                 ))),
             ),
-        ] {
-            let mut value = snapshot("valid-results");
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let key = format!("valid-results-{case}");
+            let lease = storage.open(id(&key)).await.unwrap();
+            let mut value = snapshot(&key);
             let mut record = value.invocations[0].clone();
             record.request.execution_id = ExecutionId::new("submission").unwrap();
             record.events.clear();
@@ -623,6 +657,7 @@ async fn scheduling_preserves_valid_transient_results_and_cancellation_outcomes(
             }
             record.result = Some(result);
             value.invocations.push(record);
+            fixture_dispatches(&mut value);
             lease.save(value.clone()).await.unwrap();
             assert_same(&lease.load().await.unwrap().unwrap(), &value);
         }
@@ -638,10 +673,11 @@ async fn steering_targets_require_possible_dispatch_not_merely_prior_identity() 
         Arc::new(LocalFileStorage::new(root.path().join("private")).unwrap()),
     ];
     for storage in stores {
-        let lease = storage.open(id("target-dispatch")).await.unwrap();
-        let original = snapshot("target-dispatch");
-        lease.save(original.clone()).await.unwrap();
         for case in 0..8 {
+            let key = format!("target-dispatch-{case}");
+            let lease = storage.open(id(&key)).await.unwrap();
+            let original = snapshot(&key);
+            lease.save(original.clone()).await.unwrap();
             let accepted = matches!(case, 0 | 4 | 5 | 6);
             let mut value = original.clone();
             let target = &mut value.invocations[0];
@@ -736,11 +772,11 @@ async fn steering_targets_require_possible_dispatch_not_merely_prior_identity() 
                 },
             ];
             value.invocations.push(child);
+            fixture_dispatches(&mut value);
             assert_custom_retention_admission(value.clone(), accepted).await;
             if accepted {
                 lease.save(value.clone()).await.unwrap();
                 assert_same(&lease.load().await.unwrap().unwrap(), &value);
-                lease.save(original.clone()).await.unwrap();
             } else {
                 assert!(matches!(
                     lease.save(value).await,

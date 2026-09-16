@@ -4,6 +4,7 @@
 use super::CloseOutcome;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionEvent;
+use crate::application::agent_execution::permissions::PermissionSelectionState;
 use crate::domain::agent_execution::executions::ExecutionOutcome;
 use std::{future::Future, pin::Pin};
 
@@ -121,6 +122,7 @@ pub enum ProviderSessionState {
 pub struct ProviderOperationFailure {
     error: AgentError,
     session_state: Box<ProviderSessionState>,
+    permission_selection: Option<PermissionSelectionState>,
 }
 impl ProviderOperationFailure {
     /// Record `error` and the adapter-observed provider session status without inference.
@@ -128,6 +130,20 @@ impl ProviderOperationFailure {
         Self {
             error: error.bounded(),
             session_state: Box::new(session_state),
+            permission_selection: None,
+        }
+    }
+    /// Record a permission-answer failure and the independently observed domain
+    /// selection state. Diagnostics must not be used to reconstruct this fact.
+    pub fn permission_answer(
+        error: AgentError,
+        session_state: ProviderSessionState,
+        selection: PermissionSelectionState,
+    ) -> Self {
+        Self {
+            error: error.bounded(),
+            session_state: Box::new(session_state),
+            permission_selection: Some(selection),
         }
     }
     /// Diagnostic cause, never a source of resource ownership decisions.
@@ -137,6 +153,10 @@ impl ProviderOperationFailure {
     /// Status for the work generation that admitted this operation.
     pub fn session_state(&self) -> &ProviderSessionState {
         &self.session_state
+    }
+    /// Known permission selection state when this failure belongs to an answer.
+    pub fn permission_selection(&self) -> Option<PermissionSelectionState> {
+        self.permission_selection
     }
     /// Separate diagnostic projection from explicit provider session evidence.
     pub fn into_parts(self) -> (AgentError, ProviderSessionState) {

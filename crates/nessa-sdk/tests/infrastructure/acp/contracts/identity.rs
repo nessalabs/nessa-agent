@@ -2,6 +2,7 @@
 use super::support::*;
 use crate::application::agent_execution::sessions::{SessionManager, StorageError};
 use crate::domain::agent_execution::sessions::SessionId;
+use crate::infrastructure::acp::sessions::StdioMcpServer;
 use crate::infrastructure::session_storage::LocalFileStorage;
 use crate::Agent;
 
@@ -35,7 +36,8 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
     assert!(identity.context().starts_with("sha256:"));
     assert_eq!(identity.context().len(), 71);
     let storage_root = tempfile::tempdir().unwrap();
-    let storage = Arc::new(LocalFileStorage::new(storage_root.path()).unwrap());
+    let storage_path = storage_root.path().join("sessions");
+    let storage = Arc::new(LocalFileStorage::new(&storage_path).unwrap());
     let session_id = SessionId::new("fingerprint").unwrap();
     let manager = || SessionManager::open(Some(session_id.clone()), storage.clone());
     let agent = Agent::new(Arc::new(original), manager().await.unwrap())
@@ -44,7 +46,7 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
     agent.close(close_action()).await.unwrap();
     drop(agent);
     let launches = std::fs::read(root.path().join("launches")).unwrap();
-    for change in 0..6 {
+    for change in 0..7 {
         let mut changed = config.clone();
         match change {
             0 => {
@@ -61,7 +63,12 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
             2 => changed.arguments.push("semantic-setting".into()),
             3 => changed.arguments.swap(0, 1),
             4 => changed.executable = PathBuf::from("/nonexistent/different-provider"),
-            _ => changed.file_tools = false,
+            5 => changed.tools_enabled = false,
+            _ => changed.mcp_servers.push(StdioMcpServer {
+                name: "nessa".into(),
+                command: "/trusted/nessa-mcp".into(),
+                args: vec!["--workspace".into(), "/different".into()],
+            }),
         }
         let changed = provider(changed, &model);
         assert_ne!(changed.identity(), identity);
@@ -85,7 +92,7 @@ async fn context_changes_reject_restore_before_launch_but_credentials_rotate_wit
         .unwrap();
     restored.close(close_action()).await.unwrap();
     drop(restored);
-    let journals = std::fs::read_dir(storage_root.path())
+    let journals = std::fs::read_dir(storage_path)
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .filter(|path| {

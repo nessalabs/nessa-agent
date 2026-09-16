@@ -226,6 +226,7 @@ impl AgentProvider for FailedPreflight {
                     ExecutionSessionId::new("preflight").unwrap(),
                     self.backend.clone(),
                     capabilities(),
+                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(FailedPreflightEvents(self.cause)),
             })

@@ -30,6 +30,7 @@ impl SessionStorageLease for FaultLease {
 fn invocation(id: &str, complete: bool) -> InvocationRecord {
     let id = ExecutionId::new(id).unwrap();
     InvocationRecord {
+        target_event_offset: None,
         submission: SubmissionMode::Immediate,
         request: ExecutionRequest {
             execution_id: id.clone(),
@@ -68,6 +69,7 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
         .collect();
     invocations.push(active);
     let snapshot = SessionSnapshot {
+        queue_history: Vec::new(),
         id: id.clone(),
         provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
         provider_session_id: ExecutionSessionId::new("provider-session").unwrap(),

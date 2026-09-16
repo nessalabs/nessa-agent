@@ -259,19 +259,20 @@ async fn scheduled_local_settlement_preserves_one_cause_and_exact_closer() {
         Arc::new(LocalFileStorage::new(root.path().join("scheduled-stop")).unwrap()),
     ];
     for storage in stores {
-        let lease = storage.open(id("scheduled-stop")).await.unwrap();
         for mode in [
             SubmissionMode::Queued,
             SubmissionMode::BoundarySteering,
             SubmissionMode::Steering,
         ] {
+            let name = format!("scheduled-stop-{mode:?}");
+            let lease = storage.open(id(&name)).await.unwrap();
             let closer = ActionContext::new("closer", "phone", "close").unwrap();
             let kind = if mode == SubmissionMode::Queued {
                 InvocationKind::Queued
             } else {
                 InvocationKind::Steering
             };
-            let mut value = snapshot("scheduled-stop");
+            let mut value = snapshot(&name);
             let record = &mut value.invocations[0];
             record.events.clear();
             record.submission = mode;
@@ -309,11 +310,25 @@ async fn scheduled_local_settlement_preserves_one_cause_and_exact_closer() {
                 actor: Some(closer),
             });
             record.result = Some(Ok(ExecutionOutcome::Cancelled));
+            let index = if mode == SubmissionMode::Steering {
+                let mut target = snapshot(&name).invocations.remove(0);
+                let target_id = ExecutionId::new("active-target").unwrap();
+                target.request.execution_id = target_id.clone();
+                target.events.clear();
+                for edge in &mut value.invocations[0].scheduling {
+                    edge.target = Some(target_id.clone());
+                }
+                value.invocations.insert(0, target);
+                1
+            } else {
+                0
+            };
+            super::scheduling::fixture_dispatches(&mut value);
             lease.save(value.clone()).await.unwrap();
             custom_storage::assert_custom_retention_admission(value.clone(), true).await;
             for change in 0..3 {
                 let mut invalid = value.clone();
-                let record = &mut invalid.invocations[0];
+                let record = &mut invalid.invocations[index];
                 match change {
                     0 => {
                         record.local_cancellation = Some(InvocationCancellationEvent {
@@ -340,8 +355,8 @@ async fn scheduled_local_settlement_preserves_one_cause_and_exact_closer() {
                 );
                 custom_storage::assert_custom_retention_admission(invalid, false).await;
                 assert_eq!(
-                    lease.load().await.unwrap().unwrap().invocations[0].local_cancellation,
-                    value.invocations[0].local_cancellation
+                    lease.load().await.unwrap().unwrap().invocations[index].local_cancellation,
+                    value.invocations[index].local_cancellation
                 );
             }
         }

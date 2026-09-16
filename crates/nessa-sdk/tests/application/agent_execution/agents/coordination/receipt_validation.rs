@@ -183,6 +183,7 @@ async fn received_permission_receipt_finishes_validation_after_close() {
                             })
                             .await
                             .map(|_| ())
+                            .map_err(|failure| failure.into_parts().0)
                     }
                 }
             });

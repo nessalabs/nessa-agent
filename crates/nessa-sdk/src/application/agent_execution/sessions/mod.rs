@@ -1,3 +1,13 @@
+//! Queue evidence follows the same consistency boundary as pending dispatch:
+//! ```text
+//! Agent scheduler -> InvocationQueue -> actual membership/order changes
+//!                 -> SessionManager -> SessionSnapshot.queue_history
+//! snapshot queue history -> replayed InvocationQueue -> complete-order validation
+//! invocation scheduling -> correlated checkpoint -> lifecycle/cause validation
+//! ```
+//! Arrows show ownership and validation flow. Local queue selection is saved
+//! before another command can reorder the remainder; it is not provider dispatch.
+//!
 //! SessionManager owns local session identity, saved evidence, and the storage lease.
 //!
 //! ```text
@@ -32,10 +42,12 @@
 pub(crate) mod attachment;
 mod manager;
 mod retention;
+// Queue membership is replayed separately from provider/lifecycle scheduling.
+mod queue_validation;
 pub mod storage;
 pub(crate) mod validation;
 pub use manager::SessionManager;
 pub use storage::{
-    InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, SessionSnapshot,
-    SessionStorage, SessionStorageLease, StorageError, StorageFuture,
+    InvocationCancellationEvent, InvocationRecord, InvocationSchedulingEvent, QueueHistoryRecord,
+    SessionSnapshot, SessionStorage, SessionStorageLease, StorageError, StorageFuture,
 };

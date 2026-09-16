@@ -55,13 +55,20 @@ cleanup. An already-settled invocation keeps its earlier result.
   before selecting values, even when repeated values agree. The same validation
   applies to startup/restoration replies and live updates. Later model/mode drift closes the binding. Managed
   restrictions are not rewritten to make a selection succeed.
-- Text prompts/output; optional built-in `Read`, `Write`, `Edit`, `Glob`, and
-  `Grep` tools. Every enabled tool is put in the permission `ask` list. Only
-  supplied `allow_once` and `reject_once` choices are exposed. Unknown tools,
-  ambiguous options, and unrecognized permission input fields fail closed.
-- No Bash, delegated agents, MCP servers, terminal or filesystem client RPCs,
-  provider-side hooks, plugin/settings-source loading, explicit reasoning controls, or extended
-  context mode. Unsupported incoming client requests receive a protocol error.
+- Text prompts/output with an optional Claude-native tool preset, including
+  WebSearch and WebFetch, plus explicitly configured stdio MCP servers. Native
+  file tools retain schema validation; other tools preserve bounded original
+  JSON review input. MCP names must belong to a configured server. Native tool
+  names are bounded and provider-validated. Existing native review rules and
+  configured MCP tools use permission `ask`; only supplied `allow_once` and
+  `reject_once` choices are exposed. Ambiguous permission options fail closed.
+- Native Bash/BashOutput/KillShell are disabled. Nessa-owned tools, including
+  Shepherd-backed shell execution, are exposed through MCP. EnterPlanMode and
+  ExitPlanMode are disabled to preserve default permission mode. Form elicitation,
+  terminal/filesystem client RPCs, provider-side hooks, plugin/settings-source
+  loading, explicit reasoning controls and extended context remain unsupported.
+  Claude omits tools that require unadvertised client capabilities, such as
+  AskUserQuestion. Unsupported incoming client requests receive a protocol error.
 - Binding ceilings of **200,000 context tokens and 64,000 output tokens**, further
   narrowed by model facts and the host's explicit limits. These are this profile's
   limits, not new metadata or inferred provider defaults. The fixed output limit
@@ -76,10 +83,12 @@ no MCP servers. SDK filesystem settings sources are empty. The upstream adapter
 still reads/watches its own settings for picker/policy behavior; returned runtime
 configuration is checked, never used to update Nessa's model catalog.
 
-Process-group supervision is for this restricted file-tool profile. It is not
-containment for a malicious harness or arbitrary detached commands. Shell and
-agent execution require a stronger host ownership mechanism before they can be
-enabled; there is no switch that opts into those unsupported modes here.
+Process-group supervision owns the ACP provider process. Native Claude tools are
+enabled through `tools_enabled`; native shell execution is disabled in favor of
+trusted MCP tools. This is not containment for a malicious harness or arbitrary
+commands that deliberately detach. Nessa's MCP shell separately owns command
+scopes through Shepherd and retains their process/audit results. See the
+[MCP server guide](../../nessa-mcp/README.md) for platform and retention limits.
 
 ## Queueing, steering, and hooks
 
@@ -89,6 +98,14 @@ steering uses the initialized profile’s advertised `_session/steering` extensi
 acknowledged input contributes to the active execution. Only an explicit
 `PromptRequired` response permits a new queued invocation. Ambiguous delivery is
 never retried as a prompt, and the control response has a five-second deadline.
+
+Before either prompt form writes to the provider, the shared ACP transport drains
+decoded input and establishes an operating-system pipe boundary. Unix consumes any
+bytes already available through a nonblocking read; Windows checks the pipe and
+awaits the registered asynchronous read when bytes are present. Policy changes,
+provider closure, and incomplete frames observed before that boundary therefore
+settle before dispatch. Input concurrent with or later than the empty-pipe boundary
+belongs to the next transport turn.
 
 The SDK’s before/after invocation hooks run locally around dispatch. They are
 distinct from provider-side hooks disabled by this restricted profile. See the

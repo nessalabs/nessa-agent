@@ -124,6 +124,7 @@ impl AgentProvider for OpeningProbe {
                     ExecutionSessionId::new("returned-context").unwrap(),
                     self.cleanup.clone(),
                     capabilities(),
+                    Arc::new(AcceptingAudit),
                 ),
                 events: self
                     .events
@@ -157,6 +158,7 @@ async fn failed_initialization_retains_lease_until_explicit_cleanup_recovers() {
         let provider = OpeningProbe::new(cleanup.clone());
         if failure.starts_with("restore") {
             storage.0.lock().unwrap().snapshot = Some(SessionSnapshot {
+                queue_history: Vec::new(),
                 id: SessionId::new("conversation").unwrap(),
                 provider: provider.identity(),
                 provider_session_id: ExecutionSessionId::new(if failure == "restore-identity" {
@@ -604,6 +606,7 @@ async fn every_uncertain_opening_cause_retains_lease_on_fresh_and_restored_sessi
             });
             if restored {
                 storage.0.lock().unwrap().snapshot = Some(SessionSnapshot {
+                    queue_history: Vec::new(),
                     id: SessionId::new("conversation").unwrap(),
                     provider: provider.identity(),
                     provider_session_id: ExecutionSessionId::new("restored-context").unwrap(),

@@ -59,6 +59,7 @@ async fn close_during_restore_cleans_the_rearmed_attachment() {
             agent.inner.session.id().clone(),
             restored.clone(),
             agent.inner.session.capabilities().clone(),
+            Arc::new(AcceptingAudit),
         );
         let events: Arc<AsyncMutex<Box<dyn ExecutionEventStream>>> =
             Arc::new(AsyncMutex::new(Box::new(ExhaustedEvents)));

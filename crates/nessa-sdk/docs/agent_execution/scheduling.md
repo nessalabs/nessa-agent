@@ -20,10 +20,12 @@ by admission under the SDK lock, not by timestamps from different devices.
 | Operation | When input runs | Caller stops waiting | Retry contract |
 | --- | --- | --- | --- |
 | `invoke` | Immediately, or Busy | Admission, execution, and persistence continue once the invocation slot is acquired | No receipt recovery; use `enqueue` when retries are required |
-| `enqueue` | FIFO after active work | Admission and accepted work continue | Same submission returns the original receipt/result |
+| `enqueue` | FIFO after active work unless explicitly reordered | Admission and accepted work continue | Same submission returns the original receipt/result |
 | `enqueue_steering` | Next invocation boundary, ahead of ordinary pending input | Admission and accepted work continue | Same submission returns the original receipt/result |
 | `steer` | Native active injection; confirmed unconsumed input enters priority queue | Accepted delivery continues | Same submission returns original delivery/result |
 | `remove_queued` | Only while input is pending | Await acknowledgement to know removal completed | Already removed or dispatched returns NotPending |
+| `queued_ids` | Current pending dispatch order | Read-only snapshot under the scheduler lock | Refresh before a new order command |
+| `reorder_queued` | Replaces the complete pending order within each priority | Accepted command continues | Unchanged order retries any outstanding evidence write |
 | `close` | Stops waiting work and cleans up dispatched work | Supervised cleanup continues | Repeated close does not delete or replay history |
 
 Submitted input and actor are saved before dispatch. Queued operations also retain
@@ -266,3 +268,38 @@ Execution identities are validated domain values with a 256-byte UTF-8 limit.
 request can be formed, copied into admission state, or persisted. The same
 constructor validates restored execution identities; oversized saved identities
 are corrupt history, not an alternate compatibility format.
+
+## Changing pending order
+
+Read `Agent::queued_ids()`, then pass the complete desired ID list and verified
+`ActionContext` to `Agent::reorder_queued`. Inputs keep their original IDs, text,
+receipts and priority. Steering always stays ahead of ordinary work. Changed membership
+returns `QueueChanged`; crossing the priority boundary returns `PriorityConflict`.
+If membership is unchanged, the latest accepted desired order wins, even if another
+surface reordered the same members first. Both decisions retain their before/after evidence.
+Duplicate or oversized lists are rejected before mutation. At most 64 inputs wait.
+
+The scheduler holds one lock across audit acknowledgement, replacement, and its
+save. A changed order is sent to the mandatory audit port before live mutation;
+audit rejection leaves both live and saved order unchanged. The record retains the
+complete before/after order, immutable priorities, session, caller, and
+`CallerRequested` cause. It records the selected local decision; the session
+snapshot remains authoritative for subsequent application and persistence. Caller
+loss cannot abandon the admitted transaction.
+`Applied` and `Unchanged` acknowledge persistence. A storage error can leave the new live order
+applied because a write may already have committed. Refresh the queue after an
+uncertain result. An unchanged retry flushes retained evidence; later dispatch
+also saves it before provider work. No-op commands do not consume the separate
+1,024-change history budget. Exhausting that budget leaves the queue unchanged;
+admission, selection and cleanup still have their own structural audit allowance.
+
+Snapshots retain a compact global queue history: admission, local selection,
+withdrawal/stop, reordering and restoration. Each reorder records full before and
+after order plus its caller. Single-input entries keep the scheduling checkpoint
+and caller needed to check their cause. A local selection is saved before another
+command can reorder the remaining queue; it does not claim provider dispatch.
+Restoration replays these facts for validation, checks every complete before-state,
+and rejects contradictory priorities, omitted members or repeated selection.
+The new owner records clearing retained pending membership instead of replaying
+old input. JSONL saves append changed queue-history tails atomically with related
+lifecycle evidence; file and memory storage reject rewriting earlier queue facts.

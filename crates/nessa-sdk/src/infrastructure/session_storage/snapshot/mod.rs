@@ -19,6 +19,7 @@ mod decode;
 mod errors;
 mod journal;
 mod permissions;
+mod queue_order;
 mod records;
 mod scheduling;
 mod settlement;

@@ -26,6 +26,7 @@ pub(super) struct RecordingAudit {
     pub(super) closures: Mutex<Vec<SessionClosureRecord>>,
     pub(super) finishes: Mutex<Vec<ExecutionFinish>>,
     pub(super) answers: Mutex<Vec<PermissionAnswerRecord>>,
+    pub(super) reorders: Mutex<Vec<QueueOrderRecord>>,
     pub(super) reject: bool,
     pub(super) stall: bool,
 }
@@ -49,6 +50,9 @@ impl ExecutionAudit for RecordingAudit {
                     self.records.lock().unwrap().push(record)
                 }
                 ExecutionAuditRecord::Answered(record) => self.answers.lock().unwrap().push(record),
+                ExecutionAuditRecord::QueueReordered(record) => {
+                    self.reorders.lock().unwrap().push(record)
+                }
             }
             Ok(())
         })
@@ -104,7 +108,8 @@ pub(super) fn test_acp_configuration(
         environment: BTreeMap::new(),
         credential_environment: BTreeMap::new(),
         workspace: root.path().to_path_buf(),
-        file_tools: true,
+        tools_enabled: true,
+        mcp_servers: Vec::new(),
         permissions: PermissionOfferPolicy::once_only(),
         startup_timeout: Duration::from_secs(10),
         execution_timeout: Some(Duration::from_millis(700)),

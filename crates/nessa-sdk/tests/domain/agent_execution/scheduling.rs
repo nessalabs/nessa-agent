@@ -1,6 +1,7 @@
 use nessa_sdk::domain::agent_execution::executions::{
-    ExecutionId, InvocationKind, InvocationQueue, InvocationStage, SchedulingCause,
-    SchedulingError, SchedulingInitiator, SchedulingTransition, SchedulingTransitionError,
+    ExecutionId, InvocationKind, InvocationQueue, InvocationStage, QueueMutation, QueueOrderChange,
+    QueueOrderError, QueueRemovalCause, SchedulingCause, SchedulingError, SchedulingInitiator,
+    SchedulingTransition, SchedulingTransitionError,
 };
 
 fn id(value: &str) -> ExecutionId {
@@ -536,4 +537,153 @@ fn execution_failure_only_ends_running_work_with_automatic_attribution() {
             }
         }
     }
+}
+
+#[test]
+fn queue_reordering_is_an_exact_priority_preserving_permutation() {
+    let mut queue = InvocationQueue::new(4).unwrap();
+    queue.enqueue(id("a"), InvocationKind::Queued).unwrap();
+    queue.enqueue(id("b"), InvocationKind::Queued).unwrap();
+    queue.enqueue(id("s"), InvocationKind::Steering).unwrap();
+    let before = queue.pending();
+    assert_eq!(
+        QueueOrderChange::new(before.clone(), vec![id("a"), id("s"), id("b")]),
+        Err(QueueOrderError::PriorityConflict)
+    );
+    assert_eq!(
+        QueueOrderChange::new(before.clone(), vec![id("s"), id("b"), id("b")]),
+        Err(QueueOrderError::Duplicate)
+    );
+    let change = QueueOrderChange::new(before.clone(), vec![id("s"), id("b"), id("a")]).unwrap();
+    queue.apply_order(&change).unwrap();
+    assert_eq!(
+        queue
+            .pending()
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["s", "b", "a"]
+    );
+    assert!(queue.apply_order(&change).is_err());
+    assert!(queue
+        .apply_mutation(&QueueMutation::Selected { id: id("a") })
+        .is_err());
+    assert_eq!(queue.pending()[0].0, id("s"));
+    queue.apply_mutation(&QueueMutation::Restored).unwrap();
+    assert!(queue.is_empty());
+    assert!(queue
+        .apply_mutation(&QueueMutation::Admitted {
+            id: id("a"),
+            kind: InvocationKind::Queued
+        })
+        .is_err());
+}
+
+#[test]
+fn queue_order_rejects_each_invalid_before_and_after_shape() {
+    let over_limit = (0..=QueueOrderChange::MAX_PENDING)
+        .map(|index| id(&format!("item-{index}")))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        QueueOrderChange::new(
+            over_limit
+                .iter()
+                .cloned()
+                .map(|id| (id, InvocationKind::Queued))
+                .collect(),
+            Vec::new(),
+        ),
+        Err(QueueOrderError::TooLarge)
+    );
+    assert_eq!(
+        QueueOrderChange::new(Vec::new(), over_limit),
+        Err(QueueOrderError::TooLarge)
+    );
+    assert_eq!(
+        QueueOrderChange::new(vec![(id("a"), InvocationKind::Queued)], vec![id("b")]),
+        Err(QueueOrderError::QueueChanged)
+    );
+    assert_eq!(
+        QueueOrderChange::new(
+            vec![
+                (id("a"), InvocationKind::Queued),
+                (id("s"), InvocationKind::Steering),
+            ],
+            vec![id("a"), id("s")],
+        ),
+        Err(QueueOrderError::PriorityConflict)
+    );
+
+    let unchanged = QueueOrderChange::new(
+        vec![
+            (id("s"), InvocationKind::Steering),
+            (id("a"), InvocationKind::Queued),
+        ],
+        vec![id("s"), id("a")],
+    )
+    .unwrap();
+    assert!(unchanged.is_unchanged());
+    let changed = QueueOrderChange::new(
+        vec![
+            (id("s"), InvocationKind::Steering),
+            (id("a"), InvocationKind::Queued),
+            (id("b"), InvocationKind::Queued),
+        ],
+        vec![id("s"), id("b"), id("a")],
+    )
+    .unwrap();
+    assert!(!changed.is_unchanged());
+}
+
+#[test]
+fn queue_mutation_replay_accepts_and_rejects_each_membership_transition() {
+    let mut queue = InvocationQueue::new(4).unwrap();
+    queue
+        .apply_mutation(&QueueMutation::Admitted {
+            id: id("s"),
+            kind: InvocationKind::Steering,
+        })
+        .unwrap();
+    queue
+        .apply_mutation(&QueueMutation::Admitted {
+            id: id("a"),
+            kind: InvocationKind::Queued,
+        })
+        .unwrap();
+    queue
+        .apply_mutation(&QueueMutation::Selected { id: id("s") })
+        .unwrap();
+    queue
+        .apply_mutation(&QueueMutation::Removed {
+            id: id("a"),
+            cause: QueueRemovalCause::Withdrawn,
+        })
+        .unwrap();
+    assert!(queue
+        .apply_mutation(&QueueMutation::Removed {
+            id: id("missing"),
+            cause: QueueRemovalCause::SessionClosed,
+        })
+        .is_err());
+    assert!(queue.apply_mutation(&QueueMutation::Restored).is_err());
+
+    queue
+        .apply_mutation(&QueueMutation::Admitted {
+            id: id("b"),
+            kind: InvocationKind::Queued,
+        })
+        .unwrap();
+    queue
+        .apply_mutation(&QueueMutation::Admitted {
+            id: id("c"),
+            kind: InvocationKind::Queued,
+        })
+        .unwrap();
+    let change = QueueOrderChange::new(queue.pending(), vec![id("c"), id("b")]).unwrap();
+    queue
+        .apply_mutation(&QueueMutation::Reordered(change.clone()))
+        .unwrap();
+    assert!(queue
+        .apply_mutation(&QueueMutation::Reordered(change))
+        .is_err());
 }

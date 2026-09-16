@@ -1,5 +1,6 @@
 //! Each complete line replaces one snapshot logically, while storing only changed tails.
 use super::{
+    queue_order::QueueEvent,
     records::{Event, Metadata, Provider},
     scheduling::SchedulingEvent,
     tools::corrupt,
@@ -21,6 +22,8 @@ pub(super) struct Record {
     provider: Option<Provider>,
     #[serde(skip_serializing_if = "Option::is_none")]
     provider_session_id: Option<String>,
+    queue_from: usize,
+    queue_history: Vec<QueueEvent>,
     invocation_count: usize,
     invocations: Vec<InvocationChange>,
 }
@@ -113,6 +116,7 @@ pub(in crate::infrastructure::session_storage) fn read(
 fn apply(snapshot: &mut Option<SessionSnapshot>, record: Record) -> Result<(), StorageError> {
     if snapshot.is_none() {
         *snapshot = Some(SessionSnapshot {
+            queue_history: Vec::new(),
             id: SessionId::new(record.id.clone()).map_err(corrupt)?,
             provider: record
                 .provider
@@ -136,6 +140,14 @@ fn apply(snapshot: &mut Option<SessionSnapshot>, record: Record) -> Result<(), S
         }
     }
     let value = snapshot.as_mut().expect("initialized snapshot");
+    if record.queue_from != value.queue_history.len() {
+        return Err(corrupt(
+            "queue history must append to its complete previous prefix",
+        ));
+    }
+    for reorder in record.queue_history {
+        value.queue_history.push(reorder.decode()?);
+    }
     value.invocations.truncate(record.invocation_count);
     let mut previous_index = None;
     for change in record.invocations {
@@ -243,7 +255,17 @@ pub(in crate::infrastructure::session_storage) fn encode(
                 .collect(),
         });
     }
+    let queue_from = previous.map_or(0, |prior| {
+        common_prefix(&prior.queue_history, &value.queue_history)
+    });
+    if previous.is_some_and(|prior| queue_from != prior.queue_history.len()) {
+        return Err(corrupt(
+            "saved queue history cannot be replaced or truncated",
+        ));
+    }
     if changes.is_empty()
+        && queue_from == value.queue_history.len()
+        && previous.is_none_or(|prior| prior.queue_history.len() == queue_from)
         && !provider_changed
         && !session_changed
         && previous.is_some_and(|prior| prior.invocations.len() == value.invocations.len())
@@ -259,6 +281,11 @@ pub(in crate::infrastructure::session_storage) fn encode(
             context: value.provider.context().into(),
         }),
         provider_session_id: session_changed.then(|| value.provider_session_id.as_str().into()),
+        queue_from,
+        queue_history: value.queue_history[queue_from..]
+            .iter()
+            .map(QueueEvent::from)
+            .collect(),
         invocation_count: value.invocations.len(),
         invocations: changes,
     };

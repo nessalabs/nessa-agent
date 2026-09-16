@@ -5,6 +5,7 @@ use super::lifecycle::{SessionLifecycle, WorkGeneration, WorkPermit};
 use super::submissions::{self, Settlement, SubmissionReceipt};
 use super::{Agent, AgentError};
 use crate::application::agent_execution::{
+    executions::{ExecutionAuditRecord, QueueOrderRecord},
     executions::{ExecutionRequest, SubmissionMode},
     permissions::ActionContext,
     providers::{
@@ -14,16 +15,33 @@ use crate::application::agent_execution::{
     sessions::{InvocationSchedulingEvent, StorageError},
 };
 use crate::domain::agent_execution::executions::{
-    ExecutionId, ExecutionOutcome, InvocationKind, InvocationQueue, InvocationStage,
-    SchedulingCause, SchedulingInitiator, SchedulingTransition,
+    ExecutionId, ExecutionOutcome, InvocationKind, InvocationQueue, InvocationStage, QueueMutation,
+    QueueOrderChange, QueueOrderError, QueueRemovalCause, SchedulingCause, SchedulingInitiator,
+    SchedulingTransition,
 };
 use std::{
     collections::{HashMap, HashSet},
     future::{poll_fn, Future},
     panic::{catch_unwind, AssertUnwindSafe},
     task::Poll,
+    time::Duration,
 };
-use tokio::sync::watch;
+use tokio::{sync::watch, time::sleep};
+
+const QUEUE_REORDER_AUDIT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Result of replacing the complete pending dispatch order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueueReorder {
+    /// The requested order was applied and its evidence saved.
+    Applied,
+    /// It was already the current order; outstanding evidence was saved.
+    Unchanged,
+    /// Pending membership changed; refresh and propose a new complete order.
+    QueueChanged,
+    /// Steering inputs cannot be moved behind ordinary queued input.
+    PriorityConflict,
+}
 
 /// Receipt for admitted work. Dropping it stops waiting, not execution.
 /// Accepted inputs are saved before this receipt is returned. The owning Tokio
@@ -161,7 +179,8 @@ fn event(
 impl Agent {
     /// Saves `input` and its verified `actor`, then schedules a sequential invocation.
     ///
-    /// Ordinary inputs run FIFO in admission order across all Agent clones. At
+    /// Ordinary inputs default to FIFO across all Agent clones; explicit
+    /// reorder_queued calls may replace order within a priority class. At
     /// most 64 inputs may wait; a full queue returns a Scheduling error. Retrying
     /// the same execution ID, input, actor, and operation joins its original receipt,
     /// even after settlement. Changed intent returns SubmissionConflict. Restored
@@ -205,6 +224,189 @@ impl Agent {
             .await
     }
 
+    /// Copy pending IDs in dispatch order under the scheduler's admission lock.
+    /// Running/injected/removed inputs are excluded; the copy grants no authority.
+    pub async fn queued_ids(&self) -> Vec<ExecutionId> {
+        self.inner
+            .scheduler
+            .lock()
+            .await
+            .queue
+            .pending()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
+    }
+    /// Atomically replace the complete pending order requested by verified `actor`.
+    /// Steering retains priority; identities, requests, receipts and kinds remain
+    /// unchanged. Membership races, including dispatch or withdrawal while the
+    /// mandatory audit acknowledgement is pending, return QueueChanged;
+    /// duplicate/oversized input returns InvalidInput. Applying and saving the
+    /// validated order remain serialized with dispatch and withdrawal.
+    /// Once polled, caller loss does not cancel this operation. Storage failure
+    /// may leave the new order applied: its evidence remains observed and is saved
+    /// before later dispatch. An unchanged retry retries that persistence.
+    /// At most 1024 actual order changes are retained per session; the budget is
+    /// checked before audit and mutation. Audit and storage acknowledgements are
+    /// each bounded to 30 seconds. Close interrupts either wait; interruption
+    /// before storage may leave an audited live order that close then drains. This
+    /// does not replay pending work after restart.
+    ///
+    /// # Examples
+    /// ```
+    /// use nessa_sdk::{Agent, application::agent_execution::{
+    ///     agents::{AgentError, QueueReorder}, permissions::ActionContext,
+    /// }, domain::agent_execution::executions::ExecutionId};
+    /// # async fn reorder(agent: &Agent, desired: Vec<ExecutionId>, actor: ActionContext) -> Result<(), AgentError> {
+    /// match agent.reorder_queued(desired, actor).await? {
+    ///     QueueReorder::Applied | QueueReorder::Unchanged => {},
+    ///     QueueReorder::QueueChanged | QueueReorder::PriorityConflict => {
+    ///         let current = agent.queued_ids().await;
+    ///         // Present current order and let the caller choose a fresh command.
+    ///         # let _ = current;
+    ///     }
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub async fn reorder_queued(
+        &self,
+        order: Vec<ExecutionId>,
+        actor: ActionContext,
+    ) -> Result<QueueReorder, AgentError> {
+        let agent = self.clone();
+        tokio::spawn(async move {
+            // Reorders serialize with each other while the scheduler remains
+            // available to dispatch, cancellation, and close during audit I/O.
+            let _reorder = agent.inner.reorder.lock().await;
+            let change = match QueueOrderChange::new(
+                agent.inner.scheduler.lock().await.queue.pending(),
+                order.clone(),
+            ) {
+                Ok(change) => change,
+                Err(QueueOrderError::QueueChanged) => return Ok(QueueReorder::QueueChanged),
+                Err(QueueOrderError::PriorityConflict) => {
+                    return Ok(QueueReorder::PriorityConflict)
+                }
+                Err(error) => {
+                    return Err(AgentError::InvalidInput(format!(
+                        "invalid queue order: {error:?}"
+                    )))
+                }
+            };
+            let unchanged = change.is_unchanged();
+            if !unchanged {
+                agent
+                    .inner
+                    .manager
+                    .check_queue_reorder_capacity()
+                    .await
+                    .map_err(AgentError::Storage)?;
+            }
+            let notice = agent.inner.lifecycle.close_notice();
+            if !unchanged {
+                let mut close = notice.clone();
+                let audit = agent
+                    .catch_scheduling_panic(async {
+                        tokio::select! { biased;
+                            _ = close.changed() => Err(AgentError::Closed),
+                            result = agent.inner.session.record_audit(
+                                ExecutionAuditRecord::QueueReordered(
+                                    QueueOrderRecord::caller_requested(
+                                        agent.inner.manager.id().clone(),
+                                        change.clone(),
+                                        actor.clone(),
+                                    ),
+                                ),
+                            ) => result,
+                            _ = sleep(QUEUE_REORDER_AUDIT_TIMEOUT) => Err(AgentError::AuditFailure),
+                        }
+                    })
+                    .await;
+                match audit {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => return Err(error),
+                    Err(()) => {
+                        agent.recover_scheduling_panic(None, &notice).await?;
+                        return Err(AgentError::SubmissionUnresolved);
+                    }
+                }
+                let mut scheduler = agent.inner.scheduler.lock().await;
+                let current = match QueueOrderChange::new(scheduler.queue.pending(), order) {
+                    Ok(current) => current,
+                    Err(QueueOrderError::PriorityConflict) => {
+                        return Ok(QueueReorder::PriorityConflict)
+                    }
+                    Err(QueueOrderError::QueueChanged) => return Ok(QueueReorder::QueueChanged),
+                    Err(error) => {
+                        return Err(AgentError::InvalidInput(format!(
+                            "invalid queue order: {error:?}"
+                        )))
+                    }
+                };
+                if current != change {
+                    return Ok(QueueReorder::QueueChanged);
+                }
+                scheduler
+                    .queue
+                    .apply_order(&change)
+                    .expect("exclusive validated queue order");
+                let saved = agent
+                    .catch_scheduling_panic(async {
+                        let mut close = notice.clone();
+                        tokio::select! { biased;
+                            _ = close.changed() => Err(StorageError::Io(
+                                "queue reorder persistence interrupted by close".into(),
+                            )),
+                            result = agent.inner.manager.record_queue_reorder(Some(change), actor) => result,
+                            _ = sleep(QUEUE_REORDER_AUDIT_TIMEOUT) => Err(StorageError::Io(
+                                "queue reorder persistence timed out".into(),
+                            )),
+                        }
+                    })
+                    .await;
+                return match saved {
+                    Ok(result) => {
+                        result.map_err(AgentError::Storage)?;
+                        Ok(QueueReorder::Applied)
+                    }
+                    Err(()) => {
+                        drop(scheduler);
+                        agent.recover_scheduling_panic(None, &notice).await?;
+                        Err(AgentError::SubmissionUnresolved)
+                    }
+                };
+            }
+            let scheduler = agent.inner.scheduler.lock().await;
+            let saved = agent
+                .catch_scheduling_panic(async {
+                    let mut close = notice.clone();
+                    tokio::select! { biased;
+                        _ = close.changed() => Err(StorageError::Io(
+                            "queue reorder persistence interrupted by close".into(),
+                        )),
+                        result = agent.inner.manager.record_queue_reorder(None, actor) => result,
+                        _ = sleep(QUEUE_REORDER_AUDIT_TIMEOUT) => Err(StorageError::Io(
+                            "queue reorder persistence timed out".into(),
+                        )),
+                    }
+                })
+                .await;
+            match saved {
+                Ok(result) => {
+                    result.map_err(AgentError::Storage)?;
+                    Ok(QueueReorder::Unchanged)
+                }
+                Err(()) => {
+                    drop(scheduler);
+                    agent.recover_scheduling_panic(None, &notice).await?;
+                    Err(AgentError::SubmissionUnresolved)
+                }
+            }
+        })
+        .await
+        .map_err(|_| AgentError::SubmissionUnresolved)?
+    }
+
     /// Removes pending `id`, including boundary steering, using host-verified
     /// `actor` attribution. Dispatch and removal serialize: only one can win.
     /// The input and Withdrawn cause stay in history; this does not delete evidence.
@@ -231,7 +433,7 @@ impl Agent {
                     let saved = agent
                         .inner
                         .manager
-                        .record_scheduling(
+                        .record_scheduling_with_queue(
                             pending.index,
                             event(
                                 pending.kind,
@@ -241,6 +443,10 @@ impl Agent {
                                 SchedulingCause::Withdrawn,
                                 Some(actor),
                             ),
+                            Some(QueueMutation::Removed {
+                                id: id.clone(),
+                                cause: QueueRemovalCause::Withdrawn,
+                            }),
                         )
                         .await;
                     match saved {
@@ -264,7 +470,7 @@ impl Agent {
                     drop(scheduler);
                     Some(
                         agent
-                            .recover_scheduling_panic(&id, &close_notice)
+                            .recover_scheduling_panic(Some(&id), &close_notice)
                             .await
                             .expect_err("withdrawal save panicked"),
                     )
@@ -348,9 +554,31 @@ impl Agent {
             .queue
             .enqueue(input.execution_id.clone(), kind)
             .expect("admission checked under scheduler lock");
+        let id = input.execution_id.clone();
+        let audit_actor = actor.clone();
         let receipt = Self::accept_pending(&mut scheduler, input, actor, index, kind, None, work);
-        self.start_runner(&mut scheduler);
-        Ok(receipt)
+        let notice = self.inner.lifecycle.close_notice();
+        let saved = self
+            .catch_scheduling_panic(self.inner.manager.record_queue_admission(
+                id.clone(),
+                kind,
+                audit_actor,
+            ))
+            .await;
+        match saved {
+            Ok(saved) => {
+                // Even failed acknowledgement keeps its owner and stable receipt.
+                // The runner must save the retained evidence before provider entry.
+                self.start_runner(&mut scheduler);
+                saved.map_err(AgentError::Storage)?;
+                Ok(receipt)
+            }
+            Err(()) => {
+                drop(scheduler);
+                self.recover_scheduling_panic(None, &notice).await?;
+                Err(AgentError::SubmissionUnresolved)
+            }
+        }
     }
 
     fn accept_pending(
@@ -396,7 +624,7 @@ impl Agent {
             // Wait for a direct invocation without removing pending work: close
             // can still cancel every waiting item and prevent automatic restart.
             let _active = self.inner.invocation.lock().await;
-            let (pending, close_notice) = {
+            let (pending, close_notice, selection) = {
                 let mut scheduler = self.inner.scheduler.lock().await;
                 let close_notice = self.inner.lifecycle.close_notice();
                 // A stop may come from permission or execution cleanup, without
@@ -418,19 +646,33 @@ impl Agent {
                     scheduler.running = false;
                     return;
                 };
-                (
-                    scheduler.pending.remove(&id).expect("admitted queue input"),
-                    close_notice,
-                )
+                let pending = scheduler.pending.remove(&id).expect("admitted queue input");
+                // Selected means local dequeue, not provider execution. Save the
+                // queue fact before any reorder can observe the remaining queue.
+                let selection = self
+                    .catch_scheduling_panic(self.inner.manager.record_queue_selection(id))
+                    .await;
+                (pending, close_notice, selection)
+            };
+            let selection = match selection {
+                Ok(result) => result,
+                Err(()) => {
+                    let result = self
+                        .recover_scheduling_panic(Some(&pending.input.execution_id), &close_notice)
+                        .await;
+                    pending.reply.send_replace(Some(result));
+                    self.inner.scheduler.lock().await.running = false;
+                    return;
+                }
             };
             let result = match self
-                .catch_scheduling_panic(self.run_pending(&pending))
+                .catch_scheduling_panic(self.run_pending(&pending, selection))
                 .await
             {
                 Ok(result) => result,
                 Err(()) => {
                     let result = self
-                        .recover_scheduling_panic(&pending.input.execution_id, &close_notice)
+                        .recover_scheduling_panic(Some(&pending.input.execution_id), &close_notice)
                         .await;
                     pending.reply.send_replace(Some(result));
                     self.inner.scheduler.lock().await.running = false;
@@ -441,7 +683,11 @@ impl Agent {
         }
     }
 
-    async fn run_pending(&self, pending: &Pending) -> Result<ExecutionOutcome, AgentError> {
+    async fn run_pending(
+        &self,
+        pending: &Pending,
+        selection: Result<(), StorageError>,
+    ) -> Result<ExecutionOutcome, AgentError> {
         pending._work.activate();
         let dispatch = self
             .inner
@@ -458,6 +704,7 @@ impl Agent {
                 ),
             )
             .await;
+        let dispatch = selection.and(dispatch);
         let dispatch_failed = dispatch.is_err();
         let result = match dispatch {
             Ok(()) => {
@@ -581,7 +828,7 @@ impl Agent {
 
     async fn recover_scheduling_panic(
         &self,
-        id: &ExecutionId,
+        id: Option<&ExecutionId>,
         close_notice: &watch::Receiver<Option<ActionContext>>,
     ) -> Result<ExecutionOutcome, AgentError> {
         let attempt = self.start_shutdown(SessionCloseRequest::ExecutionFailed);
@@ -606,12 +853,19 @@ impl Agent {
             }
             .bounded(),
         };
-        let metadata = self.inner.manager.scheduling_metadata(id).await;
-        let mut result = self
-            .inner
-            .manager
-            .retain_invocation_failure(id, error)
-            .await;
+        let metadata = match id {
+            Some(id) => self.inner.manager.scheduling_metadata(id).await,
+            None => None,
+        };
+        let mut result = match id {
+            Some(id) => {
+                self.inner
+                    .manager
+                    .retain_invocation_failure(id, error)
+                    .await
+            }
+            None => Err(error),
+        };
         if let Some((index, last)) = &metadata {
             if matches!(
                 last.stage,
@@ -697,7 +951,7 @@ impl Agent {
                 Ok(delivery) => delivery,
                 Err(()) => {
                     let error = agent
-                        .recover_scheduling_panic(&id, &close_notice)
+                        .recover_scheduling_panic(Some(&id), &close_notice)
                         .await
                         .expect_err("panic recovery retains failure");
                     if agent.inner.manager.scheduling_metadata(&id).await.is_some() {
@@ -827,6 +1081,7 @@ impl Agent {
                     .queue
                     .enqueue(input.execution_id.clone(), InvocationKind::Steering)
                     .expect("admission checked under scheduler lock");
+                let audit_actor = actor.clone();
                 let receipt = Self::accept_pending(
                     &mut scheduler,
                     input,
@@ -836,8 +1091,29 @@ impl Agent {
                     target,
                     work_owner.take().expect("admitted steering owner"),
                 );
-                self.start_runner(&mut scheduler);
-                Ok(SteeringDelivery::Queued(receipt))
+                let saved = self
+                    .catch_scheduling_panic(self.inner.manager.record_queue_admission(
+                        id.clone(),
+                        InvocationKind::Steering,
+                        audit_actor,
+                    ))
+                    .await;
+                match saved {
+                    Ok(saved) => {
+                        self.start_runner(&mut scheduler);
+                        // Do not replace the queued receipt with a native-steering
+                        // error: retries must recover the same waiting owner.
+                        if let Err(error) = saved {
+                            return Err(AgentError::Storage(error));
+                        }
+                        Ok(SteeringDelivery::Queued(receipt))
+                    }
+                    Err(()) => {
+                        drop(scheduler);
+                        self.recover_scheduling_panic(None, &close_notice).await?;
+                        return Err(AgentError::SubmissionUnresolved);
+                    }
+                }
             }
             Err(mut error) => {
                 // The owning generation records both automatic stops and explicit closes.
@@ -1072,7 +1348,7 @@ impl Agent {
                     } else {
                         self.inner
                             .manager
-                            .record_scheduling(
+                            .record_scheduling_with_queue(
                                 pending.index,
                                 event(
                                     pending.kind,
@@ -1082,6 +1358,15 @@ impl Agent {
                                     cause,
                                     actor.clone(),
                                 ),
+                                Some(QueueMutation::Removed {
+                                    id: id.clone(),
+                                    cause: match cause {
+                                        SchedulingCause::SessionClosed => {
+                                            QueueRemovalCause::SessionClosed
+                                        }
+                                        _ => QueueRemovalCause::RunnerStopped,
+                                    },
+                                }),
                             )
                             .await
                     }

@@ -13,6 +13,7 @@ use crate::application::agent_execution::executions::{
 
 use crate::application::agent_execution::permissions::{
     PermissionAnswer, PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
+    PermissionSelectionState,
 };
 use crate::application::agent_execution::providers::{
     CleanupFuture, CleanupReport, ExecutionEventStream, ExecutionReport, ObservationFailure,
@@ -44,6 +45,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         ProviderOpenError::no_resources(cause)
     })?;
     let (operation_capabilities, _) = watch::channel(OperationCapabilities::default());
+    let session_audit = audit.clone();
     let factory = WorkerFactory {
         event_budget: EventQueueBudget::new(),
         operation_capabilities,
@@ -84,7 +86,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         event_generations,
     });
     Ok(OpenedProviderSession {
-        session: ProviderSession::new(session_id, session, capabilities),
+        session: ProviderSession::new(session_id, session, capabilities, session_audit),
         events: Box::new(Events {
             current: Some(initial_events),
             queued,
@@ -438,19 +440,27 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             {
                 let generation = self.generation.lock().await;
                 if generation.stopped() {
-                    return Err(ProviderOperationFailure::new(
+                    return Err(ProviderOperationFailure::permission_answer(
                         AgentError::Closed,
                         ProviderSessionState::CleanupRequired,
+                        PermissionSelectionState::Pending,
                     ));
                 }
                 enqueue(&generation.commands, Command::Answer(answer, sender)).map_err(
-                    |error| ProviderOperationFailure::new(error, ProviderSessionState::Usable),
+                    |error| {
+                        ProviderOperationFailure::permission_answer(
+                            error,
+                            ProviderSessionState::Usable,
+                            PermissionSelectionState::Pending,
+                        )
+                    },
                 )?;
             }
             receiver.await.unwrap_or_else(|_| {
-                Err(ProviderOperationFailure::new(
+                Err(ProviderOperationFailure::permission_answer(
                     AgentError::Closed,
                     ProviderSessionState::CleanupRequired,
+                    PermissionSelectionState::Unknown,
                 ))
             })
         })

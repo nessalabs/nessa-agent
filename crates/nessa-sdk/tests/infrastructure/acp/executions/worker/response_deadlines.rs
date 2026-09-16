@@ -124,7 +124,7 @@ async fn live_nested_responses_observe_earliest_execution_or_steering_deadline()
                 json!({"jsonrpc":"2.0","id":77,"method":method,"params":{"sessionId":"context"}}),
             )
             .unwrap();
-            worker.config.file_tools = false;
+            worker.config.tools_enabled = false;
             let deadline = worker.current_deadline();
             let result = worker.message(&mut execution, message, deadline).await;
             let elapsed = Instant::now() - began;

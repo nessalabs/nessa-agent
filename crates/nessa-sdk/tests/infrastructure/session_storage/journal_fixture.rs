@@ -2,7 +2,7 @@
 use serde_json::{json, Value};
 
 pub(super) fn snapshot_json(bytes: &[u8]) -> Result<Value, serde_json::Error> {
-    let mut snapshot = json!({"invocations": []});
+    let mut snapshot = json!({"invocations": [], "queue_history": []});
     for line in bytes
         .split(|byte| *byte == b'\n')
         .filter(|line| !line.is_empty())
@@ -13,6 +13,9 @@ pub(super) fn snapshot_json(bytes: &[u8]) -> Result<Value, serde_json::Error> {
                 snapshot[key] = value.clone();
             }
         }
+        let queue_history = snapshot["queue_history"].as_array_mut().unwrap();
+        queue_history.truncate(record["queue_from"].as_u64().unwrap() as usize);
+        queue_history.extend(record["queue_history"].as_array().unwrap().iter().cloned());
         let invocations = snapshot["invocations"].as_array_mut().unwrap();
         invocations.truncate(record["invocation_count"].as_u64().unwrap() as usize);
         for change in record["invocations"].as_array().unwrap() {
@@ -39,6 +42,7 @@ pub(super) fn snapshot_json(bytes: &[u8]) -> Result<Value, serde_json::Error> {
 pub(super) fn journal_bytes(snapshot: &Value) -> Result<Vec<u8>, serde_json::Error> {
     let mut record = snapshot.clone();
     record["sequence"] = 1.into();
+    record["queue_from"] = 0.into();
     let invocations = record["invocations"].as_array_mut().unwrap();
     for (index, invocation) in invocations.iter_mut().enumerate() {
         let mut metadata = invocation.take();

@@ -2,14 +2,14 @@
 //! These application limits do not restrict the reusable domain identity types.
 use super::ExecutionEvent;
 use crate::application::agent_execution::agents::AgentError;
-use crate::domain::agent_execution::executions::MessageChunk;
+use crate::domain::agent_execution::executions::{MessageChunk, MessageId};
 
-pub(crate) const MAX_OBSERVATION_ID_BYTES: usize = 256;
+pub(crate) const MAX_OBSERVATION_ID_BYTES: usize = MessageId::MAX_BYTES;
 
 pub(crate) fn validate_observation_id(id: &str) -> Result<(), AgentError> {
-    if id.len() > MAX_OBSERVATION_ID_BYTES {
+    if id.is_empty() || id.len() > MAX_OBSERVATION_ID_BYTES {
         return Err(AgentError::InvalidInput(
-            "execution identity exceeds binding limit".into(),
+            "observation identity must contain 1 through 256 bytes".into(),
         ));
     }
     Ok(())

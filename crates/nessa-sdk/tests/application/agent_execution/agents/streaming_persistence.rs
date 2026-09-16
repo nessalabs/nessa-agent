@@ -38,6 +38,7 @@ impl AgentProvider for TextProvider {
                     ExecutionSessionId::new("batch").unwrap(),
                     self.backend.clone(),
                     capabilities(),
+                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(TextStream {
                     chunks: self.chunks.lock().unwrap().take().unwrap(),

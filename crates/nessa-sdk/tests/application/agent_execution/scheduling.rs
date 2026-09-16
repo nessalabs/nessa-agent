@@ -52,6 +52,7 @@ impl AgentProvider for GatedFactory {
                         closing,
                     }),
                     capabilities(),
+                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(Events(receiver)),
             })
@@ -344,7 +345,9 @@ async fn scheduling_native_injection_saves_input_and_correlates_with_active_exec
         request("correction").user_message
     );
     assert_eq!(before.scheduling.len(), 1);
+    assert_eq!(before.target_event_offset, Some(0));
     let correction = record(&storage, "correction");
+    assert_eq!(correction.target_event_offset, Some(0));
     assert_eq!(correction.result, None);
     assert!(correction.events.is_empty());
     let transition = &correction.scheduling[1];

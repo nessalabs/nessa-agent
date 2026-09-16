@@ -18,4 +18,4 @@
 pub(crate) mod binding;
 pub(crate) mod cleanup;
 mod config;
-pub use config::AcpConfig;
+pub use config::{AcpConfig, StdioMcpServer};

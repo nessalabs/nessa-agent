@@ -10,11 +10,13 @@ mod streaming_persistence;
 mod structured_observations;
 use super::support::*;
 use nessa_sdk::application::agent_execution::executions::SubmissionMode;
+use nessa_sdk::application::agent_execution::sessions::QueueHistoryRecord;
 use nessa_sdk::application::agent_execution::{
     agents::Agent,
     hooks::{HookError, InvocationContext, InvocationHook},
     providers::{ProviderIdentity, ProviderOpenFuture},
 };
+use nessa_sdk::domain::agent_execution::executions::QueueMutation;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -22,9 +24,12 @@ use tokio::sync::{mpsc, oneshot, watch};
 struct SavedState {
     leased: bool,
     pause_save: Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
+    pause_queue: Option<(QueueMutation, oneshot::Sender<()>, oneshot::Receiver<()>)>,
     snapshot: Option<SessionSnapshot>,
     writes: usize,
     fail_write: Option<usize>,
+    fail_queue: Option<QueueMutation>,
+    panic_queue: Option<QueueMutation>,
     fail_scheduling: Option<(String, InvocationStage)>,
     fail_observation: Option<String>,
     fail_settlement: Option<String>,
@@ -61,8 +66,45 @@ impl SessionStorageLease for MemoryStore {
                 let _ = started.send(());
                 let _ = release.await;
             }
+            let queue_pause = {
+                let mut state = self.0.lock().unwrap();
+                if state.pause_queue.as_ref().is_some_and(|(mutation, _, _)| {
+                    snapshot
+                        .queue_history
+                        .last()
+                        .is_some_and(|entry| &entry.mutation == mutation)
+                }) {
+                    state.pause_queue.take()
+                } else {
+                    None
+                }
+            };
+            if let Some((_, started, release)) = queue_pause {
+                let _ = started.send(());
+                let _ = release.await;
+            }
             let mut state = self.0.lock().unwrap();
             state.writes += 1;
+            if state.panic_queue.as_ref().is_some_and(|mutation| {
+                snapshot
+                    .queue_history
+                    .last()
+                    .is_some_and(|entry| &entry.mutation == mutation)
+            }) {
+                state.panic_queue = None;
+                drop(state);
+                panic!("queue membership persistence panic");
+            }
+            let fail_queue = state.fail_queue.as_ref().is_some_and(|mutation| {
+                snapshot
+                    .queue_history
+                    .last()
+                    .is_some_and(|entry| &entry.mutation == mutation)
+            });
+            if fail_queue {
+                state.fail_queue = None;
+            }
+
             let fail_scheduling = state.fail_scheduling.as_ref().is_some_and(|(id, stage)| {
                 snapshot.invocations.iter().any(|record| {
                     record.request.execution_id.as_str() == id
@@ -91,7 +133,8 @@ impl SessionStorageLease for MemoryStore {
             if fail_settlement {
                 state.fail_settlement = None;
             }
-            if state.fail_write == Some(state.writes)
+            if fail_queue
+                || state.fail_write == Some(state.writes)
                 || fail_scheduling
                 || fail_observation
                 || fail_settlement
@@ -202,6 +245,7 @@ impl AgentProvider for TestProvider {
                         outcome: self.outcome.clone(),
                     }),
                     capabilities(),
+                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(TestEvents(receiver)),
             })
@@ -593,10 +637,12 @@ async fn unfinished_saved_invocations_are_retained_without_automatic_replay() {
     let storage = MemoryStorage::default();
     let provider = TestProvider::new();
     storage.0.lock().unwrap().snapshot = Some(SessionSnapshot {
+        queue_history: Vec::new(),
         id: SessionId::new("conversation").unwrap(),
         provider: provider.identity(),
         provider_session_id: ExecutionSessionId::new("saved-context").unwrap(),
         invocations: vec![InvocationRecord {
+            target_event_offset: None,
             provider_report: None,
             local_cancellation: None,
             local_outcome: None,
@@ -686,11 +732,29 @@ async fn restored_unresolved_admission_is_never_redispatched_by_retry() {
                 actor: None,
             });
         }
+        let execution_id = ExecutionId::new("interrupted").unwrap();
+        let mut queue_history = vec![QueueHistoryRecord {
+            mutation: QueueMutation::Admitted {
+                id: execution_id.clone(),
+                kind: InvocationKind::Queued,
+            },
+            actor: Some(actor()),
+            scheduling_length: Some(1),
+        }];
+        if stage == InvocationStage::Running {
+            queue_history.push(QueueHistoryRecord {
+                mutation: QueueMutation::Selected { id: execution_id },
+                actor: None,
+                scheduling_length: Some(1),
+            });
+        }
         storage.0.lock().unwrap().snapshot = Some(SessionSnapshot {
+            queue_history,
             id: SessionId::new("conversation").unwrap(),
             provider: provider.identity(),
             provider_session_id: ExecutionSessionId::new("saved-context").unwrap(),
             invocations: vec![InvocationRecord {
+                target_event_offset: None,
                 provider_report: None,
                 local_cancellation: None,
                 local_outcome: None,

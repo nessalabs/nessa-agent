@@ -1,7 +1,7 @@
 //! Exact local outcomes survive later failures and cannot claim undispatched work.
 use super::super::custom_storage::assert_custom_retention_admission;
 use super::super::{assert_same, snapshot};
-use super::{journal_bytes, journal_path, snapshot_json, submitted};
+use super::{fixture_dispatches, journal_bytes, journal_path, snapshot_json, submitted};
 use nessa_sdk::application::agent_execution::{
     agents::AgentError,
     executions::{ExecutionEvent, ExecutionUpdate, SubmissionMode},
@@ -48,6 +48,7 @@ pub(super) fn history(mode: SubmissionMode, dispatched: bool) -> SessionSnapshot
             });
         }
     }
+    fixture_dispatches(&mut value);
     value
 }
 

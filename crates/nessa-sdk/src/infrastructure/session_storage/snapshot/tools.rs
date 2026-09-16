@@ -34,6 +34,13 @@ enum Content {
 }
 #[derive(Serialize, Deserialize)]
 enum Kind {
+    Fetch,
+    Execute,
+    Think,
+    Delete,
+    Move,
+    SwitchMode,
+
     Read,
     Edit,
     Search,
@@ -84,6 +91,12 @@ impl Tool {
                 ToolKind::Read => Kind::Read,
                 ToolKind::Edit => Kind::Edit,
                 ToolKind::Search => Kind::Search,
+                ToolKind::Fetch => Kind::Fetch,
+                ToolKind::Execute => Kind::Execute,
+                ToolKind::Think => Kind::Think,
+                ToolKind::Delete => Kind::Delete,
+                ToolKind::Move => Kind::Move,
+                ToolKind::SwitchMode => Kind::SwitchMode,
                 ToolKind::Other => Kind::Other,
             }),
             status: status.map(|status| match status {
@@ -125,6 +138,12 @@ impl Tool {
                 Kind::Read => ToolKind::Read,
                 Kind::Edit => ToolKind::Edit,
                 Kind::Search => ToolKind::Search,
+                Kind::Fetch => ToolKind::Fetch,
+                Kind::Execute => ToolKind::Execute,
+                Kind::Think => ToolKind::Think,
+                Kind::Delete => ToolKind::Delete,
+                Kind::Move => ToolKind::Move,
+                Kind::SwitchMode => ToolKind::SwitchMode,
                 Kind::Other => ToolKind::Other,
             }),
             self.status.map(|status| match status {

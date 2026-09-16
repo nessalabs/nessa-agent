@@ -7,10 +7,10 @@ use super::{
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::{
-    executions::ExecutionRequest,
+    executions::{ExecutionAudit, ExecutionAuditRecord, ExecutionRequest},
     permissions::{
         CancellationOrigin, PermissionAnswer, PermissionCancellation,
-        PermissionCancellationRequest, PermissionResolution,
+        PermissionCancellationRequest, PermissionResolution, PermissionSelectionState,
     },
 };
 use crate::domain::{
@@ -44,20 +44,33 @@ pub struct ProviderSession {
     id: ExecutionSessionId,
     backend: Arc<dyn ProviderSessionBackend>,
     capabilities: EffectiveCapabilities,
+    audit: Arc<dyn ExecutionAudit>,
 }
 impl ProviderSession {
-    /// Wrap `backend` with its provider context `id` and immutable model admission
-    /// `capabilities`. Construction performs no I/O and opens no provider context.
+    /// Wrap `backend` with its provider context `id`, immutable model admission
+    /// `capabilities`, and mandatory application `audit` port. The same sink records
+    /// provider lifecycle evidence and caller-attributed queue changes. Construction
+    /// performs no I/O and opens no provider context.
     pub fn new(
         id: ExecutionSessionId,
         backend: Arc<dyn ProviderSessionBackend>,
         capabilities: EffectiveCapabilities,
+        audit: Arc<dyn ExecutionAudit>,
     ) -> Self {
         Self {
             id,
             backend,
             capabilities,
+            audit,
         }
+    }
+    /// Deliver application-owned lifecycle evidence to the mandatory audit sink.
+    /// The sink defines its bounded acknowledgement and durability contract.
+    pub(crate) fn record_audit(
+        &self,
+        record: ExecutionAuditRecord,
+    ) -> crate::application::agent_execution::agents::AgentFuture<'_, ()> {
+        self.audit.record(record)
     }
     pub(crate) fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async move { self.backend.prepare_invocation().await })
@@ -134,11 +147,12 @@ impl ProviderSession {
                 || resolution.attribution() != &answer.attribution
                 || !matches!(resolution.request().state(), PermissionStateView::Answered { option_id, .. } if option_id == &answer.option_id)
             {
-                return Err(ProviderOperationFailure::new(
+                return Err(ProviderOperationFailure::permission_answer(
                     AgentError::Protocol(
                         "permission resolution contradicts the submitted answer".into(),
                     ),
                     ProviderSessionState::CleanupRequired,
+                    PermissionSelectionState::Consumed,
                 ));
             }
             Ok(resolution)

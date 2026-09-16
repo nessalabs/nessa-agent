@@ -13,6 +13,12 @@ pub(crate) fn tool_call(value: &Value) -> Result<ToolCallUpdate, AgentError> {
             Some("read") => Ok(ToolKind::Read),
             Some("edit") => Ok(ToolKind::Edit),
             Some("search") => Ok(ToolKind::Search),
+            Some("fetch") => Ok(ToolKind::Fetch),
+            Some("execute") => Ok(ToolKind::Execute),
+            Some("think") => Ok(ToolKind::Think),
+            Some("delete") => Ok(ToolKind::Delete),
+            Some("move") => Ok(ToolKind::Move),
+            Some("switch_mode") => Ok(ToolKind::SwitchMode),
             Some("other") => Ok(ToolKind::Other),
             _ => Err(protocol("unsupported tool kind")),
         })

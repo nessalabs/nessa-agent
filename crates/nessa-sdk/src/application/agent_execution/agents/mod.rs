@@ -35,4 +35,4 @@ mod submissions;
 pub use agent::{Agent, AgentEvents};
 pub use error::{AgentError, AgentFuture};
 pub use initialization::AgentInitializationError;
-pub use scheduling::{QueueRemoval, QueuedInvocation, SteeringDelivery};
+pub use scheduling::{QueueRemoval, QueueReorder, QueuedInvocation, SteeringDelivery};
