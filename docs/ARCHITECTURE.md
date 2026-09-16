@@ -34,6 +34,7 @@ opinion rather than the product's.
 | File | Owns |
 | --- | --- |
 | `main.rs` | The composition root. Builds the app, wires the tray, shortcut, and window. It never mentions macOS or Linux: OS behaviour is injected through `platform::current()`. |
+| `gateway/application/`, `gateway/infrastructure/` | Retryable background-service reconciliation and native launchd adapters, injected from `main.rs`. The adapter verifies the running runtime fingerprint and owns acknowledged update replacement; gateway lifetime remains independent of the desktop. |
 | `host.rs` | The host/shell seam: event names and the `PanelSize` payload. The frontend lists the same names in `src/host/window.ts`; a test fails if they drift. |
 | `panel.rs` | The panel frame: opening size, lower-right placement, show/hide. The tray and the shortcut request a toggle; they do not fit the frame. |
 | `tray.rs` | The menu bar extra (macOS) or StatusNotifierItem (Linux), and the surface-toggle request. Creating it is survivable: a desktop with no tray still launches. |
@@ -53,7 +54,7 @@ opinion rather than the product's.
 | --- | --- |
 | `main.tsx`, `store.ts` | Composition root. Mounts the panel, the session lifecycle, and product projections. |
 | `conversation/` | The conversation vertical. See the table below. |
-| `session/` | Wire session to `nessa-server` via `@nessa/client` (S1: connect + health + dev-only ping). |
+| `session/` | Authenticated wire session to `nessa-server` via `@nessa/client`, including health and reconnect lifecycle. |
 | `panel/` | The floating-window chrome. See the table below. |
 | `host/` | Injected host features and the window seam (`window.ts`). |
 
@@ -62,11 +63,11 @@ opinion rather than the product's.
 | Path | Owns |
 | --- | --- |
 | `model/` | Shared language: `Conversation`, `Turn`, `ConversationTabs` (`conversations` + `activeId`). Discriminated turns and phases. No id mill. |
-| `application/local-tabs.ts` | UI-session store shape: the shared tabs plus local id counters. A remote gateway mints its own ids and this type goes away. |
-| `application/usecases/` | One file per command. The desktop UI currently owns local draft, tab, open, and close behavior; its send/stop paths do not invoke the gateway. |
+| `application/local-tabs.ts` | UI-session store shape: the shared tabs plus local id counters. UI-local turn counters; durable conversation and submission UUIDs remain separate identities. |
+| `application/usecases/` | One file per command. Local drafts and tabs, send/steer/queue, stop, permission replies, and replacement-view application. |
 | `application/ports.ts` | `ConversationGateway` — what the panel may ask the product to do. |
-| `adapters/gateway/local.ts` | In-process UI-session gateway. The authenticated remote API is exposed separately by `@nessa/client`. |
-| `adapters/store/` | Redux projection. Reducers call the gateway; they do not contain rules. |
+| `adapters/gateway/local.ts` | In-process draft/tab projection. Remote effects live in `adapters/gateway/effects.ts` and use the shared authenticated client. |
+| `adapters/store/` | Redux projection and command thunks. Thunks invoke injected effects; reducers apply local UI state and returned views. |
 | `ui/` | Transcript, thinking pill, `useConversation`. Paints and dispatches. |
 | `model/attachments.ts` | Local file parts and per-file/draft budgets; file-bearing drafts cannot enter text-only sends. |
 | `application/usecases/attachments.ts` | Attach to the originating conversation and remove individual draft files. |
@@ -79,10 +80,10 @@ opinion rather than the product's.
 | `model/` | `SessionPhase`, status copy for the empty state. |
 | `adapters/client/` | `connectDevSession` (native credential loading, authenticated session, health; closes on probe failure) + injected session handle (live client outside Redux). |
 | `adapters/store/` | Redux projection of connection status (`hello` / `health` only). |
-| `adapters/lifecycle/` | Mount/reconnect effect, owned by the composition root. Subscribes `onClose` before publishing ready. |
+| `adapters/lifecycle/` | React lifetime plus `supervisor.ts`: fresh connections after typed transient startup failures or exhausted SDK retries, capped backoff, stale callback disposal, explicit retry for terminal errors. No message replay. |
 | `ui/use-session.ts` | Hook the panel reads for status. |
 
-Chat adapters must use `getSessionClient()` from the session barrel — do not open a second socket, and do not put `NessaClient` in Redux.
+Chat adapters receive the composition-owned session handle; they do not open another socket or put `NessaClient` in Redux. The panel uses `AgentNotification` above the pill for connection recovery and explicit admission retry. Transport recovery only refreshes the conversation; uncertain message receipts retain their submission identities.
 
 **Panel vertical** (`src/panel/`) — the floating window, not the product.
 
@@ -122,6 +123,47 @@ choice is owned by the frontend and reflected into the tray's check mark; the
 tray requests, it does not decide. New preferences point the same way, or they
 get an ADR explaining why not.
 
+**Desktop host ↔ gateway runtime.** The prepared runtime tree has one fingerprint.
+Under its service-label lock, the host copies and verifies the bundle into a
+private version directory outside the app before any service mutation. Exclusive
+atomic publication prevents replacing an existing version; launchd arguments and
+runtime PATH use only the staged directory. Published versions are retained,
+validated on reuse, and never repaired or garbage-collected automatically.
+The desktop compares it with health's fingerprint, persisted service generation,
+and canonical runtime-instance UUID, requiring the advertised process ID to match
+the exact launchd service PID. A generation is reused only for the same complete
+on-disk definition while unfenced. Changed or retired definitions receive a fresh
+random generation, so configuration reverts cannot reuse a retired identity.
+A matching recorded retirement cause forces reconciliation even when health
+otherwise matches or cleanup failed; failed bootstrap retries retain an unfenced already-published generation.
+A published request targeting the live instance/generation also forces retry when
+its result is missing. Requested and actual result generations remain separate;
+a rejection without a retirement cause cannot fence an unrelated generation. A
+restored fence reuses its original validated principal, lifecycle cause, and
+correlation instead of reconstructing attribution from the later upgrade attempt.
+Unknown launchctl output fails closed; legacy headerless health additionally
+requires a sole matching listening PID.
+For a managed update, `crates/nessa-server/src/desktop_runtime/` validates the
+correlated request, closes conversation admission, joins admitted commands,
+attempts owner cleanup, and persists upgrade audit evidence. Only a successful
+private result, correlated to that runtime instance and synced with its directory,
+authorizes the host to unload the old service. A failed result,
+an unavailable loaded service, or a foreign listener preserves the process.
+Inactive PID-less registrations are preserved too: an on-disk definition cannot
+prove launchd's independently retained program, arguments and environment.
+This one-time recovery limitation concerns direct-app registrations already broken
+before migration. Once staged, app replacement leaves the registered runtime
+intact so its normal managed retirement boundary remains available.
+Before bootstrap, the host durably records the exact service, definition, runtime
+fingerprint and generation under the service-label lock; it retains that record
+until readiness succeeds. A retry may unload an unambiguously PID-less unavailable registration only when that
+host-owned record, the desired definition and the complete on-disk definition all
+agree. Missing, malformed or contradictory evidence preserves the service. This
+lets a failed readiness check retry the host's own new registration without using
+the plist alone as authority. A failed bootstrap clears the record only when
+launchd positively reports the label unloaded. Restoring an old plist is not a
+safe rollback.
+
 ## Invariants
 
 Things that must stay true. They are invisible in the code, which is why they
@@ -137,6 +179,13 @@ are written here.
 - The window seam is guarded. Any new host call goes through `src/host/window.ts`
   and no-ops outside Tauri, or the browser workflow breaks silently.
 - A settings file missing keys still launches. Any new key has a default.
+- Gateway readiness means the expected prepared-runtime fingerprint answered on
+  health with the expected service generation, runtime-instance UUID and PID
+  matching the exact launchd service.
+  A generic HTTP 200 is insufficient.
+- Gateway updates serialize by launchd service identity. Managed replacement
+  requires correlated cleanup and audit acknowledgement; failed retirement never
+  authorizes bootout. The pre-protocol gateway has one explicit legacy path.
 - Failures at the edges — blur, sizing, tray, viewport — are reported and
   survivable, not fatal. The panel opening unblurred, or without a tray, beats
   the panel not opening.
@@ -216,18 +265,19 @@ especially [Agent/storage](../crates/nessa-sdk/docs/agent_execution/agent.md),
 [scheduling/retries](../crates/nessa-sdk/docs/agent_execution/scheduling.md), and
 [permissions](../crates/nessa-sdk/docs/agent_execution/permissions.md). The
 [structure guide](codebase-structure.md#agent-sdk-foundation) maps owning modules.
-The gateway owns one shared Agent for each authorized conversation. The
-conversation context owns durable creator/organization metadata, mandatory
-creation audit, and a bounded read projection; SDK Agent remains the sole
-scheduler and execution authority. NessaClient sends stable-ID commands over its
-existing authenticated socket. Closing a client view does not implicitly stop
-work; the explicit close command owns cleanup.
+The gateway now owns a shared Agent for each authorized conversation. The
+conversation context owns durable creator/organization metadata and a bounded
+read projection; SDK Agent remains the sole scheduler and execution authority.
+NessaClient sends stable-ID commands over its existing authenticated socket.
+The floating panel polls current replacement views, displays streaming output and
+permission choices, and queues busy follow-ups. Closing a tab detaches a view;
+Stop explicitly closes active and queued work.
 
 See [gateway chat](guides/gateway-chat.md) for configuration, ownership, commands,
 limits, and durability. The server stores SDK JSONL snapshots at consequential
 boundaries and mandatory audit records independently. Unfinished streaming text
 can be lost on crash. Reads are bounded current views, not a durable cursor stream.
-No second event database is required for this integration.
+No second event database is required for this initial integration.
 
 ADRs 0009 and 0011's exact replay and broader collaboration remain proposed work.
 Remote TLS/device provisioning, uploads, and more provider adapters remain separate
@@ -254,7 +304,6 @@ and session deadlines. Use the
 [local SDK/CLI guide](guides/local-auth.md) for gateway access and the
 [adversarial review](reviews/local-auth-gateway.md) for validation and limits.
 
-
 ## Nessa-owned tools over MCP
 
 `crates/nessa-mcp` is the stdio MCP server for all Nessa-provided tools. Claude's
@@ -262,3 +311,13 @@ native file/web tools remain provider-owned. The gateway composes trusted MCP
 server configurations into ACP; no tool request selects executable configuration.
 The shell tool coordinates an injected Shepherd runner and private process audit
 through its application ports. See the [MCP server](../crates/nessa-mcp/README.md).
+
+## CLI surface
+
+The `nessa` executable runs the gateway with `nessa server`. Online `auth token`
+and `doctor` commands use the existing authenticated product protocol as the CLI
+surface; they do not access the server registry. Offline `auth init --local`
+bootstraps first access, and local recovery/provisioning retain their exclusive
+registry lock. Cloud selection fails explicitly until its implementation exists.
+See the [CLI module map](../crates/nessa-server/src/cli/mod.rs) and
+[local auth guide](guides/local-auth.md).

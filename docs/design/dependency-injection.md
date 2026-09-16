@@ -38,8 +38,8 @@ an `clock: Arc<dyn Clock>` and supplies the default monotonic implementation.
 `CompositionRoot` constructs the dependencies and passes them to
 `AppState::with_dependencies`. State clones share the injected clock. Separate
 states can have independent clocks, including deterministic test adapters.
-`AppState::from_environment` remains a compatibility constructor for existing
-callers. Auth, hello, and routing behavior are unchanged.
+`AppState::from_environment` is the environment-driven composition entry point;
+`with_dependencies` is the explicit constructor used for adapter substitution.
 
 This server pattern complements Tauri's existing `platform::current()` host
 injection; it does not add a second host abstraction. Dependencies are scoped to
@@ -146,3 +146,25 @@ admission mutex. Remote adapters must preserve coherent current snapshot reads a
 bounded provider work; a connection-wide cached permission is insufficient.
 Idle invalidation currently polls at one second; the registry's notification port
 is available for future integration. See [local setup](../adr/done/0010-local-authentication.md).
+
+## Gateway Agent integration
+
+Composition optionally loads the private namespace's `agent` configuration and
+constructs ClaudeAcpProvider, LocalFileStorage, LocalConversationRepository and
+DurableExecutionAudit. ProductRouteState shares ConversationService across sockets;
+tests inject providers and storage without a production test selector. Shared
+request permits outlive disconnected sockets, and controls have reserved capacity.
+The panel's ConversationEffects calls the existing authenticated NessaClient and
+reads bounded replacement views. See [gateway chat](../guides/gateway-chat.md).
+
+### Browser authentication composition
+
+`src/composition/browser.tsx` creates a dependency scope and store after the
+same-origin browser session API confirms sign-in. The HTTP adapter is injected
+with `fetch`; the SDK's explicit browser-cookie authentication uses WSS (or numeric-loopback WS in dev/CI) without
+loading a native credential source. The server's `browser_session` context owns
+session records and a storage port, with the private persistent journal adapter
+selected in composition. The domain owns idle deadlines; the injected browser
+renewal lifecycle checks visible sessions and tolerates temporary outages. HTTP adapters translate cookies to session IDs; verified identity
+then uses the existing product authorization and current-state checks. Neither
+React nor Redux retains an access token or session secret.

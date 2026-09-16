@@ -1,5 +1,8 @@
 # docs
 
+[Gateway chat setup and current contracts](guides/gateway-chat.md)
+
+
 Project-specific documentation for Nessa. All contributors follow the
 [canonical coding standards](../CODING_STANDARDS.md), including the
 [organization gate](../CODING_STANDARDS.md#organization-across-the-repository).
@@ -15,8 +18,8 @@ instead of creating a competing copy.
 | [Agent SDK](../crates/nessa-sdk/docs/agent_execution/README.md) | Current Agent API, session storage, hooks, queueing, steering, and retry contracts. |
 | [Agent execution design](design/agent_execution/README.md) | Ownership review and separately labeled future gateway/conversation proposals. |
 | [Authentication](design/auth/README.md) | Design references; [local usage](guides/local-auth.md) and [gateway review](reviews/local-auth-gateway.md). |
-| [Gateway chat](guides/gateway-chat.md) | Current authenticated conversation commands, bounded views, ownership, durability, and configuration. |
-| [Nessa MCP](../crates/nessa-mcp/README.md) | Current stdio tool boundary, shell lifecycle, process ownership, and audit guarantees. |
+| [Gateway alpha review](reviews/gateway-alpha-review.md) | Local architecture review, fixed findings, external comparisons, validation, and remaining release limits. |
+| [todo/](todo/README.md) | Pending implementation tasks, including SDK context-first organization and caller updates. |
 | [adr/](adr/README.md) | Architecture decisions by implementation progress: [done](adr/done) and [todo](adr/todo). See the index for current scope and external work. |
 
 ## The skills
@@ -44,7 +47,6 @@ and [sequence diagrams and MCP](design/collaboration-sequences-and-mcp.md).
 Completed authentication decisions are in [ADR 0010](adr/done/0010-local-authentication.md);
 auth API readiness and operating bounds are in [ADR 0007](adr/done/0007-authentication-delivery.md).
 
-The SDK owns admitted follow-up queueing and steering. UI drafts and the gateway's
-authenticated routing are separate responsibilities. Read the current SDK and
-gateway chat guides before proposed collaboration work in
-[ADR 0008](adr/todo/0008-agent-client-api.md).
+The SDK owns admitted follow-up queueing and steering. UI drafts and the
+gateway's authenticated routing are separate responsibilities. Read the current
+SDK guides before the proposed conversation contract in [ADR 0008](adr/todo/0008-agent-client-api.md).
