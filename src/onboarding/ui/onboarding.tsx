@@ -195,9 +195,13 @@ function readinessNote(
   supported: boolean,
 ): string | undefined {
   if (readiness === "ready") return undefined
+  // No adapter is the one reason that will not change by doing anything here.
   if (!supported) return "Coming soon"
   if (readiness === "needs-authentication") return "Needs sign-in"
-  return "Not installed"
+  if (readiness === "not-installed") return "Not installed"
+  // Nothing heard back — the gateway is not running, or has not answered yet.
+  // Saying so is better than naming a cause that would be a guess.
+  return "Not available"
 }
 
 /** One listed agent: its mark, its name, and what it is waiting on. An agent

@@ -46,17 +46,6 @@ pub trait Host: Send + Sync {
     /// teaches would otherwise summon the panel out of sight behind it.
     fn set_above_overlay(&self, _window: &WebviewWindow, _above: bool) {}
 
-    /// Whether the OS credential store holds an item for `service`.
-    ///
-    /// Asked, never read: setup needs to know that an agent is signed in, and
-    /// that question is answerable without access to the token itself. Hosts
-    /// with no credential store answer no, which reads as "not signed in" —
-    /// the safe direction, since the alternative is offering an agent that
-    /// cannot run.
-    fn has_stored_credential(&self, _service: &str) -> bool {
-        false
-    }
-
     /// Native frost / clear. No-op on hosts where the shell paints frost in CSS.
     fn set_frosted(&self, _window: &WebviewWindow, _frosted: bool) -> Result<(), String> {
         Ok(())

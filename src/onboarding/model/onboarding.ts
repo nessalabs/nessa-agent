@@ -17,7 +17,8 @@ export type AgentId = "claude" | "codex"
  * because an agent missing from the list is a question — "where is Claude?" —
  * and an agent listed with a reason is an answer.
  */
-export type AgentReadiness = "ready" | "needs-authentication" | "unavailable"
+export type AgentReadiness =
+  "ready" | "needs-authentication" | "not-installed" | "unavailable"
 
 /** What each agent's runtime reports. Absent for an agent not yet asked about. */
 export type AgentReadinessReport = Readonly<Partial<Record<AgentId, AgentReadiness>>>

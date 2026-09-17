@@ -1,7 +1,6 @@
 // The release build is a menu bar app with no console window on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod agents;
 mod gateway;
 mod host;
 mod local_data;
@@ -29,7 +28,6 @@ fn main() {
             platform::set_frosted,
             platform::panel_size,
             platform::flush_compositor,
-            agents::agents_readiness,
             surface_credential::load_surface_credential,
             shortcuts::load_shortcuts,
             shortcuts::apply_shortcuts,
