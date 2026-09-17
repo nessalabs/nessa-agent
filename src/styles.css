@@ -644,7 +644,15 @@ body {
  * was already on screen, and a person who has pressed a button should not wait
  * a second to see the result.
  */
-.nessa-setup-window[data-step="welcome"] .nessa-setup-arrive {
+/*
+ * The first step, resolving a word at a time.
+ *
+ * `--nessa-word` is each piece's place in the order, set where the markup
+ * knows it; the delay it turns into lives here, so the pace of the line is one
+ * number in one file. A piece that does not set it is simply first.
+ */
+.nessa-setup-window[data-step="welcome"] .nessa-setup-arrive,
+.nessa-setup-window[data-step="welcome"] .nessa-setup-word {
   /*
    * Promoted for the duration. Scaling and blurring live text re-rasterizes
    * the glyphs on every frame; on its own layer they are drawn once and the
@@ -655,13 +663,25 @@ body {
   animation-name: nessa-setup-focus;
   animation-duration: 800ms;
   animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
-  animation-delay: var(--nessa-reveal-content);
+  animation-fill-mode: both;
+  animation-delay: calc(var(--nessa-reveal-content) + var(--nessa-word, 0) * 110ms);
 }
-.nessa-setup-window[data-step="welcome"] .nessa-setup-arrive:nth-child(2) {
-  animation-delay: calc(var(--nessa-reveal-content) + 90ms);
+
+/* A word has to be its own box to be scaled and blurred; inline boxes cannot
+   be. The line is laid out as a row so the gaps stay the gaps between words
+   and centring stays exact whatever the words are. */
+.nessa-setup-title[data-words] {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  column-gap: 0.28em;
+  /* The shadow moves to the words, which are what is filtered. */
+  filter: none;
 }
-.nessa-setup-window[data-step="welcome"] .nessa-setup-arrive:nth-child(3) {
-  animation-delay: calc(var(--nessa-reveal-content) + 180ms);
+
+.nessa-setup-word {
+  display: inline-block;
+  filter: var(--nessa-focus-shadow,);
 }
 
 /*
@@ -1093,6 +1113,7 @@ body {
   .nessa-setup-orb,
   .nessa-setup-orb-wash,
   .nessa-setup-stage,
+  .nessa-setup-word,
   .nessa-setup-arrive {
     animation: none;
   }

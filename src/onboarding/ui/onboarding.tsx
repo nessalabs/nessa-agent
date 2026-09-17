@@ -79,6 +79,36 @@ function summonHeading(summon: OnboardingState["summon"], configured: boolean) {
 }
 
 /**
+ * A heading that resolves one word at a time.
+ *
+ * Words are the unit because they are the unit of reading: a line that
+ * resolves whole is a thing appearing, and a line that resolves word by word
+ * is a thing being said. Each word carries its own place in the order, and the
+ * stylesheet turns that into a delay, so the stagger is one number in one file
+ * rather than a value threaded through the markup.
+ *
+ * The shadow that keeps white type legible moves to the words for the same
+ * reason it exists at all — it has to be on whatever is actually being
+ * filtered, or the animation replaces it.
+ */
+function SetupHeading({ children }: { children: string }) {
+  return (
+    <h1 data-words className="nessa-setup-title font-semibold text-white">
+      {children.split(" ").map((word, index) => (
+        <span
+          // Words repeat within a line, so position is the only identity.
+          key={`${word}-${index}`}
+          className="nessa-setup-word"
+          style={{ "--nessa-word": index } as React.CSSProperties}
+        >
+          {word}
+        </span>
+      ))}
+    </h1>
+  )
+}
+
+/**
  * A step that is a line and a way on.
  *
  * The heading is centred in the box and the action is anchored to the bottom
@@ -184,14 +214,19 @@ export function Onboarding({
       <SetupStage>
         <SetupStep
           action={
-            <Button size="lg" className={PILL} onClick={onBegin}>
+            <Button
+              size="lg"
+              className={PILL}
+              onClick={onBegin}
+              // After the last word, so the line finishes being said before it
+              // is handed a thing to do.
+              style={{ "--nessa-word": 3 } as React.CSSProperties}
+            >
               Get started
             </Button>
           }
         >
-          <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white">
-            Welcome to Nessa
-          </h1>
+          <SetupHeading>Welcome to Nessa</SetupHeading>
         </SetupStep>
       </SetupStage>
     )
