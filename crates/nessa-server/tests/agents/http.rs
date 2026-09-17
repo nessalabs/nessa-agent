@@ -6,6 +6,7 @@ use crate::agents::application::ProbeFailure;
 use crate::agents_test_support::StubAgentProbe;
 use axum::body::to_bytes;
 use serde_json::Value;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn from(origin: Option<&str>) -> HeaderMap {
     let mut headers = HeaderMap::new();
@@ -17,6 +18,37 @@ fn from(origin: Option<&str>) -> HeaderMap {
 
 fn host(probe: StubAgentProbe) -> State<Arc<dyn AgentProbe>> {
     State(Arc::new(probe))
+}
+
+/// A host that counts how many times it was asked anything.
+#[derive(Default)]
+struct CountingProbe {
+    asked: AtomicUsize,
+}
+
+impl AgentProbe for CountingProbe {
+    fn installed(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        Ok(true)
+    }
+
+    fn authenticated(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        Ok(true)
+    }
+}
+
+/// A host that fails in the one way a blocking thread reports back as a lost task.
+struct PanickingProbe;
+
+impl AgentProbe for PanickingProbe {
+    fn installed(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
+        panic!("this machine came apart while being asked");
+    }
+
+    fn authenticated(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
+        Ok(true)
+    }
 }
 
 async fn readiness_of(probe: StubAgentProbe) -> String {
@@ -85,6 +117,37 @@ async fn refuses_a_page_on_any_other_origin() {
     )
     .await;
     assert_eq!(response.status(), 403);
+}
+
+#[tokio::test]
+async fn a_refused_page_never_gets_this_machine_searched_on_its_behalf() {
+    // Answering means filesystem reads and, on macOS, a subprocess. A site the
+    // server will not answer must not be able to make it do that work at all.
+    let counted = Arc::new(CountingProbe::default());
+    let response = handle_http_agents(
+        State(counted.clone() as Arc<dyn AgentProbe>),
+        from(Some("https://evil.example")),
+    )
+    .await;
+    assert_eq!(response.status(), 403);
+    assert_eq!(counted.asked.load(Ordering::SeqCst), 0);
+
+    let allowed =
+        handle_http_agents(State(counted.clone() as Arc<dyn AgentProbe>), from(None)).await;
+    assert_eq!(allowed.status(), 200);
+    assert!(counted.asked.load(Ordering::SeqCst) > 0);
+}
+
+#[tokio::test]
+async fn a_host_that_falls_over_while_being_asked_does_not_take_the_handler_with_it() {
+    // The asking happens on a blocking thread, so its failure arrives as a
+    // failed join rather than as an unwind through the request.
+    let response = handle_http_agents(
+        State(Arc::new(PanickingProbe) as Arc<dyn AgentProbe>),
+        from(None),
+    )
+    .await;
+    assert_eq!(response.status(), 500);
 }
 
 #[tokio::test]

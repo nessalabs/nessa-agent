@@ -127,14 +127,38 @@ export function agentChoice(id: AgentId): AgentChoice | undefined {
   return AGENT_CHOICES.find((choice) => choice.id === id)
 }
 
-/** Record what the runtimes reported. Arriving after a choice was somehow made
- * does not unmake it; the choice was checked when it was made. A report also
- * clears any earlier failure: the question has now been answered. */
+/**
+ * Apply a newly arrived answer, and drop a selection it has just invalidated.
+ *
+ * The runtimes can be asked more than once — the picker offers it, and reaching
+ * the picker does it — so an answer can arrive that contradicts the one a choice
+ * was made against. While the picker is still up, a choice the newest answer
+ * says cannot run is not kept: leaving it ticked, with Continue still lit, is
+ * the panel promising an agent it has just been told is not there.
+ *
+ * Past the picker the choice is not silently unmade. Setup has moved on, and
+ * quietly emptying a decision behind someone on a step that says nothing about
+ * agents would be a worse lie than the stale tick.
+ */
+function withAnswer(
+  state: OnboardingState,
+  readiness: AgentReadinessReport | undefined,
+  readinessFailure: AgentReadinessFailure | undefined,
+): OnboardingState {
+  const answered: OnboardingState = { ...state, readiness, readinessFailure }
+  if (answered.step !== "agent" || !answered.agent) return answered
+  return isChoosable(answered, answered.agent)
+    ? answered
+    : { ...answered, agent: undefined }
+}
+
+/** Record what the runtimes reported. A report also clears any earlier failure:
+ * the question has now been answered. */
 export function recordReadiness(
   state: OnboardingState,
   readiness: AgentReadinessReport,
 ): OnboardingState {
-  return { ...state, readiness, readinessFailure: undefined }
+  return withAnswer(state, readiness, undefined)
 }
 
 /** Record that nobody answered, and why. The report is dropped rather than
@@ -144,7 +168,7 @@ export function recordReadinessFailure(
   state: OnboardingState,
   reason: AgentReadinessFailure,
 ): OnboardingState {
-  return { ...state, readiness: undefined, readinessFailure: reason }
+  return withAnswer(state, undefined, reason)
 }
 
 /** What an agent's runtime reported.

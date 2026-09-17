@@ -209,6 +209,34 @@ describe("what the runtimes answered", () => {
     expect(agentReadiness(failed, "claude")).toBe("unknown")
   })
 
+  it("unpicks an agent a later answer says cannot run", () => {
+    // The picker can ask again, so an answer can contradict the one a choice
+    // was made against. Leaving it ticked, with Continue still lit, offers an
+    // agent the runtime has just said is not there.
+    const chosen = chooseAgent(startAgentChoice(withClaudeReady()), "claude")
+    expect(chosen.agent).toBe("claude")
+    const signedOut = recordReadiness(chosen, { claude: "needs-authentication" })
+    expect(signedOut.agent).toBeUndefined()
+    expect(isChoosable(signedOut, "claude")).toBe(false)
+    // A failed ask is no better a reason to keep it: nobody answered at all.
+    expect(recordReadinessFailure(chosen, "unreachable").agent).toBeUndefined()
+  })
+
+  it("keeps a choice a later answer still supports", () => {
+    const chosen = chooseAgent(startAgentChoice(withClaudeReady()), "claude")
+    expect(recordReadiness(chosen, { claude: "ready" }).agent).toBe("claude")
+  })
+
+  it("does not empty a decision behind a step that has moved on", () => {
+    // Past the picker there is nothing on screen about agents, so unmaking the
+    // choice silently would be the worse of the two lies.
+    const summon = confirmAgent(
+      chooseAgent(startAgentChoice(withClaudeReady()), "claude"),
+    )
+    expect(summon.step).toBe("summon")
+    expect(recordReadinessFailure(summon, "unreachable").agent).toBe("claude")
+  })
+
   it("clears the failure once an answer arrives", () => {
     const answered = recordReadiness(
       recordReadinessFailure(beginOnboarding(), "unreachable"),

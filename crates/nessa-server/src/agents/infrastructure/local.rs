@@ -1,5 +1,5 @@
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 use std::process::{Command, Stdio};
 
@@ -15,35 +15,43 @@ const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 /// dependencies are chosen, and held as data. Nothing here reads a secret: the
 /// questions are whether a credential exists, never what it is.
 pub struct LocalAgentProbe {
-    /// The directory the agent adapters are installed in, if it can be found.
-    runtime_root: Option<PathBuf>,
-    /// A non-empty API key in the environment, which is what a machine account
-    /// signs in with. Held only to know that it is there.
-    anthropic_api_key: Option<String>,
+    /// Whether the agent this server would actually launch is configured and
+    /// its executable and entry point are really there. Composition resolves
+    /// this, because composition is what owns the launch configuration.
+    claude_installed: bool,
+    /// A non-empty credential in the environment, which is what a machine
+    /// account signs in with. Held only to know that it is there.
+    environment_credential: Option<String>,
     /// Where Claude Code would write a credentials file on this machine.
     claude_config_directory: Option<PathBuf>,
 }
 
+/// The environment variables the launcher passes through to the agent as a
+/// sign-in. Either one on its own starts Claude Code, so either one on its own
+/// is an answered yes here; anything this probe did not check is a machine
+/// reported as needing a sign-in it already has.
+const CLAUDE_CREDENTIAL_VARIABLES: [&str; 2] = ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"];
+
 impl LocalAgentProbe {
     /// Read this host's environment once, in composition.
     ///
-    /// The runtime root is derived from the running executable rather than from
-    /// configuration: the adapters sit beside this binary, because the desktop
-    /// app ships `nessa` and the adapters into one runtime directory and
-    /// launches this server from it. Asking about the server that would
-    /// actually start the agent is the only answer worth anything.
+    /// Whether the agent is installed is not guessed from the filesystem around
+    /// the running executable: that only ever matched the bundled desktop
+    /// layout, and said nothing at all about a server started from a plain
+    /// runtime config. Composition resolves the agent configuration that would
+    /// really be launched and hands the answer in as `claude_installed`.
     ///
     /// Claude Code accepts a sign-in from three places, so three are resolved:
-    /// an API key in the environment, a credentials file under
+    /// a credential in the environment, a credentials file under
     /// `CLAUDE_CONFIG_DIR` (or `~/.claude`), and the login keychain on macOS.
-    pub fn from_environment() -> Self {
+    pub fn from_environment(claude_installed: bool) -> Self {
         Self {
-            runtime_root: std::env::current_exe()
-                .ok()
-                .and_then(|executable| executable.parent().map(Path::to_path_buf)),
-            anthropic_api_key: std::env::var("ANTHROPIC_API_KEY")
-                .ok()
-                .filter(|key| !key.trim().is_empty()),
+            claude_installed,
+            environment_credential: CLAUDE_CREDENTIAL_VARIABLES.iter().find_map(|key| {
+                std::env::var(key)
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            }),
             claude_config_directory: std::env::var("CLAUDE_CONFIG_DIR")
                 .map(PathBuf::from)
                 .ok()
@@ -61,7 +69,7 @@ impl LocalAgentProbe {
     /// answer leaves the whole answer undetermined rather than no: a credential
     /// this probe was unable to look for is not a credential it ruled out.
     fn claude_authenticated(&self) -> Result<bool, ProbeFailure> {
-        if self.anthropic_api_key.is_some() {
+        if self.environment_credential.is_some() {
             return Ok(true);
         }
         let mut unanswered = None;
@@ -92,18 +100,12 @@ impl LocalAgentProbe {
 }
 
 impl AgentProbe for LocalAgentProbe {
+    /// Already determined, in composition, from the configuration this server
+    /// would launch. Nothing configured is a real no rather than a failure to
+    /// look: the question was asked and the answer is that there is no agent.
     fn installed(&self, agent: AgentId) -> Result<bool, ProbeFailure> {
-        let directory = match agent {
-            AgentId::Claude => "claude-acp",
-        };
-        let root = self
-            .runtime_root
-            .as_deref()
-            .ok_or(ProbeFailure::NothingToAsk)?;
-        match root.join(directory).metadata() {
-            Ok(entry) => Ok(entry.is_dir()),
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
-            Err(_) => Err(ProbeFailure::Unanswered),
+        match agent {
+            AgentId::Claude => Ok(self.claude_installed),
         }
     }
 

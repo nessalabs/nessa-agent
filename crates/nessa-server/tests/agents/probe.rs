@@ -6,55 +6,50 @@
 //! no test here drives it there, because its answer belongs to the host.
 
 use super::*;
+use std::path::Path;
 use tempfile::TempDir;
 
-/// A probe told exactly where to look and nothing more.
-fn probe(runtime_root: Option<&Path>, config: Option<&Path>, key: Option<&str>) -> LocalAgentProbe {
+/// A probe told exactly what composition resolved and nothing more.
+fn probe(installed: bool, config: Option<&Path>, credential: Option<&str>) -> LocalAgentProbe {
     LocalAgentProbe {
-        runtime_root: runtime_root.map(Path::to_path_buf),
-        anthropic_api_key: key.map(str::to_owned),
+        claude_installed: installed,
+        environment_credential: credential.map(str::to_owned),
         claude_config_directory: config.map(Path::to_path_buf),
     }
 }
 
 #[test]
-fn a_machine_that_cannot_say_where_it_is_installed_says_so() {
-    // Not "the agent is missing" — the probe could not find out either way.
+fn a_machine_with_no_agent_configured_at_all_is_a_real_no() {
+    // Nothing to launch is an answer, not a failure to look: composition asked
+    // the configuration and the configuration said there is no agent.
     assert_eq!(
-        probe(None, None, None).installed(AgentId::Claude),
-        Err(ProbeFailure::NothingToAsk)
+        probe(false, None, None).installed(AgentId::Claude),
+        Ok(false)
     );
 }
 
 #[test]
-fn an_adapter_directory_beside_the_server_is_a_real_yes_and_its_absence_a_real_no() {
-    let root = TempDir::new().unwrap();
-    assert_eq!(
-        probe(Some(root.path()), None, None).installed(AgentId::Claude),
-        Ok(false)
+fn a_configured_agent_is_installed_wherever_this_executable_happens_to_live() {
+    // The old probe answered this by looking for a `claude-acp` directory beside
+    // the running binary. That binary is the test runner, which has no such
+    // sibling, and a plain server deployment has no such sibling either — yet
+    // both can have a perfectly good agent configured. What composition
+    // resolved is the answer; where this process happens to live is not.
+    let sibling = std::env::current_exe()
+        .ok()
+        .and_then(|executable| executable.parent().map(|parent| parent.join("claude-acp")));
+    assert!(
+        sibling.is_some_and(|path| !path.is_dir()),
+        "this test only means something where the old heuristic would have said no"
     );
-    std::fs::create_dir(root.path().join("claude-acp")).unwrap();
-    assert_eq!(
-        probe(Some(root.path()), None, None).installed(AgentId::Claude),
-        Ok(true)
-    );
-}
-
-#[test]
-fn a_file_where_the_adapter_should_be_is_not_an_installed_adapter() {
-    let root = TempDir::new().unwrap();
-    std::fs::write(root.path().join("claude-acp"), b"not a directory").unwrap();
-    assert_eq!(
-        probe(Some(root.path()), None, None).installed(AgentId::Claude),
-        Ok(false)
-    );
+    assert_eq!(probe(true, None, None).installed(AgentId::Claude), Ok(true));
 }
 
 #[test]
 fn nowhere_to_look_for_a_credentials_file_is_not_the_same_as_not_finding_one() {
     // No CLAUDE_CONFIG_DIR and no home directory: the question was never asked.
     assert_eq!(
-        probe(None, None, None).claude_credentials_file(),
+        probe(false, None, None).claude_credentials_file(),
         Err(ProbeFailure::NothingToAsk)
     );
 }
@@ -63,12 +58,12 @@ fn nowhere_to_look_for_a_credentials_file_is_not_the_same_as_not_finding_one() {
 fn a_missing_or_empty_credentials_file_is_a_real_no() {
     let config = TempDir::new().unwrap();
     assert_eq!(
-        probe(None, Some(config.path()), None).claude_credentials_file(),
+        probe(false, Some(config.path()), None).claude_credentials_file(),
         Ok(false)
     );
     std::fs::write(config.path().join(".credentials.json"), b"").unwrap();
     assert_eq!(
-        probe(None, Some(config.path()), None).claude_credentials_file(),
+        probe(false, Some(config.path()), None).claude_credentials_file(),
         Ok(false)
     );
 }
@@ -82,12 +77,12 @@ fn a_credentials_file_with_contents_is_a_yes_without_being_read() {
     )
     .unwrap();
     assert_eq!(
-        probe(None, Some(config.path()), None).claude_credentials_file(),
+        probe(false, Some(config.path()), None).claude_credentials_file(),
         Ok(true)
     );
     // And it settles the whole question, so nothing asks the keychain.
     assert_eq!(
-        probe(None, Some(config.path()), None).authenticated(AgentId::Claude),
+        probe(false, Some(config.path()), None).authenticated(AgentId::Claude),
         Ok(true)
     );
 }
@@ -96,7 +91,23 @@ fn a_credentials_file_with_contents_is_a_yes_without_being_read() {
 fn an_api_key_in_the_environment_answers_before_anything_is_looked_at() {
     // A machine account signs in this way; no file and no keychain is consulted.
     assert_eq!(
-        probe(None, None, Some("key")).authenticated(AgentId::Claude),
+        probe(false, None, Some("key")).authenticated(AgentId::Claude),
+        Ok(true)
+    );
+}
+
+#[test]
+fn an_oauth_token_is_a_sign_in_because_the_launcher_starts_the_agent_with_it() {
+    // CLAUDE_CODE_OAUTH_TOKEN is passed straight through to the agent process,
+    // so a machine holding only that one is signed in and must not be sent to
+    // authenticate again.
+    assert_eq!(
+        CLAUDE_CREDENTIAL_VARIABLES,
+        ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+        "the launcher passes both of these through; the probe must read both"
+    );
+    assert_eq!(
+        probe(true, None, Some("oauth-token")).authenticated(AgentId::Claude),
         Ok(true)
     );
 }
@@ -112,7 +123,7 @@ mod without_a_keychain {
     fn a_host_with_no_keychain_answers_from_the_file_and_the_environment_alone() {
         let config = TempDir::new().unwrap();
         assert_eq!(
-            probe(None, Some(config.path()), None).authenticated(AgentId::Claude),
+            probe(false, Some(config.path()), None).authenticated(AgentId::Claude),
             Ok(false)
         );
     }
@@ -120,7 +131,7 @@ mod without_a_keychain {
     #[test]
     fn with_nowhere_to_look_at_all_the_answer_is_undetermined_rather_than_no() {
         assert_eq!(
-            probe(None, None, None).authenticated(AgentId::Claude),
+            probe(false, None, None).authenticated(AgentId::Claude),
             Err(ProbeFailure::NothingToAsk)
         );
     }

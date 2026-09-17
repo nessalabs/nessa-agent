@@ -13,7 +13,9 @@ use crate::host;
 use crate::platform;
 use crate::settings::{Panel, Settings};
 
-const MAIN_WINDOW: &str = "main";
+/// The panel itself. Named here because the window policies that single it out
+/// — close dismisses it rather than quitting — live in the host's event handler.
+pub const MAIN_WINDOW: &str = "main";
 /// The floor the resize edge may not drag the panel below, whatever the
 /// configured minimum width is: a panel shorter than this has no transcript.
 pub const MIN_PANEL_HEIGHT: f64 = 320.0;
@@ -30,9 +32,10 @@ fn settings(app: &AppHandle) -> Settings {
 
 /// Shows the panel if it is hidden, hides it if it is not. Returns whether it
 /// is showing afterwards, which is what a surface teaching the shortcut needs
-/// to know. Returns `None` when there is no panel to toggle at all — distinct
-/// from a hide, so a caller reporting this onward cannot be mistaken for a
-/// press that actually put the panel away.
+/// to know. Returns `None` when there is no panel to toggle at all — or when
+/// the show failed and there is still nothing on screen — distinct from a hide,
+/// so a caller reporting this onward cannot be mistaken for a press that
+/// actually put the panel away, nor for one that brought it up.
 pub fn toggle(app: &AppHandle) -> Option<bool> {
     let window = app.get_webview_window(MAIN_WINDOW)?;
 
@@ -50,7 +53,10 @@ pub fn toggle(app: &AppHandle) -> Option<bool> {
         return Some(false);
     }
 
-    show(&window, &settings(app));
+    if let Err(error) = show(&window, &settings(app)) {
+        eprintln!("[nessa] could not summon the panel: {error}");
+        return None;
+    }
     Some(true)
 }
 
@@ -114,12 +120,17 @@ pub fn open_setup_window(app: &AppHandle) {
 /// webview is fitted to the window, and a plain `show()` from the page does
 /// neither. The first thing a person saw after setup was therefore a panel
 /// wherever the window system happened to leave it.
+///
+/// Fails when there is no panel to summon, or when the window system refused to
+/// put it on screen. Setup hands over on the strength of this call, and has its
+/// own way to say the panel is unavailable — so a summon that showed nothing
+/// must not come back as a success.
 #[tauri::command]
-pub fn summon_panel(app: AppHandle) {
-    let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
-        return;
-    };
-    show(&window, &settings(&app));
+pub fn summon_panel(app: AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window(MAIN_WINDOW)
+        .ok_or_else(|| "there is no panel to summon".to_string())?;
+    show(&window, &settings(&app)).map_err(|error| format!("could not show the panel: {error}"))
 }
 
 /// Put the setup window on screen, now that its page has something to show.
@@ -164,7 +175,12 @@ pub fn restart_onboarding(app: &AppHandle) {
 }
 
 /// Places, fits, and focuses the panel, then hands the caret to the composer.
-pub fn show(window: &WebviewWindow, settings: &Settings) {
+///
+/// Fails only for the steps that decide whether the panel is on screen at all.
+/// Placing and fitting are corrections to a panel that still appears, and the
+/// composer's caret is a courtesy to a panel already showing; those are logged
+/// or ignored rather than reported as a summon that did not happen.
+pub fn show(window: &WebviewWindow, settings: &Settings) -> tauri::Result<()> {
     let _ = anchor_to_edge(window, settings);
     // The panel may have been summoned onto a display with more room than the
     // one it was last fitted for, and the viewport is sized for the work area
@@ -182,9 +198,10 @@ pub fn show(window: &WebviewWindow, settings: &Settings) {
         .get_webview_window(SETUP_WINDOW)
         .is_some_and(|setup| setup.is_visible().unwrap_or(false));
     platform::current().set_above_overlay(window, over_setup);
-    let _ = window.show();
-    let _ = window.set_focus();
+    window.show()?;
+    window.set_focus()?;
     let _ = window.emit(host::FOCUS_COMPOSER, ());
+    Ok(())
 }
 
 /// Applies the configured geometry once, at startup: the opening size, and the

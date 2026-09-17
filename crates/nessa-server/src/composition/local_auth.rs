@@ -80,6 +80,15 @@ pub(super) fn product_state(
     let audience = AudienceId::new(identity.gateway_id).map_err(setup_error)?;
     let organization =
         OrganizationId::new(identity.organization_ids[0].clone()).map_err(setup_error)?;
+    // What onboarding is told about the agent is the same fact the launcher
+    // acts on: the configuration resolved above, and whether the two files it
+    // would actually execute are there. A bundled desktop run and a plain
+    // server run answer this the same way, because they answer it from the
+    // same place.
+    let agent_installed = settings
+        .agent
+        .as_ref()
+        .is_some_and(|agent| agent.node.is_file() && agent.acp_entry.is_file());
     let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
     let admin = Arc::new(LocalAdmin {
         store: store.clone(),
@@ -94,7 +103,7 @@ pub(super) fn product_state(
             clock: Arc::new(SystemClock),
             policy,
             uptime_clock: uptime,
-            agent_probe: Arc::new(LocalAgentProbe::from_environment()),
+            agent_probe: Arc::new(LocalAgentProbe::from_environment(agent_installed)),
         },
     )
     .with_admin(admin)

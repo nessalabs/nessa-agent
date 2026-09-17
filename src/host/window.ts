@@ -197,6 +197,40 @@ export type SetupHandoff =
   | { outcome: "panel-unavailable"; cause: unknown }
 
 /**
+ * What closing this window did.
+ *
+ * Three outcomes rather than a rejection, for the same reason the handoff has
+ * them: a browser tab has no window of its own to close, and a close that the
+ * window system refuses is something the surface has to keep a screen up about
+ * rather than crash on.
+ */
+export type SetupWindowClose =
+  /** The window is closing. */
+  | { outcome: "closed" }
+  /** There is no host window here; nothing was closed. */
+  | { outcome: "no-native-host" }
+  /** The window is still on screen, and why. */
+  | { outcome: "close-failed"; cause: unknown }
+
+/**
+ * Close the window this page is painted in.
+ *
+ * The direct way out, with no panel in it: the handoff below uses it after the
+ * panel is up, and the setup surface offers it on its own when the handoff
+ * could not be completed and the window would otherwise sit there for good.
+ */
+export async function closeSetupWindow(): Promise<SetupWindowClose> {
+  if (!inTauri) return { outcome: "no-native-host" }
+  const { getCurrentWindow } = await import("@tauri-apps/api/window")
+  try {
+    await getCurrentWindow().close()
+  } catch (cause) {
+    return { outcome: "close-failed", cause }
+  }
+  return { outcome: "closed" }
+}
+
+/**
  * Hand off from setup to the panel: show the panel window, then close this one.
  *
  * Outside Tauri there is no second window, so this is a no-op and the caller
@@ -220,8 +254,11 @@ export async function finishSetupWindow(): Promise<SetupHandoff> {
   } catch (cause) {
     return { outcome: "panel-unavailable", cause }
   }
-  const { getCurrentWindow } = await import("@tauri-apps/api/window")
-  await getCurrentWindow().close()
+  // The panel is up, so a window that will not close is not a panel failure and
+  // is not reported as one: the cause travels out as it did before, and the
+  // surface that catches it offers a close of its own.
+  const closed = await closeSetupWindow()
+  if (closed.outcome === "close-failed") throw closed.cause
   return { outcome: "handed-over" }
 }
 

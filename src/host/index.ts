@@ -15,6 +15,7 @@ export {
   type KeyChord,
 } from "./accelerator"
 export {
+  closeSetupWindow,
   finishSetupWindow,
   hasNativeHost,
   loadAssignedSurfaceCredential,
@@ -31,4 +32,5 @@ export {
   windowSurface,
   loadShortcuts,
   type SetupHandoff,
+  type SetupWindowClose,
 } from "./window"

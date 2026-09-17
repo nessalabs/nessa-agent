@@ -1,11 +1,79 @@
 import * as React from "react"
-import { finishSetupWindow, revealSetupWindow, type SetupHandoff } from "../../host"
+import {
+  closeSetupWindow,
+  finishSetupWindow,
+  revealSetupWindow,
+  type SetupHandoff,
+} from "../../host"
 import { AgentBloom } from "./agent-bloom"
 import { Onboarding, SETUP_HEADING_ID } from "./onboarding"
 import { SetupChrome } from "./setup-chrome"
 import { useIntroSound } from "./use-intro-sound"
 import { useOnboarding } from "./use-onboarding"
 import type { AgentReadinessSource } from "../application/ports"
+
+/** The buttons on the handoff-failure screen, which are the whole point of it:
+ * a window with nothing in it but a sentence is a window someone has to kill. */
+const RECOVERY_BUTTON =
+  "h-10 rounded-full border border-border bg-card px-5 nessa-text-3 font-medium text-foreground transition-colors outline-none hover:bg-accent hover:text-accent-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40"
+
+/**
+ * What is on screen when setup finished and the panel did not come up.
+ *
+ * Both ways out are here, because the two failures underneath are different:
+ * the panel may come up on a second try, and if it does not, this window still
+ * has to be got rid of without hunting for a menu bar behind it.
+ *
+ * A close that itself fails changes nothing but the note. The screen stays, with
+ * both buttons still on it, rather than throwing out of an event handler and
+ * taking the last controls with it.
+ */
+export function HandoffFailed({
+  onRetry,
+  onClose,
+  closeFailed,
+}: {
+  onRetry: () => void
+  onClose: () => void
+  /** True once a close was asked for and the window system did not do it. */
+  closeFailed: boolean
+}) {
+  return (
+    <div className="nessa-setup-sheet">
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={SETUP_HEADING_ID}
+        className="nessa-setup-window nessa-setup-light flex flex-col items-center justify-center gap-4 overflow-y-auto bg-background p-8 text-center text-foreground"
+      >
+        <h1 id={SETUP_HEADING_ID} className="nessa-text-6 font-semibold">
+          Nessa could not open the panel
+        </h1>
+        <p className="nessa-text-3 text-muted-foreground">
+          Setup finished. Try again, or summon Nessa from the menu bar icon or with your
+          summon shortcut.
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <button type="button" className={RECOVERY_BUTTON} onClick={onRetry}>
+            Try again
+          </button>
+          <button type="button" className={RECOVERY_BUTTON} onClick={onClose}>
+            Close this window
+          </button>
+        </div>
+        {closeFailed ? (
+          <p
+            role="status"
+            aria-live="polite"
+            className="nessa-text-2 text-muted-foreground"
+          >
+            This window would not close. Close it from the window controls.
+          </p>
+        ) : null}
+      </div>
+    </div>
+  )
+}
 
 /**
  * The setup surface: first run in its own window.
@@ -36,6 +104,7 @@ export function SetupGate({
   const onboarding = useOnboarding(agents)
   const [handedOver, setHandedOver] = React.useState(false)
   const [handoff, setHandoff] = React.useState<SetupHandoff>()
+  const [closeFailed, setCloseFailed] = React.useState(false)
 
   useIntroSound(onboarding.active)
 
@@ -55,6 +124,25 @@ export function SetupGate({
       .catch((cause: unknown) => setHandoff({ outcome: "panel-unavailable", cause }))
   }, [onboarding.active, handedOver])
 
+  // Asking for the handoff again is putting the gate back where it was before
+  // the first attempt: the effect above is what performs it, and it runs again
+  // because this is the flag it waits on.
+  const retryHandoff = React.useCallback(() => {
+    setCloseFailed(false)
+    setHandoff(undefined)
+    setHandedOver(false)
+  }, [])
+
+  // Closing without the panel. Every way this can fail is a value rather than a
+  // rejection, so the screen can say what happened and keep its buttons; a
+  // browser has no window of its own to close, which is not a failure and is
+  // also not something this screen can be reached in.
+  const closeWindow = React.useCallback(() => {
+    void closeSetupWindow().then((closed) => {
+      setCloseFailed(closed.outcome !== "closed")
+    })
+  }, [])
+
   if (!onboarding.active) {
     // A surface that becomes the panel in place does so now.
     if (children !== undefined) return <>{children}</>
@@ -63,22 +151,11 @@ export function SetupGate({
     // rather than leaving a blank window nobody can explain.
     if (handoff?.outcome === "panel-unavailable") {
       return (
-        <div className="nessa-setup-sheet">
-          <div
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby={SETUP_HEADING_ID}
-            className="nessa-setup-window nessa-setup-light flex flex-col items-center justify-center gap-4 overflow-y-auto bg-background p-8 text-center text-foreground"
-          >
-            <h1 id={SETUP_HEADING_ID} className="nessa-text-6 font-semibold">
-              Nessa could not open the panel
-            </h1>
-            <p className="nessa-text-3 text-muted-foreground">
-              Setup finished. Summon Nessa from the menu bar icon, or with your summon
-              shortcut.
-            </p>
-          </div>
-        </div>
+        <HandoffFailed
+          onRetry={retryHandoff}
+          onClose={closeWindow}
+          closeFailed={closeFailed}
+        />
       )
     }
     return null
@@ -126,6 +203,7 @@ export function SetupGate({
           onChoose={onboarding.choose}
           onConfirm={onboarding.confirm}
           onFinish={onboarding.finish}
+          onRecheck={onboarding.recheck}
           platform={onboarding.platform}
         />
       </div>

@@ -42,6 +42,8 @@ impl Host for Linux {
         // Linux has no menu bar extra to discover the panel from, so it opens
         // on launch and stays on the taskbar.
         let _ = window.set_skip_taskbar(false);
-        crate::panel::show(window, settings);
+        if let Err(error) = crate::panel::show(window, settings) {
+            eprintln!("[nessa] could not open the panel on launch: {error}");
+        }
     }
 }

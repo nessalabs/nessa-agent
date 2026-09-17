@@ -90,25 +90,31 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                // With a tray, close dismisses the panel. Without one — Linux
-                // with no StatusNotifierItem — close has to end the process,
-                // or there is no quit path at all.
-                let tray = window
-                    .app_handle()
-                    .try_state::<tray::Present>()
-                    .map(|state| state.0)
-                    .unwrap_or(false);
-                if tray {
-                    api.prevent_close();
-                    let _ = window.hide();
+            // Close-to-dismiss is the panel's policy alone. Setup closes its own
+            // window to finish, and a hidden, undestroyed setup window would
+            // leave the panel lifted over the menu bar for the rest of the
+            // session — the cleanup below only runs on an actual destroy.
+            if window.label() == panel::MAIN_WINDOW {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    // With a tray, close dismisses the panel. Without one — Linux
+                    // with no StatusNotifierItem — close has to end the process,
+                    // or there is no quit path at all.
+                    let tray = window
+                        .app_handle()
+                        .try_state::<tray::Present>()
+                        .map(|state| state.0)
+                        .unwrap_or(false);
+                    if tray {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
                 }
             }
             // The panel is lifted over setup while setup is on screen. If it is
             // still showing when setup goes, it would be left floating above
             // the menu bar for the rest of the session.
             if matches!(event, WindowEvent::Destroyed) && window.label() == panel::SETUP_WINDOW {
-                if let Some(panel) = window.app_handle().get_webview_window("main") {
+                if let Some(panel) = window.app_handle().get_webview_window(panel::MAIN_WINDOW) {
                     platform::current().set_above_overlay(&panel, false);
                 }
             }

@@ -12,6 +12,7 @@ import {
 import {
   AGENT_CHOICES,
   agentReadiness,
+  isChoosable,
   type AgentId,
   type AgentReadiness,
   type AgentReadinessFailure,
@@ -279,6 +280,7 @@ export function Onboarding({
   onChoose,
   onConfirm,
   onFinish,
+  onRecheck,
   platform,
 }: {
   state: OnboardingState
@@ -289,6 +291,8 @@ export function Onboarding({
   onChoose: (id: AgentId) => void
   onConfirm: () => void
   onFinish: () => void
+  /** Ask the runtimes again, for whoever has just fixed what was wrong. */
+  onRecheck: () => void
 }) {
   // Called unconditionally, as a hook must be; it only listens on the step
   // that has keys to light.
@@ -387,6 +391,11 @@ export function Onboarding({
     )
   }
 
+  // Nothing on the list can be picked. Every reason for that can stop being
+  // true while this screen is up — a gateway still starting, a sign-in done in
+  // another window, an agent installed in a terminal — and until now the answer
+  // setup happened to get first was the answer it kept for good.
+  const stuck = !AGENT_CHOICES.some((choice) => isChoosable(state, choice.id))
   return (
     <SetupStage>
       <SetupPanel ref={step}>
@@ -406,6 +415,28 @@ export function Onboarding({
             />
           ))}
         </div>
+        {stuck ? (
+          // Said once, under the list, rather than repeated on every agent: the
+          // per-agent note says what each one is waiting on, and this says what
+          // to do about it. Polite rather than assertive, because it appears
+          // while the list beneath it is being read.
+          <div role="status" aria-live="polite" className="flex flex-col gap-2">
+            <p className="nessa-text-2 text-muted-foreground">
+              {state.readinessFailure
+                ? "Nessa could not ask what is installed here."
+                : "No agent here can start yet."}{" "}
+              Sign in or start one, then check again.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-full"
+              onClick={onRecheck}
+            >
+              Check again
+            </Button>
+          </div>
+        ) : null}
         <Button
           size="lg"
           className="rounded-full"

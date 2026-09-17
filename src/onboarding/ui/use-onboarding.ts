@@ -3,6 +3,8 @@ import type { ShortcutsDocument } from "@nessa/client"
 import defaults from "../../../protocol/defaults/shortcuts.v1.json"
 import { host, loadShortcuts, matchesAccelerator, onSummoned } from "../../host"
 import { playCue } from "./sound"
+import { listenForDismiss } from "./dismiss-shortcut"
+import { createReadinessCheck } from "../application/readiness-check"
 import type { ShortcutPlatform } from "../model/shortcut-display"
 import type { AgentReadinessSource } from "../application/ports"
 import { summonAccelerator } from "../model/shortcut-display"
@@ -61,6 +63,9 @@ export interface Onboarding {
   finish: () => void
   /** Leave setup without finishing it. */
   dismiss: () => void
+  /** Ask the runtimes again. For a gateway that was still starting up, or an
+   * agent signed in since setup opened. */
+  recheck: () => void
 }
 
 /**
@@ -94,46 +99,59 @@ export function useOnboarding(
     }
   }, [])
 
-  // What each agent's runtime reports, asked once when setup opens. Nothing is
-  // offered until the answer arrives: an agent is not choosable on the strength
-  // of not having been asked about. Not getting an answer is recorded as such,
-  // so the picker can say the gateway is unreachable rather than blaming the
-  // agent for it.
+  // What each agent's runtime reports. Nothing is offered until the answer
+  // arrives: an agent is not choosable on the strength of not having been asked
+  // about. Not getting an answer is recorded as such, so the picker can say the
+  // gateway is unreachable rather than blaming the agent for it.
+  //
+  // The ask is repeatable, because every reason it can fail is a reason that
+  // goes away: a gateway still reconciling when the window opened comes up, and
+  // an agent that needs signing in gets signed in — in another window, while
+  // this one is watching. Only the newest ask's answer is kept (see
+  // `createReadinessCheck`), so a slow first answer cannot land on top of a
+  // fresh one.
+  const readiness = React.useMemo(
+    () =>
+      createReadinessCheck(agents, (answer) =>
+        setState((current) =>
+          answer.ok
+            ? recordReadiness(current, answer.agents)
+            : recordReadinessFailure(current, answer.reason),
+        ),
+      ),
+    [agents],
+  )
+  const recheck = React.useCallback(() => void readiness.check(), [readiness])
+
   React.useEffect(() => {
-    let cancelled = false
-    void agents.read().then((answer) => {
-      if (cancelled) return
-      setState((current) =>
-        answer.ok
-          ? recordReadiness(current, answer.agents)
-          : recordReadinessFailure(current, answer.reason),
-      )
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [agents])
+    void readiness.check()
+    return () => readiness.abandon()
+  }, [readiness])
+
+  // The one ask nobody presses a button for: reaching the picker. Between the
+  // window opening and someone reading the list, a gateway that was starting up
+  // has had its chance to finish, and the list is about to be acted on. It is
+  // one more ask, not a loop — setup opens on the welcome step, so the two asks
+  // are the opening one and this one.
+  const picking = state.step === "agent"
+  React.useEffect(() => {
+    if (!picking) return
+    void readiness.check()
+  }, [picking, readiness])
 
   const keys = summonAccelerator(shortcuts)
   const platform = shortcutPlatform()
 
   // Two ways out that do not announce themselves, alongside the mark in the
-  // corner that does. Escape is what Escape means on a surface like this, and
-  // Command-Q closes *this window* rather than quitting Nessa — setup is a
-  // window in front of an app that is still running, and quitting the app
-  // because someone wanted rid of the window is not what was asked.
-  React.useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.repeat) return
-      const escape = event.key === "Escape"
-      const quit = event.key.toLowerCase() === "q" && (event.metaKey || event.ctrlKey)
-      if (!escape && !quit) return
-      event.preventDefault()
-      setState(dismissOnboarding)
-    }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [])
+  // corner that does — and only while there is something to leave. The browser
+  // path keeps this hook mounted after setup finishes, so the listener is
+  // attached and removed as setup comes and goes rather than staying on to eat
+  // keys the panel and the browser should be getting.
+  const active = isOnboarding(state)
+  React.useEffect(
+    () => listenForDismiss(window, active, () => setState(dismissOnboarding)),
+    [active],
+  )
 
   // While setup is teaching the summon shortcut, pressing it satisfies the
   // step: the keys light up and the way on appears. It does not move on by
@@ -193,7 +211,7 @@ export function useOnboarding(
 
   return {
     state,
-    active: isOnboarding(state),
+    active,
     accelerator: keys,
     platform,
     // Every button that moves setup forward sounds the same, because each is
@@ -217,5 +235,6 @@ export function useOnboarding(
     }, []),
     // Leaving is not an accomplishment and does not announce itself.
     dismiss: React.useCallback(() => setState(dismissOnboarding), []),
+    recheck,
   }
 }

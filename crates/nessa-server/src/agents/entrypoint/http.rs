@@ -66,21 +66,19 @@ pub(crate) async fn handle_http_agents(
     State(probe): State<Arc<dyn AgentProbe>>,
     headers: HeaderMap,
 ) -> Response {
-    let readiness = ReadAgentReadiness {
-        probe: probe.as_ref(),
+    // Who asked is settled before the machine is touched. A page this server
+    // does not trust gets its refusal without a single file, process, or
+    // keychain being consulted on its behalf.
+    let allowed = match allowed_origin(&headers) {
+        Allowed::No => return StatusCode::FORBIDDEN.into_response(),
+        allowed => allowed,
     };
-    let body = Json(AgentsReadinessView {
-        agents: readiness
-            .all()
-            .into_iter()
-            .map(|(agent, state)| AgentReadinessView {
-                id: agent_name(agent),
-                readiness: readiness_name(state),
-            })
-            .collect(),
-    });
-    match allowed_origin(&headers) {
-        Allowed::Same => body.into_response(),
+    let Ok(agents) = tokio::task::spawn_blocking(move || read_readiness(probe.as_ref())).await
+    else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    let body = Json(AgentsReadinessView { agents });
+    match allowed {
         Allowed::Cross(origin) => {
             let mut response = body.into_response();
             response
@@ -88,8 +86,25 @@ pub(crate) async fn handle_http_agents(
                 .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
             response
         }
-        Allowed::No => StatusCode::FORBIDDEN.into_response(),
+        _ => body.into_response(),
     }
+}
+
+/// Ask the host about every agent, under its own thread.
+///
+/// Answering means metadata reads and, on macOS, spawning `security` and
+/// waiting on it. That is a blocking OS call: run on a socket worker it would
+/// hold the whole executor for as long as the machine takes to answer, so it
+/// runs where blocking is what the thread is for.
+fn read_readiness(probe: &dyn AgentProbe) -> Vec<AgentReadinessView> {
+    ReadAgentReadiness { probe }
+        .all()
+        .into_iter()
+        .map(|(agent, state)| AgentReadinessView {
+            id: agent_name(agent),
+            readiness: readiness_name(state),
+        })
+        .collect()
 }
 
 /// Who asked, and whether they may read the answer.
