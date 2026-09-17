@@ -3,6 +3,7 @@ import type { ShortcutsDocument } from "@nessa/client"
 import defaults from "../../../protocol/defaults/shortcuts.v1.json"
 import { host } from "../../host"
 import { matchesAccelerator } from "../../host/accelerator"
+import { playCue } from "./sound"
 import type { ShortcutPlatform } from "../model/shortcut-display"
 import { loadShortcuts } from "../../host/window"
 import { summonAccelerator } from "../model/shortcut-display"
@@ -114,16 +115,22 @@ export function useOnboarding(initial?: OnboardingState): Onboarding {
   // itself, so the press is something a person sees land rather than a screen
   // that vanishes under them.
   const practising = state.step === "summon"
+  // Which half of the lesson a press would be, so the cue can be chosen before
+  // the state changes rather than from inside an updater, which React is free
+  // to run more than once.
+  const lesson = state.step === "summon" ? state.summon : undefined
   React.useEffect(() => {
     if (!practising || !keys) return
     function onKeyDown(event: KeyboardEvent) {
       if (event.repeat || !matchesAccelerator(event, keys)) return
       event.preventDefault()
+      if (lesson === "hidden") return
+      playCue(lesson === undefined ? "summon" : "dismiss")
       setState(pressSummon)
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [practising, keys])
+  }, [practising, keys, lesson])
 
   // The desktop host registers this accelerator globally, so on that host the
   // press can be taken before this window ever sees it — and a step that only
@@ -134,7 +141,8 @@ export function useOnboarding(initial?: OnboardingState): Onboarding {
   React.useEffect(() => {
     if (!practising) return
     // Both presses, because both are what the step is waiting on and neither
-    // of them can be observed on that host.
+    // of them can be observed on that host. Silently: nothing was pressed here
+    // that this window saw, and a cue would be claiming otherwise.
     const timer = window.setTimeout(
       () => setState((current) => pressSummon(pressSummon(current))),
       7000,
@@ -147,14 +155,30 @@ export function useOnboarding(initial?: OnboardingState): Onboarding {
     active: isOnboarding(state),
     accelerator: keys,
     platform,
-    begin: React.useCallback(() => setState(startAgentChoice), []),
-    choose: React.useCallback(
-      (id: AgentId) => setState((current) => chooseAgent(current, id)),
-      [],
-    ),
-    confirm: React.useCallback(() => setState(confirmAgent), []),
-    finish: React.useCallback(() => setState(completeOnboarding), []),
+    // Each way on sounds the same, because each is the same act. Picking an
+    // agent is not a way on — it is a choice among things — so it gets the
+    // lighter cue, and finishing gets the only celebratory one setup has.
+    begin: React.useCallback(() => {
+      playCue("advance")
+      setState(startAgentChoice)
+    }, []),
+    choose: React.useCallback((id: AgentId) => {
+      playCue("select")
+      setState((current) => chooseAgent(current, id))
+    }, []),
+    confirm: React.useCallback(() => {
+      playCue("advance")
+      setState(confirmAgent)
+    }, []),
+    finish: React.useCallback(() => {
+      playCue("celebrate")
+      setState(completeOnboarding)
+    }, []),
+    // Leaving is not an accomplishment and does not announce itself.
     dismiss: React.useCallback(() => setState(dismissOnboarding), []),
-    confirmSummon: React.useCallback(() => setState(confirmSummon), []),
+    confirmSummon: React.useCallback(() => {
+      playCue("advance")
+      setState(confirmSummon)
+    }, []),
   }
 }
