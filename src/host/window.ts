@@ -212,19 +212,6 @@ export async function openSetupWindow() {
   await invoke("open_setup_window")
 }
 
-/**
- * Take the dim away, leaving an ordinary window on an ordinary desktop.
- *
- * The dim is its own window, so it is closed rather than faded: a transparent
- * window that has finished fading is still a window sitting over the screen.
- */
-export async function closeSetupDim() {
-  if (!inTauri) return
-  const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow")
-  const dim = await WebviewWindow.getByLabel("setup-dim")
-  await dim?.close()
-}
-
 export function hasNativeHost(): boolean {
   return inTauri
 }

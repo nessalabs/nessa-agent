@@ -79,11 +79,23 @@ pub fn open_setup_window(app: AppHandle) {
     if let Some(window) = app.get_webview_window(SETUP_WINDOW) {
         let _ = window.show();
         crate::platform::current().present_setup(&window);
-        return;
+    } else {
+        match build_setup_window(&app) {
+            Ok(window) => crate::platform::current().present_setup(&window),
+            Err(error) => {
+                eprintln!("[nessa] could not open setup: {error}");
+                // Leave the dim rather than stranding the person behind a
+                // sheet with nothing on it; setup failing is bad, and setup
+                // failing invisibly under a light is worse.
+            }
+        }
     }
-    match build_setup_window(&app) {
-        Ok(window) => crate::platform::current().present_setup(&window),
-        Err(error) => eprintln!("[nessa] could not open setup: {error}"),
+    // The dim's whole purpose was to reach this moment, and it is nearly
+    // transparent by now. Closing it from here rather than letting it close
+    // itself means the light cannot outlive the thing it turned into — which
+    // it did, permanently, the first time the dim could not close itself.
+    if let Some(dim) = app.get_webview_window(SETUP_DIM_WINDOW) {
+        let _ = dim.close();
     }
 }
 
