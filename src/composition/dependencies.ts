@@ -1,3 +1,4 @@
+import { gatewayEffects } from "../conversation/adapters/gateway/effects"
 import { createAttachmentResources } from "../panel/adapters/attachment-resources"
 import { nativeCredentialSource } from "../session/adapters/client/credential-source"
 import type { CredentialSource } from "@nessa/client"
@@ -14,6 +15,7 @@ export function createDependencies(
     connectSession?: typeof connectDevSession
     conversation?: ConversationEffects
     credentialSource?: CredentialSource
+    clientId?: string
   } = {},
 ) {
   const config = options.environment ?? loadEnvironment({})
@@ -27,19 +29,14 @@ export function createDependencies(
       (() =>
         connectDevSession({
           stage: config.stage,
+          clientId: options.clientId,
           credentialSource: options.credentialSource ?? nativeCredentialSource(),
         })),
     conversation:
       options.conversation ??
       (config.conversation.backend === "scenario"
         ? scenarioEffects(config.conversation.scenario)
-        : {
-            async echo(text: string) {
-              const client = session.get()
-              if (!client) throw new Error("not connected")
-              return client.conversation.echo(text)
-            },
-          }),
+        : gatewayEffects(() => session.get())),
   }
 }
 export type AppDependencies = ReturnType<typeof createDependencies>

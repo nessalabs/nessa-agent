@@ -55,6 +55,16 @@ jobs:
         working-directory: .ci-gateway
       - run: node scripts/check-product-protocol.mjs
         working-directory: .ci-gateway
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm frontend:check
   local-auth:
     strategy:
       fail-fast: false
@@ -65,15 +75,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy,rustfmt
       - uses: actions/setup-node@v4
         with:
           node-version: 24
       - run: node --test scripts/product-protocol/rust-types.test.mjs
+      - run: cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk -- --check
+      - run: node --test scripts/architecture/*.test.mjs
+      - run: node scripts/check-architecture.mjs
       - run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk
       - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings
-      - run: cargo test -p nessa-app surface_credential
-        if: runner.os == 'Windows'
+      - run: node scripts/check-sdk-docs.mjs
+      - run: node scripts/check-mcp.mjs
+      - run: node scripts/check-desktop.mjs
       - name: Install SDK domain coverage tools
         if: runner.os == 'Linux'
         run: |
@@ -97,8 +111,9 @@ jobs:
           target.mkdir(parents=True)
           binary = 'nessa.exe' if '${{ runner.os }}' == 'Windows' else 'nessa'
           shutil.copy2(pathlib.Path('target/debug') / binary, target / binary)
-          (root / 'package.json').write_text(json.dumps({'private': True, 'type': 'module', 'dependencies': {'tsx': '^4.20.0', 'ws': '^8.18.0', '@nessa/client': 'file:./packages/nessa-client'}}))
-      - run: npm install --ignore-scripts
+          shutil.copy2('.github/harnesses/local-auth/package.json', root / 'package.json')
+          shutil.copy2('.github/harnesses/local-auth/package-lock.json', root / 'package-lock.json')
+      - run: npm ci --ignore-scripts
         working-directory: .ci-auth
       - run: node --import tsx scripts/smoke-windows-private-files.ts
         working-directory: .ci-auth

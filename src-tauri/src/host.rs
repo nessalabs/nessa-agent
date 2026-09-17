@@ -15,9 +15,14 @@ pub const FOCUS_COMPOSER: &str = "nessa://focus-composer";
 /// Carries the window's size to the page, which can no longer measure it
 /// once the webview is detached from the window (see `platform`).
 pub const PANEL_SIZED: &str = "nessa://panel-sized";
-/// Emitted as the user takes hold of the window's frame.
+/// Emitted as the user takes hold of the window's frame. Only the hosts with
+/// live-resize notifications raise it; the seam still declares every protocol
+/// name on every target so the shell listing and its drift test stay complete.
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 pub const RESIZE_STARTED: &str = "nessa://resize-started";
-/// Emitted as they let go of it.
+/// Emitted as they let go of it. Raised by the same hosts as
+/// [`RESIZE_STARTED`].
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 pub const RESIZE_ENDED: &str = "nessa://resize-ended";
 
 /// Points, which are CSS pixels: the webview does its own scaling, so no device

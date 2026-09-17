@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs"
+import { readFileSync, realpathSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -37,11 +37,25 @@ try {
 // Tauri drives this dev server, so the port is fixed and the Rust sources are
 // left to cargo's own watcher.
 const host = process.env.TAURI_DEV_HOST
+const tlsCert = process.env.NESSA_BROWSER_TLS_CERT
+const tlsKey = process.env.NESSA_BROWSER_TLS_KEY
+if (Boolean(tlsCert) !== Boolean(tlsKey))
+  throw new Error("Set both browser TLS certificate and key")
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   clearScreen: false,
   server: {
+    https:
+      tlsCert && tlsKey
+        ? { cert: readFileSync(tlsCert), key: readFileSync(tlsKey) }
+        : undefined,
+    proxy: {
+      "/browser": {
+        target: process.env.NESSA_BROWSER_GATEWAY_URL ?? "http://127.0.0.1:7420",
+        ws: true,
+      },
+    },
     port: 1420,
     strictPort: true,
     // WebKitGTK resolves `localhost` to 127.0.0.1. Node's `true`/`false`
@@ -99,8 +113,7 @@ export default defineConfig({
         // Rollup drop a component this app never imports along with the
         // stylesheet that component pulls in — which is what was still
         // shipping the whole KaTeX font set on MathBlock's behalf.
-        moduleSideEffects: (id: string) =>
-          !id.startsWith(nessaUi) || id.endsWith(".css"),
+        moduleSideEffects: (id: string) => !id.startsWith(nessaUi) || id.endsWith(".css"),
       },
     },
   },

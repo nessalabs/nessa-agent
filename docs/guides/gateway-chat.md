@@ -103,6 +103,16 @@ replaces the prior projection; revision values are transient, not durable replay
 cursors. Views explicitly mark omitted history. Disconnecting and reconnecting
 never resubmits prompts to reconstruct a transcript.
 
+Each read keeps local intent the gateway has not acknowledged yet, so a view
+racing an admitted send never resends or loses it, and local failures stay
+visible. A queued or accepted receipt is the gateway's own answer about its
+queue, not local intent: when a complete queue (`queueComplete: true`) omits that
+identity and the bounded message view no longer carries it, the panel drops that
+row instead of counting it as active work forever. The row is omitted history,
+which the same view already marks with `truncated`; its outcome and audit remain
+on the gateway, and the panel does not invent a terminal result for it. An
+incomplete queue proves nothing and keeps those rows.
+
 The client allocates stable conversation, execution and action IDs. Conversation
 IDs are canonical lowercase hyphenated UUIDs. Execution and action IDs are limited
 to 256 UTF-8 bytes. An uncertain

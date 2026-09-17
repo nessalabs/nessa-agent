@@ -1,89 +1,68 @@
 import { textContent } from "../../model"
 import { describe, expect, it } from "vitest"
-
 import { emptyLocalTabs } from "../local-tabs"
 import {
   beginSend,
   closeConversation,
-  completeEcho,
   failSend,
   openConversation,
   setActive,
   setDraft,
-  stopGenerating,
 } from "./index"
+const identity = {
+  conversationId: "c0",
+  executionId: "execution",
+  actionId: "action",
+  mode: "queued" as const,
+}
 
-describe("beginSend / completeEcho", () => {
-  it("appends a user turn then an echoed assistant reply", () => {
-    const pending = beginSend(emptyLocalTabs(), { content: textContent("hey") })
-    const active = pending.conversations.find((item) => item.id === pending.activeId)!
-    expect(active.phase).toBe("thinking")
-    expect(active.draft).toEqual(textContent(""))
-    expect(active.turns).toEqual([
-      {
-        id: "t1",
-        from: "user",
-        content: textContent("hey"),
-        receipt: "sending",
-      },
-    ])
-
-    const done = completeEcho(pending, pending.activeId, "hey")
-    const idle = done.conversations.find((item) => item.id === done.activeId)!
-    expect(idle.phase).toBe("idle")
-    expect(idle.turns).toEqual([
-      {
-        id: "t1",
-        from: "user",
-        content: textContent("hey"),
-        receipt: "delivered",
-      },
-      { id: "t2", from: "assistant", text: "hey" },
-    ])
-  })
-
-  it("trims only the initial title while retaining the original content", () => {
-    const content = textContent(" \n\t" + "a".repeat(60) + "\n  ")
-    const pending = beginSend(emptyLocalTabs(), { content })
-    const active = pending.conversations[0]!
-    expect(active.title).toBe("a".repeat(48))
-    expect(active.turns[0]).toEqual({
-      id: "t1",
+describe("local submission evidence", () => {
+  it("preserves exact content and permits a second queued draft", () => {
+    const content = textContent("  code\n ")
+    const pending = beginSend(emptyLocalTabs(), { ...identity, content })
+    expect(pending.conversations[0]!.title).toBe("code")
+    expect(pending.conversations[0]!.turns[0]).toMatchObject({
       from: "user",
       content,
       receipt: "sending",
+      executionId: "execution",
+      actionId: "action",
     })
-    const completed = completeEcho(pending, active.id, "reply")
-    const next = beginSend(completed, { content: textContent("different title") })
-    expect(next.conversations[0]!.title).toBe(active.title)
+    const second = beginSend(pending, {
+      ...identity,
+      executionId: "second",
+      actionId: "second-action",
+      content: textContent("next"),
+    })
+    expect(second.conversations[0]!.turns).toHaveLength(2)
   })
-
-  it("no-ops an empty draft", () => {
+  it("records uncertain delivery on the affected user turn without inventing assistant output", () => {
+    const pending = beginSend(emptyLocalTabs(), {
+      ...identity,
+      content: textContent("hello"),
+    })
+    const failed = failSend(pending, "c0", "execution", "offline")
+    expect(failed.conversations[0]!.turns).toHaveLength(1)
+    expect(failed.conversations[0]!.turns[0]).toMatchObject({
+      receipt: "unknown",
+      error: "offline",
+    })
+  })
+  it("returns to idle after confirmed rejection without offering unknown-delivery retry", () => {
+    const pending = beginSend(emptyLocalTabs(), {
+      ...identity,
+      content: textContent("hello"),
+    })
+    const failed = failSend(pending, "c0", "execution", "Agent not configured", false)
+    expect(failed.conversations[0]!.phase).toBe("idle")
+    expect(failed.conversations[0]!.turns[0]).toMatchObject({
+      receipt: "failed",
+      error: "Agent not configured",
+    })
+  })
+  it("does not consume an empty draft", () => {
     const tabs = emptyLocalTabs()
-    expect(beginSend(tabs, { content: textContent("  ") })).toBe(tabs)
-  })
-
-  it("failSend returns to idle with a failure reply", () => {
-    const pending = beginSend(emptyLocalTabs(), { content: textContent("hey") })
-    const failed = failSend(pending, pending.activeId, "not connected")
-    const active = failed.conversations.find((item) => item.id === failed.activeId)!
-    expect(active.phase).toBe("idle")
-    expect(active.turns).toEqual([
-      {
-        id: "t1",
-        from: "user",
-        content: textContent("hey"),
-        receipt: "delivered",
-      },
-      { id: "t2", from: "assistant", text: "not connected" },
-    ])
-  })
-})
-
-describe("stopGenerating", () => {
-  it("is a no-op until stop RPCs exist", () => {
-    const drafted = setDraft(emptyLocalTabs(), { draft: textContent("hello there") })
-    expect(stopGenerating(drafted)).toBe(drafted)
+    expect(beginSend(tabs, { ...identity, content: textContent(" ") })).toBe(tabs)
   })
 })
 

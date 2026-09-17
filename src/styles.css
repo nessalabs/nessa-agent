@@ -449,30 +449,23 @@ body {
   visibility: hidden;
 }
 
-/* The pasted viewer floats above the composer rather than ending in a
+/* Detail sheets share the pasted-text viewer surface and float instead of ending in a
    full-width square edge. Never use foreground as a scrim: it is white
    in dark mode and turns the entire transcript into a gray wash. */
-.nessa-pasted-viewer {
+.nessa-detail-sheet {
   padding: calc(var(--spacing) * 3);
 }
 /* Keep click-to-dismiss without tinting the area outside the viewer. */
-.nessa-pasted-viewer [data-slot="sheet-backdrop"] {
+.nessa-detail-sheet [data-slot="sheet-backdrop"] {
   background: transparent;
 }
-.nessa-pasted-viewer [data-slot="sheet-panel"] {
+.nessa-detail-sheet [data-slot="sheet-panel"] {
   border-radius: var(--radius-3xl);
-  background: color-mix(in oklab, var(--card) 92%, transparent);
+  background: var(--card);
   box-shadow: none;
 }
-/* CSS frost belongs only on hosts that do not have native vibrancy and
-   can composite it without WebKitGTK's opaque-layer artifacts. */
-.nessa-panel[data-frost="css"]:not([data-compositor="layout"])
-  .nessa-pasted-viewer
-  [data-slot="sheet-panel"] {
-  background: color-mix(in oklab, var(--card) 85%, transparent);
-  backdrop-filter: blur(120px);
-  -webkit-backdrop-filter: blur(120px);
-}
+/* Detail content must cover the transcript in both clear and frosted windows.
+   Native vibrancy belongs behind the window, not between two layers of text. */
 .nessa-pasted-pill:hover,
 .nessa-pasted-pill:active {
   color: inherit;
@@ -515,4 +508,46 @@ body {
   outline: none;
   background-color: var(--accent);
   color: var(--accent-foreground);
+}
+
+.nessa-browser-login {
+  height: 100%;
+  overflow: auto;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--background);
+  color: var(--foreground);
+}
+.nessa-browser-card {
+  width: min(100%, 380px);
+  display: grid;
+  gap: 12px;
+}
+.nessa-browser-card h1 {
+  font-size: 24px;
+  font-weight: 600;
+}
+.nessa-browser-card p {
+  font-size: 14px;
+}
+.nessa-browser-card input,
+.nessa-browser-card select,
+.nessa-browser-card button {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.nessa-browser-card input {
+  user-select: text;
+}
+.nessa-browser-card button[type="submit"] {
+  background: var(--foreground);
+  color: var(--background);
+}
+.nessa-browser-card [role="alert"] {
+  color: var(--destructive);
+}
+.nessa-browser-card :disabled {
+  opacity: 0.6;
 }

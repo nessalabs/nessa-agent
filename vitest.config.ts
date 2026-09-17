@@ -5,6 +5,9 @@ export default defineConfig({
   resolve: {
     dedupe: ["react", "react-dom"],
     alias: {
+      "@nessa-ui/react/json-tree": resolve(
+        "node_modules/@nessa-ui/react/src/components/json-tree.tsx",
+      ),
       "@nessa-ui/react/file-preview": resolve(
         "node_modules/@nessa-ui/react/src/components/file-preview/index.ts",
       ),

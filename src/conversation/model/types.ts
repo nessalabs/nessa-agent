@@ -1,35 +1,93 @@
 import type { MessageContent } from "./content"
 
-export type Receipt = "sending" | "delivered"
+export type Receipt =
+  "sending" | "accepted" | "queued" | "unknown" | "failed" | "delivered"
 
 export type UserTurn = {
   id: string
   from: "user"
   content: MessageContent
   receipt: Receipt
+  executionId?: string
+  steeringTarget?: string
+  steeringOffset?: number
+  actionId?: string
+  mode?: "queued" | "steering"
+  error?: string
+}
+
+export type AgentPart = {
+  messageId?: string
+  offset: number
+  kind: "text" | "thought" | "tool"
+  text: string
+  toolId: string
 }
 
 export type AssistantTurn = {
+  parts: AgentPart[]
+  executionId?: string
   id: string
   from: "assistant"
   text: string
+  status?: string
+  thought?: string
 }
 
 export type Turn = UserTurn | AssistantTurn
 
-export type IdleConversation = {
+type ConversationState = {
   id: string
   title: string
+  titleEdited?: boolean
   turns: Turn[]
   draft: MessageContent
-  phase: "idle"
+  /** Increments only when a failed send restores the draft, resetting the uncontrolled editor. */
+  draftReset?: number
+  /** Stable gateway identity; local tab closure does not close shared work. */
+  serverConversationId?: string
+  serverReady?: boolean
+  error?: string
+  readError?: string
+  revision?: string
+  readRequest?: string
+  cancellationStatus?: "cancelling" | "cancelled"
+  controlPending?: boolean
+  remote?: {
+    runtime?: { model: string; provider: string; workspace: string }
+    /** Last gateway view reports an invocation still running, even before its first chunk. */
+    running: boolean
+    permissions: {
+      executionId: string
+      permissionId: string
+      toolId: string
+      title: string
+      toolName: string
+      argumentsJson: string
+      options: { id: string; label: string }[]
+    }[]
+    tools: {
+      executionId: string
+      toolId: string
+      title: string
+      status: string
+      input: string
+      details: string
+    }[]
+    pending: { executionId: string; text: string; mode: "queued" | "steering" }[]
+    capabilities: {
+      queue: boolean
+      steer: boolean
+      resume: boolean
+      permissions: boolean
+    }
+    queueComplete: boolean
+    truncated: boolean
+    permissionViewError?: string
+  }
 }
-
-export type BusyConversation = {
-  id: string
-  title: string
-  turns: Turn[]
-  draft: MessageContent
+export type IdleConversation = ConversationState & { phase: "idle" }
+export type BusyConversation = ConversationState & {
   phase: "thinking" | "streaming"
   pending: string
 }

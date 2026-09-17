@@ -7,7 +7,9 @@
 //!
 //! Global summon lives in `shortcuts.json` (ADR 0004), not here.
 
-use std::fs;
+mod storage;
+
+use std::io;
 
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
@@ -21,6 +23,8 @@ use crate::local_data;
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub panel: Panel,
+    /// Keep background agents running after quitting the desktop by default.
+    pub stop_agents_on_quit: bool,
 }
 
 /// The panel's geometry, in logical pixels. It opens in the lower right of the
@@ -63,51 +67,91 @@ pub fn load(app: &AppHandle) -> Settings {
         return Settings::default();
     };
 
-    match fs::read_to_string(&path) {
+    load_from(&path, &storage::FileStorage)
+}
+
+fn load_from(path: &std::path::Path, store: &dyn storage::Storage) -> Settings {
+    match store.read(path) {
         Ok(raw) => match parse(&raw) {
-            Ok(settings) => {
-                // Rewrite the merged result so keys added by a later build show
-                // up in the file. Values already in it survive, because they
-                // were parsed into `settings` first — this fills gaps, it does
-                // not reset anything.
-                write(&path, &settings);
-                settings
-            }
+            Ok(settings) => settings,
             Err(error) => {
                 eprintln!("[nessa] {} is not valid settings: {error}", path.display());
                 Settings::default()
             }
         },
-        Err(_) => {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let settings = Settings::default();
-            write(&path, &settings);
+            if let Err(error) = write(path, &settings, store) {
+                eprintln!("[nessa] could not write {}: {error}", path.display());
+            }
             settings
         }
+        Err(error) => {
+            eprintln!("[nessa] could not read {}: {error}", path.display());
+            Settings::default()
+        }
     }
+}
+
+pub fn save(app: &AppHandle, settings: &Settings) -> io::Result<()> {
+    let path = path(app)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "settings directory unavailable"))?;
+    write(&path, settings, &storage::FileStorage)
 }
 
 fn parse(raw: &str) -> Result<Settings, serde_json::Error> {
     serde_json::from_str(raw)
 }
 
-/// Best-effort: an unwritable config directory costs the file, not the launch.
-fn write(path: &std::path::Path, settings: &Settings) {
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if let Ok(raw) = serde_json::to_string_pretty(settings) {
-        let _ = fs::write(path, format!("{raw}\n"));
-    }
+fn write(
+    path: &std::path::Path,
+    settings: &Settings,
+    store: &dyn storage::Storage,
+) -> io::Result<()> {
+    let raw = serde_json::to_string_pretty(settings).map_err(io::Error::other)?;
+    store.write(path, format!("{raw}\n").as_bytes())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{collections::HashMap, path::PathBuf, sync::Mutex};
+
+    #[derive(Default)]
+    struct FakeStorage {
+        files: Mutex<HashMap<PathBuf, Vec<u8>>>,
+        read_error: Mutex<Option<io::ErrorKind>>,
+        write_error: Mutex<Option<io::ErrorKind>>,
+    }
+    impl storage::Storage for FakeStorage {
+        fn read(&self, path: &std::path::Path) -> io::Result<String> {
+            if let Some(kind) = self.read_error.lock().unwrap().take() {
+                return Err(io::Error::from(kind));
+            }
+            let files = self.files.lock().unwrap();
+            let bytes = files
+                .get(path)
+                .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+            String::from_utf8(bytes.clone())
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+        }
+        fn write(&self, path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
+            if let Some(kind) = self.write_error.lock().unwrap().take() {
+                return Err(io::Error::from(kind));
+            }
+            self.files
+                .lock()
+                .unwrap()
+                .insert(path.to_owned(), bytes.to_vec());
+            Ok(())
+        }
+    }
 
     #[test]
     fn missing_keys_take_their_defaults() {
         let settings = parse("{}").unwrap();
         assert_eq!(settings.panel.width, 420.0);
+        assert!(!settings.stop_agents_on_quit);
         assert!(settings.panel.height.is_none());
     }
 
@@ -129,5 +173,65 @@ mod tests {
     #[test]
     fn a_malformed_file_is_an_error_not_a_default() {
         assert!(parse("{").is_err());
+    }
+
+    #[test]
+    fn unreadable_or_invalid_settings_are_never_replaced() {
+        let path = PathBuf::from("settings.json");
+        for bytes in [b"not utf8 \xff".to_vec(), b"{".to_vec()] {
+            let store = FakeStorage::default();
+            store
+                .files
+                .lock()
+                .unwrap()
+                .insert(path.clone(), bytes.clone());
+            assert_eq!(load_from(&path, &store).panel.width, 420.0);
+            assert_eq!(store.files.lock().unwrap().get(&path), Some(&bytes));
+        }
+        let store = FakeStorage::default();
+        store
+            .files
+            .lock()
+            .unwrap()
+            .insert(path.clone(), b"original".to_vec());
+        *store.read_error.lock().unwrap() = Some(io::ErrorKind::PermissionDenied);
+        load_from(&path, &store);
+        assert_eq!(store.files.lock().unwrap().get(&path).unwrap(), b"original");
+    }
+
+    #[test]
+    fn missing_settings_initialize_but_failed_replacement_preserves_prior_file() {
+        let path = PathBuf::from("settings.json");
+        let store = FakeStorage::default();
+        load_from(&path, &store);
+        assert!(store.files.lock().unwrap().contains_key(&path));
+        let original = store.files.lock().unwrap().get(&path).unwrap().clone();
+        *store.write_error.lock().unwrap() = Some(io::ErrorKind::Interrupted);
+        let changed = Settings {
+            stop_agents_on_quit: true,
+            ..Settings::default()
+        };
+        assert!(write(&path, &changed, &store).is_err());
+        assert_eq!(store.files.lock().unwrap().get(&path), Some(&original));
+        assert!(!load_from(&path, &store).stop_agents_on_quit);
+    }
+
+    #[test]
+    fn loading_valid_settings_does_not_rewrite_unchanged_content() {
+        let path = PathBuf::from("settings.json");
+        let store = FakeStorage::default();
+        let original = br#"{"stopAgentsOnQuit":true}"#.to_vec();
+        store
+            .files
+            .lock()
+            .unwrap()
+            .insert(path.clone(), original.clone());
+        *store.write_error.lock().unwrap() = Some(io::ErrorKind::Other);
+        assert!(load_from(&path, &store).stop_agents_on_quit);
+        assert_eq!(store.files.lock().unwrap().get(&path), Some(&original));
+        assert_eq!(
+            *store.write_error.lock().unwrap(),
+            Some(io::ErrorKind::Other)
+        );
     }
 }

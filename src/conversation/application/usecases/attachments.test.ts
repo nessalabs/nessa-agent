@@ -65,9 +65,23 @@ describe("draft file previews", () => {
   it("never submits or clears previews, even if submission omits the current files", () => {
     const tabs = attachFiles(emptyLocalTabs(), [file("a")], "c0")
     expect(
-      beginSend(tabs, { content: [{ type: "text", text: "hello" }, file("a")] }),
+      beginSend(tabs, {
+        conversationId: "c0",
+        executionId: "execution",
+        actionId: "action",
+        mode: "queued",
+        content: [{ type: "text", text: "hello" }, file("a")],
+      }),
     ).toBe(tabs)
-    expect(beginSend(tabs, { content: [{ type: "text", text: "hello" }] })).toBe(tabs)
+    expect(
+      beginSend(tabs, {
+        conversationId: "c0",
+        executionId: "execution",
+        actionId: "action",
+        mode: "queued",
+        content: [{ type: "text", text: "hello" }],
+      }),
+    ).toBe(tabs)
     expect(
       contentText([
         { type: "text", text: "  hi " },

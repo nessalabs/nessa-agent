@@ -1,100 +1,94 @@
-import { contentText, hasFileAttachments, type MessageContent } from "../../model"
-import type { BusyConversation, IdleConversation, UserTurn } from "../../model"
+import {
+  contentText,
+  hasFileAttachments,
+  type MessageContent,
+  type UserTurn,
+} from "../../model"
 import { findConversation, replaceConversation, takeTurnId } from "../internal/ids"
 import type { LocalTabs } from "../local-tabs"
 
-/**
- * Append a sending user turn from ordered content and enter thinking.
- * Returns unchanged tabs when there is nothing to send.
- */
+/** Retain each local submission independently; busy work does not reject a queueable draft. */
 export function beginSend(
   tabs: LocalTabs,
-  input: { content: MessageContent; conversationId?: string },
+  input: {
+    content: MessageContent
+    conversationId: string
+    executionId: string
+    actionId: string
+    mode: "queued" | "steering"
+  },
 ): LocalTabs {
-  const id = input.conversationId ?? tabs.activeId
-  const conv = findConversation(tabs, id)
-  if (
-    !conv ||
-    conv.phase !== "idle" ||
-    hasFileAttachments(input.content) ||
-    hasFileAttachments(conv.draft)
-  )
+  const conv = findConversation(tabs, input.conversationId)
+  if (!conv || hasFileAttachments(input.content) || hasFileAttachments(conv.draft))
     return tabs
-
   const text = contentText(input.content)
   if (!text.trim()) return tabs
-
   const taken = takeTurnId(tabs)
   const userTurn: UserTurn = {
     id: taken.id,
     from: "user",
     content: input.content,
     receipt: "sending",
+    executionId: input.executionId,
+    actionId: input.actionId,
+    mode: input.mode,
   }
-
-  const next: BusyConversation = {
-    id: conv.id,
-    title: conv.turns.length === 0 ? text.trim().slice(0, 48) : conv.title,
+  return replaceConversation(taken.tabs, {
+    ...conv,
+    cancellationStatus: undefined,
+    title:
+      conv.turns.length === 0 && !conv.titleEdited
+        ? text.trim().slice(0, 48)
+        : conv.title,
     turns: [...conv.turns, userTurn],
     draft: [],
     phase: "thinking",
     pending: "",
-  }
-  return replaceConversation(taken.tabs, next)
-}
-
-/** Mark the in-flight user turn delivered and append the echoed assistant reply. */
-export function completeEcho(
-  tabs: LocalTabs,
-  conversationId: string,
-  echoText: string,
-): LocalTabs {
-  const conv = findConversation(tabs, conversationId)
-  if (!conv) return tabs
-
-  const turns = conv.turns.map((turn) => {
-    if (turn.from === "user" && turn.receipt === "sending") {
-      return { ...turn, receipt: "delivered" as const }
-    }
-    return turn
+    error: undefined,
   })
-
-  const taken = takeTurnId(tabs)
-  const next: IdleConversation = {
-    id: conv.id,
-    title: conv.title,
-    turns: [...turns, { id: taken.id, from: "assistant", text: echoText }],
-    draft: conv.draft,
-    phase: "idle",
-  }
-  return replaceConversation(taken.tabs, next)
 }
 
-/** Leave the user turn and surface a short failure reply when echo fails. */
+/** A transport failure is not proof that admission failed; retain IDs for explicit retry. */
 export function failSend(
   tabs: LocalTabs,
   conversationId: string,
-  detail?: string,
+  executionId: string,
+  detail: string,
+  uncertain = true,
 ): LocalTabs {
   const conv = findConversation(tabs, conversationId)
   if (!conv) return tabs
-
-  const turns = conv.turns.map((turn) => {
-    if (turn.from === "user" && turn.receipt === "sending") {
-      return { ...turn, receipt: "delivered" as const }
-    }
-    return turn
+  const failedTurn = conv.turns.find(
+    (turn) =>
+      turn.from === "user" &&
+      turn.executionId === executionId &&
+      turn.receipt === "sending",
+  )
+  const recoveredDraft =
+    !uncertain && conv.draft.length === 0 && failedTurn?.from === "user"
+      ? failedTurn.content
+      : conv.draft
+  const otherWork =
+    conv.remote?.running ||
+    !!conv.remote?.pending.length ||
+    conv.turns.some(
+      (turn) =>
+        turn.from === "user" &&
+        turn.executionId !== executionId &&
+        ["sending", "accepted", "queued", "unknown"].includes(turn.receipt),
+    )
+  return replaceConversation(tabs, {
+    ...(uncertain || otherWork ? conv : { ...conv, phase: "idle" as const }),
+    error: detail,
+    draft: recoveredDraft,
+    draftReset:
+      recoveredDraft === conv.draft ? conv.draftReset : (conv.draftReset ?? 0) + 1,
+    turns: conv.turns.map((turn) =>
+      turn.from === "user" &&
+      turn.executionId === executionId &&
+      turn.receipt === "sending"
+        ? { ...turn, receipt: uncertain ? "unknown" : "failed", error: detail }
+        : turn,
+    ),
   })
-
-  const taken = takeTurnId(tabs)
-  const message =
-    detail && detail.trim().length > 0 ? detail.trim() : "Couldn't reach the server."
-  const next: IdleConversation = {
-    id: conv.id,
-    title: conv.title,
-    turns: [...turns, { id: taken.id, from: "assistant", text: message }],
-    draft: conv.draft,
-    phase: "idle",
-  }
-  return replaceConversation(taken.tabs, next)
 }

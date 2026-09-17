@@ -11,9 +11,13 @@ import { SessionLifecycle } from "./session"
 import { makeStore } from "./store"
 import { createDependencies } from "./composition/dependencies"
 
+import { BrowserApplication } from "./composition/browser"
+import { hasNativeHost } from "./host"
+
 import { environmentFromVite } from "./env/vite"
 
-const dependencies = createDependencies({ environment: environmentFromVite() })
+const environment = environmentFromVite()
+const dependencies = createDependencies({ environment })
 const store = makeStore(dependencies)
 
 const container = document.getElementById("root")
@@ -21,9 +25,15 @@ if (!container) throw new Error("missing #root")
 
 createRoot(container).render(
   <React.StrictMode>
-    <Provider store={store}>
-      <App attachmentResources={dependencies.attachments} />
-      {dependencies.usesLocalSession && <SessionLifecycle dependencies={dependencies} />}
-    </Provider>
+    {!hasNativeHost() && environment.conversation.backend === "local" ? (
+      <BrowserApplication environment={environment} />
+    ) : (
+      <Provider store={store}>
+        <App attachmentResources={dependencies.attachments} />
+        {dependencies.usesLocalSession && (
+          <SessionLifecycle dependencies={dependencies} />
+        )}
+      </Provider>
+    )}
   </React.StrictMode>,
 )

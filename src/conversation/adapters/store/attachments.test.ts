@@ -1,11 +1,14 @@
 import { expect, it, vi } from "vitest"
 import { makeStore } from "../../../store"
 import { createDependencies } from "../../../composition/dependencies"
+import { scenarioEffects } from "../scenario/effects"
 import { attachFiles, sendDraft } from "./slice"
 
 it("rejects preview-file sends without contacting the backend or clearing the draft", async () => {
-  const echo = vi.fn(async () => ({ text: "reply" }))
-  const store = makeStore(createDependencies({ conversation: { echo } }))
+  const send = vi.fn(scenarioEffects("echo").send)
+  const store = makeStore(
+    createDependencies({ conversation: { ...scenarioEffects("echo"), send } }),
+  )
   const file = {
     type: "file" as const,
     id: "f",
@@ -22,8 +25,11 @@ it("rejects preview-file sends without contacting the backend or clearing the dr
     [{ type: "text" as const, text: "hello" }],
   ]) {
     const result = await store.dispatch(sendDraft({ content, id: "c0" }))
-    expect(result.payload).toEqual({ kind: "preview-only-files" })
-    expect(store.getState().conversation).toEqual(before)
+    expect(result.meta.requestStatus).toBe("rejected")
+    expect(store.getState().conversation.conversations[0]!.draft).toEqual(
+      before.conversations[0]!.draft,
+    )
+    expect(store.getState().conversation.conversations[0]!.error).toMatch(/preview-only/)
   }
-  expect(echo).not.toHaveBeenCalled()
+  expect(send).not.toHaveBeenCalled()
 })
