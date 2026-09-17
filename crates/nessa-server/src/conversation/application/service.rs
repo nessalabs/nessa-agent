@@ -332,6 +332,7 @@ impl ConversationService {
         id: &ConversationId,
         caller: &ConversationCaller,
     ) -> Result<Arc<LiveConversation>, ConversationError> {
+        caller.actor()?;
         let record = self
             .inner
             .metadata
@@ -531,6 +532,8 @@ impl ConversationService {
             }
             let execution =
                 ExecutionId::new(&execution_id).map_err(|_| ConversationError::InvalidInput)?;
+            let prompt =
+                PromptText::new(text.clone()).map_err(|_| ConversationError::InvalidInput)?;
             let live = service.resolve(&id, &caller).await?;
             // Reserve the full effective context budget consistently across retries.
             // ACP owns hidden context/tokenization; this is a conservative admission
@@ -543,8 +546,7 @@ impl ConversationService {
             }
             let request = ExecutionRequest {
                 execution_id: execution,
-                user_message: PromptText::new(text.clone())
-                    .map_err(|_| ConversationError::InvalidInput)?,
+                user_message: prompt,
                 estimated_input_tokens: u64::from(
                     limits.max_context_window() - service.inner.limits.reserved_output_tokens,
                 ),

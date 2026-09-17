@@ -315,13 +315,17 @@ async fn malformed_controls_do_not_open_a_dormant_owned_provider() {
     assert!(matches!(
         service
             .cancel_permission(
-                id,
+                id.clone(),
                 caller("panel", "cancel"),
                 "execution".into(),
                 "permission".into(),
                 "   ".into(),
             )
             .await,
+        Err(ConversationError::InvalidInput)
+    ));
+    assert!(matches!(
+        service.read(id, caller("panel", "\n")).await,
         Err(ConversationError::InvalidInput)
     ));
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
