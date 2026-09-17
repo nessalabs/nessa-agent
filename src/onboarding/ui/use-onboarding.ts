@@ -155,15 +155,15 @@ export function useOnboarding(initial?: OnboardingState): Onboarding {
     active: isOnboarding(state),
     accelerator: keys,
     platform,
-    // Each way on sounds the same, because each is the same act. Picking an
-    // agent is not a way on — it is a choice among things — so it gets the
-    // lighter cue, and finishing gets the only celebratory one setup has.
+    // Every button that moves setup forward sounds the same, because each is
+    // the same act. Picking an agent is not one of them — it switches a thing
+    // on — and finishing gets the only celebratory cue setup has.
     begin: React.useCallback(() => {
       playCue("advance")
       setState(startAgentChoice)
     }, []),
     choose: React.useCallback((id: AgentId) => {
-      playCue("select")
+      playCue("choose")
       setState((current) => chooseAgent(current, id))
     }, []),
     confirm: React.useCallback(() => {

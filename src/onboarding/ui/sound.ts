@@ -1,5 +1,4 @@
 import bloomingGlass from "./blooming-glass.mp3"
-import buttonSound from "./sounds/button.m4a"
 import celebrationSound from "./sounds/celebration.m4a"
 import selectSound from "./sounds/select.m4a"
 import toggleOffSound from "./sounds/toggle-off.m4a"
@@ -13,7 +12,7 @@ export type Cue =
   /** The window opening. */
   | "intro"
   /** An agent picked out of the list. */
-  | "select"
+  | "choose"
   /** A step accepted, and the next one arriving. */
   | "advance"
   /** The summon shortcut putting Nessa on screen. */
@@ -38,8 +37,11 @@ export type Cue =
  */
 const CUES: Readonly<Record<Cue, { src: string; volume: number }>> = Object.freeze({
   intro: { src: bloomingGlass, volume: 0.35 },
-  select: { src: selectSound, volume: 0.32 },
-  advance: { src: buttonSound, volume: 0.3 },
+  // Choosing an agent is a thing being switched on, and it is the kit's toggle
+  // that says so — the same sound the summon lesson uses, because it is the
+  // same act.
+  choose: { src: toggleOnSound, volume: 0.32 },
+  advance: { src: selectSound, volume: 0.3 },
   summon: { src: toggleOnSound, volume: 0.34 },
   dismiss: { src: toggleOffSound, volume: 0.34 },
   celebrate: { src: celebrationSound, volume: 0.4 },
