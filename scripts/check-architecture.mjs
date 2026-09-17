@@ -6,6 +6,10 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
+import {
+  hasImmediateCfg,
+  hasNoImmediateCfg,
+} from "./architecture/platform-boundaries.mjs"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const src = join(root, "src")
@@ -210,7 +214,7 @@ const macosRetirementBoundaries = [
   },
   {
     path: "crates/nessa-server/src/desktop_runtime/domain/mod.rs",
-    declaration: "validate_retirement_evidence, RetirementCause",
+    declaration: "pub(crate) use retirement::{",
   },
   {
     path: "crates/nessa-server/src/desktop_runtime/domain/retirement.rs",
@@ -245,17 +249,32 @@ const macosRetirementBoundaries = [
 for (const boundary of macosRetirementBoundaries) {
   const file = join(root, boundary.path)
   const text = readFileSync(file, "utf8")
-  const declaration = text.indexOf(boundary.declaration)
-  const attribute = '#[cfg(any(target_os = "macos", test))]'
-  const productionAttribute = '#[cfg(target_os = "macos")]'
-  const preceding = text.slice(Math.max(0, declaration - 80), declaration)
-  if (
-    declaration < 0 ||
-    (!preceding.includes(attribute) && !preceding.includes(productionAttribute))
-  ) {
+  if (!hasImmediateCfg(text, boundary.declaration)) {
     fail(
       file,
       "managed gateway retirement is a macOS production capability; gate its module boundary so other targets do not compile unused lifecycle code",
+    )
+  }
+}
+
+const portableRuntimeBoundaries = [
+  {
+    path: "crates/nessa-server/src/desktop_runtime/domain/mod.rs",
+    declaration: "pub(crate) use retirement::RunningRuntime;",
+  },
+  {
+    path: "crates/nessa-server/src/desktop_runtime/domain/retirement.rs",
+    declaration: "pub(crate) struct RunningRuntime",
+  },
+]
+
+for (const boundary of portableRuntimeBoundaries) {
+  const file = join(root, boundary.path)
+  const text = readFileSync(file, "utf8")
+  if (!hasNoImmediateCfg(text, boundary.declaration)) {
+    fail(
+      file,
+      "runtime incarnation identity is portable health evidence; do not hide it behind a target cfg",
     )
   }
 }

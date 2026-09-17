@@ -1,5 +1,5 @@
 //! Private namespace files adapt the desktop signal protocol and durable upgrade audit.
 #[cfg(any(target_os = "macos", test))]
 mod files;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(crate) use files::RetirementFiles;

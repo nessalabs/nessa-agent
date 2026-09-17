@@ -1,6 +1,7 @@
 use crate::browser_session::domain::value_objects::{Lifetime, RemovalReason};
 use nessa_auth::application::ports::{
-    AccessError, PortFuture, SessionEvidence, SessionVerifier, VerifiedSessionCredential,
+    AccessError, CredentialEvidence, PortFuture, SessionEvidence, SessionVerifier,
+    VerifiedSessionCredential,
 };
 use nessa_auth::domain::CredentialId;
 
@@ -184,9 +185,7 @@ impl SignIn<'_> {
         origin: String,
         id: String,
         prior: Option<&str>,
-    ) -> Result<(u64, Option<(String, BrowserSession)>), nessa_auth::application::ports::AccessError>
-    {
-        use nessa_auth::application::ports::{AccessError, CredentialEvidence};
+    ) -> Result<(u64, Option<(String, BrowserSession)>), AccessError> {
         let evidence = CredentialEvidence::new(token.into_bytes())?;
         let identity = self
             .authentication

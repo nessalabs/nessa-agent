@@ -14,7 +14,7 @@
     "format": "prettier --write src scripts packages eslint.config.js prettier.config.js",
     "format:check": "prettier --check src scripts packages eslint.config.js prettier.config.js",
     "lint": "eslint src packages",
-    "architecture": "node scripts/check-architecture.mjs",
+    "architecture": "node --test scripts/architecture/*.test.mjs && node scripts/check-architecture.mjs",
     "protocol:generate": "node scripts/generate-protocol-types.mjs && node scripts/generate-product-protocol.mjs",
     "protocol:check": "node scripts/check-protocol.mjs && node scripts/check-product-protocol.mjs",
     "client:typecheck": "pnpm --dir packages/nessa-client typecheck",
