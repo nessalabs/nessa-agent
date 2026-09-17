@@ -47,6 +47,21 @@ pub fn toggle(app: &AppHandle) -> bool {
 /// a panel.
 pub const SETUP_WINDOW: &str = "setup";
 
+/// Put the panel on screen the way summoning it does.
+///
+/// Setup hands over by showing the panel, and showing a window is not the same
+/// as placing one: the panel is anchored to an edge of the work area and its
+/// webview is fitted to the window, and a plain `show()` from the page does
+/// neither. The first thing a person saw after setup was therefore a panel
+/// wherever the window system happened to leave it.
+#[tauri::command]
+pub fn summon_panel(app: AppHandle) {
+    let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
+        return;
+    };
+    show(&window, &settings(&app));
+}
+
 /// Opens first-run setup again, from the beginning.
 ///
 /// Setup finishes by closing its own window, so there is usually nothing left

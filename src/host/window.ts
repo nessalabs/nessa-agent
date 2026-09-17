@@ -189,10 +189,12 @@ export function windowSurface(): "panel" | "setup" {
  */
 export async function finishSetupWindow() {
   if (!inTauri) return
-  const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow")
-  const panel = await WebviewWindow.getByLabel("main")
-  await panel?.show()
-  await panel?.setFocus()
+  // Through the host, not `show()` on the window: the panel is anchored to an
+  // edge of the work area and its webview fitted to the window, and a page
+  // cannot do either. Showing it from here left it wherever the window system
+  // happened to put it.
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("summon_panel")
   const { getCurrentWindow } = await import("@tauri-apps/api/window")
   await getCurrentWindow().close()
 }
