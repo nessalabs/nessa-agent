@@ -868,11 +868,15 @@ body {
  * of the three stages before it, which is when the panel has settled and its
  * contents may start to arrive.
  */
-.nessa-setup-sheet {
-  position: fixed;
-  inset: 0;
-  display: grid;
-  place-items: center;
+/*
+ * The reveal's timeline, in one place.
+ *
+ * On `:root` rather than on a wrapper, because setup is two windows now — the
+ * dim and the window it opens — and each is its own document. A token defined
+ * inside one of them is not a timeline; it is half a timeline, and the half
+ * that is missing simply does not animate.
+ */
+:root {
   /*
    * The seed is the knob. It is the only stage with nothing to do but be
    * watched, so it is the one that decides whether the opening feels unhurried
@@ -975,28 +979,23 @@ body {
 }
 
 /*
- * The vessel. It is nothing at all while the light is still gathering, then
- * becomes a visible empty panel a moment before the light starts to spread —
- * so there is something there to be filled.
+ * The vessel — which is the window itself now.
+ *
+ * It is opaque from the first frame, because the window is: a real window has
+ * a background whether or not anything has been drawn in it, and a light
+ * growing inside a dark room is the whole picture. It was translucent while
+ * setup was a sheet over the desktop and there was something behind it worth
+ * letting through; there no longer is.
+ *
+ * The frame, the corners and the shadow are the system's, so nothing here
+ * draws them.
  */
 .nessa-setup-window {
   position: relative;
   width: 100%;
   height: 100%;
   overflow: hidden;
-  animation: nessa-setup-vessel 300ms var(--nessa-motion-easing-standard)
-    calc(var(--nessa-reveal-seed) - 200ms) both;
-}
-
-@keyframes nessa-setup-vessel {
-  from {
-    background: rgb(12 10 16 / 0);
-    box-shadow: none;
-  }
-  to {
-    background: rgb(12 10 16 / 0.55);
-    box-shadow: 0 30px 80px -20px rgb(0 0 0 / 0.55);
-  }
+  background: rgb(12 10 16);
 }
 
 /* The light itself, inside the vessel and cut off by it. */
