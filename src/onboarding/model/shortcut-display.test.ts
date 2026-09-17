@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { ShortcutsDocument } from "@nessa/client"
 import defaults from "../../../protocol/defaults/shortcuts.v1.json"
-import { formatAccelerator, summonAccelerator } from "./shortcut-display"
+import { acceleratorKeys, formatAccelerator, summonAccelerator } from "./shortcut-display"
 
 const bundled = defaults as ShortcutsDocument
 
@@ -59,19 +59,36 @@ describe("summon accelerator", () => {
 })
 
 describe("writing an accelerator", () => {
-  it("uses Apple glyphs on macOS and words elsewhere", () => {
-    expect(formatAccelerator("CmdOrCtrl+Shift+D", "macos")).toBe("⌘⇧D")
+  it("writes the same binding the way each platform writes it", () => {
+    expect(formatAccelerator("CmdOrCtrl+Shift+D", "apple")).toBe("⌘⇧D")
+    expect(formatAccelerator("CmdOrCtrl+Shift+D", "windows")).toBe("Ctrl+Shift+D")
     expect(formatAccelerator("CmdOrCtrl+Shift+D", "linux")).toBe("Ctrl+Shift+D")
-    expect(formatAccelerator("CmdOrCtrl+Shift+D", "browser")).toBe("Ctrl+Shift+D")
+  })
+
+  it("splits a shortcut into one key per cap", () => {
+    expect(acceleratorKeys("CmdOrCtrl+Shift+D", "apple")).toEqual(["⌘", "⇧", "D"])
+    expect(acceleratorKeys("CmdOrCtrl+Shift+D", "windows")).toEqual([
+      "Ctrl",
+      "Shift",
+      "D",
+    ])
+  })
+
+  it("writes the same modifier as each platform names it", () => {
+    expect(acceleratorKeys("Super+K", "apple")).toEqual(["⌘", "K"])
+    expect(acceleratorKeys("Super+K", "windows")).toEqual(["Win", "K"])
+    expect(acceleratorKeys("Super+K", "linux")).toEqual(["Super", "K"])
+    expect(acceleratorKeys("Alt+Escape", "apple")).toEqual(["⌥", "esc"])
+    expect(acceleratorKeys("Alt+Escape", "linux")).toEqual(["Alt", "Esc"])
   })
 
   it("keeps a token it does not recognise instead of dropping it", () => {
-    expect(formatAccelerator("CmdOrCtrl+Space", "macos")).toBe("⌘Space")
+    expect(acceleratorKeys("CmdOrCtrl+Space", "apple")).toEqual(["⌘", "Space"])
     expect(formatAccelerator("Hyper+K", "linux")).toBe("Hyper+K")
   })
 
   it("survives empty and untidy input without inventing keys", () => {
-    expect(formatAccelerator("", "macos")).toBe("")
-    expect(formatAccelerator(" Cmd + Shift + a ", "macos")).toBe("⌘⇧A")
+    expect(acceleratorKeys("", "apple")).toEqual([])
+    expect(formatAccelerator(" Cmd + Shift + a ", "apple")).toBe("⌘⇧A")
   })
 })

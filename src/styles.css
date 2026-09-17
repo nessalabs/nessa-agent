@@ -586,6 +586,65 @@ body {
 }
 
 /*
+ * Setup's hero type.
+ *
+ * The design system's scale tops out at 20px because it sizes UI chrome; a
+ * first-run title is not chrome, so it gets an explicit display size here
+ * rather than a level that was never meant to carry it. It still uses the
+ * system's own sans family.
+ */
+.nessa-setup-title {
+  font-family: var(--nessa-font-sans);
+  font-size: 2rem;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+@keyframes nessa-setup-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
+ * First-run setup is always the light glass treatment.
+ *
+ * Setup sits on the morphing colour wash, and a pale pane over that wash is the
+ * look the product wants whatever the OS appearance is — a dark slab over the
+ * same pigments reads as a hole rather than glass. The design system switches
+ * its tokens with a `dark` class on the document, so a subtree cannot opt back
+ * out; these are the light values from its `:root`, re-declared for this one
+ * surface so its own components keep the contrast they were built for.
+ *
+ * Only the tokens setup actually paints with are listed. If the design system
+ * restyles its light palette, this block has to follow it.
+ */
+.nessa-setup-light {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.52 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.556 0 0);
+  color-scheme: light;
+  color: var(--foreground);
+}
+
+/*
  * Setup's hero type and its arrival.
  *
  * The design system's scale tops out at 20px because it sizes UI chrome; a
@@ -631,5 +690,122 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .nessa-setup-arrive {
     animation: none;
+  }
+}
+
+/*
+ * The setup window, and the way it arrives.
+ *
+ * The window is a transparent sheet over the whole work area, so setup can dim
+ * what is behind it before anything else happens. What a person sees is the box
+ * drawn here, not the window.
+ *
+ * The opening reads as one movement: the desktop dims, a small glow blooms at
+ * the centre, and that glow opens out until it has filled the box. The wash is
+ * already painting underneath the whole time — the clip is what grows, so the
+ * colour appears to spread from the orb rather than fade in behind it.
+ *
+ * Under a reduced-motion preference none of this runs: the dim and the box are
+ * simply there, which is the same end state the animation arrives at.
+ */
+.nessa-setup-sheet {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.nessa-setup-dim {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 0.55);
+  backdrop-filter: blur(2px);
+  animation: nessa-setup-dim-in 420ms var(--nessa-motion-easing-standard) both;
+}
+
+@keyframes nessa-setup-dim-in {
+  from {
+    opacity: 0;
+    backdrop-filter: blur(0);
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.nessa-setup-window {
+  position: relative;
+  width: min(560px, 92vw);
+  height: min(560px, 82vh);
+  overflow: hidden;
+  border-radius: 22px;
+  box-shadow: 0 30px 80px -20px rgb(0 0 0 / 0.55);
+  /* The orb opens after the dim has settled. */
+  animation: nessa-setup-bloom 900ms var(--nessa-motion-easing-emphasized) 260ms both;
+}
+
+@keyframes nessa-setup-bloom {
+  from {
+    clip-path: circle(7% at 50% 50%);
+    opacity: 0;
+    transform: scale(0.94);
+    filter: saturate(1.6) brightness(1.3);
+  }
+  35% {
+    opacity: 1;
+  }
+  to {
+    clip-path: circle(78% at 50% 50%);
+    opacity: 1;
+    transform: scale(1);
+    filter: none;
+  }
+}
+
+/* The glow that reads as the orb before it opens out. */
+.nessa-setup-window::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow: 0 0 120px 40px rgb(255 255 255 / 0.28) inset;
+  animation: nessa-setup-glow 900ms var(--nessa-motion-easing-emphasized) 260ms both;
+}
+
+@keyframes nessa-setup-glow {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* Setup's content waits for the box to finish opening. */
+.nessa-setup-arrive {
+  animation: nessa-setup-arrive var(--nessa-motion-duration-slow)
+    var(--nessa-motion-easing-arrival) 900ms both;
+}
+
+.nessa-setup-arrive:nth-child(2) {
+  animation-delay: 970ms;
+}
+.nessa-setup-arrive:nth-child(3) {
+  animation-delay: 1040ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nessa-setup-dim,
+  .nessa-setup-window,
+  .nessa-setup-window::after,
+  .nessa-setup-arrive {
+    animation: none;
+  }
+  .nessa-setup-window {
+    clip-path: none;
+  }
+  .nessa-setup-window::after {
+    opacity: 0;
   }
 }

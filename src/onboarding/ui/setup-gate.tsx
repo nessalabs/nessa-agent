@@ -1,27 +1,35 @@
 import * as React from "react"
-import { host } from "../../host"
+import { finishSetupWindow } from "../../host"
 import { Onboarding } from "./onboarding"
 import { useOnboarding } from "./use-onboarding"
 
 /**
- * Shows first-run setup, and the app only once setup is finished.
+ * The setup surface: first run in its own window.
  *
- * Setup is its own screen rather than something the panel draws inside itself:
- * it fills the window, owns no panel chrome, and the panel is not mounted
- * behind it. That keeps the panel's frame, tabs and composer out of a surface
- * that has nothing to do with them, and keeps setup out of the panel's own
- * component.
+ * The desktop host opens this in a small centred window of its own, so setup
+ * never borrows the panel's frame, tabs or composer, and the panel is not
+ * mounted behind it. Finishing or skipping shows the panel and closes this
+ * window. In a plain browser there is no second window, so the same component
+ * hands over to `children` in place.
  */
 export function SetupGate({ children }: { children: React.ReactNode }) {
   const onboarding = useOnboarding()
+  const [handedOver, setHandedOver] = React.useState(false)
+
+  React.useEffect(() => {
+    if (onboarding.active || handedOver) return
+    setHandedOver(true)
+    void finishSetupWindow()
+  }, [onboarding.active, handedOver])
+
   if (!onboarding.active) return <>{children}</>
-  // The webview is larger than the window and pinned to its bottom right, so
-  // setup takes the same stage and window-sized surface the panel does. It
-  // wears none of the panel's chrome: no tabs, no composer, no edge reveal and
-  // no resize handle, because none of them belong to a setup screen.
   return (
-    <div className="nessa-stage" data-host={host.kind}>
-      <div className="nessa-panel relative overflow-hidden">
+    <div className="nessa-setup-sheet">
+      {/* What is behind setup dims first, so the box arrives into a settled
+        screen rather than competing with the desktop. Decorative: the dim is
+        not a control and closing setup is the corner button's job. */}
+      <div aria-hidden="true" className="nessa-setup-dim" />
+      <div className="nessa-setup-window">
         <Onboarding
           state={onboarding.state}
           summon={onboarding.summon}
@@ -30,6 +38,8 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
           onConfirm={onboarding.confirm}
           onFinish={onboarding.finish}
           onDismiss={onboarding.dismiss}
+          platform={onboarding.platform}
+          onConfirmSummon={onboarding.confirmSummon}
         />
       </div>
     </div>

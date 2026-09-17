@@ -3,12 +3,16 @@
   "identifier": "default",
   "description": "What the floating Nessa window is allowed to ask the host for.",
   "windows": [
-    "main"
+    "main",
+    "setup"
   ],
   "permissions": [
     "core:default",
     "core:event:default",
     "core:window:allow-start-dragging",
-    "core:window:allow-start-resize-dragging"
+    "core:window:allow-start-resize-dragging",
+    "core:window:allow-show",
+    "core:window:allow-close",
+    "core:window:allow-set-focus"
   ]
 }

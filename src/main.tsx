@@ -13,7 +13,7 @@ import { makeStore } from "./store"
 import { createDependencies } from "./composition/dependencies"
 
 import { BrowserApplication } from "./composition/browser"
-import { hasNativeHost } from "./host"
+import { hasNativeHost, windowSurface } from "./host"
 
 import { environmentFromVite } from "./env/vite"
 
@@ -24,19 +24,23 @@ const store = makeStore(dependencies)
 const container = document.getElementById("root")
 if (!container) throw new Error("missing #root")
 
+// The host opens setup in its own window; that window paints setup and nothing
+// else, and the panel window paints the panel and nothing else.
+const panel = (
+  <Provider store={store}>
+    <App attachmentResources={dependencies.attachments} />
+    {dependencies.usesLocalSession && <SessionLifecycle dependencies={dependencies} />}
+  </Provider>
+)
+
 createRoot(container).render(
   <React.StrictMode>
-    {!hasNativeHost() && environment.conversation.backend === "local" ? (
+    {windowSurface() === "setup" ? (
+      <SetupGate>{panel}</SetupGate>
+    ) : !hasNativeHost() && environment.conversation.backend === "local" ? (
       <BrowserApplication environment={environment} />
     ) : (
-      <Provider store={store}>
-        <SetupGate>
-          <App attachmentResources={dependencies.attachments} />
-          {dependencies.usesLocalSession && (
-            <SessionLifecycle dependencies={dependencies} />
-          )}
-        </SetupGate>
-      </Provider>
+      panel
     )}
   </React.StrictMode>,
 )

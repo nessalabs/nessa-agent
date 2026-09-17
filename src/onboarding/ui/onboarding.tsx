@@ -1,11 +1,18 @@
 import * as React from "react"
 import { Check, X } from "lucide-react"
+import { AgentMark } from "./agent-mark"
+import { Keycaps } from "./keycaps"
+import type { ShortcutPlatform } from "../model/shortcut-display"
 import { Button } from "@nessa-ui/react/button"
 import {
   MorphingMeshGradient,
   morphingMeshGradientPresets,
 } from "@nessa-ui/react/morphing-mesh-gradient"
 import { AGENT_CHOICES, type AgentId, type OnboardingState } from "../model/onboarding"
+
+/** Setup's primary action, sized the same on every step. */
+const PILL =
+  "nessa-setup-arrive h-12 min-w-56 rounded-full bg-white px-10 nessa-text-5 font-medium text-neutral-950 shadow-lg hover:bg-white/90"
 
 /**
  * The wash every setup step is painted on.
@@ -72,19 +79,18 @@ function SetupPanel({ children }: { children: React.ReactNode }) {
   )
 }
 
-/** One selectable agent. An agent no provider can run is disabled and says so,
- * rather than being offered and failing later. */
+/** One selectable agent: its mark, its name, and whether it can run yet. An
+ * agent no provider can run is disabled and says so, rather than being offered
+ * and failing later. */
 function AgentOption({
   id,
   name,
-  summary,
   available,
   selected,
   onSelect,
 }: {
   id: AgentId
   name: string
-  summary: string
   available: boolean
   selected: boolean
   onSelect: (id: AgentId) => void
@@ -94,33 +100,26 @@ function AgentOption({
       type="button"
       role="radio"
       aria-checked={selected}
-      // The visible name and its availability badge are separate elements with
-      // only a margin between them, which reads as one run-together word. Name
-      // the option outright so it is announced the way it is written.
+      // The name and its availability badge are separate elements with only a
+      // margin between them, which reads as one run-together word. Name the
+      // option outright so it is announced the way it is written.
       aria-label={available ? name : `${name}, coming soon`}
-      aria-describedby={`onboarding-agent-${id}-summary`}
       disabled={!available}
       onClick={() => onSelect(id)}
-      className="flex w-full items-start gap-3 rounded-xl border border-white/15 bg-background/45 p-4 text-left backdrop-blur-md transition-[background-color,border-color] outline-none hover:bg-background/65 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50 aria-checked:border-ring aria-checked:bg-background/75"
+      className="flex w-full items-center gap-3 rounded-xl border border-white/15 bg-background/45 p-3 text-left backdrop-blur-md transition-[background-color,border-color] outline-none hover:bg-background/65 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50 aria-checked:border-ring aria-checked:bg-background/75"
     >
-      <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border border-border">
-        {selected ? <Check aria-hidden className="size-3.5" /> : null}
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground">
+        <AgentMark id={id} />
       </span>
-      <span className="flex min-w-0 flex-col gap-1">
-        <span className="nessa-text-4 font-medium text-foreground">
-          {name}
-          {available ? null : (
-            <span className="ml-2 nessa-text-2 font-normal text-muted-foreground">
-              Coming soon
-            </span>
-          )}
-        </span>
-        <span
-          id={`onboarding-agent-${id}-summary`}
-          className="nessa-text-2 text-muted-foreground"
-        >
-          {summary}
-        </span>
+      <span className="nessa-text-4 font-medium text-foreground">{name}</span>
+      <span className="ml-auto flex items-center">
+        {available ? (
+          <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-border">
+            {selected ? <Check aria-hidden className="size-3.5" /> : null}
+          </span>
+        ) : (
+          <span className="nessa-text-2 text-muted-foreground">Coming soon</span>
+        )}
       </span>
     </button>
   )
@@ -141,9 +140,16 @@ export function Onboarding({
   onConfirm,
   onFinish,
   onDismiss,
+  platform,
+  onConfirmSummon,
 }: {
   state: OnboardingState
   summon?: string
+  /** The keyboard conventions this device writes shortcuts in. */
+  platform: ShortcutPlatform
+  /** Move on from the summon step, for hosts where the shortcut never reaches
+   * this window. */
+  onConfirmSummon: () => void
   onBegin: () => void
   onChoose: (id: AgentId) => void
   onConfirm: () => void
@@ -155,17 +161,13 @@ export function Onboarding({
   if (state.step === "welcome") {
     return (
       <SetupStage onDismiss={onDismiss}>
-        <div className="flex size-full min-h-0 flex-col items-center justify-end gap-10 pb-10 text-center">
+        <div className="flex size-full min-h-0 flex-col items-center justify-end gap-9 pb-14 text-center">
           <div className="flex flex-1 items-center">
             <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white drop-shadow-[0_1px_16px_rgba(0,0,0,0.35)]">
               Welcome to Nessa
             </h1>
           </div>
-          <Button
-            size="lg"
-            className="nessa-setup-arrive rounded-full bg-white px-8 text-neutral-950 shadow-lg hover:bg-white/90"
-            onClick={onBegin}
-          >
+          <Button size="lg" className={PILL} onClick={onBegin}>
             Get started
           </Button>
         </div>
@@ -176,22 +178,31 @@ export function Onboarding({
   if (state.step === "summon") {
     return (
       <SetupStage onDismiss={onDismiss}>
-        <div className="flex size-full min-h-0 flex-col items-center justify-end gap-10 pb-10 text-center">
-          <div className="flex flex-1 flex-col items-center justify-center gap-5 px-4">
+        <div className="flex size-full min-h-0 flex-col items-center justify-end gap-9 pb-14 text-center">
+          <div className="flex flex-1 flex-col items-center justify-center gap-7 px-4">
             <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white drop-shadow-[0_1px_16px_rgba(0,0,0,0.35)]">
               {summon ? "Summon it from anywhere" : "Set a summon shortcut"}
             </h1>
-            {summon ? (
-              <kbd className="nessa-setup-arrive rounded-full border border-white/40 bg-white/25 px-5 py-2 font-sans nessa-text-5 font-medium tracking-wide text-white shadow-lg backdrop-blur-md">
-                {summon}
-              </kbd>
-            ) : null}
+            {summon ? <Keycaps keys={summon} platform={platform} /> : null}
           </div>
-          <Button
-            size="lg"
-            className="nessa-setup-arrive rounded-full bg-white px-8 text-neutral-950 shadow-lg hover:bg-white/90"
-            onClick={onFinish}
-          >
+          <Button size="lg" className={PILL} onClick={onConfirmSummon}>
+            Continue
+          </Button>
+        </div>
+      </SetupStage>
+    )
+  }
+
+  if (state.step === "ready") {
+    return (
+      <SetupStage onDismiss={onDismiss}>
+        <div className="flex size-full min-h-0 flex-col items-center justify-end gap-9 pb-14 text-center">
+          <div className="flex flex-1 items-center px-6">
+            <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white drop-shadow-[0_1px_16px_rgba(0,0,0,0.35)]">
+              You&rsquo;re all set
+            </h1>
+          </div>
+          <Button size="lg" className={PILL} onClick={onFinish}>
             Start using Nessa
           </Button>
         </div>
@@ -202,13 +213,7 @@ export function Onboarding({
   return (
     <SetupStage onDismiss={onDismiss}>
       <SetupPanel>
-        <div className="flex flex-col gap-2">
-          <h1 className="nessa-text-6 font-semibold text-foreground">Choose an agent</h1>
-          <p className="nessa-text-2 text-muted-foreground">
-            Nessa runs your conversations through this agent. You can change it later in
-            settings.
-          </p>
-        </div>
+        <h1 className="nessa-text-6 font-semibold text-foreground">Choose an agent</h1>
         <div role="radiogroup" aria-label="Agent" className="flex flex-col gap-2">
           {AGENT_CHOICES.map((choice) => (
             <AgentOption

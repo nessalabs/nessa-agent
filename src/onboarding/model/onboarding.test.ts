@@ -6,10 +6,15 @@ import {
   chooseAgent,
   completeOnboarding,
   confirmAgent,
+  confirmSummon,
   dismissOnboarding,
   isOnboarding,
   startAgentChoice,
 } from "./onboarding"
+
+function atSummon() {
+  return confirmAgent(chooseAgent(startAgentChoice(beginOnboarding()), "claude"))
+}
 
 describe("first-run setup", () => {
   it("starts on welcome and shows setup until it is finished", () => {
@@ -19,18 +24,17 @@ describe("first-run setup", () => {
     expect(isOnboarding({ step: "done", agent: "claude" })).toBe(false)
   })
 
-  it("walks welcome to a chosen agent, then to summon, then finishes", () => {
+  it("walks welcome to an agent, then the shortcut, then finishes", () => {
     const picking = startAgentChoice(beginOnboarding())
     expect(picking.step).toBe("agent")
     const chosen = chooseAgent(picking, "claude")
     expect(chosen.agent).toBe("claude")
     const summon = confirmAgent(chosen)
     expect(summon).toEqual({ step: "summon", agent: "claude" })
-    expect(isOnboarding(summon)).toBe(true)
-    expect(completeOnboarding(summon)).toEqual({
-      step: "done",
-      agent: "claude",
-    })
+    const ready = confirmSummon(summon)
+    expect(ready).toEqual({ step: "ready", agent: "claude" })
+    expect(isOnboarding(ready)).toBe(true)
+    expect(completeOnboarding(ready)).toEqual({ step: "done", agent: "claude" })
   })
 
   it("does not record an agent no provider can run", () => {
@@ -45,26 +49,39 @@ describe("first-run setup", () => {
     expect(isOnboarding(confirmAgent(picking))).toBe(true)
   })
 
-  it("only finishes from the summon step", () => {
+  it("only finishes from the last step", () => {
     const welcome = beginOnboarding()
     expect(completeOnboarding(welcome)).toBe(welcome)
     const chosen = chooseAgent(startAgentChoice(welcome), "claude")
     expect(completeOnboarding(chosen)).toBe(chosen)
+    expect(completeOnboarding(atSummon())).toEqual(atSummon())
   })
 
   it("ignores steps that do not apply to the current one", () => {
     const welcome = beginOnboarding()
     expect(chooseAgent(welcome, "claude")).toBe(welcome)
-    const done = completeOnboarding(
-      confirmAgent(chooseAgent(startAgentChoice(welcome), "claude")),
-    )
+    const done = completeOnboarding(confirmSummon(atSummon()))
     expect(startAgentChoice(done)).toBe(done)
     expect(chooseAgent(done, "claude")).toBe(done)
   })
 
   it("offers Claude first and marks every listed agent honestly", () => {
     expect(AGENT_CHOICES.map((choice) => choice.id)).toEqual(["claude", "codex"])
+    expect(AGENT_CHOICES.map((choice) => choice.name)).toEqual(["Claude", "Codex"])
     expect(AGENT_CHOICES.filter((choice) => choice.available)).toHaveLength(1)
+  })
+})
+
+describe("learning the summon shortcut", () => {
+  it("moves on whether the shortcut or the button confirms it", () => {
+    expect(confirmSummon(atSummon())).toEqual({ step: "ready", agent: "claude" })
+  })
+
+  it("ignores presses outside the step that teaches it", () => {
+    const welcome = beginOnboarding()
+    expect(confirmSummon(welcome)).toBe(welcome)
+    const ready = confirmSummon(atSummon())
+    expect(confirmSummon(ready)).toBe(ready)
   })
 })
 
@@ -77,9 +94,8 @@ describe("leaving setup without finishing it", () => {
   })
 
   it("leaves a finished setup alone", () => {
-    const done = completeOnboarding(
-      confirmAgent(chooseAgent(startAgentChoice(beginOnboarding()), "claude")),
-    )
+    const done = completeOnboarding(confirmSummon(atSummon()))
+    expect(done.step).toBe("done")
     expect(dismissOnboarding(done)).toBe(done)
   })
 })

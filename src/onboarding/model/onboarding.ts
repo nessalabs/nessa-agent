@@ -15,8 +15,6 @@ export interface AgentChoice {
   id: AgentId
   /** Product name, as a person would say it. */
   name: string
-  /** One line on what picking it means. */
-  summary: string
   /** False while no provider adapter can run this agent yet. */
   available: boolean
 }
@@ -31,19 +29,17 @@ export const AGENT_CHOICES: readonly AgentChoice[] = Object.freeze([
   Object.freeze({
     id: "claude" as const,
     name: "Claude",
-    summary: "Anthropic's agent, over the bundled Claude ACP runtime.",
     available: true,
   }),
   Object.freeze({
     id: "codex" as const,
     name: "Codex",
-    summary: "OpenAI's agent. Not available yet.",
     available: false,
   }),
 ])
 
 /** Ordered first-run steps. `done` means the panel shows the conversation. */
-export type OnboardingStep = "welcome" | "agent" | "summon" | "done"
+export type OnboardingStep = "welcome" | "agent" | "summon" | "ready" | "done"
 
 /** What the panel is showing during first run. */
 export interface OnboardingState {
@@ -82,6 +78,13 @@ export function confirmAgent(state: OnboardingState): OnboardingState {
   return state.agent ? { ...state, step: "summon" } : state
 }
 
+/** Move on from the summon step, whether the person pressed the shortcut or
+ * the button. Presses outside that step are somebody using their shortcut, not
+ * setup, and change nothing. */
+export function confirmSummon(state: OnboardingState): OnboardingState {
+  return state.step === "summon" ? { ...state, step: "ready" } : state
+}
+
 /** Leave setup without finishing it, from any step. Nothing is recorded: an
  * agent chosen on the way out is not a completed setup, and the next run starts
  * over. */
@@ -89,9 +92,9 @@ export function dismissOnboarding(state: OnboardingState): OnboardingState {
   return state.step === "done" ? state : { step: "done" }
 }
 
-/** Finish setup from the summon step. */
+/** Finish setup from its last step. */
 export function completeOnboarding(state: OnboardingState): OnboardingState {
-  return state.step === "summon" ? { ...state, step: "done" } : state
+  return state.step === "ready" ? { ...state, step: "done" } : state
 }
 
 /** Whether the panel should show setup instead of the conversation. */

@@ -151,6 +151,37 @@ export async function startResizeFromLeftEdge() {
 export { inTauri }
 
 /** Whether this page runs inside the trusted desktop host. */
+/**
+ * Which surface this window was opened to paint.
+ *
+ * The desktop host opens setup in its own window pointed at the same bundle
+ * with `?surface=setup`, so the query is the window's identity as far as the
+ * shell is concerned. A plain browser has no second window and always paints
+ * the panel.
+ */
+export function windowSurface(): "panel" | "setup" {
+  if (typeof window === "undefined") return "panel"
+  return new URLSearchParams(window.location.search).get("surface") === "setup"
+    ? "setup"
+    : "panel"
+}
+
+/**
+ * Hand off from setup to the panel: show the panel window, then close this one.
+ *
+ * Outside Tauri there is no second window, so this is a no-op and the caller
+ * simply carries on rendering the panel in place.
+ */
+export async function finishSetupWindow() {
+  if (!inTauri) return
+  const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow")
+  const panel = await WebviewWindow.getByLabel("main")
+  await panel?.show()
+  await panel?.setFocus()
+  const { getCurrentWindow } = await import("@tauri-apps/api/window")
+  await getCurrentWindow().close()
+}
+
 export function hasNativeHost(): boolean {
   return inTauri
 }

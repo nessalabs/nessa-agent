@@ -1,5 +1,11 @@
 import type { ShortcutsDocument } from "@nessa/client"
-import type { HostKind } from "../../host/features"
+
+/** The keyboard conventions a shortcut is written in.
+ *
+ * `CmdOrCtrl` is one binding everywhere but three different things to read, so
+ * the platform decides both the symbol and whether keys are joined or listed.
+ */
+export type ShortcutPlatform = "apple" | "windows" | "linux"
 
 /** The accelerator the host actually registers for summoning the panel.
  *
@@ -14,51 +20,97 @@ export function summonAccelerator(shortcuts: ShortcutsDocument): string | undefi
   )?.keys
 }
 
-/** Modifier glyphs Apple platforms are written with. */
-const APPLE_GLYPHS: Readonly<Record<string, string>> = Object.freeze({
-  cmdorctrl: "⌘",
-  cmd: "⌘",
-  command: "⌘",
-  super: "⌘",
-  ctrl: "⌃",
-  control: "⌃",
-  alt: "⌥",
-  option: "⌥",
-  shift: "⇧",
-})
+/** How each platform writes the modifiers an accelerator can name. */
+const MODIFIERS: Readonly<Record<ShortcutPlatform, Readonly<Record<string, string>>>> =
+  Object.freeze({
+    apple: Object.freeze({
+      cmdorctrl: "⌘",
+      commandorcontrol: "⌘",
+      cmd: "⌘",
+      command: "⌘",
+      super: "⌘",
+      meta: "⌘",
+      ctrl: "⌃",
+      control: "⌃",
+      alt: "⌥",
+      option: "⌥",
+      shift: "⇧",
+    }),
+    windows: Object.freeze({
+      cmdorctrl: "Ctrl",
+      commandorcontrol: "Ctrl",
+      cmd: "Ctrl",
+      command: "Ctrl",
+      super: "Win",
+      meta: "Win",
+      ctrl: "Ctrl",
+      control: "Ctrl",
+      alt: "Alt",
+      option: "Alt",
+      shift: "Shift",
+    }),
+    linux: Object.freeze({
+      cmdorctrl: "Ctrl",
+      commandorcontrol: "Ctrl",
+      cmd: "Ctrl",
+      command: "Ctrl",
+      super: "Super",
+      meta: "Super",
+      ctrl: "Ctrl",
+      control: "Ctrl",
+      alt: "Alt",
+      option: "Alt",
+      shift: "Shift",
+    }),
+  })
 
-/** Modifier words every other platform is written with. */
-const NAMES: Readonly<Record<string, string>> = Object.freeze({
-  cmdorctrl: "Ctrl",
-  cmd: "Ctrl",
-  command: "Ctrl",
-  super: "Super",
-  ctrl: "Ctrl",
-  control: "Ctrl",
-  alt: "Alt",
-  option: "Alt",
-  shift: "Shift",
-})
+/** How each platform writes keys that have a name rather than a letter. */
+const NAMED_KEYS: Readonly<Record<ShortcutPlatform, Readonly<Record<string, string>>>> =
+  Object.freeze({
+    apple: Object.freeze({
+      enter: "↩",
+      return: "↩",
+      space: "Space",
+      escape: "esc",
+      esc: "esc",
+      tab: "⇥",
+      backspace: "⌫",
+      delete: "⌦",
+      up: "↑",
+      down: "↓",
+      left: "←",
+      right: "→",
+    }),
+    windows: Object.freeze({ escape: "Esc", esc: "Esc" }),
+    linux: Object.freeze({ escape: "Esc", esc: "Esc" }),
+  })
 
 /**
- * Write a Tauri-style accelerator the way the host platform writes shortcuts:
- * `⌘⇧D` on macOS, `Ctrl+Shift+D` elsewhere.
+ * Split an accelerator into the keys a person presses, written for `platform`.
  *
- * `CmdOrCtrl` is the same binding on every platform but is not written the same
- * way, which is the whole reason this exists. Tokens with no known spelling are
- * passed through unchanged rather than dropped, so an unrecognised accelerator
- * is still shown accurately instead of silently losing a modifier.
+ * Each entry is one keycap. Tokens with no known spelling are passed through
+ * with their own capitalisation rather than dropped, so an unrecognised
+ * accelerator is still shown accurately instead of silently losing a modifier.
  */
-export function formatAccelerator(keys: string, host: HostKind): string {
-  const apple = host === "macos"
-  const parts = keys
+export function acceleratorKeys(keys: string, platform: ShortcutPlatform): string[] {
+  return keys
     .split("+")
     .map((part) => part.trim())
     .filter((part) => part.length > 0)
-  if (parts.length === 0) return ""
-  const written = parts.map((part) => {
-    const lookup = (apple ? APPLE_GLYPHS : NAMES)[part.toLowerCase()]
-    return lookup ?? (part.length === 1 ? part.toUpperCase() : part)
-  })
-  return apple ? written.join("") : written.join("+")
+    .map((part) => {
+      const token = part.toLowerCase()
+      const written = MODIFIERS[platform][token] ?? NAMED_KEYS[platform][token]
+      if (written) return written
+      return part.length === 1 ? part.toUpperCase() : part
+    })
+}
+
+/**
+ * Write an accelerator as one string, the way its platform writes shortcuts:
+ * `⌘⇧D` on Apple keyboards, `Ctrl+Shift+D` elsewhere. Used where a single label
+ * is needed rather than keycaps — an accessible name, for instance.
+ */
+export function formatAccelerator(keys: string, platform: ShortcutPlatform): string {
+  const written = acceleratorKeys(keys, platform)
+  return platform === "apple" ? written.join("") : written.join("+")
 }

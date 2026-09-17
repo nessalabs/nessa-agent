@@ -9,6 +9,7 @@
 export type { CompositorKind } from "./features"
 export { host } from "./resolve"
 export {
+  finishSetupWindow,
   hasNativeHost,
   loadAssignedSurfaceCredential,
   flushCompositor,
@@ -19,4 +20,5 @@ export {
   setFrosted,
   startResizeFromLeftEdge,
   windowSize,
+  windowSurface,
 } from "./window"
