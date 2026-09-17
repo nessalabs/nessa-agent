@@ -165,7 +165,11 @@ function SetupStep({
 }) {
   return (
     <div className="relative size-full min-h-0">
-      <div className="flex size-full flex-col items-center justify-center gap-7 px-6 pb-20 text-center">
+      {/* No padding for the action below: it is positioned against the box, not
+        laid out in this column, so reserving room for it here only pushed the
+        content off the box's centre — by exactly half of whatever was
+        reserved. */}
+      <div className="flex size-full flex-col items-center justify-center gap-7 px-6 text-center">
         {children}
       </div>
       <div className="absolute inset-x-0 bottom-10 flex justify-center">{action}</div>
