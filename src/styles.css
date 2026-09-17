@@ -586,47 +586,6 @@ body {
 }
 
 /*
- * Setup's hero type.
- *
- * The design system's scale tops out at 20px because it sizes UI chrome; a
- * first-run title is not chrome, so it gets an explicit display size here
- * rather than a level that was never meant to carry it. It still uses the
- * system's own sans family.
- */
-/*
- * First-run setup is always the light glass treatment.
- *
- * Setup sits on the morphing colour wash, and a pale pane over that wash is the
- * look the product wants whatever the OS appearance is — a dark slab over the
- * same pigments reads as a hole rather than glass. The design system switches
- * its tokens with a `dark` class on the document, so a subtree cannot opt back
- * out; these are the light values from its `:root`, re-declared for this one
- * surface so its own components keep the contrast they were built for.
- *
- * Only the tokens setup actually paints with are listed. If the design system
- * restyles its light palette, this block has to follow it.
- */
-.nessa-setup-light {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.52 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.556 0 0);
-  color-scheme: light;
-  color: var(--foreground);
-}
-
-/*
  * Setup's hero type and its arrival.
  *
  * The design system's scale tops out at 20px because it sizes UI chrome; a
@@ -676,13 +635,13 @@ body {
  * a second to see the result.
  */
 .nessa-setup-window[data-step="welcome"] .nessa-setup-arrive {
-  animation-delay: 1180ms;
+  animation-delay: 1960ms;
 }
 .nessa-setup-window[data-step="welcome"] .nessa-setup-arrive:nth-child(2) {
-  animation-delay: 1250ms;
+  animation-delay: 2030ms;
 }
 .nessa-setup-window[data-step="welcome"] .nessa-setup-arrive:nth-child(3) {
-  animation-delay: 1320ms;
+  animation-delay: 2100ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -692,16 +651,54 @@ body {
 }
 
 /*
+ * A shortcut drawn as the keys themselves.
+ *
+ * Written as text a shortcut is a string to decode; drawn as caps it is a
+ * thing to press, which is the point of the step that teaches it. The cap is
+ * line art rather than a rendered key: two concentric rounded outlines — the
+ * shell and the moulded top face — with a heavier bottom edge standing in for
+ * the front wall seen edge on. Nothing here is opaque, so the wash behind
+ * keeps travelling through the keys and they belong to the surface rather
+ * than sitting on it.
+ *
+ * White, because setup's own pigments are already saturated: a second hue over
+ * them competes, while white line art reads at every point of the wash's cycle.
+ */
+.nessa-keycap {
+  position: relative;
+  border: 1.5px solid rgb(255 255 255 / 0.85);
+  border-bottom-width: 3px;
+  border-radius: 0.75rem;
+  background: rgb(255 255 255 / 0.12);
+  color: #fff;
+  text-shadow: 0 1px 10px rgb(0 0 0 / 0.3);
+}
+
+/* The top face, inset from the shell — what makes it a cap and not a chip. It
+   sits higher than it is deep, which is where the front wall comes from. */
+.nessa-keycap::before {
+  content: "";
+  position: absolute;
+  inset: 3px 3px 5px;
+  border: 1px solid rgb(255 255 255 / 0.4);
+  border-radius: 0.45rem;
+  pointer-events: none;
+}
+
+/*
  * The setup window, and the way it arrives.
  *
  * The window is a transparent sheet over the whole work area, so setup can dim
  * what is behind it before anything else happens. What a person sees is the box
  * drawn here, not the window.
  *
- * The opening reads as one movement: the desktop dims, a small glow blooms at
- * the centre, and that glow opens out until it has filled the box. The wash is
- * already painting underneath the whole time — the clip is what grows, so the
- * colour appears to spread from the orb rather than fade in behind it.
+ * The opening has two beats. First the screen dims and the agent's colours
+ * gather into an orb that stays where it is and keeps moving — this is the
+ * part that has to be given time, because it is the only moment the product
+ * has a face before it has an interface. Only then does the box arrive, at
+ * full size and soft edged, and resolve. The box is never uncovered by a
+ * growing circle: a shape that wipes itself in is a transition, and this is
+ * meant to read as one thing becoming another.
  *
  * Under a reduced-motion preference none of this runs: the dim and the box are
  * simply there, which is the same end state the animation arrives at.
@@ -732,136 +729,125 @@ body {
 }
 
 /*
- * The box is masked by a soft radial falloff that opens outward, so the wash
- * appears to spread as light rather than uncover behind a hard edge. The mask
- * radius is a registered custom property because a gradient's colour stops
- * cannot otherwise be animated; `@property` gives it a type the engine can
- * interpolate.
+ * The orb: the agent, at the size of a planet.
+ *
+ * It gathers, then holds for well over a second while its own paint works,
+ * then hands the screen to the box. It is deliberately not blurred — a blur
+ * turns the painting into an anonymous coloured cloud, and the whole point of
+ * opening here is that this is a face and not a light. Volume comes from
+ * lighting it instead: a highlight fixed at the upper left, the paint turning
+ * underneath it, and the lower right falling into shadow.
  */
-@property --nessa-bloom {
-  syntax: "<percentage>";
-  inherits: false;
-  initial-value: 0%;
+.nessa-setup-orb {
+  position: absolute;
+  width: min(300px, 44vw);
+  height: min(300px, 44vw);
+  pointer-events: none;
+  border-radius: 50%;
+  isolation: isolate;
+  animation: nessa-setup-orb 1820ms var(--nessa-motion-easing-standard) 120ms both;
 }
 
+@keyframes nessa-setup-orb {
+  from {
+    opacity: 0;
+    transform: scale(0.74);
+  }
+  /* Gathered by ~380ms, and then simply there, alive. */
+  14% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  72% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.3);
+  }
+}
+
+/*
+ * The body of the sphere. The inner shadow is the terminator — where the
+ * surface turns away from the light — and the outer glow is the colour it
+ * throws back onto the dimmed screen around it. The turn is slow and finite:
+ * it only has to last as long as the orb does.
+ */
+.nessa-setup-orb-face {
+  box-shadow:
+    inset -14px -18px 40px -14px rgb(90 50 70 / 0.42),
+    inset 18px 20px 44px -16px rgb(255 255 255 / 0.5),
+    0 0 100px -6px rgb(249 168 106 / 0.45);
+  animation: nessa-setup-orb-turn 9s linear 1 both;
+}
+
+@keyframes nessa-setup-orb-turn {
+  to {
+    rotate: 180deg;
+  }
+}
+
+/* The specular highlight, fixed while the paint rotates under it. */
+.nessa-setup-orb-sheen {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  mix-blend-mode: screen;
+  background: radial-gradient(
+    circle at 34% 27%,
+    rgb(255 255 255 / 0.5) 0%,
+    rgb(255 255 255 / 0.1) 24%,
+    transparent 48%
+  );
+}
+
+/*
+ * The box, arriving out of the orb.
+ *
+ * It comes in at its full size, blurred and oversaturated so that what is
+ * inside it is still the orb's light rather than a picture; pulling the blur
+ * off is what resolves it into a surface. Nothing is clipped or wiped.
+ */
 .nessa-setup-window {
   position: relative;
   width: min(560px, 92vw);
   height: min(560px, 82vh);
   overflow: hidden;
   border-radius: 22px;
-  --nessa-bloom: 0%;
-  -webkit-mask-image: radial-gradient(
-    circle at 50% 50%,
-    #000 var(--nessa-bloom),
-    transparent calc(var(--nessa-bloom) + 34%)
-  );
-  mask-image: radial-gradient(
-    circle at 50% 50%,
-    #000 var(--nessa-bloom),
-    transparent calc(var(--nessa-bloom) + 34%)
-  );
-  animation: nessa-setup-bloom 1100ms var(--nessa-motion-easing-standard) 240ms both;
+  animation: nessa-setup-open 640ms var(--nessa-motion-easing-arrival) 1400ms both;
 }
 
-@keyframes nessa-setup-bloom {
+@keyframes nessa-setup-open {
   from {
-    --nessa-bloom: 0%;
-    transform: scale(0.96);
-    filter: saturate(1.5) brightness(1.35) blur(6px);
+    opacity: 0;
+    transform: scale(0.88);
+    filter: blur(28px) saturate(1.5) brightness(1.18);
     box-shadow: none;
   }
   45% {
-    filter: saturate(1.2) brightness(1.1) blur(0);
+    opacity: 1;
   }
   to {
-    --nessa-bloom: 92%;
+    opacity: 1;
     transform: scale(1);
     filter: none;
     box-shadow: 0 30px 80px -20px rgb(0 0 0 / 0.55);
   }
 }
 
-/*
- * The agent's own colours, over the wash, dissolving as the box opens.
- *
- * It starts tight and saturated — a glow the size of the avatar — then spreads
- * and thins until the mesh underneath is all that is left. The blur is what
- * makes the two read as one material rather than a layer lifting off.
- */
-.nessa-setup-agent-bloom {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  animation: nessa-setup-agent-bloom 1500ms var(--nessa-motion-easing-standard) 240ms both;
-}
-
-@keyframes nessa-setup-agent-bloom {
-  from {
-    opacity: 1;
-    transform: scale(0.3);
-    filter: blur(14px) saturate(1.25);
-  }
-  30% {
-    opacity: 1;
-    transform: scale(0.62);
-    filter: blur(26px) saturate(1.15);
-  }
-  to {
-    opacity: 0;
-    transform: scale(1.35);
-    filter: blur(64px) saturate(1);
-  }
-}
-
-/* The light the bloom throws onto the dimmed screen around it, gone by the
-   time the box has resolved. */
-.nessa-setup-halo {
-  position: absolute;
-  width: min(560px, 92vw);
-  height: min(560px, 82vh);
-  pointer-events: none;
-  background: radial-gradient(
-    circle at 50% 50%,
-    rgb(249 168 106 / 0.5),
-    rgb(230 182 210 / 0.32) 38%,
-    rgb(211 169 216 / 0.18) 58%,
-    transparent 72%
-  );
-  filter: blur(40px);
-  animation: nessa-setup-halo 1100ms var(--nessa-motion-easing-standard) 240ms both;
-}
-
-@keyframes nessa-setup-halo {
-  from {
-    opacity: 0;
-    transform: scale(0.35);
-  }
-  30% {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-    transform: scale(1.15);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .nessa-setup-dim,
   .nessa-setup-window,
-  .nessa-setup-halo,
-  .nessa-setup-agent-bloom,
+  .nessa-setup-orb,
+  .nessa-setup-orb-face,
   .nessa-setup-arrive {
     animation: none;
   }
-  .nessa-setup-agent-bloom {
+  .nessa-setup-orb {
     opacity: 0;
   }
   .nessa-setup-window {
-    --nessa-bloom: 92%;
     box-shadow: 0 30px 80px -20px rgb(0 0 0 / 0.55);
-  }
-  .nessa-setup-halo {
-    opacity: 0;
   }
 }

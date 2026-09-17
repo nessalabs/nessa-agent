@@ -1,32 +1,36 @@
-import { AGENT_ICON_WASH } from "../../conversation"
+import { RandomAvatar } from "@nessa-ui/react/random-avatar"
+
+import { AGENT_HUES, AGENT_SEED } from "../../conversation"
 
 /**
- * The agent's own colours, as the light setup opens from.
+ * The agent itself, holding the screen before setup opens.
  *
- * Setup does not begin on an anonymous glow: it begins on Nessa's face. These
- * are the washes the avatar and the app icon are painted with, arranged the way
- * that painting arranges them — the warm note centred, the lavender pushed out
- * to a rim — so the first thing a person sees is the same identity that will be
- * sitting in the panel afterwards.
+ * This is not a glow shaped like the avatar — it is the avatar, the same
+ * deterministic painting the header and the app icon are, at the size of a
+ * planet. So the first thing a person sees is literally the face that will be
+ * sitting in the panel afterwards, and there is no second definition of it to
+ * drift: seed and hue wheel come from `identity.ts` like everywhere else.
  *
- * It sits over the wash and fades as the box opens, which is what makes the
- * agent's colours appear to diffuse into the gradient rather than be replaced
- * by it. Decorative throughout.
+ * Its own paint does the living: `animateOnMount` blooms the pools on, `busy`
+ * keeps a wash flooding and handing over to the next. What is added here is
+ * volume — the paint is lit from the upper left and falls away at the lower
+ * right, and it turns under a fixed highlight, which is what makes a flat
+ * painting read as a sphere. Decorative throughout.
  */
 export function AgentBloom() {
-  const [lavender, pink, peach, warm] = AGENT_ICON_WASH
   return (
-    <span
-      aria-hidden="true"
-      className="nessa-setup-agent-bloom"
-      style={{
-        backgroundImage: [
-          `radial-gradient(circle at 50% 50%, ${warm} 0%, transparent 46%)`,
-          `radial-gradient(circle at 38% 58%, ${peach} 0%, transparent 52%)`,
-          `radial-gradient(circle at 62% 40%, ${pink} 0%, transparent 58%)`,
-          `radial-gradient(circle at 50% 50%, ${lavender} 0%, transparent 78%)`,
-        ].join(", "),
-      }}
-    />
+    <div aria-hidden="true" className="nessa-setup-orb">
+      <RandomAvatar
+        seed={AGENT_SEED}
+        hues={AGENT_HUES}
+        ground="paper"
+        animateOnMount
+        busy
+        speed={1.8}
+        className="nessa-setup-orb-face size-full rounded-full"
+      />
+      {/* The highlight stays put while the paint turns beneath it. */}
+      <span className="nessa-setup-orb-sheen" />
+    </div>
   )
 }

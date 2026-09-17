@@ -29,7 +29,9 @@ export function Keycaps({
           // Caps repeat within a shortcut, so position is the only identity.
           key={`${cap}-${index}`}
           aria-hidden="true"
-          className="nessa-keycap flex min-w-11 items-center justify-center rounded-xl px-3 py-2.5 font-sans nessa-text-5 font-semibold text-neutral-900"
+          // Square at a single glyph and wider at a word, the way a keyboard
+          // sizes its own caps.
+          className="nessa-keycap flex h-14 min-w-14 items-center justify-center px-4 font-sans nessa-text-5 font-semibold"
         >
           {cap}
         </kbd>

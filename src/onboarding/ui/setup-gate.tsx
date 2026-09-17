@@ -30,10 +30,11 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
         screen rather than competing with the desktop. Decorative: the dim is
         not a control and closing setup is the corner button's job. */}
       <div aria-hidden="true" className="nessa-setup-dim" />
-      {/* The light the opening throws onto the dimmed screen around the box. */}
-      <div aria-hidden="true" className="nessa-setup-halo" />
+      {/* The agent's colours, living on the dimmed screen for a beat before the
+        box opens out of them. It sits outside the box because for most of its
+        life there is no box to sit in. */}
+      <AgentBloom />
       <div className="nessa-setup-window" data-step={onboarding.state.step}>
-        <AgentBloom />
         <Onboarding
           state={onboarding.state}
           summon={onboarding.summon}
@@ -41,7 +42,6 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
           onChoose={onboarding.choose}
           onConfirm={onboarding.confirm}
           onFinish={onboarding.finish}
-          onDismiss={onboarding.dismiss}
           platform={onboarding.platform}
           onConfirmSummon={onboarding.confirmSummon}
         />

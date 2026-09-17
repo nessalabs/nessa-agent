@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Check, X } from "lucide-react"
+import { Check } from "lucide-react"
 import { AgentMark } from "./agent-mark"
 import { Keycaps } from "./keycaps"
 import type { ShortcutPlatform } from "../model/shortcut-display"
@@ -22,13 +22,7 @@ const PILL =
  * travel, so anything laid straight on it has to stay legible wherever they go
  * — which large, heavy, shadowed type does and small body copy does not.
  */
-function SetupStage({
-  children,
-  onDismiss,
-}: {
-  children: React.ReactNode
-  onDismiss?: () => void
-}) {
+function SetupStage({ children }: { children: React.ReactNode }) {
   return (
     <MorphingMeshGradient
       colors={morphingMeshGradientPresets.glass}
@@ -42,16 +36,6 @@ function SetupStage({
         palette is what the design system's own components are built against
         here. Headings set their colour explicitly for the same reason. */}
       <div className="nessa-setup-light relative flex size-full min-h-0 items-center justify-center p-5">
-        {onDismiss ? (
-          <button
-            type="button"
-            aria-label="Skip setup"
-            onClick={onDismiss}
-            className="absolute top-3 right-3 z-10 flex size-8 items-center justify-center rounded-full text-white/80 transition-colors outline-none hover:bg-white/20 hover:text-white focus-visible:ring-[3px] focus-visible:ring-white/50"
-          >
-            <X aria-hidden className="size-4" />
-          </button>
-        ) : null}
         {children}
       </div>
     </MorphingMeshGradient>
@@ -139,7 +123,6 @@ export function Onboarding({
   onChoose,
   onConfirm,
   onFinish,
-  onDismiss,
   platform,
   onConfirmSummon,
 }: {
@@ -154,13 +137,10 @@ export function Onboarding({
   onChoose: (id: AgentId) => void
   onConfirm: () => void
   onFinish: () => void
-  /** Leave setup without finishing it. Setup has no window chrome of its own,
-   * so this is the corner control that stands in for it. */
-  onDismiss?: () => void
 }) {
   if (state.step === "welcome") {
     return (
-      <SetupStage onDismiss={onDismiss}>
+      <SetupStage>
         <div className="flex size-full min-h-0 flex-col items-center justify-end gap-9 pb-14 text-center">
           <div className="flex flex-1 items-center">
             <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white drop-shadow-[0_1px_16px_rgba(0,0,0,0.35)]">
@@ -177,7 +157,7 @@ export function Onboarding({
 
   if (state.step === "summon") {
     return (
-      <SetupStage onDismiss={onDismiss}>
+      <SetupStage>
         <div className="flex size-full min-h-0 flex-col items-center justify-end gap-9 pb-14 text-center">
           <div className="flex flex-1 flex-col items-center justify-center gap-7 px-4">
             <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white drop-shadow-[0_1px_16px_rgba(0,0,0,0.35)]">
@@ -195,7 +175,7 @@ export function Onboarding({
 
   if (state.step === "ready") {
     return (
-      <SetupStage onDismiss={onDismiss}>
+      <SetupStage>
         <div className="flex size-full min-h-0 flex-col items-center justify-end gap-9 pb-14 text-center">
           <div className="flex flex-1 items-center px-6">
             <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white drop-shadow-[0_1px_16px_rgba(0,0,0,0.35)]">
@@ -211,7 +191,7 @@ export function Onboarding({
   }
 
   return (
-    <SetupStage onDismiss={onDismiss}>
+    <SetupStage>
       <SetupPanel>
         <h1 className="nessa-text-6 font-semibold text-foreground">Choose an agent</h1>
         <div role="radiogroup" aria-label="Agent" className="flex flex-col gap-2">

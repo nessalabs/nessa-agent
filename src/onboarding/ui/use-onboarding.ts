@@ -95,6 +95,20 @@ export function useOnboarding(initial?: OnboardingState): Onboarding {
   const keys = summonAccelerator(shortcuts)
   const platform = shortcutPlatform()
 
+  // Setup has no chrome and no visible way out — a close control on the wash
+  // read as a blemish on it — so Escape is the way out, which is what Escape
+  // means on a modal surface anyway. It is bound for the whole of setup rather
+  // than one step: someone who wants to leave will not have read this far.
+  React.useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape" || event.repeat) return
+      event.preventDefault()
+      setState(dismissOnboarding)
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [])
+
   // While setup is teaching the summon shortcut, pressing it moves on. The
   // desktop host also holds this accelerator globally, so on that host the press
   // may be taken by the global binding before the window sees it; the step still
