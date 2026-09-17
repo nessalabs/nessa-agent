@@ -54,7 +54,7 @@ function SetupWindowControls({
         className="nessa-setup-control nessa-setup-control-close"
       >
         <svg viewBox="0 0 12 12" aria-hidden className="nessa-setup-control-glyph">
-          <path d="M3.9 3.9 8.1 8.1M8.1 3.9 3.9 8.1" />
+          <path d="M4.2 4.2 7.8 7.8M7.8 4.2 4.2 7.8" />
         </svg>
       </button>
       <button
@@ -64,7 +64,7 @@ function SetupWindowControls({
         className="nessa-setup-control nessa-setup-control-minimize"
       >
         <svg viewBox="0 0 12 12" aria-hidden className="nessa-setup-control-glyph">
-          <path d="M3.4 6h5.2" />
+          <path d="M3.6 6h4.8" />
         </svg>
       </button>
       {/* Green like the other two, because a grey one does not read as "this
@@ -73,7 +73,18 @@ function SetupWindowControls({
         size for zoom to toggle to, and a button that does nothing when pressed
         is worse than one that was never offered. It is the one light with no
         glyph under the pointer, which is where the set says so. */}
-      <span aria-hidden="true" className="nessa-setup-control nessa-setup-control-zoom" />
+      <span aria-hidden="true" className="nessa-setup-control nessa-setup-control-zoom">
+        {/* The system's zoom glyph: two filled triangles pulling apart along
+          the diagonal, rather than a stroke like the other two. */}
+        <svg
+          viewBox="0 0 12 12"
+          aria-hidden
+          className="nessa-setup-control-glyph nessa-setup-control-glyph-filled"
+        >
+          <path d="M4 4h3.3L4 7.3Z" />
+          <path d="M8 8H4.7L8 4.7Z" />
+        </svg>
+      </span>
     </div>
   )
 }

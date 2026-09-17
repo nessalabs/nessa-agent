@@ -795,11 +795,11 @@ body {
 }
 
 /*
- * Green like the other two, because a grey one does not read as "this window
- * cannot zoom" — it reads as a set of controls that is subtly wrong. It is
- * still a shape rather than a button, and it is the one light that shows no
- * glyph when the pointer is over the group, which is how the set says what it
- * can and cannot do without looking broken at rest.
+ * Green like the other two, and carrying its glyph like the other two, because
+ * a set where one light behaves differently reads as broken rather than as
+ * honest. It is still a shape rather than a button: setup covers the screen,
+ * so there is no other size for zoom to toggle to, and it does nothing when
+ * pressed.
  */
 .nessa-setup-control-zoom {
   background: #28c840;
@@ -819,6 +819,12 @@ body {
   fill: none;
   opacity: 0;
   transition: opacity 90ms ease-out;
+}
+
+/* Zoom's is drawn rather than stroked: two solid triangles, not an outline. */
+.nessa-setup-control-glyph-filled {
+  fill: rgb(0 0 0 / 0.6);
+  stroke: none;
 }
 
 .nessa-setup-controls:hover .nessa-setup-control-glyph,
