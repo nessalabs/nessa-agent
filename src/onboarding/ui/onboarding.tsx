@@ -74,7 +74,7 @@ function summonHeading(summon: OnboardingState["summon"], configured: boolean) {
   if (!configured) return "Set a summon shortcut"
   if (summon === undefined) return "Summon it from anywhere"
   if (summon === "shown") return "Press it again to hide"
-  return "That\u2019s the toggle"
+  return "That\u2019s all it takes"
 }
 
 /**
@@ -187,7 +187,7 @@ export function Onboarding({
             </Button>
           }
         >
-          <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white drop-shadow-[0_1px_16px_rgba(0,0,0,0.35)]">
+          <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white">
             Welcome to Nessa
           </h1>
         </SetupStep>
@@ -211,7 +211,7 @@ export function Onboarding({
             ) : null
           }
         >
-          <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white drop-shadow-[0_1px_16px_rgba(0,0,0,0.35)]">
+          <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white">
             {summonHeading(state.summon, Boolean(accelerator))}
           </h1>
           {accelerator ? (
@@ -232,7 +232,7 @@ export function Onboarding({
             </Button>
           }
         >
-          <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white drop-shadow-[0_1px_16px_rgba(0,0,0,0.35)]">
+          <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white">
             You&rsquo;re all set
           </h1>
         </SetupStep>

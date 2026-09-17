@@ -602,6 +602,16 @@ body {
   font-size: 2rem;
   line-height: 1.15;
   letter-spacing: -0.02em;
+  /*
+   * The shadow that keeps white type legible wherever the wash's pigments
+   * happen to be. It lives in a custom property because the focus animation
+   * animates `filter`, and a filter set anywhere else on the element is not
+   * combined with that — it is replaced by it, and with a forwards fill it
+   * stays replaced. Anything else using that animation inherits nothing here
+   * and resolves the empty fallback.
+   */
+  --nessa-focus-shadow: drop-shadow(0 1px 16px rgb(0 0 0 / 0.35));
+  filter: var(--nessa-focus-shadow,);
 }
 
 @keyframes nessa-setup-arrive {
@@ -635,6 +645,13 @@ body {
  * a second to see the result.
  */
 .nessa-setup-window[data-step="welcome"] .nessa-setup-arrive {
+  /*
+   * Promoted for the duration. Scaling and blurring live text re-rasterizes
+   * the glyphs on every frame; on its own layer they are drawn once and the
+   * compositor does the rest, which is the difference between this reading as
+   * a focus pull and as a stutter.
+   */
+  will-change: opacity, scale, filter;
   animation-name: nessa-setup-focus;
   animation-duration: 800ms;
   animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
@@ -667,7 +684,7 @@ body {
   from {
     opacity: 0;
     scale: 1.06;
-    filter: blur(14px);
+    filter: blur(10px) var(--nessa-focus-shadow,);
   }
   /* Legible before it has finished settling, so the last of the movement is
      something you watch rather than something you wait for. */
@@ -677,7 +694,7 @@ body {
   to {
     opacity: 1;
     scale: 1;
-    filter: blur(0);
+    filter: blur(0) var(--nessa-focus-shadow,);
   }
 }
 
