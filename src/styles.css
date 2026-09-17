@@ -960,8 +960,15 @@ body {
 .nessa-setup-dim {
   position: absolute;
   inset: 0;
+  /*
+   * A wash and nothing else. `backdrop-filter` here is the same mistake the
+   * panel documents above: on a transparent, undecorated macOS window it does
+   * not sample the behind-window content 1:1, and it stops updating when the
+   * window loses focus — so what it had sampled at some earlier moment stayed
+   * frozen on screen, which is why reopening setup left the desktop looking
+   * permanently frosted while a fresh launch looked right.
+   */
   background: rgb(0 0 0 / 0.55);
-  backdrop-filter: blur(2px);
   animation: nessa-setup-dim
     calc(
       var(--nessa-reveal-seed) + var(--nessa-reveal-bloom) + var(--nessa-reveal-settle)
