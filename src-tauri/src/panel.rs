@@ -91,6 +91,13 @@ pub fn show(window: &WebviewWindow, settings: &Settings) {
     if let Err(error) = crate::platform::current().fit_viewport(window) {
         eprintln!("[nessa] could not fit the panel's viewport: {error}");
     }
+    // Setup covers the menu bar, so a panel at its ordinary level would be
+    // summoned behind the window teaching the shortcut that summoned it.
+    let over_setup = window
+        .app_handle()
+        .get_webview_window(SETUP_WINDOW)
+        .is_some();
+    crate::platform::current().set_above_overlay(window, over_setup);
     let _ = window.show();
     let _ = window.set_focus();
     let _ = window.emit(host::FOCUS_COMPOSER, ());

@@ -102,6 +102,14 @@ fn main() {
                     let _ = window.hide();
                 }
             }
+            // The panel is lifted over setup while setup is on screen. If it is
+            // still showing when setup goes, it would be left floating above
+            // the menu bar for the rest of the session.
+            if matches!(event, WindowEvent::Destroyed) && window.label() == panel::SETUP_WINDOW {
+                if let Some(panel) = window.app_handle().get_webview_window("main") {
+                    platform::current().set_above_overlay(&panel, false);
+                }
+            }
             platform::current().on_window_event(window, event);
         })
         .build(tauri::generate_context!())

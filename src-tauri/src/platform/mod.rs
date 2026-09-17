@@ -41,6 +41,11 @@ pub trait Host: Send + Sync {
     /// where a maximized window already covers everything leave it alone.
     fn present_overlay(&self, _window: &WebviewWindow) {}
 
+    /// Stack the panel over, or back under, a screen-covering overlay. Setup
+    /// covers everything the panel normally floats above, so the shortcut it
+    /// teaches would otherwise summon the panel out of sight behind it.
+    fn set_above_overlay(&self, _window: &WebviewWindow, _above: bool) {}
+
     /// Native frost / clear. No-op on hosts where the shell paints frost in CSS.
     fn set_frosted(&self, _window: &WebviewWindow, _frosted: bool) -> Result<(), String> {
         Ok(())

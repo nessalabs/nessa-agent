@@ -27,6 +27,10 @@ impl Host for Macos {
         overlay::present(window)
     }
 
+    fn set_above_overlay(&self, window: &WebviewWindow, above: bool) {
+        overlay::set_above_overlay(window, above)
+    }
+
     fn set_frosted(&self, window: &WebviewWindow, frosted: bool) -> Result<(), String> {
         vibrancy::set(window, frosted)
     }

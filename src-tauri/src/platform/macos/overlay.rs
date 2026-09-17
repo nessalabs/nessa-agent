@@ -48,3 +48,31 @@ pub fn present(window: &WebviewWindow) {
     }
     native.makeKeyAndOrderFront(None);
 }
+
+/// Lift the panel over the setup overlay, or put it back among ordinary
+/// floating windows.
+///
+/// Setup covers the menu bar, which puts it above everything the panel
+/// normally floats over — so the shortcut lesson summoned Nessa *underneath*
+/// the window teaching the shortcut, which looks like the shortcut not
+/// working. While setup is on screen the panel goes one level higher still,
+/// which is also the truthful picture: Nessa arrives over whatever is in front
+/// of you, and setup is no exception.
+pub fn set_above_overlay(window: &WebviewWindow, above: bool) {
+    let handle = match window.ns_window() {
+        Ok(handle) => handle,
+        Err(error) => {
+            eprintln!("[nessa] could not restack the panel: {error}");
+            return;
+        }
+    };
+    let native = unsafe { &*handle.cast::<NSWindow>() };
+    native.setLevel(if above {
+        NSMainMenuWindowLevel + 2
+    } else {
+        // `NSFloatingWindowLevel`, which is where `always_on_top` leaves it:
+        // over ordinary windows and under the menu bar. It is written out
+        // because objc2 does not export the named constant.
+        3
+    });
+}
