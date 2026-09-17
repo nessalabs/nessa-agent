@@ -38,7 +38,7 @@ pub(super) struct ServiceStatus {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum ServiceState {
     Unloaded,
-    ManagedCurrent,
+    ManagedCurrent(ManagedRuntime),
     ManagedStale(ManagedRuntime),
     LegacyExactService,
     ForeignPort,
@@ -69,7 +69,7 @@ pub(super) fn classify(
                 && runtime.generation == expected.1
                 && definition_matches
             {
-                ServiceState::ManagedCurrent
+                ServiceState::ManagedCurrent(runtime)
             } else {
                 ServiceState::ManagedStale(runtime)
             }
@@ -629,7 +629,10 @@ fn parse_health(bytes: &[u8]) -> Option<Health> {
         _ => None,
     }
 }
-pub(super) fn wait_fingerprint(service: &str, expected: (&str, &str)) -> Result<(), String> {
+pub(super) fn wait_fingerprint(
+    service: &str,
+    expected: (&str, &str),
+) -> Result<ManagedRuntime, String> {
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
         if let Some(Health::Managed(runtime)) = health() {
@@ -639,7 +642,7 @@ pub(super) fn wait_fingerprint(service: &str, expected: (&str, &str)) -> Result<
                 && runtime.fingerprint == expected.0
                 && runtime.generation == expected.1
             {
-                return Ok(());
+                return Ok(runtime);
             }
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -647,7 +650,7 @@ pub(super) fn wait_fingerprint(service: &str, expected: (&str, &str)) -> Result<
     Err("Gateway did not advertise the expected runtime identity owned by its launchd service before the readiness deadline".into())
 }
 /// Installation failure never authorizes stopping a process or restoring old configuration.
-pub(super) fn forward_recovery(result: Result<(), String>) -> Result<(), String> {
+pub(super) fn forward_recovery<T>(result: Result<T, String>) -> Result<T, String> {
     result.map_err(|primary| format!("{primary}; gateway registration and any loaded process were preserved for forward recovery; retry reconciliation"))
 }
 #[cfg(test)]

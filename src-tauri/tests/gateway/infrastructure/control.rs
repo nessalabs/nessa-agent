@@ -59,7 +59,7 @@ fn classification_requires_the_exact_loaded_process() {
             true,
             None
         ),
-        ServiceState::ManagedCurrent
+        ServiceState::ManagedCurrent(runtime("new", 42))
     );
     assert_eq!(
         classify(
@@ -433,7 +433,7 @@ fn fresh_requests_preserve_successful_fences_and_ignore_unrelated_results() {
 fn installation_failures_preserve_primary_error_and_require_forward_recovery() {
     assert_eq!(forward_recovery(Ok(())), Ok(()));
     for stage in ["publication", "bootstrap", "readiness"] {
-        let error = forward_recovery(Err(stage.into())).unwrap_err();
+        let error = forward_recovery::<()>(Err(stage.into())).unwrap_err();
         assert!(error.starts_with(stage));
         assert!(error.contains("loaded process were preserved for forward recovery"));
     }

@@ -1,4 +1,47 @@
 use std::{error::Error, fmt, path::Path};
+
+/// Exact native runtime incarnation established by successful reconciliation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconciledGateway {
+    service: String,
+    runtime_fingerprint: String,
+    runtime_instance: String,
+    service_generation: String,
+    process_id: u32,
+}
+impl ReconciledGateway {
+    pub fn new(
+        service: String,
+        runtime_fingerprint: String,
+        runtime_instance: String,
+        service_generation: String,
+        process_id: u32,
+    ) -> Self {
+        Self {
+            service,
+            runtime_fingerprint,
+            runtime_instance,
+            service_generation,
+            process_id,
+        }
+    }
+    pub fn service(&self) -> &str {
+        &self.service
+    }
+    pub fn runtime_fingerprint(&self) -> &str {
+        &self.runtime_fingerprint
+    }
+    pub fn runtime_instance(&self) -> &str {
+        &self.runtime_instance
+    }
+    pub fn service_generation(&self) -> &str {
+        &self.service_generation
+    }
+    pub fn process_id(&self) -> u32 {
+        self.process_id
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GatewayError {
     Registration(String),
@@ -14,9 +57,9 @@ impl fmt::Display for GatewayError {
     }
 }
 impl Error for GatewayError {}
-/// Reconciliation returns the native service identity only after matching readiness. A stop acknowledges the
-/// request delivery, not the eventual physical cleanup of each agent.
+/// Reconciliation returns the exact native runtime incarnation only after matching readiness. A stop
+/// acknowledges request delivery, not the eventual physical cleanup of each agent.
 pub trait GatewayHost: Send + Sync {
-    fn register(&self, runtime: &Path, stage: &str) -> Result<String, GatewayError>;
-    fn stop_agents(&self, service: &str) -> Result<(), GatewayError>;
+    fn register(&self, runtime: &Path, stage: &str) -> Result<ReconciledGateway, GatewayError>;
+    fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError>;
 }

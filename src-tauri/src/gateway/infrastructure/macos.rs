@@ -1,5 +1,5 @@
 //! launchd registration and loopback readiness. Service lifetime belongs to launchd.
-use crate::gateway::application::{GatewayError, GatewayHost};
+use crate::gateway::application::{GatewayError, GatewayHost, ReconciledGateway};
 use nessa_local_storage::OpenMode;
 use serde::Deserialize;
 use serde_json::Value;
@@ -20,7 +20,7 @@ mod staging;
 use control::{
     classify, forward_recovery, health, launchctl, legacy_listener_pid, lock_namespace,
     read_pending_retirement, read_retirement_evidence, retire, service_status, wait_fingerprint,
-    Health, Registration, ServiceState,
+    Health, ManagedRuntime, Registration, ServiceState,
 };
 use generation::service_generation;
 use install_attempt::{
@@ -30,13 +30,20 @@ use staging::{launch_settings, stage_runtime};
 
 pub(super) struct Launchd;
 impl GatewayHost for Launchd {
-    fn register(&self, runtime: &Path, stage: &str) -> Result<String, GatewayError> {
+    fn register(&self, runtime: &Path, stage: &str) -> Result<ReconciledGateway, GatewayError> {
         register(runtime, stage).map_err(GatewayError::Registration)
     }
-    fn stop_agents(&self, service: &str) -> Result<(), GatewayError> {
-        // Address the registered service, never a PID discovered by port scanning.
+    fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError> {
+        let status = service_status(gateway.service()).map_err(GatewayError::Stop)?;
+        let running = health();
+        if !matches_reconciled_gateway(gateway, &status, running.as_ref()) {
+            return Err(GatewayError::Stop(
+                "Gateway runtime identity changed; no agent stop request was sent".into(),
+            ));
+        }
+        // Address the revalidated registered service, never a PID discovered by port scanning.
         let result = Command::new("/bin/launchctl")
-            .args(["kill", "SIGUSR1", service])
+            .args(["kill", "SIGUSR1", gateway.service()])
             .output()
             .map_err(|error| GatewayError::Stop(error.to_string()))?;
         if result.status.success() {
@@ -48,7 +55,25 @@ impl GatewayHost for Launchd {
         }
     }
 }
-fn register(runtime: &Path, stage: &str) -> Result<String, String> {
+
+fn matches_reconciled_gateway(
+    gateway: &ReconciledGateway,
+    status: &control::ServiceStatus,
+    health: Option<&Health>,
+) -> bool {
+    matches!(
+        health,
+        Some(Health::Managed(runtime))
+            if status.loaded
+                && status.process_identity_known
+                && status.pid == Some(gateway.process_id())
+                && runtime.pid == gateway.process_id()
+                && runtime.fingerprint == gateway.runtime_fingerprint()
+                && runtime.instance == gateway.runtime_instance()
+                && runtime.generation == gateway.service_generation()
+    )
+}
+fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
     let location = runtime.to_string_lossy();
     if location.starts_with("/Volumes/") || location.contains("/AppTranslocation/") {
         return Err("Move Nessa to Applications before starting its background service".into());
@@ -179,9 +204,15 @@ fn register(runtime: &Path, stage: &str) -> Result<String, String> {
         listener,
     );
     match state {
-        ServiceState::ManagedCurrent => {
+        ServiceState::ManagedCurrent(running) => {
             clear_install_attempt(&lock_directory)?;
-            return Ok(service);
+            return Ok(ReconciledGateway::new(
+                service,
+                running.fingerprint,
+                running.instance,
+                running.generation,
+                running.pid,
+            ));
         }
         ServiceState::ManagedStale(running) => {
             let old_definition = read_definition(&path)?;
@@ -230,7 +261,7 @@ fn register(runtime: &Path, stage: &str) -> Result<String, String> {
         }
         ServiceState::Unloaded => clear_install_attempt(&lock_directory)?,
     }
-    let installation = (|| -> Result<(), String> {
+    let installation = (|| -> Result<ManagedRuntime, String> {
         std::fs::create_dir_all(&agents).map_err(|e| e.to_string())?;
         let logs = log.parent().ok_or("invalid log directory")?;
         nessa_local_storage::create_directory(logs).map_err(|e| e.to_string())?;
@@ -281,12 +312,18 @@ fn register(runtime: &Path, stage: &str) -> Result<String, String> {
             || service_status(&service).map(|status| status.loaded),
             || clear_install_attempt(&lock_directory),
         )?;
-        wait_fingerprint(&service, (&fingerprint, &generation))?;
+        let running = wait_fingerprint(&service, (&fingerprint, &generation))?;
         clear_install_attempt(&lock_directory)?;
-        Ok(())
+        Ok(running)
     })();
-    forward_recovery(installation)?;
-    Ok(service)
+    let running = forward_recovery(installation)?;
+    Ok(ReconciledGateway::new(
+        service,
+        running.fingerprint,
+        running.instance,
+        running.generation,
+        running.pid,
+    ))
 }
 fn prepare_data_directory(
     trusted_base: &Path,
@@ -397,14 +434,99 @@ fn finish_bootstrap(
 #[cfg(test)]
 mod tests {
     use super::{
-        finish_bootstrap, incomplete_install_retry, prepare_data_directory, runtime_fingerprint,
-        service_matches,
+        finish_bootstrap, incomplete_install_retry, matches_reconciled_gateway,
+        prepare_data_directory, runtime_fingerprint, service_matches,
     };
+    use crate::gateway::application::ReconciledGateway;
+    use crate::gateway::infrastructure::macos::control::{Health, ManagedRuntime, ServiceStatus};
     use serde_json::{json, Value};
     use std::{cell::Cell, fs, path::PathBuf};
 
     fn temporary_directory(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("nessa-gateway-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn stop_authority_requires_the_same_live_runtime_incarnation() {
+        let gateway = ReconciledGateway::new(
+            "gui/501/so.nessa.gateway.prod".into(),
+            "a".repeat(64),
+            "550e8400-e29b-41d4-a716-446655440000".into(),
+            "b".repeat(64),
+            42,
+        );
+        let status = ServiceStatus {
+            loaded: true,
+            pid: Some(42),
+            process_identity_known: true,
+        };
+        let current = Health::Managed(ManagedRuntime {
+            fingerprint: "a".repeat(64),
+            generation: "b".repeat(64),
+            instance: "550e8400-e29b-41d4-a716-446655440000".into(),
+            pid: 42,
+        });
+        assert!(matches_reconciled_gateway(
+            &gateway,
+            &status,
+            Some(&current)
+        ));
+
+        for replacement in [
+            ManagedRuntime {
+                fingerprint: "c".repeat(64),
+                generation: "b".repeat(64),
+                instance: "550e8400-e29b-41d4-a716-446655440000".into(),
+                pid: 42,
+            },
+            ManagedRuntime {
+                fingerprint: "a".repeat(64),
+                generation: "d".repeat(64),
+                instance: "550e8400-e29b-41d4-a716-446655440000".into(),
+                pid: 42,
+            },
+            ManagedRuntime {
+                fingerprint: "a".repeat(64),
+                generation: "b".repeat(64),
+                instance: "660e8400-e29b-41d4-a716-446655440000".into(),
+                pid: 42,
+            },
+            ManagedRuntime {
+                fingerprint: "a".repeat(64),
+                generation: "b".repeat(64),
+                instance: "550e8400-e29b-41d4-a716-446655440000".into(),
+                pid: 43,
+            },
+        ] {
+            assert!(!matches_reconciled_gateway(
+                &gateway,
+                &status,
+                Some(&Health::Managed(replacement))
+            ));
+        }
+        assert!(!matches_reconciled_gateway(
+            &gateway,
+            &ServiceStatus {
+                loaded: true,
+                pid: Some(43),
+                process_identity_known: true,
+            },
+            Some(&current)
+        ));
+        assert!(!matches_reconciled_gateway(
+            &gateway,
+            &ServiceStatus {
+                loaded: true,
+                pid: Some(42),
+                process_identity_known: false,
+            },
+            Some(&current)
+        ));
+        assert!(!matches_reconciled_gateway(
+            &gateway,
+            &status,
+            Some(&Health::Legacy)
+        ));
     }
 
     #[test]
