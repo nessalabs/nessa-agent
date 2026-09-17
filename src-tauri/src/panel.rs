@@ -47,13 +47,6 @@ pub fn toggle(app: &AppHandle) -> bool {
 /// a panel.
 pub const SETUP_WINDOW: &str = "setup";
 
-/// Where the page has drawn the surface the window controls belong to, in
-/// points from the window's top left.
-#[tauri::command]
-pub fn place_window_controls(window: tauri::WebviewWindow, left: f64, top: f64) {
-    crate::platform::current().place_window_controls(&window, left, top);
-}
-
 /// Opens first-run setup again, from the beginning.
 ///
 /// Setup finishes by closing its own window, so there is usually nothing left

@@ -4,7 +4,6 @@ import { AgentBloom } from "./agent-bloom"
 import { Onboarding } from "./onboarding"
 import { useIntroSound } from "./use-intro-sound"
 import { useOnboarding } from "./use-onboarding"
-import { useWindowControls } from "./use-window-controls"
 
 /**
  * The setup surface: first run in its own window.
@@ -21,11 +20,6 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
 
   useIntroSound(onboarding.active)
 
-  // The window's own controls are moved onto this box; only the page knows
-  // where it is.
-  const box = React.useRef<HTMLDivElement>(null)
-  useWindowControls(box)
-
   React.useEffect(() => {
     if (onboarding.active || handedOver) return
     setHandedOver(true)
@@ -39,7 +33,7 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
         screen rather than competing with the desktop. Decorative: the dim is
         not a control and closing setup is the corner button's job. */}
       <div aria-hidden="true" className="nessa-setup-dim" />
-      <div ref={box} className="nessa-setup-window" data-step={onboarding.state.step}>
+      <div className="nessa-setup-window" data-step={onboarding.state.step}>
         {/* The light setup arrives as, inside the panel it will fill. It lives
           in here — clipped by the panel's own bounds — because a form that
           grows until it *is* the window reads as the window being drawn, and
@@ -52,6 +46,7 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
           onChoose={onboarding.choose}
           onConfirm={onboarding.confirm}
           onFinish={onboarding.finish}
+          onDismiss={onboarding.dismiss}
           platform={onboarding.platform}
         />
       </div>

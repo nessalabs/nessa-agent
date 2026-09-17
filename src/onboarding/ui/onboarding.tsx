@@ -17,6 +17,35 @@ const PILL =
   "nessa-setup-arrive h-12 min-w-56 rounded-full bg-white px-10 nessa-text-5 font-medium text-neutral-950 shadow-lg hover:bg-white/90"
 
 /**
+ * The window controls, on a bar of nothing.
+ *
+ * Setup has no titlebar of its own — it covers the screen and the panel is a
+ * drawing — so there is no native place for the one control it needs: a way
+ * out. These are that, in the shape macOS has already taught everyone to look
+ * for in the top left corner.
+ *
+ * Only close does anything. Minimising or zooming a window that *is* the
+ * screen means nothing, so those two are drawn the way the system draws an
+ * unavailable control and are not controls: they are `aria-hidden` shapes, not
+ * buttons that quietly refuse.
+ */
+function SetupWindowControls({ onClose }: { onClose?: () => void }) {
+  if (!onClose) return null
+  return (
+    <div className="nessa-setup-controls">
+      <button
+        type="button"
+        aria-label="Close setup"
+        onClick={onClose}
+        className="nessa-setup-light-close"
+      />
+      <span aria-hidden="true" className="nessa-setup-light-inert" />
+      <span aria-hidden="true" className="nessa-setup-light-inert" />
+    </div>
+  )
+}
+
+/**
  * The wash every setup step is painted on.
  *
  * It is decorative: inert to the pointer, hidden from assistive technology by
@@ -24,7 +53,13 @@ const PILL =
  * travel, so anything laid straight on it has to stay legible wherever they go
  * — which large, heavy, shadowed type does and small body copy does not.
  */
-function SetupStage({ children }: { children: React.ReactNode }) {
+function SetupStage({
+  children,
+  onClose,
+}: {
+  children: React.ReactNode
+  onClose?: () => void
+}) {
   return (
     <MorphingMeshGradient
       colors={morphingMeshGradientPresets.glass}
@@ -38,6 +73,7 @@ function SetupStage({ children }: { children: React.ReactNode }) {
         palette is what the design system's own components are built against
         here. Headings set their colour explicitly for the same reason. */}
       <div className="nessa-setup-light relative flex size-full min-h-0 items-center justify-center p-5">
+        <SetupWindowControls onClose={onClose} />
         {children}
       </div>
     </MorphingMeshGradient>
@@ -202,6 +238,7 @@ export function Onboarding({
   onConfirm,
   onFinish,
   platform,
+  onDismiss,
 }: {
   state: OnboardingState
   accelerator?: string
@@ -211,6 +248,9 @@ export function Onboarding({
   onChoose: (id: AgentId) => void
   onConfirm: () => void
   onFinish: () => void
+  /** Leave setup without finishing it. Setup has no window chrome of its own,
+   * so its controls are drawn with it. */
+  onDismiss?: () => void
 }) {
   // Called unconditionally, as a hook must be; it only listens on the step
   // that has keys to light.
@@ -218,7 +258,7 @@ export function Onboarding({
 
   if (state.step === "welcome") {
     return (
-      <SetupStage>
+      <SetupStage onClose={onDismiss}>
         <SetupStep
           action={
             <Button
@@ -245,7 +285,7 @@ export function Onboarding({
 
   if (state.step === "summon") {
     return (
-      <SetupStage>
+      <SetupStage onClose={onDismiss}>
         {/* This step asks for presses, so there is nothing to confirm until
           both have landed. Offering the way on beforehand invites a click
           straight past the only thing the step is here to teach — and the
@@ -276,7 +316,7 @@ export function Onboarding({
   }
 
   return (
-    <SetupStage>
+    <SetupStage onClose={onDismiss}>
       <SetupPanel>
         <h1 className="nessa-text-6 font-semibold text-foreground">Choose an agent</h1>
         <div role="radiogroup" aria-label="Agent" className="flex flex-col gap-2">

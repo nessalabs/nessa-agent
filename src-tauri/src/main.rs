@@ -28,7 +28,6 @@ fn main() {
             platform::set_frosted,
             platform::panel_size,
             platform::flush_compositor,
-            panel::place_window_controls,
             surface_credential::load_surface_credential,
             shortcuts::load_shortcuts,
             shortcuts::apply_shortcuts,
