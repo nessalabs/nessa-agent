@@ -648,22 +648,35 @@ body {
 }
 
 /*
- * The first step comes into focus rather than merely arriving.
+ * The first step resolves out of the panel rather than arriving on it.
  *
- * It is the one thing on the panel that has not been on screen in some form
- * already, so it gets the fuller treatment: rising, resolving and fading up
- * together. Later steps keep the plain arrival — they replace content that
- * was already there, and dressing that up would read as the window reopening.
+ * It is the one thing here that has not been on screen in some form already,
+ * and everything it follows has been a thing coming into focus — so it does
+ * the same. It condenses: slightly too large and far too soft, pulling into
+ * sharpness where it already stands.
+ *
+ * Deliberately no travel. Sliding up from below says the words came from
+ * somewhere off-panel and were placed here, which is a different claim from
+ * the one the whole opening has been making — that all of this was already
+ * present and is only now in focus.
+ *
+ * Later steps keep the plain arrival. They replace content that was already
+ * there, and dressing that up would read as the window reopening.
  */
 @keyframes nessa-setup-focus {
   from {
     opacity: 0;
-    transform: translateY(24px);
-    filter: blur(10px);
+    scale: 1.06;
+    filter: blur(14px);
+  }
+  /* Legible before it has finished settling, so the last of the movement is
+     something you watch rather than something you wait for. */
+  62% {
+    opacity: 1;
   }
   to {
     opacity: 1;
-    transform: none;
+    scale: 1;
     filter: blur(0);
   }
 }
