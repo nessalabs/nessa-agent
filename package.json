@@ -27,7 +27,7 @@
     "auth:fmt:check": "cargo fmt -p nessa-local-storage -p nessa-auth -- --check",
     "auth:cli": "tsx scripts/nessa-auth.mjs",
     "server:test": "cargo test -p nessa-server",
-    "server:run": "cargo run -p nessa-server",
+    "server:run": "cargo run -p nessa-server -- server",
     "server:smoke": "tsx scripts/smoke-connect.mjs",
     "check": "pnpm format:check && pnpm lint && pnpm architecture && pnpm protocol:check && pnpm client:docs:check && pnpm client:typecheck && pnpm typecheck && pnpm test && pnpm server:fmt:check && pnpm server:clippy && pnpm server:test && pnpm auth:fmt:check && pnpm auth:clippy && pnpm auth:test",
     "ui:types": "node scripts/ensure-nessa-ui.mjs --update",

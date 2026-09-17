@@ -95,7 +95,7 @@ jobs:
           shutil.copytree('scripts', root / 'scripts')
           target = root / 'target/debug'
           target.mkdir(parents=True)
-          binary = 'nessa-server.exe' if '${{ runner.os }}' == 'Windows' else 'nessa-server'
+          binary = 'nessa.exe' if '${{ runner.os }}' == 'Windows' else 'nessa'
           shutil.copy2(pathlib.Path('target/debug') / binary, target / binary)
           (root / 'package.json').write_text(json.dumps({'private': True, 'type': 'module', 'dependencies': {'tsx': '^4.20.0', 'ws': '^8.18.0', '@nessa/client': 'file:./packages/nessa-client'}}))
       - run: npm install --ignore-scripts
