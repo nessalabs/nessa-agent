@@ -1,5 +1,6 @@
 import * as React from "react"
 import { finishSetupWindow } from "../../host"
+import { AgentBloom } from "./agent-bloom"
 import { Onboarding } from "./onboarding"
 import { useOnboarding } from "./use-onboarding"
 
@@ -31,7 +32,8 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
       <div aria-hidden="true" className="nessa-setup-dim" />
       {/* The light the opening throws onto the dimmed screen around the box. */}
       <div aria-hidden="true" className="nessa-setup-halo" />
-      <div className="nessa-setup-window">
+      <div className="nessa-setup-window" data-step={onboarding.state.step}>
+        <AgentBloom />
         <Onboarding
           state={onboarding.state}
           summon={onboarding.summon}

@@ -9,7 +9,7 @@
  * The gateway Agent owns work. Local tabs only retain drafts, server identity,
  * and displayed receipts; closing a tab never stops another surface's Agent.
  */
-export { AGENT_HUES } from "./model"
+export { AGENT_HUES, AGENT_ICON_WASH, AGENT_SEED } from "./model"
 export { ConversationNotification } from "./ui/conversation-notification"
 export { ConversationQueue } from "./ui/conversation-queue"
 export { Transcript } from "./ui/transcript"

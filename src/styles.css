@@ -593,24 +593,6 @@ body {
  * rather than a level that was never meant to carry it. It still uses the
  * system's own sans family.
  */
-.nessa-setup-title {
-  font-family: var(--nessa-font-sans);
-  font-size: 2rem;
-  line-height: 1.15;
-  letter-spacing: -0.02em;
-}
-
-@keyframes nessa-setup-arrive {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
 /*
  * First-run setup is always the light glass treatment.
  *
@@ -685,6 +667,22 @@ body {
 }
 .nessa-setup-arrive:nth-child(3) {
   animation-delay: 140ms;
+}
+
+/*
+ * The first step waits for the box to finish opening, so nothing is legible
+ * through the bloom. Later steps do not: their content replaces content that
+ * was already on screen, and a person who has pressed a button should not wait
+ * a second to see the result.
+ */
+.nessa-setup-window[data-step="welcome"] .nessa-setup-arrive {
+  animation-delay: 1180ms;
+}
+.nessa-setup-window[data-step="welcome"] .nessa-setup-arrive:nth-child(2) {
+  animation-delay: 1250ms;
+}
+.nessa-setup-window[data-step="welcome"] .nessa-setup-arrive:nth-child(3) {
+  animation-delay: 1320ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -784,6 +782,38 @@ body {
   }
 }
 
+/*
+ * The agent's own colours, over the wash, dissolving as the box opens.
+ *
+ * It starts tight and saturated — a glow the size of the avatar — then spreads
+ * and thins until the mesh underneath is all that is left. The blur is what
+ * makes the two read as one material rather than a layer lifting off.
+ */
+.nessa-setup-agent-bloom {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  animation: nessa-setup-agent-bloom 1500ms var(--nessa-motion-easing-standard) 240ms both;
+}
+
+@keyframes nessa-setup-agent-bloom {
+  from {
+    opacity: 1;
+    transform: scale(0.3);
+    filter: blur(14px) saturate(1.25);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(0.62);
+    filter: blur(26px) saturate(1.15);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.35);
+    filter: blur(64px) saturate(1);
+  }
+}
+
 /* The light the bloom throws onto the dimmed screen around it, gone by the
    time the box has resolved. */
 .nessa-setup-halo {
@@ -793,9 +823,10 @@ body {
   pointer-events: none;
   background: radial-gradient(
     circle at 50% 50%,
-    rgb(150 170 255 / 0.55),
-    rgb(120 100 220 / 0.25) 40%,
-    transparent 70%
+    rgb(249 168 106 / 0.5),
+    rgb(230 182 210 / 0.32) 38%,
+    rgb(211 169 216 / 0.18) 58%,
+    transparent 72%
   );
   filter: blur(40px);
   animation: nessa-setup-halo 1100ms var(--nessa-motion-easing-standard) 240ms both;
@@ -819,8 +850,12 @@ body {
   .nessa-setup-dim,
   .nessa-setup-window,
   .nessa-setup-halo,
+  .nessa-setup-agent-bloom,
   .nessa-setup-arrive {
     animation: none;
+  }
+  .nessa-setup-agent-bloom {
+    opacity: 0;
   }
   .nessa-setup-window {
     --nessa-bloom: 92%;
