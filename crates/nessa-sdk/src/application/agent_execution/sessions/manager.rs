@@ -562,7 +562,12 @@ impl SessionManager {
             actor,
             scheduling_length,
         });
-        let _ = super::queue_validation::replay(snapshot)?;
+        // A rejected mutation leaves no trace: retained history must describe a
+        // queue the scheduler can still replay.
+        if let Err(error) = super::queue_validation::replay(snapshot) {
+            snapshot.queue_history.pop();
+            return Err(error);
+        }
         Ok(())
     }
     /// Record actual queue membership after the scheduler changed it. Failure
@@ -595,17 +600,33 @@ impl SessionManager {
         self.record_queue_mutation(QueueMutation::Admitted { id, kind }, Some(actor))
             .await
     }
-    /// Save one order decision; unchanged retry flushes earlier failed evidence.
-    pub(crate) async fn record_queue_reorder(
+    /// Retain one order decision and apply it to the live queue in a single
+    /// transition. `apply` runs while this call holds the evidence mutex, so the
+    /// retained history and the order the scheduler will dispatch cannot diverge.
+    ///
+    /// The only suspension point is acquiring that mutex, before either effect:
+    /// a caller that bounds this call with a timeout or close therefore either
+    /// retains and applies the change or leaves both unchanged. Writing the
+    /// retained evidence to storage is the caller's separate, interruptible
+    /// [`Self::flush_observed`].
+    pub(crate) async fn retain_queue_reorder(
         &self,
-        change: Option<QueueOrderChange>,
+        change: QueueOrderChange,
         actor: ActionContext,
+        apply: impl FnOnce(),
     ) -> Result<(), StorageError> {
-        if let Some(change) = change {
-            return self
-                .record_queue_mutation(QueueMutation::Reordered(change), Some(actor))
-                .await;
-        }
+        let mut evidence = self.evidence.lock().await;
+        let snapshot = evidence
+            .observed
+            .as_mut()
+            .ok_or_else(|| StorageError::Corrupt("queue has no session".into()))?;
+        Self::append_queue_mutation(snapshot, QueueMutation::Reordered(change), Some(actor))?;
+        apply();
+        Ok(())
+    }
+    /// Write observed evidence retained by an earlier transition. An unchanged
+    /// retry flushes evidence an earlier failed write left observed.
+    pub(crate) async fn flush_observed(&self) -> Result<(), StorageError> {
         let mut evidence = self.evidence.lock().await;
         self.save_observed(&mut evidence).await
     }

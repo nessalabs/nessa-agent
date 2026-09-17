@@ -242,14 +242,16 @@ impl Agent {
     /// mandatory audit acknowledgement is pending, return QueueChanged;
     /// duplicate/oversized input returns InvalidInput. Applying and saving the
     /// validated order remain serialized with dispatch and withdrawal.
-    /// Once polled, caller loss does not cancel this operation. Storage failure
-    /// may leave the new order applied: its evidence remains observed and is saved
-    /// before later dispatch. An unchanged retry retries that persistence.
-    /// At most 1024 actual order changes are retained per session; the budget is
-    /// checked before audit and mutation. Audit and storage acknowledgements are
-    /// each bounded to 30 seconds. Close interrupts either wait; interruption
-    /// before storage may leave an audited live order that close then drains. This
-    /// does not replay pending work after restart.
+    /// Once polled, caller loss does not cancel this operation. Changing the live
+    /// order and retaining its evidence is one transition: either both happen or
+    /// neither does. Storage failure may leave that applied order observed but
+    /// unwritten; it is saved before later dispatch, and an unchanged retry
+    /// retries that persistence. At most 1024 actual order changes are retained
+    /// per session; the budget is checked before audit and mutation. Audit,
+    /// retention, and storage acknowledgements are each bounded to 30 seconds.
+    /// Close interrupts any of those waits; interruption before storage may leave
+    /// an audited live order that close then drains. This does not replay pending
+    /// work after restart.
     ///
     /// # Examples
     /// ```
@@ -345,10 +347,41 @@ impl Agent {
                 if current != change {
                     return Ok(QueueReorder::QueueChanged);
                 }
-                scheduler
-                    .queue
-                    .apply_order(&change)
-                    .expect("exclusive validated queue order");
+                // Changing the live order and retaining that change are one
+                // transition. Waiting for evidence ownership happens before
+                // either effect, so an interruption here leaves the queue and
+                // its history agreeing on the order dispatch will replay.
+                let retained = agent
+                    .catch_scheduling_panic(async {
+                        let mut close = notice.clone();
+                        tokio::select! { biased;
+                            _ = close.changed() => Err(StorageError::Io(
+                                "queue reorder retention interrupted by close".into(),
+                            )),
+                            result = agent.inner.manager.retain_queue_reorder(
+                                change.clone(),
+                                actor.clone(),
+                                || {
+                                    scheduler
+                                        .queue
+                                        .apply_order(&change)
+                                        .expect("exclusive validated queue order")
+                                },
+                            ) => result,
+                            _ = sleep(QUEUE_REORDER_AUDIT_TIMEOUT) => Err(StorageError::Io(
+                                "queue reorder retention timed out".into(),
+                            )),
+                        }
+                    })
+                    .await;
+                match retained {
+                    Ok(result) => result.map_err(AgentError::Storage)?,
+                    Err(()) => {
+                        drop(scheduler);
+                        agent.recover_scheduling_panic(None, &notice).await?;
+                        return Err(AgentError::SubmissionUnresolved);
+                    }
+                }
                 let saved = agent
                     .catch_scheduling_panic(async {
                         let mut close = notice.clone();
@@ -356,7 +389,7 @@ impl Agent {
                             _ = close.changed() => Err(StorageError::Io(
                                 "queue reorder persistence interrupted by close".into(),
                             )),
-                            result = agent.inner.manager.record_queue_reorder(Some(change), actor) => result,
+                            result = agent.inner.manager.flush_observed() => result,
                             _ = sleep(QUEUE_REORDER_AUDIT_TIMEOUT) => Err(StorageError::Io(
                                 "queue reorder persistence timed out".into(),
                             )),
@@ -383,7 +416,7 @@ impl Agent {
                         _ = close.changed() => Err(StorageError::Io(
                             "queue reorder persistence interrupted by close".into(),
                         )),
-                        result = agent.inner.manager.record_queue_reorder(None, actor) => result,
+                        result = agent.inner.manager.flush_observed() => result,
                         _ = sleep(QUEUE_REORDER_AUDIT_TIMEOUT) => Err(StorageError::Io(
                             "queue reorder persistence timed out".into(),
                         )),

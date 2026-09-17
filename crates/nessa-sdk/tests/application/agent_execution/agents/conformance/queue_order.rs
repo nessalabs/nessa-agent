@@ -244,6 +244,60 @@ async fn stalled_reorder_audit_has_a_bounded_acknowledgement() {
     }
     agent.close(actor()).await.unwrap();
 }
+#[tokio::test(start_paused = true)]
+async fn reorder_waiting_for_evidence_leaves_live_order_and_history_agreeing() {
+    let (agent, backend, storage, release, receipts) = waiting().await;
+    let (entered, audited) = oneshot::channel();
+    let (resume_audit, paused) = oneshot::channel();
+    *backend.audit.pause.lock().unwrap() = Some((entered, paused));
+    let reordering = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.reorder_queued(ids(&["s", "c", "b"]), actor()).await }
+    });
+    bounded(audited).await.unwrap();
+    // An unrelated observation owns evidence across a stalled storage write
+    // while the reorder is still inside its audit, so the reorder reaches its
+    // own retention only after that owner blocks it.
+    let (started, saving) = oneshot::channel();
+    let (commit, gate) = oneshot::channel();
+    storage.0.lock().unwrap().pause_save = Some((started, gate));
+    backend
+        .output
+        .send(Some(ExecutionEvent::new(
+            ExecutionId::new("running").unwrap(),
+            ExecutionUpdate::Tool(ToolCallUpdate::new(
+                ToolCallId::new("observed").unwrap(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )),
+        )))
+        .unwrap();
+    bounded(saving).await.unwrap();
+    resume_audit.send(()).unwrap();
+    assert!(matches!(
+        reordering.await.unwrap(),
+        Err(AgentError::Storage(_))
+    ));
+    // The request was audited, but the bounded retention neither changed the
+    // live order nor retained a mutation dispatch would later have to replay.
+    assert_eq!(audited_reorders(&backend).len(), 1);
+    assert_eq!(agent.queued_ids().await, ids(&["s", "b", "c"]));
+    assert!(reorders(&storage.snapshot()).is_empty());
+    commit.send(()).unwrap();
+    release.send(()).unwrap();
+    for receipt in receipts {
+        bounded(receipt.wait()).await.unwrap();
+    }
+    assert_eq!(
+        *backend.executions.lock().unwrap(),
+        ids(&["running", "s", "b", "c"])
+    );
+    assert!(reorders(&storage.snapshot()).is_empty());
+    agent.close(actor()).await.unwrap();
+}
 #[tokio::test]
 async fn caller_loss_during_save_does_not_abandon_the_order_transaction() {
     let (agent, _, storage, release, receipts) = waiting().await;

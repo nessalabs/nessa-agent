@@ -281,11 +281,18 @@ Duplicate or oversized lists are rejected before mutation. At most 64 inputs wai
 
 The scheduler holds one lock across audit acknowledgement, replacement, and its
 save. A changed order is sent to the mandatory audit port before live mutation;
-audit rejection leaves both live and saved order unchanged. The record retains the
+audit rejection leaves both live and saved order unchanged. Replacing the live
+order and retaining that change in session history is one transition: the wait
+for evidence ownership happens before either effect, so a close or the bounded
+30-second wait can only leave both unchanged, never a live order that retained
+history cannot replay. Writing that retained history to storage is separate and
+remains interruptible. The record retains the
 complete before/after order, immutable priorities, session, caller, and
 `CallerRequested` cause. It records the selected local decision; the session
 snapshot remains authoritative for subsequent application and persistence. Caller
-loss cannot abandon the admitted transaction.
+loss cannot abandon the admitted transaction. An audited request whose retention
+is interrupted leaves no order change; the audit records the decision, not a
+completed effect.
 `Applied` and `Unchanged` acknowledge persistence. A storage error can leave the new live order
 applied because a write may already have committed. Refresh the queue after an
 uncertain result. An unchanged retry flushes retained evidence; later dispatch
