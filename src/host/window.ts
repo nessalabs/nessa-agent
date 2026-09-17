@@ -199,6 +199,13 @@ export async function finishSetupWindow() {
   await getCurrentWindow().close()
 }
 
+/** Put the setup window out of the way without leaving setup. */
+export async function minimizeSetupWindow() {
+  if (!inTauri) return
+  const { getCurrentWindow } = await import("@tauri-apps/api/window")
+  await getCurrentWindow().minimize()
+}
+
 export function hasNativeHost(): boolean {
   return inTauri
 }

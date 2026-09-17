@@ -35,18 +35,43 @@ const PILL =
  * unavailable control and are not controls: they are `aria-hidden` shapes, not
  * buttons that quietly refuse.
  */
-function SetupWindowControls({ onClose }: { onClose?: () => void }) {
+function SetupWindowControls({
+  onClose,
+  onMinimize,
+}: {
+  onClose?: () => void
+  onMinimize?: () => void
+}) {
   if (!onClose) return null
   return (
+    // Hovering anywhere on the group reveals every glyph at once, which is
+    // what macOS does — and is most of what makes a real set feel real.
     <div className="nessa-setup-controls">
       <button
         type="button"
         aria-label="Close setup"
         onClick={onClose}
-        className="nessa-setup-light-close"
-      />
-      <span aria-hidden="true" className="nessa-setup-light-inert" />
-      <span aria-hidden="true" className="nessa-setup-light-inert" />
+        className="nessa-setup-light nessa-setup-light-close"
+      >
+        <svg viewBox="0 0 12 12" aria-hidden className="nessa-setup-light-glyph">
+          <path d="M3.9 3.9 8.1 8.1M8.1 3.9 3.9 8.1" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        aria-label="Minimize setup"
+        onClick={onMinimize}
+        className="nessa-setup-light nessa-setup-light-minimize"
+      >
+        <svg viewBox="0 0 12 12" aria-hidden className="nessa-setup-light-glyph">
+          <path d="M3.4 6h5.2" />
+        </svg>
+      </button>
+      {/* Grey and inert, which is how the system draws a control a window
+        cannot use: setup covers the screen, so there is no size for zoom to
+        toggle it to. It is a shape rather than a button, because a button that
+        does nothing when pressed is worse than one that was never offered. */}
+      <span aria-hidden="true" className="nessa-setup-light nessa-setup-light-zoom" />
     </div>
   )
 }
@@ -62,9 +87,11 @@ function SetupWindowControls({ onClose }: { onClose?: () => void }) {
 function SetupStage({
   children,
   onClose,
+  onMinimize,
 }: {
   children: React.ReactNode
   onClose?: () => void
+  onMinimize?: () => void
 }) {
   return (
     <MorphingMeshGradient
@@ -79,7 +106,7 @@ function SetupStage({
         palette is what the design system's own components are built against
         here. Headings set their colour explicitly for the same reason. */}
       <div className="nessa-setup-light relative flex size-full min-h-0 items-center justify-center p-5">
-        <SetupWindowControls onClose={onClose} />
+        <SetupWindowControls onClose={onClose} onMinimize={onMinimize} />
         {children}
       </div>
     </MorphingMeshGradient>
@@ -270,6 +297,7 @@ export function Onboarding({
   onFinish,
   platform,
   onDismiss,
+  onMinimize,
 }: {
   state: OnboardingState
   accelerator?: string
@@ -282,6 +310,8 @@ export function Onboarding({
   /** Leave setup without finishing it. Setup has no window chrome of its own,
    * so its controls are drawn with it. */
   onDismiss?: () => void
+  /** Put setup out of the way without leaving it. */
+  onMinimize?: () => void
 }) {
   // Called unconditionally, as a hook must be; it only listens on the step
   // that has keys to light.
@@ -289,7 +319,7 @@ export function Onboarding({
 
   if (state.step === "welcome") {
     return (
-      <SetupStage onClose={onDismiss}>
+      <SetupStage onClose={onDismiss} onMinimize={onMinimize}>
         <SetupStep
           action={
             <Button
@@ -316,7 +346,7 @@ export function Onboarding({
 
   if (state.step === "summon") {
     return (
-      <SetupStage onClose={onDismiss}>
+      <SetupStage onClose={onDismiss} onMinimize={onMinimize}>
         {/* This step asks for presses, so there is nothing to confirm until
           both have landed. Offering the way on beforehand invites a click
           straight past the only thing the step is here to teach — and the
@@ -347,7 +377,7 @@ export function Onboarding({
   }
 
   return (
-    <SetupStage onClose={onDismiss}>
+    <SetupStage onClose={onDismiss} onMinimize={onMinimize}>
       <SetupPanel>
         <h1 className="nessa-text-6 font-semibold text-foreground">Choose an agent</h1>
         <div role="radiogroup" aria-label="Agent" className="flex flex-col gap-2">

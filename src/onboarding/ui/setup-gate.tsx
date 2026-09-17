@@ -1,5 +1,6 @@
 import * as React from "react"
 import { finishSetupWindow } from "../../host"
+import { minimizeSetupWindow } from "../../host/window"
 import { AgentBloom } from "./agent-bloom"
 import { Onboarding } from "./onboarding"
 import { useIntroSound } from "./use-intro-sound"
@@ -59,6 +60,7 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
           onConfirm={onboarding.confirm}
           onFinish={onboarding.finish}
           onDismiss={onboarding.dismiss}
+          onMinimize={minimizeSetupWindow}
           platform={onboarding.platform}
         />
       </div>
