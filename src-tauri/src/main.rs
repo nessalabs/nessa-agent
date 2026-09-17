@@ -28,9 +28,8 @@ fn main() {
             platform::set_frosted,
             platform::panel_size,
             platform::flush_compositor,
-            panel::complete_onboarding,
+            panel::finish_setup,
             panel::reveal_setup_window,
-            panel::summon_panel,
             surface_credential::load_surface_credential,
             shortcuts::load_shortcuts,
             shortcuts::apply_shortcuts,
@@ -121,6 +120,11 @@ fn main() {
             // The panel is lifted over setup while setup is on screen. If it is
             // still showing when setup goes, it would be left floating above
             // the menu bar for the rest of the session.
+            //
+            // A safety net, not the handoff's cleanup path: `panel::finish_setup`
+            // owns the finishing order and closes setup itself. This catches the
+            // ways setup can go that nothing coordinates — a dismissal, a
+            // crashed webview — and is idempotent with the handoff's own close.
             if matches!(event, WindowEvent::Destroyed) && window.label() == panel::SETUP_WINDOW {
                 if let Some(panel) = window.app_handle().get_webview_window(panel::MAIN_WINDOW) {
                     platform::current().set_above_overlay(&panel, false);

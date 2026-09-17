@@ -6,6 +6,7 @@
 
 use std::io;
 
+use serde::Serialize;
 use tauri::{
     AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalSize, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder,
@@ -115,24 +116,116 @@ pub fn open_setup_window(app: &AppHandle) {
     }
 }
 
-/// Put the panel on screen the way summoning it does.
+/// What handing setup over to the panel did, step by step.
 ///
-/// Setup hands over by showing the panel, and showing a window is not the same
-/// as placing one: the panel is anchored to an edge of the work area and its
-/// webview is fitted to the window, and a plain `show()` from the page does
-/// neither. The first thing a person saw after setup was therefore a panel
-/// wherever the window system happened to leave it.
+/// Only the steps that can fail without the handoff failing. Showing the panel
+/// is not among them: a handoff whose panel did not come up is an `Err` and
+/// changes nothing else, so there is no shape of this struct in which the panel
+/// is not already on screen.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupHandoff {
+    /// Whether the setup window is gone. False leaves a window on screen that
+    /// its own page has to offer a way out of.
+    pub setup_closed: bool,
+    /// Why the setup window is still on screen, when it is.
+    pub close_error: Option<String>,
+    /// Why completion was not written down, when it was asked for and refused.
+    /// The panel is up either way; the cost is a second run of setup.
+    pub record_error: Option<String>,
+}
+
+/// Hand setup over to the panel: show the panel, write setup off, close setup.
 ///
-/// Fails when there is no panel to summon, or when the window system refused to
-/// put it on screen. Setup hands over on the strength of this call, and has its
-/// own way to say the panel is unavailable — so a summon that showed nothing
-/// must not come back as a success.
+/// One command rather than three, because the order between them is the whole
+/// point and no webview can hold it. Setup's window used to run this sequence
+/// itself and issued its last call — the completion write — *after* awaiting its
+/// own close, so a teardown that won the race left `onboarding.completed` unset
+/// on a machine somebody had just finished setting up.
+///
+/// The order here, in Rust, from the process that outlives the window:
+///
+/// ```text
+///   show panel ──► record completion ──► close setup
+///        │               │                    │
+///     Err: stop      logged, kept going   reported back
+/// ```
+///
+/// Showing the panel is the only step that can abandon the handoff: nothing is
+/// written and setup stays on screen, because a completion recorded over a
+/// panel nobody has seen work buries first run behind a failure the next launch
+/// cannot see. A refused write does not stop the close — that would trade the
+/// panel for a settings file — but it now happens while the window is still
+/// alive, which is the point.
+///
+/// `completed` is the surface's own account of how setup ended: finished, or
+/// left. Leaving stays free to change its mind, so only a finish is recorded.
 #[tauri::command]
-pub fn summon_panel(app: AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window(MAIN_WINDOW)
-        .ok_or_else(|| "there is no panel to summon".to_string())?;
-    show(&window, &settings(&app)).map_err(|error| format!("could not show the panel: {error}"))
+pub fn finish_setup(app: AppHandle, completed: bool) -> Result<SetupHandoff, String> {
+    hand_over(
+        completed,
+        || {
+            let window = app
+                .get_webview_window(MAIN_WINDOW)
+                .ok_or_else(|| "there is no panel to summon".to_string())?;
+            // Through `show` rather than `WebviewWindow::show`: the panel is
+            // anchored to an edge of the work area and its webview fitted to the
+            // window, and a plain show does neither. The first thing a person
+            // saw after setup was otherwise a panel wherever the window system
+            // happened to leave it.
+            show(&window, &settings(&app))
+                .map_err(|error| format!("could not show the panel: {error}"))
+        },
+        || {
+            // Written through the settings file, which is the one durable store
+            // the app has — the same load, change, save the tray's own toggle
+            // does. The managed `Settings` is deliberately not updated in place:
+            // nothing after startup reads this flag, and the launch that does
+            // reads it off disk before anything is managed at all.
+            set_onboarding(&app, Onboarding { completed: true })
+                .map_err(|error| format!("could not record that setup finished: {error}"))
+        },
+        || match app.get_webview_window(SETUP_WINDOW) {
+            // Closing it destroys it, which is what lets the panel back down to
+            // its ordinary level (see the `Destroyed` handler in `main.rs`).
+            Some(setup) => setup
+                .close()
+                .map_err(|error| format!("could not close setup: {error}")),
+            // Already gone. The end state this asks for is the one that holds.
+            None => Ok(()),
+        },
+    )
+}
+
+/// The order of the handoff, with its three effects supplied.
+///
+/// Split from [`finish_setup`] so the ordering guarantee — and what each
+/// failure does to the steps after it — is a thing a test can hold, rather than
+/// something only a running window system could demonstrate.
+fn hand_over(
+    completed: bool,
+    show_panel: impl FnOnce() -> Result<(), String>,
+    record: impl FnOnce() -> Result<(), String>,
+    close_setup: impl FnOnce() -> Result<(), String>,
+) -> Result<SetupHandoff, String> {
+    show_panel()?;
+
+    let record_error = if completed { record().err() } else { None };
+    if let Some(error) = &record_error {
+        // Survivable: the panel is up, and the cost is one more run of setup.
+        eprintln!("[nessa] {error}");
+    }
+
+    let close_error = close_setup().err();
+    if let Some(error) = &close_error {
+        eprintln!("[nessa] {error}");
+    }
+
+    Ok(SetupHandoff {
+        setup_closed: close_error.is_none(),
+        close_error,
+        record_error,
+    })
 }
 
 /// Put the setup window on screen, now that its page has something to show.
@@ -146,24 +239,6 @@ pub fn summon_panel(app: AppHandle) -> Result<(), String> {
 pub fn reveal_setup_window(window: WebviewWindow) {
     let _ = window.show();
     platform::current().reveal_overlay(&window);
-}
-
-/// Record that first-run setup finished, so the next launch skips it.
-///
-/// Written through the settings file, which is the one durable store the app
-/// has — the same load, change, save the tray's own toggle does. The managed
-/// `Settings` is deliberately not updated in place: nothing after startup reads
-/// this flag, and the launch that does reads it off disk before anything is
-/// managed at all.
-///
-/// Fails when the file could not be written. Setup calls this on its way to the
-/// panel and does not wait on the answer, so this reports the write honestly
-/// rather than swallowing it: a failure means setup runs again next launch,
-/// which is worth saying out loud even though it does not stop the handoff.
-#[tauri::command]
-pub fn complete_onboarding(app: AppHandle) -> Result<(), String> {
-    set_onboarding(&app, Onboarding { completed: true })
-        .map_err(|error| format!("could not record that setup finished: {error}"))
 }
 
 fn set_onboarding(app: &AppHandle, onboarding: Onboarding) -> io::Result<()> {
@@ -394,7 +469,144 @@ fn anchor_to_edge(window: &WebviewWindow, settings: &Settings) -> tauri::Result<
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use super::*;
+
+    /// The steps the handoff took, in the order it took them.
+    #[derive(Default)]
+    struct Steps(RefCell<Vec<&'static str>>);
+
+    impl Steps {
+        fn took(&self, step: &'static str) {
+            self.0.borrow_mut().push(step);
+        }
+
+        fn order(&self) -> Vec<&'static str> {
+            self.0.borrow().clone()
+        }
+    }
+
+    #[test]
+    fn shows_the_panel_then_records_then_closes_setup() {
+        let steps = Steps::default();
+        let handoff = hand_over(
+            true,
+            || {
+                steps.took("show");
+                Ok(())
+            },
+            || {
+                steps.took("record");
+                Ok(())
+            },
+            || {
+                steps.took("close");
+                Ok(())
+            },
+        )
+        .expect("the panel came up");
+
+        // The completion write happens before the window that asked for it is
+        // destroyed. That ordering is the defect this command exists to fix.
+        assert_eq!(steps.order(), ["show", "record", "close"]);
+        assert!(handoff.setup_closed);
+        assert!(handoff.close_error.is_none());
+        assert!(handoff.record_error.is_none());
+    }
+
+    #[test]
+    fn a_panel_that_will_not_show_records_nothing_and_leaves_setup_up() {
+        let steps = Steps::default();
+        let refused = hand_over(
+            true,
+            || Err("there is no panel to summon".to_string()),
+            || {
+                steps.took("record");
+                Ok(())
+            },
+            || {
+                steps.took("close");
+                Ok(())
+            },
+        );
+
+        // A completion written over a panel nobody has seen work buries first
+        // run behind a failure the next launch cannot see; and the window has to
+        // stay to say so.
+        assert_eq!(
+            refused.err().as_deref(),
+            Some("there is no panel to summon")
+        );
+        assert_eq!(steps.order(), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn a_refused_write_still_closes_the_setup_window() {
+        let steps = Steps::default();
+        let handoff = hand_over(
+            true,
+            || Ok(()),
+            || Err("could not record that setup finished: disk full".to_string()),
+            || {
+                steps.took("close");
+                Ok(())
+            },
+        )
+        .expect("the panel came up");
+
+        // Survivable: the cost is one more run of setup, not the panel.
+        assert_eq!(steps.order(), ["close"]);
+        assert!(handoff.setup_closed);
+        assert_eq!(
+            handoff.record_error.as_deref(),
+            Some("could not record that setup finished: disk full")
+        );
+    }
+
+    #[test]
+    fn leaving_setup_records_nothing_and_still_hands_over() {
+        let steps = Steps::default();
+        let handoff = hand_over(
+            false,
+            || {
+                steps.took("show");
+                Ok(())
+            },
+            || {
+                steps.took("record");
+                Ok(())
+            },
+            || {
+                steps.took("close");
+                Ok(())
+            },
+        )
+        .expect("the panel came up");
+
+        // Escape, the corner mark and the dimmed screen are as easily a slip as
+        // a decision: leaving stays free to run setup again.
+        assert_eq!(steps.order(), ["show", "close"]);
+        assert!(handoff.record_error.is_none());
+    }
+
+    #[test]
+    fn a_window_that_will_not_close_is_reported_rather_than_failing_the_handoff() {
+        let handoff = hand_over(
+            true,
+            || Ok(()),
+            || Ok(()),
+            || Err("could not close setup: the window server said no".to_string()),
+        )
+        .expect("the panel is up, whatever this window does");
+
+        assert!(!handoff.setup_closed);
+        assert_eq!(
+            handoff.close_error.as_deref(),
+            Some("could not close setup: the window server said no")
+        );
+        assert!(handoff.record_error.is_none());
+    }
 
     fn area(width: u32, height: u32) -> WorkArea {
         WorkArea {

@@ -29,7 +29,7 @@ export interface DismissKeyTarget {
 }
 
 /** Whether this press is one of the two ways out. */
-export function dismissesSetup(event: DismissKeyPress): boolean {
+function dismissesSetup(event: DismissKeyPress): boolean {
   if (event.repeat) return false
   if (event.key === "Escape") return true
   return event.key.toLowerCase() === "q" && (event.metaKey || event.ctrlKey)

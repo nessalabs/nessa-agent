@@ -183,10 +183,14 @@ export function windowSurface(): "panel" | "setup" {
 /**
  * What handing off from setup to the panel actually did.
  *
- * Three outcomes rather than a rejection, because the caller has to act on all
- * three and two of them are not faults: a browser has no second window, and a
- * panel that could not be summoned still leaves a setup window that must not
- * sit there empty.
+ * Outcomes rather than a rejection, because the caller has to act on all of
+ * them and only one is a panel fault: a browser has no second window, and a
+ * setup window that is still on screen — whether because the panel never came
+ * up or because the window itself would not go — must not sit there empty.
+ *
+ * The last two are deliberately distinct. They put different things on screen
+ * and offer different ways out, and collapsing them told people the panel was
+ * unavailable while it stood open behind the sentence saying so.
  */
 export type SetupHandoff =
   /** The panel is up and this window is closing. */
@@ -195,6 +199,8 @@ export type SetupHandoff =
   | { outcome: "no-native-host" }
   /** The panel did not come up. This window is still on screen. */
   | { outcome: "panel-unavailable"; cause: unknown }
+  /** The panel is up; this window is the only thing that did not go. */
+  | { outcome: "setup-close-failed"; panelShown: true; cause: unknown }
 
 /**
  * What closing this window did.
@@ -215,9 +221,10 @@ export type SetupWindowClose =
 /**
  * Close the window this page is painted in.
  *
- * The direct way out, with no panel in it: the handoff below uses it after the
- * panel is up, and the setup surface offers it on its own when the handoff
- * could not be completed and the window would otherwise sit there for good.
+ * The recovery screen's way out, and only that. The handoff closes this window
+ * on the host, in order and after the completion write (`finishSetupWindow`);
+ * this is what the setup surface offers when the handoff left the window on
+ * screen and it would otherwise sit there for good.
  */
 export async function closeSetupWindow(): Promise<SetupWindowClose> {
   if (!inTauri) return { outcome: "no-native-host" }
@@ -230,52 +237,57 @@ export async function closeSetupWindow(): Promise<SetupWindowClose> {
   return { outcome: "closed" }
 }
 
+/** `panel::SetupHandoff`, as the host serializes it. */
+interface NativeSetupHandoff {
+  setupClosed: boolean
+  closeError: string | null
+  recordError: string | null
+}
+
 /**
- * Hand off from setup to the panel: show the panel window, then close this one.
+ * Hand off from setup to the panel.
+ *
+ * One call, because the sequence behind it — show the panel, record that setup
+ * finished, close this window — has to survive this window. Running it from
+ * here meant the completion write was issued by a webview that had already
+ * awaited its own destruction, so a teardown that got there first left
+ * `onboarding.completed` unset on a machine somebody had just set up. The order
+ * now lives in `panel::finish_setup`, in the process that outlives the window.
+ *
+ * `completed` is how setup ended: a finish, or somebody leaving. Only a finish
+ * is written off for good, which is the host's rule to apply — this carries the
+ * fact, not the decision.
  *
  * Outside Tauri there is no second window, so this is a no-op and the caller
  * simply carries on rendering the panel in place.
  *
- * The close is not conditional on the summon. A failed summon used to abandon
- * the handoff half way, leaving a setup window that had already stopped
- * painting setup — and nothing said so. If the panel cannot be summoned the
- * failure is returned rather than thrown, so the surface can say so instead of
- * showing an empty window.
+ * In the ordinary case this promise never settles: the window it was called
+ * from is gone before the answer gets back. Everything that had to happen has
+ * happened by then.
  */
-export async function finishSetupWindow(): Promise<SetupHandoff> {
+export async function finishSetupWindow(completed: boolean): Promise<SetupHandoff> {
   if (!inTauri) return { outcome: "no-native-host" }
-  // Through the host, not `show()` on the window: the panel is anchored to an
-  // edge of the work area and its webview fitted to the window, and a page
-  // cannot do either. Showing it from here left it wherever the window system
-  // happened to put it.
   const { invoke } = await import("@tauri-apps/api/core")
+  let handoff: NativeSetupHandoff
   try {
-    await invoke("summon_panel")
+    handoff = await invoke<NativeSetupHandoff>("finish_setup", { completed })
   } catch (cause) {
+    // The one step that abandons the handoff. Nothing was written and this
+    // window is still on screen, which is what the surface has to say.
     return { outcome: "panel-unavailable", cause }
   }
-  // The panel is up, so a window that will not close is not a panel failure and
-  // is not reported as one: the cause travels out as it did before, and the
-  // surface that catches it offers a close of its own.
-  const closed = await closeSetupWindow()
-  if (closed.outcome === "close-failed") throw closed.cause
+  if (handoff.recordError) {
+    // Survivable, and already logged on the host's side. It costs the next
+    // launch's straight start, not this one's panel.
+    console.warn("[nessa] could not record that setup finished", handoff.recordError)
+  }
+  // The panel is up. A window that will not close is not a panel failure and is
+  // no longer reported as one — the surface says what actually happened and
+  // offers a close rather than another handoff.
+  if (!handoff.setupClosed) {
+    return { outcome: "setup-close-failed", panelShown: true, cause: handoff.closeError }
+  }
   return { outcome: "handed-over" }
-}
-
-/**
- * Record that first-run setup finished, so the next launch opens the panel
- * instead of setup.
- *
- * The host keeps this in its settings file; there is nothing to write to
- * outside Tauri, where a reload starts over anyway, so this is an explicit
- * no-op rather than a pretend success. It rejects when the host could not
- * write — which costs the next launch's straight start, not this one's handoff,
- * so the caller logs it and carries on.
- */
-export async function recordSetupComplete(): Promise<void> {
-  if (!inTauri) return
-  const { invoke } = await import("@tauri-apps/api/core")
-  await invoke("complete_onboarding")
 }
 
 /**

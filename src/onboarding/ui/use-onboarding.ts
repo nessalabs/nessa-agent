@@ -117,37 +117,32 @@ export function useOnboarding(
   // this one is watching. Only the newest ask's answer is kept (see
   // `createReadinessCheck`), so a slow first answer cannot land on top of a
   // fresh one.
+  //
+  // One ask at a time, and that too is `createReadinessCheck`'s: every ask
+  // reaches the readiness probe, which does real work on the machine — on macOS
+  // a blocking subprocess per agent — so a person pressing "Check again" while
+  // nothing visibly happens would otherwise stack up probes. Which ask is
+  // current and whether one is outstanding live together there, so abandoning
+  // an ask on the way out releases both; a busy flag owned out here could
+  // refuse the next ask on behalf of one whose answer had already been dropped.
+  // This hook only paints what that object reports.
+  const [checking, setChecking] = React.useState(false)
   const readiness = React.useMemo(
     () =>
-      createReadinessCheck(agents, (answer) =>
-        setState((current) =>
-          answer.ok
-            ? recordReadiness(current, answer.agents)
-            : recordReadinessFailure(current, answer.reason),
-        ),
+      createReadinessCheck(
+        agents,
+        (answer) =>
+          setState((current) =>
+            answer.ok
+              ? recordReadiness(current, answer.agents)
+              : recordReadinessFailure(current, answer.reason),
+          ),
+        setChecking,
       ),
     [agents],
   )
-  // One ask at a time. Every ask reaches the readiness probe, which does real
-  // work on the machine — on macOS a blocking subprocess per agent — so a
-  // person pressing "Check again" while nothing visibly happens would stack up
-  // probes. The generation guard inside `createReadinessCheck` only keeps a
-  // stale answer off the screen; it does not stop the ask being made.
-  //
-  // Coalescing rather than queueing: the ask in flight was started after
-  // whatever was fixed, so its answer is the fresh one a second ask would go
-  // and fetch. The flag is a ref as well as state because two clicks in one
-  // frame are two events against the same render.
-  const [checking, setChecking] = React.useState(false)
-  const asking = React.useRef(false)
   const ask = React.useCallback(() => {
-    if (asking.current) return
-    asking.current = true
-    setChecking(true)
-    void readiness.check().finally(() => {
-      asking.current = false
-      setChecking(false)
-    })
+    void readiness.check()
   }, [readiness])
   const recheck = ask
 

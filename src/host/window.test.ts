@@ -116,53 +116,79 @@ describe("closing the setup window", () => {
 })
 
 describe("handing setup over to the panel", () => {
-  it("summons the panel and closes this window", async () => {
+  /** What the host reports when every step of the handoff did what it should. */
+  const landed = { setupClosed: true, closeError: null, recordError: null }
+
+  it("hands the host the one fact it does not have, and carries on", async () => {
     const { finishSetupWindow } = await import("./window")
-    invoke.mockResolvedValue(undefined)
-    await expect(finishSetupWindow()).resolves.toEqual({ outcome: "handed-over" })
-    expect(invoke).toHaveBeenCalledWith("summon_panel")
-    expect(close).toHaveBeenCalledTimes(1)
+    invoke.mockResolvedValue(landed)
+    await expect(finishSetupWindow(true)).resolves.toEqual({ outcome: "handed-over" })
+    // One call, not three. Showing the panel, writing setup off and closing this
+    // window are ordered on the host, in the process that outlives this window.
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith("finish_setup", { completed: true })
+    // Nothing closes the window from here any more.
+    expect(close).not.toHaveBeenCalled()
+  })
+
+  it("tells the host that somebody left rather than finished", async () => {
+    const { finishSetupWindow } = await import("./window")
+    invoke.mockResolvedValue(landed)
+    await expect(finishSetupWindow(false)).resolves.toEqual({ outcome: "handed-over" })
+    // Leaving stays free to change its mind: the host records nothing for it.
+    expect(invoke).toHaveBeenCalledWith("finish_setup", { completed: false })
   })
 
   it("says the panel did not come up rather than closing over nothing", async () => {
     const { finishSetupWindow } = await import("./window")
-    const cause = new Error("no panel")
+    const cause = new Error("there is no panel to summon")
     invoke.mockRejectedValue(cause)
-    await expect(finishSetupWindow()).resolves.toEqual({
+    await expect(finishSetupWindow(true)).resolves.toEqual({
       outcome: "panel-unavailable",
       cause,
     })
     expect(close).not.toHaveBeenCalled()
   })
-})
 
-describe("recording that first-run setup finished", () => {
-  it("tells the host, so the next launch opens the panel instead", async () => {
-    const { recordSetupComplete } = await import("./window")
-    invoke.mockResolvedValue(undefined)
-    await expect(recordSetupComplete()).resolves.toBeUndefined()
-    expect(invoke).toHaveBeenCalledWith("complete_onboarding")
+  // The defect this distinction exists for: the panel was up, and the surface
+  // said "Nessa could not open the panel" over the top of it.
+  it("reports a window that would not close as exactly that, panel and all", async () => {
+    const { finishSetupWindow } = await import("./window")
+    invoke.mockResolvedValue({
+      setupClosed: false,
+      closeError: "could not close setup: the window server said no",
+      recordError: null,
+    })
+    await expect(finishSetupWindow(true)).resolves.toEqual({
+      outcome: "setup-close-failed",
+      panelShown: true,
+      cause: "could not close setup: the window server said no",
+    })
   })
 
-  // The handoff to the panel is what somebody is waiting on. A host that could
-  // not write the flag costs them a second run of setup, so the failure has to
-  // arrive as a rejected promise the caller can swallow — not as a throw out of
-  // the click that finished setup.
-  it("rejects rather than throwing when the host could not write it", async () => {
-    const { recordSetupComplete } = await import("./window")
-    const cause = "could not record that setup finished"
-    invoke.mockRejectedValue(cause)
-    const recorded = recordSetupComplete()
-    const swallowed = vi.fn()
-    await expect(recorded.catch(swallowed)).resolves.toBeUndefined()
-    expect(swallowed).toHaveBeenCalledWith(cause)
+  // Survivable: a settings file that would not take the flag costs a second run
+  // of setup, not the panel somebody is waiting on.
+  it("hands over anyway when the completion write was refused", async () => {
+    const { finishSetupWindow } = await import("./window")
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    invoke.mockResolvedValue({
+      setupClosed: true,
+      closeError: null,
+      recordError: "could not record that setup finished: disk full",
+    })
+    await expect(finishSetupWindow(true)).resolves.toEqual({ outcome: "handed-over" })
+    expect(warn).toHaveBeenCalledWith(
+      "[nessa] could not record that setup finished",
+      "could not record that setup finished: disk full",
+    )
+    warn.mockRestore()
   })
 
-  it("has nothing to record outside the desktop host", async () => {
+  it("has no second window to hand over to outside the desktop host", async () => {
     vi.stubGlobal("window", {})
     vi.resetModules()
-    const { recordSetupComplete } = await import("./window")
-    await expect(recordSetupComplete()).resolves.toBeUndefined()
+    const { finishSetupWindow } = await import("./window")
+    await expect(finishSetupWindow(true)).resolves.toEqual({ outcome: "no-native-host" })
     expect(invoke).not.toHaveBeenCalled()
   })
 })
