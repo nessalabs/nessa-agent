@@ -51,9 +51,9 @@ function SetupWindowControls({
         type="button"
         aria-label="Close setup"
         onClick={onClose}
-        className="nessa-setup-light nessa-setup-light-close"
+        className="nessa-setup-control nessa-setup-control-close"
       >
-        <svg viewBox="0 0 12 12" aria-hidden className="nessa-setup-light-glyph">
+        <svg viewBox="0 0 12 12" aria-hidden className="nessa-setup-control-glyph">
           <path d="M3.9 3.9 8.1 8.1M8.1 3.9 3.9 8.1" />
         </svg>
       </button>
@@ -61,9 +61,9 @@ function SetupWindowControls({
         type="button"
         aria-label="Minimize setup"
         onClick={onMinimize}
-        className="nessa-setup-light nessa-setup-light-minimize"
+        className="nessa-setup-control nessa-setup-control-minimize"
       >
-        <svg viewBox="0 0 12 12" aria-hidden className="nessa-setup-light-glyph">
+        <svg viewBox="0 0 12 12" aria-hidden className="nessa-setup-control-glyph">
           <path d="M3.4 6h5.2" />
         </svg>
       </button>
@@ -71,7 +71,7 @@ function SetupWindowControls({
         cannot use: setup covers the screen, so there is no size for zoom to
         toggle it to. It is a shape rather than a button, because a button that
         does nothing when pressed is worse than one that was never offered. */}
-      <span aria-hidden="true" className="nessa-setup-light nessa-setup-light-zoom" />
+      <span aria-hidden="true" className="nessa-setup-control nessa-setup-control-zoom" />
     </div>
   )
 }

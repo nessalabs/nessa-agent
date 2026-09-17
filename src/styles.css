@@ -769,7 +769,7 @@ body {
  * anywhere near the group. Flat discs with a colour each read as dots someone
  * drew, which is what these were.
  */
-.nessa-setup-light {
+.nessa-setup-control {
   position: relative;
   display: flex;
   align-items: center;
@@ -786,11 +786,11 @@ body {
     inset 0 1px 1px rgb(255 255 255 / 0.28);
 }
 
-.nessa-setup-light-close {
+.nessa-setup-control-close {
   background: #ff5f57;
 }
 
-.nessa-setup-light-minimize {
+.nessa-setup-control-minimize {
   background: #febc2e;
 }
 
@@ -798,7 +798,7 @@ body {
  * Grey and inert, the way the system draws a control a window cannot use.
  * Setup covers the screen, so there is no other size for zoom to toggle to.
  */
-.nessa-setup-light-zoom {
+.nessa-setup-control-zoom {
   background: rgb(255 255 255 / 0.26);
   box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 0.12);
 }
@@ -808,7 +808,7 @@ body {
  * pointer: on macOS, hovering any of the three shows all of them, and that
  * single detail is most of what separates a real set from three dots.
  */
-.nessa-setup-light-glyph {
+.nessa-setup-control-glyph {
   width: 12px;
   height: 12px;
   stroke: rgb(0 0 0 / 0.55);
@@ -819,16 +819,16 @@ body {
   transition: opacity 90ms ease-out;
 }
 
-.nessa-setup-controls:hover .nessa-setup-light-glyph,
-.nessa-setup-light:focus-visible .nessa-setup-light-glyph {
+.nessa-setup-controls:hover .nessa-setup-control-glyph,
+.nessa-setup-control:focus-visible .nessa-setup-control-glyph {
   opacity: 1;
 }
 
-.nessa-setup-light:active {
+.nessa-setup-control:active {
   filter: brightness(0.88);
 }
 
-.nessa-setup-light:focus-visible {
+.nessa-setup-control:focus-visible {
   box-shadow:
     inset 0 0 0 0.5px rgb(0 0 0 / 0.2),
     inset 0 1px 1px rgb(255 255 255 / 0.28),
