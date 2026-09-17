@@ -43,6 +43,10 @@ pub fn toggle(app: &AppHandle) -> bool {
     true
 }
 
+/// The first-run setup window, which is a screen-covering takeover rather than
+/// a panel.
+pub const SETUP_WINDOW: &str = "setup";
+
 /// Opens first-run setup again, from the beginning.
 ///
 /// Setup finishes by closing its own window, so there is usually nothing left
@@ -51,11 +55,10 @@ pub fn toggle(app: &AppHandle) -> bool {
 /// holds its progress in memory and showing it again mid-flow would resume it
 /// rather than restart it.
 pub fn restart_onboarding(app: &AppHandle) {
-    const SETUP_WINDOW: &str = "setup";
     if let Some(window) = app.get_webview_window(SETUP_WINDOW) {
         let _ = window.eval("window.location.reload()");
         let _ = window.show();
-        let _ = window.set_focus();
+        crate::platform::current().present_overlay(&window);
         return;
     }
 
@@ -73,8 +76,9 @@ pub fn restart_onboarding(app: &AppHandle) {
     .skip_taskbar(true)
     .maximized(true)
     .build();
-    if let Err(error) = built {
-        eprintln!("[nessa] could not reopen setup: {error}");
+    match built {
+        Ok(window) => crate::platform::current().present_overlay(&window),
+        Err(error) => eprintln!("[nessa] could not reopen setup: {error}"),
     }
 }
 

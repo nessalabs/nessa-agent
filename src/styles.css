@@ -813,21 +813,42 @@ body {
   --nessa-reveal-glow-warm: 226 148 92;
 }
 
+/*
+ * The dim belongs to the arrival, not to setup.
+ *
+ * It exists to clear the desktop out of the way while there is nothing to look
+ * at but a light, and to make that light the only lit thing on the screen. Once
+ * the panel is there it has done its job: holding it for the rest of setup
+ * would leave a grey cast over everything the person is about to go back to,
+ * for no reason, and setup is a window — it does not need the room darkened to
+ * be read.
+ */
 .nessa-setup-dim {
   position: absolute;
   inset: 0;
   background: rgb(0 0 0 / 0.55);
   backdrop-filter: blur(2px);
-  animation: nessa-setup-dim-in 420ms var(--nessa-motion-easing-standard) both;
+  animation: nessa-setup-dim
+    calc(
+      var(--nessa-reveal-seed) + var(--nessa-reveal-bloom) + var(--nessa-reveal-settle)
+    )
+    var(--nessa-motion-easing-standard) both;
 }
 
-@keyframes nessa-setup-dim-in {
+@keyframes nessa-setup-dim {
   from {
     opacity: 0;
-    backdrop-filter: blur(0);
+  }
+  /* Down within the first half-second, while the light is still gathering. */
+  17% {
+    opacity: 1;
+  }
+  /* Held for the whole of that, and lifted as the panel fills. */
+  58% {
+    opacity: 1;
   }
   to {
-    opacity: 1;
+    opacity: 0;
   }
 }
 

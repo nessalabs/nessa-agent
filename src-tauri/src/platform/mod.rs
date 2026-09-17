@@ -35,6 +35,12 @@ pub trait Host: Send + Sync {
     /// window yet.
     fn configure_app(&self, _app: &AppHandle) {}
 
+    /// Put a window over the whole screen, above whatever the OS draws on top
+    /// of ordinary windows, and give it focus. Setup uses this: it dims what is
+    /// behind it, and a dim that stops at the menu bar is not a dim. Hosts
+    /// where a maximized window already covers everything leave it alone.
+    fn present_overlay(&self, _window: &WebviewWindow) {}
+
     /// Native frost / clear. No-op on hosts where the shell paints frost in CSS.
     fn set_frosted(&self, _window: &WebviewWindow, _frosted: bool) -> Result<(), String> {
         Ok(())
