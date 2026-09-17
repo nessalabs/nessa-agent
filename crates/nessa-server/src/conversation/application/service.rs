@@ -858,6 +858,7 @@ impl ConversationService {
         self.close_agents(actor).await
     }
 
+    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn retirement_cause(&self) -> Option<ActionContext> {
         self.inner.retirement.get().cloned()
     }

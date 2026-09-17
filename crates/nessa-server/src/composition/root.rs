@@ -1,4 +1,5 @@
 use crate::cli::entrypoint::{parse, Command, HELP};
+#[cfg(target_os = "macos")]
 use crate::desktop_runtime::{
     application::{restore_retirement, retire},
     infrastructure::RetirementFiles,
@@ -69,7 +70,7 @@ impl CompositionRoot {
         let product =
             super::local_auth::product_state(&config, dependencies.clock.clone(), bundle)?;
         let conversations = product.conversations.clone();
-        #[cfg(unix)]
+        #[cfg(target_os = "macos")]
         let retirement_clock = product.clock.clone();
         let desktop_identity = if let Some(bundle) = bundle {
             let configured = std::env::var("NESSA_RUNTIME_FINGERPRINT")
@@ -86,7 +87,7 @@ impl CompositionRoot {
         } else {
             None
         };
-        #[cfg(unix)]
+        #[cfg(target_os = "macos")]
         let retirement_files = if let Some(identity) = &desktop_identity {
             let root = config
                 .auth_directory
@@ -121,7 +122,7 @@ impl CompositionRoot {
             "nessa server listening",
         );
 
-        #[cfg(unix)]
+        #[cfg(target_os = "macos")]
         if bundle.is_some() {
             if let Some(service) = conversations.clone() {
                 let mut requests = signal(SignalKind::user_defined1()).map_err(RunError::Serve)?;
@@ -134,7 +135,7 @@ impl CompositionRoot {
                 });
             }
         }
-        #[cfg(unix)]
+        #[cfg(target_os = "macos")]
         if let Some(identity) = desktop_identity {
             let files = retirement_files.expect("desktop files initialized before admission");
             let service = conversations.clone();

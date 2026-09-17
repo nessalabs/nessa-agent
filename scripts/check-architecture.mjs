@@ -195,6 +195,71 @@ for (const file of walk(src)) {
   }
 }
 
+const macosRetirementBoundaries = [
+  {
+    path: "crates/nessa-server/src/composition/root.rs",
+    declaration: "use crate::desktop_runtime::{",
+  },
+  {
+    path: "crates/nessa-server/src/desktop_runtime/application/mod.rs",
+    declaration: "mod retirement;",
+  },
+  {
+    path: "crates/nessa-server/src/desktop_runtime/infrastructure/mod.rs",
+    declaration: "mod files;",
+  },
+  {
+    path: "crates/nessa-server/src/desktop_runtime/domain/mod.rs",
+    declaration: "validate_retirement_evidence, RetirementCause",
+  },
+  {
+    path: "crates/nessa-server/src/desktop_runtime/domain/retirement.rs",
+    declaration: "pub(crate) struct RetirementRequest",
+  },
+  {
+    path: "crates/nessa-server/src/desktop_runtime/domain/retirement.rs",
+    declaration: "pub(crate) struct RetirementFence",
+  },
+  {
+    path: "crates/nessa-server/src/desktop_runtime/domain/retirement.rs",
+    declaration: "pub(crate) struct RetirementCause",
+  },
+  {
+    path: "crates/nessa-server/src/desktop_runtime/domain/retirement.rs",
+    declaration: "pub(crate) fn validate_retirement_evidence",
+  },
+  {
+    path: "crates/nessa-server/src/conversation/application/service.rs",
+    declaration: "pub(crate) fn retirement_cause",
+  },
+  {
+    path: "crates/nessa-server/src/composition/root.rs",
+    declaration: "let retirement_clock",
+  },
+  {
+    path: "crates/nessa-server/src/composition/root.rs",
+    declaration: "let retirement_files",
+  },
+]
+
+for (const boundary of macosRetirementBoundaries) {
+  const file = join(root, boundary.path)
+  const text = readFileSync(file, "utf8")
+  const declaration = text.indexOf(boundary.declaration)
+  const attribute = '#[cfg(any(target_os = "macos", test))]'
+  const productionAttribute = '#[cfg(target_os = "macos")]'
+  const preceding = text.slice(Math.max(0, declaration - 80), declaration)
+  if (
+    declaration < 0 ||
+    (!preceding.includes(attribute) && !preceding.includes(productionAttribute))
+  ) {
+    fail(
+      file,
+      "managed gateway retirement is a macOS production capability; gate its module boundary so other targets do not compile unused lifecycle code",
+    )
+  }
+}
+
 if (failures.length > 0) {
   console.error("architecture check failed:\n")
   for (const line of failures) console.error(`  ${line}`)
