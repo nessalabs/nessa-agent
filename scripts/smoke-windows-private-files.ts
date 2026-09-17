@@ -1,10 +1,16 @@
-/** Windows runtime checks for the Node Win32 bridge; no credential leaves this fixture. */
+/** Windows runtime checks for the Node Win32 bridge; no credential leaves this
+ * fixture. Each refusal is asserted by its typed reason, so a bridge that only
+ * ran out of time fails this fixture instead of passing a safety check it never
+ * actually performed. */
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import { link, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { windowsPrivateFile } from "../packages/nessa-client/src/transport/windows-private-file.js"
+import {
+  NessaPrivateFileUnavailableError,
+  windowsPrivateFile,
+} from "../packages/nessa-client/src/transport/windows-private-file.js"
 import { LocalFileCredentialSource } from "../packages/nessa-client/src/transport/local-credential-source.js"
 
 assert.equal(process.platform, "win32")
@@ -14,7 +20,10 @@ try {
   await windowsPrivateFile("reserve", file)
   await windowsPrivateFile("write", file, "fixture-only\n")
   assert.equal(await windowsPrivateFile("read", file), "fixture-only\n")
-  await assert.rejects(windowsPrivateFile("reserve", file))
+  await assert.rejects(
+    windowsPrivateFile("reserve", file),
+    NessaPrivateFileUnavailableError,
+  )
   const source = new LocalFileCredentialSource({ dataDir: root, file })
   assert.equal(
     await source.load({
@@ -29,16 +38,19 @@ try {
   )
   const alias = join(root, "alias")
   await link(file, alias)
-  await assert.rejects(windowsPrivateFile("read", file))
+  await assert.rejects(windowsPrivateFile("read", file), NessaPrivateFileUnavailableError)
   await rm(alias)
   const change = spawnSync("icacls.exe", [file, "/grant", "*S-1-1-0:R"], {
     encoding: "utf8",
   })
   assert.equal(change.status, 0, "could not make broad ACL fixture")
-  await assert.rejects(windowsPrivateFile("read", file))
+  await assert.rejects(windowsPrivateFile("read", file), NessaPrivateFileUnavailableError)
   const inherited = join(root, "inherited")
   await writeFile(inherited, "fixture")
-  await assert.rejects(windowsPrivateFile("read", inherited))
+  await assert.rejects(
+    windowsPrivateFile("read", inherited),
+    NessaPrivateFileUnavailableError,
+  )
   console.log(
     "Windows Node ACL creation, loading, hard-link and broad/inherited ACL rejection passed",
   )
