@@ -73,8 +73,10 @@ pub fn restart_onboarding(app: &AppHandle) {
     .decorations(false)
     .shadow(false)
     .always_on_top(true)
+    // Deliberately not maximized: `present_overlay` gives it the whole screen,
+    // menu bar included, and maximizing fits a window to the *visible* frame —
+    // which is the screen minus exactly the parts this needs to cover.
     .skip_taskbar(true)
-    .maximized(true)
     .build();
     match built {
         Ok(window) => crate::platform::current().present_overlay(&window),

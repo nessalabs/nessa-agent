@@ -46,8 +46,7 @@
         "shadow": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "visible": true,
-        "maximized": true
+        "visible": true
       }
     ]
   },

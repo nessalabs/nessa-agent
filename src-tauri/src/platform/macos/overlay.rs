@@ -29,12 +29,19 @@ pub fn present(window: &WebviewWindow) {
     // NSWindow, so it is only borrowed for this configuration.
     let native = unsafe { &*handle.cast::<NSWindow>() };
 
+    // The level goes first, and that ordering is the whole trick: AppKit
+    // constrains an ordinary window's frame to the screen's *visible* area —
+    // the screen minus the menu bar and the Dock — so a frame set while the
+    // window is still at an ordinary level is clipped back to exactly the
+    // shape this is trying to escape. Above the menu bar there is nothing to
+    // constrain it to.
+    //
+    // One level above the bar: enough to cover it, and not so high that setup
+    // sits over a screen saver or a security prompt.
+    native.setLevel(NSMainMenuWindowLevel + 1);
     if let Some(screen) = native.screen() {
         native.setFrame_display(screen.frame(), true);
     }
-    // One above the menu bar: enough to cover it, and not so high that setup
-    // sits over a screen saver or a security prompt.
-    native.setLevel(NSMainMenuWindowLevel + 1);
     native.setCollectionBehavior(
         native.collectionBehavior()
             | NSWindowCollectionBehavior::CanJoinAllSpaces
