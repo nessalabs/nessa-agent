@@ -111,8 +111,19 @@ recovers its saved receipt instead of running it twice. Changed input is a new
 submission, not an edit to a running operation. Pending input can be removed.
 
 The gateway stores conversation ownership separately from SDK JSONL sessions.
+A conversation's owner record appears under its ID only once its complete bytes
+are durable: an interrupted creation publishes nothing, so the same conversation
+ID can still be created afterwards, while publication never replaces a name
+another owner already holds. A genuinely corrupt owner record still fails closed
+and is never repaired. Opening a conversation's provider for the first time is
+gated on its mandatory creation audit, whatever the entry point: if that audit
+failed, ownership remains and read and send also refuse until the original
+creation evidence is acknowledged.
+
 Consequential SDK boundaries persist accumulated output; a crash can lose text
-from an unfinished stream. Mandatory execution/permission audit is independent of
+from an unfinished stream. After a missed live observation the bounded view
+fences ambiguous streaming text, which has no durable cursor, but text the
+committed snapshot proves belongs to a settled message is rebuilt exactly once. Mandatory execution/permission audit is independent of
 views: private atomic JSON records are synced before acknowledgement. Those records
 retain target, transition, cause, known actor, original input and local delivery
 stage. Local closure and a written permission answer do not claim external tool

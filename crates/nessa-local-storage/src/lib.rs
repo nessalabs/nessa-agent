@@ -15,9 +15,12 @@ mod windows;
 use windows as platform;
 
 pub use platform::{
-    create_directory, create_directory_beneath, open, open_beneath, replace, replace_beneath,
-    sync_directory, sync_directory_beneath, verify_directory, verify_file,
+    create_directory, create_directory_beneath, open, open_beneath, publish_new, replace,
+    replace_beneath, sync_directory, sync_directory_beneath, verify_directory, verify_file,
 };
+
+const TEMPORARY_PREFIX: &str = ".nessa-";
+const TEMPORARY_SUFFIX: &str = ".tmp";
 
 #[derive(Clone, Copy)]
 pub enum OpenMode {
@@ -51,7 +54,7 @@ impl PrivateTempFile {
             let mut random = [0u8; 16];
             getrandom::fill(&mut random).map_err(|e| io::Error::other(e.to_string()))?;
             let name: String = random.iter().map(|b| format!("{b:02x}")).collect();
-            let path = parent.join(format!(".nessa-{name}.tmp"));
+            let path = parent.join(format!("{TEMPORARY_PREFIX}{name}{TEMPORARY_SUFFIX}"));
             match open(&path, OpenMode::CreateNew) {
                 Ok(file) => {
                     return Ok(Self {
@@ -75,7 +78,7 @@ impl PrivateTempFile {
             let mut random = [0u8; 16];
             getrandom::fill(&mut random).map_err(|e| io::Error::other(e.to_string()))?;
             let name: String = random.iter().map(|b| format!("{b:02x}")).collect();
-            let relative = directory.join(format!(".nessa-{name}.tmp"));
+            let relative = directory.join(format!("{TEMPORARY_PREFIX}{name}{TEMPORARY_SUFFIX}"));
             match open_beneath(root, &relative, OpenMode::CreateNew) {
                 Ok(file) => {
                     return Ok(Self {
@@ -101,6 +104,39 @@ impl PrivateTempFile {
     }
     pub fn persist(self, destination: &Path) -> io::Result<()> {
         replace(&self.path, destination)
+    }
+    /// Publish this file under `destination` only if that name is still unused.
+    ///
+    /// Returns `AlreadyExists` when another owner already published there,
+    /// leaving that record untouched. This temporary name is released before
+    /// the call returns, so the published file ends with a single link.
+    ///
+    /// # Errors
+    /// Any platform publication failure, including a taken destination.
+    pub fn publish(self, destination: &Path) -> io::Result<()> {
+        publish_new(&self.path, destination)
+    }
+    /// Remove temporary files an interrupted publish left in `directory`.
+    ///
+    /// A publish interrupted between linking its destination and releasing its
+    /// own name leaves a second link to an already complete record, which then
+    /// fails private-file verification. One owner calls this when it takes the
+    /// directory, before its first publish; a concurrent writer would see its
+    /// own publish fail rather than lose data.
+    ///
+    /// # Errors
+    /// The directory cannot be read, or a temporary file cannot be removed.
+    pub fn clear_stale(directory: &Path) -> io::Result<()> {
+        verify_directory(directory)?;
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if name.starts_with(TEMPORARY_PREFIX) && name.ends_with(TEMPORARY_SUFFIX) {
+                std::fs::remove_file(entry.path())?;
+            }
+        }
+        Ok(())
     }
     /// Atomically publish this temporary file to a path beneath the same trusted root.
     pub fn persist_beneath(self, destination: &Path) -> io::Result<()> {
@@ -142,6 +178,56 @@ mod tests {
         assert_eq!(text, "replacement");
         std::fs::hard_link(&path, directory.join("alias")).unwrap();
         assert!(open(&path, OpenMode::Read).is_err());
+    }
+
+    #[test]
+    fn publication_never_replaces_a_taken_name_and_stale_temporaries_are_released() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("private");
+        create_directory(&directory).unwrap();
+        let path = directory.join("record");
+
+        let mut temp = PrivateTempFile::new_in(&directory).unwrap();
+        temp.as_file_mut().write_all(b"owner").unwrap();
+        temp.as_file().sync_all().unwrap();
+        temp.publish(&path).unwrap();
+        sync_directory(&directory).unwrap();
+        // The publisher released its own name, so the record is a private,
+        // single-linked file its owner can read back.
+        let mut text = String::new();
+        open(&path, OpenMode::Read)
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        assert_eq!(text, "owner");
+
+        let mut second = PrivateTempFile::new_in(&directory).unwrap();
+        second.as_file_mut().write_all(b"impostor").unwrap();
+        second.as_file().sync_all().unwrap();
+        assert_eq!(
+            second.publish(&path).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        text.clear();
+        open(&path, OpenMode::Read)
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        assert_eq!(text, "owner");
+
+        // A publish interrupted before it released its own name leaves the
+        // record unreadable until the next owner clears that temporary.
+        let leftover = directory.join(".nessa-interrupted.tmp");
+        std::fs::hard_link(&path, &leftover).unwrap();
+        assert!(open(&path, OpenMode::Read).is_err());
+        PrivateTempFile::clear_stale(&directory).unwrap();
+        assert!(!leftover.exists());
+        text.clear();
+        open(&path, OpenMode::Read)
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        assert_eq!(text, "owner");
     }
 
     #[cfg(unix)]

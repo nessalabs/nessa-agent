@@ -235,6 +235,108 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
     assert_eq!(reopen.initiator_surface_id, "phone");
 }
 
+struct GatedCreationAudit {
+    reject: AtomicBool,
+    records: Mutex<Vec<ConversationCreationAuditRecord>>,
+}
+impl ConversationCreationAudit for GatedCreationAudit {
+    fn record(&self, record: ConversationCreationAuditRecord) -> ConversationFuture<'_, ()> {
+        Box::pin(async move {
+            let reject = self.reject.load(Ordering::SeqCst);
+            if !reject {
+                self.records.lock().unwrap().push(record);
+            }
+            if reject {
+                Err(ConversationError::Audit)
+            } else {
+                Ok(())
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_reconciled() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let audit = Arc::new(GatedCreationAudit {
+        reject: AtomicBool::new(true),
+        records: Mutex::new(Vec::new()),
+    });
+    let service = ConversationService::new(
+        Arc::new(Provider(provider.clone())),
+        storage,
+        repository.clone(),
+        audit.clone(),
+        Arc::new(TestClock),
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = id();
+    assert!(matches!(
+        service
+            .create(id.clone(), caller("panel", "create-1"))
+            .await,
+        Err(ConversationError::Audit)
+    ));
+    assert!(repository.records.lock().unwrap().contains_key(&id));
+
+    // Ownership is published, so both direct wire entry points resolve it. Neither
+    // may open the provider while the mandatory creation audit is unacknowledged.
+    assert!(matches!(
+        service.read(id.clone(), caller("panel", "read-1")).await,
+        Err(ConversationError::Audit)
+    ));
+    assert!(matches!(
+        service
+            .submit(
+                id.clone(),
+                caller("panel", "send-1"),
+                "send-1".into(),
+                "Hello".into(),
+                SubmissionMode::Queue,
+            )
+            .await,
+        Err(ConversationError::Audit)
+    ));
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+    assert!(provider.executions.lock().unwrap().is_empty());
+    assert!(audit.records.lock().unwrap().is_empty());
+
+    audit.reject.store(false, Ordering::SeqCst);
+    service
+        .read(id.clone(), caller("phone", "read-2"))
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    service
+        .submit(
+            id.clone(),
+            caller("phone", "send-2"),
+            "send-2".into(),
+            "Hello".into(),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    completed(&service, &id, 1).await;
+
+    // Recovery audits the original creator's evidence exactly once, and a later
+    // read does not repeat it against the already opened provider.
+    let records = audit.records.lock().unwrap().clone();
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].cause,
+        super::ConversationCreationCause::CallerRequested
+    );
+    assert_eq!(records[0].correlation_id, "create-1");
+    assert_eq!(records[0].initiator_surface_id, "panel");
+    assert_eq!(records[0].before, ConversationOwnershipState::Absent);
+    assert_eq!(records[0].after, ConversationOwnershipState::Owned);
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    service.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
     let (_, provider, repository, storage) = fixture(ConversationLimits::default());

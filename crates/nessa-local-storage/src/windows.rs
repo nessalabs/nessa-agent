@@ -398,6 +398,21 @@ pub fn replace(from: &Path, to: &Path) -> io::Result<()> {
         ))
     }
 }
+/// Publish `from` under the unused name `to`, never replacing an existing one.
+///
+/// The move omits `MOVEFILE_REPLACE_EXISTING`, so a taken destination fails
+/// with `AlreadyExists` instead of overwriting another owner's record.
+pub fn publish_new(from: &Path, to: &Path) -> io::Result<()> {
+    check_parents(from)?;
+    check_parents(to)?;
+    unsafe {
+        check(MoveFileExW(
+            wide(from)?.as_ptr(),
+            wide(to)?.as_ptr(),
+            MOVEFILE_WRITE_THROUGH,
+        ))
+    }
+}
 pub fn replace_beneath(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
     if from.components().next().is_none()
         || to.components().next().is_none()

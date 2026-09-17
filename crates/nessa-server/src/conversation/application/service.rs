@@ -199,24 +199,11 @@ impl ConversationService {
                 if !record.allows(&caller.organization_id, &caller.principal_id) {
                     return Err(ConversationError::NotFound);
                 }
-                service
-                    .inner
-                    .creation_audit
-                    .record(super::ConversationCreationAuditRecord {
-                        conversation_id: record.id().clone(),
-                        organization_id: record.organization().clone(),
-                        owner_id: record.owner().clone(),
-                        before: super::ConversationOwnershipState::Absent,
-                        after: super::ConversationOwnershipState::Owned,
-                        cause: super::ConversationCreationCause::CallerRequested,
-                        initiator_principal_id: record.owner().clone(),
-                        initiator_surface_id: record.creator_surface().to_owned(),
-                        correlation_id: record.creation_action().to_owned(),
-                        requested_at_ms: record.creation_requested_at_ms(),
-                        observed_at_ms: service.inner.clock.unix_milliseconds(),
-                    })
-                    .await
-                    .map_err(|_| ConversationError::Audit)?;
+                drop(creation_guard);
+                // Opening reconciles the original creation audit from stored
+                // creator evidence, so this reopen is recorded after the
+                // creation it repeats, never instead of it.
+                service.resolve(&id, &caller).await?;
                 if caller.action_id != record.creation_action() {
                     service
                         .inner
@@ -237,8 +224,6 @@ impl ConversationService {
                         .await
                         .map_err(|_| ConversationError::Audit)?;
                 }
-                drop(creation_guard);
-                service.resolve(&id, &caller).await?;
                 return Ok(());
             }
             {
@@ -256,46 +241,6 @@ impl ConversationService {
             let record = &outcome.conversation;
             if !record.allows(&caller.organization_id, &caller.principal_id) {
                 return Err(ConversationError::NotFound);
-            }
-            service
-                .inner
-                .creation_audit
-                .record(super::ConversationCreationAuditRecord {
-                    conversation_id: record.id().clone(),
-                    organization_id: record.organization().clone(),
-                    owner_id: record.owner().clone(),
-                    before: super::ConversationOwnershipState::Absent,
-                    after: super::ConversationOwnershipState::Owned,
-                    cause: super::ConversationCreationCause::CallerRequested,
-                    initiator_principal_id: record.owner().clone(),
-                    initiator_surface_id: record.creator_surface().to_owned(),
-                    correlation_id: record.creation_action().to_owned(),
-                    requested_at_ms: record.creation_requested_at_ms(),
-                    observed_at_ms: service.inner.clock.unix_milliseconds(),
-                })
-                .await
-                .map_err(|_| ConversationError::Audit)?;
-            if outcome.disposition == super::ConversationCreationDisposition::Existing
-                && caller.action_id != record.creation_action()
-            {
-                service
-                    .inner
-                    .creation_audit
-                    .record(super::ConversationCreationAuditRecord {
-                        conversation_id: record.id().clone(),
-                        organization_id: record.organization().clone(),
-                        owner_id: record.owner().clone(),
-                        before: super::ConversationOwnershipState::Owned,
-                        after: super::ConversationOwnershipState::Owned,
-                        cause: super::ConversationCreationCause::IdempotentReopen,
-                        initiator_principal_id: caller.principal_id.clone(),
-                        initiator_surface_id: caller.surface_id.clone(),
-                        correlation_id: caller.action_id.clone(),
-                        requested_at_ms,
-                        observed_at_ms: service.inner.clock.unix_milliseconds(),
-                    })
-                    .await
-                    .map_err(|_| ConversationError::Audit)?;
             }
             let slot = {
                 let mut owners = service.inner.conversations.lock().await;
@@ -323,6 +268,28 @@ impl ConversationService {
             };
             drop(creation_guard);
             service.open_slot(&id, slot).await?;
+            if outcome.disposition == super::ConversationCreationDisposition::Existing
+                && caller.action_id != record.creation_action()
+            {
+                service
+                    .inner
+                    .creation_audit
+                    .record(super::ConversationCreationAuditRecord {
+                        conversation_id: record.id().clone(),
+                        organization_id: record.organization().clone(),
+                        owner_id: record.owner().clone(),
+                        before: super::ConversationOwnershipState::Owned,
+                        after: super::ConversationOwnershipState::Owned,
+                        cause: super::ConversationCreationCause::IdempotentReopen,
+                        initiator_principal_id: caller.principal_id.clone(),
+                        initiator_surface_id: caller.surface_id.clone(),
+                        correlation_id: caller.action_id.clone(),
+                        requested_at_ms,
+                        observed_at_ms: service.inner.clock.unix_milliseconds(),
+                    })
+                    .await
+                    .map_err(|_| ConversationError::Audit)?;
+            }
             Ok(())
         })
         .await
@@ -384,6 +351,43 @@ impl ConversationService {
                     .value
                     .get_or_init(|| async {
                         let opening = async {
+                            // One gate for every first provider opening: read the
+                            // authoritative creator evidence and reconcile its
+                            // mandatory creation audit before any provider work.
+                            // Repeating it is idempotent by conversation identity.
+                            let record = service
+                                .inner
+                                .metadata
+                                .load(&id)
+                                .await
+                                .map_err(|cause| OpeningFailure { cause, _cleanup: None, retryable: true })?
+                                .ok_or(OpeningFailure {
+                                    cause: ConversationError::NotFound,
+                                    _cleanup: None,
+                                    retryable: false,
+                                })?;
+                            service
+                                .inner
+                                .creation_audit
+                                .record(super::ConversationCreationAuditRecord {
+                                    conversation_id: record.id().clone(),
+                                    organization_id: record.organization().clone(),
+                                    owner_id: record.owner().clone(),
+                                    before: super::ConversationOwnershipState::Absent,
+                                    after: super::ConversationOwnershipState::Owned,
+                                    cause: super::ConversationCreationCause::CallerRequested,
+                                    initiator_principal_id: record.owner().clone(),
+                                    initiator_surface_id: record.creator_surface().to_owned(),
+                                    correlation_id: record.creation_action().to_owned(),
+                                    requested_at_ms: record.creation_requested_at_ms(),
+                                    observed_at_ms: service.inner.clock.unix_milliseconds(),
+                                })
+                                .await
+                                .map_err(|_| OpeningFailure {
+                                    cause: ConversationError::Audit,
+                                    _cleanup: None,
+                                    retryable: true,
+                                })?;
                             let session_id =
                                 SessionId::new(id.to_string()).expect("UUID session key");
                             let manager = SessionManager::open(

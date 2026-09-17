@@ -328,7 +328,15 @@ impl Projection {
         );
         self.bump();
     }
+    /// Apply one live broadcast observation. Live updates carry no durable
+    /// cursor, so the lag fence drops their text.
     pub fn event(&mut self, event: &ExecutionEvent) {
+        self.observe(event, false);
+    }
+    /// Apply one observation. `authoritative` marks replay of a committed record
+    /// rebuilt from the SDK snapshot: that text is proven to belong to this
+    /// message, so the lag fence must not erase it.
+    fn observe(&mut self, event: &ExecutionEvent, authoritative: bool) {
         let id = event.execution_id().as_str();
         // A completion watcher can restore the final snapshot before this
         // observer drains already-buffered chunks. Do not append those twice.
@@ -363,18 +371,20 @@ impl Projection {
             self.view.truncated = true;
         }
         let part = match event.update() {
-            ExecutionUpdate::Message(chunk) if !self.lagged => Some(ConversationPart {
-                message_id: chunk.message_id().map(str::to_owned),
-                offset,
-                kind: if chunk.kind() == MessageKind::Text {
-                    "text"
-                } else {
-                    "thought"
-                }
-                .into(),
-                text: clipped(chunk.as_str(), available),
-                tool_id: String::new(),
-            }),
+            ExecutionUpdate::Message(chunk) if authoritative || !self.lagged => {
+                Some(ConversationPart {
+                    message_id: chunk.message_id().map(str::to_owned),
+                    offset,
+                    kind: if chunk.kind() == MessageKind::Text {
+                        "text"
+                    } else {
+                        "thought"
+                    }
+                    .into(),
+                    text: clipped(chunk.as_str(), available),
+                    tool_id: String::new(),
+                })
+            }
             ExecutionUpdate::Tool(update) => Some(ConversationPart {
                 message_id: None,
                 offset,
@@ -499,7 +509,7 @@ impl Projection {
         self.view.messages[index].status = ConversationMessageStatus::Running;
         self.view.messages[index].error = None;
         for event in &record.events {
-            self.event(event);
+            self.observe(event, true);
         }
         let index = self.ensure_message(id);
         self.view.messages[index].status = match &record.result {

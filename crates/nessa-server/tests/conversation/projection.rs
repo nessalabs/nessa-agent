@@ -214,6 +214,78 @@ fn stale_preterminal_snapshot_cannot_revive_a_finished_review() {
     assert!(projection.read().permissions.is_empty());
 }
 
+fn text_parts(view: &super::ConversationView, id: &str) -> String {
+    view.messages
+        .iter()
+        .find(|message| message.execution_id == id)
+        .unwrap()
+        .parts
+        .iter()
+        .filter(|part| part.kind == "text")
+        .map(|part| part.text.as_str())
+        .collect()
+}
+fn completed_snapshot(id: &str, events: Vec<ExecutionEvent>) -> SessionSnapshot {
+    let mut snapshot = review_snapshot(events);
+    snapshot.invocations[0].request.execution_id = ExecutionId::new(id).unwrap();
+    snapshot.invocations[0].result = Some(Ok(ExecutionOutcome::Completed));
+    snapshot
+}
+
+#[test]
+fn lagged_projection_rebuilds_saved_text_from_a_terminal_snapshot_exactly_once() {
+    let mut projection = projection();
+    let chunk = event(ExecutionUpdate::Message(MessageChunk::text("saved answer")));
+    projection.event(&chunk);
+    projection.lagged();
+    // Ambiguous live text is fenced: it has no durable cursor.
+    assert!(text_parts(&projection.read(), "execution").is_empty());
+
+    let snapshot = completed_snapshot(
+        "execution",
+        vec![
+            chunk.clone(),
+            event(ExecutionUpdate::Finished(ExecutionOutcome::Completed)),
+        ],
+    );
+    projection.settled("execution", Some(&snapshot));
+    let view = projection.read();
+    assert_eq!(text_parts(&view, "execution"), "saved answer");
+    assert_eq!(
+        view.messages[0].status,
+        ConversationMessageStatus::Completed
+    );
+
+    // Buffered live chunks draining after settlement must not duplicate it.
+    projection.event(&chunk);
+    assert_eq!(text_parts(&projection.read(), "execution"), "saved answer");
+
+    // The live fence still holds for a later invocation in the same projection,
+    // and its own terminal snapshot recovers its text.
+    let later = ExecutionId::new("later").unwrap();
+    let chunk = ExecutionEvent::new(
+        later.clone(),
+        ExecutionUpdate::Message(MessageChunk::text("later answer")),
+    );
+    projection.admitted("later", "question", ConversationPendingMode::Queued);
+    projection.event(&chunk);
+    assert!(text_parts(&projection.read(), "later").is_empty());
+    projection.settled(
+        "later",
+        Some(&completed_snapshot(
+            "later",
+            vec![
+                chunk,
+                ExecutionEvent::new(
+                    later,
+                    ExecutionUpdate::Finished(ExecutionOutcome::Completed),
+                ),
+            ],
+        )),
+    );
+    assert_eq!(text_parts(&projection.read(), "later"), "later answer");
+}
+
 #[test]
 fn cancellation_does_not_hide_a_separate_receipt_failure() {
     let mut projection = projection();

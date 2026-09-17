@@ -6,7 +6,7 @@ use crate::conversation::{
     domain::{Conversation, ConversationId},
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
-use nessa_local_storage::{self as storage, OpenMode};
+use nessa_local_storage::{self as storage, OpenMode, PrivateTempFile};
 use serde::{Deserialize, Serialize};
 use std::{
     io::{Read, Write},
@@ -31,8 +31,13 @@ pub struct LocalConversationRepository {
 }
 impl LocalConversationRepository {
     /// The composition-selected directory must be private and owned by this OS user.
+    ///
+    /// Taking the directory also releases temporary files an interrupted
+    /// publish left behind, so a record published just before that interruption
+    /// is readable again instead of keeping a second link forever.
     pub fn new(root: PathBuf) -> Result<Self, ConversationError> {
         storage::create_directory(&root).map_err(|_| ConversationError::Metadata)?;
+        PrivateTempFile::clear_stale(&root).map_err(|_| ConversationError::Metadata)?;
         Ok(Self {
             root,
             writes: Arc::new(Mutex::new(())),
@@ -109,12 +114,19 @@ impl ConversationRepository for LocalConversationRepository {
                 if bytes.len() > 4096 {
                     return Err(ConversationError::Metadata);
                 }
+                // The owner's name appears only once its complete bytes are
+                // durable, so an interrupted creation leaves no record at all
+                // and the same conversation ID can still be created. Publishing
+                // never replaces a name another owner already holds.
+                let mut file =
+                    PrivateTempFile::new_in(&root).map_err(|_| ConversationError::Metadata)?;
+                file.as_file_mut()
+                    .write_all(&bytes)
+                    .and_then(|_| file.as_file().sync_all())
+                    .map_err(|_| ConversationError::Metadata)?;
                 let path = root.join(format!("{}.json", conversation.id()));
-                match storage::open(&path, OpenMode::CreateNew) {
-                    Ok(mut file) => {
-                        file.write_all(&bytes)
-                            .and_then(|_| file.sync_all())
-                            .map_err(|_| ConversationError::Metadata)?;
+                match file.publish(&path) {
+                    Ok(()) => {
                         storage::sync_directory(&root).map_err(|_| ConversationError::Metadata)?;
                         Ok(ConversationCreation {
                             conversation,
