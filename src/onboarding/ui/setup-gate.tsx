@@ -47,7 +47,6 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
           onConfirm={onboarding.confirm}
           onFinish={onboarding.finish}
           platform={onboarding.platform}
-          onConfirmSummon={onboarding.confirmSummon}
         />
       </div>
     </div>

@@ -13,7 +13,6 @@ import {
   completeOnboarding,
   confirmAgent,
   dismissOnboarding,
-  confirmSummon,
   isOnboarding,
   pressSummon,
   startAgentChoice,
@@ -61,8 +60,6 @@ export interface Onboarding {
   finish: () => void
   /** Leave setup without finishing it. */
   dismiss: () => void
-  /** Move on from the summon step, once the shortcut has been pressed. */
-  confirmSummon: () => void
 }
 
 /**
@@ -183,9 +180,5 @@ export function useOnboarding(initial?: OnboardingState): Onboarding {
     }, []),
     // Leaving is not an accomplishment and does not announce itself.
     dismiss: React.useCallback(() => setState(dismissOnboarding), []),
-    confirmSummon: React.useCallback(() => {
-      playCue("advance")
-      setState(confirmSummon)
-    }, []),
   }
 }

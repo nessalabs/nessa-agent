@@ -6,7 +6,6 @@ import {
   chooseAgent,
   completeOnboarding,
   confirmAgent,
-  confirmSummon,
   dismissOnboarding,
   isOnboarding,
   pressSummon,
@@ -37,10 +36,9 @@ describe("first-run setup", () => {
     expect(chosen.agent).toBe("claude")
     const summon = confirmAgent(chosen)
     expect(summon).toEqual({ step: "summon", agent: "claude" })
-    const ready = confirmSummon(pressSummon(pressSummon(summon)))
-    expect(ready).toEqual({ step: "ready", agent: "claude" })
-    expect(isOnboarding(ready)).toBe(true)
-    expect(completeOnboarding(ready)).toEqual({ step: "done", agent: "claude" })
+    expect(isOnboarding(summon)).toBe(true)
+    // The shortcut lesson is the last step: finishing it finishes setup.
+    expect(completeOnboarding(summonPressed())).toEqual({ step: "done", agent: "claude" })
   })
 
   it("does not record an agent no provider can run", () => {
@@ -55,18 +53,22 @@ describe("first-run setup", () => {
     expect(isOnboarding(confirmAgent(picking))).toBe(true)
   })
 
-  it("only finishes from the last step", () => {
+  it("only finishes from a completed shortcut lesson", () => {
     const welcome = beginOnboarding()
     expect(completeOnboarding(welcome)).toBe(welcome)
     const chosen = chooseAgent(startAgentChoice(welcome), "claude")
     expect(completeOnboarding(chosen)).toBe(chosen)
-    expect(completeOnboarding(summonPressed())).toEqual(summonPressed())
+    // Half a lesson is not a finished one.
+    const summon = atSummon()
+    expect(completeOnboarding(summon)).toBe(summon)
+    const shown = pressSummon(summon)
+    expect(completeOnboarding(shown)).toBe(shown)
   })
 
   it("ignores steps that do not apply to the current one", () => {
     const welcome = beginOnboarding()
     expect(chooseAgent(welcome, "claude")).toBe(welcome)
-    const done = completeOnboarding(confirmSummon(summonPressed()))
+    const done = completeOnboarding(summonPressed())
     expect(startAgentChoice(done)).toBe(done)
     expect(chooseAgent(done, "claude")).toBe(done)
   })
@@ -79,19 +81,18 @@ describe("first-run setup", () => {
 })
 
 describe("learning the summon shortcut", () => {
-  it("teaches both halves of the toggle before it offers a way on", () => {
+  it("teaches both halves of the toggle before it offers a way out", () => {
     const summon = atSummon()
     expect(summon.summon).toBeUndefined()
-    expect(confirmSummon(summon)).toBe(summon)
 
-    // Summoning is only half the lesson, so it is not yet a way on.
+    // Summoning is only half the lesson, so it is not yet a way out.
     const shown = pressSummon(summon)
     expect(shown.summon).toBe("shown")
-    expect(confirmSummon(shown)).toBe(shown)
+    expect(completeOnboarding(shown)).toBe(shown)
 
     const hidden = pressSummon(shown)
     expect(hidden.summon).toBe("hidden")
-    expect(confirmSummon(hidden)).toEqual({ step: "ready", agent: "claude" })
+    expect(completeOnboarding(hidden)).toEqual({ step: "done", agent: "claude" })
   })
 
   it("stops teaching once the lesson is over", () => {
@@ -99,17 +100,15 @@ describe("learning the summon shortcut", () => {
     expect(pressSummon(hidden)).toBe(hidden)
   })
 
-  it("does not carry the lesson into the step after it", () => {
-    expect(confirmSummon(summonPressed())).not.toHaveProperty("summon")
+  it("does not carry the lesson into the finished setup", () => {
+    expect(completeOnboarding(summonPressed())).not.toHaveProperty("summon")
   })
 
   it("ignores presses outside the step that teaches it", () => {
     const welcome = beginOnboarding()
     expect(pressSummon(welcome)).toBe(welcome)
-    expect(confirmSummon(welcome)).toBe(welcome)
-    const ready = confirmSummon(summonPressed())
-    expect(pressSummon(ready)).toBe(ready)
-    expect(confirmSummon(ready)).toBe(ready)
+    const done = completeOnboarding(summonPressed())
+    expect(pressSummon(done)).toBe(done)
   })
 })
 
@@ -122,7 +121,7 @@ describe("leaving setup without finishing it", () => {
   })
 
   it("leaves a finished setup alone", () => {
-    const done = completeOnboarding(confirmSummon(summonPressed()))
+    const done = completeOnboarding(summonPressed())
     expect(done.step).toBe("done")
     expect(dismissOnboarding(done)).toBe(done)
   })

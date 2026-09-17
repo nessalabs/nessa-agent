@@ -38,8 +38,12 @@ export const AGENT_CHOICES: readonly AgentChoice[] = Object.freeze([
   }),
 ])
 
-/** Ordered first-run steps. `done` means the panel shows the conversation. */
-export type OnboardingStep = "welcome" | "agent" | "summon" | "ready" | "done"
+/** Ordered first-run steps. `done` means the panel shows the conversation.
+ *
+ * There is no step after the shortcut lesson. Finishing it is already the good
+ * news, and a screen whose only job is to say so again is a screen between
+ * someone and the thing they came for. */
+export type OnboardingStep = "welcome" | "agent" | "summon" | "done"
 
 /** What the panel is showing during first run. */
 export interface OnboardingState {
@@ -103,15 +107,6 @@ export function pressSummon(state: OnboardingState): OnboardingState {
   return state
 }
 
-/** Move on from the summon step, which only a step that has been satisfied can
- * do: until the shortcut has both summoned and dismissed, there is nothing to
- * confirm. The lesson does not travel to the next step — it is about the step,
- * not the setup. */
-export function confirmSummon(state: OnboardingState): OnboardingState {
-  if (state.step !== "summon" || state.summon !== "hidden") return state
-  return { step: "ready", agent: state.agent }
-}
-
 /** Leave setup without finishing it, from any step. Nothing is recorded: an
  * agent chosen on the way out is not a completed setup, and the next run starts
  * over. */
@@ -119,9 +114,12 @@ export function dismissOnboarding(state: OnboardingState): OnboardingState {
   return state.step === "done" ? state : { step: "done" }
 }
 
-/** Finish setup from its last step. */
+/** Finish setup, which only a completed shortcut lesson can do: until it has
+ * both summoned and dismissed there is nothing to finish. The lesson does not
+ * travel into the finished state — it was about the step, not the setup. */
 export function completeOnboarding(state: OnboardingState): OnboardingState {
-  return state.step === "ready" ? { ...state, step: "done" } : state
+  if (state.step !== "summon" || state.summon !== "hidden") return state
+  return { step: "done", agent: state.agent }
 }
 
 /** Whether the panel should show setup instead of the conversation. */

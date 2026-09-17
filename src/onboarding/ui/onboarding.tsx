@@ -164,14 +164,11 @@ export function Onboarding({
   onConfirm,
   onFinish,
   platform,
-  onConfirmSummon,
 }: {
   state: OnboardingState
   accelerator?: string
   /** The keyboard conventions this device writes shortcuts in. */
   platform: ShortcutPlatform
-  /** Move on from the summon step, once the shortcut has been pressed. */
-  onConfirmSummon: () => void
   onBegin: () => void
   onChoose: (id: AgentId) => void
   onConfirm: () => void
@@ -205,8 +202,8 @@ export function Onboarding({
         <SetupStep
           action={
             state.summon === "hidden" ? (
-              <Button size="lg" className={PILL} onClick={onConfirmSummon}>
-                Continue
+              <Button size="lg" className={PILL} onClick={onFinish}>
+                Start using Nessa
               </Button>
             ) : null
           }
@@ -217,24 +214,6 @@ export function Onboarding({
           {accelerator ? (
             <Keycaps keys={accelerator} platform={platform} pressed={state.summon} />
           ) : null}
-        </SetupStep>
-      </SetupStage>
-    )
-  }
-
-  if (state.step === "ready") {
-    return (
-      <SetupStage>
-        <SetupStep
-          action={
-            <Button size="lg" className={PILL} onClick={onFinish}>
-              Start using Nessa
-            </Button>
-          }
-        >
-          <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white">
-            You&rsquo;re all set
-          </h1>
         </SetupStep>
       </SetupStage>
     )
