@@ -5,6 +5,7 @@ import {
   agentReadiness,
   isChoosable,
   recordReadiness,
+  recordReadinessFailure,
   beginOnboarding,
   chooseAgent,
   completeOnboarding,
@@ -17,16 +18,16 @@ import {
 
 /** Setup with Claude reported ready, which is the only way it is choosable. */
 function withClaudeReady(state = beginOnboarding()) {
-  return recordReadiness(state, { claude: "ready", codex: "unavailable" })
+  return recordReadiness(state, { claude: "ready", codex: "not-installed" })
 }
 
 function atSummon() {
   return confirmAgent(chooseAgent(startAgentChoice(withClaudeReady()), "claude"))
 }
 
-/** The summon step with the shortcut pressed both times: shown, then hidden. */
+/** The summon step with the shortcut reported both ways: shown, then hidden. */
 function summonPressed() {
-  return pressSummon(pressSummon(atSummon()))
+  return pressSummon(pressSummon(atSummon(), true), false)
 }
 
 describe("first-run setup", () => {
@@ -48,7 +49,8 @@ describe("first-run setup", () => {
     expect(summon).toEqual({
       step: "summon",
       agent: "claude",
-      readiness: { claude: "ready", codex: "unavailable" },
+      readiness: { claude: "ready", codex: "not-installed" },
+      readinessFailure: undefined,
     })
     expect(isOnboarding(summon)).toBe(true)
     // The shortcut lesson is the last step: finishing it finishes setup.
@@ -65,7 +67,7 @@ describe("first-run setup", () => {
     // Not asked yet is not the same as available, and only one of them is safe
     // to assume.
     const picking = startAgentChoice(beginOnboarding())
-    expect(agentReadiness(picking, "claude")).toBe("unavailable")
+    expect(agentReadiness(picking, "claude")).toBe("unknown")
     expect(isChoosable(picking, "claude")).toBe(false)
     expect(chooseAgent(picking, "claude")).toBe(picking)
   })
@@ -84,7 +86,7 @@ describe("first-run setup", () => {
     const picking = recordReadiness(startAgentChoice(beginOnboarding()), {
       codex: "ready",
     })
-    expect(agentReadiness(picking, "codex")).toBe("unavailable")
+    expect(agentReadiness(picking, "codex")).toBe("not-supported")
     expect(chooseAgent(picking, "codex")).toBe(picking)
   })
 
@@ -94,16 +96,18 @@ describe("first-run setup", () => {
     expect(isOnboarding(confirmAgent(picking))).toBe(true)
   })
 
-  it("only finishes from a completed shortcut lesson", () => {
+  it("only finishes from the last step", () => {
     const welcome = beginOnboarding()
     expect(completeOnboarding(welcome)).toBe(welcome)
     const chosen = chooseAgent(startAgentChoice(withClaudeReady(welcome)), "claude")
     expect(completeOnboarding(chosen)).toBe(chosen)
-    // Half a lesson is not a finished one.
-    const summon = atSummon()
-    expect(completeOnboarding(summon)).toBe(summon)
-    const shown = pressSummon(summon)
-    expect(completeOnboarding(shown)).toBe(shown)
+  })
+
+  it("finishes from the summon step with the lesson unlearned", () => {
+    // Nothing else can: a configuration that registers no accelerator has
+    // nothing to press, and refusing to finish left setup with no way out but
+    // abandoning it, which records nothing and starts over next launch.
+    expect(completeOnboarding(atSummon())).toEqual({ step: "done", agent: "claude" })
   })
 
   it("ignores steps that do not apply to the current one", () => {
@@ -125,31 +129,93 @@ describe("learning the summon shortcut", () => {
   it("teaches both halves of the toggle before it offers a way out", () => {
     const summon = atSummon()
     expect(summon.summon).toBeUndefined()
+    expect(summon.summonTaught).toBeUndefined()
 
     // Summoning is only half the lesson, so it is not yet a way out.
-    const shown = pressSummon(summon)
+    const shown = pressSummon(summon, true)
     expect(shown.summon).toBe("shown")
-    expect(completeOnboarding(shown)).toBe(shown)
+    expect(shown.summonTaught).toBe(false)
 
-    const hidden = pressSummon(shown)
+    const hidden = pressSummon(shown, false)
     expect(hidden.summon).toBe("hidden")
-    expect(completeOnboarding(hidden)).toEqual({ step: "done", agent: "claude" })
+    expect(hidden.summonTaught).toBe(true)
   })
 
-  it("stops teaching once the lesson is over", () => {
+  it("records what the host reported, not which press this was", () => {
+    // The panel can already be on screen when the step is reached — toggled
+    // from the tray, or summoned earlier while nothing was listening. The first
+    // press then *hides* it. A press counter said "shown" and told the person
+    // to press it again to hide a panel that was already gone.
+    const first = pressSummon(atSummon(), false)
+    expect(first.summon).toBe("hidden")
+
+    const second = pressSummon(first, true)
+    expect(second.summon).toBe("shown")
+
+    const third = pressSummon(second, false)
+    expect(third.summon).toBe("hidden")
+  })
+
+  it("does not un-teach the lesson when the panel comes back", () => {
+    // A third press is somebody trying it out. Taking the way on back off the
+    // screen for it would be a punishment for curiosity.
+    const again = pressSummon(summonPressed(), true)
+    expect(again.summon).toBe("shown")
+    expect(again.summonTaught).toBe(true)
+  })
+
+  it("changes nothing when the host repeats what is already recorded", () => {
     const hidden = summonPressed()
-    expect(pressSummon(hidden)).toBe(hidden)
+    expect(pressSummon(hidden, false)).toBe(hidden)
   })
 
   it("does not carry the lesson into the finished setup", () => {
-    expect(completeOnboarding(summonPressed())).not.toHaveProperty("summon")
+    const done = completeOnboarding(summonPressed())
+    expect(done).not.toHaveProperty("summon")
+    expect(done).not.toHaveProperty("summonTaught")
   })
 
   it("ignores presses outside the step that teaches it", () => {
     const welcome = beginOnboarding()
-    expect(pressSummon(welcome)).toBe(welcome)
+    expect(pressSummon(welcome, true)).toBe(welcome)
     const done = completeOnboarding(summonPressed())
-    expect(pressSummon(done)).toBe(done)
+    expect(pressSummon(done, true)).toBe(done)
+  })
+})
+
+describe("what the runtimes answered", () => {
+  it("tells a failed ask apart from an agent with no adapter", () => {
+    const asked = recordReadinessFailure(
+      startAgentChoice(beginOnboarding()),
+      "unreachable",
+    )
+    // Not a fact about Claude: nobody answered for it.
+    expect(agentReadiness(asked, "claude")).toBe("unknown")
+    expect(asked.readinessFailure).toBe("unreachable")
+    // Which is a different thing from Codex, about which there is an answer.
+    expect(agentReadiness(asked, "codex")).toBe("not-supported")
+    expect(isChoosable(asked, "claude")).toBe(false)
+  })
+
+  it("keeps an unreadable answer distinct from an unreachable one", () => {
+    const asked = recordReadinessFailure(beginOnboarding(), "unreadable")
+    expect(asked.readinessFailure).toBe("unreadable")
+  })
+
+  it("drops a stale report when a later ask fails", () => {
+    // A "ready" from before the gateway went away is not evidence it can start.
+    const failed = recordReadinessFailure(withClaudeReady(), "unreachable")
+    expect(failed.readiness).toBeUndefined()
+    expect(agentReadiness(failed, "claude")).toBe("unknown")
+  })
+
+  it("clears the failure once an answer arrives", () => {
+    const answered = recordReadiness(
+      recordReadinessFailure(beginOnboarding(), "unreachable"),
+      { claude: "ready" },
+    )
+    expect(answered.readinessFailure).toBeUndefined()
+    expect(agentReadiness(answered, "claude")).toBe("ready")
   })
 })
 

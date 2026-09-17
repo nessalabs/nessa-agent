@@ -8,6 +8,28 @@ describe("frontend environment", () => {
   it("defaults to the real backend", () => {
     expect(loadEnvironment({}).conversation.backend).toBe("local")
   })
+  it("sends a packaged build straight at the local gateway", () => {
+    expect(loadEnvironment({}).gatewayBaseUrl).toBe("http://127.0.0.1:7420")
+  })
+
+  it("sends a development build at its own origin, where the proxy is", () => {
+    expect(loadEnvironment({}, true).gatewayBaseUrl).toBe("")
+  })
+
+  it("takes a configured gateway as an origin, without its path", () => {
+    expect(
+      loadEnvironment({ VITE_NESSA_GATEWAY_URL: "https://gateway.example:8443/ignored/" })
+        .gatewayBaseUrl,
+    ).toBe("https://gateway.example:8443")
+  })
+
+  it.each(["127.0.0.1:7420", "ws://127.0.0.1:7420", "file:///tmp", "nonsense"])(
+    "rejects %s as a gateway URL",
+    (url) => {
+      expect(() => loadEnvironment({ VITE_NESSA_GATEWAY_URL: url })).toThrow()
+    },
+  )
+
   it.each(["prod", "alpha"])("rejects scenarios in %s", (stage) => {
     expect(() =>
       loadEnvironment(

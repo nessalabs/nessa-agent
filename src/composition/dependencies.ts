@@ -7,6 +7,8 @@ import { scenarioEffects } from "../conversation/adapters/scenario/effects"
 import { createSessionHandle } from "../session/adapters/client/handle"
 import { connectDevSession } from "../session/adapters/client/dev-session"
 import type { ConversationEffects } from "../conversation/application/ports"
+import { httpAgentReadiness } from "../onboarding/adapters/agents"
+import type { AgentReadinessSource } from "../onboarding/application/ports"
 
 /** Construct once per application. Overrides are explicit, never a service locator. */
 export function createDependencies(
@@ -14,6 +16,7 @@ export function createDependencies(
     environment?: Environment
     connectSession?: typeof connectDevSession
     conversation?: ConversationEffects
+    agents?: AgentReadinessSource
     credentialSource?: CredentialSource
     clientId?: string
   } = {},
@@ -23,6 +26,9 @@ export function createDependencies(
   return {
     session,
     attachments: createAttachmentResources(),
+    // Setup's one pre-session question. Constructed here so the surface takes
+    // it as a dependency rather than importing the transport it happens to use.
+    agents: options.agents ?? httpAgentReadiness({ baseUrl: config.gatewayBaseUrl }),
     usesLocalSession: config.conversation.backend === "local",
     connectSession:
       options.connectSession ??

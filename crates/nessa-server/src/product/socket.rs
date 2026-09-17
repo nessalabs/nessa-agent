@@ -889,7 +889,10 @@ mod tests {
         }
     }
 
-    use crate::{app::ports::Clock as UptimeClock, product::ProductDependencies};
+    use crate::{
+        agents_test_support::StubAgentProbe, app::ports::Clock as UptimeClock,
+        product::ProductDependencies,
+    };
     use nessa_auth::{
         adapters::cedar::CedarPolicyEvaluator,
         application::{
@@ -1013,6 +1016,7 @@ mod tests {
                 clock: authority.clone(),
                 policy: Arc::new(CedarPolicyEvaluator::new().unwrap()),
                 uptime_clock: authority.clone(),
+                agent_probe: Arc::new(StubAgentProbe::answering(false, false)),
             },
         );
         (state, authority)

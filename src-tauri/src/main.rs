@@ -82,9 +82,7 @@ fn main() {
             // is the active window when it does. It is placed while still
             // hidden and shown by its own page, once that page has a frame to
             // show — see `panel::reveal_setup_window`.
-            if let Some(window) = app.get_webview_window(panel::SETUP_WINDOW) {
-                platform::current().present_overlay(&window);
-            }
+            panel::open_setup_window(app.handle());
 
             // The panel reads these on every show, to re-fit the frame.
             app.manage(settings);

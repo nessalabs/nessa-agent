@@ -23,8 +23,12 @@ impl Host for Macos {
         }
     }
 
-    fn present_overlay(&self, window: &WebviewWindow) {
-        overlay::present(window)
+    fn place_overlay(&self, window: &WebviewWindow) {
+        overlay::place(window)
+    }
+
+    fn reveal_overlay(&self, window: &WebviewWindow) {
+        overlay::reveal(window)
     }
 
     fn set_above_overlay(&self, window: &WebviewWindow, above: bool) {

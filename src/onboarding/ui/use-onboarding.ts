@@ -1,12 +1,10 @@
 import * as React from "react"
 import type { ShortcutsDocument } from "@nessa/client"
 import defaults from "../../../protocol/defaults/shortcuts.v1.json"
-import { host } from "../../host"
-import { matchesAccelerator } from "../../host/accelerator"
+import { host, loadShortcuts, matchesAccelerator, onSummoned } from "../../host"
 import { playCue } from "./sound"
 import type { ShortcutPlatform } from "../model/shortcut-display"
-import { loadShortcuts, onSummoned } from "../../host/window"
-import { readAgentsReadiness } from "../adapters/agents"
+import type { AgentReadinessSource } from "../application/ports"
 import { summonAccelerator } from "../model/shortcut-display"
 import {
   beginOnboarding,
@@ -17,6 +15,7 @@ import {
   isOnboarding,
   pressSummon,
   recordReadiness,
+  recordReadinessFailure,
   startAgentChoice,
   type AgentId,
   type OnboardingState,
@@ -76,7 +75,10 @@ export interface Onboarding {
  * bundled defaults the way the rest of the panel does, so setup teaches the
  * binding that is actually registered rather than a hardcoded one.
  */
-export function useOnboarding(initial?: OnboardingState): Onboarding {
+export function useOnboarding(
+  agents: AgentReadinessSource,
+  initial?: OnboardingState,
+): Onboarding {
   const [state, setState] = React.useState<OnboardingState>(
     () => initial ?? beginOnboarding(),
   )
@@ -94,17 +96,23 @@ export function useOnboarding(initial?: OnboardingState): Onboarding {
 
   // What each agent's runtime reports, asked once when setup opens. Nothing is
   // offered until the answer arrives: an agent is not choosable on the strength
-  // of not having been asked about.
+  // of not having been asked about. Not getting an answer is recorded as such,
+  // so the picker can say the gateway is unreachable rather than blaming the
+  // agent for it.
   React.useEffect(() => {
     let cancelled = false
-    void readAgentsReadiness().then((reported) => {
+    void agents.read().then((answer) => {
       if (cancelled) return
-      setState((current) => recordReadiness(current, reported))
+      setState((current) =>
+        answer.ok
+          ? recordReadiness(current, answer.agents)
+          : recordReadinessFailure(current, answer.reason),
+      )
     })
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [agents])
 
   const keys = summonAccelerator(shortcuts)
   const platform = shortcutPlatform()
@@ -132,10 +140,11 @@ export function useOnboarding(initial?: OnboardingState): Onboarding {
   // itself, so the press is something a person sees land rather than a screen
   // that vanishes under them.
   const practising = state.step === "summon"
-  // Which half of the lesson a press would be, so the cue can be chosen before
-  // the state changes rather than from inside an updater, which React is free
-  // to run more than once.
-  const lesson = state.step === "summon" ? state.summon : undefined
+  // What the panel is doing right now, so the browser path can work out what
+  // its own press would do to it — and so the cue is chosen before the state
+  // changes rather than from inside an updater, which React is free to run more
+  // than once.
+  const showing = state.step === "summon" && state.summon === "shown"
   React.useEffect(() => {
     // Only where nothing else reports the press. A native host holds this
     // accelerator with the system and tells us about it, and counting both a
@@ -144,13 +153,17 @@ export function useOnboarding(initial?: OnboardingState): Onboarding {
     function onKeyDown(event: KeyboardEvent) {
       if (event.repeat || !matchesAccelerator(event, keys)) return
       event.preventDefault()
-      if (lesson === "hidden") return
-      playCue(lesson === undefined ? "summon" : "dismiss")
-      setState(pressSummon)
+      // There is no panel to toggle in a browser, so this is the nearest thing
+      // to a report: the press flips whatever the surface last showed. It goes
+      // through the same door as the host's own report, as the same kind of
+      // fact, so the two paths cannot drift apart.
+      const reported = !showing
+      playCue(reported ? "summon" : "dismiss")
+      setState((current) => pressSummon(current, reported))
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [practising, keys, lesson])
+  }, [practising, keys, showing])
 
   // The desktop host registers this accelerator with the system, so the press
   // is taken before this window sees a key — which is why it also reports the
@@ -161,9 +174,13 @@ export function useOnboarding(initial?: OnboardingState): Onboarding {
     if (!practising) return
     let stop: (() => void) | undefined
     let cancelled = false
-    void onSummoned((showing) => {
-      playCue(showing ? "summon" : "dismiss")
-      setState(pressSummon)
+    // What the host reports is what the model records. It is the only thing
+    // here that knows whether the panel is actually on screen, and a model that
+    // counted presses instead could be told one thing by the sound, another by
+    // the copy, and a third by the panel itself.
+    void onSummoned((reported) => {
+      playCue(reported ? "summon" : "dismiss")
+      setState((current) => pressSummon(current, reported))
     }).then((unlisten) => {
       if (cancelled) unlisten()
       else stop = unlisten

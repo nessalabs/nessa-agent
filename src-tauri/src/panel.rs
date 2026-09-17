@@ -5,11 +5,13 @@
 //! between displays re-places the panel rather than stranding it.
 
 use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalSize, WebviewWindow,
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalSize, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder,
 };
 
 use crate::host;
-use crate::settings::Settings;
+use crate::platform;
+use crate::settings::{Panel, Settings};
 
 const MAIN_WINDOW: &str = "main";
 /// The floor the resize edge may not drag the panel below, whatever the
@@ -28,24 +30,82 @@ fn settings(app: &AppHandle) -> Settings {
 
 /// Shows the panel if it is hidden, hides it if it is not. Returns whether it
 /// is showing afterwards, which is what a surface teaching the shortcut needs
-/// to know; a missing window reports hidden.
-pub fn toggle(app: &AppHandle) -> bool {
-    let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
-        return false;
-    };
+/// to know. Returns `None` when there is no panel to toggle at all — distinct
+/// from a hide, so a caller reporting this onward cannot be mistaken for a
+/// press that actually put the panel away.
+pub fn toggle(app: &AppHandle) -> Option<bool> {
+    let window = app.get_webview_window(MAIN_WINDOW)?;
 
     if window.is_visible().unwrap_or(false) {
         let _ = window.hide();
-        return false;
+        // Hiding the panel takes the key window away with it. While setup is on
+        // screen that leaves focus nowhere, and setup's way out — Escape — is a
+        // key handler in its page, which never sees a key it is not focused for.
+        // The lesson that teaches this shortcut presses it twice.
+        if let Some(setup) = app.get_webview_window(SETUP_WINDOW) {
+            if setup.is_visible().unwrap_or(false) {
+                platform::current().reveal_overlay(&setup);
+            }
+        }
+        return Some(false);
     }
 
     show(&window, &settings(app));
-    true
+    Some(true)
 }
 
 /// The first-run setup window, which is a screen-covering takeover rather than
 /// a panel.
 pub const SETUP_WINDOW: &str = "setup";
+
+/// The size setup opens at on hosts that do not place it themselves.
+///
+/// `place_overlay` replaces this frame with the whole screen where the host can
+/// do that. Where it is an explicit no-op, this *is* the window somebody gets,
+/// so it has to be a window rather than whatever default the window system
+/// hands out for a size nobody asked for.
+const SETUP_WIDTH: f64 = 960.0;
+const SETUP_HEIGHT: f64 = 640.0;
+
+/// The one place the setup window's shape is written down.
+///
+/// It is built here rather than declared in `tauri.conf.json` because setup is
+/// also reopened during a session (`restart_onboarding`), and two declarations
+/// of one window are two things to keep in step with nothing comparing them.
+///
+/// Built hidden: a window is on screen the moment it exists, and its page
+/// reveals it once it has a frame to show (`reveal_setup_window`).
+fn build_setup_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
+    WebviewWindowBuilder::new(
+        app,
+        SETUP_WINDOW,
+        WebviewUrl::App("index.html?surface=setup".into()),
+    )
+    .title("Welcome to Nessa")
+    .inner_size(SETUP_WIDTH, SETUP_HEIGHT)
+    .center()
+    .resizable(false)
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .always_on_top(true)
+    // Deliberately not maximized: `place_overlay` gives it the whole screen,
+    // menu bar included, and maximizing fits a window to the *visible* frame —
+    // which is the screen minus exactly the parts this needs to cover.
+    .skip_taskbar(true)
+    .visible(false)
+    .build()
+}
+
+/// Opens first-run setup at startup: built hidden, shaped into an overlay, and
+/// left for its own page to reveal. A setup window that cannot be built is
+/// survivable — the panel is still reachable from the tray.
+pub fn open_setup_window(app: &AppHandle) {
+    match build_setup_window(app) {
+        Ok(window) => platform::current().place_overlay(&window),
+        Err(error) => eprintln!("[nessa] could not open setup: {error}"),
+    }
+}
 
 /// Put the panel on screen the way summoning it does.
 ///
@@ -72,45 +132,35 @@ pub fn summon_panel(app: AppHandle) {
 #[tauri::command]
 pub fn reveal_setup_window(window: WebviewWindow) {
     let _ = window.show();
-    crate::platform::current().present_overlay(&window);
+    platform::current().reveal_overlay(&window);
 }
 
 /// Opens first-run setup again, from the beginning.
 ///
 /// Setup finishes by closing its own window, so there is usually nothing left
-/// to show and a fresh one is built to the same shape as the configured one. A
-/// window that is still open is reloaded rather than reused, because setup
-/// holds its progress in memory and showing it again mid-flow would resume it
-/// rather than restart it.
+/// to show and a fresh one is built — by the same builder that opened the first
+/// one. A window that is still open is reloaded rather than reused, because
+/// setup holds its progress in memory and showing it again mid-flow would
+/// resume it rather than restart it.
+///
+/// Debug builds only, with its one caller — the tray item that asks for it.
+/// First-run setup is not persisted yet, so it runs on every launch; reopening
+/// it on demand is what makes it possible to work on, not a shipped feature.
+#[cfg(debug_assertions)]
 pub fn restart_onboarding(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window(SETUP_WINDOW) {
-        let _ = window.eval("window.location.reload()");
-        let _ = window.show();
-        crate::platform::current().present_overlay(&window);
+    let Some(window) = app.get_webview_window(SETUP_WINDOW) else {
+        // A fresh window is revealed by its page, the same as at startup.
+        open_setup_window(app);
         return;
-    }
+    };
 
-    let built = tauri::WebviewWindowBuilder::new(
-        app,
-        SETUP_WINDOW,
-        tauri::WebviewUrl::App("index.html?surface=setup".into()),
-    )
-    .title("Welcome to Nessa")
-    .resizable(false)
-    .transparent(true)
-    .decorations(false)
-    .shadow(false)
-    .always_on_top(true)
-    // Deliberately not maximized: `present_overlay` gives it the whole screen,
-    // menu bar included, and maximizing fits a window to the *visible* frame —
-    // which is the screen minus exactly the parts this needs to cover.
-    .skip_taskbar(true)
-    .visible(false)
-    .build();
-    match built {
-        Ok(window) => crate::platform::current().present_overlay(&window),
-        Err(error) => eprintln!("[nessa] could not reopen setup: {error}"),
-    }
+    let _ = window.eval("window.location.reload()");
+    let _ = window.show();
+    let host = platform::current();
+    host.place_overlay(&window);
+    // Already on screen from an earlier run, so there is no first frame to wait
+    // for: this one is revealed here rather than by the page.
+    host.reveal_overlay(&window);
 }
 
 /// Places, fits, and focuses the panel, then hands the caret to the composer.
@@ -119,16 +169,19 @@ pub fn show(window: &WebviewWindow, settings: &Settings) {
     // The panel may have been summoned onto a display with more room than the
     // one it was last fitted for, and the viewport is sized for the work area
     // it is standing in. A failure costs the resize fix, not the show.
-    if let Err(error) = crate::platform::current().fit_viewport(window) {
+    if let Err(error) = platform::current().fit_viewport(window) {
         eprintln!("[nessa] could not fit the panel's viewport: {error}");
     }
     // Setup covers the menu bar, so a panel at its ordinary level would be
-    // summoned behind the window teaching the shortcut that summoned it.
+    // summoned behind the window teaching the shortcut that summoned it. The
+    // window exists from startup and outlives being dismissed, so it is being on
+    // screen that decides this — lifting the panel over an overlay that is not
+    // there leaves it floating above the menu bar.
     let over_setup = window
         .app_handle()
         .get_webview_window(SETUP_WINDOW)
-        .is_some();
-    crate::platform::current().set_above_overlay(window, over_setup);
+        .is_some_and(|setup| setup.is_visible().unwrap_or(false));
+    platform::current().set_above_overlay(window, over_setup);
     let _ = window.show();
     let _ = window.set_focus();
     let _ = window.emit(host::FOCUS_COMPOSER, ());
@@ -194,7 +247,7 @@ pub fn realized_outer(
     PhysicalSize::new(width.max(1), current.height)
 }
 
-pub fn opening_size(panel: &crate::settings::Panel) -> OpeningSize {
+pub fn opening_size(panel: &Panel) -> OpeningSize {
     let min_width = panel.min_width.max(1.0);
     // A configured width below the configured minimum is a contradiction; the
     // minimum wins, since it is the one the resize edge will enforce anyway.
@@ -323,7 +376,7 @@ mod tests {
 
     #[test]
     fn a_width_below_the_minimum_opens_at_the_minimum() {
-        let panel = crate::settings::Panel {
+        let panel = Panel {
             width: 200.0,
             height: None,
             min_width: 420.0,
@@ -336,7 +389,7 @@ mod tests {
 
     #[test]
     fn a_height_below_the_transcript_floor_opens_at_the_floor() {
-        let panel = crate::settings::Panel {
+        let panel = Panel {
             width: 420.0,
             height: Some(100.0),
             min_width: 420.0,

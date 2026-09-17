@@ -5,8 +5,7 @@ import type {
   ShortcutSurface,
 } from "@nessa/client"
 
-import { chordMatches, parseAccelerator, type KeyChord } from "../../host/accelerator"
-import { host } from "../../host"
+import { chordMatches, host, parseAccelerator, type KeyChord } from "../../host"
 
 export type FocusedPanelAction =
   | { action: "panel.newTab" }

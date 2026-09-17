@@ -25,7 +25,9 @@ const container = document.getElementById("root")
 if (!container) throw new Error("missing #root")
 
 // The host opens setup in its own window; that window paints setup and nothing
-// else, and the panel window paints the panel and nothing else.
+// else, and the panel window paints the panel and nothing else. So the setup
+// branch is given no children: the panel tree below belongs to the other window
+// and mounting it here would start a second session in a window that is closing.
 const panel = (
   <Provider store={store}>
     <App attachmentResources={dependencies.attachments} />
@@ -36,7 +38,7 @@ const panel = (
 createRoot(container).render(
   <React.StrictMode>
     {windowSurface() === "setup" ? (
-      <SetupGate>{panel}</SetupGate>
+      <SetupGate agents={dependencies.agents} />
     ) : !hasNativeHost() && environment.conversation.backend === "local" ? (
       <BrowserApplication environment={environment} />
     ) : (

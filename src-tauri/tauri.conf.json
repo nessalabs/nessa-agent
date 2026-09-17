@@ -35,18 +35,6 @@
         "visibleOnAllWorkspaces": true,
         "skipTaskbar": true,
         "visible": false
-      },
-      {
-        "label": "setup",
-        "url": "index.html?surface=setup",
-        "title": "Welcome to Nessa",
-        "resizable": false,
-        "transparent": true,
-        "decorations": false,
-        "shadow": false,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "visible": false
       }
     ]
   },

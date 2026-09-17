@@ -1,10 +1,13 @@
+use std::sync::Arc;
+
+use axum::extract::State;
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
 
-use crate::agents::adapters::LocalAgentProbe;
-use crate::agents::application::ReadAgentReadiness;
+use crate::agents::application::{AgentProbe, ReadAgentReadiness};
+use crate::agents::domain::{AgentId, Readiness};
 use crate::server::entrypoint::origin;
 
 /// One agent, and what stands between it and running.
@@ -24,6 +27,30 @@ pub struct AgentsReadinessView {
     agents: Vec<AgentReadinessView>,
 }
 
+/// The name this agent is known by on the wire and in the interface.
+///
+/// The domain has no opinion about this; a rename here is a wire change, not a
+/// change to what an agent is.
+fn agent_name(agent: AgentId) -> &'static str {
+    match agent {
+        AgentId::Claude => "claude",
+    }
+}
+
+/// The name a readiness is reported under.
+///
+/// The wire has three names. A sign-in this machine could not determine is
+/// reported as one that is needed: signing in is the one action that settles
+/// the question either way, and it is better advice than silence. The
+/// distinction survives in the domain for an interface that wants to say more.
+fn readiness_name(readiness: Readiness) -> &'static str {
+    match readiness {
+        Readiness::Ready => "ready",
+        Readiness::NeedsAuthentication | Readiness::AuthenticationUnknown => "needs-authentication",
+        Readiness::NotInstalled => "not-installed",
+    }
+}
+
 /// `GET /onboarding/agents`.
 ///
 /// Deliberately unauthenticated. It answers the question asked while Nessa is
@@ -35,16 +62,20 @@ pub struct AgentsReadinessView {
 /// states, no paths, no versions, no account, and never a credential. To
 /// anything that can already reach this port, "an agent is installed here" is
 /// not a secret worth a handshake.
-pub(crate) async fn handle_http_agents(headers: HeaderMap) -> Response {
-    let probe = LocalAgentProbe;
-    let readiness = ReadAgentReadiness { probe: &probe };
+pub(crate) async fn handle_http_agents(
+    State(probe): State<Arc<dyn AgentProbe>>,
+    headers: HeaderMap,
+) -> Response {
+    let readiness = ReadAgentReadiness {
+        probe: probe.as_ref(),
+    };
     let body = Json(AgentsReadinessView {
         agents: readiness
             .all()
             .into_iter()
             .map(|(agent, state)| AgentReadinessView {
-                id: agent.as_str(),
-                readiness: state.as_str(),
+                id: agent_name(agent),
+                readiness: readiness_name(state),
             })
             .collect(),
     });
@@ -90,3 +121,7 @@ fn allowed_origin(headers: &HeaderMap) -> Allowed {
         Allowed::No
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/agents/http.rs"]
+mod tests;

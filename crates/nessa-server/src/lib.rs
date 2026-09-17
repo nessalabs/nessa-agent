@@ -16,5 +16,9 @@ pub mod server;
 pub use core::run;
 
 #[cfg(test)]
+#[path = "../tests/agents/support.rs"]
+pub(crate) mod agents_test_support;
+
+#[cfg(test)]
 #[path = "../tests/conversation/support.rs"]
 pub(crate) mod conversation_test_support;

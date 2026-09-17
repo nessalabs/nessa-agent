@@ -1,5 +1,6 @@
 //! Local product dependency factory. Provider choices stay outside route handlers.
 use crate::{
+    agents::infrastructure::LocalAgentProbe,
     app::ports::Clock as ServerClock,
     browser_session::adapters::PersistentSessions,
     conversation::{
@@ -93,6 +94,7 @@ pub(super) fn product_state(
             clock: Arc::new(SystemClock),
             policy,
             uptime_clock: uptime,
+            agent_probe: Arc::new(LocalAgentProbe::from_environment()),
         },
     )
     .with_admin(admin)

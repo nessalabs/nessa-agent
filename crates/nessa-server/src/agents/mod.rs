@@ -14,7 +14,7 @@
 //! Nothing here reads a secret. It asks whether a credential exists, never
 //! what it is.
 
-pub mod adapters;
 pub mod application;
 pub mod domain;
 pub mod entrypoint;
+pub mod infrastructure;

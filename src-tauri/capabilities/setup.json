@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "setup",
+  "description": "Setup hands over to the panel and then closes itself, so its page — and only its page — may close a window. Showing and focusing setup are native commands (reveal_setup_window), not page-side calls, so they need no window ACL grant.",
+  "windows": [
+    "setup"
+  ],
+  "permissions": [
+    "core:window:allow-close"
+  ]
+}

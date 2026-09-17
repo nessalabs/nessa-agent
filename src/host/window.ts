@@ -165,7 +165,6 @@ export async function startResizeFromLeftEdge() {
 
 export { inTauri }
 
-/** Whether this page runs inside the trusted desktop host. */
 /**
  * Which surface this window was opened to paint.
  *
@@ -182,21 +181,48 @@ export function windowSurface(): "panel" | "setup" {
 }
 
 /**
+ * What handing off from setup to the panel actually did.
+ *
+ * Three outcomes rather than a rejection, because the caller has to act on all
+ * three and two of them are not faults: a browser has no second window, and a
+ * panel that could not be summoned still leaves a setup window that must not
+ * sit there empty.
+ */
+export type SetupHandoff =
+  /** The panel is up and this window is closing. */
+  | { outcome: "handed-over" }
+  /** No second window exists; the caller renders the panel in place. */
+  | { outcome: "no-native-host" }
+  /** The panel did not come up. This window is still on screen. */
+  | { outcome: "panel-unavailable"; cause: unknown }
+
+/**
  * Hand off from setup to the panel: show the panel window, then close this one.
  *
  * Outside Tauri there is no second window, so this is a no-op and the caller
  * simply carries on rendering the panel in place.
+ *
+ * The close is not conditional on the summon. A failed summon used to abandon
+ * the handoff half way, leaving a setup window that had already stopped
+ * painting setup — and nothing said so. If the panel cannot be summoned the
+ * failure is returned rather than thrown, so the surface can say so instead of
+ * showing an empty window.
  */
-export async function finishSetupWindow() {
-  if (!inTauri) return
+export async function finishSetupWindow(): Promise<SetupHandoff> {
+  if (!inTauri) return { outcome: "no-native-host" }
   // Through the host, not `show()` on the window: the panel is anchored to an
   // edge of the work area and its webview fitted to the window, and a page
   // cannot do either. Showing it from here left it wherever the window system
   // happened to put it.
   const { invoke } = await import("@tauri-apps/api/core")
-  await invoke("summon_panel")
+  try {
+    await invoke("summon_panel")
+  } catch (cause) {
+    return { outcome: "panel-unavailable", cause }
+  }
   const { getCurrentWindow } = await import("@tauri-apps/api/window")
   await getCurrentWindow().close()
+  return { outcome: "handed-over" }
 }
 
 /**
@@ -213,6 +239,7 @@ export async function revealSetupWindow() {
   await invoke("reveal_setup_window")
 }
 
+/** Whether this page runs inside the trusted desktop host. */
 export function hasNativeHost(): boolean {
   return inTauri
 }

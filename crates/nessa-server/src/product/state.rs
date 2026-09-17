@@ -1,4 +1,6 @@
+use crate::agents::application::AgentProbe;
 use crate::conversation::application::ConversationService;
+use axum::extract::FromRef;
 use nessa_auth::{
     application::{
         credential_admin::CredentialAdmin,
@@ -30,6 +32,16 @@ pub struct ProductRouteState {
     pub(crate) conversations: Option<Arc<ConversationService>>,
     pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
     pub(crate) uptime_clock: Arc<dyn crate::app::ports::Clock>,
+    pub(crate) agent_probe: Arc<dyn AgentProbe>,
+}
+
+/// The pre-authentication onboarding route is given the host probe and nothing
+/// else. It runs before there is a session, so it has no use for the rest of
+/// this state and must not be able to reach it.
+impl FromRef<ProductRouteState> for Arc<dyn AgentProbe> {
+    fn from_ref(state: &ProductRouteState) -> Self {
+        state.agent_probe.clone()
+    }
 }
 
 /// Typed dependencies selected once by the server composition root.
@@ -44,6 +56,9 @@ pub struct ProductDependencies {
     pub policy: Arc<dyn PolicyEvaluator>,
     /// Existing server clock used only to report health uptime.
     pub uptime_clock: Arc<dyn crate::app::ports::Clock>,
+    /// Asks this host which agents could start here. Chosen in composition so
+    /// no route handler constructs a machine probe of its own.
+    pub agent_probe: Arc<dyn AgentProbe>,
 }
 
 impl ProductRouteState {
@@ -71,6 +86,7 @@ impl ProductRouteState {
             admin: None,
             conversations: None,
             uptime_clock: dependencies.uptime_clock,
+            agent_probe: dependencies.agent_probe,
         }
     }
 

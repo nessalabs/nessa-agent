@@ -311,6 +311,22 @@ and per-operation authorization for both native and browser sessions. Browser
 storage retains only the credential ID, bound origin, and idle-lifetime evidence;
 the auth registry resolves current identity and access state on every admission.
 
+## Agent readiness
+
+`crates/nessa-server/src/agents/` answers which coding agents could actually
+start here, before there is a session to authenticate with.
+`domain/value_objects/` owns `AgentId`, the host's three-way `HostAnswer`, and
+the `Readiness` rule that turns two answers into one thing to tell the person;
+`application/` owns the `AgentProbe` port, whose typed `ProbeFailure` keeps "not
+signed in" apart from "could not tell", and the `ReadAgentReadiness` use case
+that only asks and maps; `infrastructure/local.rs` asks this machine, with the
+runtime root, API key and config directory resolved once in composition;
+`entrypoint/http.rs` owns the wire vocabulary and the cross-origin rule for
+`GET /onboarding/agents`. Composition injects `LocalAgentProbe` through
+`ProductDependencies`, and the handler receives it alone via `FromRef`. Tests
+under `tests/agents/` split domain rules, application orchestration, the HTTP
+boundary, and the local probe's failure modes.
+
 ## Command-line surface
 
 The `nessa-server` crate builds the `nessa` executable. `cli/entrypoint/` parses

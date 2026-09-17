@@ -11,13 +11,13 @@ use objc2_app_kit::{NSApplication, NSMainMenuWindowLevel, NSWindow, NSWindowColl
 use objc2_foundation::MainThreadMarker;
 use tauri::WebviewWindow;
 
-/// Cover the screen the window is on, above the menu bar, and take focus.
+/// Cover the screen the window is on, above the menu bar — without showing it.
 ///
-/// Focus is part of the same job rather than an extra: Nessa is an accessory
-/// app, so it is not active until something makes it active, and an inactive
-/// app's window spends the first click on being activated. Setup is a window
-/// full of buttons, and every one of them would have needed pressing twice.
-pub fn present(window: &WebviewWindow) {
+/// The window is still hidden when this runs: setup is revealed by its own page
+/// once it has a frame to show, so ordering it in here would put an unpainted
+/// window on screen and steal the frontmost app's focus at launch. [`reveal`]
+/// is the half that does that, from the reveal path only.
+pub fn place(window: &WebviewWindow) {
     let handle = match window.ns_window() {
         Ok(handle) => handle,
         Err(error) => {
@@ -47,10 +47,27 @@ pub fn present(window: &WebviewWindow) {
             | NSWindowCollectionBehavior::CanJoinAllSpaces
             | NSWindowCollectionBehavior::FullScreenAuxiliary,
     );
+}
+
+/// Bring the placed overlay to the front and make it the key window.
+///
+/// Nessa is an accessory app: it is not active until something makes it active,
+/// and an inactive app's window spends the first click on being activated.
+/// Setup is a window full of buttons, and every one of them would otherwise
+/// have needed pressing twice.
+pub fn reveal(window: &WebviewWindow) {
+    let handle = match window.ns_window() {
+        Ok(handle) => handle,
+        Err(error) => {
+            eprintln!("[nessa] could not bring setup to the front: {error}");
+            return;
+        }
+    };
+    // Runs on the main thread; the live WebviewWindow owns this NSWindow, so it
+    // is only borrowed for this call.
+    let native = unsafe { &*handle.cast::<NSWindow>() };
 
     if let Some(marker) = MainThreadMarker::new() {
-        // Without this the first click anywhere in setup is spent activating
-        // an accessory app rather than pressing what was clicked.
         NSApplication::sharedApplication(marker).activate();
     }
     native.makeKeyAndOrderFront(None);

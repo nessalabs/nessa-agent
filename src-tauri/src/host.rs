@@ -12,14 +12,13 @@ pub const TOGGLE_SURFACE: &str = "nessa://toggle-surface";
 /// Raised whenever the panel is summoned, so the composer takes the caret
 /// without the reader having to click into it first.
 pub const FOCUS_COMPOSER: &str = "nessa://focus-composer";
-/// Carries the window's size to the page, which can no longer measure it
-/// once the webview is detached from the window (see `platform`).
 /// The global summon accelerator fired; the payload is whether the panel is
 /// now showing. The accelerator is registered with the system, so the key press
 /// never reaches a window as a key — a surface that needs to know it happened
 /// has to be told.
 pub const SUMMONED: &str = "nessa://summoned";
-
+/// Carries the window's size to the page, which can no longer measure it
+/// once the webview is detached from the window (see `platform`).
 pub const PANEL_SIZED: &str = "nessa://panel-sized";
 /// Emitted as the user takes hold of the window's frame. Only the hosts with
 /// live-resize notifications raise it; the seam still declares every protocol
@@ -59,6 +58,7 @@ mod tests {
         for event in [
             TOGGLE_SURFACE,
             FOCUS_COMPOSER,
+            SUMMONED,
             PANEL_SIZED,
             RESIZE_STARTED,
             RESIZE_ENDED,

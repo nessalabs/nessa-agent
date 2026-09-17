@@ -610,7 +610,8 @@ body {
    * stays replaced. Anything else using that animation inherits nothing here
    * and resolves the empty fallback.
    */
-  --nessa-focus-shadow: drop-shadow(0 1px 16px rgb(0 0 0 / 0.35));
+  --nessa-focus-shadow: drop-shadow(0 1px 3px rgb(0 0 0 / 0.9))
+    drop-shadow(0 2px 20px rgb(0 0 0 / 0.5));
   filter: var(--nessa-focus-shadow,);
 }
 
@@ -728,52 +729,90 @@ body {
   }
 }
 
+/*
+ * Nothing above this line may outrank it.
+ *
+ * `animation: none` only wins where it is at least as specific as the rule that
+ * set the animation, and the welcome step's rules are scoped through
+ * `.nessa-setup-window[data-step="welcome"]` — three selectors against one.
+ * The override lost, and a 900ms blur-and-scale ran on the first screen of
+ * every launch for someone who had asked for no movement at all. So the scoped
+ * selectors are repeated here at their own specificity; ties go to the later
+ * rule, which is this one.
+ */
 @media (prefers-reduced-motion: reduce) {
-  .nessa-setup-arrive {
+  .nessa-setup-arrive,
+  .nessa-setup-word,
+  .nessa-setup-window[data-step="welcome"] .nessa-setup-arrive,
+  .nessa-setup-window[data-step="welcome"] .nessa-setup-word,
+  .nessa-setup-chrome,
+  .nessa-setup-control {
     animation: none;
+    /* The promotion was for the duration of an animation that is not running. */
+    will-change: auto;
   }
 }
 
 /*
- * The way out, in the corner.
+ * Setup's chrome: the way out, and the way to make it be quiet.
  *
- * Faint until it is wanted: setup is four screens long and asks for one thing
- * at a time, and a lit control in the corner competes with whichever thing
- * that is. It is the only visible exit, so it never disappears entirely —
- * Escape and Command-Q also work, and neither announces itself.
- *
- * It arrives with the panel rather than before it, for the same reason the
- * drawn window controls did: a control sitting on a dark screen while a light
- * is still gathering announces a window several seconds before there is one.
+ * It used to wait out the whole opening — its own delay chain ran to about
+ * 3.6 seconds, and it sat inside the wash that fades in behind everything, so
+ * nothing could have made it appear sooner. That is a long time to hold someone
+ * inside a surface that covers the menu bar with no visible way out of it, and
+ * a reduced-motion preference did not shorten it by a millisecond. It now
+ * belongs to the window rather than to the wash and arrives with it.
  */
-.nessa-setup-close {
+.nessa-setup-chrome {
   position: absolute;
   top: 0.75rem;
   right: 0.75rem;
   z-index: 10;
   display: flex;
   align-items: center;
+  gap: 0.25rem;
+  animation: nessa-setup-settled 320ms var(--nessa-motion-easing-standard)
+    calc(var(--nessa-reveal-seed) - 200ms) both;
+}
+
+/*
+ * Quiet, but not invisible.
+ *
+ * At 55% white over a wash whose lighter stops are near-white this measured
+ * about 1.1:1 — decorative rather than legible. The mark now carries its own
+ * dark backing so its contrast does not depend on which pigment happens to be
+ * travelling underneath it.
+ */
+.nessa-setup-control {
+  display: flex;
+  align-items: center;
   justify-content: center;
   width: 1.75rem;
   height: 1.75rem;
   border-radius: 50%;
-  color: rgb(255 255 255 / 0.55);
+  background: rgb(10 8 14 / 0.55);
+  color: rgb(255 255 255 / 0.92);
   outline: none;
   transition:
     color 120ms ease-out,
     background-color 120ms ease-out;
-  animation: nessa-setup-settled 420ms var(--nessa-motion-easing-standard)
-    var(--nessa-reveal-content) both;
 }
 
-.nessa-setup-close:hover {
-  background: rgb(255 255 255 / 0.16);
-  color: rgb(255 255 255 / 0.95);
+.nessa-setup-control:hover {
+  background: rgb(10 8 14 / 0.78);
+  color: #fff;
 }
 
-.nessa-setup-close:focus-visible {
-  color: rgb(255 255 255 / 0.95);
-  box-shadow: 0 0 0 3px rgb(255 255 255 / 0.5);
+/*
+ * Two rings, dark inside light. One ring in one colour is only ever visible
+ * over the half of this wash it happens to contrast with; a pair is visible
+ * over either.
+ */
+.nessa-setup-control:focus-visible {
+  color: #fff;
+  box-shadow:
+    0 0 0 2px rgb(8 6 12 / 0.9),
+    0 0 0 4px rgb(255 255 255 / 0.95);
 }
 
 /*
@@ -797,7 +836,9 @@ body {
   border-radius: 0.75rem;
   background: rgb(255 255 255 / 0.12);
   color: #fff;
-  text-shadow: 0 1px 10px rgb(0 0 0 / 0.3);
+  text-shadow:
+    0 1px 2px rgb(0 0 0 / 0.9),
+    0 2px 12px rgb(0 0 0 / 0.5);
 }
 
 /* The top face, inset from the shell — what makes it a cap and not a chip. It
@@ -1024,7 +1065,23 @@ body {
 .nessa-setup-window {
   position: relative;
   width: min(560px, 92vw);
-  height: min(560px, 82vh);
+  /*
+   * A floor and a ceiling rather than a fixed height. Fixed, with nothing
+   * inside it scrolling, the agent picker's list and its Continue button were
+   * simply cut off at a large text size or a high UI scale — and a Continue
+   * button that cannot be reached is a setup that cannot be finished. The step
+   * column and the picker pane scroll; the window keeps its proportions until
+   * there is more content than screen.
+   */
+  min-height: min(560px, 82vh);
+  max-height: 82vh;
+  /* A column rather than a percentage-height box. With the height no longer
+     fixed there is nothing for a child's `height: 100%` to resolve against, and
+     the wash collapsed to nothing; as a flex item it is given the room that is
+     left instead, and can be told it may shrink. */
+  display: flex;
+  flex-direction: column;
+  /* Clips the light to the vessel's own corners; the layers inside scroll. */
   overflow: hidden;
   border-radius: 22px;
   animation: nessa-setup-vessel 300ms var(--nessa-motion-easing-standard)
@@ -1153,6 +1210,10 @@ body {
  * so that what is left when the light goes is already there.
  */
 .nessa-setup-stage {
+  /* Takes the room the window has left, and may shrink below its content so
+     the step inside it is the thing that scrolls. */
+  flex: 1 1 auto;
+  min-height: 0;
   animation: nessa-setup-settled 520ms var(--nessa-motion-easing-standard)
     calc(var(--nessa-reveal-seed) + 300ms) both;
 }
@@ -1173,14 +1234,23 @@ body {
   .nessa-setup-orb-wash,
   .nessa-setup-stage,
   .nessa-setup-word,
-  .nessa-setup-arrive {
+  .nessa-setup-arrive,
+  .nessa-setup-chrome,
+  .nessa-setup-control {
     animation: none;
   }
   /* The final composition, with none of the movement that arrives at it. */
   .nessa-setup-orb {
     display: none;
   }
+  /*
+   * Every end state the cancelled keyframe was carrying, not just the shadow.
+   * The dark vessel fill existed only inside `nessa-setup-vessel`, so turning
+   * that animation off took the window's backing with it — leaving the light
+   * type over nothing but the desktop, its worst-case background for contrast.
+   */
   .nessa-setup-window {
+    background: rgb(12 10 16 / 0.55);
     box-shadow: 0 30px 80px -20px rgb(0 0 0 / 0.55);
   }
 }

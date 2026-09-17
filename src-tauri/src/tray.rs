@@ -13,6 +13,7 @@ use tauri::{
 
 use crate::host;
 use crate::panel;
+use crate::settings;
 
 /// The surface control lives in the tray menu rather than in the panel's
 /// header: the header is only two lines tall and the panel is dismissed by the
@@ -27,6 +28,12 @@ pub struct Present(pub bool);
 struct QuitPolicyMenuItem(CheckMenuItem<Wry>);
 
 const TRAY_ID: &str = "nessa-tray";
+/// Reopens first-run setup. Debug builds only: first-run setup is not persisted
+/// yet, so it runs on every launch and there is no way to see it twice in one.
+/// This runs it on demand, which is what makes it possible to work on at all —
+/// it is not a feature anybody asked for, so it does not ship until it is one.
+#[cfg(debug_assertions)]
+const SHOW_SETUP_ITEM: &str = "show-setup";
 /// The menu bar icon, compiled in rather than resolved as a bundle resource so
 /// dev and packaged builds load the identical bytes with no path lookup.
 ///
@@ -44,20 +51,13 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         .build(app)?;
     let stop_agents =
         CheckMenuItemBuilder::with_id("stop-agents-on-quit", "Stop active agents when quitting")
-            .checked(crate::settings::load(app).stop_agents_on_quit)
+            .checked(settings::load(app).stop_agents_on_quit)
             .build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit Nessa").build(app)?;
-    // First-run setup is not persisted yet, so it runs on every launch and
-    // there is no way to see it twice in one. This runs it on demand, which is
-    // what makes it possible to work on at all.
-    let setup = MenuItemBuilder::with_id("restart-onboarding", "Restart onboarding").build(app)?;
-    let menu = MenuBuilder::new(app)
-        .items(&[&toggle, &transparent])
-        .separator()
-        .items(&[&setup])
-        .separator()
-        .items(&[&stop_agents, &quit])
-        .build()?;
+    let menu = MenuBuilder::new(app).items(&[&toggle, &transparent]);
+    #[cfg(debug_assertions)]
+    let menu = menu.separator().text(SHOW_SETUP_ITEM, "Show setup again");
+    let menu = menu.separator().items(&[&stop_agents, &quit]).build()?;
 
     app.manage(SurfaceMenuItem(transparent));
     app.manage(QuitPolicyMenuItem(stop_agents));
@@ -78,18 +78,19 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
                 let _ = app.emit(host::TOGGLE_SURFACE, ());
             }
             "stop-agents-on-quit" => {
-                let mut settings = crate::settings::load(app);
-                settings.stop_agents_on_quit = !settings.stop_agents_on_quit;
-                match crate::settings::save(app, &settings) {
+                let mut chosen = settings::load(app);
+                chosen.stop_agents_on_quit = !chosen.stop_agents_on_quit;
+                match settings::save(app, &chosen) {
                     Ok(()) => {
                         if let Some(item) = app.try_state::<QuitPolicyMenuItem>() {
-                            let _ = item.0.set_checked(settings.stop_agents_on_quit);
+                            let _ = item.0.set_checked(chosen.stop_agents_on_quit);
                         }
                     }
                     Err(error) => eprintln!("[nessa] could not save settings: {error}"),
                 }
             }
-            "restart-onboarding" => crate::panel::restart_onboarding(app),
+            #[cfg(debug_assertions)]
+            SHOW_SETUP_ITEM => panel::restart_onboarding(app),
             "quit" => app.exit(0),
             _ => {}
         })

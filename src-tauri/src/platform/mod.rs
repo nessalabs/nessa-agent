@@ -35,11 +35,24 @@ pub trait Host: Send + Sync {
     /// window yet.
     fn configure_app(&self, _app: &AppHandle) {}
 
-    /// Put a window over the whole screen, above whatever the OS draws on top
-    /// of ordinary windows, and give it focus. Setup uses this: it dims what is
-    /// behind it, and a dim that stops at the menu bar is not a dim. Hosts
-    /// where a maximized window already covers everything leave it alone.
-    fn present_overlay(&self, _window: &WebviewWindow) {}
+    /// Shape a window into a screen-covering overlay: its level, its frame, and
+    /// which Spaces it joins. Setup uses this — it dims what is behind it, and a
+    /// dim that stops at the menu bar is not a dim.
+    ///
+    /// Placing is not showing. The setup window is placed while still hidden and
+    /// revealed by its own page once that page has a frame to show, so this must
+    /// not order the window in or activate the app; [`Host::reveal_overlay`]
+    /// does that. Hosts where an ordinary window already covers what it needs to
+    /// leave the frame alone.
+    fn place_overlay(&self, _window: &WebviewWindow) {}
+
+    /// Bring an already-placed overlay to the front and give it focus.
+    ///
+    /// Focus is part of revealing rather than an extra: Nessa is an accessory
+    /// app, so it is not active until something makes it active, and an inactive
+    /// app's window spends the first click on being activated. Setup is a window
+    /// full of buttons, and every one of them would need pressing twice.
+    fn reveal_overlay(&self, _window: &WebviewWindow) {}
 
     /// Stack the panel over, or back under, a screen-covering overlay. Setup
     /// covers everything the panel normally floats above, so the shortcut it

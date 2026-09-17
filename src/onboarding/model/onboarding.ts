@@ -13,12 +13,33 @@ export type AgentId = "claude" | "codex"
 /**
  * What stands between an agent and running, as its runtime reports it.
  *
- * Only `ready` may be chosen. The other two are shown rather than hidden,
- * because an agent missing from the list is a question — "where is Claude?" —
- * and an agent listed with a reason is an answer.
+ * Only `ready` may be chosen. The rest are shown rather than hidden, because an
+ * agent missing from the list is a question — "where is Claude?" — and an agent
+ * listed with a reason is an answer. That only holds while the reasons stay
+ * distinct: "Nessa has no adapter for this" and "nobody answered" are different
+ * facts and a person can act on only one of them.
  */
 export type AgentReadiness =
-  "ready" | "needs-authentication" | "not-installed" | "unavailable"
+  /** Installed, signed in, and able to start. */
+  | "ready"
+  /** Installed, but nothing here is signed in to it. */
+  | "needs-authentication"
+  /** Nothing to sign in to: the agent's own runtime is not on this machine. */
+  | "not-installed"
+  /** Nessa has no adapter for this agent at all. The one reason that will not
+   * change by doing anything on this machine. */
+  | "not-supported"
+  /** Nobody has answered for it — it has not been asked yet, the gateway could
+   * not be reached, or it said something this build cannot read. Never a
+   * negative answer about the agent itself. */
+  | "unknown"
+
+/** Why nothing is known about any agent, when the ask itself failed. */
+export type AgentReadinessFailure =
+  /** Nothing usable came back: the gateway is not running, or refused. */
+  | "unreachable"
+  /** Something came back in a shape this build cannot read. */
+  | "unreadable"
 
 /** What each agent's runtime reports. Absent for an agent not yet asked about. */
 export type AgentReadinessReport = Readonly<Partial<Record<AgentId, AgentReadiness>>>
@@ -66,15 +87,22 @@ export interface OnboardingState {
   /** The agent picked so far, if any. Never an unavailable one. */
   agent?: AgentId
   /**
-   * How far the summon lesson has got, as what the shortcut last did.
-   *
-   * The shortcut is a toggle, and half a toggle is not a lesson: someone who
-   * only ever sees it summon has been taught how to put Nessa on screen and
-   * not how to get rid of it. So the step asks for both presses, and is only
-   * satisfied once the second has put it away again. Undefined means neither
-   * press has arrived yet.
+   * What the panel is doing now, as the host reported it — not a count of
+   * presses. The two can disagree: the panel may already be on screen when the
+   * step is reached, and then the first press hides it. A model that counted
+   * would say "shown" while the sound, the panel and the copy all said
+   * otherwise. Undefined means nothing has been reported yet.
    */
   summon?: "shown" | "hidden"
+  /**
+   * Whether the shortcut has been seen to put the panel away.
+   *
+   * That is the half of the toggle the step exists to teach: someone who only
+   * ever sees it summon has been taught how to put Nessa on screen and not how
+   * to get rid of it. Once taught it stays taught — a later press must not take
+   * the way on back off the screen.
+   */
+  summonTaught?: boolean
   /**
    * What each agent's runtime reported when it was asked. Absent until it has
    * been: nothing is choosable before the answer arrives, because offering an
@@ -82,6 +110,11 @@ export interface OnboardingState {
    * avoid.
    */
   readiness?: AgentReadinessReport
+  /**
+   * Why the ask failed, when it did. Kept apart from the report so "we could
+   * not find out" is never shown as a fact about an agent.
+   */
+  readinessFailure?: AgentReadinessFailure
 }
 
 /** The state a panel with no completed setup starts from. */
@@ -95,20 +128,33 @@ export function agentChoice(id: AgentId): AgentChoice | undefined {
 }
 
 /** Record what the runtimes reported. Arriving after a choice was somehow made
- * does not unmake it; the choice was checked when it was made. */
+ * does not unmake it; the choice was checked when it was made. A report also
+ * clears any earlier failure: the question has now been answered. */
 export function recordReadiness(
   state: OnboardingState,
   readiness: AgentReadinessReport,
 ): OnboardingState {
-  return { ...state, readiness }
+  return { ...state, readiness, readinessFailure: undefined }
 }
 
-/** What an agent's runtime reported, or `unavailable` while nothing has been
- * reported — an agent is not offered on the strength of not having been asked
- * about. */
+/** Record that nobody answered, and why. The report is dropped rather than
+ * kept: a stale "ready" from an earlier ask is not evidence that an agent whose
+ * gateway has since gone away can still start. */
+export function recordReadinessFailure(
+  state: OnboardingState,
+  reason: AgentReadinessFailure,
+): OnboardingState {
+  return { ...state, readiness: undefined, readinessFailure: reason }
+}
+
+/** What an agent's runtime reported.
+ *
+ * `not-supported` is a real negative answer and belongs to the listing, not to
+ * any runtime. `unknown` is the absence of an answer — not asked yet, or asked
+ * and not answered — and an agent is never offered on the strength of it. */
 export function agentReadiness(state: OnboardingState, id: AgentId): AgentReadiness {
-  if (!agentChoice(id)?.supported) return "unavailable"
-  return state.readiness?.[id] ?? "unavailable"
+  if (!agentChoice(id)?.supported) return "not-supported"
+  return state.readiness?.[id] ?? "unknown"
 }
 
 /** Whether an agent may be picked: its adapter exists, it is installed, and
@@ -138,18 +184,26 @@ export function confirmAgent(state: OnboardingState): OnboardingState {
 }
 
 /**
- * Record a press of the summon shortcut while setup is teaching it: the first
- * summons, the second puts it away. Further presses change nothing — the
- * lesson is over and re-arming it would take the way on back off the screen.
+ * Record what the summon shortcut just did, as the host reports it.
+ *
+ * `showing` is the panel's actual visibility after the press, not a count of
+ * presses. Counting was wrong in a way nobody could recover from: a panel
+ * already on screen when the step is reached is *hidden* by the first press,
+ * and the copy, the cue and the keycaps would then each be describing a
+ * different panel.
+ *
+ * Seeing it put the panel away is what the step is for, so that is what is
+ * remembered; a later press moves `summon` but cannot un-teach it.
  *
  * Presses outside that step are somebody using their shortcut, not setup, and
- * change nothing either.
+ * change nothing.
  */
-export function pressSummon(state: OnboardingState): OnboardingState {
+export function pressSummon(state: OnboardingState, showing: boolean): OnboardingState {
   if (state.step !== "summon") return state
-  if (state.summon === undefined) return { ...state, summon: "shown" }
-  if (state.summon === "shown") return { ...state, summon: "hidden" }
-  return state
+  const summon = showing ? "shown" : "hidden"
+  const summonTaught = state.summonTaught === true || !showing
+  if (state.summon === summon && state.summonTaught === summonTaught) return state
+  return { ...state, summon, summonTaught }
 }
 
 /** Leave setup without finishing it, from any step. Nothing is recorded: an
@@ -159,11 +213,20 @@ export function dismissOnboarding(state: OnboardingState): OnboardingState {
   return state.step === "done" ? state : { step: "done" }
 }
 
-/** Finish setup, which only a completed shortcut lesson can do: until it has
- * both summoned and dismissed there is nothing to finish. The lesson does not
- * travel into the finished state — it was about the step, not the setup. */
+/**
+ * Finish setup from the last step, keeping the agent that was chosen.
+ *
+ * The shortcut lesson is what the step is for; it is not what setup is for.
+ * Requiring it to finish made setup impossible to complete for a configuration
+ * that registers no summon accelerator, and for anyone who cannot hold a chord
+ * — with no way out but abandoning setup, which records nothing and starts over
+ * next launch. Whether the lesson landed is in `summonTaught`, and the surface
+ * decides what to offer on the strength of it; refusing to finish is not that
+ * decision. The lesson does not travel into the finished state — it was about
+ * the step, not the setup.
+ */
 export function completeOnboarding(state: OnboardingState): OnboardingState {
-  if (state.step !== "summon" || state.summon !== "hidden") return state
+  if (state.step !== "summon") return state
   return { step: "done", agent: state.agent }
 }
 

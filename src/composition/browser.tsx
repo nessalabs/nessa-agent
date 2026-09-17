@@ -94,7 +94,7 @@ function BrowserSession({
   onTerminalFailure: (error: unknown) => void
 }) {
   return (
-    <SetupGate>
+    <SetupGate agents={scope.dependencies.agents}>
       <SessionLifecycle
         dependencies={scope.dependencies}
         onTerminalFailure={onTerminalFailure}
