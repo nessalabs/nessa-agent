@@ -635,13 +635,13 @@ body {
  * a second to see the result.
  */
 .nessa-setup-window[data-step="welcome"] .nessa-setup-arrive {
-  animation-delay: 2200ms;
+  animation-delay: 3380ms;
 }
 .nessa-setup-window[data-step="welcome"] .nessa-setup-arrive:nth-child(2) {
-  animation-delay: 2270ms;
+  animation-delay: 3450ms;
 }
 .nessa-setup-window[data-step="welcome"] .nessa-setup-arrive:nth-child(3) {
-  animation-delay: 2340ms;
+  animation-delay: 3520ms;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -766,115 +766,147 @@ body {
 /*
  * The blob, and the box it becomes.
  *
- * It is the box's own size from the start and simply held small, so that
- * filling the window is a scale rather than a handover between two differently
- * shaped things. The corners are the tell: they are fluid and drifting while
- * it rolls, and they square off into the window's radius on the way out.
+ * Its scale and its turn are custom properties rather than transforms, so the
+ * wash inside can apply the exact inverse of both and hold still while the
+ * body moves over it. Rotation and uniform scale commute, so the two cancel
+ * to the identity at every frame — the body rolls and grows, the colour does
+ * neither, and the window is uncovered rather than magnified.
  *
  * It is deliberately not blurred. A blur turns a body into an anonymous cloud,
  * and the point of opening here is that something is *there* before the
  * interface is.
  */
+@property --nessa-orb-scale {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0.4;
+}
+
+@property --nessa-orb-turn {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 0deg;
+}
+
 .nessa-setup-orb {
   position: absolute;
   width: min(560px, 92vw);
   height: min(560px, 82vh);
   pointer-events: none;
-  animation: nessa-setup-orb 1900ms var(--nessa-motion-easing-arrival) 120ms both;
+  overflow: hidden;
+  scale: var(--nessa-orb-scale);
+  rotate: var(--nessa-orb-turn);
+  border-radius: 58% 42% 46% 54% / 52% 46% 54% 48%;
+  /*
+   * The growth is timed by its keyframes rather than by an easing curve.
+   * An ease-out across one long segment spends almost all of it in the first
+   * few hundred milliseconds, which made the window snap open after a long
+   * wait; `linear` between stops puts the shape of the motion here, where it
+   * can be read.
+   */
+  animation:
+    nessa-setup-orb 3000ms linear 150ms both,
+    nessa-setup-orb-roll 1560ms var(--nessa-motion-easing-standard) 150ms both,
+    nessa-setup-orb-square 1440ms var(--nessa-motion-easing-arrival) 1710ms forwards;
 }
 
 @keyframes nessa-setup-orb {
   from {
     opacity: 0;
-    transform: scale(0.34);
+    --nessa-orb-scale: 0.26;
+    --nessa-orb-turn: -14deg;
   }
-  /* Gathered by ~500ms, and then simply there, rolling. */
-  20% {
+  /* Gathered by ~510ms. */
+  12% {
     opacity: 1;
-    transform: scale(0.5);
+    --nessa-orb-scale: 0.4;
   }
-  61% {
-    opacity: 1;
-    transform: scale(0.54);
+  /* Then simply there, rolling, barely growing at all. The turn is spent by
+     the end of it: a body may lean, but a window that is squaring off while
+     still tilted just looks broken. */
+  52% {
+    --nessa-orb-scale: 0.45;
+    --nessa-orb-turn: 0deg;
   }
-  92% {
-    opacity: 1;
+  /* And opening out, gathering pace before it settles. */
+  64% {
+    --nessa-orb-scale: 0.55;
+  }
+  76% {
+    --nessa-orb-scale: 0.7;
+  }
+  88% {
+    --nessa-orb-scale: 0.86;
+  }
+  96% {
+    --nessa-orb-scale: 0.96;
   }
   to {
-    /* Filled the window, and handed it over. */
-    opacity: 0;
-    transform: scale(1);
+    /* Filled the window, square to it, and handed it over. */
+    opacity: 1;
+    --nessa-orb-scale: 1;
   }
 }
 
-/*
- * The body: what is clipped to the blob's outline and lit as a solid.
- *
- * Two animations drive the outline in turn. The first drifts it for as long as
- * it is a blob; the second, which starts the instant the first ends and does
- * not fill backwards, squares it into the window. Because the drift ends on
- * the same shape the squaring starts from, the two meet exactly.
- */
-.nessa-setup-orb-body {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  border-radius: 58% 42% 46% 54% / 52% 46% 54% 48%;
-  box-shadow:
-    inset -30px -38px 90px -30px rgb(20 6 30 / 0.65),
-    inset 34px 38px 80px -34px rgb(255 255 255 / 0.4);
-  animation:
-    nessa-setup-orb-roll 1160ms var(--nessa-motion-easing-standard) 120ms both,
-    nessa-setup-orb-square 620ms var(--nessa-motion-easing-arrival) 1280ms forwards;
-}
-
+/* The outline, alive for as long as it is a body. The turn is carried by the
+   main animation; this is the shape changing underneath it. */
 @keyframes nessa-setup-orb-roll {
   0% {
     border-radius: 58% 42% 46% 54% / 52% 46% 54% 48%;
   }
-  35% {
-    border-radius: 44% 56% 62% 38% / 44% 58% 42% 56%;
+  30% {
+    border-radius: 38% 62% 68% 32% / 40% 64% 36% 60%;
   }
-  70% {
-    border-radius: 52% 48% 36% 64% / 62% 42% 58% 38%;
+  60% {
+    border-radius: 64% 36% 30% 70% / 68% 34% 66% 32%;
   }
   100% {
     border-radius: 58% 42% 46% 54% / 52% 46% 54% 48%;
   }
 }
 
+/*
+ * Squaring off into the window. It starts the instant the roll ends and does
+ * not fill backwards, so the two meet on the same shape rather than fighting
+ * over the property.
+ */
 @keyframes nessa-setup-orb-square {
   from {
     border-radius: 58% 42% 46% 54% / 52% 46% 54% 48%;
-    box-shadow:
-      inset -30px -38px 90px -30px rgb(20 6 30 / 0.65),
-      inset 34px 38px 80px -34px rgb(255 255 255 / 0.4);
   }
   to {
-    /* The window's own radius, and no lighting: a window is not a sphere. */
     border-radius: 22px;
-    box-shadow:
-      inset 0 0 0 0 rgb(20 6 30 / 0),
-      inset 0 0 0 0 rgb(255 255 255 / 0);
   }
 }
 
-/* The specular highlight, gone by the time the body is flat. */
-.nessa-setup-orb-sheen {
+/* The wash: the window's own colour, held still under everything above. */
+.nessa-setup-orb-wash {
   position: absolute;
   inset: 0;
-  mix-blend-mode: screen;
-  background: radial-gradient(
-    circle at 33% 26%,
-    rgb(255 255 255 / 0.42) 0%,
-    rgb(255 255 255 / 0.08) 26%,
-    transparent 52%
-  );
-  animation: nessa-setup-orb-sheen 620ms var(--nessa-motion-easing-arrival) 1280ms both;
+  scale: calc(1 / var(--nessa-orb-scale));
+  rotate: calc(-1 * var(--nessa-orb-turn));
 }
 
-@keyframes nessa-setup-orb-sheen {
+/*
+ * The lighting that makes it a solid rather than a hole cut in the wash. It
+ * goes as the body flattens, because a window is not a sphere.
+ */
+.nessa-setup-orb-shade {
+  position: absolute;
+  inset: 0;
+  box-shadow:
+    inset -34px -44px 96px -34px rgb(18 6 30 / 0.7),
+    inset 38px 42px 88px -36px rgb(255 255 255 / 0.45);
+  background: radial-gradient(
+    circle at 33% 26%,
+    rgb(255 255 255 / 0.4) 0%,
+    rgb(255 255 255 / 0.07) 26%,
+    transparent 52%
+  );
+  animation: nessa-setup-orb-shade 1440ms var(--nessa-motion-easing-arrival) 1710ms both;
+}
+
+@keyframes nessa-setup-orb-shade {
   from {
     opacity: 1;
   }
@@ -893,7 +925,7 @@ body {
   height: min(560px, 82vh);
   overflow: hidden;
   border-radius: 22px;
-  animation: nessa-setup-open 460ms var(--nessa-motion-easing-standard) 1680ms both;
+  animation: nessa-setup-open 460ms var(--nessa-motion-easing-standard) 2960ms both;
 }
 
 @keyframes nessa-setup-open {
@@ -911,8 +943,8 @@ body {
   .nessa-setup-dim,
   .nessa-setup-window,
   .nessa-setup-orb,
-  .nessa-setup-orb-body,
-  .nessa-setup-orb-sheen,
+  .nessa-setup-orb-wash,
+  .nessa-setup-orb-shade,
   .nessa-setup-arrive {
     animation: none;
   }
