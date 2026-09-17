@@ -551,3 +551,85 @@ body {
 .nessa-browser-card :disabled {
   opacity: 0.6;
 }
+
+/*
+ * First-run setup is always the light glass treatment.
+ *
+ * Setup sits on the morphing colour wash, and a pale pane over that wash is the
+ * look the product wants whatever the OS appearance is — a dark slab over the
+ * same pigments reads as a hole rather than glass. The design system switches
+ * its tokens with a `dark` class on the document, so a subtree cannot opt back
+ * out; these are the light values from its `:root`, re-declared for this one
+ * surface so its own components keep the contrast they were built for.
+ *
+ * Only the tokens setup actually paints with are listed. If the design system
+ * restyles its light palette, this block has to follow it.
+ */
+.nessa-setup-light {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.52 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.556 0 0);
+  color-scheme: light;
+  color: var(--foreground);
+}
+
+/*
+ * Setup's hero type and its arrival.
+ *
+ * The design system's scale tops out at 20px because it sizes UI chrome; a
+ * first-run title is not chrome, so it gets an explicit display size here
+ * rather than a level that was never meant to carry it. It still uses the
+ * system's own sans family and motion tokens.
+ *
+ * Content rises into place once when a step appears. Under a reduced-motion
+ * preference it simply is in place — the wash behind it stills for the same
+ * reason, so the whole surface agrees.
+ */
+.nessa-setup-title {
+  font-family: var(--nessa-font-sans);
+  font-size: 2rem;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+@keyframes nessa-setup-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.nessa-setup-arrive {
+  animation: nessa-setup-arrive var(--nessa-motion-duration-slow)
+    var(--nessa-motion-easing-arrival) both;
+}
+
+/* Each child lands just after the one above it. */
+.nessa-setup-arrive:nth-child(2) {
+  animation-delay: 70ms;
+}
+.nessa-setup-arrive:nth-child(3) {
+  animation-delay: 140ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nessa-setup-arrive {
+    animation: none;
+  }
+}

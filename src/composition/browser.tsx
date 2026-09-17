@@ -4,6 +4,7 @@ import { isAuthenticationFailure } from "../session/adapters/client/authenticati
 import { Provider } from "react-redux"
 import { conversationTabSnapshot, restoreConversations } from "../conversation"
 import { createTabStorage } from "../conversation/adapters/browser/tab-storage"
+import { SetupGate } from "../onboarding"
 import { App } from "../panel"
 import {
   canUseGateway,
@@ -93,7 +94,7 @@ function BrowserSession({
   onTerminalFailure: (error: unknown) => void
 }) {
   return (
-    <>
+    <SetupGate>
       <SessionLifecycle
         dependencies={scope.dependencies}
         onTerminalFailure={onTerminalFailure}
@@ -103,7 +104,7 @@ function BrowserSession({
         onSignOut={onDisconnect}
         sessionError={error}
       />
-    </>
+    </SetupGate>
   )
 }
 

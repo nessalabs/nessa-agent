@@ -6,6 +6,7 @@ import "@fontsource-variable/geist"
 import "@fontsource-variable/geist-mono"
 import "./styles.css"
 
+import { SetupGate } from "./onboarding"
 import { App } from "./panel"
 import { SessionLifecycle } from "./session"
 import { makeStore } from "./store"
@@ -29,10 +30,12 @@ createRoot(container).render(
       <BrowserApplication environment={environment} />
     ) : (
       <Provider store={store}>
-        <App attachmentResources={dependencies.attachments} />
-        {dependencies.usesLocalSession && (
-          <SessionLifecycle dependencies={dependencies} />
-        )}
+        <SetupGate>
+          <App attachmentResources={dependencies.attachments} />
+          {dependencies.usesLocalSession && (
+            <SessionLifecycle dependencies={dependencies} />
+          )}
+        </SetupGate>
       </Provider>
     )}
   </React.StrictMode>,
