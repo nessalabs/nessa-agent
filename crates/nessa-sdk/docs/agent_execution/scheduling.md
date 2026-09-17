@@ -279,14 +279,17 @@ If membership is unchanged, the latest accepted desired order wins, even if anot
 surface reordered the same members first. Both decisions retain their before/after evidence.
 Duplicate or oversized lists are rejected before mutation. At most 64 inputs wait.
 
-The scheduler holds one lock across audit acknowledgement, replacement, and its
-save. A changed order is sent to the mandatory audit port before live mutation;
-audit rejection leaves both live and saved order unchanged. Replacing the live
-order and retaining that change in session history is one transition: the wait
-for evidence ownership happens before either effect, so a close or the bounded
-30-second wait can only leave both unchanged, never a live order that retained
-history cannot replay. Writing that retained history to storage is separate and
-remains interruptible. The record retains the
+Reorders serialize with each other while the scheduler stays available to
+dispatch, cancellation and close during audit I/O. A changed order is sent to the
+mandatory audit port before the scheduler's admission lock is taken; audit
+rejection leaves both live and saved order unchanged. The scheduler is then held
+across replacement and its save, under one shared 30-second budget so those two
+waits cannot compose into a longer block. Replacing the live order and retaining
+that change in session history is one transition: the wait for evidence ownership
+happens before either effect, so a close or that bounded wait can only leave both
+unchanged, never a live order that retained history cannot replay. A close before
+retention reports Closed rather than a storage fault. Writing that retained
+history to storage is separate and remains interruptible. The record retains the
 complete before/after order, immutable priorities, session, caller, and
 `CallerRequested` cause. It records the selected local decision; the session
 snapshot remains authoritative for subsequent application and persistence. Caller

@@ -227,3 +227,46 @@ async fn local_failure_preserves_inferred_prior_success_before_save_and_after_re
         assert!(after.invocations[0].events.is_empty());
     }
 }
+
+#[tokio::test]
+async fn a_refused_reorder_retains_no_mutation_and_never_changes_the_live_queue() {
+    let (manager, _lease, _active) = manager(0).await;
+    // An order whose members this session never admitted cannot be replayed, so
+    // retention must refuse it.
+    let change = QueueOrderChange::new(
+        vec![
+            (ExecutionId::new("first").unwrap(), InvocationKind::Queued),
+            (ExecutionId::new("second").unwrap(), InvocationKind::Queued),
+        ],
+        vec![
+            ExecutionId::new("second").unwrap(),
+            ExecutionId::new("first").unwrap(),
+        ],
+    )
+    .unwrap();
+    let applied = AtomicBool::new(false);
+    let refused = manager
+        .retain_queue_reorder(
+            change,
+            ActionContext::new("user", "test", "reorder").unwrap(),
+            || {
+                applied.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+
+    assert!(matches!(refused, Err(StorageError::Corrupt(_))));
+    // The live queue is never touched, and the rejected record is not left in
+    // observed evidence for a later save to publish.
+    assert!(!applied.load(Ordering::SeqCst));
+    assert!(manager
+        .evidence
+        .lock()
+        .await
+        .observed
+        .as_ref()
+        .unwrap()
+        .queue_history
+        .is_empty());
+}

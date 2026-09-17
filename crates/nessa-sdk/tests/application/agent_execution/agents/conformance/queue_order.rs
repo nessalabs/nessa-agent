@@ -299,6 +299,57 @@ async fn reorder_waiting_for_evidence_leaves_live_order_and_history_agreeing() {
     agent.close(actor()).await.unwrap();
 }
 #[tokio::test]
+async fn close_interrupts_reorder_retention_and_leaves_the_order_unchanged() {
+    let (agent, backend, storage, _release, receipts) = waiting().await;
+    let (entered, audited) = oneshot::channel();
+    let (resume_audit, paused) = oneshot::channel();
+    *backend.audit.pause.lock().unwrap() = Some((entered, paused));
+    let reordering = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.reorder_queued(ids(&["s", "c", "b"]), actor()).await }
+    });
+    bounded(audited).await.unwrap();
+    let (started, saving) = oneshot::channel();
+    let (commit, gate) = oneshot::channel();
+    storage.0.lock().unwrap().pause_save = Some((started, gate));
+    backend
+        .output
+        .send(Some(ExecutionEvent::new(
+            ExecutionId::new("running").unwrap(),
+            ExecutionUpdate::Tool(ToolCallUpdate::new(
+                ToolCallId::new("observed").unwrap(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )),
+        )))
+        .unwrap();
+    bounded(saving).await.unwrap();
+    resume_audit.send(()).unwrap();
+    // Close reaches a reorder waiting for evidence ownership. Nothing has
+    // changed yet, so this is teardown rather than an interrupted write, and
+    // the reorder releases the scheduler without changing the live order.
+    let closing = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.close(actor()).await }
+    });
+    assert_eq!(bounded(reordering).await.unwrap(), Err(AgentError::Closed));
+    commit.send(()).unwrap();
+    assert!(!bounded(closing).await.unwrap().unwrap().forced);
+    assert!(reorders(&storage.snapshot()).is_empty());
+    for (index, receipt) in receipts.into_iter().enumerate() {
+        let result = bounded(receipt.wait()).await;
+        if index == 0 {
+            assert_eq!(result, Ok(ExecutionOutcome::Completed));
+        } else {
+            assert_eq!(result, Err(AgentError::Closed));
+        }
+    }
+}
+
+#[tokio::test]
 async fn caller_loss_during_save_does_not_abandon_the_order_transaction() {
     let (agent, _, storage, release, receipts) = waiting().await;
     let (started, waiting) = oneshot::channel();

@@ -562,12 +562,7 @@ impl SessionManager {
             actor,
             scheduling_length,
         });
-        // A rejected mutation leaves no trace: retained history must describe a
-        // queue the scheduler can still replay.
-        if let Err(error) = super::queue_validation::replay(snapshot) {
-            snapshot.queue_history.pop();
-            return Err(error);
-        }
+        let _ = super::queue_validation::replay(snapshot)?;
         Ok(())
     }
     /// Record actual queue membership after the scheduler changed it. Failure
@@ -613,16 +608,25 @@ impl SessionManager {
         &self,
         change: QueueOrderChange,
         actor: ActionContext,
-        apply: impl FnOnce(),
+        apply: impl FnOnce() -> Result<(), StorageError>,
     ) -> Result<(), StorageError> {
         let mut evidence = self.evidence.lock().await;
         let snapshot = evidence
             .observed
             .as_mut()
             .ok_or_else(|| StorageError::Corrupt("queue has no session".into()))?;
-        Self::append_queue_mutation(snapshot, QueueMutation::Reordered(change), Some(actor))?;
-        apply();
-        Ok(())
+        // Either both effects happen or neither does, so a refused order change
+        // leaves no retained mutation the live queue never made. Only this
+        // transition rolls back: every other queue record describes an effect
+        // the scheduler has already performed.
+        let retained = snapshot.queue_history.len();
+        let result =
+            Self::append_queue_mutation(snapshot, QueueMutation::Reordered(change), Some(actor))
+                .and_then(|()| apply());
+        if result.is_err() {
+            snapshot.queue_history.truncate(retained);
+        }
+        result
     }
     /// Write observed evidence retained by an earlier transition. An unchanged
     /// retry flushes evidence an earlier failed write left observed.

@@ -25,7 +25,10 @@ use std::{
     task::Poll,
     time::Duration,
 };
-use tokio::{sync::watch, time::sleep};
+use tokio::{
+    sync::watch,
+    time::{sleep, sleep_until, Instant},
+};
 
 const QUEUE_REORDER_AUDIT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -247,9 +250,12 @@ impl Agent {
     /// neither does. Storage failure may leave that applied order observed but
     /// unwritten; it is saved before later dispatch, and an unchanged retry
     /// retries that persistence. At most 1024 actual order changes are retained
-    /// per session; the budget is checked before audit and mutation. Audit,
-    /// retention, and storage acknowledgements are each bounded to 30 seconds.
-    /// Close interrupts any of those waits; interruption before storage may leave
+    /// per session; the budget is checked before audit and mutation. Audit
+    /// acknowledgement is bounded to 30 seconds. Retention and its persistence
+    /// share one further 30-second budget, so the admission lock this operation
+    /// holds against dispatch and withdrawal is never blocked for longer than
+    /// that. Close interrupts any of those waits: before retention it reports
+    /// Closed and changes nothing, while interruption after retention may leave
     /// an audited live order that close then drains. This does not replay pending
     /// work after restart.
     ///
@@ -332,6 +338,10 @@ impl Agent {
                     }
                 }
                 let mut scheduler = agent.inner.scheduler.lock().await;
+                // One budget for the whole phase that holds the scheduler, so
+                // retention and its persistence cannot compose into a longer
+                // block against dispatch, withdrawal, or teardown.
+                let deadline = Instant::now() + QUEUE_REORDER_AUDIT_TIMEOUT;
                 let current = match QueueOrderChange::new(scheduler.queue.pending(), order) {
                     Ok(current) => current,
                     Err(QueueOrderError::PriorityConflict) => {
@@ -355,27 +365,31 @@ impl Agent {
                     .catch_scheduling_panic(async {
                         let mut close = notice.clone();
                         tokio::select! { biased;
-                            _ = close.changed() => Err(StorageError::Io(
-                                "queue reorder retention interrupted by close".into(),
-                            )),
+                            // Nothing has changed yet, so close is teardown here
+                            // rather than an interrupted evidence write.
+                            _ = close.changed() => Err(AgentError::Closed),
                             result = agent.inner.manager.retain_queue_reorder(
                                 change.clone(),
                                 actor.clone(),
                                 || {
-                                    scheduler
-                                        .queue
-                                        .apply_order(&change)
-                                        .expect("exclusive validated queue order")
+                                    scheduler.queue.apply_order(&change).map_err(|error| {
+                                        StorageError::Corrupt(format!(
+                                            "exclusive validated queue order: {error:?}"
+                                        ))
+                                    })
                                 },
-                            ) => result,
-                            _ = sleep(QUEUE_REORDER_AUDIT_TIMEOUT) => Err(StorageError::Io(
-                                "queue reorder retention timed out".into(),
+                            ) => result.map_err(AgentError::Storage),
+                            _ = sleep_until(deadline) => Err(AgentError::Storage(
+                                StorageError::Io(
+                                    "queue reorder retention timed out waiting for session evidence"
+                                        .into(),
+                                ),
                             )),
                         }
                     })
                     .await;
                 match retained {
-                    Ok(result) => result.map_err(AgentError::Storage)?,
+                    Ok(result) => result?,
                     Err(()) => {
                         drop(scheduler);
                         agent.recover_scheduling_panic(None, &notice).await?;
@@ -390,7 +404,7 @@ impl Agent {
                                 "queue reorder persistence interrupted by close".into(),
                             )),
                             result = agent.inner.manager.flush_observed() => result,
-                            _ = sleep(QUEUE_REORDER_AUDIT_TIMEOUT) => Err(StorageError::Io(
+                            _ = sleep_until(deadline) => Err(StorageError::Io(
                                 "queue reorder persistence timed out".into(),
                             )),
                         }
