@@ -248,6 +248,21 @@ fn transcript_truncation_does_not_hide_complete_queue_but_queue_trimming_does() 
 }
 
 #[test]
+fn pending_and_message_text_agree_through_the_eight_kibibyte_contract() {
+    let mut projection = projection();
+    let text = "😀".repeat(2048);
+
+    projection.admitted("execution", &text, ConversationPendingMode::Queued);
+
+    let view = projection.read();
+    assert_eq!(text.len(), 8192);
+    assert_eq!(view.messages[0].user_text, text);
+    assert_eq!(view.pending[0].text, view.messages[0].user_text);
+    assert!(view.queue_complete);
+    assert!(!view.truncated);
+}
+
+#[test]
 fn tool_details_preserve_whitespace_sparse_updates_and_explicit_clear() {
     let mut projection = projection();
     let tool = ToolCallId::new("shell").unwrap();

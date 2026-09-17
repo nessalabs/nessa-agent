@@ -31,7 +31,6 @@ pub struct ConversationCreationAuditRecord {
     pub initiator_surface_id: String,
     pub correlation_id: String,
     pub requested_at_ms: u64,
-    pub committed_at_ms: u64,
     pub observed_at_ms: u64,
 }
 
@@ -48,6 +47,8 @@ pub enum ConversationCreationCause {
 }
 
 /// Commits creation evidence before the application reports success.
+/// Caller-requested creation records are idempotent by conversation identity so
+/// an interrupted first audit delivery can be safely retried from stored evidence.
 pub trait ConversationCreationAudit: Send + Sync {
     fn record(&self, record: ConversationCreationAuditRecord) -> ConversationFuture<'_, ()>;
 }

@@ -181,15 +181,16 @@ impl ConversationService {
             if service.inner.retirement.get().is_some() {
                 return Err(ConversationError::Unavailable);
             }
+            let requested_at_ms = service.inner.clock.unix_milliseconds();
             let proposed = Conversation::new(
                 id.clone(),
                 caller.organization_id.clone(),
                 caller.principal_id.clone(),
                 caller.surface_id.clone(),
                 caller.action_id.clone(),
+                requested_at_ms,
             )
             .map_err(|_| ConversationError::InvalidInput)?;
-            let requested_at_ms = service.inner.clock.unix_milliseconds();
             // Serialize create/reopen decisions without holding the live-owner map
             // across repository or audit I/O. Existing ownership is checked before
             // this request can reserve capacity or open a provider.
@@ -198,7 +199,6 @@ impl ConversationService {
                 if !record.allows(&caller.organization_id, &caller.principal_id) {
                     return Err(ConversationError::NotFound);
                 }
-                let committed_at_ms = service.inner.clock.unix_milliseconds();
                 service
                     .inner
                     .creation_audit
@@ -206,18 +206,37 @@ impl ConversationService {
                         conversation_id: record.id().clone(),
                         organization_id: record.organization().clone(),
                         owner_id: record.owner().clone(),
-                        before: super::ConversationOwnershipState::Owned,
+                        before: super::ConversationOwnershipState::Absent,
                         after: super::ConversationOwnershipState::Owned,
-                        cause: super::ConversationCreationCause::IdempotentReopen,
-                        initiator_principal_id: caller.principal_id.clone(),
-                        initiator_surface_id: caller.surface_id.clone(),
-                        correlation_id: caller.action_id.clone(),
-                        requested_at_ms,
-                        committed_at_ms,
+                        cause: super::ConversationCreationCause::CallerRequested,
+                        initiator_principal_id: record.owner().clone(),
+                        initiator_surface_id: record.creator_surface().to_owned(),
+                        correlation_id: record.creation_action().to_owned(),
+                        requested_at_ms: record.creation_requested_at_ms(),
                         observed_at_ms: service.inner.clock.unix_milliseconds(),
                     })
                     .await
                     .map_err(|_| ConversationError::Audit)?;
+                if caller.action_id != record.creation_action() {
+                    service
+                        .inner
+                        .creation_audit
+                        .record(super::ConversationCreationAuditRecord {
+                            conversation_id: record.id().clone(),
+                            organization_id: record.organization().clone(),
+                            owner_id: record.owner().clone(),
+                            before: super::ConversationOwnershipState::Owned,
+                            after: super::ConversationOwnershipState::Owned,
+                            cause: super::ConversationCreationCause::IdempotentReopen,
+                            initiator_principal_id: caller.principal_id.clone(),
+                            initiator_surface_id: caller.surface_id.clone(),
+                            correlation_id: caller.action_id.clone(),
+                            requested_at_ms,
+                            observed_at_ms: service.inner.clock.unix_milliseconds(),
+                        })
+                        .await
+                        .map_err(|_| ConversationError::Audit)?;
+                }
                 drop(creation_guard);
                 service.resolve(&id, &caller).await?;
                 return Ok(());
@@ -238,17 +257,6 @@ impl ConversationService {
             if !record.allows(&caller.organization_id, &caller.principal_id) {
                 return Err(ConversationError::NotFound);
             }
-            let committed_at_ms = service.inner.clock.unix_milliseconds();
-            let (before, cause) = match outcome.disposition {
-                super::ConversationCreationDisposition::Created => (
-                    super::ConversationOwnershipState::Absent,
-                    super::ConversationCreationCause::CallerRequested,
-                ),
-                super::ConversationCreationDisposition::Existing => (
-                    super::ConversationOwnershipState::Owned,
-                    super::ConversationCreationCause::IdempotentReopen,
-                ),
-            };
             service
                 .inner
                 .creation_audit
@@ -256,18 +264,39 @@ impl ConversationService {
                     conversation_id: record.id().clone(),
                     organization_id: record.organization().clone(),
                     owner_id: record.owner().clone(),
-                    before,
+                    before: super::ConversationOwnershipState::Absent,
                     after: super::ConversationOwnershipState::Owned,
-                    cause,
-                    initiator_principal_id: caller.principal_id.clone(),
-                    initiator_surface_id: caller.surface_id.clone(),
-                    correlation_id: caller.action_id.clone(),
-                    requested_at_ms,
-                    committed_at_ms,
+                    cause: super::ConversationCreationCause::CallerRequested,
+                    initiator_principal_id: record.owner().clone(),
+                    initiator_surface_id: record.creator_surface().to_owned(),
+                    correlation_id: record.creation_action().to_owned(),
+                    requested_at_ms: record.creation_requested_at_ms(),
                     observed_at_ms: service.inner.clock.unix_milliseconds(),
                 })
                 .await
                 .map_err(|_| ConversationError::Audit)?;
+            if outcome.disposition == super::ConversationCreationDisposition::Existing
+                && caller.action_id != record.creation_action()
+            {
+                service
+                    .inner
+                    .creation_audit
+                    .record(super::ConversationCreationAuditRecord {
+                        conversation_id: record.id().clone(),
+                        organization_id: record.organization().clone(),
+                        owner_id: record.owner().clone(),
+                        before: super::ConversationOwnershipState::Owned,
+                        after: super::ConversationOwnershipState::Owned,
+                        cause: super::ConversationCreationCause::IdempotentReopen,
+                        initiator_principal_id: caller.principal_id.clone(),
+                        initiator_surface_id: caller.surface_id.clone(),
+                        correlation_id: caller.action_id.clone(),
+                        requested_at_ms,
+                        observed_at_ms: service.inner.clock.unix_milliseconds(),
+                    })
+                    .await
+                    .map_err(|_| ConversationError::Audit)?;
+            }
             let slot = {
                 let mut owners = service.inner.conversations.lock().await;
                 if service.inner.retirement.get().is_some() {
@@ -646,19 +675,15 @@ impl ConversationService {
         supervised(async move {
             let _admission = service.admit().await?;
             let actor = caller.actor()?;
+            let execution =
+                ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
             let live = service.resolve(&id, &caller).await?;
-            let result = live
-                .agent
-                .remove_queued(
-                    ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?,
-                    actor,
-                )
-                .await?;
+            let result = live.agent.remove_queued(execution.clone(), actor).await?;
             let snapshot = live.agent.session_manager().snapshot().await;
             live.projection
                 .lock()
                 .await
-                .settled(&execution, snapshot.as_ref());
+                .settled(execution.as_str(), snapshot.as_ref());
             Ok(result == QueueRemoval::Removed)
         })
         .await
@@ -675,17 +700,20 @@ impl ConversationService {
         supervised(async move {
             let _admission = service.admit().await?;
             let actor = caller.actor()?;
+            let execution_id =
+                ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
+            let permission_id =
+                PermissionId::new(&permission).map_err(|_| ConversationError::InvalidInput)?;
+            let option_id =
+                PermissionOptionId::new(option).map_err(|_| ConversationError::InvalidInput)?;
             let live = service.resolve(&id, &caller).await?;
             let answer = live
                 .agent
                 .answer_permission(PermissionAnswer {
                     attribution: ApprovalAttribution::new(actor, ApprovalBasis::Explicit),
-                    execution_id: ExecutionId::new(&execution)
-                        .map_err(|_| ConversationError::InvalidInput)?,
-                    id: PermissionId::new(&permission)
-                        .map_err(|_| ConversationError::InvalidInput)?,
-                    option_id: PermissionOptionId::new(option)
-                        .map_err(|_| ConversationError::InvalidInput)?,
+                    execution_id,
+                    id: permission_id,
+                    option_id,
                 })
                 .await;
             match answer {
@@ -729,16 +757,18 @@ impl ConversationService {
                 return Err(ConversationError::InvalidInput);
             }
             let actor = caller.actor()?;
-            let live = service.resolve(&id, &caller).await?;
             let reason = CustomPermissionCancellationReason::new("gateway_request", reason)
                 .map_err(|_| ConversationError::InvalidInput)?;
+            let execution_id =
+                ExecutionId::new(&execution).map_err(|_| ConversationError::InvalidInput)?;
+            let permission_id =
+                PermissionId::new(&permission).map_err(|_| ConversationError::InvalidInput)?;
+            let live = service.resolve(&id, &caller).await?;
             let _cancellation = live
                 .agent
                 .cancel_permission(PermissionCancellationRequest {
-                    execution_id: ExecutionId::new(&execution)
-                        .map_err(|_| ConversationError::InvalidInput)?,
-                    id: PermissionId::new(&permission)
-                        .map_err(|_| ConversationError::InvalidInput)?,
+                    execution_id,
+                    id: permission_id,
                     reason: PermissionCancellationReason::custom(reason),
                     actor,
                 })

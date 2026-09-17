@@ -9,6 +9,7 @@ pub struct Conversation {
     owner: PrincipalId,
     creator_surface: String,
     creation_action: String,
+    creation_requested_at_ms: u64,
 }
 impl Conversation {
     /// Bind an identity to the authenticated creator. Ownership never comes from prompt data.
@@ -18,6 +19,7 @@ impl Conversation {
         owner: PrincipalId,
         creator_surface: String,
         creation_action: String,
+        creation_requested_at_ms: u64,
     ) -> Result<Self, &'static str> {
         for value in [&creator_surface, &creation_action] {
             if value.trim().is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
@@ -30,6 +32,7 @@ impl Conversation {
             owner,
             creator_surface,
             creation_action,
+            creation_requested_at_ms,
         })
     }
     pub fn id(&self) -> &ConversationId {
@@ -46,6 +49,9 @@ impl Conversation {
     }
     pub fn creation_action(&self) -> &str {
         &self.creation_action
+    }
+    pub fn creation_requested_at_ms(&self) -> u64 {
+        self.creation_requested_at_ms
     }
     /// Both organization and principal must agree; knowing an ID grants no access.
     pub fn allows(&self, organization: &OrganizationId, principal: &PrincipalId) -> bool {

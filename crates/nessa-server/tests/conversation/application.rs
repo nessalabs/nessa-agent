@@ -26,7 +26,7 @@ use nessa_sdk::{
     infrastructure::session_storage::InMemoryStorage,
 };
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
 };
 use tokio::sync::{oneshot, Notify};
@@ -89,6 +89,40 @@ impl ConversationCreationAudit for RecordingCreationAudit {
     }
 }
 
+struct RecoveringCreationAudit {
+    fail_first: AtomicBool,
+    accepted: Mutex<Vec<ConversationCreationAuditRecord>>,
+}
+impl ConversationCreationAudit for RecoveringCreationAudit {
+    fn record(&self, record: ConversationCreationAuditRecord) -> ConversationFuture<'_, ()> {
+        Box::pin(async move {
+            if self.fail_first.swap(false, Ordering::SeqCst) {
+                return Err(ConversationError::Audit);
+            }
+            let mut accepted = self.accepted.lock().unwrap();
+            if let Some(existing) = accepted
+                .iter()
+                .find(|existing| existing.conversation_id == record.conversation_id)
+            {
+                if existing.before == ConversationOwnershipState::Absent
+                    && record.before == ConversationOwnershipState::Absent
+                    && existing.organization_id == record.organization_id
+                    && existing.owner_id == record.owner_id
+                    && existing.cause == record.cause
+                    && existing.initiator_principal_id == record.initiator_principal_id
+                    && existing.initiator_surface_id == record.initiator_surface_id
+                    && existing.correlation_id == record.correlation_id
+                    && existing.requested_at_ms == record.requested_at_ms
+                {
+                    return Ok(());
+                }
+            }
+            accepted.push(record);
+            Ok(())
+        })
+    }
+}
+
 #[tokio::test]
 async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_open() {
     let (_, provider, repository, storage) = fixture(ConversationLimits::default());
@@ -138,8 +172,67 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
     assert_eq!(record.initiator_surface_id, "panel");
     assert_eq!(record.correlation_id, "create-1");
     assert_eq!(record.requested_at_ms, 1_700_000_000_123);
-    assert_eq!(record.committed_at_ms, 1_700_000_000_123);
     assert_eq!(record.observed_at_ms, 1_700_000_000_123);
+}
+
+#[tokio::test]
+async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let audit = Arc::new(RecoveringCreationAudit {
+        fail_first: AtomicBool::new(true),
+        accepted: Mutex::new(Vec::new()),
+    });
+    let service = ConversationService::new(
+        Arc::new(Provider(provider.clone())),
+        storage,
+        repository.clone(),
+        audit.clone(),
+        Arc::new(TestClock),
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = id();
+
+    assert!(matches!(
+        service
+            .create(id.clone(), caller("panel", "create-original"))
+            .await,
+        Err(ConversationError::Audit)
+    ));
+    assert!(repository.records.lock().unwrap().contains_key(&id));
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+
+    service
+        .create(id, caller("phone", "create-retry"))
+        .await
+        .unwrap();
+
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    let accepted = audit.accepted.lock().unwrap();
+    assert_eq!(accepted.len(), 2);
+    let initial = accepted
+        .iter()
+        .filter(|record| record.before == ConversationOwnershipState::Absent)
+        .collect::<Vec<_>>();
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].after, ConversationOwnershipState::Owned);
+    assert_eq!(
+        initial[0].cause,
+        super::ConversationCreationCause::CallerRequested
+    );
+    assert_eq!(initial[0].correlation_id, "create-original");
+    assert_eq!(initial[0].initiator_surface_id, "panel");
+    let reopen = accepted
+        .iter()
+        .find(|record| record.before == ConversationOwnershipState::Owned)
+        .unwrap();
+    assert_eq!(
+        reopen.cause,
+        super::ConversationCreationCause::IdempotentReopen
+    );
+    assert_eq!(reopen.correlation_id, "create-retry");
+    assert_eq!(reopen.initiator_surface_id, "phone");
 }
 
 #[tokio::test]
@@ -182,6 +275,56 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
         "caller-lost"
     );
     service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn malformed_controls_do_not_open_a_dormant_owned_provider() {
+    let (service, provider, repository, _) = fixture(ConversationLimits::default());
+    let id = id();
+    repository.records.lock().unwrap().insert(
+        id.clone(),
+        Conversation::new(
+            id.clone(),
+            OrganizationId::new("org").unwrap(),
+            PrincipalId::new("person").unwrap(),
+            "panel".into(),
+            "create".into(),
+            1_700_000_000_123,
+        )
+        .unwrap(),
+    );
+
+    assert!(matches!(
+        service
+            .remove(id.clone(), caller("panel", "remove"), "".into())
+            .await,
+        Err(ConversationError::InvalidInput)
+    ));
+    assert!(matches!(
+        service
+            .answer(
+                id.clone(),
+                caller("panel", "answer"),
+                "execution".into(),
+                "permission".into(),
+                "".into(),
+            )
+            .await,
+        Err(ConversationError::InvalidInput)
+    ));
+    assert!(matches!(
+        service
+            .cancel_permission(
+                id,
+                caller("panel", "cancel"),
+                "execution".into(),
+                "permission".into(),
+                "   ".into(),
+            )
+            .await,
+        Err(ConversationError::InvalidInput)
+    ));
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -275,6 +418,7 @@ fn ownership_and_creation_context_are_domain_state() {
         PrincipalId::new("person").unwrap(),
         "panel".into(),
         "create".into(),
+        1_700_000_000_123,
     )
     .unwrap();
     assert!(record.allows(
@@ -287,6 +431,7 @@ fn ownership_and_creation_context_are_domain_state() {
     ));
     assert_eq!(record.creator_surface(), "panel");
     assert_eq!(record.creation_action(), "create");
+    assert_eq!(record.creation_requested_at_ms(), 1_700_000_000_123);
     assert!(ConversationId::new("../../file").is_err());
     assert!(ConversationId::new("00000000-0000-4000-8000-000000000001").is_ok());
     assert!(ConversationId::new("00000000-0000-4000-8000-00000000000A").is_err());
@@ -296,7 +441,8 @@ fn ownership_and_creation_context_are_domain_state() {
         record.organization().clone(),
         record.owner().clone(),
         "\n".into(),
-        "create".into()
+        "create".into(),
+        1_700_000_000_123,
     )
     .is_err());
 }
@@ -469,6 +615,7 @@ async fn first_read_caller_loss_cannot_leave_an_unstarted_shutdown_slot() {
             PrincipalId::new("person").unwrap(),
             "panel".into(),
             "create".into(),
+            1_700_000_000_123,
         )
         .unwrap(),
     );
@@ -959,6 +1106,7 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
             PrincipalId::new("person").unwrap(),
             "panel".into(),
             "create".into(),
+            1_700_000_000_123,
         )
         .unwrap(),
     );

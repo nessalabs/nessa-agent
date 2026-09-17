@@ -57,6 +57,16 @@ describe("conversation view agreement", () => {
     )
   })
 
+  it("accepts matching pending and message text above the former preview limit", () => {
+    const value = view()
+    const text = "😀".repeat(2048)
+    value.messages[0]!.userText = text
+    value.pending[0]!.text = text
+
+    expect(new TextEncoder().encode(text)).toHaveLength(8192)
+    expect(() => conversationView(value, "conversation")).not.toThrow()
+  })
+
   it("allows pending text mismatch when bounded evidence is truncated", () => {
     const value = view()
     value.truncated = true

@@ -138,7 +138,7 @@ impl Projection {
             if self.view.pending.len() < 64 {
                 self.view.pending.push(ConversationPending {
                     execution_id: id.into(),
-                    text: clipped(text, 1024),
+                    text: clipped(text, MAX_TEXT),
                     mode,
                 });
             } else {

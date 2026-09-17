@@ -22,6 +22,7 @@ struct StoredConversation {
     owner: String,
     creator_surface: String,
     creation_action: String,
+    creation_requested_at_ms: u64,
 }
 /// Private create-once files bind conversation IDs to owners before any provider opens.
 pub struct LocalConversationRepository {
@@ -65,6 +66,7 @@ fn read(root: &Path, id: &ConversationId) -> Result<Option<Conversation>, Conver
             PrincipalId::new(value.owner).map_err(|_| ConversationError::Metadata)?,
             value.creator_surface,
             value.creation_action,
+            value.creation_requested_at_ms,
         )
         .map_err(|_| ConversationError::Metadata)?,
     ))
@@ -101,6 +103,7 @@ impl ConversationRepository for LocalConversationRepository {
                     owner: conversation.owner().as_str().into(),
                     creator_surface: conversation.creator_surface().into(),
                     creation_action: conversation.creation_action().into(),
+                    creation_requested_at_ms: conversation.creation_requested_at_ms(),
                 };
                 let bytes = serde_json::to_vec(&value).map_err(|_| ConversationError::Metadata)?;
                 if bytes.len() > 4096 {

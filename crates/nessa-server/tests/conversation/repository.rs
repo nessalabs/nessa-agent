@@ -20,6 +20,7 @@ async fn ownership_is_create_once_and_corrupt_records_fail_closed() {
         PrincipalId::new("alice").unwrap(),
         "panel".into(),
         "create-original".into(),
+        123,
     )
     .unwrap();
     let created = repository.create(original.clone()).await.unwrap();
@@ -34,6 +35,7 @@ async fn ownership_is_create_once_and_corrupt_records_fail_closed() {
         PrincipalId::new("bob").unwrap(),
         "other".into(),
         "overwrite".into(),
+        456,
     )
     .unwrap();
     let existing = repository.create(impostor).await.unwrap();
