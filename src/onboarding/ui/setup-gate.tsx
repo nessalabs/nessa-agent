@@ -29,6 +29,8 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
         screen rather than competing with the desktop. Decorative: the dim is
         not a control and closing setup is the corner button's job. */}
       <div aria-hidden="true" className="nessa-setup-dim" />
+      {/* The light the opening throws onto the dimmed screen around the box. */}
+      <div aria-hidden="true" className="nessa-setup-halo" />
       <div className="nessa-setup-window">
         <Onboarding
           state={onboarding.state}
