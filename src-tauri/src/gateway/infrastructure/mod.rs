@@ -13,19 +13,9 @@
 //!                    -> control -> launchd / existing gateway
 //! ```
 //! Arrows mean calls; only launchd owns the background process lifetime.
-use super::application::GatewayHost;
-use std::sync::Arc;
 #[cfg(target_os = "macos")]
 mod macos;
+mod selection;
 #[cfg(not(target_os = "macos"))]
 mod unsupported;
-pub fn current() -> Arc<dyn GatewayHost> {
-    #[cfg(target_os = "macos")]
-    {
-        Arc::new(macos::Launchd)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Arc::new(unsupported::Unsupported)
-    }
-}
+pub use selection::current;
