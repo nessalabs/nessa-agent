@@ -18,6 +18,10 @@ use std::process::{Command, Stdio};
 use crate::agents::application::ProbeFailure;
 
 /// Where Claude Code keeps its sign-in on macOS. Asked after, never read.
+///
+/// Gated with the one function that reads it: a host without a keychain has no
+/// keychain to name.
+#[cfg(target_os = "macos")]
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 
 /// What Claude Code names its credentials file inside its config directory.
