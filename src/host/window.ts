@@ -225,3 +225,17 @@ export async function loadAssignedSurfaceCredential(stage: string): Promise<stri
     )
   }
 }
+
+/**
+ * Tell the host where the surface the window controls belong to has been
+ * drawn, in CSS pixels from the window's top left.
+ *
+ * The setup window covers the whole screen, so the corner its controls would
+ * otherwise sit in is the corner of the display — stranded in the dimmed area,
+ * nowhere near the box they close. Only the page knows where that box is.
+ */
+export async function placeWindowControls(left: number, top: number) {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("place_window_controls", { left, top })
+}

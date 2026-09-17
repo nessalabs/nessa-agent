@@ -36,7 +36,7 @@ window-vibrancy = "0.6"
 # only so `platform/macos` can observe AppKit's live resize notifications and
 # place the webview inside the window. Nothing new is compiled into the binary.
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSResponder", "NSView"] }
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSResponder", "NSView", "NSButton", "NSControl"] }
 objc2-foundation = { version = "0.3", features = ["NSNotification", "NSOperation", "block2"] }
 block2 = "0.6"
 

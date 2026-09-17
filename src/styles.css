@@ -735,60 +735,6 @@ body {
 }
 
 /*
- * The window controls, on a bar that is not there.
- *
- * Setup covers the screen and has no titlebar, so this is the only way out of
- * it besides Escape, and it belongs where a window's controls belong. The bar
- * itself is nothing — no surface, no line — because the panel already has an
- * edge and a second one inside it would read as a window within a window.
- */
-.nessa-setup-controls {
-  position: absolute;
-  top: 0.9rem;
-  left: 0.9rem;
-  z-index: 10;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.nessa-setup-light-close,
-.nessa-setup-light-inert {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  /* A hairline of the lit edge, so the dots read as inset rather than printed
-     on. It is what the system's own controls have. */
-  box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 0.18);
-}
-
-.nessa-setup-light-close {
-  background: #ff5f57;
-  transition: filter 120ms ease-out;
-  outline: none;
-}
-
-.nessa-setup-light-close:hover {
-  filter: brightness(1.12);
-}
-
-.nessa-setup-light-close:focus-visible {
-  box-shadow:
-    inset 0 0 0 0.5px rgb(0 0 0 / 0.18),
-    0 0 0 3px rgb(255 255 255 / 0.55);
-}
-
-/*
- * Minimising or zooming a window that *is* the screen means nothing, so these
- * are drawn the way the system draws a control that is unavailable — and they
- * are shapes rather than buttons, because a button that does nothing when
- * pressed is worse than one that was never offered.
- */
-.nessa-setup-light-inert {
-  background: rgb(255 255 255 / 0.22);
-}
-
-/*
  * A shortcut drawn as the keys themselves.
  *
  * Written as text a shortcut is a string to decode; drawn as caps it is a

@@ -46,6 +46,13 @@ pub trait Host: Send + Sync {
     /// teaches would otherwise summon the panel out of sight behind it.
     fn set_above_overlay(&self, _window: &WebviewWindow, _above: bool) {}
 
+    /// Put the window's own close/minimise/zoom controls at a point inside it,
+    /// measured from its top left. A window covering the whole screen would
+    /// otherwise wear them in the display's corner, far from the surface they
+    /// close; the page knows where it drew that surface. Hosts that draw their
+    /// controls where they belong ignore this.
+    fn place_window_controls(&self, _window: &WebviewWindow, _left: f64, _top: f64) {}
+
     /// Native frost / clear. No-op on hosts where the shell paints frost in CSS.
     fn set_frosted(&self, _window: &WebviewWindow, _frosted: bool) -> Result<(), String> {
         Ok(())

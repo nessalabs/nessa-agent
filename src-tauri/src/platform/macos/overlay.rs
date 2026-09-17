@@ -7,8 +7,12 @@
 //! itself and raising the window above the bar that would otherwise draw over
 //! it.
 
-use objc2_app_kit::{NSApplication, NSMainMenuWindowLevel, NSWindow, NSWindowCollectionBehavior};
+use objc2_app_kit::{
+    NSApplication, NSMainMenuWindowLevel, NSWindow, NSWindowButton, NSWindowCollectionBehavior,
+    NSWindowStyleMask, NSWindowTitleVisibility,
+};
 use objc2_foundation::MainThreadMarker;
+use objc2_foundation::NSPoint;
 use tauri::WebviewWindow;
 
 /// Cover the screen the window is on, above the menu bar, and take focus.
@@ -39,6 +43,7 @@ pub fn present(window: &WebviewWindow) {
     // One level above the bar: enough to cover it, and not so high that setup
     // sits over a screen saver or a security prompt.
     native.setLevel(NSMainMenuWindowLevel + 1);
+    install_controls(native);
     if let Some(screen) = native.screen() {
         native.setFrame_display(screen.frame(), true);
     }
@@ -82,4 +87,70 @@ pub fn set_above_overlay(window: &WebviewWindow, above: bool) {
         // because objc2 does not export the named constant.
         3
     });
+}
+
+/*
+ * The window's own close, minimise and zoom buttons, with none of the window
+ * chrome they normally come attached to.
+ *
+ * They are the real controls rather than three circles that look like them: a
+ * drawn one has to reimplement every state the system already draws — hover,
+ * press, window-inactive, the symbols that appear when the pointer is over the
+ * group — and it will be wrong the moment any of that changes. Making the
+ * titlebar transparent and its title invisible, over a content view that runs
+ * the full height of the window, leaves the buttons and nothing else.
+ */
+fn install_controls(native: &NSWindow) {
+    native.setStyleMask(
+        native.styleMask()
+            | NSWindowStyleMask::Titled
+            | NSWindowStyleMask::Closable
+            | NSWindowStyleMask::Miniaturizable
+            | NSWindowStyleMask::FullSizeContentView,
+    );
+    native.setTitlebarAppearsTransparent(true);
+    native.setTitleVisibility(NSWindowTitleVisibility::Hidden);
+}
+
+/**
+ * Put the window controls at a point in the window, rather than in its corner.
+ *
+ * This window is the whole screen, so the corner AppKit would put them in is
+ * the corner of the *display* — stranded in the dimmed area, nowhere near the
+ * surface they close. The page knows where it drew that surface and says so.
+ *
+ * They are moved into the content view to get there: a standard button lives
+ * in the title bar's own view, which is a strip too short to hold one several
+ * hundred points further down.
+ */
+pub fn place_controls(window: &WebviewWindow, left: f64, top: f64) {
+    let handle = match window.ns_window() {
+        Ok(handle) => handle,
+        Err(error) => {
+            eprintln!("[nessa] could not place the window controls: {error}");
+            return;
+        }
+    };
+    let native = unsafe { &*handle.cast::<NSWindow>() };
+    let Some(content) = native.contentView() else {
+        return;
+    };
+    let height = content.frame().size.height;
+    let mut x = left;
+    for button in [
+        NSWindowButton::CloseButton,
+        NSWindowButton::MiniaturizeButton,
+        NSWindowButton::ZoomButton,
+    ] {
+        let Some(view) = native.standardWindowButton(button) else {
+            continue;
+        };
+        let size = view.frame().size;
+        view.removeFromSuperview();
+        content.addSubview(&view);
+        // AppKit measures from the bottom left; the page measures from the top.
+        view.setFrameOrigin(NSPoint::new(x, height - top - size.height));
+        // The spacing the system uses between the three.
+        x += 20.0;
+    }
 }
