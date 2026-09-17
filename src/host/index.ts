@@ -25,6 +25,7 @@ export {
   onSummoned,
   onToggleSurface,
   onWindowResize,
+  recordSetupComplete,
   revealSetupWindow,
   setFrosted,
   startResizeFromLeftEdge,

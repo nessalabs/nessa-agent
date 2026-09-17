@@ -135,3 +135,34 @@ describe("handing setup over to the panel", () => {
     expect(close).not.toHaveBeenCalled()
   })
 })
+
+describe("recording that first-run setup finished", () => {
+  it("tells the host, so the next launch opens the panel instead", async () => {
+    const { recordSetupComplete } = await import("./window")
+    invoke.mockResolvedValue(undefined)
+    await expect(recordSetupComplete()).resolves.toBeUndefined()
+    expect(invoke).toHaveBeenCalledWith("complete_onboarding")
+  })
+
+  // The handoff to the panel is what somebody is waiting on. A host that could
+  // not write the flag costs them a second run of setup, so the failure has to
+  // arrive as a rejected promise the caller can swallow — not as a throw out of
+  // the click that finished setup.
+  it("rejects rather than throwing when the host could not write it", async () => {
+    const { recordSetupComplete } = await import("./window")
+    const cause = "could not record that setup finished"
+    invoke.mockRejectedValue(cause)
+    const recorded = recordSetupComplete()
+    const swallowed = vi.fn()
+    await expect(recorded.catch(swallowed)).resolves.toBeUndefined()
+    expect(swallowed).toHaveBeenCalledWith(cause)
+  })
+
+  it("has nothing to record outside the desktop host", async () => {
+    vi.stubGlobal("window", {})
+    vi.resetModules()
+    const { recordSetupComplete } = await import("./window")
+    await expect(recordSetupComplete()).resolves.toBeUndefined()
+    expect(invoke).not.toHaveBeenCalled()
+  })
+})

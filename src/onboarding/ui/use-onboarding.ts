@@ -1,7 +1,13 @@
 import * as React from "react"
 import type { ShortcutsDocument } from "@nessa/client"
 import defaults from "../../../protocol/defaults/shortcuts.v1.json"
-import { host, loadShortcuts, matchesAccelerator, onSummoned } from "../../host"
+import {
+  host,
+  loadShortcuts,
+  matchesAccelerator,
+  onSummoned,
+  recordSetupComplete,
+} from "../../host"
 import { playCue } from "./sound"
 import { listenForDismiss } from "./dismiss-shortcut"
 import { createReadinessCheck } from "../application/readiness-check"
@@ -64,17 +70,22 @@ export interface Onboarding {
   /** Leave setup without finishing it. */
   dismiss: () => void
   /** Ask the runtimes again. For a gateway that was still starting up, or an
-   * agent signed in since setup opened. */
+   * agent signed in since setup opened. Does nothing while an ask is already in
+   * flight — its answer is the one a second ask would be waiting for. */
   recheck: () => void
+  /** True while an ask is in flight, so the control that starts one can show
+   * that it is working rather than looking like it did nothing. */
+  checking: boolean
 }
 
 /**
  * Coordinates first-run setup for the panel.
  *
- * The chosen agent lives in memory for now: nothing is persisted and no
- * provider is configured, so a relaunch starts setup again. Persisting the
- * choice and connecting it to a gateway are separate steps; keeping them out
- * means this hook cannot imply an agent is ready to run.
+ * Finishing setup is recorded with the host, so a relaunch opens straight into
+ * the panel. Only that fact is kept: the chosen agent still lives in memory,
+ * because no provider is configured against it and nothing reads it back.
+ * Connecting the choice to a gateway is a separate step; keeping it out means
+ * this hook cannot imply an agent is ready to run.
  *
  * The summon shortcut is read from the host's own cache, falling back to the
  * bundled defaults the way the rest of the panel does, so setup teaches the
@@ -121,23 +132,47 @@ export function useOnboarding(
       ),
     [agents],
   )
-  const recheck = React.useCallback(() => void readiness.check(), [readiness])
+  // One ask at a time. Every ask reaches the readiness probe, which does real
+  // work on the machine — on macOS a blocking subprocess per agent — so a
+  // person pressing "Check again" while nothing visibly happens would stack up
+  // probes. The generation guard inside `createReadinessCheck` only keeps a
+  // stale answer off the screen; it does not stop the ask being made.
+  //
+  // Coalescing rather than queueing: the ask in flight was started after
+  // whatever was fixed, so its answer is the fresh one a second ask would go
+  // and fetch. The flag is a ref as well as state because two clicks in one
+  // frame are two events against the same render.
+  const [checking, setChecking] = React.useState(false)
+  const asking = React.useRef(false)
+  const ask = React.useCallback(() => {
+    if (asking.current) return
+    asking.current = true
+    setChecking(true)
+    void readiness.check().finally(() => {
+      asking.current = false
+      setChecking(false)
+    })
+  }, [readiness])
+  const recheck = ask
 
   React.useEffect(() => {
-    void readiness.check()
+    ask()
     return () => readiness.abandon()
-  }, [readiness])
+  }, [ask, readiness])
 
   // The one ask nobody presses a button for: reaching the picker. Between the
   // window opening and someone reading the list, a gateway that was starting up
   // has had its chance to finish, and the list is about to be acted on. It is
   // one more ask, not a loop — setup opens on the welcome step, so the two asks
   // are the opening one and this one.
+  //
+  // It is also subject to the one-ask-at-a-time rule above: if the opening ask
+  // has not answered yet, that answer is already the one this step wants.
   const picking = state.step === "agent"
   React.useEffect(() => {
     if (!picking) return
-    void readiness.check()
-  }, [picking, readiness])
+    ask()
+  }, [picking, ask])
 
   const keys = summonAccelerator(shortcuts)
   const platform = shortcutPlatform()
@@ -230,11 +265,28 @@ export function useOnboarding(
       setState(confirmAgent)
     }, []),
     finish: React.useCallback(() => {
+      if (!practising) return
       playCue("celebrate")
       setState(completeOnboarding)
-    }, []),
+      // Finishing is what is recorded, and dismissing deliberately is not.
+      // They are different acts in the model — `completeOnboarding` keeps the
+      // agent, `dismissOnboarding` keeps nothing and says the next run starts
+      // over — and the ways out of setup are Escape, the corner mark, and a
+      // click on the dimmed screen behind it. Any of those can be a slip on a
+      // window that covers the whole display; treating one as "done forever"
+      // would bury first-run setup on a machine where nobody chose anything.
+      // Leaving without finishing stays free to change its mind.
+      //
+      // Not awaited, and its failure does not travel: the handoff to the panel
+      // is the thing somebody is waiting on, and a settings file that would not
+      // take the flag costs them a second run of setup, not their panel.
+      void recordSetupComplete().catch((cause: unknown) => {
+        console.warn("[nessa] could not record that setup finished", cause)
+      })
+    }, [practising]),
     // Leaving is not an accomplishment and does not announce itself.
     dismiss: React.useCallback(() => setState(dismissOnboarding), []),
     recheck,
+    checking,
   }
 }

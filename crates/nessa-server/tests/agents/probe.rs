@@ -4,6 +4,10 @@
 //! developer's own home directory, credentials, or keychain. The keychain is
 //! only ever reached when the environment and the file have both said no, and
 //! no test here drives it there, because its answer belongs to the host.
+//!
+//! What makes a credentials file a sign-in is Claude's own, and is tested
+//! beside it in `claude.rs`. These tests are about the order the sources are
+//! asked in and what an unanswered source does to the whole answer.
 
 use super::*;
 use std::path::Path;
@@ -55,21 +59,7 @@ fn nowhere_to_look_for_a_credentials_file_is_not_the_same_as_not_finding_one() {
 }
 
 #[test]
-fn a_missing_or_empty_credentials_file_is_a_real_no() {
-    let config = TempDir::new().unwrap();
-    assert_eq!(
-        probe(false, Some(config.path()), None).claude_credentials_file(),
-        Ok(false)
-    );
-    std::fs::write(config.path().join(".credentials.json"), b"").unwrap();
-    assert_eq!(
-        probe(false, Some(config.path()), None).claude_credentials_file(),
-        Ok(false)
-    );
-}
-
-#[test]
-fn a_credentials_file_with_contents_is_a_yes_without_being_read() {
+fn a_credentials_file_settles_the_question_before_the_keychain_is_asked() {
     let config = TempDir::new().unwrap();
     std::fs::write(
         config.path().join(".credentials.json"),
@@ -80,7 +70,6 @@ fn a_credentials_file_with_contents_is_a_yes_without_being_read() {
         probe(false, Some(config.path()), None).claude_credentials_file(),
         Ok(true)
     );
-    // And it settles the whole question, so nothing asks the keychain.
     assert_eq!(
         probe(false, Some(config.path()), None).authenticated(AgentId::Claude),
         Ok(true)
@@ -92,22 +81,6 @@ fn an_api_key_in_the_environment_answers_before_anything_is_looked_at() {
     // A machine account signs in this way; no file and no keychain is consulted.
     assert_eq!(
         probe(false, None, Some("key")).authenticated(AgentId::Claude),
-        Ok(true)
-    );
-}
-
-#[test]
-fn an_oauth_token_is_a_sign_in_because_the_launcher_starts_the_agent_with_it() {
-    // CLAUDE_CODE_OAUTH_TOKEN is passed straight through to the agent process,
-    // so a machine holding only that one is signed in and must not be sent to
-    // authenticate again.
-    assert_eq!(
-        CLAUDE_CREDENTIAL_VARIABLES,
-        ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
-        "the launcher passes both of these through; the probe must read both"
-    );
-    assert_eq!(
-        probe(true, None, Some("oauth-token")).authenticated(AgentId::Claude),
         Ok(true)
     );
 }

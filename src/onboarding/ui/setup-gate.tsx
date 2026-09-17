@@ -204,6 +204,7 @@ export function SetupGate({
           onConfirm={onboarding.confirm}
           onFinish={onboarding.finish}
           onRecheck={onboarding.recheck}
+          checking={onboarding.checking}
           platform={onboarding.platform}
         />
       </div>

@@ -25,6 +25,24 @@ pub struct Settings {
     pub panel: Panel,
     /// Keep background agents running after quitting the desktop by default.
     pub stop_agents_on_quit: bool,
+    /// How far first-run setup got. A file written before this key existed
+    /// loads as "not done", which is the same answer a first launch gives.
+    pub onboarding: Onboarding,
+}
+
+/// What first-run setup has settled.
+///
+/// Only whether it finished: that is the one fact a launch acts on. The agent
+/// setup chose is deliberately not kept here — nothing on either side of the
+/// boundary reads it back yet, and a written key nobody reads is a promise the
+/// build cannot keep. It becomes another field on this struct on the day
+/// something honours it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Onboarding {
+    /// Whether first-run setup has been completed. A launch with this true
+    /// opens straight into the panel instead of the setup window.
+    pub completed: bool,
 }
 
 /// The panel's geometry, in logical pixels. It opens in the lower right of the
@@ -153,6 +171,28 @@ mod tests {
         assert_eq!(settings.panel.width, 420.0);
         assert!(!settings.stop_agents_on_quit);
         assert!(settings.panel.height.is_none());
+        // A settings file written before first-run setup was persisted has no
+        // such key, and says the same thing a first launch does: not done.
+        assert!(!settings.onboarding.completed);
+    }
+
+    #[test]
+    fn a_completed_first_run_survives_a_reload() {
+        let path = PathBuf::from("settings.json");
+        let store = FakeStorage::default();
+        assert!(!load_from(&path, &store).onboarding.completed);
+
+        let mut settings = load_from(&path, &store);
+        settings.onboarding.completed = true;
+        write(&path, &settings, &store).unwrap();
+
+        assert!(load_from(&path, &store).onboarding.completed);
+        // Written under the same camelCase convention as every other key, so
+        // the file stays the editable interface it is meant to be.
+        let written = store.files.lock().unwrap().get(&path).unwrap().clone();
+        let raw = String::from_utf8(written).unwrap();
+        assert!(raw.contains(r#""completed": true"#), "{raw}");
+        assert!(raw.contains(r#""onboarding""#), "{raw}");
     }
 
     #[test]

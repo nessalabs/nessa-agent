@@ -251,6 +251,7 @@ rows from the shared Transcript; it does not parse provider wire formats.
 - `crates/nessa-server/src/desktop_runtime/` owns validated upgrade correlation, the admission-and-cleanup retirement use case, and private request/result/audit files. A managed old gateway stays alive until it has durably acknowledged retirement; launchd performs replacement only after that acknowledgement.
 - `crates/nessa-server/src/composition/desktop.rs` bootstraps private local access and injects bundled provider paths.
 - `settings.stopAgentsOnQuit` controls agent cleanup on desktop exit; launchd owns gateway lifetime independently.
+- `settings.onboarding.completed` records that first-run setup finished. `src-tauri/src/main.rs` opens the setup window only when it is false; `panel::complete_onboarding` (invoked from `src/host/window.ts`'s `recordSetupComplete` when setup is finished, not when it is dismissed) writes it, and the debug-only tray item clears it through `panel::restart_onboarding`.
 
 The first update from a gateway that predates retirement acknowledgement uses a
 single explicit legacy bootout after its sole listening PID matches the exact
@@ -320,12 +321,16 @@ the `Readiness` rule that turns two answers into one thing to tell the person;
 `application/` owns the `AgentProbe` port, whose typed `ProbeFailure` keeps "not
 signed in" apart from "could not tell", and the `ReadAgentReadiness` use case
 that only asks and maps; `infrastructure/local.rs` asks this machine, with the
-runtime root, API key and config directory resolved once in composition;
-`entrypoint/http.rs` owns the wire vocabulary and the cross-origin rule for
-`GET /onboarding/agents`. Composition injects `LocalAgentProbe` through
-`ProductDependencies`, and the handler receives it alone via `FromRef`. Tests
-under `tests/agents/` split domain rules, application orchestration, the HTTP
-boundary, and the local probe's failure modes.
+runtime root, API key and config directory resolved once in composition, while
+`infrastructure/claude.rs` holds what is true of Claude Code alone — its
+keychain item, its credentials file and what makes one a real sign-in, and the
+environment variables the launcher passes through — so a second agent gets a
+sibling module rather than a branch; `entrypoint/http.rs` owns the wire
+vocabulary and the cross-origin rule for `GET /onboarding/agents`. Composition
+injects `LocalAgentProbe` through `ProductDependencies`, and the handler
+receives it alone via `FromRef`. Tests under `tests/agents/` split domain rules,
+application orchestration, the HTTP boundary, the local probe's failure modes,
+and Claude's own sign-in conventions.
 
 ## Command-line surface
 

@@ -263,6 +263,22 @@ export async function finishSetupWindow(): Promise<SetupHandoff> {
 }
 
 /**
+ * Record that first-run setup finished, so the next launch opens the panel
+ * instead of setup.
+ *
+ * The host keeps this in its settings file; there is nothing to write to
+ * outside Tauri, where a reload starts over anyway, so this is an explicit
+ * no-op rather than a pretend success. It rejects when the host could not
+ * write — which costs the next launch's straight start, not this one's handoff,
+ * so the caller logs it and carries on.
+ */
+export async function recordSetupComplete(): Promise<void> {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("complete_onboarding")
+}
+
+/**
  * Show the setup window, once its page has a frame to show.
  *
  * It is created hidden: a window is on screen the moment it exists, and a

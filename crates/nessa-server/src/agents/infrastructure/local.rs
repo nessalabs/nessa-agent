@@ -1,19 +1,20 @@
-use std::io::ErrorKind;
 use std::path::PathBuf;
-#[cfg(target_os = "macos")]
-use std::process::{Command, Stdio};
 
 use crate::agents::application::{AgentProbe, ProbeFailure};
 use crate::agents::domain::AgentId;
-
-/// Where Claude Code keeps its sign-in on macOS. Asked after, never read.
-const CLAUDE_KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
+use crate::agents::infrastructure::claude;
 
 /// The machine this server is running on.
 ///
 /// Everything it needs from the environment is resolved once, where
 /// dependencies are chosen, and held as data. Nothing here reads a secret: the
 /// questions are whether a credential exists, never what it is.
+///
+/// What is true of *Claude Code specifically* — the name of its keychain item,
+/// where it writes a credentials file, which variables sign it in, what makes
+/// one of those a real sign-in — belongs to `claude.rs`. This type owns the
+/// order those sources are asked in and what an unanswered source means, which
+/// would be the same for any agent.
 pub struct LocalAgentProbe {
     /// Whether the agent this server would actually launch is configured and
     /// its executable and entry point are really there. Composition resolves
@@ -25,12 +26,6 @@ pub struct LocalAgentProbe {
     /// Where Claude Code would write a credentials file on this machine.
     claude_config_directory: Option<PathBuf>,
 }
-
-/// The environment variables the launcher passes through to the agent as a
-/// sign-in. Either one on its own starts Claude Code, so either one on its own
-/// is an answered yes here; anything this probe did not check is a machine
-/// reported as needing a sign-in it already has.
-const CLAUDE_CREDENTIAL_VARIABLES: [&str; 2] = ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"];
 
 impl LocalAgentProbe {
     /// Read this host's environment once, in composition.
@@ -47,19 +42,8 @@ impl LocalAgentProbe {
     pub fn from_environment(claude_installed: bool) -> Self {
         Self {
             claude_installed,
-            environment_credential: CLAUDE_CREDENTIAL_VARIABLES.iter().find_map(|key| {
-                std::env::var(key)
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-            }),
-            claude_config_directory: std::env::var("CLAUDE_CONFIG_DIR")
-                .map(PathBuf::from)
-                .ok()
-                .or_else(|| {
-                    std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-                        .ok()
-                        .map(|home| PathBuf::from(home).join(".claude"))
-                }),
+            environment_credential: claude::environment_credential(),
+            claude_config_directory: claude::config_directory(),
         }
     }
 
@@ -74,28 +58,21 @@ impl LocalAgentProbe {
         }
         let mut unanswered = None;
         if holds(&mut unanswered, self.claude_credentials_file())
-            || holds(&mut unanswered, keychain_holds(CLAUDE_KEYCHAIN_SERVICE))
+            || holds(&mut unanswered, claude::keychain_sign_in())
         {
             return Ok(true);
         }
         unanswered.map_or(Ok(false), Err)
     }
 
-    /// Whether Claude Code has written a credentials file here.
-    ///
-    /// Only the file's size is looked at. An empty file is a real no; a file
-    /// that exists with contents is a real yes; anything the filesystem refuses
-    /// to describe is neither.
+    /// Ask Claude's own credentials file, wherever this host puts it. Nowhere to
+    /// look is a question that was never asked, not a sign-in ruled out.
     fn claude_credentials_file(&self) -> Result<bool, ProbeFailure> {
         let directory = self
             .claude_config_directory
             .as_deref()
             .ok_or(ProbeFailure::NothingToAsk)?;
-        match directory.join(".credentials.json").metadata() {
-            Ok(file) => Ok(file.len() > 0),
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
-            Err(_) => Err(ProbeFailure::Unanswered),
-        }
+        claude::credentials_file(directory)
     }
 }
 
@@ -128,45 +105,6 @@ fn holds(unanswered: &mut Option<ProbeFailure>, source: Result<bool, ProbeFailur
             false
         }
     }
-}
-
-/// `errSecItemNotFound`: the keychain looked and there is no such item. This is
-/// the tool answering no, not the tool failing.
-#[cfg(target_os = "macos")]
-const KEYCHAIN_ITEM_NOT_FOUND: i32 = 44;
-
-/// Whether the login keychain holds a generic password for `service`.
-///
-/// Asked for the item's *attributes* and not its data: `find-generic-password`
-/// without `-w` prints metadata and never the secret, so this answers "is there
-/// a sign-in" without the server handling the token and without the keychain
-/// prompting to release one.
-///
-/// Output is discarded and only the exit status read. A locked keychain, a
-/// missing tool, or any other failure is reported as a failure rather than as
-/// an absent sign-in, so that the caller can tell the two apart.
-#[cfg(target_os = "macos")]
-fn keychain_holds(service: &str) -> Result<bool, ProbeFailure> {
-    match Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", service])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-    {
-        Ok(status) if status.success() => Ok(true),
-        Ok(status) if status.code() == Some(KEYCHAIN_ITEM_NOT_FOUND) => Ok(false),
-        Ok(_) => Err(ProbeFailure::Unanswered),
-        Err(error) if error.kind() == ErrorKind::NotFound => Err(ProbeFailure::NothingToAsk),
-        Err(_) => Err(ProbeFailure::Unanswered),
-    }
-}
-
-/// A host with no keychain has already given its whole answer in the file and
-/// the environment, so this is a real no rather than a failure to look.
-#[cfg(not(target_os = "macos"))]
-fn keychain_holds(_service: &str) -> Result<bool, ProbeFailure> {
-    Ok(false)
 }
 
 #[cfg(test)]

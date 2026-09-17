@@ -281,6 +281,7 @@ export function Onboarding({
   onConfirm,
   onFinish,
   onRecheck,
+  checking = false,
   platform,
 }: {
   state: OnboardingState
@@ -293,6 +294,10 @@ export function Onboarding({
   onFinish: () => void
   /** Ask the runtimes again, for whoever has just fixed what was wrong. */
   onRecheck: () => void
+  /** True while an ask is in flight. The button that starts one says so and
+   * stops taking presses, because each ask runs a real probe per agent and a
+   * button that looks inert invites being pressed again. */
+  checking?: boolean
 }) {
   // Called unconditionally, as a hook must be; it only listens on the step
   // that has keys to light.
@@ -431,9 +436,10 @@ export function Onboarding({
               type="button"
               variant="outline"
               className="rounded-full"
+              disabled={checking}
               onClick={onRecheck}
             >
-              Check again
+              {checking ? "Checking…" : "Check again"}
             </Button>
           </div>
         ) : null}

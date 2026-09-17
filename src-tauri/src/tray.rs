@@ -28,10 +28,13 @@ pub struct Present(pub bool);
 struct QuitPolicyMenuItem(CheckMenuItem<Wry>);
 
 const TRAY_ID: &str = "nessa-tray";
-/// Reopens first-run setup. Debug builds only: first-run setup is not persisted
-/// yet, so it runs on every launch and there is no way to see it twice in one.
-/// This runs it on demand, which is what makes it possible to work on at all —
-/// it is not a feature anybody asked for, so it does not ship until it is one.
+/// Reopens first-run setup, and un-finishes it: `panel::restart_onboarding`
+/// clears the persisted completion as well as showing the window, so this is a
+/// real restart rather than a second look at a setup the file still calls done.
+///
+/// Debug builds only: setup now runs once and records that it did, so this is
+/// the only way to see it again while working on it. It is not a feature
+/// anybody asked for, so it does not ship until it is one.
 #[cfg(debug_assertions)]
 const SHOW_SETUP_ITEM: &str = "show-setup";
 /// The menu bar icon, compiled in rather than resolved as a bundle resource so

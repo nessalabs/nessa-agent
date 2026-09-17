@@ -4,6 +4,8 @@
 //! the frame is fitted. The frame is reapplied on every show, so moving
 //! between displays re-places the panel rather than stranding it.
 
+use std::io;
+
 use tauri::{
     AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalSize, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder,
@@ -11,7 +13,7 @@ use tauri::{
 
 use crate::host;
 use crate::platform;
-use crate::settings::{Panel, Settings};
+use crate::settings::{self, Onboarding, Panel, Settings};
 
 /// The panel itself. Named here because the window policies that single it out
 /// — close dismisses it rather than quitting — live in the host's event handler.
@@ -146,6 +148,30 @@ pub fn reveal_setup_window(window: WebviewWindow) {
     platform::current().reveal_overlay(&window);
 }
 
+/// Record that first-run setup finished, so the next launch skips it.
+///
+/// Written through the settings file, which is the one durable store the app
+/// has — the same load, change, save the tray's own toggle does. The managed
+/// `Settings` is deliberately not updated in place: nothing after startup reads
+/// this flag, and the launch that does reads it off disk before anything is
+/// managed at all.
+///
+/// Fails when the file could not be written. Setup calls this on its way to the
+/// panel and does not wait on the answer, so this reports the write honestly
+/// rather than swallowing it: a failure means setup runs again next launch,
+/// which is worth saying out loud even though it does not stop the handoff.
+#[tauri::command]
+pub fn complete_onboarding(app: AppHandle) -> Result<(), String> {
+    set_onboarding(&app, Onboarding { completed: true })
+        .map_err(|error| format!("could not record that setup finished: {error}"))
+}
+
+fn set_onboarding(app: &AppHandle, onboarding: Onboarding) -> io::Result<()> {
+    let mut chosen = settings::load(app);
+    chosen.onboarding = onboarding;
+    settings::save(app, &chosen)
+}
+
 /// Opens first-run setup again, from the beginning.
 ///
 /// Setup finishes by closing its own window, so there is usually nothing left
@@ -154,11 +180,23 @@ pub fn reveal_setup_window(window: WebviewWindow) {
 /// setup holds its progress in memory and showing it again mid-flow would
 /// resume it rather than restart it.
 ///
+/// The persisted completion is cleared with it, so the tray item means what it
+/// says: setup is genuinely un-finished again, and the next launch opens it —
+/// rather than one window now over a file that still claims setup is done.
+///
 /// Debug builds only, with its one caller — the tray item that asks for it.
-/// First-run setup is not persisted yet, so it runs on every launch; reopening
-/// it on demand is what makes it possible to work on, not a shipped feature.
+/// First-run setup only happens once now that it is persisted, so this is the
+/// only way to see it a second time while working on it; it is not a feature
+/// anybody asked for, so it does not ship until it is one.
 #[cfg(debug_assertions)]
 pub fn restart_onboarding(app: &AppHandle) {
+    // Clearing it is what makes this a restart rather than a preview. A file
+    // that will not take the change costs the next launch's setup, not this
+    // window, so it is reported and the window opens anyway.
+    if let Err(error) = set_onboarding(app, Onboarding::default()) {
+        eprintln!("[nessa] could not reopen setup for the next launch: {error}");
+    }
+
     let Some(window) = app.get_webview_window(SETUP_WINDOW) else {
         // A fresh window is revealed by its page, the same as at startup.
         open_setup_window(app);

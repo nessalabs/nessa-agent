@@ -28,6 +28,7 @@ fn main() {
             platform::set_frosted,
             platform::panel_size,
             platform::flush_compositor,
+            panel::complete_onboarding,
             panel::reveal_setup_window,
             panel::summon_panel,
             surface_credential::load_surface_credential,
@@ -78,11 +79,18 @@ fn main() {
                 platform::bind_window(&window, &settings);
             }
 
+            // First run only: setup records that it finished, and a launch that
+            // reads that record opens straight into the panel. The settings
+            // loaded above are the same ones the panel is sized from — the file
+            // is read once per launch, not once per question.
+            //
             // Setup is a takeover: it covers the screen, menu bar included, and
             // is the active window when it does. It is placed while still
             // hidden and shown by its own page, once that page has a frame to
             // show — see `panel::reveal_setup_window`.
-            panel::open_setup_window(app.handle());
+            if !settings.onboarding.completed {
+                panel::open_setup_window(app.handle());
+            }
 
             // The panel reads these on every show, to re-fit the frame.
             app.manage(settings);
