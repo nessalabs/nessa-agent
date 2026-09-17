@@ -199,11 +199,18 @@ export async function finishSetupWindow() {
   await getCurrentWindow().close()
 }
 
-/** Put the setup window out of the way without leaving setup. */
-export async function minimizeSetupWindow() {
+/**
+ * Show the setup window, once its page has a frame to show.
+ *
+ * It is created hidden: a window is on screen the moment it exists, and a
+ * webview has painted nothing the moment it is created, so a window visible
+ * from the start shows whatever the window server has for it until the first
+ * frame lands — a flash at exactly the point the opening begins from darkness.
+ */
+export async function revealSetupWindow() {
   if (!inTauri) return
-  const { getCurrentWindow } = await import("@tauri-apps/api/window")
-  await getCurrentWindow().minimize()
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("reveal_setup_window")
 }
 
 export function hasNativeHost(): boolean {

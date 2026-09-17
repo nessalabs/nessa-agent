@@ -62,6 +62,19 @@ pub fn summon_panel(app: AppHandle) {
     show(&window, &settings(&app));
 }
 
+/// Put the setup window on screen, now that its page has something to show.
+///
+/// It is created hidden. A window is on screen the moment it exists, and a
+/// webview has not painted anything the moment it is created — so a window
+/// visible from the start shows whatever the window server has for it until
+/// the first frame arrives, which is a flash of nothing at the very point the
+/// opening is trying to begin from darkness.
+#[tauri::command]
+pub fn reveal_setup_window(window: WebviewWindow) {
+    let _ = window.show();
+    crate::platform::current().present_overlay(&window);
+}
+
 /// Opens first-run setup again, from the beginning.
 ///
 /// Setup finishes by closing its own window, so there is usually nothing left
@@ -92,6 +105,7 @@ pub fn restart_onboarding(app: &AppHandle) {
     // menu bar included, and maximizing fits a window to the *visible* frame —
     // which is the screen minus exactly the parts this needs to cover.
     .skip_taskbar(true)
+    .visible(false)
     .build();
     match built {
         Ok(window) => crate::platform::current().present_overlay(&window),

@@ -109,13 +109,17 @@ export function useOnboarding(initial?: OnboardingState): Onboarding {
   const keys = summonAccelerator(shortcuts)
   const platform = shortcutPlatform()
 
-  // Setup has no chrome and no visible way out — a close control on the wash
-  // read as a blemish on it — so Escape is the way out, which is what Escape
-  // means on a modal surface anyway. It is bound for the whole of setup rather
-  // than one step: someone who wants to leave will not have read this far.
+  // Two ways out that do not announce themselves, alongside the mark in the
+  // corner that does. Escape is what Escape means on a surface like this, and
+  // Command-Q closes *this window* rather than quitting Nessa — setup is a
+  // window in front of an app that is still running, and quitting the app
+  // because someone wanted rid of the window is not what was asked.
   React.useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape" || event.repeat) return
+      if (event.repeat) return
+      const escape = event.key === "Escape"
+      const quit = event.key.toLowerCase() === "q" && (event.metaKey || event.ctrlKey)
+      if (!escape && !quit) return
       event.preventDefault()
       setState(dismissOnboarding)
     }

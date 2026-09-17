@@ -28,6 +28,7 @@ fn main() {
             platform::set_frosted,
             platform::panel_size,
             platform::flush_compositor,
+            panel::reveal_setup_window,
             panel::summon_panel,
             surface_credential::load_surface_credential,
             shortcuts::load_shortcuts,
@@ -78,7 +79,9 @@ fn main() {
             }
 
             // Setup is a takeover: it covers the screen, menu bar included, and
-            // is the active window when it does.
+            // is the active window when it does. It is placed while still
+            // hidden and shown by its own page, once that page has a frame to
+            // show — see `panel::reveal_setup_window`.
             if let Some(window) = app.get_webview_window(panel::SETUP_WINDOW) {
                 platform::current().present_overlay(&window);
             }

@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Check } from "lucide-react"
+import { Check, X } from "lucide-react"
 import { AgentMark } from "./agent-mark"
 import { Keycaps } from "./keycaps"
 import { useHeldKeys } from "./use-held-keys"
@@ -23,69 +23,27 @@ const PILL =
   "nessa-setup-arrive h-12 min-w-56 rounded-full bg-white px-10 nessa-text-5 font-medium text-neutral-950 shadow-lg hover:bg-white/90"
 
 /**
- * The window controls, on a bar of nothing.
+ * The way out, in the corner.
  *
- * Setup has no titlebar of its own — it covers the screen and the panel is a
- * drawing — so there is no native place for the one control it needs: a way
- * out. These are that, in the shape macOS has already taught everyone to look
- * for in the top left corner.
+ * Drawn window controls were never convincing — they have to reimplement every
+ * state the system already draws, and the one that could not do anything had
+ * to either look broken or lie. A single quiet mark asks for none of that: it
+ * says there is a way out without pretending to be window chrome.
  *
- * Only close does anything. Minimising or zooming a window that *is* the
- * screen means nothing, so those two are drawn the way the system draws an
- * unavailable control and are not controls: they are `aria-hidden` shapes, not
- * buttons that quietly refuse.
+ * It stays faint until it is wanted. Nothing on this panel should compete with
+ * the one thing the step is asking for.
  */
-function SetupWindowControls({
-  onClose,
-  onMinimize,
-}: {
-  onClose?: () => void
-  onMinimize?: () => void
-}) {
+function SetupClose({ onClose }: { onClose?: () => void }) {
   if (!onClose) return null
   return (
-    // Hovering anywhere on the group reveals every glyph at once, which is
-    // what macOS does — and is most of what makes a real set feel real.
-    <div className="nessa-setup-controls">
-      <button
-        type="button"
-        aria-label="Close setup"
-        onClick={onClose}
-        className="nessa-setup-control nessa-setup-control-close"
-      >
-        <svg viewBox="0 0 12 12" aria-hidden className="nessa-setup-control-glyph">
-          <path d="M4.2 4.2 7.8 7.8M7.8 4.2 4.2 7.8" />
-        </svg>
-      </button>
-      <button
-        type="button"
-        aria-label="Minimize setup"
-        onClick={onMinimize}
-        className="nessa-setup-control nessa-setup-control-minimize"
-      >
-        <svg viewBox="0 0 12 12" aria-hidden className="nessa-setup-control-glyph">
-          <path d="M3.6 6h4.8" />
-        </svg>
-      </button>
-      {/* Green like the other two, because a grey one does not read as "this
-        window cannot zoom" — it reads as a set that is subtly wrong. Still a
-        shape rather than a button: setup covers the screen, so there is no
-        size for zoom to toggle to, and a button that does nothing when pressed
-        is worse than one that was never offered. It is the one light with no
-        glyph under the pointer, which is where the set says so. */}
-      <span aria-hidden="true" className="nessa-setup-control nessa-setup-control-zoom">
-        {/* The system's zoom glyph: two filled triangles pulling apart along
-          the diagonal, rather than a stroke like the other two. */}
-        <svg
-          viewBox="0 0 12 12"
-          aria-hidden
-          className="nessa-setup-control-glyph nessa-setup-control-glyph-filled"
-        >
-          <path d="M4 4h3.3L4 7.3Z" />
-          <path d="M8 8H4.7L8 4.7Z" />
-        </svg>
-      </span>
-    </div>
+    <button
+      type="button"
+      aria-label="Close setup"
+      onClick={onClose}
+      className="nessa-setup-close"
+    >
+      <X aria-hidden className="size-4" />
+    </button>
   )
 }
 
@@ -100,11 +58,9 @@ function SetupWindowControls({
 function SetupStage({
   children,
   onClose,
-  onMinimize,
 }: {
   children: React.ReactNode
   onClose?: () => void
-  onMinimize?: () => void
 }) {
   return (
     <MorphingMeshGradient
@@ -119,7 +75,7 @@ function SetupStage({
         palette is what the design system's own components are built against
         here. Headings set their colour explicitly for the same reason. */}
       <div className="nessa-setup-light relative flex size-full min-h-0 items-center justify-center p-5">
-        <SetupWindowControls onClose={onClose} onMinimize={onMinimize} />
+        <SetupClose onClose={onClose} />
         {children}
       </div>
     </MorphingMeshGradient>
@@ -310,7 +266,6 @@ export function Onboarding({
   onFinish,
   platform,
   onDismiss,
-  onMinimize,
 }: {
   state: OnboardingState
   accelerator?: string
@@ -323,8 +278,6 @@ export function Onboarding({
   /** Leave setup without finishing it. Setup has no window chrome of its own,
    * so its controls are drawn with it. */
   onDismiss?: () => void
-  /** Put setup out of the way without leaving it. */
-  onMinimize?: () => void
 }) {
   // Called unconditionally, as a hook must be; it only listens on the step
   // that has keys to light.
@@ -332,7 +285,7 @@ export function Onboarding({
 
   if (state.step === "welcome") {
     return (
-      <SetupStage onClose={onDismiss} onMinimize={onMinimize}>
+      <SetupStage onClose={onDismiss}>
         <SetupStep
           action={
             <Button
@@ -359,7 +312,7 @@ export function Onboarding({
 
   if (state.step === "summon") {
     return (
-      <SetupStage onClose={onDismiss} onMinimize={onMinimize}>
+      <SetupStage onClose={onDismiss}>
         {/* This step asks for presses, so there is nothing to confirm until
           both have landed. Offering the way on beforehand invites a click
           straight past the only thing the step is here to teach — and the
@@ -390,7 +343,7 @@ export function Onboarding({
   }
 
   return (
-    <SetupStage onClose={onDismiss} onMinimize={onMinimize}>
+    <SetupStage onClose={onDismiss}>
       <SetupPanel>
         <h1 className="nessa-text-6 font-semibold text-foreground">Choose an agent</h1>
         <div role="radiogroup" aria-label="Agent" className="flex flex-col gap-2">

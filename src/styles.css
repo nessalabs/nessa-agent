@@ -735,111 +735,45 @@ body {
 }
 
 /*
- * The window controls, on a bar that is not there.
+ * The way out, in the corner.
  *
- * Setup covers the screen and has no titlebar, so this is the only way out of
- * it besides Escape, and it belongs where a window's controls belong. The bar
- * itself is nothing — no surface, no line — because the panel already has an
- * edge and a second one inside it would read as a window within a window.
+ * Faint until it is wanted: setup is four screens long and asks for one thing
+ * at a time, and a lit control in the corner competes with whichever thing
+ * that is. It is the only visible exit, so it never disappears entirely —
+ * Escape and Command-Q also work, and neither announces itself.
+ *
+ * It arrives with the panel rather than before it, for the same reason the
+ * drawn window controls did: a control sitting on a dark screen while a light
+ * is still gathering announces a window several seconds before there is one.
  */
-.nessa-setup-controls {
+.nessa-setup-close {
   position: absolute;
-  top: 0.9rem;
-  left: 0.9rem;
+  top: 0.75rem;
+  right: 0.75rem;
   z-index: 10;
   display: flex;
-  gap: 8px;
   align-items: center;
-  /*
-   * They arrive with the panel, not before it. A window's controls sitting on
-   * a dark screen while a light is still gathering announce the window several
-   * seconds before there is one, which is the whole of what the opening was
-   * trying not to do.
-   */
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 50%;
+  color: rgb(255 255 255 / 0.55);
+  outline: none;
+  transition:
+    color 120ms ease-out,
+    background-color 120ms ease-out;
   animation: nessa-setup-settled 420ms var(--nessa-motion-easing-standard)
     var(--nessa-reveal-content) both;
 }
 
-/*
- * One light.
- *
- * What makes the system's own look the way they do is not the colour: it is
- * the hairline of darker colour around the edge, the light falling on the top
- * of the dome, and the fact that the glyphs are absent until the pointer is
- * anywhere near the group. Flat discs with a colour each read as dots someone
- * drew, which is what these were.
- */
-.nessa-setup-control {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 12px;
-  height: 12px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  outline: none;
-  /* A hairline of its own colour, darkened — the system's are flat discs with
-     an edge, not glass beads. An earlier attempt lit a dome on top of each and
-     they stopped looking like the real thing entirely. */
-  box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 0.14);
+.nessa-setup-close:hover {
+  background: rgb(255 255 255 / 0.16);
+  color: rgb(255 255 255 / 0.95);
 }
 
-.nessa-setup-control-close {
-  background: #ff5f57;
-}
-
-.nessa-setup-control-minimize {
-  background: #febc2e;
-}
-
-/*
- * Green like the other two, and carrying its glyph like the other two, because
- * a set where one light behaves differently reads as broken rather than as
- * honest. It is still a shape rather than a button: setup covers the screen,
- * so there is no other size for zoom to toggle to, and it does nothing when
- * pressed.
- */
-.nessa-setup-control-zoom {
-  background: #28c840;
-}
-
-/*
- * The glyphs. They belong to the group rather than to the button under the
- * pointer: on macOS, hovering any of the three shows all of them, and that
- * single detail is most of what separates a real set from three dots.
- */
-.nessa-setup-control-glyph {
-  width: 12px;
-  height: 12px;
-  stroke: rgb(0 0 0 / 0.6);
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  fill: none;
-  opacity: 0;
-  transition: opacity 90ms ease-out;
-}
-
-/* Zoom's is drawn rather than stroked: two solid triangles, not an outline. */
-.nessa-setup-control-glyph-filled {
-  fill: rgb(0 0 0 / 0.6);
-  stroke: none;
-}
-
-.nessa-setup-controls:hover .nessa-setup-control-glyph,
-.nessa-setup-control:focus-visible .nessa-setup-control-glyph {
-  opacity: 1;
-}
-
-.nessa-setup-control:active {
-  filter: brightness(0.88);
-}
-
-.nessa-setup-control:focus-visible {
-  box-shadow:
-    inset 0 0 0 0.5px rgb(0 0 0 / 0.14),
-    0 0 0 3px rgb(255 255 255 / 0.5);
+.nessa-setup-close:focus-visible {
+  color: rgb(255 255 255 / 0.95);
+  box-shadow: 0 0 0 3px rgb(255 255 255 / 0.5);
 }
 
 /*

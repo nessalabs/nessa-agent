@@ -1,6 +1,6 @@
 import * as React from "react"
 import { finishSetupWindow } from "../../host"
-import { minimizeSetupWindow } from "../../host/window"
+import { revealSetupWindow } from "../../host/window"
 import { AgentBloom } from "./agent-bloom"
 import { Onboarding } from "./onboarding"
 import { useIntroSound } from "./use-intro-sound"
@@ -20,6 +20,14 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
   const [handedOver, setHandedOver] = React.useState(false)
 
   useIntroSound(onboarding.active)
+
+  // The window is created hidden and shown from here, after this has rendered
+  // — so the first thing on screen is the opening rather than an empty window
+  // waiting for its first frame.
+  React.useEffect(() => {
+    const shown = requestAnimationFrame(() => void revealSetupWindow())
+    return () => cancelAnimationFrame(shown)
+  }, [])
 
   React.useEffect(() => {
     if (onboarding.active || handedOver) return
@@ -60,7 +68,6 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
           onConfirm={onboarding.confirm}
           onFinish={onboarding.finish}
           onDismiss={onboarding.dismiss}
-          onMinimize={minimizeSetupWindow}
           platform={onboarding.platform}
         />
       </div>
