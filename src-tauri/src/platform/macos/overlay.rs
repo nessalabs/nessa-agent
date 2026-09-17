@@ -11,33 +11,32 @@ use objc2_app_kit::{NSApplication, NSMainMenuWindowLevel, NSWindow, NSWindowColl
 use objc2_foundation::MainThreadMarker;
 use tauri::WebviewWindow;
 
-/// Cover the screen the window is on, above the menu bar, and take focus.
+/// Cover the screen this window is on, above the menu bar, and let clicks
+/// through it.
 ///
-/// Focus is part of the same job rather than an extra: Nessa is an accessory
-/// app, so it is not active until something makes it active, and an inactive
-/// app's window spends the first click on being activated. Setup is a window
-/// full of buttons, and every one of them would have needed pressing twice.
-pub fn present(window: &WebviewWindow) {
+/// This is the dim: a sheet that takes the desktop away for the opening and
+/// then goes. A maximized window would be fitted to the *visible* frame — the
+/// screen minus the menu bar and the Dock — which is precisely what it has to
+/// cover, so the frame comes from the screen itself.
+///
+/// The level goes first, and that ordering is the trick: AppKit constrains an
+/// ordinary window's frame to the visible area, so a frame set while the
+/// window is still at an ordinary level is clipped back to the shape this is
+/// trying to escape.
+///
+/// It is also made to ignore the mouse entirely. It is scenery, and a person
+/// who clicks past the setup window should reach whatever is actually behind
+/// it rather than a pane of glass they cannot see.
+pub fn present_dim(window: &WebviewWindow) {
     let handle = match window.ns_window() {
         Ok(handle) => handle,
         Err(error) => {
-            eprintln!("[nessa] could not place setup over the screen: {error}");
+            eprintln!("[nessa] could not place the setup dim: {error}");
             return;
         }
     };
-    // Runs on the main thread during setup; the live WebviewWindow owns this
-    // NSWindow, so it is only borrowed for this configuration.
     let native = unsafe { &*handle.cast::<NSWindow>() };
-
-    // The level goes first, and that ordering is the whole trick: AppKit
-    // constrains an ordinary window's frame to the screen's *visible* area —
-    // the screen minus the menu bar and the Dock — so a frame set while the
-    // window is still at an ordinary level is clipped back to exactly the
-    // shape this is trying to escape. Above the menu bar there is nothing to
-    // constrain it to.
-    //
-    // One level above the bar: enough to cover it, and not so high that setup
-    // sits over a screen saver or a security prompt.
+    // One above the menu bar, so the setup window at two above sits over it.
     native.setLevel(NSMainMenuWindowLevel + 1);
     if let Some(screen) = native.screen() {
         native.setFrame_display(screen.frame(), true);
@@ -47,10 +46,31 @@ pub fn present(window: &WebviewWindow) {
             | NSWindowCollectionBehavior::CanJoinAllSpaces
             | NSWindowCollectionBehavior::FullScreenAuxiliary,
     );
+    native.setIgnoresMouseEvents(true);
+}
 
+/// Put the setup window over the dim, and give it the keyboard.
+///
+/// Nessa is an accessory app, so it is not active until something makes it
+/// active, and an inactive app spends the first click on becoming active
+/// rather than on what was clicked — which is why every button needed pressing
+/// twice. Activating the app and making this window key is the same act as
+/// putting it on screen, so it belongs in the same place.
+pub fn present_setup(window: &WebviewWindow) {
+    let handle = match window.ns_window() {
+        Ok(handle) => handle,
+        Err(error) => {
+            eprintln!("[nessa] could not focus setup: {error}");
+            return;
+        }
+    };
+    let native = unsafe { &*handle.cast::<NSWindow>() };
+    // Above the dim, which is one above the menu bar.
+    native.setLevel(NSMainMenuWindowLevel + 2);
+    native.setCollectionBehavior(
+        native.collectionBehavior() | NSWindowCollectionBehavior::FullScreenAuxiliary,
+    );
     if let Some(marker) = MainThreadMarker::new() {
-        // Without this the first click anywhere in setup is spent activating
-        // an accessory app rather than pressing what was clicked.
         NSApplication::sharedApplication(marker).activate();
     }
     native.makeKeyAndOrderFront(None);
@@ -75,7 +95,8 @@ pub fn set_above_overlay(window: &WebviewWindow, above: bool) {
     };
     let native = unsafe { &*handle.cast::<NSWindow>() };
     native.setLevel(if above {
-        NSMainMenuWindowLevel + 2
+        // Over setup, which is two above the menu bar.
+        NSMainMenuWindowLevel + 3
     } else {
         // `NSFloatingWindowLevel`, which is where `always_on_top` leaves it:
         // over ordinary windows and under the menu bar. It is written out

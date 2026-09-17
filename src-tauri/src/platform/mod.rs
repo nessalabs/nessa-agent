@@ -35,11 +35,16 @@ pub trait Host: Send + Sync {
     /// window yet.
     fn configure_app(&self, _app: &AppHandle) {}
 
-    /// Put a window over the whole screen, above whatever the OS draws on top
-    /// of ordinary windows, and give it focus. Setup uses this: it dims what is
-    /// behind it, and a dim that stops at the menu bar is not a dim. Hosts
-    /// where a maximized window already covers everything leave it alone.
-    fn present_overlay(&self, _window: &WebviewWindow) {}
+    /// Spread a window over the whole screen, above whatever the OS draws on
+    /// top of ordinary windows, and let the mouse through it. This is setup's
+    /// dim: a dim that stops at the menu bar is not a dim, and one that eats
+    /// clicks is a pane of glass nobody can see.
+    fn present_dim(&self, _window: &WebviewWindow) {}
+
+    /// Put the setup window in front and give it the keyboard, activating the
+    /// app if it is not active — otherwise the first click anywhere in setup is
+    /// spent waking the app rather than pressing what was clicked.
+    fn present_setup(&self, _window: &WebviewWindow) {}
 
     /// Stack the panel over, or back under, a screen-covering overlay. Setup
     /// covers everything the panel normally floats above, so the shortcut it

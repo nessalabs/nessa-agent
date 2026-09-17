@@ -43,9 +43,13 @@ pub fn toggle(app: &AppHandle) -> bool {
     true
 }
 
-/// The first-run setup window, which is a screen-covering takeover rather than
-/// a panel.
+/// The first-run setup window: an ordinary app window, with a frame the system
+/// draws and a titlebar you can drag it by.
 pub const SETUP_WINDOW: &str = "setup";
+
+/// The sheet behind it that takes the desktop away while setup opens, and goes
+/// once it has.
+pub const SETUP_DIM_WINDOW: &str = "setup-dim";
 
 /// Put the panel on screen the way summoning it does.
 ///
@@ -73,8 +77,26 @@ pub fn restart_onboarding(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(SETUP_WINDOW) {
         let _ = window.eval("window.location.reload()");
         let _ = window.show();
-        crate::platform::current().present_overlay(&window);
+        crate::platform::current().present_setup(&window);
         return;
+    }
+
+    let dim = tauri::WebviewWindowBuilder::new(
+        app,
+        SETUP_DIM_WINDOW,
+        tauri::WebviewUrl::App("index.html?surface=setup-dim".into()),
+    )
+    .title("Nessa")
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .focused(false)
+    .build();
+    match dim {
+        Ok(window) => crate::platform::current().present_dim(&window),
+        Err(error) => eprintln!("[nessa] could not reopen the setup dim: {error}"),
     }
 
     let built = tauri::WebviewWindowBuilder::new(
@@ -83,18 +105,17 @@ pub fn restart_onboarding(app: &AppHandle) {
         tauri::WebviewUrl::App("index.html?surface=setup".into()),
     )
     .title("Welcome to Nessa")
+    .inner_size(560.0, 560.0)
+    .center()
     .resizable(false)
-    .transparent(true)
-    .decorations(false)
-    .shadow(false)
-    .always_on_top(true)
-    // Deliberately not maximized: `present_overlay` gives it the whole screen,
-    // menu bar included, and maximizing fits a window to the *visible* frame —
-    // which is the screen minus exactly the parts this needs to cover.
+    .maximizable(false)
+    .decorations(true)
+    .title_bar_style(tauri::utils::TitleBarStyle::Overlay)
+    .hidden_title(true)
     .skip_taskbar(true)
     .build();
     match built {
-        Ok(window) => crate::platform::current().present_overlay(&window),
+        Ok(window) => crate::platform::current().present_setup(&window),
         Err(error) => eprintln!("[nessa] could not reopen setup: {error}"),
     }
 }

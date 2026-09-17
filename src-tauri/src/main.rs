@@ -77,10 +77,14 @@ fn main() {
                 platform::bind_window(&window, &settings);
             }
 
-            // Setup is a takeover: it covers the screen, menu bar included, and
-            // is the active window when it does.
+            // The dim takes the desktop away for the opening; setup is an
+            // ordinary window in front of it, and it takes the keyboard so the
+            // first click lands on what was clicked.
+            if let Some(window) = app.get_webview_window(panel::SETUP_DIM_WINDOW) {
+                platform::current().present_dim(&window);
+            }
             if let Some(window) = app.get_webview_window(panel::SETUP_WINDOW) {
-                platform::current().present_overlay(&window);
+                platform::current().present_setup(&window);
             }
 
             // The panel reads these on every show, to re-fit the frame.

@@ -174,11 +174,11 @@ export { inTauri }
  * shell is concerned. A plain browser has no second window and always paints
  * the panel.
  */
-export function windowSurface(): "panel" | "setup" {
+export function windowSurface(): "panel" | "setup" | "setup-dim" {
   if (typeof window === "undefined") return "panel"
-  return new URLSearchParams(window.location.search).get("surface") === "setup"
-    ? "setup"
-    : "panel"
+  const surface = new URLSearchParams(window.location.search).get("surface")
+  if (surface === "setup" || surface === "setup-dim") return surface
+  return "panel"
 }
 
 /**
@@ -197,6 +197,19 @@ export async function finishSetupWindow() {
   await invoke("summon_panel")
   const { getCurrentWindow } = await import("@tauri-apps/api/window")
   await getCurrentWindow().close()
+}
+
+/**
+ * Take the dim away, leaving an ordinary window on an ordinary desktop.
+ *
+ * The dim is its own window, so it is closed rather than faded: a transparent
+ * window that has finished fading is still a window sitting over the screen.
+ */
+export async function closeSetupDim() {
+  if (!inTauri) return
+  const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow")
+  const dim = await WebviewWindow.getByLabel("setup-dim")
+  await dim?.close()
 }
 
 export function hasNativeHost(): boolean {
