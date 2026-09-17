@@ -200,6 +200,19 @@ export async function finishSetupWindow() {
 }
 
 /**
+ * Open the setup window, once the opening has produced something for it to be.
+ *
+ * It is built at this moment rather than waiting hidden, so that its frame is
+ * not on screen during the opening and its own animations start when it
+ * appears rather than having run out while nobody could see them.
+ */
+export async function openSetupWindow() {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("open_setup_window")
+}
+
+/**
  * Take the dim away, leaving an ordinary window on an ordinary desktop.
  *
  * The dim is its own window, so it is closed rather than faded: a transparent

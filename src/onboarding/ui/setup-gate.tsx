@@ -1,6 +1,5 @@
 import * as React from "react"
 import { finishSetupWindow } from "../../host"
-import { AgentBloom } from "./agent-bloom"
 import { Onboarding } from "./onboarding"
 import { useIntroSound } from "./use-intro-sound"
 import { useOnboarding } from "./use-onboarding"
@@ -29,8 +28,6 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
   if (!onboarding.active) return <>{children}</>
   return (
     <div className="nessa-setup-window" data-step={onboarding.state.step}>
-      {/* The light setup arrives as, inside the window it will fill. */}
-      <AgentBloom />
       <Onboarding
         state={onboarding.state}
         accelerator={onboarding.accelerator}

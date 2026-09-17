@@ -653,6 +653,8 @@ body {
  */
 .nessa-setup-window[data-step="welcome"] .nessa-setup-arrive,
 .nessa-setup-window[data-step="welcome"] .nessa-setup-word {
+  /* Measured from this window's own first frame, which is the moment it
+     opens — the reveal it follows happened in another window entirely. */
   /*
    * Promoted for the duration. Scaling and blurring live text re-rasterizes
    * the glyphs on every frame; on its own layer they are drawn once and the
@@ -667,7 +669,7 @@ body {
   /* Far shorter than the duration above, so each piece is still resolving
      when the next begins: what is seen is one movement crossing the line
      rather than pieces arriving one after another. */
-  animation-delay: calc(var(--nessa-reveal-content) + var(--nessa-word, 0) * 42ms);
+  animation-delay: calc(360ms + var(--nessa-word, 0) * 42ms);
 }
 
 .nessa-setup-title[data-words] {
@@ -886,11 +888,14 @@ body {
   --nessa-reveal-seed: 2600ms;
   --nessa-reveal-bloom: 760ms;
   --nessa-reveal-settle: 300ms;
-  /* Derived, not chosen: content arrives when the panel has settled, whatever
-     the stages above are set to. */
-  --nessa-reveal-content: calc(
-    var(--nessa-reveal-seed) + var(--nessa-reveal-bloom) + var(--nessa-reveal-settle)
-  );
+  /*
+   * When the light has reached the window's bounds, and the window opens over
+   * it. `setup-dim.tsx` has to know this too — a window has to be told to
+   * open, and a CSS animation reaching its last frame is not something the
+   * window system notices — so the two are written to agree, and this is where
+   * the number is decided.
+   */
+  --nessa-reveal-filled: calc(var(--nessa-reveal-seed) + var(--nessa-reveal-bloom));
   /* The palette the seed is lit with. It is the panel's own, so the glow that
      opens the window and the window's background are one colour scheme. */
   --nessa-reveal-glow-cool: 150 116 214;
@@ -999,6 +1004,21 @@ body {
 }
 
 /* The light itself, inside the vessel and cut off by it. */
+/*
+ * Where the window will be: centred, and exactly its size. The light grows to
+ * these bounds, and the window opens over them — what is on screen does not
+ * change at that moment, only which process draws it.
+ */
+.nessa-setup-reveal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: 560px;
+  height: 560px;
+  margin: -280px 0 0 -280px;
+  pointer-events: none;
+}
+
 .nessa-setup-orb {
   position: absolute;
   inset: 0;
@@ -1084,12 +1104,13 @@ body {
     opacity: 1;
   }
   to {
-    /* Gone, onto the panel's own wash underneath — which is the same wash, so
-       there is nothing to see in the change. */
-    opacity: 0;
-    --nessa-orb-scale: 1.3;
-    --nessa-orb-wash: 0.77;
-    border-radius: 34% 66% 62% 38% / 44% 36% 64% 56%;
+    /* Exactly the window it is about to become: its bounds, and the corner
+       radius macOS gives a window. It held on rather than fading, because the
+       window opening over it is what takes it off screen. */
+    opacity: 1;
+    --nessa-orb-scale: 1;
+    --nessa-orb-wash: 1;
+    border-radius: 12px;
     box-shadow:
       0 0 0 0 rgb(var(--nessa-reveal-glow-cool) / 0),
       0 0 0 0 rgb(var(--nessa-reveal-glow-warm) / 0);
@@ -1105,22 +1126,10 @@ body {
 }
 
 /*
- * The panel's settled background, which comes up under the light as it floods
- * so that what is left when the light goes is already there.
+ * The window's wash is simply there when it opens. The opening happened in the
+ * window in front of it and ended on this exact picture; fading it in would be
+ * fading in something already on screen.
  */
-.nessa-setup-stage {
-  animation: nessa-setup-settled 520ms var(--nessa-motion-easing-standard)
-    calc(var(--nessa-reveal-seed) + 300ms) both;
-}
-
-@keyframes nessa-setup-settled {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
 
 @media (prefers-reduced-motion: reduce) {
   .nessa-setup-dim,

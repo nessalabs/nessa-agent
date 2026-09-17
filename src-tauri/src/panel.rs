@@ -66,6 +66,48 @@ pub fn summon_panel(app: AppHandle) {
     show(&window, &settings(&app));
 }
 
+/// Open the setup window, which the opening produces rather than precedes.
+///
+/// It is built at this moment rather than at launch because a window exists
+/// the instant it is created: its frame, its corners and its controls are all
+/// there, and a box sitting on screen while a light is supposed to be becoming
+/// one gives the whole thing away. Building it late also means its own
+/// animations start when it appears instead of having run out while it was
+/// hidden.
+#[tauri::command]
+pub fn open_setup_window(app: AppHandle) {
+    if let Some(window) = app.get_webview_window(SETUP_WINDOW) {
+        let _ = window.show();
+        crate::platform::current().present_setup(&window);
+        return;
+    }
+    match build_setup_window(&app) {
+        Ok(window) => crate::platform::current().present_setup(&window),
+        Err(error) => eprintln!("[nessa] could not open setup: {error}"),
+    }
+}
+
+/// An ordinary app window: the system draws its frame, shadow, corners and
+/// controls, and the transparent titlebar leaves only the controls showing
+/// while still being the thing you drag it by.
+fn build_setup_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
+    tauri::WebviewWindowBuilder::new(
+        app,
+        SETUP_WINDOW,
+        tauri::WebviewUrl::App("index.html?surface=setup".into()),
+    )
+    .title("Welcome to Nessa")
+    .inner_size(560.0, 560.0)
+    .center()
+    .resizable(false)
+    .maximizable(false)
+    .decorations(true)
+    .title_bar_style(tauri::utils::TitleBarStyle::Overlay)
+    .hidden_title(true)
+    .skip_taskbar(true)
+    .build()
+}
+
 /// Opens first-run setup again, from the beginning.
 ///
 /// Setup finishes by closing its own window, so there is usually nothing left
@@ -74,13 +116,20 @@ pub fn summon_panel(app: AppHandle) {
 /// holds its progress in memory and showing it again mid-flow would resume it
 /// rather than restart it.
 pub fn restart_onboarding(app: &AppHandle) {
+    // A setup window left over from last time is closed rather than reused:
+    // the opening builds its own, and reusing one would skip it.
     if let Some(window) = app.get_webview_window(SETUP_WINDOW) {
+        let _ = window.close();
+    }
+    if let Some(window) = app.get_webview_window(SETUP_DIM_WINDOW) {
         let _ = window.eval("window.location.reload()");
         let _ = window.show();
-        crate::platform::current().present_setup(&window);
+        crate::platform::current().present_dim(&window);
         return;
     }
 
+    // Only the dim. It runs the opening and opens setup itself when the light
+    // has filled, which is the same order a first launch follows.
     let dim = tauri::WebviewWindowBuilder::new(
         app,
         SETUP_DIM_WINDOW,
@@ -97,26 +146,6 @@ pub fn restart_onboarding(app: &AppHandle) {
     match dim {
         Ok(window) => crate::platform::current().present_dim(&window),
         Err(error) => eprintln!("[nessa] could not reopen the setup dim: {error}"),
-    }
-
-    let built = tauri::WebviewWindowBuilder::new(
-        app,
-        SETUP_WINDOW,
-        tauri::WebviewUrl::App("index.html?surface=setup".into()),
-    )
-    .title("Welcome to Nessa")
-    .inner_size(560.0, 560.0)
-    .center()
-    .resizable(false)
-    .maximizable(false)
-    .decorations(true)
-    .title_bar_style(tauri::utils::TitleBarStyle::Overlay)
-    .hidden_title(true)
-    .skip_taskbar(true)
-    .build();
-    match built {
-        Ok(window) => crate::platform::current().present_setup(&window),
-        Err(error) => eprintln!("[nessa] could not reopen setup: {error}"),
     }
 }
 
