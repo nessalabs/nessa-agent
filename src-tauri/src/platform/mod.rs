@@ -139,7 +139,10 @@ pub fn flush_compositor(window: WebviewWindow) -> Result<(), String> {
 }
 
 /// The display the panel is on, falling back to the primary one — the same
-/// choice `panel::anchor_to_edge` makes when it places the panel.
+/// choice `panel::anchor_to_edge` makes when it places the panel. Only the
+/// hosts that pin the webview themselves need it; `platform/other` lets the
+/// webview fill the window.
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 pub(crate) fn current_monitor(window: &WebviewWindow) -> Result<Option<tauri::Monitor>, String> {
     let current = window.current_monitor().map_err(|e| e.to_string())?;
     match current {

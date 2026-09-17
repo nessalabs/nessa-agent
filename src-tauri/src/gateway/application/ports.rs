@@ -9,6 +9,10 @@ pub struct ReconciledGateway {
     service_generation: String,
     process_id: u32,
 }
+// The identity itself is portable evidence carried by the `GatewayHost`
+// contract on every target. Reading its parts is what one native adapter does,
+// and macOS is the only host that manages a background service today.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 impl ReconciledGateway {
     pub fn new(
         service: String,
