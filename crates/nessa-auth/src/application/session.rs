@@ -1,8 +1,8 @@
 //! Authentication assembles identity only. Callers must authorize each operation
 //! against fresh state and own invalidation/expiry handling for open connections.
 use super::ports::{
-    AccessError, AccessReader, Clock, CredentialEvidence, CredentialVerifier, SessionEvidence,
-    SessionVerifier,
+    AccessError, AccessReader, AccessSnapshot, Clock, CredentialEvidence, CredentialVerifier,
+    SessionEvidence, SessionVerifier,
 };
 use crate::domain::{AudienceId, AuthContext};
 
@@ -49,7 +49,7 @@ impl ReadCurrentSession<'_> {
     pub async fn execute(
         &self,
         session: &AuthenticatedSession,
-    ) -> Result<super::ports::AccessSnapshot, AccessError> {
+    ) -> Result<AccessSnapshot, AccessError> {
         let context = session.context();
         let snapshot = self.access.read(context.credential_id()).await?;
         if snapshot.revision < session.auth_revision() {
@@ -102,7 +102,7 @@ impl ResumeSession<'_> {
         &self,
         evidence: &SessionEvidence,
         audience: &AudienceId,
-    ) -> Result<(AuthenticatedSession, super::ports::AccessSnapshot), AccessError> {
+    ) -> Result<(AuthenticatedSession, AccessSnapshot), AccessError> {
         let verified = self.verifier.verify_session(evidence, audience).await?;
         let credential_id = verified.credential_id;
         let snapshot = self.access.read(&credential_id).await?;
