@@ -832,19 +832,17 @@ body {
 }
 
 /*
- * The reveal: an ambient presence that wakes, expands into the panel, and
- * settles.
+ * The reveal: a light wakes in an empty panel and fills it.
  *
- * There is one substance the whole way through. The colour is the panel's own
- * gradient from the first frame — it is simply small, soft-edged and heavily
- * blurred to begin with, and the opening is that form losing its blur and
- * growing to the panel's bounds. Nothing crossfades into anything else, so the
- * glow cannot read as an unrelated gradient being swapped in.
+ * The panel is the vessel and it exists first. The light lives inside it,
+ * clipped by its bounds, and grows until it has flooded them — so what is felt
+ * is a container filling, not a form being inflated until it happens to be the
+ * window. A round thing growing inside a square reaches the edges before the
+ * corners, which is what filling looks like.
  *
- * Two animations, one per stage, so each is timed by its own token. The seed
- * fills backwards and holds; the bloom does not fill backwards, so during the
- * seed's window the seed is what is on screen, and the two meet on the same
- * values.
+ * The colour is the panel's own wash from the first frame, so nothing
+ * crossfades into anything unrelated: the light *is* the background, seen
+ * before it has spread.
  */
 @property --nessa-orb-scale {
   syntax: "<number>";
@@ -853,14 +851,14 @@ body {
 }
 
 /*
- * How large the wash is drawn, independent of the form over it.
+ * How large the wash is drawn, independent of the light carrying it.
  *
  * Pinning it to the panel exactly would stop the zoom, but it would also make
- * a small form a narrow crop of the gradient's middle — and the middle of a
+ * a small light a narrow crop of the gradient's middle — and the middle of a
  * gradient is very nearly one flat colour, which is what makes an opening look
- * dead. These hold the wash tighter than the inverse while the form is small,
+ * dead. These hold the wash tighter than the inverse while the light is small,
  * so real colour travels across it, and relax to the exact inverse as it
- * fills. What is left of the zoom is a settle, not a magnification.
+ * spreads.
  */
 @property --nessa-orb-wash {
   syntax: "<number>";
@@ -868,32 +866,61 @@ body {
   initial-value: 2.1;
 }
 
-.nessa-setup-orb {
-  position: absolute;
+/*
+ * The vessel. It is nothing at all while the light is still gathering, then
+ * becomes a visible empty panel a moment before the light starts to spread —
+ * so there is something there to be filled.
+ */
+.nessa-setup-window {
+  position: relative;
   width: min(560px, 92vw);
   height: min(560px, 82vh);
+  overflow: hidden;
+  border-radius: 22px;
+  animation: nessa-setup-vessel 300ms var(--nessa-motion-easing-standard)
+    calc(var(--nessa-reveal-seed) - 200ms) both;
+}
+
+@keyframes nessa-setup-vessel {
+  from {
+    background: rgb(12 10 16 / 0);
+    box-shadow: none;
+  }
+  to {
+    background: rgb(12 10 16 / 0.55);
+    box-shadow: 0 30px 80px -20px rgb(0 0 0 / 0.55);
+  }
+}
+
+/* The light itself, inside the vessel and cut off by it. */
+.nessa-setup-orb {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
   pointer-events: none;
+  /* The wash inside is drawn larger than this box on purpose, so this is what
+     cuts it to the light's own shape. Without it the wash simply hangs out as
+     a soft rectangle, which is not a light at all. */
   overflow: hidden;
   scale: var(--nessa-orb-scale);
   border-radius: 58% 42% 46% 54% / 52% 46% 54% 48%;
-  /* Heavy blur is the whole of the first stage's character: no outline, no
-     edge, nothing yet recognisable — a presence rather than an object. */
+  /* It stays soft the whole way. The panel's edge is what gives the filled
+     colour its shape, so the light never needs an edge of its own. */
   filter: blur(34px);
-  /* The light it throws on the dimmed screen around it. */
   box-shadow:
     0 0 90px 8px rgb(var(--nessa-reveal-glow-cool) / 0.34),
     0 0 170px 34px rgb(var(--nessa-reveal-glow-warm) / 0.17);
   animation:
-    /* Linear, because the shape's own drift is what should be felt, not an
+    /* Linear, because the drift itself is what should be felt rather than an
        easing curve pushing it about. */
     nessa-setup-seed var(--nessa-reveal-seed) linear both,
-    /* Leaves without hurry and arrives without stopping dead. */ nessa-setup-bloom
+    /* Leaves without hurry, arrives without stopping dead. */ nessa-setup-fill
       var(--nessa-reveal-bloom) cubic-bezier(0.34, 0.16, 0.2, 1) var(--nessa-reveal-seed)
       forwards;
 }
 
 /*
- * Stage one. The form breathes and changes shape without really growing, so
+ * Stage one. The light breathes and changes shape without really growing, so
  * the silhouette reads as organic rather than as something being inflated.
  */
 @keyframes nessa-setup-seed {
@@ -911,8 +938,7 @@ body {
   /*
    * Two shallow waypoints rather than a circuit of extreme ones. At this size,
    * under this much blur, a large swing in the corners does not read as a
-   * shape changing — it reads as a small light twitching. The deviations are
-   * a few percent, and there is a lot of time to cross them.
+   * shape changing — it reads as a small light twitching.
    */
   50% {
     --nessa-orb-scale: 0.32;
@@ -933,37 +959,39 @@ body {
 }
 
 /*
- * Stage two. It accelerates away and settles on the panel — no overshoot, no
- * bounce: this is a presence arriving, not a thing being thrown. The blur
- * coming off is what brings the panel's boundary into existence.
+ * Stage two. It overshoots the panel rather than landing on it, because a
+ * light that stops exactly at the corners has been fitted to them; one that
+ * carries past has filled them. The wash ends at the inverse of that overshoot
+ * so the colour is still exactly panel-sized underneath.
  */
-@keyframes nessa-setup-bloom {
+@keyframes nessa-setup-fill {
   from {
+    opacity: 1;
     --nessa-orb-scale: 0.33;
     --nessa-orb-wash: 1.92;
     border-radius: 51% 49% 49% 51% / 52% 48% 52% 48%;
-    filter: blur(34px);
     box-shadow:
       0 0 90px 8px rgb(var(--nessa-reveal-glow-cool) / 0.34),
       0 0 170px 34px rgb(var(--nessa-reveal-glow-warm) / 0.17);
   }
+  78% {
+    opacity: 1;
+  }
   to {
-    --nessa-orb-scale: 1;
-    --nessa-orb-wash: 1;
-    border-radius: 22px;
-    filter: blur(0);
-    /* The panel casts a shadow rather than glowing; the box takes over. */
+    /* Gone, onto the panel's own wash underneath — which is the same wash, so
+       there is nothing to see in the change. */
+    opacity: 0;
+    --nessa-orb-scale: 1.3;
+    --nessa-orb-wash: 0.77;
+    border-radius: 34% 66% 62% 38% / 44% 36% 64% 56%;
     box-shadow:
       0 0 0 0 rgb(var(--nessa-reveal-glow-cool) / 0),
       0 0 0 0 rgb(var(--nessa-reveal-glow-warm) / 0);
   }
 }
 
-/*
- * The wash: the panel's colour, held under the form rather than carried by it.
- * A wash that grows with its container reads as magnification; this one barely
- * moves, so the panel is uncovered instead.
- */
+/* The wash: the panel's colour, held under the light rather than carried by
+   it. A wash that grows with its container reads as magnification. */
 .nessa-setup-orb-wash {
   position: absolute;
   inset: 0;
@@ -971,35 +999,20 @@ body {
 }
 
 /*
- * The panel itself, which only has to appear: by the time it does, its shape,
- * its size and its colour are already on screen. It comes up over the bloom so
- * the boundary resolves as part of the same movement.
+ * The panel's settled background, which comes up under the light as it floods
+ * so that what is left when the light goes is already there.
  */
-.nessa-setup-window {
-  position: relative;
-  width: min(560px, 92vw);
-  height: min(560px, 82vh);
-  overflow: hidden;
-  border-radius: 22px;
-  /*
-   * It comes up only once the form has all but filled its outline. Fading a
-   * full-size panel in over a form that is still small is a cut however soft
-   * the fade — there is a moment where two sizes of the same thing are on
-   * screen at once, and that reads as a switch rather than as an arrival.
-   */
-  animation: nessa-setup-open var(--nessa-reveal-settle)
-    var(--nessa-motion-easing-standard)
-    calc(var(--nessa-reveal-seed) + var(--nessa-reveal-bloom) - 120ms) both;
+.nessa-setup-stage {
+  animation: nessa-setup-settled 520ms var(--nessa-motion-easing-standard)
+    calc(var(--nessa-reveal-seed) + 300ms) both;
 }
 
-@keyframes nessa-setup-open {
+@keyframes nessa-setup-settled {
   from {
     opacity: 0;
-    box-shadow: none;
   }
   to {
     opacity: 1;
-    box-shadow: 0 30px 80px -20px rgb(0 0 0 / 0.55);
   }
 }
 
@@ -1008,6 +1021,7 @@ body {
   .nessa-setup-window,
   .nessa-setup-orb,
   .nessa-setup-orb-wash,
+  .nessa-setup-stage,
   .nessa-setup-arrive {
     animation: none;
   }

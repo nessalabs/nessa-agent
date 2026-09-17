@@ -29,7 +29,7 @@ function SetupStage({ children }: { children: React.ReactNode }) {
       type="mesh"
       speed={1.1}
       blur={88}
-      className="size-full"
+      className="nessa-setup-stage size-full"
     >
       {/* Setup's controls are always the light treatment: a dark pill over
         these pigments reads as a hole punched in the wash, and the light

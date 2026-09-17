@@ -33,11 +33,12 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
         screen rather than competing with the desktop. Decorative: the dim is
         not a control and closing setup is the corner button's job. */}
       <div aria-hidden="true" className="nessa-setup-dim" />
-      {/* The agent's colours, living on the dimmed screen for a beat before the
-        box opens out of them. It sits outside the box because for most of its
-        life there is no box to sit in. */}
-      <AgentBloom />
       <div className="nessa-setup-window" data-step={onboarding.state.step}>
+        {/* The light setup arrives as, inside the panel it will fill. It lives
+          in here — clipped by the panel's own bounds — because a form that
+          grows until it *is* the window reads as the window being drawn, and
+          what should be felt is the window being filled. */}
+        <AgentBloom />
         <Onboarding
           state={onboarding.state}
           accelerator={onboarding.accelerator}
