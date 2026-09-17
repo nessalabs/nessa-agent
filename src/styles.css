@@ -809,7 +809,7 @@ body {
    * or merely slow — and at this length the chime very nearly ends as the
    * first words settle, which is the whole reason for the sound being there.
    */
-  --nessa-reveal-seed: 2950ms;
+  --nessa-reveal-seed: 2600ms;
   --nessa-reveal-bloom: 760ms;
   --nessa-reveal-settle: 300ms;
   /* Derived, not chosen: content arrives when the panel has settled, whatever
