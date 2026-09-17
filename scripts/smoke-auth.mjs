@@ -1,5 +1,6 @@
 /** Real Rust gateway + NessaClient lifecycle, isolated in a temporary local data root. */
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import { spawn, spawnSync } from "node:child_process"
 import { once } from "node:events"
 import {
@@ -29,9 +30,7 @@ const root = fileURLToPath(new URL("../", import.meta.url))
 const directory = mkdtempSync(join(tmpdir(), "nessa-auth-e2e-"))
 const binary = join(
   root,
-  process.platform === "win32"
-    ? "target/debug/nessa-server.exe"
-    : "target/debug/nessa-server",
+  process.platform === "win32" ? "target/debug/nessa.exe" : "target/debug/nessa",
 )
 const listener = createServer().listen(0, "127.0.0.1")
 await once(listener, "listening")
@@ -75,7 +74,11 @@ async function stop() {
   await exited
 }
 async function start() {
-  server = spawn(binary, [], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] })
+  server = spawn(binary, ["server"], {
+    cwd: root,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  })
   server.stdout.on("data", (bytes) => {
     logs += bytes.toString()
   })
@@ -114,10 +117,14 @@ async function expectClose(client, action, expectedReason) {
   }
 }
 try {
-  const init = spawnSync(binary, ["auth", "init", "--owner-token-file", ownerPath], {
-    env,
-    encoding: "utf8",
-  })
+  const init = spawnSync(
+    binary,
+    ["auth", "init", "--local", "--owner-token-file", ownerPath],
+    {
+      env,
+      encoding: "utf8",
+    },
+  )
   assert.equal(init.status, 0, init.stderr)
   const ownerSecret = readFileSync(ownerPath, "utf8").trim()
   if (process.platform !== "win32") assert.equal(statSync(ownerPath).mode & 0o777, 0o600)
@@ -125,15 +132,19 @@ try {
   const duplicatePath = join(directory, "duplicate-owner.token")
   const duplicateInit = spawnSync(
     binary,
-    ["auth", "init", "--owner-token-file", duplicatePath],
+    ["auth", "init", "--local", "--owner-token-file", duplicatePath],
     { env, encoding: "utf8" },
   )
   assert.notEqual(duplicateInit.status, 0)
   assert.equal(existsSync(duplicatePath), false)
-  const overwrite = spawnSync(binary, ["auth", "init", "--owner-token-file", ownerPath], {
-    env,
-    encoding: "utf8",
-  })
+  const overwrite = spawnSync(
+    binary,
+    ["auth", "init", "--local", "--owner-token-file", ownerPath],
+    {
+      env,
+      encoding: "utf8",
+    },
+  )
   assert.notEqual(overwrite.status, 0)
   assert.equal(readFileSync(ownerPath, "utf8").trim(), ownerSecret)
   const configPath = join(env.NESSA_DATA_DIR, "ci", "instances", "e2e", "config.json")
@@ -155,6 +166,7 @@ try {
     [
       "auth",
       "recover-owner",
+      "--local",
       "--owner-token-file",
       join(directory, "invalid-config.token"),
     ],
@@ -184,7 +196,13 @@ try {
   )
   const locked = spawnSync(
     binary,
-    ["auth", "recover-owner", "--owner-token-file", join(directory, "blocked.token")],
+    [
+      "auth",
+      "recover-owner",
+      "--local",
+      "--owner-token-file",
+      join(directory, "blocked.token"),
+    ],
     { env, encoding: "utf8" },
   )
   assert.notEqual(locked.status, 0)
@@ -192,6 +210,88 @@ try {
   assert.deepEqual(await owner.auth.session(), owner.productSession)
   const identity = owner.productSession
   assert.equal(identity.expiresAt, null)
+
+  // Exercise the browser proxy's loopback upstream, including route isolation.
+  // Real-browser TLS/cookie handling is separate from this gateway contract test.
+  for (const browserOrigin of ["https://127.0.0.1:1443", "http://127.0.0.1:1420"]) {
+    const browserRequest = (path, cookie, token, origin = browserOrigin) =>
+      fetch(`http://127.0.0.1:${port}/browser/${path}`, {
+        method: "POST",
+        headers: {
+          Origin: origin,
+          "X-Nessa-Browser": "1",
+          "Content-Type": "application/json",
+          ...(cookie ? { Cookie: cookie } : {}),
+        },
+        ...(token === undefined ? {} : { body: JSON.stringify({ token }) }),
+        signal: AbortSignal.timeout(5000),
+      })
+    assert.equal((await browserRequest("login", undefined, "invalid")).status, 401)
+    const browserLogin = await browserRequest("login", undefined, ownerSecret)
+    assert.equal(browserLogin.status, 204)
+    const setCookie = browserLogin.headers.get("set-cookie")
+    for (const flag of ["HttpOnly", "SameSite=Strict", "Path=/"])
+      assert.ok(setCookie.includes(flag))
+    assert.equal(setCookie.includes("Secure"), browserOrigin.startsWith("https:"))
+    assert.ok(!setCookie.includes(ownerSecret))
+    const browserCookie = setCookie.split(";")[0]
+    assert.equal((await browserRequest("check", browserCookie)).status, 204)
+    assert.equal(
+      (await browserRequest("check", browserCookie, undefined, "https://localhost:1443"))
+        .status,
+      401,
+    )
+    async function browserHandshake(path) {
+      const socket = new WebSocket(`${url}${path}`, {
+        headers: { Origin: browserOrigin, Cookie: browserCookie },
+        handshakeTimeout: 5000,
+      })
+      const closed = once(socket, "close")
+      const [challenge] = await once(socket, "message")
+      const response = once(socket, "message")
+      socket.send(
+        JSON.stringify({
+          type: "req",
+          id: "browser-auth",
+          method: "session.authenticate",
+          params: {
+            minVersion: 1,
+            maxVersion: 1,
+            nonce: JSON.parse(challenge.toString()).payload.nonce,
+            credential: "",
+            client: { id: "browser-smoke" },
+          },
+        }),
+      )
+      const [message] = await response
+      return { socket, closed, response: JSON.parse(message.toString()) }
+    }
+    const nativeCookie = await browserHandshake("/session")
+    assert.equal(nativeCookie.response.error.code, "unauthorized")
+    await nativeCookie.closed
+    const browserSocket = await browserHandshake("/browser/session")
+    assert.equal(browserSocket.response.ok, true)
+    assert.equal(browserSocket.response.payload.principalId, identity.principalId)
+    const browserHealth = once(browserSocket.socket, "message")
+    browserSocket.socket.send(
+      JSON.stringify({
+        type: "req",
+        id: "browser-health",
+        method: "server.health",
+        params: {},
+      }),
+    )
+    assert.equal(JSON.parse((await browserHealth)[0].toString()).ok, true)
+    assert.equal((await browserRequest("logout", browserCookie)).status, 204)
+    await Promise.race([
+      browserSocket.closed,
+      sleep(5000).then(() => {
+        throw new Error("browser socket survived logout")
+      }),
+    ])
+    assert.equal((await browserRequest("check", browserCookie)).status, 401)
+    assert.equal((await owner.server.health()).ok, true)
+  }
   const chat = await NessaClient.connect({
     ...options,
     profile: "product",
@@ -202,7 +302,10 @@ try {
   assert.notEqual(chat.productSession.credentialId, identity.credentialId)
   assert.notEqual(chat.productSession.principalId, identity.principalId)
   assert.equal((await chat.server.health()).ok, true)
-  assert.deepEqual(await chat.conversation.echo("local chat"), { text: "local chat" })
+  await assert.rejects(
+    chat.conversation.read(randomUUID()),
+    (error) => error.code === "agent_not_configured",
+  )
   assert.ok((await chat.credentials.list()).credentials.length >= 2)
   const request = {
     requestId: "reader-issue",
@@ -296,7 +399,7 @@ try {
   assert.equal((await permanentClient.server.health()).ok, true)
   assert.equal((await reader.server.health()).ok, true)
   await assert.rejects(
-    reader.conversation.echo("denied"),
+    reader.conversation.read(randomUUID()),
     (error) => error.code === "forbidden",
   )
   await assert.rejects(
@@ -496,15 +599,128 @@ try {
   const recoveredPath = join(directory, "recovered.token")
   const recovery = spawnSync(
     binary,
-    ["auth", "recover-owner", "--owner-token-file", recoveredPath],
+    ["auth", "recover-owner", "--local", "--owner-token-file", recoveredPath],
     { env, encoding: "utf8" },
   )
   assert.equal(recovery.status, 0, recovery.stderr)
   await start()
   await assert.rejects(connect(ownerSecret))
-  const recovered = await connect(readFileSync(recoveredPath, "utf8").trim())
+  let recovered = await connect(readFileSync(recoveredPath, "utf8").trim())
   assert.equal(recovered.productSession.organizationId, identity.organizationId)
   assert.equal((await recovered.server.health()).ok, true)
+  // The public executable is also an authenticated client surface.
+  const doctor = spawnSync(binary, ["doctor", "--credential-file", recoveredPath], {
+    env,
+    encoding: "utf8",
+  })
+  assert.equal(doctor.status, 0, doctor.stderr)
+  assert.equal(JSON.parse(doctor.stdout).healthy, true)
+  const missingDoctor = spawnSync(
+    binary,
+    ["doctor", "--credential-file", join(directory, "missing.token")],
+    { env, encoding: "utf8" },
+  )
+  assert.notEqual(missingDoctor.status, 0)
+  assert.equal(JSON.parse(missingDoctor.stdout).authenticated, false)
+  const tokenCommand = spawnSync(
+    binary,
+    ["auth", "token", "--credential-file", recoveredPath],
+    { env, encoding: "utf8" },
+  )
+  assert.equal(tokenCommand.status, 0, tokenCommand.stderr)
+  const browserToken = tokenCommand.stdout.trim()
+  assert.ok(browserToken.length > 20)
+  assert.ok(!tokenCommand.stderr.includes(browserToken))
+  const browserClient = await connect(browserToken)
+  const browserCredentialId = browserClient.productSession.credentialId
+  assert.deepEqual(browserClient.productSession.grants.map((g) => g.action).sort(), [
+    "conversation.write",
+    "server.read",
+  ])
+  assert.notEqual(
+    browserClient.productSession.principalId,
+    recovered.productSession.principalId,
+  )
+  assert.equal(browserClient.productSession.expiresAt, null)
+  const browserTokenFile = join(directory, "cli-browser.token")
+  if (process.platform === "win32") {
+    await windowsPrivateFile("reserve", browserTokenFile)
+    await windowsPrivateFile("write", browserTokenFile, browserToken)
+  } else writeFileSync(browserTokenFile, browserToken, { mode: 0o600 })
+  const deniedToken = spawnSync(
+    binary,
+    ["auth", "token", "--credential-file", browserTokenFile],
+    { env, encoding: "utf8" },
+  )
+  assert.notEqual(deniedToken.status, 0)
+  assert.equal(deniedToken.stdout, "")
+  assert.ok(!deniedToken.stderr.includes(browserToken))
+  const browserSignIn = await fetch(`http://127.0.0.1:${port}/browser/login`, {
+    method: "POST",
+    headers: {
+      Origin: "http://127.0.0.1:1420",
+      "X-Nessa-Browser": "1",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ token: browserToken }),
+  })
+  assert.equal(browserSignIn.status, 204)
+  const persistedCookie = browserSignIn.headers.get("set-cookie").split(";")[0]
+  await stop()
+  await start()
+  const restoredBrowser = await fetch(`http://127.0.0.1:${port}/browser/check`, {
+    method: "POST",
+    headers: {
+      Origin: "http://127.0.0.1:1420",
+      "X-Nessa-Browser": "1",
+      Cookie: persistedCookie,
+    },
+  })
+  assert.equal(restoredBrowser.status, 204)
+  assert.ok(restoredBrowser.headers.get("set-cookie").includes("Max-Age="))
+  recovered = await connect(readFileSync(recoveredPath, "utf8").trim())
+
+  await recovered.credentials.revoke(browserCredentialId, "cli-token-revoke")
+  await assert.rejects(connect(browserToken))
+  const revokedBrowser = await fetch(`http://127.0.0.1:${port}/browser/check`, {
+    method: "POST",
+    headers: {
+      Origin: "http://127.0.0.1:1420",
+      "X-Nessa-Browser": "1",
+      Cookie: persistedCookie,
+    },
+  })
+  assert.equal(revokedBrowser.status, 401)
+  const ttlCommand = spawnSync(
+    binary,
+    ["auth", "token", "--ttl", "12h", "--credential-file", recoveredPath],
+    { env, encoding: "utf8" },
+  )
+  assert.equal(ttlCommand.status, 0, ttlCommand.stderr)
+  const ttlClient = await connect(ttlCommand.stdout.trim())
+  assert.ok(ttlClient.productSession.expiresAt > Math.floor(Date.now() / 1000) + 43000)
+  assert.ok(ttlClient.productSession.expiresAt <= Math.floor(Date.now() / 1000) + 43200)
+
+  const cloud = spawnSync(binary, ["auth", "init", "--cloud"], { env, encoding: "utf8" })
+  assert.notEqual(cloud.status, 0)
+  const defaultInit = spawnSync(binary, ["auth", "init", "--local"], {
+    env: { ...env, NESSA_INSTANCE: "cli-default" },
+    encoding: "utf8",
+  })
+  assert.equal(defaultInit.status, 0, defaultInit.stderr)
+  assert.ok(
+    existsSync(
+      join(
+        env.NESSA_DATA_DIR,
+        "ci",
+        "instances",
+        "cli-default",
+        "auth",
+        "surfaces",
+        "nessa-cli.token",
+      ),
+    ),
+  )
   await expectClose(
     recovered,
     async () => {

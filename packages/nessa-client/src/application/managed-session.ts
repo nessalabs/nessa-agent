@@ -36,6 +36,7 @@ export class ManagedSession {
   private readonly observers = new Set<(state: ConnectionState) => void>()
   private readonly closers = new Set<(error: Error) => void>()
   private value: ConnectionState = { status: "connected" }
+  private publication = 0
 
   constructor(
     initial: ConnectedSession,
@@ -101,8 +102,10 @@ export class ManagedSession {
   }
 
   private publish(state: ConnectionState): void {
+    const publication = ++this.publication
     this.value = Object.freeze(state)
     for (const observer of [...this.observers]) {
+      if (publication !== this.publication) break
       try {
         observer(state)
       } catch {

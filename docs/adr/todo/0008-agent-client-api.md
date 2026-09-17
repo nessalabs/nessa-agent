@@ -1,5 +1,12 @@
 # 0008. Build nessa-sdk as the reusable Rust agent runtime
 
+> Current implementation: [gateway chat](../../guides/gateway-chat.md) uses the existing SDK Agent,
+> leased JSONL sessions, independent durable audit, and bounded replacement views.
+> NessaClient and the panel use authenticated conversation commands; retired spike
+> methods are absent. The exact durable cursor/event-store and broader collaboration design
+> below remains a proposal, not a prerequisite or description of the current chat API.
+
+
 ## Purpose
 
 Build one Rust library that runs and controls agent conversations. The server
@@ -8,7 +15,7 @@ to accept, tracks each turn, and records who started or controlled it. Saved
 records flow through the event stream and gateway back to clients.
 
 - **Date:** 2026-09-07
-- **Status:** accepted direction — local Agent/ACP execution, model and operation capabilities, hooks, session storage, scheduling, and retry recovery implemented; shared Conversation/gateway coordination remains planned
+- **Status:** accepted direction — local Agent/ACP execution, model and operation capabilities, hooks, session storage, scheduling, and retry recovery implemented; local gateway/client/panel coordination implemented with bounded replacement views; exact durable replay remains planned
 - **Review supplement:** [Runtime classes and sequences](../../design/agent_execution/runtime-classes-and-sequences.md) — proposed responsibilities, operations, and failure flows; no implementation code
 - **Supporting research:** [Server runtime research](../../design/agent_execution/sdk-shape.md)
 
@@ -85,12 +92,11 @@ API for its UI. Putting execution rules into gateway handlers would tie them to
 Nessa's transport. Putting them into the TypeScript client would make each client
 responsible for server behavior and leave no reusable server library.
 
-Today the authenticated WebSocket gateway and NessaClient connection exist. The
-temporary `conversation.echo()` operation returns the supplied text. The Rust crate
-implements model metadata, capability admission, and a standalone restricted
-Claude ACP execution binding. Durable conversation/turn operations and their
-coordinator remain planned features. WebSocket communication already works; the stream
-integration adds durable history and replay after reconnect.
+Today the authenticated WebSocket gateway, NessaClient connection, and server-owned
+conversation create/read/input/control operations exist. The Rust crate implements
+model metadata, capability admission, and a standalone restricted Claude ACP
+execution binding. Durable event-stream history and replay after reconnect remain
+planned features.
 
 ## Architecture and ownership
 
@@ -963,7 +969,7 @@ to start a future turn.
    and retrieve work. Connect real storage, gateway access checks, the existing
    NessaClient, generated schemas, and the panel's injected gateway. Include
    unchanging origin, allowed listing/filtering, configured surface identities,
-   and saved event delivery. Replace echo and demonstrate the local agent flow.
+   and saved event delivery. Demonstrate the local agent flow through that contract.
 3. **Finish recovery and reuse checks.** Test reconnect/replay, crash recovery,
    lost replies, races, storage failures, slow subscribers, and shutdown. Prove
    direct Rust embedding, replacement adapters, and two isolated SDK instances.
@@ -991,8 +997,7 @@ of defining alternate client/setup APIs or command identities.
 
 Finalize wire names and payloads through the existing schema generation workflow.
 Update current callers, fixtures, documentation, and local development data
-together. Remove `conversation.echo()` when real operations land. Do not add
-aliases, compatibility shims, mixed-version support, or unnecessary protocol,
+together. Do not add aliases, compatibility shims, mixed-version support, or unnecessary protocol,
 schema, or package version bumps. A version transition needs an explicit user
 request.
 

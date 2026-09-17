@@ -161,6 +161,17 @@ pub fn sync_directory(path: &Path) -> io::Result<()> {
 pub fn replace(from: &Path, to: &Path) -> io::Result<()> {
     fs::rename(from, to)
 }
+/// Publish `from` under the unused name `to`, never replacing an existing one.
+///
+/// `link` fails with `AlreadyExists` when `to` is taken, so an interrupted or
+/// repeated publish cannot overwrite a record another owner already published.
+/// The published name shares the temporary file's inode until that temporary
+/// name is removed; until then the file has two links and fails private-file
+/// verification, so callers must remove their temporary before reporting
+/// success and clear temporaries a crash left behind.
+pub fn publish_new(from: &Path, to: &Path) -> io::Result<()> {
+    fs::hard_link(from, to)
+}
 pub fn replace_beneath(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
     let (from_parent, from_leaf) = open_parent_beneath(root, from)?;
     let (to_parent, to_leaf) = open_parent_beneath(root, to)?;

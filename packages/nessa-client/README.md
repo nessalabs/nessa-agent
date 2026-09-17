@@ -136,7 +136,10 @@ requests, and releases subscriptions. It is safe to call repeatedly.
 ## Available product APIs
 
 - `client.server.health()` reads authorized gateway health.
-- `client.conversation.echo(text)` checks `conversation.write` and echoes text.
+- `client.conversation.create({ conversationId? })` creates or reopens an agent conversation.
+- `client.conversation.send(id, text)` queues input; `steer(id, text)` uses supported steering.
+- `client.conversation.read(id)` returns a bounded replacement view of live output, waiting input, tools, and permissions.
+- `remove`, `answer`, `cancel`, and `close` control waiting input, permission reviews, and the live context.
 - `client.auth.session()` reads the current authenticated session.
 - `client.credentials.issue(params)` issues a scoped credential.
 - `client.credentials.list()` lists credential metadata without secrets.
@@ -146,6 +149,42 @@ The server authorizes every operation using current state.
 `NessaRpcError` carries server RPC rejection details;
 `NessaProtocolCompatibilityError` reports incompatible version ranges before any
 credential is sent. Transport errors do not imply a mutation was rolled back.
+
+## Agent conversations
+
+```ts
+const { conversationId } = await client.conversation.create()
+const receipt = await client.conversation.send(conversationId, "Hello")
+const view = await client.conversation.read(conversationId)
+```
+
+Read serially while the surface is visible to display current streamed output. Each
+view replaces the previous one; `revision` is opaque, and `truncated` indicates
+omitted history or text. `permissionViewError` means a complete review cannot be
+shown safely. Permission controls must use its exact offered IDs and original input.
+
+The client generates separate execution and action IDs once per message. A
+conversation ID is a canonical lowercase hyphenated UUID. Message text is limited
+to 8 KiB of UTF-8, and execution and action IDs are limited to 256 UTF-8 bytes.
+The client enforces these limits before sending a request. A
+`NessaConversationMutationError` retains them and exposes `retry()` for the same
+immutable creation or message-admission command after recovery. No mutation automatically replays. If retry state
+must survive a process restart, save the input and the error's `conversationId`,
+`executionId`, and `requestId`, then pass the IDs in the command options. An
+intentional new send generates a new execution ID even when its text is identical.
+
+Controls (reorder, remove, answer, cancel, and close) instead expose `NessaConversationControlError` with `uncertain: true` when no trustworthy acknowledgement arrives. They do not offer `retry()`: read the current view, then deliberately choose a new action if needed. Replaying an earlier close could stop newer work from another surface.
+
+Failed permission answers also expose `permissionSelection` as `"pending"`,
+`"consumed"`, or `"unknown"`. This typed fact says whether the domain review is
+still actionable, was selected before a later audit or delivery failure, or must
+be resolved by reading authoritative state. It is independent of the diagnostic
+error code and message; `pending` also sets `uncertain` to `false` because the
+gateway proved that no selection occurred.
+
+`client.conversation.close(id)` closes the live provider context and retains saved
+conversation history. `client.close()` only disconnects this surface; the gateway
+continues owning accepted work.
 
 ## Export API documentation
 
@@ -188,3 +227,7 @@ points are rejected. PowerShell environments that disable `Add-Type` fail closed
 The native desktop uses the shared Rust storage backend directly. See
 [local authentication](../../docs/guides/local-auth.md#windows-storage) for platform
 requirements and validation status.
+
+### Reorder waiting messages
+
+`client.conversation.reorder(id, executionIds)` atomically replaces the full waiting order (at most 64 unique IDs). Include every current waiting input, including steering inputs; running work is excluded, and ordinary messages cannot move ahead of steering. The result contains `requestId` and `outcome`: `applied`, `unchanged`, `queue_changed`, or `priority_conflict`. The latter two leave the queue unchanged; refresh the view before choosing another order. An uncertain acknowledgement exposes `NessaConversationControlError` without replay.

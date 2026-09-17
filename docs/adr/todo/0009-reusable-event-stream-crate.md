@@ -1,5 +1,12 @@
 # 0009. Integrate the standalone event-stream library
 
+> Current implementation: [gateway chat](../../guides/gateway-chat.md) uses the existing SDK Agent,
+> leased JSONL sessions, independent durable audit, and bounded replacement views.
+> NessaClient and the panel use authenticated conversation commands; retired spike
+> methods are absent. The exact durable cursor/event-store and broader collaboration design
+> below remains a proposal, not a prerequisite or description of the current chat API.
+
+
 ## Purpose
 
 Let the runtime and gateway read the same saved conversation history. That history

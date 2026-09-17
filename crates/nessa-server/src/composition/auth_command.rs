@@ -100,7 +100,7 @@ pub(super) fn execute(args: &[String]) -> Result<(), RunError> {
         }
     };
     file.write_all(outcome.evidence.expose_bytes()).and_then(|()| file.write_all(b"\n")).and_then(|()| file.sync_all())
-        .map_err(|_| RunError::Authentication("credential committed but token output failed; run auth recover-owner with a new output path".into()))?;
+        .map_err(|_| RunError::Authentication("credential committed but token output failed; run nessa auth recover-owner --local with a new output path".into()))?;
     if let Some(parent) = output.parent() {
         nessa_local_storage::sync_directory(parent).map_err(failure)?;
     }
@@ -283,7 +283,7 @@ fn parse(args: &[String]) -> Result<(bool, PathBuf), RunError> {
             Ok((operation == "recover-owner", PathBuf::from(path)))
         }
         _ => Err(RunError::Authentication(
-            "usage: nessa-server auth <init|recover-owner> --owner-token-file <new-absolute-path>"
+            "usage: nessa auth <init|recover-owner> --local --owner-token-file <new-absolute-path>"
                 .into(),
         )),
     }

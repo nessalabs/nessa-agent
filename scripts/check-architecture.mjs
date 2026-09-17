@@ -6,6 +6,10 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
+import {
+  hasImmediateCfg,
+  hasNoImmediateCfg,
+} from "./architecture/platform-boundaries.mjs"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const src = join(root, "src")
@@ -191,6 +195,86 @@ for (const file of walk(src)) {
     fail(
       file,
       "host policy belongs in src/host; do not name Linux components in the chrome",
+    )
+  }
+}
+
+const macosRetirementBoundaries = [
+  {
+    path: "crates/nessa-server/src/composition/root.rs",
+    declaration: "use crate::desktop_runtime::{",
+  },
+  {
+    path: "crates/nessa-server/src/desktop_runtime/application/mod.rs",
+    declaration: "mod retirement;",
+  },
+  {
+    path: "crates/nessa-server/src/desktop_runtime/infrastructure/mod.rs",
+    declaration: "mod files;",
+  },
+  {
+    path: "crates/nessa-server/src/desktop_runtime/domain/mod.rs",
+    declaration: "pub(crate) use retirement::{",
+  },
+  {
+    path: "crates/nessa-server/src/desktop_runtime/domain/retirement.rs",
+    declaration: "pub(crate) struct RetirementRequest",
+  },
+  {
+    path: "crates/nessa-server/src/desktop_runtime/domain/retirement.rs",
+    declaration: "pub(crate) struct RetirementFence",
+  },
+  {
+    path: "crates/nessa-server/src/desktop_runtime/domain/retirement.rs",
+    declaration: "pub(crate) struct RetirementCause",
+  },
+  {
+    path: "crates/nessa-server/src/desktop_runtime/domain/retirement.rs",
+    declaration: "pub(crate) fn validate_retirement_evidence",
+  },
+  {
+    path: "crates/nessa-server/src/conversation/application/service.rs",
+    declaration: "pub(crate) fn retirement_cause",
+  },
+  {
+    path: "crates/nessa-server/src/composition/root.rs",
+    declaration: "let retirement_clock",
+  },
+  {
+    path: "crates/nessa-server/src/composition/root.rs",
+    declaration: "let retirement_files",
+  },
+]
+
+for (const boundary of macosRetirementBoundaries) {
+  const file = join(root, boundary.path)
+  const text = readFileSync(file, "utf8")
+  if (!hasImmediateCfg(text, boundary.declaration)) {
+    fail(
+      file,
+      "managed gateway retirement is a macOS production capability; gate its module boundary so other targets do not compile unused lifecycle code",
+    )
+  }
+}
+
+const portableRuntimeBoundaries = [
+  {
+    path: "crates/nessa-server/src/desktop_runtime/domain/mod.rs",
+    declaration: "pub(crate) use retirement::RunningRuntime;",
+  },
+  {
+    path: "crates/nessa-server/src/desktop_runtime/domain/retirement.rs",
+    declaration: "pub(crate) struct RunningRuntime",
+  },
+]
+
+for (const boundary of portableRuntimeBoundaries) {
+  const file = join(root, boundary.path)
+  const text = readFileSync(file, "utf8")
+  if (!hasNoImmediateCfg(text, boundary.declaration)) {
+    fail(
+      file,
+      "runtime incarnation identity is portable health evidence; do not hide it behind a target cfg",
     )
   }
 }

@@ -157,3 +157,217 @@ pub struct SessionTermination {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after_ms: Option<u64>,
 }
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationMessageStatus {
+    Queued,
+    Running,
+    Completed,
+    Cancelled,
+    Failed,
+    Injected,
+    Unresolved,
+}
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationPendingMode {
+    Queued,
+    Steering,
+}
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationDisposition {
+    Queued,
+    Injected,
+    Settled,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationCapabilities {
+    pub queue: bool,
+    pub steer: bool,
+    pub resume: bool,
+    pub permissions: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationMessage {
+    pub execution_id: String,
+    pub user_text: String,
+    pub status: ConversationMessageStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steering_target: Option<String>,
+    pub parts: Vec<ConversationPart>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steering_offset: Option<u64>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPending {
+    pub execution_id: String,
+    pub text: String,
+    pub mode: ConversationPendingMode,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPermissionOption {
+    pub id: String,
+    pub label: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPermission {
+    pub execution_id: String,
+    pub permission_id: String,
+    pub tool_id: String,
+    pub title: String,
+    pub options: Vec<ConversationPermissionOption>,
+    pub tool_name: String,
+    pub arguments_json: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationTool {
+    pub execution_id: String,
+    pub tool_id: String,
+    pub title: String,
+    pub status: String,
+    pub details: String,
+    pub input: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationView {
+    pub conversation_id: String,
+    pub revision: String,
+    pub messages: Vec<ConversationMessage>,
+    pub pending: Vec<ConversationPending>,
+    pub permissions: Vec<ConversationPermission>,
+    pub tools: Vec<ConversationTool>,
+    pub capabilities: ConversationCapabilities,
+    pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_view_error: Option<String>,
+    pub queue_complete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<ConversationRuntime>,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationCreateParams {
+    pub conversation_id: String,
+    pub request_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationCreateResult {
+    pub conversation_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationReadParams {
+    pub conversation_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationSendParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub execution_id: String,
+    pub text: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationRemoveParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub execution_id: String,
+}
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationPermissionSelectionState {
+    Pending,
+    Consumed,
+    Unknown,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPermissionAnswerErrorDetails {
+    pub selection_state: ConversationPermissionSelectionState,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationAnswerParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub execution_id: String,
+    pub permission_id: String,
+    pub option_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationCancelParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub execution_id: String,
+    pub permission_id: String,
+    pub reason: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationCloseParams {
+    pub conversation_id: String,
+    pub request_id: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationReceipt {
+    pub execution_id: String,
+    pub disposition: ConversationDisposition,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationMutationResult {
+    pub request_id: String,
+    pub applied: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationReorderParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub execution_ids: Vec<String>,
+}
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationReorderOutcome {
+    Applied,
+    Unchanged,
+    QueueChanged,
+    PriorityConflict,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationReorderResult {
+    pub request_id: String,
+    pub outcome: ConversationReorderOutcome,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationRuntime {
+    pub model: String,
+    pub provider: String,
+    pub workspace: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ConversationPart {
+    pub offset: u64,
+    pub kind: String,
+    pub text: String,
+    pub tool_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+}

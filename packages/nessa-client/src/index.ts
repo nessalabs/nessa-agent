@@ -43,8 +43,6 @@ export {
 } from "./application/index.js"
 export type {
   ClientInfo,
-  EchoParams,
-  EchoResult,
   EventFrame,
   Frame,
   GatewayError,
@@ -92,7 +90,6 @@ export const ConnectionProfile = { Product: "product" } as const
 export type { CommonConnectOptions } from "./application/options.js"
 export type { EventHandler } from "./application/events.js"
 export type { ClientEventMap } from "./protocol/types.js"
-export type { ConversationApi } from "./presentation/conversation-api.js"
 export type { ResolvedConnectRetryOptions } from "./application/connect-retry.js"
 export type {
   ResolvedConnectOptions,
@@ -123,3 +120,37 @@ export {
   type CredentialSource,
 } from "./application/credential-source.js"
 export { LocalFileCredentialSource } from "./transport/local-credential-source.js"
+
+export type {
+  ConversationApi,
+  ConversationActionOptions,
+  ConversationCreateOptions,
+  ConversationSendOptions,
+  ConversationSubmission,
+} from "./presentation/conversation-api.js"
+export type {
+  ConversationView,
+  ConversationMessage,
+  ConversationPart,
+  ConversationRuntime,
+  ConversationPending,
+  ConversationPermission,
+  ConversationPermissionOption,
+  ConversationTool,
+  ConversationCapabilities,
+  ConversationMessageStatus,
+  ConversationDisposition,
+  ConversationPendingMode,
+  ConversationMutationResult,
+  ConversationReorderResult,
+  ConversationReorderOutcome,
+  ConversationCreateResult,
+  ConversationReceipt,
+  ConversationPermissionSelectionState,
+} from "./generated/product.js"
+export {
+  NessaConversationMutationError,
+  NessaConversationControlError,
+} from "./application/conversation-mutation-error.js"
+
+export { isRetryableConnectionError } from "./application/connect-retry.js"

@@ -83,22 +83,6 @@ export interface HealthResult {
   uptimeMs: number
 }
 
-/** Text input for the authorized conversation echo round trip. */
-
-export interface EchoParams {
-  /** User draft text to echo back. */
-
-  text: string
-}
-
-/** Echoed input text; no model-generated reply is produced. */
-
-export interface EchoResult {
-  /** Echo of EchoParams.text. */
-
-  text: string
-}
-
 /** Versioned server-owned shortcut configuration included in the legacy handshake. */
 
 export interface ShortcutsDocument {

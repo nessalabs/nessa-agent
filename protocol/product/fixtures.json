@@ -35,5 +35,74 @@
     "code": "gateway_overloaded",
     "retryable": true,
     "retryAfterMs": 1500
+  },
+  "ConversationCreateParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "create"
+  },
+  "ConversationSendParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "send",
+    "executionId": "execution",
+    "text": "Hello"
+  },
+  "ConversationView": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "revision": "1",
+    "messages": [],
+    "pending": [],
+    "permissions": [],
+    "tools": [],
+    "capabilities": {
+      "queue": true,
+      "steer": false,
+      "resume": true,
+      "permissions": true
+    },
+    "truncated": false,
+    "queueComplete": true
+  },
+  "ConversationReadParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001"
+  },
+  "ConversationRemoveParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "action",
+    "executionId": "execution"
+  },
+  "ConversationAnswerParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "action",
+    "executionId": "execution",
+    "permissionId": "permission",
+    "optionId": "allow"
+  },
+  "ConversationCancelParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "action",
+    "executionId": "execution",
+    "permissionId": "permission",
+    "reason": "User withdrew this review"
+  },
+  "ConversationCloseParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "action"
+  },
+  "ConversationReceipt": {
+    "executionId": "execution",
+    "disposition": "queued"
+  },
+  "ConversationMutationResult": {
+    "requestId": "action",
+    "applied": true
+  },
+  "ConversationReorderParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "reorder-1",
+    "executionIds": ["execution-2", "execution-1"]
+  },
+  "ConversationReorderResult": {
+    "requestId": "reorder-1",
+    "outcome": "applied"
   }
 }

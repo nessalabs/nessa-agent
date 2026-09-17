@@ -1,11 +1,17 @@
 use super::generated::{SessionCloseReason, SessionTermination};
 use super::{state::ProductRouteState, wire::*};
+use crate::browser_session::{
+    application::{invalidation_reason, BrowserSessionVerifier, ReadBrowserSession},
+    domain::value_objects::RemovalReason,
+};
+#[cfg(test)]
+use crate::conversation_test_support as conversation_support;
 use crate::protocol::{
     health_check_message, EventFrame, OutgoingMessage, RequestFrame, ResponseFrame,
     MAX_PAYLOAD_BYTES,
 };
 use axum::extract::ws::{CloseFrame, Message};
-use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use futures_util::{stream::FuturesUnordered, Sink, SinkExt, Stream, StreamExt};
 use nessa_auth::{
     application::{
         authorization::AuthorizeAction,
@@ -14,8 +20,8 @@ use nessa_auth::{
             ListCredentialsRequest, RevokeCredentialRequest,
         },
         dto::{CredentialGrantDto, MembershipRoleDto, MembershipStateDto, ResourceDto},
-        ports::{AccessError, AccessSnapshot, CredentialEvidence, Decision},
-        session::{AuthenticateSession, AuthenticatedSession, ReadCurrentSession},
+        ports::{AccessError, AccessSnapshot, CredentialEvidence, Decision, SessionEvidence},
+        session::{AuthenticateSession, AuthenticatedSession, ReadCurrentSession, ResumeSession},
     },
     domain::{Action, CredentialId},
 };
@@ -24,13 +30,21 @@ use std::time::Duration;
 use tokio::time::{interval, timeout, timeout_at, Instant, MissedTickBehavior};
 use uuid::Uuid;
 
-const PRODUCT_METHODS: [&str; 6] = [
+const PRODUCT_METHODS: &[&str] = &[
     "auth.session",
     "server.health",
-    "conversation.echo",
     "credential.issue",
     "credential.list",
     "credential.revoke",
+    "conversation.create",
+    "conversation.read",
+    "conversation.send",
+    "conversation.steer",
+    "conversation.remove",
+    "conversation.reorder",
+    "conversation.answer",
+    "conversation.cancel",
+    "conversation.close",
 ];
 
 /// Run one mandatory-authentication product session.
@@ -92,8 +106,8 @@ where
         }
     };
 
-    let snapshot = match current_snapshot(&state, &session).await {
-        Ok(snapshot) => snapshot,
+    let (session, snapshot) = match current_identity(&state, &session).await {
+        Ok(current) => current,
         Err(error) => {
             close_session(
                 state.settings.write_timeout,
@@ -154,6 +168,61 @@ where
     if params.nonce != nonce || params.client.id.is_empty() || params.client.id.len() > 256 {
         return Err((frame.id, "unauthorized"));
     }
+    if let Some(id) = &state.browser_session_id {
+        if !params.credential.is_empty() {
+            return Err((frame.id, "unauthorized"));
+        }
+        let store = state
+            .browser_sessions
+            .as_ref()
+            .ok_or_else(|| (frame.id.clone(), "unauthorized"))?;
+        let expected_origin = state
+            .browser_session_origin
+            .as_deref()
+            .ok_or_else(|| (frame.id.clone(), "unauthorized"))?;
+        let _verified_record = ReadBrowserSession {
+            store: store.as_ref(),
+        }
+        .execute(id, state.clock.unix_seconds())
+        .await
+        .map_err(|_| (frame.id.clone(), "temporarily_unavailable"))?
+        .filter(|session| session.origin() == expected_origin)
+        .ok_or_else(|| (frame.id.clone(), "unauthorized"))?;
+        let evidence = SessionEvidence::new(id.as_bytes().to_vec())
+            .map_err(|_| (frame.id.clone(), "unauthorized"))?;
+        let verifier = BrowserSessionVerifier {
+            store: store.as_ref(),
+            expected_origin,
+            now: state.clock.unix_seconds(),
+        };
+        let identity = (ResumeSession {
+            verifier: &verifier,
+            access: state.access.as_ref(),
+            clock: state.clock.as_ref(),
+        })
+        .execute(&evidence, &state.audience)
+        .await;
+        let identity = match identity {
+            Ok((identity, _)) => identity,
+            Err(error) => {
+                if let Some(reason) = invalidation_reason(error) {
+                    store
+                        .remove(id.clone(), state.clock.unix_seconds(), reason, None)
+                        .await
+                        .map_err(|_| (frame.id.clone(), "temporarily_unavailable"))?;
+                }
+                return Err((
+                    frame.id,
+                    if retryable_access_error(error) {
+                        "temporarily_unavailable"
+                    } else {
+                        "unauthorized"
+                    },
+                ));
+            }
+        };
+        return Ok((frame.id, identity));
+    }
     let evidence = CredentialEvidence::new(params.credential.into_bytes())
         .map_err(|_| (frame.id.clone(), "unauthorized"))?;
     let session = AuthenticateSession {
@@ -166,7 +235,7 @@ where
     .map_err(|error| {
         (
             frame.id.clone(),
-            if error == AccessError::Unavailable {
+            if retryable_access_error(error) {
                 "temporarily_unavailable"
             } else {
                 "unauthorized"
@@ -212,8 +281,15 @@ async fn run_authenticated<S>(
         }
     };
     tokio::pin!(expiry);
+    // Slow provider preparation cannot hold permission or close commands behind it.
+    // Tasks own admitted operations after a socket disappears; capacity is bounded.
+    let mut requests = FuturesUnordered::new();
     loop {
         tokio::select! {
+            Some(response) = requests.next(), if !requests.is_empty() => {
+                let Ok(response) = response else { break };
+                if send(state.settings.write_timeout, &mut socket, response).await.is_err() { break; }
+            }
             _ = &mut expiry => {
                 close_session(state.settings.write_timeout, &mut socket, SessionCloseReason::CredentialExpired).await;
                 break;
@@ -250,8 +326,25 @@ async fn run_authenticated<S>(
                 // Admission authorizes one operation against committed state.
                 // Its response may finish after revocation; the next request
                 // and idle liveness check observe the new revision.
-                let response = dispatch(&state, &session, frame).await;
-                if send(state.settings.write_timeout, &mut socket, response).await.is_err() { break; }
+                let control = matches!(frame.method.as_str(), "conversation.close" | "conversation.answer" | "conversation.cancel" | "conversation.remove" | "conversation.reorder");
+                if requests.len() >= if control { 20 } else { 16 } {
+                    if send_error(state.settings.write_timeout, &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
+                    continue;
+                }
+                // Detached commands retain a shared permit through completion,
+                // so reconnecting cannot accumulate unlimited admitted tasks.
+                // Controls have separate capacity from reads and provider opens.
+                let capacity = if control { &state.controls } else { &state.requests };
+                let Ok(permit) = capacity.clone().try_acquire_owned() else {
+                    if send_error(state.settings.write_timeout, &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
+                    continue;
+                };
+                let request_state = state.clone();
+                let request_session = session.clone();
+                requests.push(tokio::spawn(async move {
+                    let _permit = permit;
+                    dispatch(&request_state, &request_session, frame).await
+                }));
             }
         }
     }
@@ -262,9 +355,10 @@ async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
-    if current_session_error(state, session).await.is_some() {
-        return failure(&frame.id, "unauthorized");
-    }
+    let (session, snapshot) = match current_identity(state, session).await {
+        Ok(current) => current,
+        Err(_) => return failure(&frame.id, "unauthorized"),
+    };
     if frame.kind != "req" || frame.id.is_empty() || frame.id.len() > 256 {
         return failure(&frame.id, "invalid_request");
     }
@@ -275,19 +369,30 @@ async fn dispatch(
         if frame.params != json!({}) {
             return failure(&frame.id, "invalid_request");
         }
-        let snapshot = match current_snapshot(state, session).await {
-            Ok(snapshot) => snapshot,
-            Err(_) => return failure(&frame.id, "unauthorized"),
-        };
-        return success(&frame.id, &session_ready(state, session, &snapshot));
+        if ensure_browser_session_present(state, &session)
+            .await
+            .is_err()
+        {
+            return failure(&frame.id, "unauthorized");
+        }
+        return success(&frame.id, &session_ready(state, &session, &snapshot));
     }
     let action_name = match action_for_method(&frame.method) {
         Some(action) => action,
         _ => return failure(&frame.id, "unknown_method"),
     };
-    let authorization = authorize(state, session, action_name).await;
+    let authorization = authorize(state, &session, action_name).await;
     match authorization {
-        Ok(Decision::Allow) => dispatch_authorized(state, session, frame).await,
+        Ok(Decision::Allow) => {
+            if ensure_browser_session_present(state, &session)
+                .await
+                .is_err()
+            {
+                failure(&frame.id, "unauthorized")
+            } else {
+                dispatch_authorized(state, &session, frame).await
+            }
+        }
         Ok(Decision::Deny) => failure(&frame.id, "forbidden"),
         Err(_) => failure(&frame.id, "unauthorized"),
     }
@@ -317,13 +422,8 @@ async fn dispatch_authorized(
     frame: RequestFrame,
 ) -> OutgoingMessage {
     match frame.method.as_str() {
-        "conversation.echo" => {
-            let params: crate::protocol::EchoParams = match serde_json::from_value(frame.params) {
-                Ok(params) => params,
-                Err(_) => return failure(&frame.id, "invalid_request"),
-            };
-            crate::protocol::echo_message(&frame.id, params.text)
-                .unwrap_or_else(|_| failure(&frame.id, "internal_error"))
+        method if method.starts_with("conversation.") => {
+            super::conversation::dispatch(state, session, frame).await
         }
         "server.health" => {
             if frame.params != json!({}) {
@@ -468,7 +568,7 @@ async fn dispatch_authorized(
     }
 }
 
-fn success<T: serde::Serialize>(request_id: &str, payload: &T) -> OutgoingMessage {
+pub(super) fn success<T: serde::Serialize>(request_id: &str, payload: &T) -> OutgoingMessage {
     ResponseFrame::success(request_id, payload)
         .map(OutgoingMessage::Response)
         .unwrap_or_else(|_| failure(request_id, "internal_error"))
@@ -477,7 +577,15 @@ fn success<T: serde::Serialize>(request_id: &str, payload: &T) -> OutgoingMessag
 fn action_for_method(method: &str) -> Option<&'static str> {
     match method {
         "server.health" => Some("server.read"),
-        "conversation.echo" => Some("conversation.write"),
+        "conversation.create"
+        | "conversation.read"
+        | "conversation.send"
+        | "conversation.steer"
+        | "conversation.remove"
+        | "conversation.reorder"
+        | "conversation.answer"
+        | "conversation.cancel"
+        | "conversation.close" => Some("conversation.write"),
         "credential.issue" | "credential.list" | "credential.revoke" => Some("credential.manage"),
         _ => None,
     }
@@ -524,27 +632,146 @@ fn session_ready(
     )
 }
 
+#[cfg(test)]
 async fn current_snapshot(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
 ) -> Result<AccessSnapshot, AccessError> {
-    ReadCurrentSession {
+    current_identity(state, session)
+        .await
+        .map(|(_, snapshot)| snapshot)
+}
+
+async fn current_identity(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<(AuthenticatedSession, AccessSnapshot), AccessError> {
+    timeout(
+        state.settings.handshake_timeout,
+        current_identity_inner(state, session),
+    )
+    .await
+    .map_err(|_| AccessError::Unavailable)?
+}
+
+async fn current_identity_inner(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<(AuthenticatedSession, AccessSnapshot), AccessError> {
+    if let Some(id) = &state.browser_session_id {
+        let store = state
+            .browser_sessions
+            .as_ref()
+            .ok_or(AccessError::InvalidCredential)?;
+        let expected_origin = state
+            .browser_session_origin
+            .as_deref()
+            .ok_or(AccessError::InvalidCredential)?;
+        let retained = ReadBrowserSession {
+            store: store.as_ref(),
+        }
+        .execute(id, state.clock.unix_seconds())
+        .await?
+        .filter(|session| session.origin() == expected_origin)
+        .ok_or(AccessError::InvalidCredential)?;
+        if retained.credential_id() != session.context().credential_id() {
+            store
+                .remove(
+                    id.clone(),
+                    state.clock.unix_seconds(),
+                    RemovalReason::IdentityMismatch,
+                    None,
+                )
+                .await?;
+            return Err(AccessError::IdentityMismatch);
+        }
+        let evidence = SessionEvidence::new(id.as_bytes().to_vec())?;
+        let verifier = BrowserSessionVerifier {
+            store: store.as_ref(),
+            expected_origin,
+            now: state.clock.unix_seconds(),
+        };
+        match (ResumeSession {
+            verifier: &verifier,
+            access: state.access.as_ref(),
+            clock: state.clock.as_ref(),
+        })
+        .execute(&evidence, &state.audience)
+        .await
+        {
+            Ok(current) => return Ok(current),
+            Err(error) => {
+                if let Some(reason) = invalidation_reason(error) {
+                    store
+                        .remove(id.clone(), state.clock.unix_seconds(), reason, None)
+                        .await?;
+                }
+                return Err(error);
+            }
+        }
+    }
+    let snapshot = ReadCurrentSession {
         access: state.access.as_ref(),
         clock: state.clock.as_ref(),
     }
     .execute(session)
-    .await
+    .await?;
+    Ok((session.clone(), snapshot))
+}
+
+async fn ensure_browser_session_present(
+    state: &ProductRouteState,
+    session: &AuthenticatedSession,
+) -> Result<(), AccessError> {
+    let Some(id) = &state.browser_session_id else {
+        return Ok(());
+    };
+    let store = state
+        .browser_sessions
+        .as_ref()
+        .ok_or(AccessError::InvalidCredential)?;
+    let retained = ReadBrowserSession {
+        store: store.as_ref(),
+    }
+    .execute(id, state.clock.unix_seconds())
+    .await?
+    .ok_or(AccessError::InvalidCredential)?;
+    if retained.credential_id() != session.context().credential_id() {
+        store
+            .remove(
+                id.clone(),
+                state.clock.unix_seconds(),
+                RemovalReason::IdentityMismatch,
+                None,
+            )
+            .await?;
+        return Err(AccessError::IdentityMismatch);
+    }
+    Ok(())
 }
 
 async fn current_session_error(
     state: &ProductRouteState,
     session: &AuthenticatedSession,
 ) -> Option<AccessError> {
-    current_snapshot(state, session).await.err()
+    current_identity(state, session).await.err()
 }
 
-fn failure(request_id: &str, code: &str) -> OutgoingMessage {
+pub(super) fn failure(request_id: &str, code: &str) -> OutgoingMessage {
     OutgoingMessage::Response(ResponseFrame::failure(request_id, code, code))
+}
+
+pub(super) fn failure_with_details(
+    request_id: &str,
+    code: &str,
+    details: serde_json::Value,
+) -> OutgoingMessage {
+    OutgoingMessage::Response(ResponseFrame::failure_with_details(
+        request_id,
+        code,
+        code,
+        Some(details),
+    ))
 }
 
 async fn send_error<S: Sink<Message> + Unpin>(
@@ -572,9 +799,15 @@ fn close_reason(error: AccessError) -> SessionCloseReason {
     match error {
         AccessError::CredentialRevoked => SessionCloseReason::CredentialRevoked,
         AccessError::CredentialExpired => SessionCloseReason::CredentialExpired,
-        AccessError::Unavailable => SessionCloseReason::TemporaryUnavailable,
+        AccessError::Unavailable | AccessError::StaleRevision => {
+            SessionCloseReason::TemporaryUnavailable
+        }
         _ => SessionCloseReason::AuthorizationLost,
     }
+}
+
+fn retryable_access_error(error: AccessError) -> bool {
+    matches!(error, AccessError::Unavailable | AccessError::StaleRevision)
 }
 
 async fn close_session<S: Sink<Message> + Unpin>(
@@ -598,6 +831,40 @@ async fn close_session<S: Sink<Message> + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod browser_sessions {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/browser_session/tests.rs"
+        ));
+    }
+
+    #[test]
+    fn every_manifest_method_has_one_runtime_dispatch_path() {
+        let manifest: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../protocol/product/manifest.json"
+        )))
+        .unwrap();
+        let advertised = manifest["methods"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        let runtime = std::iter::once("session.authenticate")
+            .chain(PRODUCT_METHODS.iter().copied())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(advertised, runtime);
+        for method in PRODUCT_METHODS {
+            if *method == "auth.session" {
+                continue;
+            }
+            assert!(
+                action_for_method(method).is_some(),
+                "advertised method has no authorization/dispatch path: {method}"
+            );
+        }
+    }
 
     #[test]
     fn session_termination_is_typed_bounded_and_classifies_authority_failures() {
@@ -606,6 +873,7 @@ mod tests {
             (AccessError::CredentialExpired, "credential_expired", false),
             (AccessError::InactiveMembership, "authorization_lost", false),
             (AccessError::Unavailable, "temporary_unavailable", true),
+            (AccessError::StaleRevision, "temporary_unavailable", true),
         ] {
             let reason = close_reason(error);
             let value = serde_json::to_value(SessionTermination {
@@ -638,13 +906,14 @@ mod tests {
         },
     };
     use std::sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     };
 
     struct Authority {
         snapshot: Mutex<AccessSnapshot>,
         now: AtomicU64,
+        proof_expires_at: Mutex<Option<u64>>,
     }
 
     impl CredentialVerifier for Authority {
@@ -659,7 +928,7 @@ mod tests {
                 }
                 Ok(VerifiedCredential {
                     credential_id: CredentialId::new("credential").unwrap(),
-                    expires_at: Some(200),
+                    expires_at: *self.proof_expires_at.lock().unwrap(),
                 })
             })
         }
@@ -732,6 +1001,7 @@ mod tests {
         let authority = Arc::new(Authority {
             snapshot: Mutex::new(snapshot(role, MembershipStatus::Active)),
             now: AtomicU64::new(100),
+            proof_expires_at: Mutex::new(Some(200)),
         });
         let state = ProductRouteState::new(
             ResourceId::new("gateway-resource").unwrap(),
@@ -975,7 +1245,7 @@ mod tests {
         for frame in [
             forged,
             request("", "server.health"),
-            request("unknown", "conversation.echo"),
+            request("unknown", "conversation.unknown"),
         ] {
             assert!(!dispatch(&state, &session, frame).await.is_success());
         }
@@ -1254,6 +1524,154 @@ mod tests {
         authority: Arc<Authority>,
         policy: CedarPolicyEvaluator,
     }
+
+    struct PresenceStore {
+        present: Arc<AtomicBool>,
+        session: crate::browser_session::application::BrowserSession,
+    }
+    impl crate::browser_session::application::SessionStore for PresenceStore {
+        fn insert<'a>(
+            &'a self,
+            _: String,
+            _: crate::browser_session::application::BrowserSession,
+            _: Option<String>,
+            _: u64,
+        ) -> PortFuture<'a, Option<(String, crate::browser_session::application::BrowserSession)>>
+        {
+            Box::pin(async { Err(AccessError::Unsupported) })
+        }
+        fn get<'a>(
+            &'a self,
+            _: String,
+        ) -> PortFuture<'a, Option<crate::browser_session::application::BrowserSession>> {
+            Box::pin(async move {
+                Ok(self
+                    .present
+                    .load(Ordering::SeqCst)
+                    .then(|| self.session.clone()))
+            })
+        }
+        fn remove<'a>(
+            &'a self,
+            _: String,
+            _: u64,
+            _: RemovalReason,
+            _: Option<CredentialId>,
+        ) -> PortFuture<'a, ()> {
+            Box::pin(async move {
+                self.present.store(false, Ordering::SeqCst);
+                Ok(())
+            })
+        }
+        fn abandon_login<'a>(
+            &'a self,
+            _: String,
+            _: Option<(String, crate::browser_session::application::BrowserSession)>,
+            _: u64,
+        ) -> PortFuture<'a, ()> {
+            Box::pin(async { Err(AccessError::Unsupported) })
+        }
+        fn renew<'a>(
+            &'a self,
+            _: String,
+            _: u64,
+            _: CredentialId,
+        ) -> PortFuture<'a, crate::browser_session::application::BrowserSession> {
+            Box::pin(async { Err(AccessError::Unsupported) })
+        }
+    }
+
+    struct RemoveBrowserAfterAdmission {
+        present: Arc<AtomicBool>,
+        policy: CedarPolicyEvaluator,
+    }
+
+    struct RemoveBrowserAfterAuthorityRead {
+        authority: Arc<Authority>,
+        present: Arc<AtomicBool>,
+    }
+    impl AccessReader for RemoveBrowserAfterAuthorityRead {
+        fn read<'a>(&'a self, id: &'a CredentialId) -> PortFuture<'a, AccessSnapshot> {
+            Box::pin(async move {
+                let snapshot = self.authority.read(id).await?;
+                self.present.store(false, Ordering::SeqCst);
+                Ok(snapshot)
+            })
+        }
+    }
+    impl PolicyEvaluator for RemoveBrowserAfterAdmission {
+        fn evaluate(
+            &self,
+            context: &AuthContext,
+            action: &Action,
+            resource: &Resource,
+            snapshot: &AccessSnapshot,
+        ) -> Result<Decision, AccessError> {
+            let decision = self.policy.evaluate(context, action, resource, snapshot)?;
+            if decision == Decision::Allow {
+                self.present.store(false, Ordering::SeqCst);
+            }
+            Ok(decision)
+        }
+    }
+
+    #[tokio::test]
+    async fn browser_logout_after_policy_allow_prevents_handler_dispatch() {
+        let (mut state, _) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let present = Arc::new(AtomicBool::new(true));
+        let store = Arc::new(PresenceStore {
+            present: present.clone(),
+            session: crate::browser_session::application::BrowserSession::new(
+                session.context().credential_id().clone(),
+                "https://127.0.0.1:1443".into(),
+                100,
+            )
+            .unwrap(),
+        });
+        state = state.with_browser_sessions(store);
+        state.browser_session_id = Some("a".repeat(64));
+        state.browser_session_origin = Some("https://127.0.0.1:1443".into());
+        state.policy = Arc::new(RemoveBrowserAfterAdmission {
+            present,
+            policy: CedarPolicyEvaluator::new().unwrap(),
+        });
+        state.uptime_clock = Arc::new(MustNotRun);
+
+        let OutgoingMessage::Response(response) =
+            dispatch(&state, &session, request("logout-race", "server.health")).await
+        else {
+            panic!("response expected")
+        };
+        assert_eq!(response.error.unwrap().code, "unauthorized");
+    }
+
+    #[tokio::test]
+    async fn browser_logout_after_auth_snapshot_prevents_auth_session_success() {
+        let (mut state, authority) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let present = Arc::new(AtomicBool::new(true));
+        let store = Arc::new(PresenceStore {
+            present: present.clone(),
+            session: crate::browser_session::application::BrowserSession::new(
+                session.context().credential_id().clone(),
+                "https://127.0.0.1:1443".into(),
+                100,
+            )
+            .unwrap(),
+        });
+        state = state.with_browser_sessions(store);
+        state.browser_session_id = Some("a".repeat(64));
+        state.browser_session_origin = Some("https://127.0.0.1:1443".into());
+        state.access = Arc::new(RemoveBrowserAfterAuthorityRead { authority, present });
+
+        let OutgoingMessage::Response(response) =
+            dispatch(&state, &session, request("logout-race", "auth.session")).await
+        else {
+            panic!("response expected")
+        };
+        assert_eq!(response.error.unwrap().code, "unauthorized");
+    }
     impl PolicyEvaluator for RevokeAfterAdmission {
         fn evaluate(
             &self,
@@ -1294,4 +1712,5 @@ mod tests {
             .unwrap()
             .unwrap();
     }
+    include!("../../tests/conversation/gateway.rs");
 }

@@ -15,6 +15,8 @@ pub enum RunError {
     Environment(EnvironmentError),
     /// Product authentication failed to initialize; contains no credential material.
     Authentication(String),
+    /// Invalid or unavailable configured agent provider.
+    Agent(String),
     Bind {
         addr: String,
         source: io::Error,
@@ -25,6 +27,7 @@ pub enum RunError {
 impl fmt::Display for RunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Agent(message) => write!(f, "agent setup failed: {message}"),
             Self::Authentication(message) => write!(f, "authentication setup failed: {message}"),
             Self::Environment(error) => write!(f, "invalid configuration: {error}"),
             Self::Bind { addr, source } => match source.kind() {
@@ -43,7 +46,7 @@ impl std::error::Error for RunError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Environment(error) => Some(error),
-            Self::Authentication(_) => None,
+            Self::Authentication(_) | Self::Agent(_) => None,
             Self::Bind { source, .. } => Some(source),
             Self::Serve(source) => Some(source),
         }
@@ -64,7 +67,7 @@ impl From<io::Error> for RunError {
 
 impl std::process::Termination for RunError {
     fn report(self) -> std::process::ExitCode {
-        tracing::error!(%self, "nessa-server failed");
+        tracing::error!(%self, "nessa failed");
         std::process::ExitCode::FAILURE
     }
 }

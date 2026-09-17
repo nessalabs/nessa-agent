@@ -1,21 +1,13 @@
-//! Composition root — the single place that wires the running server.
-//!
-//! Like livelance's `CompositionRoot`: load config, build shared state, assemble
-//! the Axum router, bind, and serve. No business rules live here; only dependency
-//! wiring so `main` and tests have one entry point.
+//! Constructs trusted gateway dependencies once per server and the CLI client
+//! adapter for online commands. Offline bootstrap is isolated in auth_command.
 //!
 //! ```text
-//! Environment::from_system()
-//!        │
-//!        ▼
-//! AppState::from_environment()
-//!        │
-//!        ▼
-//! server::entrypoint::http::router(state)
-//!        │
-//!        ▼
-//! TcpListener::bind → axum::serve
+//! Environment -> private runtime config -> auth + ConversationService
+//!                                         -> provider / storage / audit
+//! ProductRouteState -> authenticated HTTP/WebSocket router
 //! ```
+//! Arrows show construction and injection. Conversations share the service across
+//! sockets; shutdown closes its Agents before the process exits.
 
 mod root;
 
@@ -25,3 +17,9 @@ mod auth_command;
 mod local_auth;
 
 mod runtime_config;
+
+mod agent;
+
+mod desktop;
+
+mod cli;

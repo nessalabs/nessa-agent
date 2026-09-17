@@ -12,6 +12,7 @@ if (typeof globalThis.WebSocket === "undefined") {
 
 const TOKEN = "test-token"
 const CHALLENGE_NONCE = "test-challenge-nonce"
+const CONVERSATION_ID = "00000000-0000-4000-8000-000000000001"
 
 describe("NessaClient", () => {
   let wss: WebSocketServer
@@ -49,6 +50,7 @@ describe("NessaClient", () => {
             credential?: string
             nonce?: string
             text?: string
+            executionId?: string
           }
         }
 
@@ -213,7 +215,7 @@ describe("NessaClient", () => {
           return
         }
 
-        if (frame.method === "conversation.echo") {
+        if (frame.method === "conversation.send") {
           if (!connected) {
             socket.send(
               JSON.stringify({
@@ -225,13 +227,13 @@ describe("NessaClient", () => {
             )
             return
           }
-          const text = typeof frame.params?.text === "string" ? frame.params.text : ""
+          const executionId = frame.params?.executionId
           socket.send(
             JSON.stringify({
               type: "res",
               id: frame.id,
               ok: true,
-              payload: { text },
+              payload: { executionId, disposition: "queued" },
             }),
           )
           return
@@ -275,8 +277,15 @@ describe("NessaClient", () => {
       uptimeMs: 42,
     })
 
-    const echo = await client.conversation.echo("hey")
-    expect(echo).toEqual({ text: "hey" })
+    const receipt = await client.conversation.send(CONVERSATION_ID, "hey", {
+      executionId: "execution",
+      requestId: "action",
+    })
+    expect(receipt).toEqual({
+      executionId: "execution",
+      disposition: "queued",
+      requestId: "action",
+    })
 
     client.close()
   })

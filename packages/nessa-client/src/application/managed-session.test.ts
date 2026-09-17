@@ -180,6 +180,90 @@ describe("persistent session", () => {
     expect(client.state.status).toBe("closed")
   })
 
+  it("does not publish stale reconnecting state after an observer closes reentrantly", async () => {
+    const first = connected()
+    const connect = vi.fn()
+    const client = new ManagedSession(first, config, connect, timing())
+    const seen: string[] = []
+    client.onState((state) => {
+      seen.push(`first:${state.status}`)
+      if (state.status === "reconnecting") client.close()
+    })
+    client.onState((state) => seen.push(`second:${state.status}`))
+
+    first.wire.drop()
+    await flush()
+
+    expect(seen).toEqual(["first:reconnecting", "first:closed", "second:closed"])
+    expect(client.state.status).toBe("closed")
+    expect(connect).not.toHaveBeenCalled()
+  })
+
+  it("closes a replacement wire without publishing stale connected state after reentrant close", async () => {
+    const first = connected()
+    const next = connected()
+    const client = new ManagedSession(first, config, async () => next, timing())
+    const seen: string[] = []
+    client.onState((state) => {
+      seen.push(`first:${state.status}`)
+      if (state.status === "connected") client.close()
+    })
+    client.onState((state) => seen.push(`second:${state.status}`))
+
+    first.wire.drop()
+    await flush()
+
+    expect(seen).toEqual([
+      "first:reconnecting",
+      "second:reconnecting",
+      "first:connected",
+      "first:closed",
+      "second:closed",
+    ])
+    expect(client.state.status).toBe("closed")
+    expect(next.wire.termination?.code).toBe(1000)
+  })
+
+  it("continues nonterminal publication after a throwing observer", async () => {
+    const first = connected()
+    const next = connected()
+    const client = new ManagedSession(first, config, async () => next, timing())
+    const seen = vi.fn()
+    client.onState(() => {
+      throw new Error("observer")
+    })
+    client.onState(seen)
+
+    first.wire.drop()
+    await flush()
+
+    expect(seen.mock.calls.map(([state]) => state.status)).toEqual([
+      "reconnecting",
+      "connected",
+    ])
+    expect(client.state.status).toBe("connected")
+    client.close()
+  })
+
+  it("finishes the closed notification generation when observers close reentrantly", () => {
+    const first = connected()
+    const client = new ManagedSession(first, config, vi.fn(), timing())
+    const seen: string[] = []
+    const closed = vi.fn(() => client.close())
+    client.onState((state) => {
+      seen.push(`first:${state.status}`)
+      if (state.status === "closed") client.close()
+    })
+    client.onState((state) => seen.push(`second:${state.status}`))
+    client.onClose(closed)
+
+    client.close()
+
+    expect(seen).toEqual(["first:closed", "second:closed"])
+    expect(closed).toHaveBeenCalledOnce()
+    expect(client.state.status).toBe("closed")
+  })
+
   it("closes late successful attempts when the caller closes during authentication", async () => {
     const first = connected(),
       next = connected()

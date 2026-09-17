@@ -57,6 +57,7 @@ export type ConnectRetryTiming = {
   random: () => number
 }
 
+/** Whether a failed connection can be attempted again. Unknown errors and permanent authentication failures are terminal; this does not authorize replaying application commands. */
 export function isRetryableConnectionError(error: unknown): boolean {
   return (
     error instanceof RetryableConnectError ||

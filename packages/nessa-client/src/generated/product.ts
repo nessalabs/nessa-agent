@@ -206,6 +206,275 @@ export interface SessionTermination {
   /** Optional server delay hint in milliseconds, bounded to 60,000. */
   retryAfterMs?: number
 }
+/** Current invocation status, including unresolved interrupted history. */
+export const ConversationMessageStatus = {
+  Queued: "queued",
+  Running: "running",
+  Completed: "completed",
+  Cancelled: "cancelled",
+  Failed: "failed",
+  Injected: "injected",
+  Unresolved: "unresolved",
+} as const
+export type ConversationMessageStatus =
+  (typeof ConversationMessageStatus)[keyof typeof ConversationMessageStatus]
+/** How an admitted input waits for dispatch. */
+export const ConversationPendingMode = { Queued: "queued", Steering: "steering" } as const
+export type ConversationPendingMode =
+  (typeof ConversationPendingMode)[keyof typeof ConversationPendingMode]
+/** How the gateway accepted or recovered this submission. */
+export const ConversationDisposition = {
+  Queued: "queued",
+  Injected: "injected",
+  Settled: "settled",
+} as const
+export type ConversationDisposition =
+  (typeof ConversationDisposition)[keyof typeof ConversationDisposition]
+/** Operations supported by this configured agent. */
+export interface ConversationCapabilities {
+  /** Can queue input at invocation boundaries. */
+  queue: boolean
+  /** Can submit supported steering input. */
+  steer: boolean
+  /** Can restore the provider context. */
+  resume: boolean
+  /** Can review provider permission requests. */
+  permissions: boolean
+}
+/** One bounded conversation turn; omitted older text is indicated by the enclosing truncated flag. */
+export interface ConversationMessage {
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** User input text. */
+  userText: string
+  /** Current invocation state. */
+  status: ConversationMessageStatus
+  /** Bounded diagnostic for this invocation. */
+  error?: string
+  /** Execution that consumed this injected steering input; its shared reply answers this input. */
+  steeringTarget?: string
+  /** Provider observations in execution order; offsets address the retained SDK event sequence. */
+  parts: ConversationPart[]
+  /** Target event count when steering was admitted locally; does not imply provider consumption timing. */
+  steeringOffset?: number
+}
+/** A waiting input that may be removed before dispatch. */
+export interface ConversationPending {
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** Waiting user input. */
+  text: string
+  /** Queue or steering admission. */
+  mode: ConversationPendingMode
+}
+/** An exact option offered by the provider. */
+export interface ConversationPermissionOption {
+  /** Opaque offered option identifier. */
+  id: string
+  /** Provider label for this option. */
+  label: string
+}
+/** A pending review with its complete offered choices. */
+export interface ConversationPermission {
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** Permission identity within the execution. */
+  permissionId: string
+  /** Tool being reviewed. */
+  toolId: string
+  /** Provider tool title. */
+  title: string
+  /** Complete offered choices; never silently shortened. */
+  options: ConversationPermissionOption[]
+  /** Exact reviewed tool name. */
+  toolName: string
+  /** Exact original JSON input reviewed by the user; never truncated. */
+  argumentsJson: string
+}
+/** Bounded presentation of an observed tool call. */
+export interface ConversationTool {
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** Tool call identity within the execution. */
+  toolId: string
+  /** Provider tool title. */
+  title: string
+  /** Current provider tool status. */
+  status: string
+  /** Bounded provider-observed tool output and file changes; omitted content is marked. */
+  details: string
+  /** Exact tool arguments observed through a permission request, or empty when unavailable. */
+  input: string
+}
+/** Bounded full replacement of the current live conversation view. Polling never implies cancellation or durable streaming storage. */
+export interface ConversationView {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Opaque revision; compare for equality, never numeric ordering. */
+  revision: string
+  /** Recent turns with current streamed output. */
+  messages: ConversationMessage[]
+  /** Current removable queue entries. */
+  pending: ConversationPending[]
+  /** Actionable permission reviews. */
+  permissions: ConversationPermission[]
+  /** Recent tool states. */
+  tools: ConversationTool[]
+  /** Agent operation support. */
+  capabilities: ConversationCapabilities
+  /** Some non-actionable history or text was omitted to bound this response. */
+  truncated: boolean
+  /** Why pending review choices cannot safely be shown; do not offer inferred choices. */
+  permissionViewError?: string
+  /** All currently pending execution IDs are represented, so an exact reorder may be attempted. */
+  queueComplete: boolean
+  /** Configured provider, model and working directory for this conversation. */
+  runtime?: ConversationRuntime
+}
+/** Idempotently create or reopen one named conversation. */
+export interface ConversationCreateParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+}
+/** Conversation ready for read and admission. */
+export interface ConversationCreateResult {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+}
+/** Read the current bounded projection. */
+export interface ConversationReadParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+}
+/** Submit one input; execution and request IDs stay fixed across retries. */
+export interface ConversationSendParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** User message, at most 8 KiB UTF-8; gateway enforces the byte bound. */
+  text: string
+}
+/** Remove an input that has not dispatched. */
+export interface ConversationRemoveParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+}
+/** Whether a failed permission answer left the domain review pending, consumed it, or could not prove either state. */
+export const ConversationPermissionSelectionState = {
+  Pending: "pending",
+  Consumed: "consumed",
+  Unknown: "unknown",
+} as const
+export type ConversationPermissionSelectionState =
+  (typeof ConversationPermissionSelectionState)[keyof typeof ConversationPermissionSelectionState]
+/** Typed review state attached to a failed conversation.answer response. This state is independent of the diagnostic error code. */
+export interface ConversationPermissionAnswerErrorDetails {
+  /** Authoritative knowledge of whether the reviewed option was selected. */
+  selectionState: ConversationPermissionSelectionState
+}
+/** Choose one option from the exact pending permission. */
+export interface ConversationAnswerParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** Pending permission identity. */
+  permissionId: string
+  /** Exact provider-offered option identity. */
+  optionId: string
+}
+/** Cancel one permission review with a caller reason. */
+export interface ConversationCancelParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** Pending permission identity. */
+  permissionId: string
+  /** Reason recorded with authenticated caller attribution. */
+  reason: string
+}
+/** Close the live provider context while retaining conversation history. */
+export interface ConversationCloseParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+}
+/** Stable acknowledgement of one submitted input. */
+export interface ConversationReceipt {
+  /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
+  executionId: string
+  /** Accepted or recovered submission state. */
+  disposition: ConversationDisposition
+}
+/** Acknowledgement for a control action. */
+export interface ConversationMutationResult {
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** Whether the requested change was applied or already acknowledged. */
+  applied: boolean
+}
+/** Atomically replace the complete waiting order. All current waiting execution IDs must appear once; steering retains priority over ordinary queued input. */
+export interface ConversationReorderParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Identity of this deliberate control action; an uncertain acknowledgement requires a fresh read, not replay. */
+  requestId: string
+  /** Exact desired full waiting order, including steering inputs. Running invocations are excluded. */
+  executionIds: string[]
+}
+/** Applied or unchanged order, or a rejected stale queue/steering-priority conflict. Rejections leave the queue unchanged. */
+export const ConversationReorderOutcome = {
+  Applied: "applied",
+  Unchanged: "unchanged",
+  QueueChanged: "queue_changed",
+  PriorityConflict: "priority_conflict",
+} as const
+export type ConversationReorderOutcome =
+  (typeof ConversationReorderOutcome)[keyof typeof ConversationReorderOutcome]
+/** Acknowledgement of one atomic queue reorder control. */
+export interface ConversationReorderResult {
+  /** Identity of this deliberate control action; an uncertain acknowledgement requires a fresh read, not replay. */
+  requestId: string
+  /** Whether the whole requested order was accepted. */
+  outcome: ConversationReorderOutcome
+}
+/** Runtime configuration selected by the gateway composition for this conversation. */
+export interface ConversationRuntime {
+  /** Configured model identifier. */
+  model: string
+  /** Configured agent provider name. */
+  provider: string
+  /** Working directory on the gateway host, not the client filesystem. */
+  workspace: string
+}
+/** One ordered observation fragment in a bounded execution projection; offsets may have gaps. */
+export interface ConversationPart {
+  /** Zero-based SDK observation offset within the owning execution, used to preserve order. */
+  offset: number
+  /** Text, exposed thought content, or a tool observation. */
+  kind: "text" | "thought" | "tool"
+  /** Exact text fragment for text or thought observations; empty for tool observations. */
+  text: string
+  /** Owning tool identity for a tool observation; empty for text or thought observations. */
+  toolId: string
+  /** Opaque provider message identity; only fragments with the same identity may be combined. */
+  messageId?: string
+}
 export const ProductMethod = {
   SessionAuthenticate: "session.authenticate",
   AuthSession: "auth.session",
@@ -213,6 +482,14 @@ export const ProductMethod = {
   CredentialIssue: "credential.issue",
   CredentialList: "credential.list",
   CredentialRevoke: "credential.revoke",
-  ConversationEcho: "conversation.echo",
+  ConversationCreate: "conversation.create",
+  ConversationRead: "conversation.read",
+  ConversationSend: "conversation.send",
+  ConversationSteer: "conversation.steer",
+  ConversationRemove: "conversation.remove",
+  ConversationAnswer: "conversation.answer",
+  ConversationCancel: "conversation.cancel",
+  ConversationClose: "conversation.close",
+  ConversationReorder: "conversation.reorder",
 } as const
 export const ProductEvent = { SessionChallenge: "session.challenge" } as const

@@ -8,7 +8,15 @@
     "credential.issue": "CredentialIssueParams",
     "credential.list": null,
     "credential.revoke": "CredentialRevokeParams",
-    "conversation.echo": null
+    "conversation.create": "ConversationCreateParams",
+    "conversation.read": "ConversationReadParams",
+    "conversation.send": "ConversationSendParams",
+    "conversation.steer": "ConversationSendParams",
+    "conversation.remove": "ConversationRemoveParams",
+    "conversation.answer": "ConversationAnswerParams",
+    "conversation.cancel": "ConversationCancelParams",
+    "conversation.close": "ConversationCloseParams",
+    "conversation.reorder": "ConversationReorderParams"
   },
   "events": {
     "session.challenge": "SessionChallenge"

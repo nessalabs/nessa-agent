@@ -35,8 +35,12 @@ export type CommonConnectOptions = {
  */
 export type ProductConnectOptions = CommonConnectOptions & {
   profile?: "product"
-  /** Opaque credential evidence. It is sent only in `session.authenticate`. */
-  auth?: { credential: string }
+  /**
+   * Explicit evidence is sent only in `session.authenticate`. Browser cookies use
+   * `/browser/session` over WSS, or numeric-loopback WS in dev/CI, and never load
+   * a native credential source.
+   */
+  auth?: { credential: string } | { browserCookie: true }
   /** Host storage override. Node otherwise loads the assigned private surface file. */
   credentialSource?: CredentialSource
 }

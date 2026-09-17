@@ -6,11 +6,49 @@ Build with Rust 1.89 or newer, then initialize once:
 
 ```sh
 cargo build -p nessa-server
-target/debug/nessa-server auth init --owner-token-file "$HOME/nessa-owner.token"
+target/debug/nessa auth init --local
 pnpm server:run
 ```
 
-Use a new absolute path for the token file. The command writes it with mode
+The executable is `nessa`; the Rust package remains `nessa-server`. Install it on
+PATH with `cargo install --path crates/nessa-server --bin nessa --locked`.
+Run `nessa --help` for the command surface. `nessa server` starts the gateway;
+calling `nessa` with no arguments displays help.
+
+`auth init --local` is one-time offline bootstrap. It creates the gateway identity,
+owner credential and panel credential before the gateway exists. The default
+owner output is `<namespace>/auth/surfaces/nessa-cli.token`, used by the CLI.
+An explicit `--owner-token-file /absolute/new.token` selects a different output;
+then supply that path to online commands with `--credential-file`.
+Do not run init for each browser login. Local registry commands still require
+the gateway to be stopped. Cloud authentication is not implemented: `--cloud`
+returns an error without provisioning local state.
+
+With the gateway running, use a second terminal:
+
+```sh
+nessa doctor
+nessa auth token | pbcopy  # macOS: paste into the browser sign-in form
+```
+
+`auth token` authenticates as a CLI surface over `/session` and requests a new
+browser credential from the gateway. It never opens the live registry. Each
+invocation creates a distinct member principal with only `server.read` and
+`conversation.write` on the authenticated gateway and organization. Tokens have no expiry by default, capped by the CLI credential's expiry.
+Use `nessa auth token --ttl 12h` (positive `s`, `m`, `h`, or `d` duration)
+for temporary access, or `--no-expiry` to state the default explicitly. Only the secret goes to stdout;
+request and credential IDs go to stderr. Issuance is never automatically retried.
+If delivery is uncertain or output fails, inspect/revoke the recorded credential
+using the administrative commands below before issuing again.
+
+`doctor` checks configuration loading, private credential access, authenticated
+connection and authorized health. It writes JSON to stdout and returns nonzero
+on failure. Diagnostics do not include credentials. Online commands default to
+local mode; `--local` is optional. They use the same `NESSA_*` namespace, stage,
+host and port as the server, and cannot send local credentials to remote hosts.
+Use `--credential-file /absolute/path` for an existing owner credential.
+
+When specifying an output, use a new absolute path for the token file. The command writes it with mode
 `0600` on Unix or a protected Windows ACL and prints only metadata. Treat the file as a password. Owner and ordinary credentials have no expiry by default. Set `--expires-at UNIX_SECONDS`
 on offline commands, or `expiresAt` on issuance, when you want temporary access.
 Explicit expiry must be in the future. There is no 24-hour or 30-day lifetime cap.
@@ -27,7 +65,7 @@ this protocol and automatically loads its own credential through the native host
 `auth init` assigns it a distinct principal and private file at
 `auth/surfaces/nessa-panel.token`, with all currently implemented permissions:
 `server.read`, `conversation.write`, and `credential.manage`.
-Use `auth init --owner-token-file /absolute/new.token --chat-grants server.read,conversation.write`
+Use `auth init --local --owner-token-file /absolute/new.token --chat-grants server.read,conversation.write`
 to restrict initial chat access. Client metadata never grants permissions.
 
 ## Mint a restricted token
@@ -93,7 +131,7 @@ transport bytes cannot be recalled.
 Stop the server, then use a new token path:
 
 ```sh
-target/debug/nessa-server auth recover-owner --owner-token-file "$HOME/nessa-owner-next.token"
+target/debug/nessa auth recover-owner --local --owner-token-file "$HOME/nessa-owner-next.token"
 pnpm server:run
 ```
 
@@ -118,8 +156,8 @@ authorization boundaries, and platform limits.
 Stop the gateway, then provision or replace the credential assigned to a surface:
 
 ```sh
-target/debug/nessa-server auth provision-surface --surface-id terminal --grants server.read
-target/debug/nessa-server auth provision-surface --surface-id nessa-panel --grants server.read,conversation.write,credential.manage
+target/debug/nessa auth provision-surface --local --surface-id terminal --grants server.read
+target/debug/nessa auth provision-surface --local --surface-id nessa-panel --grants server.read,conversation.write,credential.manage
 ```
 
 Each surface has a distinct principal, membership, and token. Reprovisioning revokes
@@ -262,3 +300,72 @@ raise configured limits deliberately if necessary, never delete registry records
 to unblock a mutation. Keep the original request ID for explicit retries, including
 revoke retries, to avoid consuming additional receipts. See the review for the
 full retention decision and typed failure handling.
+
+## Run Nessa in a browser
+
+Browser sign-in uses an opaque server session cookie. HTTPS uses the
+`__Host-nessa-session` cookie with `Secure`, `HttpOnly`, `SameSite=Strict`, and
+host-only scope. Numeric loopback HTTP in dev/CI uses the separate
+`nessa-local-session` cookie with the same attributes except `Secure`. Sessions
+expire after 30 days of inactivity. Current credential expiry, revocation,
+membership, grants, and policy are resolved independently on every admission.
+While the browser is visible, it checks every five minutes and on focus;
+the server extends the idle deadline at most once per hour and refreshes the cookie.
+Refresh, browser restart, and gateway restart reconnect without entering a token again. Sign-out revokes that session on the server and
+clears its cookie. Submitted access tokens are never stored in localStorage,
+sessionStorage, Redux, or URLs. The server retains only the verified credential
+ID, bound origin, and idle-lifetime evidence, not the submitted token or copied
+identity claims. Sessions are bounded to 128 per gateway and persisted in the private namespace
+file `auth/browser-sessions.jsonl`. Its append-only journal retains typed transition
+causes (including credential revocation/expiry, inactive membership, identity
+mismatch, and invalid credential state), honest
+automatic or caller attribution, and before/after state; it contains no submitted access tokens.
+Storage failure rejects the transition and makes the store unavailable until
+restart; corrupt journals fail startup. Journal reads, writes, and flushes run on
+the server's blocking pool and browser authentication deadlines cover the complete
+storage and identity operation. The journal has a 64 MiB total bound, checked
+before replay and before every append. Reaching the bound fails further session
+transitions without discarding historical audit evidence or growing the file. To
+rotate it, stop the gateway, move the journal to private archival storage, and
+restart; browsers then sign in once to create a new journal. Do not truncate a live
+journal or discard the archive.
+Existing in-memory sessions need one sign-in after upgrading. Existing finite
+tokens keep their original expiry; generate a new token for ongoing access.
+Revocation and permission changes
+continue to apply to every connection and operation.
+
+For local development, run the gateway with `NESSA_STAGE=dev` (the default),
+then run `pnpm dev` and open `http://127.0.0.1:1420`. No certificate is needed.
+Both the gateway and frontend must use dev or CI stage for HTTP sign-in.
+Only numeric loopback (`127.0.0.1` or `[::1]`) permits HTTP/WS; `localhost`, LAN
+addresses, and alpha/prod stages do not. The server independently enforces this
+policy; a frontend stage setting cannot enable it on a production gateway.
+
+For HTTPS, start the current server build, then run the browser UI with a certificate your
+browser trusts (for example, a localhost certificate issued by your development CA):
+
+```sh
+NESSA_BROWSER_TLS_CERT=/absolute/localhost.pem \
+NESSA_BROWSER_TLS_KEY=/absolute/localhost-key.pem \
+pnpm exec vite --host 127.0.0.1 --port 1443
+```
+
+Open `https://127.0.0.1:1443`. The certificate must cover `127.0.0.1`. Vite forwards
+`/browser` HTTP and WebSocket requests to the local gateway on port 7420; set
+`NESSA_BROWSER_GATEWAY_URL` to target a different test gateway. The browser uses
+HTTPS/WSS on this URL, or HTTP/WS for loopback development; the proxy's upstream
+hop is local loopback HTTP. Native
+Tauri development retains its existing HTTP dev server. This does not add a
+remote gateway deployment or install a trusted CA automatically.
+
+Provision a dedicated browser surface token using the offline surface command
+above with `--surface-id nessa-browser --grants server.read,conversation.write`.
+Its token file is `auth/surfaces/nessa-browser.token` under the selected namespace.
+Provisioning is an offline command: follow the existing gateway-stop requirement.
+Enter that token once. Do not use the owner token for normal browser sessions.
+
+Browser endpoints require a trusted loopback Origin and a custom request header;
+the session is bound to the exact origin that signed in. No CORS access is enabled.
+Cookie authentication is accepted only on `/browser/session`; native `/session`
+continues to require explicit credential evidence. Sign-out closes all sockets
+using that browser session on the next state check, without cancelling agents.

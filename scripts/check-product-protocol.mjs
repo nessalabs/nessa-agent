@@ -12,6 +12,12 @@ const read = (name) =>
 const schema = read("v1.json")
 const manifest = read("manifest.json")
 const ajv = new Ajv2020({ allErrors: true, strict: false })
+ajv.addKeyword({
+  keyword: "x-utf8MaxBytes",
+  type: "string",
+  schemaType: "number",
+  validate: (limit, value) => Buffer.byteLength(value, "utf8") <= limit,
+})
 ajv.addSchema(schema)
 for (const name of [
   ...Object.values(manifest.methods),
@@ -34,6 +40,44 @@ for (const invalid of [
   if (validateAuth(invalid))
     throw new Error("Product auth schema accepts invalid fixture")
 }
+// Conversation command correlation and bounds are part of the product contract.
+const validateSend = ajv.getSchema(`${schema.$id}#/$defs/ConversationSendParams`)
+const send = read("fixtures.json").ConversationSendParams
+for (const invalid of [
+  { ...send, requestId: "" },
+  { ...send, requestId: "😀".repeat(65) },
+  { ...send, executionId: "" },
+  { ...send, text: "x".repeat(8193) },
+  { ...send, executionId: "😀".repeat(65) },
+  { ...send, text: "😀".repeat(2049) },
+  { ...send, principalId: "untrusted-caller" },
+]) {
+  if (validateSend(invalid))
+    throw new Error("Product conversation schema accepts invalid command")
+}
+for (const valid of [
+  { ...send, executionId: "😀".repeat(64) },
+  { ...send, requestId: "😀".repeat(64) },
+  { ...send, text: "😀".repeat(2048) },
+]) {
+  if (!validateSend(valid))
+    throw new Error(
+      `Product conversation schema rejects exact UTF-8 bound: ${JSON.stringify(validateSend.errors)}`,
+    )
+}
+const validateReorder = ajv.getSchema(`${schema.$id}#/$defs/ConversationReorderParams`)
+const reorder = read("fixtures.json").ConversationReorderParams
+for (const invalid of [
+  { ...reorder, executionIds: ["same", "same"] },
+  { ...reorder, executionIds: [""] },
+  { ...reorder, executionIds: Array.from({ length: 65 }, (_, i) => `e-${i}`) },
+  { ...reorder, requestId: "" },
+]) {
+  if (validateReorder(invalid))
+    throw new Error("Product reorder schema accepts invalid command")
+}
+if (!validateReorder({ ...reorder, executionIds: [] }))
+  throw new Error("Empty queue order must be valid")
 const result = spawnSync(
   process.execPath,
   ["scripts/generate-product-protocol.mjs", "--check"],

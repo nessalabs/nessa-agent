@@ -117,7 +117,7 @@ build inputs, not server security controls or runtime deployment secrets.
 Rust real-server fixture:
 
 ```sh
-NESSA_STAGE=ci NESSA_UPTIME_BACKEND=fixed NESSA_UPTIME_FIXED_MS=123 cargo run -p nessa-server
+NESSA_STAGE=ci NESSA_UPTIME_BACKEND=fixed NESSA_UPTIME_FIXED_MS=123 cargo run -p nessa-server -- server
 ```
 
 The default is `NESSA_UPTIME_BACKEND=monotonic`. Fixed uptime is dev/CI-only,

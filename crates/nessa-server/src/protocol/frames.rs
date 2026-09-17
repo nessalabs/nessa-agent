@@ -62,6 +62,16 @@ impl ResponseFrame {
 
     /// Failed RPC reply with a gateway error code and message.
     pub fn failure(request_id: &str, code: &str, message: &str) -> Self {
+        Self::failure_with_details(request_id, code, message, None)
+    }
+
+    /// Failed RPC reply with optional typed method-specific details.
+    pub fn failure_with_details(
+        request_id: &str,
+        code: &str,
+        message: &str,
+        details: Option<Value>,
+    ) -> Self {
         Self {
             kind: "res",
             id: request_id.to_string(),
@@ -70,7 +80,7 @@ impl ResponseFrame {
             error: Some(GatewayError {
                 code: code.to_string(),
                 message: message.to_string(),
-                details: None,
+                details,
             }),
         }
     }

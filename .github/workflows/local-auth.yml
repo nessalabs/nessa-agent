@@ -5,6 +5,56 @@ on:
     branches: [main]
   workflow_dispatch:
 jobs:
+  gateway-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: cargo fmt --all -- --check
+      - run: cargo test -p nessa-mcp
+      - run: cargo clippy -p nessa-mcp --all-targets -- -D warnings
+      - run: node scripts/check-architecture.mjs
+      # The official client and protocol checks do not require the desktop UI's
+      # separate repository. Install only their tooling in an isolated harness.
+      - name: Prepare gateway contract harness
+        shell: python
+        run: |
+          import json, pathlib, shutil
+          root = pathlib.Path('.ci-gateway')
+          root.mkdir()
+          shutil.copytree('packages/nessa-client', root / 'packages/nessa-client')
+          shutil.copytree('protocol', root / 'protocol')
+          shutil.copytree('scripts', root / 'scripts')
+          shutil.copytree('crates/nessa-server/src/protocol', root / 'crates/nessa-server/src/protocol')
+          product = root / 'crates/nessa-server/src/product'
+          product.mkdir(parents=True)
+          shutil.copy2('crates/nessa-server/src/product/generated.rs', product / 'generated.rs')
+          shutil.copy2('vitest.config.ts', root / 'vitest.config.ts')
+          shutil.copy2('prettier.config.js', root / 'prettier.config.js')
+          shutil.copy2('.prettierignore', root / '.prettierignore')
+          package = json.loads(pathlib.Path('package.json').read_text())
+          dependencies = {
+              name: package['devDependencies'][name].lstrip('^~')
+              for name in ['@types/node', '@types/ws', 'ajv', 'ajv-formats', 'json-schema-to-typescript', 'prettier', 'typescript', 'vitest', 'ws']
+          }
+          (root / 'package.json').write_text(json.dumps({'private': True, 'type': 'module', 'devDependencies': dependencies}))
+      - run: npm install --ignore-scripts
+        working-directory: .ci-gateway
+      - run: npm exec -- prettier --check packages/nessa-client scripts prettier.config.js
+        working-directory: .ci-gateway
+      - run: npm exec -- vitest run --config vitest.config.ts packages/nessa-client
+        working-directory: .ci-gateway
+      - run: npm exec -- tsc --noEmit -p packages/nessa-client/tsconfig.json
+        working-directory: .ci-gateway
+      - run: node scripts/check-protocol.mjs
+        working-directory: .ci-gateway
+      - run: node scripts/check-product-protocol.mjs
+        working-directory: .ci-gateway
   local-auth:
     strategy:
       fail-fast: false
@@ -45,7 +95,7 @@ jobs:
           shutil.copytree('scripts', root / 'scripts')
           target = root / 'target/debug'
           target.mkdir(parents=True)
-          binary = 'nessa-server.exe' if '${{ runner.os }}' == 'Windows' else 'nessa-server'
+          binary = 'nessa.exe' if '${{ runner.os }}' == 'Windows' else 'nessa'
           shutil.copy2(pathlib.Path('target/debug') / binary, target / binary)
           (root / 'package.json').write_text(json.dumps({'private': True, 'type': 'module', 'dependencies': {'tsx': '^4.20.0', 'ws': '^8.18.0', '@nessa/client': 'file:./packages/nessa-client'}}))
       - run: npm install --ignore-scripts
