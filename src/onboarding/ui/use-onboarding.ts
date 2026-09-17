@@ -14,6 +14,7 @@ import {
   dismissOnboarding,
   confirmSummon,
   isOnboarding,
+  pressSummon,
   startAgentChoice,
   type AgentId,
   type OnboardingState,
@@ -59,8 +60,7 @@ export interface Onboarding {
   finish: () => void
   /** Leave setup without finishing it. */
   dismiss: () => void
-  /** Move on from the summon step, for hosts where the shortcut never reaches
-   * this window. */
+  /** Move on from the summon step, once the shortcut has been pressed. */
   confirmSummon: () => void
 }
 
@@ -109,21 +109,33 @@ export function useOnboarding(initial?: OnboardingState): Onboarding {
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [])
 
-  // While setup is teaching the summon shortcut, pressing it moves on. The
-  // desktop host also holds this accelerator globally, so on that host the press
-  // may be taken by the global binding before the window sees it; the step still
-  // moves on from its button.
+  // While setup is teaching the summon shortcut, pressing it satisfies the
+  // step: the keys light up and the way on appears. It does not move on by
+  // itself, so the press is something a person sees land rather than a screen
+  // that vanishes under them.
   const practising = state.step === "summon"
   React.useEffect(() => {
     if (!practising || !keys) return
     function onKeyDown(event: KeyboardEvent) {
       if (event.repeat || !matchesAccelerator(event, keys)) return
       event.preventDefault()
-      setState(confirmSummon)
+      setState(pressSummon)
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [practising, keys])
+
+  // The desktop host registers this accelerator globally, so on that host the
+  // press can be taken before this window ever sees it — and a step that only
+  // opens to a press it cannot receive is a dead end. After long enough to have
+  // tried, setup opens the way on regardless. This goes away once the host
+  // forwards the summon it handled; until then it is the difference between
+  // waiting and being stuck.
+  React.useEffect(() => {
+    if (!practising) return
+    const timer = window.setTimeout(() => setState(pressSummon), 7000)
+    return () => window.clearTimeout(timer)
+  }, [practising])
 
   return {
     state,

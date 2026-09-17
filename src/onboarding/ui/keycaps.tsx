@@ -12,9 +12,13 @@ import { acceleratorKeys, formatAccelerator } from "../model/shortcut-display"
 export function Keycaps({
   keys,
   platform,
+  pressed = false,
 }: {
   keys: string
   platform: ShortcutPlatform
+  /** Whether the shortcut has been pressed. The caps light and stay lit, so
+   * the press is visibly what opened the way on. */
+  pressed?: boolean
 }) {
   const caps = acceleratorKeys(keys, platform)
   if (caps.length === 0) return null
@@ -29,6 +33,7 @@ export function Keycaps({
           // Caps repeat within a shortcut, so position is the only identity.
           key={`${cap}-${index}`}
           aria-hidden="true"
+          data-pressed={pressed || undefined}
           // Square at a single glyph and wider at a word, the way a keyboard
           // sizes its own caps.
           className="nessa-keycap flex h-14 min-w-14 items-center justify-center px-4 font-sans nessa-text-5 font-semibold"

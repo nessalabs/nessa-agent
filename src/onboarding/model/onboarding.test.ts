@@ -9,11 +9,17 @@ import {
   confirmSummon,
   dismissOnboarding,
   isOnboarding,
+  pressSummon,
   startAgentChoice,
 } from "./onboarding"
 
 function atSummon() {
   return confirmAgent(chooseAgent(startAgentChoice(beginOnboarding()), "claude"))
+}
+
+/** The summon step with the shortcut already pressed. */
+function summonPressed() {
+  return pressSummon(atSummon())
 }
 
 describe("first-run setup", () => {
@@ -31,7 +37,7 @@ describe("first-run setup", () => {
     expect(chosen.agent).toBe("claude")
     const summon = confirmAgent(chosen)
     expect(summon).toEqual({ step: "summon", agent: "claude" })
-    const ready = confirmSummon(summon)
+    const ready = confirmSummon(pressSummon(summon))
     expect(ready).toEqual({ step: "ready", agent: "claude" })
     expect(isOnboarding(ready)).toBe(true)
     expect(completeOnboarding(ready)).toEqual({ step: "done", agent: "claude" })
@@ -54,13 +60,13 @@ describe("first-run setup", () => {
     expect(completeOnboarding(welcome)).toBe(welcome)
     const chosen = chooseAgent(startAgentChoice(welcome), "claude")
     expect(completeOnboarding(chosen)).toBe(chosen)
-    expect(completeOnboarding(atSummon())).toEqual(atSummon())
+    expect(completeOnboarding(summonPressed())).toEqual(summonPressed())
   })
 
   it("ignores steps that do not apply to the current one", () => {
     const welcome = beginOnboarding()
     expect(chooseAgent(welcome, "claude")).toBe(welcome)
-    const done = completeOnboarding(confirmSummon(atSummon()))
+    const done = completeOnboarding(confirmSummon(summonPressed()))
     expect(startAgentChoice(done)).toBe(done)
     expect(chooseAgent(done, "claude")).toBe(done)
   })
@@ -73,14 +79,25 @@ describe("first-run setup", () => {
 })
 
 describe("learning the summon shortcut", () => {
-  it("moves on whether the shortcut or the button confirms it", () => {
-    expect(confirmSummon(atSummon())).toEqual({ step: "ready", agent: "claude" })
+  it("has no way on until the shortcut has been pressed", () => {
+    const summon = atSummon()
+    expect(summon.summoned).toBeUndefined()
+    expect(confirmSummon(summon)).toBe(summon)
+    const pressed = pressSummon(summon)
+    expect(pressed.summoned).toBe(true)
+    expect(confirmSummon(pressed)).toEqual({ step: "ready", agent: "claude" })
+  })
+
+  it("does not carry the press into the step after it", () => {
+    expect(confirmSummon(summonPressed())).not.toHaveProperty("summoned")
   })
 
   it("ignores presses outside the step that teaches it", () => {
     const welcome = beginOnboarding()
+    expect(pressSummon(welcome)).toBe(welcome)
     expect(confirmSummon(welcome)).toBe(welcome)
-    const ready = confirmSummon(atSummon())
+    const ready = confirmSummon(summonPressed())
+    expect(pressSummon(ready)).toBe(ready)
     expect(confirmSummon(ready)).toBe(ready)
   })
 })
@@ -94,7 +111,7 @@ describe("leaving setup without finishing it", () => {
   })
 
   it("leaves a finished setup alone", () => {
-    const done = completeOnboarding(confirmSummon(atSummon()))
+    const done = completeOnboarding(confirmSummon(summonPressed()))
     expect(done.step).toBe("done")
     expect(dismissOnboarding(done)).toBe(done)
   })

@@ -63,6 +63,32 @@ function SetupPanel({ children }: { children: React.ReactNode }) {
   )
 }
 
+/**
+ * A step that is a line and a way on.
+ *
+ * The heading is centred in the box and the action is anchored to the bottom
+ * of it, rather than the heading being centred in whatever is left above the
+ * action. Otherwise a step whose action has not appeared yet — the summon step
+ * before the shortcut is pressed — hangs its heading too high, and the heading
+ * jumps when the action arrives.
+ */
+function SetupStep({
+  children,
+  action,
+}: {
+  children: React.ReactNode
+  action?: React.ReactNode
+}) {
+  return (
+    <div className="relative size-full min-h-0">
+      <div className="flex size-full flex-col items-center justify-center gap-7 px-6 pb-20 text-center">
+        {children}
+      </div>
+      <div className="absolute inset-x-0 bottom-10 flex justify-center">{action}</div>
+    </div>
+  )
+}
+
 /** One selectable agent: its mark, its name, and whether it can run yet. An
  * agent no provider can run is disabled and says so, rather than being offered
  * and failing later. */
@@ -130,8 +156,7 @@ export function Onboarding({
   summon?: string
   /** The keyboard conventions this device writes shortcuts in. */
   platform: ShortcutPlatform
-  /** Move on from the summon step, for hosts where the shortcut never reaches
-   * this window. */
+  /** Move on from the summon step, once the shortcut has been pressed. */
   onConfirmSummon: () => void
   onBegin: () => void
   onChoose: (id: AgentId) => void
@@ -141,16 +166,17 @@ export function Onboarding({
   if (state.step === "welcome") {
     return (
       <SetupStage>
-        <div className="flex size-full min-h-0 flex-col items-center justify-end gap-9 pb-14 text-center">
-          <div className="flex flex-1 items-center">
-            <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white drop-shadow-[0_1px_16px_rgba(0,0,0,0.35)]">
-              Welcome to Nessa
-            </h1>
-          </div>
-          <Button size="lg" className={PILL} onClick={onBegin}>
-            Get started
-          </Button>
-        </div>
+        <SetupStep
+          action={
+            <Button size="lg" className={PILL} onClick={onBegin}>
+              Get started
+            </Button>
+          }
+        >
+          <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white drop-shadow-[0_1px_16px_rgba(0,0,0,0.35)]">
+            Welcome to Nessa
+          </h1>
+        </SetupStep>
       </SetupStage>
     )
   }
@@ -158,17 +184,26 @@ export function Onboarding({
   if (state.step === "summon") {
     return (
       <SetupStage>
-        <div className="flex size-full min-h-0 flex-col items-center justify-end gap-9 pb-14 text-center">
-          <div className="flex flex-1 flex-col items-center justify-center gap-7 px-4">
-            <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white drop-shadow-[0_1px_16px_rgba(0,0,0,0.35)]">
-              {summon ? "Summon it from anywhere" : "Set a summon shortcut"}
-            </h1>
-            {summon ? <Keycaps keys={summon} platform={platform} /> : null}
-          </div>
-          <Button size="lg" className={PILL} onClick={onConfirmSummon}>
-            Continue
-          </Button>
-        </div>
+        {/* This step asks for a press, so there is nothing to confirm until one
+          lands. Offering the way on beforehand invites a click straight past
+          the only thing the step is here to teach — and the button arriving
+          *because* the keys lit is what says the press worked. */}
+        <SetupStep
+          action={
+            state.summoned ? (
+              <Button size="lg" className={PILL} onClick={onConfirmSummon}>
+                Continue
+              </Button>
+            ) : null
+          }
+        >
+          <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white drop-shadow-[0_1px_16px_rgba(0,0,0,0.35)]">
+            {summon ? "Summon it from anywhere" : "Set a summon shortcut"}
+          </h1>
+          {summon ? (
+            <Keycaps keys={summon} platform={platform} pressed={state.summoned} />
+          ) : null}
+        </SetupStep>
       </SetupStage>
     )
   }
@@ -176,16 +211,17 @@ export function Onboarding({
   if (state.step === "ready") {
     return (
       <SetupStage>
-        <div className="flex size-full min-h-0 flex-col items-center justify-end gap-9 pb-14 text-center">
-          <div className="flex flex-1 items-center px-6">
-            <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white drop-shadow-[0_1px_16px_rgba(0,0,0,0.35)]">
-              You&rsquo;re all set
-            </h1>
-          </div>
-          <Button size="lg" className={PILL} onClick={onFinish}>
-            Start using Nessa
-          </Button>
-        </div>
+        <SetupStep
+          action={
+            <Button size="lg" className={PILL} onClick={onFinish}>
+              Start using Nessa
+            </Button>
+          }
+        >
+          <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white drop-shadow-[0_1px_16px_rgba(0,0,0,0.35)]">
+            You&rsquo;re all set
+          </h1>
+        </SetupStep>
       </SetupStage>
     )
   }

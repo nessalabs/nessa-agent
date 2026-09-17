@@ -46,6 +46,12 @@ export interface OnboardingState {
   step: OnboardingStep
   /** The agent picked so far, if any. Never an unavailable one. */
   agent?: AgentId
+  /**
+   * Whether the summon step has been satisfied — the shortcut has been pressed
+   * and setup saw it. The step has nothing to confirm until then: it is asking
+   * for a press, not for agreement, so there is no way on until one arrives.
+   */
+  summoned?: boolean
 }
 
 /** The state a panel with no completed setup starts from. */
@@ -78,11 +84,20 @@ export function confirmAgent(state: OnboardingState): OnboardingState {
   return state.agent ? { ...state, step: "summon" } : state
 }
 
-/** Move on from the summon step, whether the person pressed the shortcut or
- * the button. Presses outside that step are somebody using their shortcut, not
- * setup, and change nothing. */
+/** Record that the summon shortcut was pressed while setup was teaching it.
+ * Presses outside that step are somebody using their shortcut, not setup, and
+ * change nothing. */
+export function pressSummon(state: OnboardingState): OnboardingState {
+  return state.step === "summon" ? { ...state, summoned: true } : state
+}
+
+/** Move on from the summon step, which only a step that has been satisfied can
+ * do: until the shortcut has been pressed there is nothing to confirm. The
+ * flag does not travel to the next step — it is about the step, not the
+ * setup. */
 export function confirmSummon(state: OnboardingState): OnboardingState {
-  return state.step === "summon" ? { ...state, step: "ready" } : state
+  if (state.step !== "summon" || !state.summoned) return state
+  return { step: "ready", agent: state.agent }
 }
 
 /** Leave setup without finishing it, from any step. Nothing is recorded: an
