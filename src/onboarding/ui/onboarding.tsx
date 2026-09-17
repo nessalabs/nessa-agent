@@ -10,6 +10,7 @@ import {
   morphingMeshGradientPresets,
 } from "@nessa-ui/react/morphing-mesh-gradient"
 import { AGENT_CHOICES, type AgentId, type OnboardingState } from "../model/onboarding"
+import { revealChunks } from "../model/reveal-text"
 
 /** Setup's primary action, sized the same on every step. */
 const PILL =
@@ -79,29 +80,31 @@ function summonHeading(summon: OnboardingState["summon"], configured: boolean) {
 }
 
 /**
- * A heading that resolves one word at a time.
+ * A heading that resolves a few letters at a time.
  *
- * Words are the unit because they are the unit of reading: a line that
- * resolves whole is a thing appearing, and a line that resolves word by word
- * is a thing being said. Each word carries its own place in the order, and the
- * stylesheet turns that into a delay, so the stagger is one number in one file
- * rather than a value threaded through the markup.
+ * Whole words arrive in too few, too large steps to read as a line being said.
+ * A couple of characters at a time is continuous — and because each piece
+ * takes far longer to resolve than the gap between its neighbours, what is
+ * seen is one movement crossing the line rather than pieces arriving in turn.
  *
- * The shadow that keeps white type legible moves to the words for the same
+ * Each piece carries its place in the order and the stylesheet turns that into
+ * a delay, so the pace of the line is one number in one file.
+ *
+ * The shadow that keeps white type legible moves to the pieces for the same
  * reason it exists at all — it has to be on whatever is actually being
  * filtered, or the animation replaces it.
  */
 function SetupHeading({ children }: { children: string }) {
   return (
     <h1 data-words className="nessa-setup-title font-semibold text-white">
-      {children.split(" ").map((word, index) => (
+      {revealChunks(children).map((chunk, index) => (
         <span
-          // Words repeat within a line, so position is the only identity.
-          key={`${word}-${index}`}
+          // Chunks repeat within a line, so position is the only identity.
+          key={`${chunk}-${index}`}
           className="nessa-setup-word"
           style={{ "--nessa-word": index } as React.CSSProperties}
         >
-          {word}
+          {chunk}
         </span>
       ))}
     </h1>
@@ -218,9 +221,13 @@ export function Onboarding({
               size="lg"
               className={PILL}
               onClick={onBegin}
-              // After the last word, so the line finishes being said before it
-              // is handed a thing to do.
-              style={{ "--nessa-word": 3 } as React.CSSProperties}
+              // After the last of the line, so the sentence finishes being
+              // said before anything is asked.
+              style={
+                {
+                  "--nessa-word": revealChunks("Welcome to Nessa").length,
+                } as React.CSSProperties
+              }
             >
               Get started
             </Button>

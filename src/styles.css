@@ -661,26 +661,33 @@ body {
    */
   will-change: opacity, scale, filter;
   animation-name: nessa-setup-focus;
-  animation-duration: 800ms;
+  animation-duration: 900ms;
   animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
   animation-fill-mode: both;
-  animation-delay: calc(var(--nessa-reveal-content) + var(--nessa-word, 0) * 110ms);
+  /* Far shorter than the duration above, so each piece is still resolving
+     when the next begins: what is seen is one movement crossing the line
+     rather than pieces arriving one after another. */
+  animation-delay: calc(var(--nessa-reveal-content) + var(--nessa-word, 0) * 42ms);
 }
 
-/* A word has to be its own box to be scaled and blurred; inline boxes cannot
-   be. The line is laid out as a row so the gaps stay the gaps between words
-   and centring stays exact whatever the words are. */
 .nessa-setup-title[data-words] {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  column-gap: 0.28em;
-  /* The shadow moves to the words, which are what is filtered. */
+  /* The shadow moves to the pieces, which are what is filtered. */
   filter: none;
 }
 
+/*
+ * A piece has to be its own box to be scaled and blurred, since inline boxes
+ * cannot be. It keeps its own whitespace: the split falls wherever it falls,
+ * and a piece beginning with a space has to still be a space wide, or the line
+ * closes up as it resolves.
+ *
+ * The pieces are laid out as ordinary inline boxes, not as flex children. A
+ * row with a gap puts that gap between every piece, which spaces out the
+ * inside of the words themselves.
+ */
 .nessa-setup-word {
   display: inline-block;
+  white-space: pre;
   filter: var(--nessa-focus-shadow,);
 }
 
@@ -703,8 +710,11 @@ body {
 @keyframes nessa-setup-focus {
   from {
     opacity: 0;
-    scale: 1.06;
-    filter: blur(10px) var(--nessa-focus-shadow,);
+    /* Neighbouring pieces differ less than whole words did; a large delta
+       across a line resolving in pieces reads as a ripple of mismatched
+       sizes rather than as one thing coming into focus. */
+    scale: 1.03;
+    filter: blur(8px) var(--nessa-focus-shadow,);
   }
   /* Legible before it has finished settling, so the last of the movement is
      something you watch rather than something you wait for. */
