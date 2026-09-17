@@ -29,10 +29,13 @@ async fn slow_consumer_hits_shared_byte_budget_and_still_audits_and_cleans_up() 
         // Keep the event consumer alive without reading its large messages. Byte
         // exhaustion, not the 4096-slot count or consumer loss, must end execution.
         // The fixture must decode more than the fixed 32 MiB queue budget to
-        // exercise this boundary. Debug builds can take longer than ten seconds
-        // to move that payload through the real child-process transport, so keep
-        // the timeout as a deadlock guard rather than a throughput assertion.
-        let failure = timeout(Duration::from_secs(30), active)
+        // exercise this boundary, which an idle debug build moves through the real
+        // child-process transport in about ten seconds per pass. This bound is a
+        // deadlock guard, never a throughput assertion, so it is sized far above
+        // that cost: a host running the rest of this suite alongside it has been
+        // measured at three times the idle figure, and exceeding the bound must
+        // mean nothing is moving at all.
+        let failure = timeout(Duration::from_secs(180), active)
             .await
             .unwrap()
             .unwrap()

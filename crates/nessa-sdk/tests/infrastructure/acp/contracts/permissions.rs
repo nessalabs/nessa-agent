@@ -437,7 +437,16 @@ async fn provider_error_cannot_hide_a_failed_cancellation_audit() {
         reject: true,
         ..Default::default()
     });
-    let (root, binding) = test_acp_binding_with_audit("permission-provider-error", 16, audit);
+    // This check is about a provider error not hiding a failed cancellation
+    // audit, so the child must be reaped inside its budget rather than adding
+    // honest uncertain-cleanup evidence to the failure being asserted. The
+    // shared fixture's two-second budget has been measured close to the time a
+    // busy host needs, and it stays short there because other checks escalate
+    // against a stop-resistant child. Widen it only here.
+    let (root, mut config, model) = test_acp_configuration("permission-provider-error", 16);
+    config.kill_timeout = Duration::from_secs(30);
+    let binding =
+        ClaudeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit).unwrap();
     let mut opened = binding.open(None).await.unwrap();
     let active = start(&opened, "write").await;
     next(&mut opened).await;
