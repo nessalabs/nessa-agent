@@ -90,12 +90,17 @@ pub fn open_setup_window(app: AppHandle) {
             }
         }
     }
-    // The dim's whole purpose was to reach this moment, and it is nearly
-    // transparent by now. Closing it from here rather than letting it close
-    // itself means the light cannot outlive the thing it turned into — which
-    // it did, permanently, the first time the dim could not close itself.
+    // The dim's whole purpose was to reach this moment. It is hidden from here
+    // rather than left to remove itself, because a window covering the screen
+    // must not be the only thing responsible for getting off it — that is how
+    // a light ended up sitting over the desktop permanently.
+    //
+    // Hidden rather than closed: the chime that accompanies the opening is
+    // longer than the opening, and closing the window would cut it off. It
+    // closes itself once the sound is done, which by then is housekeeping
+    // rather than anything anyone can see.
     if let Some(dim) = app.get_webview_window(SETUP_DIM_WINDOW) {
-        let _ = dim.close();
+        let _ = dim.hide();
     }
 }
 

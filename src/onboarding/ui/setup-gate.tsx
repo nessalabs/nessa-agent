@@ -1,7 +1,6 @@
 import * as React from "react"
 import { finishSetupWindow } from "../../host"
 import { Onboarding } from "./onboarding"
-import { useIntroSound } from "./use-intro-sound"
 import { useOnboarding } from "./use-onboarding"
 
 /**
@@ -16,8 +15,6 @@ import { useOnboarding } from "./use-onboarding"
 export function SetupGate({ children }: { children: React.ReactNode }) {
   const onboarding = useOnboarding()
   const [handedOver, setHandedOver] = React.useState(false)
-
-  useIntroSound(onboarding.active)
 
   React.useEffect(() => {
     if (onboarding.active || handedOver) return
