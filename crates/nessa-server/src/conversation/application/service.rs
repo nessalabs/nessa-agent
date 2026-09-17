@@ -200,10 +200,12 @@ impl ConversationService {
                     return Err(ConversationError::NotFound);
                 }
                 drop(creation_guard);
-                // Opening reconciles the original creation audit from stored
-                // creator evidence, so this reopen is recorded after the
-                // creation it repeats, never instead of it.
-                service.resolve(&id, &caller).await?;
+                // Acknowledge the original creation from its stored creator
+                // evidence before attributing this reopen to its caller, and
+                // before any provider opening. An unavailable audit sink
+                // therefore refuses the reopen instead of leaving an opened
+                // conversation with no record of who reopened it.
+                service.reconcile_creation_audit(&record).await?;
                 if caller.action_id != record.creation_action() {
                     service
                         .inner
@@ -224,6 +226,7 @@ impl ConversationService {
                         .await
                         .map_err(|_| ConversationError::Audit)?;
                 }
+                service.resolve(&id, &caller).await?;
                 return Ok(());
             }
             {
@@ -241,6 +244,29 @@ impl ConversationService {
             let record = &outcome.conversation;
             if !record.allows(&caller.organization_id, &caller.principal_id) {
                 return Err(ConversationError::NotFound);
+            }
+            service.reconcile_creation_audit(record).await?;
+            if outcome.disposition == super::ConversationCreationDisposition::Existing
+                && caller.action_id != record.creation_action()
+            {
+                service
+                    .inner
+                    .creation_audit
+                    .record(super::ConversationCreationAuditRecord {
+                        conversation_id: record.id().clone(),
+                        organization_id: record.organization().clone(),
+                        owner_id: record.owner().clone(),
+                        before: super::ConversationOwnershipState::Owned,
+                        after: super::ConversationOwnershipState::Owned,
+                        cause: super::ConversationCreationCause::IdempotentReopen,
+                        initiator_principal_id: caller.principal_id.clone(),
+                        initiator_surface_id: caller.surface_id.clone(),
+                        correlation_id: caller.action_id.clone(),
+                        requested_at_ms,
+                        observed_at_ms: service.inner.clock.unix_milliseconds(),
+                    })
+                    .await
+                    .map_err(|_| ConversationError::Audit)?;
             }
             let slot = {
                 let mut owners = service.inner.conversations.lock().await;
@@ -268,31 +294,36 @@ impl ConversationService {
             };
             drop(creation_guard);
             service.open_slot(&id, slot).await?;
-            if outcome.disposition == super::ConversationCreationDisposition::Existing
-                && caller.action_id != record.creation_action()
-            {
-                service
-                    .inner
-                    .creation_audit
-                    .record(super::ConversationCreationAuditRecord {
-                        conversation_id: record.id().clone(),
-                        organization_id: record.organization().clone(),
-                        owner_id: record.owner().clone(),
-                        before: super::ConversationOwnershipState::Owned,
-                        after: super::ConversationOwnershipState::Owned,
-                        cause: super::ConversationCreationCause::IdempotentReopen,
-                        initiator_principal_id: caller.principal_id.clone(),
-                        initiator_surface_id: caller.surface_id.clone(),
-                        correlation_id: caller.action_id.clone(),
-                        requested_at_ms,
-                        observed_at_ms: service.inner.clock.unix_milliseconds(),
-                    })
-                    .await
-                    .map_err(|_| ConversationError::Audit)?;
-            }
             Ok(())
         })
         .await
+    }
+    /// Acknowledge the original creation from stored creator evidence.
+    ///
+    /// Caller-requested creation records are idempotent by conversation
+    /// identity, so every entry point can reconcile the same evidence before it
+    /// opens a provider without inventing a second creation.
+    async fn reconcile_creation_audit(
+        &self,
+        record: &Conversation,
+    ) -> Result<(), ConversationError> {
+        self.inner
+            .creation_audit
+            .record(super::ConversationCreationAuditRecord {
+                conversation_id: record.id().clone(),
+                organization_id: record.organization().clone(),
+                owner_id: record.owner().clone(),
+                before: super::ConversationOwnershipState::Absent,
+                after: super::ConversationOwnershipState::Owned,
+                cause: super::ConversationCreationCause::CallerRequested,
+                initiator_principal_id: record.owner().clone(),
+                initiator_surface_id: record.creator_surface().to_owned(),
+                correlation_id: record.creation_action().to_owned(),
+                requested_at_ms: record.creation_requested_at_ms(),
+                observed_at_ms: self.inner.clock.unix_milliseconds(),
+            })
+            .await
+            .map_err(|_| ConversationError::Audit)
     }
     async fn resolve(
         &self,
@@ -367,24 +398,10 @@ impl ConversationService {
                                     retryable: false,
                                 })?;
                             service
-                                .inner
-                                .creation_audit
-                                .record(super::ConversationCreationAuditRecord {
-                                    conversation_id: record.id().clone(),
-                                    organization_id: record.organization().clone(),
-                                    owner_id: record.owner().clone(),
-                                    before: super::ConversationOwnershipState::Absent,
-                                    after: super::ConversationOwnershipState::Owned,
-                                    cause: super::ConversationCreationCause::CallerRequested,
-                                    initiator_principal_id: record.owner().clone(),
-                                    initiator_surface_id: record.creator_surface().to_owned(),
-                                    correlation_id: record.creation_action().to_owned(),
-                                    requested_at_ms: record.creation_requested_at_ms(),
-                                    observed_at_ms: service.inner.clock.unix_milliseconds(),
-                                })
+                                .reconcile_creation_audit(&record)
                                 .await
-                                .map_err(|_| OpeningFailure {
-                                    cause: ConversationError::Audit,
+                                .map_err(|cause| OpeningFailure {
+                                    cause,
                                     _cleanup: None,
                                     retryable: true,
                                 })?;

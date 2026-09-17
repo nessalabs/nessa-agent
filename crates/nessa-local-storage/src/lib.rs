@@ -15,9 +15,13 @@ mod windows;
 use windows as platform;
 
 pub use platform::{
-    create_directory, create_directory_beneath, open, open_beneath, publish_new, replace,
-    replace_beneath, sync_directory, sync_directory_beneath, verify_directory, verify_file,
+    create_directory, create_directory_beneath, open, open_beneath, replace, replace_beneath,
+    sync_directory, sync_directory_beneath, verify_directory, verify_file,
 };
+// Publication post-conditions differ by platform: the Unix link leaves the
+// writer's own name behind until it is released. Only `PrivateTempFile::publish`
+// knows how to complete that, so it stays the single entry point.
+pub(crate) use platform::publish_new;
 
 const TEMPORARY_PREFIX: &str = ".nessa-";
 const TEMPORARY_SUFFIX: &str = ".tmp";
@@ -108,13 +112,22 @@ impl PrivateTempFile {
     /// Publish this file under `destination` only if that name is still unused.
     ///
     /// Returns `AlreadyExists` when another owner already published there,
-    /// leaving that record untouched. This temporary name is released before
-    /// the call returns, so the published file ends with a single link.
+    /// leaving that record untouched. Success means this temporary name has
+    /// also been released, so the published file has a single link and passes
+    /// private-file verification; a failure to release it is reported rather
+    /// than discarded, and [`Self::clear_stale`] repairs it.
     ///
     /// # Errors
-    /// Any platform publication failure, including a taken destination.
+    /// Any platform publication failure, including a taken destination, and any
+    /// failure to release this temporary name afterwards.
     pub fn publish(self, destination: &Path) -> io::Result<()> {
-        publish_new(&self.path, destination)
+        publish_new(&self.path, destination)?;
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => Ok(()),
+            // A move already consumed this name; a link did not.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
     }
     /// Remove temporary files an interrupted publish left in `directory`.
     ///

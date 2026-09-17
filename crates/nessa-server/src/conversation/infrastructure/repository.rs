@@ -37,7 +37,14 @@ impl LocalConversationRepository {
     /// is readable again instead of keeping a second link forever.
     pub fn new(root: PathBuf) -> Result<Self, ConversationError> {
         storage::create_directory(&root).map_err(|_| ConversationError::Metadata)?;
-        PrivateTempFile::clear_stale(&root).map_err(|_| ConversationError::Metadata)?;
+        PrivateTempFile::clear_stale(&root).map_err(|error| {
+            tracing::error!(
+                directory = %root.display(),
+                %error,
+                "conversation metadata temporaries could not be released"
+            );
+            ConversationError::Metadata
+        })?;
         Ok(Self {
             root,
             writes: Arc::new(Mutex::new(())),

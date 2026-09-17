@@ -237,20 +237,31 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
 
 struct GatedCreationAudit {
     reject: AtomicBool,
+    reject_reopen: AtomicBool,
+    attempts: AtomicUsize,
     records: Mutex<Vec<ConversationCreationAuditRecord>>,
 }
 impl ConversationCreationAudit for GatedCreationAudit {
     fn record(&self, record: ConversationCreationAuditRecord) -> ConversationFuture<'_, ()> {
         Box::pin(async move {
-            let reject = self.reject.load(Ordering::SeqCst);
-            if !reject {
-                self.records.lock().unwrap().push(record);
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            let reopen = record.cause == super::ConversationCreationCause::IdempotentReopen;
+            if self.reject.load(Ordering::SeqCst)
+                || (reopen && self.reject_reopen.load(Ordering::SeqCst))
+            {
+                return Err(ConversationError::Audit);
             }
-            if reject {
-                Err(ConversationError::Audit)
-            } else {
-                Ok(())
+            // Caller-requested creation records are idempotent by conversation
+            // identity; keep one so repeats are visible as repeats.
+            let mut records = self.records.lock().unwrap();
+            if !records.iter().any(|existing| {
+                existing.conversation_id == record.conversation_id
+                    && existing.cause == record.cause
+                    && existing.correlation_id == record.correlation_id
+            }) {
+                records.push(record);
             }
+            Ok(())
         })
     }
 }
@@ -260,6 +271,8 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
     let (_, provider, repository, storage) = fixture(ConversationLimits::default());
     let audit = Arc::new(GatedCreationAudit {
         reject: AtomicBool::new(true),
+        reject_reopen: AtomicBool::new(false),
+        attempts: AtomicUsize::new(0),
         records: Mutex::new(Vec::new()),
     });
     let service = ConversationService::new(
@@ -299,8 +312,20 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
             .await,
         Err(ConversationError::Audit)
     ));
+    assert!(matches!(
+        service
+            .reorder(
+                id.clone(),
+                caller("panel", "reorder-1"),
+                vec!["send-1".into()],
+            )
+            .await,
+        Err(ConversationError::Audit)
+    ));
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
     assert!(provider.executions.lock().unwrap().is_empty());
+    // Each refused entry point attempted the gate; none of them accepted it.
+    assert_eq!(audit.attempts.load(Ordering::SeqCst), 4);
     assert!(audit.records.lock().unwrap().is_empty());
 
     audit.reject.store(false, Ordering::SeqCst);
@@ -334,6 +359,84 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
     assert_eq!(records[0].before, ConversationOwnershipState::Absent);
     assert_eq!(records[0].after, ConversationOwnershipState::Owned);
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let audit = Arc::new(GatedCreationAudit {
+        reject: AtomicBool::new(false),
+        reject_reopen: AtomicBool::new(false),
+        attempts: AtomicUsize::new(0),
+        records: Mutex::new(Vec::new()),
+    });
+    let service = ConversationService::new(
+        Arc::new(Provider(provider.clone())),
+        storage,
+        repository.clone(),
+        audit.clone(),
+        Arc::new(TestClock),
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = id();
+    service
+        .create(id.clone(), caller("panel", "create-1"))
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    service.shutdown().await.unwrap();
+
+    // A fresh owner map, so the next create must open the provider again.
+    let service = ConversationService::new(
+        Arc::new(Provider(provider.clone())),
+        Arc::new(InMemoryStorage::new()),
+        repository,
+        audit.clone(),
+        Arc::new(TestClock),
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    // The original creation stays acknowledged; only this caller's reopen
+    // attribution is refused.
+    audit.reject_reopen.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        service
+            .create(id.clone(), caller("phone", "create-2"))
+            .await,
+        Err(ConversationError::Audit)
+    ));
+    // The reopen is attributed before its effect, so a refused attribution
+    // leaves no reopened conversation behind.
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+
+    audit.reject_reopen.store(false, Ordering::SeqCst);
+    service
+        .create(id, caller("phone", "create-3"))
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
+    let records = audit.records.lock().unwrap().clone();
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| (record.cause, record.correlation_id.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                super::ConversationCreationCause::CallerRequested,
+                "create-1"
+            ),
+            (
+                super::ConversationCreationCause::IdempotentReopen,
+                "create-3"
+            ),
+        ]
+    );
+    drop(records);
     service.shutdown().await.unwrap();
 }
 
