@@ -131,6 +131,8 @@ async fn renewal_crosses_original_deadline_and_restart_then_logout_is_durable() 
     drop(store);
     let store = PersistentSessions::open(&path).unwrap();
     assert!(store.get(id).await.unwrap().is_none());
+    // Durable bytes are inspected only after releasing exclusive journal ownership.
+    drop(store);
     let records = std::fs::read_to_string(path).unwrap();
     let last: StoredRecord = serde_json::from_str(records.lines().last().unwrap()).unwrap();
     assert!(matches!(last.changes[0].reason, Reason::SignOut));
@@ -269,6 +271,8 @@ async fn abandoned_replacement_restores_prior_session_in_one_durable_audit_recor
     let store = PersistentSessions::open(&path).unwrap();
     assert!(store.get(prior_id).await.unwrap().is_some());
     assert!(store.get(replacement_id).await.unwrap().is_none());
+    // Durable bytes are inspected only after releasing exclusive journal ownership.
+    drop(store);
     let records = std::fs::read_to_string(path).unwrap();
     let record: StoredRecord = serde_json::from_str(records.lines().last().unwrap()).unwrap();
     assert_eq!(record.changes.len(), 2);
@@ -530,6 +534,8 @@ async fn expiry_and_failed_audit_writes_never_report_success_or_resurrect_sessio
         .renew(id.clone(), 100 + IDLE_SECONDS, credential_id())
         .await
         .is_err());
+    // Durable bytes are inspected only after releasing exclusive journal ownership.
+    drop(store);
     let record: StoredRecord = serde_json::from_str(
         std::fs::read_to_string(&path)
             .unwrap()
@@ -540,7 +546,6 @@ async fn expiry_and_failed_audit_writes_never_report_success_or_resurrect_sessio
     .unwrap();
     assert!(matches!(record.changes[0].reason, Reason::IdleExpired));
     assert!(record.changes[0].initiator.is_none());
-    drop(store);
     for operation in ["insert", "renew", "remove"] {
         let path = dir.path().join(format!("{operation}.jsonl"));
         let store = PersistentSessions::open(&path).unwrap();
@@ -653,6 +658,8 @@ async fn every_automatic_invalidation_retains_its_typed_cause_without_an_initiat
             .remove(id, 101, invalidation_reason(error).unwrap(), None)
             .await
             .unwrap();
+        // Durable bytes are inspected only after releasing exclusive journal ownership.
+        drop(store);
         let record: StoredRecord = serde_json::from_str(
             std::fs::read_to_string(path)
                 .unwrap()
