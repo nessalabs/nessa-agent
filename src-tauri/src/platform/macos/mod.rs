@@ -1,5 +1,6 @@
 //! macOS host: accessory app, native frost, WKWebView pin, AppKit live resize.
 
+mod credentials;
 mod live_resize;
 mod overlay;
 mod vibrancy;
@@ -29,6 +30,10 @@ impl Host for Macos {
 
     fn set_above_overlay(&self, window: &WebviewWindow, above: bool) {
         overlay::set_above_overlay(window, above)
+    }
+
+    fn has_stored_credential(&self, service: &str) -> bool {
+        credentials::has_stored_credential(service)
     }
 
     fn set_frosted(&self, window: &WebviewWindow, frosted: bool) -> Result<(), String> {

@@ -225,3 +225,17 @@ export async function loadAssignedSurfaceCredential(stage: string): Promise<stri
     )
   }
 }
+
+/**
+ * Ask each agent's runtime whether it can run: installed, and signed in.
+ *
+ * A browser has no runtimes to ask and reports nothing, which reads as "not
+ * available" — the safe direction, since the alternative is offering an agent
+ * that cannot run and failing later, somewhere the person cannot connect back
+ * to the choice they made.
+ */
+export async function loadAgentsReadiness(): Promise<Record<string, string> | undefined> {
+  if (!inTauri) return undefined
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<Record<string, string>>("agents_readiness")
+}

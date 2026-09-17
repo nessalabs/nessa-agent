@@ -5,7 +5,7 @@ import { host } from "../../host"
 import { matchesAccelerator } from "../../host/accelerator"
 import { playCue } from "./sound"
 import type { ShortcutPlatform } from "../model/shortcut-display"
-import { loadShortcuts, onSummoned } from "../../host/window"
+import { loadAgentsReadiness, loadShortcuts, onSummoned } from "../../host/window"
 import { summonAccelerator } from "../model/shortcut-display"
 import {
   beginOnboarding,
@@ -15,6 +15,9 @@ import {
   dismissOnboarding,
   isOnboarding,
   pressSummon,
+  recordReadiness,
+  type AgentReadiness,
+  type AgentReadinessReport,
   startAgentChoice,
   type AgentId,
   type OnboardingState,
@@ -39,6 +42,16 @@ function shortcutPlatform(): ShortcutPlatform {
   if (/mac|iphone|ipad|ipod/i.test(agent)) return "apple"
   if (/linux|x11|cros/i.test(agent)) return "linux"
   return "windows"
+}
+
+/** The host answers with plain strings; anything this build does not know is
+ * treated as unavailable rather than trusted. */
+function asReport(reported: Record<string, string>): AgentReadinessReport {
+  const known = (value: string | undefined): AgentReadiness | undefined =>
+    value === "ready" || value === "needs-authentication" || value === "unavailable"
+      ? value
+      : undefined
+  return { claude: known(reported.claude), codex: known(reported.codex) }
 }
 
 /** What the panel needs to paint first-run setup and move through it. */
@@ -84,6 +97,20 @@ export function useOnboarding(initial?: OnboardingState): Onboarding {
     let cancelled = false
     void loadShortcuts().then((loaded) => {
       if (!cancelled && loaded) setShortcuts(loaded)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // What each agent's runtime reports, asked once when setup opens. Nothing is
+  // offered until the answer arrives: an agent is not choosable on the strength
+  // of not having been asked about.
+  React.useEffect(() => {
+    let cancelled = false
+    void loadAgentsReadiness().then((reported) => {
+      if (cancelled || !reported) return
+      setState((current) => recordReadiness(current, asReport(reported)))
     })
     return () => {
       cancelled = true

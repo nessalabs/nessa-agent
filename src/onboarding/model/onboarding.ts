@@ -10,13 +10,27 @@
 /** An agent Nessa can be set up against. */
 export type AgentId = "claude" | "codex"
 
-/** What the panel knows about one selectable agent. */
+/**
+ * What stands between an agent and running, as its runtime reports it.
+ *
+ * Only `ready` may be chosen. The other two are shown rather than hidden,
+ * because an agent missing from the list is a question — "where is Claude?" —
+ * and an agent listed with a reason is an answer.
+ */
+export type AgentReadiness = "ready" | "needs-authentication" | "unavailable"
+
+/** What each agent's runtime reports. Absent for an agent not yet asked about. */
+export type AgentReadinessReport = Readonly<Partial<Record<AgentId, AgentReadiness>>>
+
+/** What the panel knows about one listed agent. */
 export interface AgentChoice {
   id: AgentId
   /** Product name, as a person would say it. */
   name: string
-  /** False while no provider adapter can run this agent yet. */
-  available: boolean
+  /** False while Nessa has no adapter for this agent at all, whatever is
+   * installed. That is a different thing from an adapter that cannot run yet,
+   * and it is the only one that will not change by signing in. */
+  supported: boolean
 }
 
 /** The agents offered at first run, in presentation order.
@@ -29,12 +43,12 @@ export const AGENT_CHOICES: readonly AgentChoice[] = Object.freeze([
   Object.freeze({
     id: "claude" as const,
     name: "Claude",
-    available: true,
+    supported: true,
   }),
   Object.freeze({
     id: "codex" as const,
     name: "Codex",
-    available: false,
+    supported: false,
   }),
 ])
 
@@ -60,6 +74,13 @@ export interface OnboardingState {
    * press has arrived yet.
    */
   summon?: "shown" | "hidden"
+  /**
+   * What each agent's runtime reported when it was asked. Absent until it has
+   * been: nothing is choosable before the answer arrives, because offering an
+   * agent and then finding out it cannot run is the failure this exists to
+   * avoid.
+   */
+  readiness?: AgentReadinessReport
 }
 
 /** The state a panel with no completed setup starts from. */
@@ -72,6 +93,29 @@ export function agentChoice(id: AgentId): AgentChoice | undefined {
   return AGENT_CHOICES.find((choice) => choice.id === id)
 }
 
+/** Record what the runtimes reported. Arriving after a choice was somehow made
+ * does not unmake it; the choice was checked when it was made. */
+export function recordReadiness(
+  state: OnboardingState,
+  readiness: AgentReadinessReport,
+): OnboardingState {
+  return { ...state, readiness }
+}
+
+/** What an agent's runtime reported, or `unavailable` while nothing has been
+ * reported — an agent is not offered on the strength of not having been asked
+ * about. */
+export function agentReadiness(state: OnboardingState, id: AgentId): AgentReadiness {
+  if (!agentChoice(id)?.supported) return "unavailable"
+  return state.readiness?.[id] ?? "unavailable"
+}
+
+/** Whether an agent may be picked: its adapter exists, it is installed, and
+ * something here is signed in to it. */
+export function isChoosable(state: OnboardingState, id: AgentId): boolean {
+  return agentReadiness(state, id) === "ready"
+}
+
 /** Move from the welcome step to the agent picker. Other steps do not move. */
 export function startAgentChoice(state: OnboardingState): OnboardingState {
   return state.step === "welcome" ? { ...state, step: "agent" } : state
@@ -82,7 +126,7 @@ export function startAgentChoice(state: OnboardingState): OnboardingState {
  * cannot honour. */
 export function chooseAgent(state: OnboardingState, id: AgentId): OnboardingState {
   if (state.step !== "agent") return state
-  return agentChoice(id)?.available ? { ...state, agent: id } : state
+  return isChoosable(state, id) ? { ...state, agent: id } : state
 }
 
 /** Move from the picker to the summon step. Only a recorded agent moves on;

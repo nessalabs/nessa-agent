@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest"
 import {
   AGENT_CHOICES,
   agentChoice,
+  agentReadiness,
+  isChoosable,
+  recordReadiness,
   beginOnboarding,
   chooseAgent,
   completeOnboarding,
@@ -12,8 +15,13 @@ import {
   startAgentChoice,
 } from "./onboarding"
 
+/** Setup with Claude reported ready, which is the only way it is choosable. */
+function withClaudeReady(state = beginOnboarding()) {
+  return recordReadiness(state, { claude: "ready", codex: "unavailable" })
+}
+
 function atSummon() {
-  return confirmAgent(chooseAgent(startAgentChoice(beginOnboarding()), "claude"))
+  return confirmAgent(chooseAgent(startAgentChoice(withClaudeReady()), "claude"))
 }
 
 /** The summon step with the shortcut pressed both times: shown, then hidden. */
@@ -30,25 +38,58 @@ describe("first-run setup", () => {
   })
 
   it("walks welcome to an agent, then the shortcut, then finishes", () => {
-    const picking = startAgentChoice(beginOnboarding())
+    const picking = startAgentChoice(withClaudeReady())
     expect(picking.step).toBe("agent")
     const chosen = chooseAgent(picking, "claude")
     expect(chosen.agent).toBe("claude")
     const summon = confirmAgent(chosen)
-    expect(summon).toEqual({ step: "summon", agent: "claude" })
+    // What the runtimes reported travels with the state: the picker is behind
+    // us, but nothing has said it is no longer true.
+    expect(summon).toEqual({
+      step: "summon",
+      agent: "claude",
+      readiness: { claude: "ready", codex: "unavailable" },
+    })
     expect(isOnboarding(summon)).toBe(true)
     // The shortcut lesson is the last step: finishing it finishes setup.
     expect(completeOnboarding(summonPressed())).toEqual({ step: "done", agent: "claude" })
   })
 
   it("does not record an agent no provider can run", () => {
+    const picking = startAgentChoice(withClaudeReady())
+    expect(agentChoice("codex")?.supported).toBe(false)
+    expect(chooseAgent(picking, "codex")).toBe(picking)
+  })
+
+  it("offers nothing until the runtimes have been asked", () => {
+    // Not asked yet is not the same as available, and only one of them is safe
+    // to assume.
     const picking = startAgentChoice(beginOnboarding())
-    expect(agentChoice("codex")?.available).toBe(false)
+    expect(agentReadiness(picking, "claude")).toBe("unavailable")
+    expect(isChoosable(picking, "claude")).toBe(false)
+    expect(chooseAgent(picking, "claude")).toBe(picking)
+  })
+
+  it("does not offer an agent that is installed but not signed in", () => {
+    const picking = recordReadiness(startAgentChoice(beginOnboarding()), {
+      claude: "needs-authentication",
+    })
+    expect(agentReadiness(picking, "claude")).toBe("needs-authentication")
+    expect(isChoosable(picking, "claude")).toBe(false)
+    expect(chooseAgent(picking, "claude")).toBe(picking)
+  })
+
+  it("never offers an agent it has no adapter for, whatever is reported", () => {
+    // A runtime cannot talk Nessa into running something it cannot drive.
+    const picking = recordReadiness(startAgentChoice(beginOnboarding()), {
+      codex: "ready",
+    })
+    expect(agentReadiness(picking, "codex")).toBe("unavailable")
     expect(chooseAgent(picking, "codex")).toBe(picking)
   })
 
   it("does not leave the picker without a recorded agent", () => {
-    const picking = startAgentChoice(beginOnboarding())
+    const picking = startAgentChoice(withClaudeReady())
     expect(confirmAgent(picking)).toBe(picking)
     expect(isOnboarding(confirmAgent(picking))).toBe(true)
   })
@@ -56,7 +97,7 @@ describe("first-run setup", () => {
   it("only finishes from a completed shortcut lesson", () => {
     const welcome = beginOnboarding()
     expect(completeOnboarding(welcome)).toBe(welcome)
-    const chosen = chooseAgent(startAgentChoice(welcome), "claude")
+    const chosen = chooseAgent(startAgentChoice(withClaudeReady(welcome)), "claude")
     expect(completeOnboarding(chosen)).toBe(chosen)
     // Half a lesson is not a finished one.
     const summon = atSummon()
@@ -76,7 +117,7 @@ describe("first-run setup", () => {
   it("offers Claude first and marks every listed agent honestly", () => {
     expect(AGENT_CHOICES.map((choice) => choice.id)).toEqual(["claude", "codex"])
     expect(AGENT_CHOICES.map((choice) => choice.name)).toEqual(["Claude", "Codex"])
-    expect(AGENT_CHOICES.filter((choice) => choice.available)).toHaveLength(1)
+    expect(AGENT_CHOICES.filter((choice) => choice.supported)).toHaveLength(1)
   })
 })
 

@@ -9,7 +9,13 @@ import {
   MorphingMeshGradient,
   morphingMeshGradientPresets,
 } from "@nessa-ui/react/morphing-mesh-gradient"
-import { AGENT_CHOICES, type AgentId, type OnboardingState } from "../model/onboarding"
+import {
+  AGENT_CHOICES,
+  agentReadiness,
+  type AgentId,
+  type AgentReadiness,
+  type OnboardingState,
+} from "../model/onboarding"
 import { revealChunks } from "../model/reveal-text"
 
 /** Setup's primary action, sized the same on every step. */
@@ -177,32 +183,53 @@ function SetupStep({
   )
 }
 
-/** One selectable agent: its mark, its name, and whether it can run yet. An
- * agent no provider can run is disabled and says so, rather than being offered
- * and failing later. */
+/**
+ * What an agent that cannot be picked is waiting on.
+ *
+ * Every one of these is shown on the agent itself rather than as a message
+ * elsewhere, because the reason belongs to the thing it is about — and two of
+ * the three are fixable, which is only useful if the person can tell which.
+ */
+function readinessNote(
+  readiness: AgentReadiness,
+  supported: boolean,
+): string | undefined {
+  if (readiness === "ready") return undefined
+  if (!supported) return "Coming soon"
+  if (readiness === "needs-authentication") return "Needs sign-in"
+  return "Not installed"
+}
+
+/** One listed agent: its mark, its name, and what it is waiting on. An agent
+ * that cannot run is shown with the reason rather than hidden — a missing
+ * Claude is a question, and a Claude that says it needs signing in is an
+ * answer. */
 function AgentOption({
   id,
   name,
-  available,
+  supported,
+  readiness,
   selected,
   onSelect,
 }: {
   id: AgentId
   name: string
-  available: boolean
+  supported: boolean
+  readiness: AgentReadiness
   selected: boolean
   onSelect: (id: AgentId) => void
 }) {
+  const note = readinessNote(readiness, supported)
   return (
     <button
       type="button"
       role="radio"
       aria-checked={selected}
-      // The name and its availability badge are separate elements with only a
-      // margin between them, which reads as one run-together word. Name the
-      // option outright so it is announced the way it is written.
-      aria-label={available ? name : `${name}, coming soon`}
-      disabled={!available}
+      // The name and its note are separate elements with only a margin between
+      // them, which reads as one run-together word. Name the option outright so
+      // it is announced the way it is written.
+      aria-label={note ? `${name}, ${note.toLowerCase()}` : name}
+      disabled={Boolean(note)}
       onClick={() => onSelect(id)}
       className="flex w-full items-center gap-3 rounded-xl border border-white/15 bg-background/45 p-3 text-left backdrop-blur-md transition-[background-color,border-color] outline-none hover:bg-background/65 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50 aria-checked:border-ring aria-checked:bg-background/75"
     >
@@ -211,12 +238,12 @@ function AgentOption({
       </span>
       <span className="nessa-text-4 font-medium text-foreground">{name}</span>
       <span className="ml-auto flex items-center">
-        {available ? (
+        {note ? (
+          <span className="nessa-text-2 text-muted-foreground">{note}</span>
+        ) : (
           <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-border">
             {selected ? <Check aria-hidden className="size-3.5" /> : null}
           </span>
-        ) : (
-          <span className="nessa-text-2 text-muted-foreground">Coming soon</span>
         )}
       </span>
     </button>
@@ -324,6 +351,7 @@ export function Onboarding({
             <AgentOption
               key={choice.id}
               {...choice}
+              readiness={agentReadiness(state, choice.id)}
               selected={state.agent === choice.id}
               onSelect={onChoose}
             />
