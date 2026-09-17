@@ -132,9 +132,9 @@ async fn worker_with_ready_frames_boundary(
     let marker = await_flush.then(|| tempfile::tempdir().unwrap());
     let marker_path = marker.as_ref().map(|marker| marker.path().join("flushed"));
     if let Some(marker_path) = &marker_path {
-        process.args(["-c", "import sys,json;sys.stdout.buffer.write(sys.argv[1].encode());sys.stdout.buffer.flush();open(sys.argv[2],'w').close();m=json.loads(sys.stdin.readline());print(json.dumps({'jsonrpc':'2.0','id':m['id'],'error':{'code':-32099,'message':'test prompt observed'}}),flush=True)", &bytes, marker_path.to_str().unwrap()]);
+        process.args(["-c", "import sys,json;sys.stdout.buffer.write(sys.argv[1].encode());sys.stdout.buffer.flush();open(sys.argv[2],'w').close();m=json.loads(sys.stdin.readline());print(json.dumps({'jsonrpc':'2.0','id':m['id'],'error':{'code':-32099,'message':'test prompt observed'}}),flush=True);sys.stdin.read()", &bytes, marker_path.to_str().unwrap()]);
     } else {
-        process.args(["-c", "import sys,json;sys.stdout.buffer.write(sys.argv[1].encode());sys.stdout.buffer.flush();m=json.loads(sys.stdin.readline());print(json.dumps({'jsonrpc':'2.0','id':m['id'],'error':{'code':-32099,'message':'test prompt observed'}}),flush=True)", &bytes]);
+        process.args(["-c", "import sys,json;sys.stdout.buffer.write(sys.argv[1].encode());sys.stdout.buffer.flush();m=json.loads(sys.stdin.readline());print(json.dumps({'jsonrpc':'2.0','id':m['id'],'error':{'code':-32099,'message':'test prompt observed'}}),flush=True);sys.stdin.read()", &bytes]);
     }
     let mut scope = ProcessScope::spawn(process).unwrap();
     let mut reader = Reader::new(scope.stdout.take().unwrap(), config.max_frame_bytes);
