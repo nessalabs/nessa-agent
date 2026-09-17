@@ -319,18 +319,23 @@ start here, before there is a session to authenticate with.
 `domain/value_objects/` owns `AgentId`, the host's three-way `HostAnswer`, and
 the `Readiness` rule that turns two answers into one thing to tell the person;
 `application/` owns the `AgentProbe` port, whose typed `ProbeFailure` keeps "not
-signed in" apart from "could not tell", and the `ReadAgentReadiness` use case
-that only asks and maps; `infrastructure/local.rs` asks this machine, with the
+signed in" apart from "could not tell", the `ReadAgentReadiness` use case that
+only asks and maps, and `SharedAgentReadiness`, which bounds what one
+unauthenticated request can cost: concurrent callers share a single in-flight
+probe (never a cached answer) and stop waiting for it at a deadline;
+`infrastructure/local.rs` asks this machine, with the
 runtime root, API key and config directory resolved once in composition, while
 `infrastructure/claude.rs` holds what is true of Claude Code alone — its
 keychain item, its credentials file and what makes one a real sign-in, and the
 environment variables the launcher passes through — so a second agent gets a
 sibling module rather than a branch; `entrypoint/http.rs` owns the wire
-vocabulary and the cross-origin rule for `GET /onboarding/agents`. Composition
-injects `LocalAgentProbe` through `ProductDependencies`, and the handler
-receives it alone via `FromRef`. Tests under `tests/agents/` split domain rules,
-application orchestration, the HTTP boundary, the local probe's failure modes,
-and Claude's own sign-in conventions.
+vocabulary and the cross-origin rule for `GET /onboarding/agents`, and answers a
+reading it could not obtain with 503 rather than an invented readiness.
+Composition injects `LocalAgentProbe` through `ProductDependencies`, and the
+handler receives the shared reader over it alone via `FromRef`. Tests under
+`tests/agents/` split domain rules, application orchestration, the shared
+reader's bounds, the HTTP boundary, the local probe's failure modes, and
+Claude's own sign-in conventions.
 
 ## Command-line surface
 

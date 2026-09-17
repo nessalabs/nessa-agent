@@ -1,4 +1,4 @@
-use crate::agents::application::AgentProbe;
+use crate::agents::application::{AgentProbe, SharedAgentReadiness};
 use crate::conversation::application::ConversationService;
 use axum::extract::FromRef;
 use nessa_auth::{
@@ -32,15 +32,19 @@ pub struct ProductRouteState {
     pub(crate) conversations: Option<Arc<ConversationService>>,
     pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
     pub(crate) uptime_clock: Arc<dyn crate::app::ports::Clock>,
-    pub(crate) agent_probe: Arc<dyn AgentProbe>,
+    pub(crate) agent_readiness: Arc<SharedAgentReadiness>,
 }
 
-/// The pre-authentication onboarding route is given the host probe and nothing
-/// else. It runs before there is a session, so it has no use for the rest of
-/// this state and must not be able to reach it.
-impl FromRef<ProductRouteState> for Arc<dyn AgentProbe> {
+/// The pre-authentication onboarding route is given one way to ask this machine
+/// about its agents, and nothing else. It runs before there is a session, so it
+/// has no use for the rest of this state and must not be able to reach it.
+///
+/// It is handed the shared reader rather than the probe itself because the route
+/// is unauthenticated: whoever is calling chooses how many requests arrive, and
+/// the reader is what keeps that from choosing how many probes this server runs.
+impl FromRef<ProductRouteState> for Arc<SharedAgentReadiness> {
     fn from_ref(state: &ProductRouteState) -> Self {
-        state.agent_probe.clone()
+        state.agent_readiness.clone()
     }
 }
 
@@ -57,7 +61,9 @@ pub struct ProductDependencies {
     /// Existing server clock used only to report health uptime.
     pub uptime_clock: Arc<dyn crate::app::ports::Clock>,
     /// Asks this host which agents could start here. Chosen in composition so
-    /// no route handler constructs a machine probe of its own.
+    /// no route handler constructs a machine probe of its own. How often it may
+    /// be asked is this state's to decide, not composition's — see
+    /// [`SharedAgentReadiness`].
     pub agent_probe: Arc<dyn AgentProbe>,
 }
 
@@ -86,7 +92,7 @@ impl ProductRouteState {
             admin: None,
             conversations: None,
             uptime_clock: dependencies.uptime_clock,
-            agent_probe: dependencies.agent_probe,
+            agent_readiness: Arc::new(SharedAgentReadiness::new(dependencies.agent_probe)),
         }
     }
 

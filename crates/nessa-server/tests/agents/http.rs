@@ -2,11 +2,16 @@
 //! stub: this test must never ask the machine it runs on about credentials.
 
 use super::*;
-use crate::agents::application::ProbeFailure;
-use crate::agents_test_support::StubAgentProbe;
+use crate::agents::application::{AgentProbe, ProbeFailure};
+use crate::agents_test_support::{StubAgentProbe, WaitingAgentProbe};
 use axum::body::to_bytes;
 use serde_json::Value;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+/// Long enough that no test here ever reaches it by accident, short enough that
+/// a test which does reach it fails rather than stalls.
+const TEST_DEADLINE: Duration = Duration::from_secs(5);
 
 fn from(origin: Option<&str>) -> HeaderMap {
     let mut headers = HeaderMap::new();
@@ -16,8 +21,15 @@ fn from(origin: Option<&str>) -> HeaderMap {
     headers
 }
 
-fn host(probe: StubAgentProbe) -> State<Arc<dyn AgentProbe>> {
-    State(Arc::new(probe))
+/// The route's view of a machine: one shared reader over the given probe.
+fn reading(probe: Arc<dyn AgentProbe>, deadline: Duration) -> State<Arc<SharedAgentReadiness>> {
+    State(Arc::new(SharedAgentReadiness::with_deadline(
+        probe, deadline,
+    )))
+}
+
+fn host(probe: StubAgentProbe) -> State<Arc<SharedAgentReadiness>> {
+    reading(Arc::new(probe), TEST_DEADLINE)
 }
 
 /// A host that counts how many times it was asked anything.
@@ -124,16 +136,12 @@ async fn a_refused_page_never_gets_this_machine_searched_on_its_behalf() {
     // Answering means filesystem reads and, on macOS, a subprocess. A site the
     // server will not answer must not be able to make it do that work at all.
     let counted = Arc::new(CountingProbe::default());
-    let response = handle_http_agents(
-        State(counted.clone() as Arc<dyn AgentProbe>),
-        from(Some("https://evil.example")),
-    )
-    .await;
+    let machine = reading(counted.clone(), TEST_DEADLINE);
+    let response = handle_http_agents(machine.clone(), from(Some("https://evil.example"))).await;
     assert_eq!(response.status(), 403);
     assert_eq!(counted.asked.load(Ordering::SeqCst), 0);
 
-    let allowed =
-        handle_http_agents(State(counted.clone() as Arc<dyn AgentProbe>), from(None)).await;
+    let allowed = handle_http_agents(machine, from(None)).await;
     assert_eq!(allowed.status(), 200);
     assert!(counted.asked.load(Ordering::SeqCst) > 0);
 }
@@ -142,12 +150,68 @@ async fn a_refused_page_never_gets_this_machine_searched_on_its_behalf() {
 async fn a_host_that_falls_over_while_being_asked_does_not_take_the_handler_with_it() {
     // The asking happens on a blocking thread, so its failure arrives as a
     // failed join rather than as an unwind through the request.
+    let response =
+        handle_http_agents(reading(Arc::new(PanickingProbe), TEST_DEADLINE), from(None)).await;
+    assert_eq!(response.status(), 500);
+}
+
+#[tokio::test]
+async fn a_machine_that_will_not_answer_is_reported_as_no_answer_rather_than_as_no_agent() {
+    // Gate 7. The three names on the wire are all claims about the agent, and
+    // this server found none of them out — it stopped waiting. Saying
+    // "not-installed" would send the person to install what they have, and
+    // "needs-authentication" would send them to sign in again; both would be
+    // this server making something up about their machine.
+    let probe = Arc::new(WaitingAgentProbe::default());
     let response = handle_http_agents(
-        State(Arc::new(PanickingProbe) as Arc<dyn AgentProbe>),
-        from(None),
+        reading(probe.clone(), Duration::from_millis(50)),
+        from(Some("tauri://localhost")),
     )
     .await;
-    assert_eq!(response.status(), 500);
+    assert_eq!(response.status(), 503);
+    // The page is told it is a refusal to answer rather than left unable to
+    // read the status at all.
+    assert_eq!(
+        response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .and_then(|value| value.to_str().ok()),
+        Some("tauri://localhost")
+    );
+    probe.release();
+}
+
+#[tokio::test]
+async fn many_callers_at_once_still_only_ask_this_machine_once() {
+    // The route is unauthenticated, so how many requests arrive is not this
+    // server's choice. How many probes they turn into is: every caller is asking
+    // the same parameterless question, so one probe answers all of them — one
+    // blocking thread, and on macOS one `security` process, not eight.
+    const CALLERS: usize = 8;
+    let probe = Arc::new(WaitingAgentProbe::default());
+    let machine = reading(probe.clone(), TEST_DEADLINE);
+
+    let callers: Vec<_> = (0..CALLERS)
+        .map(|_| {
+            let machine = machine.clone();
+            tokio::spawn(async move { handle_http_agents(machine, from(None)).await })
+        })
+        .collect();
+    probe.started().await;
+    probe.release();
+
+    for caller in callers {
+        assert_eq!(caller.await.unwrap().status(), 200, "every caller answered");
+    }
+    assert_eq!(
+        probe.most_at_once(),
+        1,
+        "{CALLERS} callers must never put more than one probe on this machine at a time"
+    );
+    assert!(
+        probe.runs() <= CALLERS,
+        "a caller arriving after the shared probe finished asks again, but none asks twice"
+    );
 }
 
 #[tokio::test]

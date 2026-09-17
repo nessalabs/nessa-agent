@@ -6,7 +6,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
 
-use crate::agents::application::{AgentProbe, ReadAgentReadiness};
+use crate::agents::application::{ReadingFailure, SharedAgentReadiness};
 use crate::agents::domain::{AgentId, Readiness};
 use crate::server::entrypoint::origin;
 
@@ -62,8 +62,12 @@ fn readiness_name(readiness: Readiness) -> &'static str {
 /// states, no paths, no versions, no account, and never a credential. To
 /// anything that can already reach this port, "an agent is installed here" is
 /// not a secret worth a handshake.
+/// What this costs is bounded by [`SharedAgentReadiness`], which runs one probe
+/// however many callers are asking and stops waiting for it after a deadline. A
+/// reading that did not arrive is reported as no reading — see [`declined`] —
+/// rather than as an agent that is missing or signed out.
 pub(crate) async fn handle_http_agents(
-    State(probe): State<Arc<dyn AgentProbe>>,
+    State(host): State<Arc<SharedAgentReadiness>>,
     headers: HeaderMap,
 ) -> Response {
     // Who asked is settled before the machine is touched. A page this server
@@ -73,32 +77,43 @@ pub(crate) async fn handle_http_agents(
         Allowed::No => return StatusCode::FORBIDDEN.into_response(),
         allowed => allowed,
     };
-    let Ok(agents) = tokio::task::spawn_blocking(move || read_readiness(probe.as_ref())).await
-    else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    let mut response = match host.read().await {
+        Ok(agents) => Json(AgentsReadinessView {
+            agents: view(agents),
+        })
+        .into_response(),
+        Err(ReadingFailure::Undetermined) => declined(),
+        // The asking came apart rather than ran long. That is this server
+        // failing, not this server declining, and it is reported as one.
+        Err(ReadingFailure::Lost) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    let body = Json(AgentsReadinessView { agents });
-    match allowed {
-        Allowed::Cross(origin) => {
-            let mut response = body.into_response();
-            response
-                .headers_mut()
-                .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
-            response
-        }
-        _ => body.into_response(),
+    // Attached to whatever came out, including a refusal to answer: a browser
+    // that is not allowed to read the status cannot tell "no answer" from "no
+    // gateway", and the page is entitled to know which it met.
+    if let Allowed::Cross(origin) = allowed {
+        response
+            .headers_mut()
+            .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
     }
+    response
 }
 
-/// Ask the host about every agent, under its own thread.
+/// This server was asked and would not say.
 ///
-/// Answering means metadata reads and, on macOS, spawning `security` and
-/// waiting on it. That is a blocking OS call: run on a socket worker it would
-/// hold the whole executor for as long as the machine takes to answer, so it
-/// runs where blocking is what the thread is for.
-fn read_readiness(probe: &dyn AgentProbe) -> Vec<AgentReadinessView> {
-    ReadAgentReadiness { probe }
-        .all()
+/// A 503 rather than a 200 carrying some readiness, because there is no honest
+/// readiness to carry. The wire's three names are all *claims about the agent* —
+/// `not-installed` and `needs-authentication` each tell the person to go and do
+/// something — and this server did not find any of them out; it declined to ask.
+/// Saying so as a status keeps "could not determine" from being dressed up as a
+/// fact, and setup already reports a gateway with no answer as a gateway with no
+/// answer. Retrying is the right response, so the person's "check again" is too.
+fn declined() -> Response {
+    StatusCode::SERVICE_UNAVAILABLE.into_response()
+}
+
+/// Name each agent and its state the way the wire does.
+fn view(agents: Vec<(AgentId, Readiness)>) -> Vec<AgentReadinessView> {
+    agents
         .into_iter()
         .map(|(agent, state)| AgentReadinessView {
             id: agent_name(agent),
