@@ -40,9 +40,11 @@ pub(super) fn execute(args: &[String]) -> Result<(), RunError> {
         .unwrap_or("server.read,conversation.write,credential.manage");
     validate_grants(chat_grants)?;
     let directory = Environment::auth_directory_from_system()?;
+    prepare_auth_directory(&directory)?;
     let settings = super::runtime_config::RuntimeConfig::load(&directory)?;
     let store = LocalCredentialStore::open_with_config(
-        directory.join("credentials.v1.json"),
+        &directory,
+        "credentials.v1.json",
         settings.registry,
     )
     .map_err(failure)?;
@@ -195,9 +197,11 @@ fn provision_command(args: &[String]) -> Result<(), RunError> {
     let grants = option_value(args, "--grants")?.unwrap_or(defaults);
     validate_grants(grants)?;
     let directory = Environment::auth_directory_from_system()?;
+    prepare_auth_directory(&directory)?;
     let settings = super::runtime_config::RuntimeConfig::load(&directory)?;
     let store = LocalCredentialStore::open_with_config(
-        directory.join("credentials.v1.json"),
+        &directory,
+        "credentials.v1.json",
         settings.registry,
     )
     .map_err(failure)?;
@@ -289,6 +293,10 @@ fn private_output(path: &Path) -> std::io::Result<File> {
     nessa_local_storage::open(path, nessa_local_storage::OpenMode::CreateNew)
 }
 
+fn prepare_auth_directory(path: &Path) -> Result<(), RunError> {
+    nessa_local_storage::create_directory(path).map_err(failure)
+}
+
 fn failure(error: impl std::fmt::Display) -> RunError {
     RunError::Authentication(error.to_string())
 }
@@ -296,6 +304,18 @@ fn failure(error: impl std::fmt::Display) -> RunError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_run_prepares_a_private_auth_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let auth = temporary.path().join("data/dev/auth");
+
+        prepare_auth_directory(&auth).unwrap();
+
+        nessa_local_storage::verify_directory(&auth).unwrap();
+        LocalCredentialStore::open(&auth, "credentials.v1.json").unwrap();
+    }
+
     #[test]
     fn only_explicit_offline_commands_and_absolute_output_are_accepted() {
         let parse_args =

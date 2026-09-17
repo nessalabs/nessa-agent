@@ -16,7 +16,12 @@ import { createServer } from "node:net"
 import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { WebSocket, WebSocketServer } from "ws"
-import { NessaClient, NessaMutationError, NessaRpcError } from "@nessa/client"
+import {
+  NessaClient,
+  NessaConnectionClosedError,
+  NessaMutationError,
+  NessaRpcError,
+} from "@nessa/client"
 import { windowsPrivateFile } from "../packages/nessa-client/src/transport/windows-private-file.js"
 
 globalThis.WebSocket = WebSocket
@@ -503,11 +508,27 @@ try {
   await expectClose(
     recovered,
     async () => {
-      const revoked = await recovered.credentials.revoke(
-        recovered.productSession.credentialId,
-        "revoke-self",
-      )
-      assert.equal(revoked.credentialId, recovered.productSession.credentialId)
+      // Self-revocation races its own acknowledgement: the gateway answers the
+      // mutation and closes the socket it just revoked, and either order is
+      // correct. Accept the answer when it arrives first and the matching close
+      // when it does; anything else is a real failure. The close itself is still
+      // asserted by expectClose.
+      try {
+        const revoked = await recovered.credentials.revoke(
+          recovered.productSession.credentialId,
+          "revoke-self",
+        )
+        assert.equal(revoked.credentialId, recovered.productSession.credentialId)
+      } catch (error) {
+        assert.ok(
+          error instanceof NessaMutationError &&
+            error.requestId === "revoke-self" &&
+            error.cause instanceof NessaConnectionClosedError &&
+            error.cause.closeReason === "credential_revoked" &&
+            error.cause.retryable === false,
+          `self-revocation must be acknowledged or closed by its own revocation: ${error}`,
+        )
+      }
     },
     "credential_revoked",
   )

@@ -1,6 +1,39 @@
+/** The bridge refused this file. It is missing, or it is not a private,
+ * single-linked regular file owned by the current user under a protected
+ * owner-only ACL. This answer is fail-closed: retrying the same file cannot
+ * change it. */
+export class NessaPrivateFileUnavailableError extends Error {
+  constructor(message = "Windows private credential file unavailable or unsafe") {
+    super(message)
+    this.name = "NessaPrivateFileUnavailableError"
+  }
+}
+
+/** The bridge did not answer within its budget, so nothing is known about the
+ * file. Unlike an unavailable answer this is transient, and a caller that can
+ * wait may try again. */
+export class NessaPrivateFileTimeoutError extends Error {
+  constructor(
+    message = "Windows private credential bridge did not answer within its budget",
+  ) {
+    super(message)
+    this.name = "NessaPrivateFileTimeoutError"
+  }
+}
+
+/** Every call starts Windows PowerShell and compiles the Win32 helper through
+ * Add-Type, so the floor for one call is a C# compiler run, not a syscall. A
+ * cold or loaded machine routinely needs tens of seconds for that first work,
+ * and answering "unsafe" because the compiler was slow would be a lie. */
+const BRIDGE_BUDGET_MS = 60_000
+
 /** Windows-only Node adapter. Built-in Windows PowerShell hosts a small Win32
  * bridge; filenames and secrets travel over stdin, never command arguments.
- * Validation and I/O use the same handle. No process-global mutable state. */
+ * Validation and I/O use the same handle. No process-global mutable state.
+ *
+ * Rejects with {@link NessaPrivateFileUnavailableError} when the bridge refuses
+ * the file, and with {@link NessaPrivateFileTimeoutError} when it does not
+ * answer in time. Branch on those types; do not read the message. */
 export async function windowsPrivateFile(
   operation: "read" | "reserve" | "write",
   path: string,
@@ -26,12 +59,11 @@ export async function windowsPrivateFile(
       { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
     )
     let output = ""
-    const fail = () =>
-      reject(new Error("Windows private credential file unavailable or unsafe"))
+    const fail = () => reject(new NessaPrivateFileUnavailableError())
     const timer = setTimeout(() => {
       child.kill()
-      fail()
-    }, 15000)
+      reject(new NessaPrivateFileTimeoutError())
+    }, BRIDGE_BUDGET_MS)
     child.stdout.setEncoding("utf8")
     child.stdout.on("data", (chunk: string) => {
       output += chunk

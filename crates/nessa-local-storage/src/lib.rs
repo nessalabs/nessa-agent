@@ -15,12 +15,18 @@ mod windows;
 use windows as platform;
 
 pub use platform::{
-    create_directory, open, replace, sync_directory, verify_directory, verify_file,
+    create_directory, create_directory_beneath, open, open_beneath, replace, replace_beneath,
+    sync_directory, sync_directory_beneath, verify_directory, verify_file,
 };
 
 #[derive(Clone, Copy)]
 pub enum OpenMode {
     Read,
+    /// Opens an existing file for reads without waiting on special-file peers.
+    ///
+    /// The platform still verifies that the opened handle is a private,
+    /// single-linked regular file before returning it.
+    ReadNonblocking,
     ReadWrite,
     OpenOrCreate,
     CreateNew,
@@ -36,6 +42,7 @@ fn unsafe_file() -> io::Error {
 pub struct PrivateTempFile {
     file: File,
     path: PathBuf,
+    beneath: Option<(PathBuf, PathBuf)>,
 }
 impl PrivateTempFile {
     pub fn new_in(parent: &Path) -> io::Result<Self> {
@@ -46,7 +53,37 @@ impl PrivateTempFile {
             let name: String = random.iter().map(|b| format!("{b:02x}")).collect();
             let path = parent.join(format!(".nessa-{name}.tmp"));
             match open(&path, OpenMode::CreateNew) {
-                Ok(file) => return Ok(Self { file, path }),
+                Ok(file) => {
+                    return Ok(Self {
+                        file,
+                        path,
+                        beneath: None,
+                    })
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "could not reserve private temporary file",
+        ))
+    }
+    /// Reserve a private temporary file within `directory`, relative to a trusted root.
+    pub fn new_beneath(root: &Path, directory: &Path) -> io::Result<Self> {
+        for _ in 0..10 {
+            let mut random = [0u8; 16];
+            getrandom::fill(&mut random).map_err(|e| io::Error::other(e.to_string()))?;
+            let name: String = random.iter().map(|b| format!("{b:02x}")).collect();
+            let relative = directory.join(format!(".nessa-{name}.tmp"));
+            match open_beneath(root, &relative, OpenMode::CreateNew) {
+                Ok(file) => {
+                    return Ok(Self {
+                        file,
+                        path: root.join(&relative),
+                        beneath: Some((root.to_path_buf(), relative)),
+                    });
+                }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(e),
             }
@@ -64,6 +101,11 @@ impl PrivateTempFile {
     }
     pub fn persist(self, destination: &Path) -> io::Result<()> {
         replace(&self.path, destination)
+    }
+    /// Atomically publish this temporary file to a path beneath the same trusted root.
+    pub fn persist_beneath(self, destination: &Path) -> io::Result<()> {
+        let (root, relative) = self.beneath.as_ref().ok_or_else(unsafe_file)?;
+        replace_beneath(root, relative, destination)
     }
 }
 impl Drop for PrivateTempFile {
@@ -100,5 +142,60 @@ mod tests {
         assert_eq!(text, "replacement");
         std::fs::hard_link(&path, directory.join("alias")).unwrap();
         assert!(open(&path, OpenMode::Read).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nonblocking_reads_accept_private_files_and_reject_fifos_without_a_writer() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("private");
+        create_directory(&directory).unwrap();
+        let regular = directory.join("regular");
+        open(&regular, OpenMode::CreateNew)
+            .unwrap()
+            .write_all(b"value")
+            .unwrap();
+
+        let mut text = String::new();
+        open(&regular, OpenMode::ReadNonblocking)
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        assert_eq!(text, "value");
+
+        let fifo = directory.join("fifo");
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+        assert!(open(&fifo, OpenMode::ReadNonblocking).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_shared_directories_are_rejected_without_permission_repair() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        for mode in [0o755, 0o750] {
+            let directory = root.path().join(format!("shared-{mode:o}"));
+            std::fs::create_dir(&directory).unwrap();
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(mode)).unwrap();
+
+            assert!(verify_directory(&directory).is_err());
+            assert!(create_directory(&directory).is_err());
+            assert_eq!(
+                std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+                mode
+            );
+        }
+
+        let private = root.path().join("private");
+        create_directory(&private).unwrap();
+        assert_eq!(
+            std::fs::metadata(private).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
     }
 }
