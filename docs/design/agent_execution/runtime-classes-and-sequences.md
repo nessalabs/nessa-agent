@@ -1,5 +1,12 @@
 # Agent runtime classes and sequences — review supplement to ADR 0008
 
+> Current implementation: [gateway chat](../../guides/gateway-chat.md) uses the existing SDK Agent,
+> leased JSONL sessions, independent durable audit, and bounded replacement views.
+> NessaClient and the panel use authenticated conversation commands; retired spike
+> methods are absent. The exact durable cursor/event-store and broader collaboration design
+> below remains a proposal, not a prerequisite or description of the current chat API.
+
+
 This is the proposed shared conversation/gateway shape. The local
 [Agent, storage, hooks, and scheduling contracts](../../../crates/nessa-sdk/docs/agent_execution/README.md)
 are already implemented. Those concrete APIs remain authoritative; the classes

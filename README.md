@@ -59,23 +59,22 @@ implementation per OS, injected by `current()` — and in
   hang over the desktop. The frontend owns the choice and remembers it
   ([src/panel/adapters/surface.ts](src/panel/adapters/surface.ts)); the tray item only *requests* a
   toggle, and its check mark is reflected back from `set_frosted`.
-- **Temporary chat echo** — the conversation tabs in
-  [`src/conversation/`](src/conversation) are still a UI session for tabs and
-  drafts; send calls `conversation.echo` through `NessaClient` so your message
-  and the server’s echo show in the transcript until real turn RPCs land. On
-  launch the panel opens a `stage=dev` session against local `nessa-server`
-  (`just server`) and probes health + ping in the empty state.
+- **Server-backed conversations** — the conversation tabs in
+  [`src/conversation/`](src/conversation) retain local drafts while
+  `@nessa/client` creates, reads, sends, steers, and controls server-owned
+  conversations. On launch the panel opens a `stage=dev` session against local
+  `nessa server` (`just server`) and reads authorized gateway health.
 
 ## Running it
 
 ```bash
 pnpm install
-just server   # terminal 1 — nessa-server on ws://127.0.0.1:7420
+just server   # terminal 1 — nessa server on ws://127.0.0.1:7420
 just dev      # terminal 2 — panel; connects with stage=dev
 ```
 
 Before the first server run, initialize its private local credentials:
-`cargo run -p nessa-server -- auth init --owner-token-file "$HOME/nessa-owner.token"`.
+`cargo run -p nessa-server -- auth init --local --owner-token-file "$HOME/nessa-owner.token"`.
 This requires no signup. See [local authentication](docs/adr/done/0010-local-authentication.md)
 for scoped clients, environment isolation, and owner recovery.
 
@@ -127,13 +126,16 @@ and `just release` there.
 | Command | What it does |
 | --- | --- |
 | `just` | List recipes |
-| `just server` | Local `nessa-server` (stage=dev defaults) |
+| `just server` | Local `nessa server` (stage=dev defaults) |
 | `just dev` | Desktop app in dev mode (falls back to the browser UI with no display) |
 | `just web` | The UI in a browser, no Tauri |
 | `just release fast` | Testing-shaped release — slow opts off (`.app` / `.deb` / NSIS) |
 | `just release` | Shipping bundle — fat LTO, stripped (`.dmg` / `.deb` / NSIS) |
 | `pnpm app` | `tauri dev`, no host defaults |
-| `pnpm app:build` | The shipping bundle for every Linux format (`.deb` + `.rpm` + AppImage) |
+| `pnpm app:build` | Build and verify the currently supported macOS shipping bundle |
+| `pnpm frontend:check` | Run the complete frontend/client formatting, lint, protocol, docs, type, test, and build contract |
+| `pnpm sdk:check` | Run SDK formatting, Clippy, tests, and warnings-denied Rustdoc |
+| `pnpm check` | Run the same frontend, Rust crate, SDK, MCP, and desktop checks composed in CI |
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm ui:types` | Reconcile the vendored UI with `nessa-ui-revision` |
 
@@ -141,6 +143,10 @@ and `just release` there.
 
 There is no settings UI yet, so `settings.json` under the app config directory
 *is* the interface. Paths are **stage-scoped** ([ADR 0005](docs/adr/done/0005-stage-scoped-local-data.md)):
+
+Nessa creates a missing settings file with private permissions and replaces
+updates atomically. Invalid JSON, invalid UTF-8, and other read failures use
+in-memory defaults without overwriting the original file.
 
 | Stage | Location (macOS example) |
 | --- | --- |
@@ -164,7 +170,8 @@ than falling back.
     "width": 420,
     "height": null,
     "minWidth": 420
-  }
+  },
+  "stopAgentsOnQuit": false
 }
 ```
 
@@ -173,6 +180,7 @@ than falling back.
 | `panel.width` | The width the panel *opens* at. After that the window's own width wins, so a drag on the resize edge is not thrown away |
 | `panel.height` | The height it opens at. `null` fills whatever the work area leaves once the menu bar and the Dock have taken theirs, and keeps re-filling it across displays |
 | `panel.minWidth` | How narrow the resize edge may drag it |
+| `stopAgentsOnQuit` | Whether quitting the desktop asks the registered gateway to close active agents; the gateway itself remains available |
 
 A configured `width` below `minWidth` is a contradiction, so the minimum wins —
 it is what the resize edge enforces anyway. Height has its own floor

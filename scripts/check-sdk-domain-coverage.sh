@@ -8,6 +8,12 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 coverage_target=$(mktemp -d "${TMPDIR:-/tmp}/nessa-sdk-domain-coverage.XXXXXX")
 trap 'rm -rf -- "$coverage_target"' EXIT
 
+# Coverage instrumentation slows ACP cleanup handshakes enough that parallel
+# contract tests can consume each other's short scheduling margin. Run the test
+# binaries serially so this domain gate measures code paths deterministically.
+: "${RUST_TEST_THREADS:=1}"
+export RUST_TEST_THREADS
+
 # Never clean or instrument the normal/shared workspace target directory.
 # The workspace storage dependency is infrastructure, outside the SDK domain gate;
 # keep every SDK domain file included at the same 100% thresholds.

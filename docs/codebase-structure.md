@@ -21,9 +21,10 @@ establish an architectural boundary.
 
 Nessa has a Rust desktop host (window, tray, settings, OS integration), a React
 shell (chat surface, composer, avatar), and a background gateway process.
-The conversation vertical has earned the split: clients are projections, and the
-gateway owns commands through the SDK Agent. Other modules stay flat until they
-earn the same trigger — an invariant, a second consumer, or their own persistence.
+The conversation vertical has earned the split: the panel is a projection, and
+the gateway owns commands through the SDK Agent. New contexts establish the
+feature-first, role-below layout immediately, including their module map and test
+locations. Existing SDK layout changes are tracked in [the SDK organization task](todo/sdk-context-first-organization.md).
 
 ## Target shape
 
@@ -151,7 +152,7 @@ writing the full defaults on first launch is buying.
   `src/panel/ui/app.tsx` is the chrome. Conversation UI lives in
   `src/conversation/ui/`. Host subscriptions live in `src/panel/adapters/`.
 - Product commands live in `src/conversation/application/usecases/`. The store
-  is a projection: reducers call `ConversationGateway` and keep the tabs.
+  is a projection: thunks call injected effects and reducers apply returned views.
   The shared tabs are `conversations` + `activeId`. Local id counters live on
   `LocalTabs`, not on the model the future server will share. Other modules
   import `src/conversation` (the barrel), not files under it — `store.ts` is
@@ -219,7 +220,6 @@ identity providers remain future adapters.
 local auth, SDK session storage, and desktop credential adapters. It has no auth/domain policy
 or Tauri dependency; callers inject the resulting adapters through composition.
 
-
 ## Gateway conversation ownership
 
 `crates/nessa-server/src/conversation/` groups durable conversation identity/access
@@ -227,8 +227,8 @@ or Tauri dependency; callers inject the resulting adapters through composition.
 metadata/audit adapters (infrastructure). `product/conversation.rs` maps the
 canonical product wire contract; composition supplies provider, storage and audit.
 Tests follow those responsibilities under `crates/nessa-server/tests/conversation/`.
-Clients use NessaClient and never own SDK scheduling. See
-[gateway chat](guides/gateway-chat.md).
+The floating panel uses injected conversation effects and NessaClient; neither
+owns SDK scheduling. See [gateway chat](guides/gateway-chat.md).
 
 ## MCP tools
 
@@ -237,3 +237,87 @@ live under their feature name with domain, application and infrastructure owners
 `shell/` contains command validation, runner/audit ports and the Shepherd adapter.
 All additional Nessa tools use this MCP boundary. See the
 [server guide](../crates/nessa-mcp/README.md).
+
+`src/conversation/adapters/agent-stream/` maps replacement gateway projections to
+Nessa UI AgentEvent/TranscriptBuilder. `ui/agent-transcript-view.ts` derives activity
+rows from the shared Transcript; it does not parse provider wire formats.
+
+### Packaged gateway lifecycle
+
+- `scripts/desktop/prepare.mjs` builds the macOS runtime resource tree from locked dependencies.
+- `scripts/desktop/runtime-fingerprint.mjs` identifies that complete prepared tree, including model data and installed ACP dependencies; its adjacent tests cover content, layout, and relocation.
+- `src-tauri/src/gateway/application/` owns retryable reconciliation; `gateway/infrastructure/` serializes launchd transitions, distinguishes managed, legacy, and foreign processes, and requires the expected health fingerprint and service generation, runtime-instance UUID and matching launchd PID before readiness. Its `macos/generation.rs` reuses the published identity only for an equal unfenced definition and otherwise creates a fresh random generation; configuration reverts never deterministically recreate retired identities. `macos/install_attempt.rs` durably binds a pending bootstrap to the host's exact definition and generation so Retry can replace only that incomplete, unambiguously PID-less attempt; disk state alone never grants that authority.
+- `src-tauri/src/gateway/infrastructure/macos/staging.rs` copies the bundled runtime to private immutable per-label/fingerprint directories, removes removable bundle-supplied extended attributes, syncs both cloned and byte-copied files, verifies full-tree parity with the packaging digest, and publishes atomically before service mutation. Existing versions are verified and retained; launchd arguments and PATH use the staged directory. Tests cover cross-language Unicode/framing parity, private permissions, symlinks, rejected special entries, normalized file metadata, corrupt/existing versions and interrupted attempts.
+- `crates/nessa-server/src/desktop_runtime/` owns validated upgrade correlation, the admission-and-cleanup retirement use case, and private request/result/audit files. A managed old gateway stays alive until it has durably acknowledged retirement; launchd performs replacement only after that acknowledgement.
+- `crates/nessa-server/src/composition/desktop.rs` bootstraps private local access and injects bundled provider paths.
+- `settings.stopAgentsOnQuit` controls agent cleanup on desktop exit; launchd owns gateway lifetime independently.
+
+The first update from a gateway that predates retirement acknowledgement uses a
+single explicit legacy bootout after its sole listening PID matches the exact
+loaded launchd service PID. A listener
+found only by port is never stopped. Later updates exchange correlated records in
+`gateway-upgrade/` under the running gateway's namespace, fence new conversation
+commands, join admitted commands, close owned agents, record the transition, and
+then replace the service definition. Failed or contradictory acknowledgement
+preserves the old process. An admitted retirement cause fences admission even when cleanup or audit fails;
+that evidence forces a stale-service retry but never authorizes bootout. A pending
+request for the live instance/generation also forces retry if result publication
+failed; stale requests for other instances or generations do not. Successful
+results retain the original validated lifecycle principal, cause, and correlation as durable retirement fences;
+fresh requests never delete them, and the host syncs a correlated success before
+bootout. Installation failure preserves the desired registration and any loaded
+replacement for forward recovery, without restoring an old definition or stopping
+an unretired new process. UI retry starts reconciliation again rather than
+reusing an earlier startup error.
+
+### Automated dependency guard
+
+`pnpm architecture` checks frontend vertical imports and explicit Rust imports in
+SDK, auth, server, MCP, and desktop gateway domain/application modules. Domain imports cannot reach
+application DTOs, adapters, runtime libraries, or OS effects; application modules
+cannot import concrete infrastructure/composition. The guard and its negative
+fixtures run in CI. It is a source-level import check, not a Rust module resolver:
+macros, fully qualified expressions, transitive re-exports, lifecycle ownership,
+and semantic DTO relationships still require compilation and review.
+
+### New-context layout from day one
+
+Use `context/domain`, `context/application`, and `context/infrastructure` for new
+Rust features. Application owns ports/DTOs and orchestration; infrastructure
+translates external protocols and effects. Keep UI and transport entrypoints as
+outer adapters. The existing TypeScript vertical uses `model`, `application`,
+`adapters`, and `ui` for those responsibilities.
+
+Create concrete owners and module maps even for a small first feature. Layout
+is not a reason to invent a domain entity, generic runtime, or registry: a host
+integration with no domain rules can begin with application and infrastructure.
+Place each next real rule in its prescribed role rather than leaving everything
+in one catch-all file. New MCP shell code is the small Rust example; the desktop
+gateway context demonstrates an application port with native adapters. Older SDK
+paths remain current until the coordinated TODO updates all consumers.
+
+## Browser sessions
+
+`crates/nessa-server/src/browser_session/` owns browser sign-in: `application/`
+coordinates an opaque credential binding and its asynchronous storage port, `domain/value_objects/`
+owns the rolling idle lifetime used to validate every stored session, and `adapters/`
+implements the bounded session journal with filesystem work on the blocking pool
+(and memory test adapter), and `entrypoint/http.rs` translates cookies and requests.
+Tests under `tests/browser_session/` cover lifetime, persistence, and HTTP boundaries. Its module map
+exports handlers and origin checks. Composition enables plain browser HTTP only
+for a dev/CI gateway bound to numeric loopback. Server
+composition chooses storage. The product socket retains mandatory authentication
+and per-operation authorization for both native and browser sessions. Browser
+storage retains only the credential ID, bound origin, and idle-lifetime evidence;
+the auth registry resolves current identity and access state on every admission.
+
+## Command-line surface
+
+The `nessa-server` crate builds the `nessa` executable. `cli/entrypoint/` parses
+commands, `cli/application/` coordinates token requests through its gateway port,
+and `cli/infrastructure/` implements the bounded local WebSocket adapter.
+`composition/cli.rs` wires the adapter, clock, identities and stdout/stderr.
+Tests mirror those responsibilities under `tests/cli/`; `scripts/smoke-auth.mjs`
+checks actual process output and authenticated server effects. Offline bootstrap
+remains in `composition/auth_command.rs`; it requires explicit `--local` selection.
+Cloud auth is reserved but not implemented. See [local auth](guides/local-auth.md).

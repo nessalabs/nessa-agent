@@ -129,6 +129,11 @@ that their combination describes a possible execution.
   owner. Test both cases, including competing uncertain cleanup and audit failures.
   Reconciliation and publication must be atomic with respect to incoming evidence;
   repeated reconciliation must not duplicate failures or grow the report.
+  At gateway boundaries, extend ownership tests through caller disconnect and
+  reconnect: detached commands must retain bounded admission ownership, and
+  permission/close controls must remain available under normal-request pressure.
+  Compare live projections with saved terminal evidence in both arrival orders;
+  a replacement view must not revive removed server state or duplicate output.
   Keep diagnostic errors out of admission and resource-ownership decisions:
   transport rejection, provider settlement, local cancellation, physical cleanup,
   and audit acknowledgement require explicit facts. Exercise identical diagnostics
@@ -245,6 +250,9 @@ TypeScript, backend and frontend, tests, scripts, configuration, and docs.
   neighboring source, tests, and documentation. Identify its layer, responsibility,
   lifecycle, and dependencies; follow the established layout rather than adding
   another top-level catch-all file or parallel implementation.
+- Establish context/feature-first, then role directories for new code from day
+  one, with a module map and corresponding test locations. Existing SDK moves
+  are tracked in [the organization TODO](docs/todo/sdk-context-first-organization.md).
 - Keep feature vocabulary consistent across layers. Within a context, separate
   sessions, executions, tools, permissions, or other real responsibilities before
   grouping by DDD role. Shared terminology does not require empty mirrored folders
