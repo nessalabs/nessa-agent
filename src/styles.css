@@ -803,10 +803,20 @@ body {
   inset: 0;
   display: grid;
   place-items: center;
-  --nessa-reveal-seed: 1450ms;
+  /*
+   * The seed is the knob. It is the only stage with nothing to do but be
+   * watched, so it is the one that decides whether the opening feels unhurried
+   * or merely slow — and at this length the chime very nearly ends as the
+   * first words settle, which is the whole reason for the sound being there.
+   */
+  --nessa-reveal-seed: 2950ms;
   --nessa-reveal-bloom: 760ms;
   --nessa-reveal-settle: 300ms;
-  --nessa-reveal-content: 2500ms;
+  /* Derived, not chosen: content arrives when the panel has settled, whatever
+     the stages above are set to. */
+  --nessa-reveal-content: calc(
+    var(--nessa-reveal-seed) + var(--nessa-reveal-bloom) + var(--nessa-reveal-settle)
+  );
   /* The palette the seed is lit with. It is the panel's own, so the glow that
      opens the window and the window's background are one colour scheme. */
   --nessa-reveal-glow-cool: 150 116 214;
