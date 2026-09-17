@@ -64,3 +64,48 @@ fn names_are_what_the_wire_and_the_interface_use() {
     );
     assert_eq!(Readiness::NotInstalled.as_str(), "not-installed");
 }
+
+mod cross_origin {
+    use axum::http::{header, HeaderMap, HeaderValue};
+
+    use crate::agents::entrypoint::http::handle_http_agents;
+
+    fn from(origin: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if let Some(value) = origin {
+            headers.insert(header::ORIGIN, HeaderValue::from_str(value).unwrap());
+        }
+        headers
+    }
+
+    #[tokio::test]
+    async fn lets_the_app_read_the_answer() {
+        // The app's webview is on tauri://localhost, so every request it makes
+        // is cross-origin and needs the header to be released to the page.
+        let response = handle_http_agents(from(Some("tauri://localhost"))).await;
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .and_then(|value| value.to_str().ok()),
+            Some("tauri://localhost")
+        );
+    }
+
+    #[tokio::test]
+    async fn refuses_a_page_on_any_other_origin() {
+        // Unauthenticated is not the same as open to every site you visit.
+        let response = handle_http_agents(from(Some("https://evil.example"))).await;
+        assert_eq!(response.status(), 403);
+    }
+
+    #[tokio::test]
+    async fn answers_a_caller_that_is_not_a_page_at_all() {
+        let response = handle_http_agents(from(None)).await;
+        assert_eq!(response.status(), 200);
+        assert!(!response
+            .headers()
+            .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
+    }
+}
