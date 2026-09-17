@@ -37,15 +37,15 @@
         "visible": false
       },
       {
-        "label": "setup-dim",
-        "url": "index.html?surface=setup-dim",
-        "title": "Nessa",
+        "label": "setup",
+        "url": "index.html?surface=setup",
+        "title": "Welcome to Nessa",
+        "resizable": false,
         "transparent": true,
         "decorations": false,
         "shadow": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "focus": false,
         "visible": true
       }
     ]

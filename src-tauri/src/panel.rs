@@ -43,13 +43,9 @@ pub fn toggle(app: &AppHandle) -> bool {
     true
 }
 
-/// The first-run setup window: an ordinary app window, with a frame the system
-/// draws and a titlebar you can drag it by.
+/// The first-run setup window, which is a screen-covering takeover rather than
+/// a panel.
 pub const SETUP_WINDOW: &str = "setup";
-
-/// The sheet behind it that takes the desktop away while setup opens, and goes
-/// once it has.
-pub const SETUP_DIM_WINDOW: &str = "setup-dim";
 
 /// Put the panel on screen the way summoning it does.
 ///
@@ -66,65 +62,6 @@ pub fn summon_panel(app: AppHandle) {
     show(&window, &settings(&app));
 }
 
-/// Open the setup window, which the opening produces rather than precedes.
-///
-/// It is built at this moment rather than at launch because a window exists
-/// the instant it is created: its frame, its corners and its controls are all
-/// there, and a box sitting on screen while a light is supposed to be becoming
-/// one gives the whole thing away. Building it late also means its own
-/// animations start when it appears instead of having run out while it was
-/// hidden.
-#[tauri::command]
-pub fn open_setup_window(app: AppHandle) {
-    if let Some(window) = app.get_webview_window(SETUP_WINDOW) {
-        let _ = window.show();
-        crate::platform::current().present_setup(&window);
-    } else {
-        match build_setup_window(&app) {
-            Ok(window) => crate::platform::current().present_setup(&window),
-            Err(error) => {
-                eprintln!("[nessa] could not open setup: {error}");
-                // Leave the dim rather than stranding the person behind a
-                // sheet with nothing on it; setup failing is bad, and setup
-                // failing invisibly under a light is worse.
-            }
-        }
-    }
-    // The dim's whole purpose was to reach this moment. It is hidden from here
-    // rather than left to remove itself, because a window covering the screen
-    // must not be the only thing responsible for getting off it — that is how
-    // a light ended up sitting over the desktop permanently.
-    //
-    // Hidden rather than closed: the chime that accompanies the opening is
-    // longer than the opening, and closing the window would cut it off. It
-    // closes itself once the sound is done, which by then is housekeeping
-    // rather than anything anyone can see.
-    if let Some(dim) = app.get_webview_window(SETUP_DIM_WINDOW) {
-        let _ = dim.hide();
-    }
-}
-
-/// An ordinary app window: the system draws its frame, shadow, corners and
-/// controls, and the transparent titlebar leaves only the controls showing
-/// while still being the thing you drag it by.
-fn build_setup_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
-    tauri::WebviewWindowBuilder::new(
-        app,
-        SETUP_WINDOW,
-        tauri::WebviewUrl::App("index.html?surface=setup".into()),
-    )
-    .title("Welcome to Nessa")
-    .inner_size(560.0, 560.0)
-    .center()
-    .resizable(false)
-    .maximizable(false)
-    .decorations(true)
-    .title_bar_style(tauri::utils::TitleBarStyle::Overlay)
-    .hidden_title(true)
-    .skip_taskbar(true)
-    .build()
-}
-
 /// Opens first-run setup again, from the beginning.
 ///
 /// Setup finishes by closing its own window, so there is usually nothing left
@@ -133,36 +70,32 @@ fn build_setup_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 /// holds its progress in memory and showing it again mid-flow would resume it
 /// rather than restart it.
 pub fn restart_onboarding(app: &AppHandle) {
-    // A setup window left over from last time is closed rather than reused:
-    // the opening builds its own, and reusing one would skip it.
     if let Some(window) = app.get_webview_window(SETUP_WINDOW) {
-        let _ = window.close();
-    }
-    if let Some(window) = app.get_webview_window(SETUP_DIM_WINDOW) {
         let _ = window.eval("window.location.reload()");
         let _ = window.show();
-        crate::platform::current().present_dim(&window);
+        crate::platform::current().present_overlay(&window);
         return;
     }
 
-    // Only the dim. It runs the opening and opens setup itself when the light
-    // has filled, which is the same order a first launch follows.
-    let dim = tauri::WebviewWindowBuilder::new(
+    let built = tauri::WebviewWindowBuilder::new(
         app,
-        SETUP_DIM_WINDOW,
-        tauri::WebviewUrl::App("index.html?surface=setup-dim".into()),
+        SETUP_WINDOW,
+        tauri::WebviewUrl::App("index.html?surface=setup".into()),
     )
-    .title("Nessa")
+    .title("Welcome to Nessa")
+    .resizable(false)
     .transparent(true)
     .decorations(false)
     .shadow(false)
     .always_on_top(true)
+    // Deliberately not maximized: `present_overlay` gives it the whole screen,
+    // menu bar included, and maximizing fits a window to the *visible* frame —
+    // which is the screen minus exactly the parts this needs to cover.
     .skip_taskbar(true)
-    .focused(false)
     .build();
-    match dim {
-        Ok(window) => crate::platform::current().present_dim(&window),
-        Err(error) => eprintln!("[nessa] could not reopen the setup dim: {error}"),
+    match built {
+        Ok(window) => crate::platform::current().present_overlay(&window),
+        Err(error) => eprintln!("[nessa] could not reopen setup: {error}"),
     }
 }
 

@@ -4,8 +4,7 @@
   "description": "What the floating Nessa window is allowed to ask the host for.",
   "windows": [
     "main",
-    "setup",
-    "setup-dim"
+    "setup"
   ],
   "permissions": [
     "core:default",

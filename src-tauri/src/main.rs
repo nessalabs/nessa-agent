@@ -28,7 +28,6 @@ fn main() {
             platform::set_frosted,
             platform::panel_size,
             platform::flush_compositor,
-            panel::open_setup_window,
             panel::summon_panel,
             surface_credential::load_surface_credential,
             shortcuts::load_shortcuts,
@@ -78,11 +77,10 @@ fn main() {
                 platform::bind_window(&window, &settings);
             }
 
-            // Only the dim exists at launch. It runs the opening and opens the
-            // setup window itself, once there is a filled light for that window
-            // to be.
-            if let Some(window) = app.get_webview_window(panel::SETUP_DIM_WINDOW) {
-                platform::current().present_dim(&window);
+            // Setup is a takeover: it covers the screen, menu bar included, and
+            // is the active window when it does.
+            if let Some(window) = app.get_webview_window(panel::SETUP_WINDOW) {
+                platform::current().present_overlay(&window);
             }
 
             // The panel reads these on every show, to re-fit the frame.

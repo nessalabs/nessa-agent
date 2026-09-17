@@ -174,11 +174,11 @@ export { inTauri }
  * shell is concerned. A plain browser has no second window and always paints
  * the panel.
  */
-export function windowSurface(): "panel" | "setup" | "setup-dim" {
+export function windowSurface(): "panel" | "setup" {
   if (typeof window === "undefined") return "panel"
-  const surface = new URLSearchParams(window.location.search).get("surface")
-  if (surface === "setup" || surface === "setup-dim") return surface
-  return "panel"
+  return new URLSearchParams(window.location.search).get("surface") === "setup"
+    ? "setup"
+    : "panel"
 }
 
 /**
@@ -197,33 +197,6 @@ export async function finishSetupWindow() {
   await invoke("summon_panel")
   const { getCurrentWindow } = await import("@tauri-apps/api/window")
   await getCurrentWindow().close()
-}
-
-/**
- * Open the setup window, once the opening has produced something for it to be.
- *
- * It is built at this moment rather than waiting hidden, so that its frame is
- * not on screen during the opening and its own animations start when it
- * appears rather than having run out while nobody could see them.
- */
-export async function openSetupWindow() {
-  if (!inTauri) return
-  const { invoke } = await import("@tauri-apps/api/core")
-  await invoke("open_setup_window")
-}
-
-/**
- * Close the dim once it has nothing left to do.
- *
- * The host has already hidden it by the time this runs, so this is
- * housekeeping: nothing visible depends on it, which is the point — a window
- * covering the screen must never be the only thing that can remove it.
- */
-export async function closeSetupDim() {
-  if (!inTauri) return
-  const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow")
-  const dim = await WebviewWindow.getByLabel("setup-dim")
-  await dim?.close()
 }
 
 export function hasNativeHost(): boolean {

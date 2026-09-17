@@ -6,7 +6,7 @@ import "@fontsource-variable/geist"
 import "@fontsource-variable/geist-mono"
 import "./styles.css"
 
-import { SetupDim, SetupGate } from "./onboarding"
+import { SetupGate } from "./onboarding"
 import { App } from "./panel"
 import { SessionLifecycle } from "./session"
 import { makeStore } from "./store"
@@ -35,9 +35,7 @@ const panel = (
 
 createRoot(container).render(
   <React.StrictMode>
-    {windowSurface() === "setup-dim" ? (
-      <SetupDim />
-    ) : windowSurface() === "setup" ? (
+    {windowSurface() === "setup" ? (
       <SetupGate>{panel}</SetupGate>
     ) : !hasNativeHost() && environment.conversation.backend === "local" ? (
       <BrowserApplication environment={environment} />
