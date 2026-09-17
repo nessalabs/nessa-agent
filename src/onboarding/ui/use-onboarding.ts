@@ -1,13 +1,7 @@
 import * as React from "react"
 import type { ShortcutsDocument } from "@nessa/client"
 import defaults from "../../../protocol/defaults/shortcuts.v1.json"
-import {
-  host,
-  loadShortcuts,
-  matchesAccelerator,
-  onSummoned,
-  recordSetupComplete,
-} from "../../host"
+import { host, loadShortcuts, matchesAccelerator, onSummoned } from "../../host"
 import { playCue } from "./sound"
 import { listenForDismiss } from "./dismiss-shortcut"
 import { createReadinessCheck } from "../application/readiness-check"
@@ -81,8 +75,10 @@ export interface Onboarding {
 /**
  * Coordinates first-run setup for the panel.
  *
- * Finishing setup is recorded with the host, so a relaunch opens straight into
- * the panel. Only that fact is kept: the chosen agent still lives in memory,
+ * Finishing setup is recorded in the state and nowhere else. Persisting it with
+ * the host — so a relaunch opens straight into the panel — belongs to whoever
+ * hands over to the panel, because it must not outrun a handoff that fails.
+ * Only that one fact is ever kept: the chosen agent still lives in memory,
  * because no provider is configured against it and nothing reads it back.
  * Connecting the choice to a gateway is a separate step; keeping it out means
  * this hook cannot imply an agent is ready to run.
@@ -268,21 +264,13 @@ export function useOnboarding(
       if (!practising) return
       playCue("celebrate")
       setState(completeOnboarding)
-      // Finishing is what is recorded, and dismissing deliberately is not.
-      // They are different acts in the model — `completeOnboarding` keeps the
-      // agent, `dismissOnboarding` keeps nothing and says the next run starts
-      // over — and the ways out of setup are Escape, the corner mark, and a
-      // click on the dimmed screen behind it. Any of those can be a slip on a
-      // window that covers the whole display; treating one as "done forever"
-      // would bury first-run setup on a machine where nobody chose anything.
-      // Leaving without finishing stays free to change its mind.
-      //
-      // Not awaited, and its failure does not travel: the handoff to the panel
-      // is the thing somebody is waiting on, and a settings file that would not
-      // take the flag costs them a second run of setup, not their panel.
-      void recordSetupComplete().catch((cause: unknown) => {
-        console.warn("[nessa] could not record that setup finished", cause)
-      })
+      // Finishing is recorded in the state rather than persisted from here.
+      // `completeOnboarding` keeps the agent and marks the ending a completion;
+      // `dismissOnboarding` keeps nothing and marks it a dismissal. Which of
+      // the two happened is half of what decides whether setup is written off
+      // for good — the other half is whether the panel actually came up, which
+      // this callback cannot know. The surface that learns it makes that call
+      // (see `recordsSetupCompletion`).
     }, [practising]),
     // Leaving is not an accomplishment and does not announce itself.
     dismiss: React.useCallback(() => setState(dismissOnboarding), []),

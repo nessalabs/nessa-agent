@@ -14,4 +14,4 @@
 //! inside this one.
 mod claude;
 mod local;
-pub use local::LocalAgentProbe;
+pub use local::{AgentLaunchFiles, LocalAgentProbe};

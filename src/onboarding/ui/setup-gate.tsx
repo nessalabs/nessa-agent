@@ -2,6 +2,7 @@ import * as React from "react"
 import {
   closeSetupWindow,
   finishSetupWindow,
+  recordSetupComplete,
   revealSetupWindow,
   type SetupHandoff,
 } from "../../host"
@@ -11,6 +12,7 @@ import { SetupChrome } from "./setup-chrome"
 import { useIntroSound } from "./use-intro-sound"
 import { useOnboarding } from "./use-onboarding"
 import type { AgentReadinessSource } from "../application/ports"
+import { recordsSetupCompletion } from "../application/setup-completion"
 
 /** The buttons on the handoff-failure screen, which are the whole point of it:
  * a window with nothing in it but a sentence is a window someone has to kill. */
@@ -116,13 +118,29 @@ export function SetupGate({
     return () => cancelAnimationFrame(shown)
   }, [])
 
+  // Handing over to the panel, and — only if that lands — writing setup off for
+  // good. The order matters and used to be the other way round: the flag was
+  // persisted the moment somebody pressed the last button, so a panel that
+  // failed to come up left them on the recovery screen with first-run setup
+  // already marked done forever on a machine they had never seen it work on.
+  // The rule about which endings count is `recordsSetupCompletion`.
+  const setup = onboarding.state
   React.useEffect(() => {
     if (onboarding.active || handedOver) return
     setHandedOver(true)
     void finishSetupWindow()
-      .then(setHandoff)
+      .then((landed) => {
+        setHandoff(landed)
+        if (!recordsSetupCompletion(setup, landed.outcome)) return
+        // Not awaited, and its failure does not travel: the handoff is the
+        // thing somebody is waiting on, and a settings file that would not take
+        // the flag costs them a second run of setup, not their panel.
+        void recordSetupComplete().catch((cause: unknown) => {
+          console.warn("[nessa] could not record that setup finished", cause)
+        })
+      })
       .catch((cause: unknown) => setHandoff({ outcome: "panel-unavailable", cause }))
-  }, [onboarding.active, handedOver])
+  }, [onboarding.active, handedOver, setup])
 
   // Asking for the handoff again is putting the gate back where it was before
   // the first attempt: the effect above is what performs it, and it runs again

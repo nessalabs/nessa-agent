@@ -14,12 +14,31 @@ use std::path::Path;
 use tempfile::TempDir;
 
 /// A probe told exactly what composition resolved and nothing more.
-fn probe(installed: bool, config: Option<&Path>, credential: Option<&str>) -> LocalAgentProbe {
+fn probe(
+    launch_files: Option<AgentLaunchFiles>,
+    config: Option<&Path>,
+    credential: Option<&str>,
+) -> LocalAgentProbe {
     LocalAgentProbe {
-        claude_installed: installed,
+        claude_launch_files: launch_files,
         environment_credential: credential.map(str::to_owned),
         claude_config_directory: config.map(Path::to_path_buf),
     }
+}
+
+/// The pair of paths composition would resolve for an agent rooted at `root`,
+/// whether or not anything has been written there yet.
+fn launch_files(root: &Path) -> Option<AgentLaunchFiles> {
+    Some(AgentLaunchFiles {
+        runtime: root.join("node"),
+        entry: root.join("acp-entry.js"),
+    })
+}
+
+/// Put both files in place, as installing the agent would.
+fn install(root: &Path) {
+    std::fs::write(root.join("node"), b"#!/bin/sh\n").unwrap();
+    std::fs::write(root.join("acp-entry.js"), b"// entry\n").unwrap();
 }
 
 #[test]
@@ -27,7 +46,7 @@ fn a_machine_with_no_agent_configured_at_all_is_a_real_no() {
     // Nothing to launch is an answer, not a failure to look: composition asked
     // the configuration and the configuration said there is no agent.
     assert_eq!(
-        probe(false, None, None).installed(AgentId::Claude),
+        probe(None, None, None).installed(AgentId::Claude),
         Ok(false)
     );
 }
@@ -46,14 +65,87 @@ fn a_configured_agent_is_installed_wherever_this_executable_happens_to_live() {
         sibling.is_some_and(|path| !path.is_dir()),
         "this test only means something where the old heuristic would have said no"
     );
-    assert_eq!(probe(true, None, None).installed(AgentId::Claude), Ok(true));
+    let root = TempDir::new().unwrap();
+    install(root.path());
+    assert_eq!(
+        probe(launch_files(root.path()), None, None).installed(AgentId::Claude),
+        Ok(true)
+    );
+}
+
+#[test]
+fn a_configured_agent_missing_its_files_is_not_installed() {
+    let root = TempDir::new().unwrap();
+    assert_eq!(
+        probe(launch_files(root.path()), None, None).installed(AgentId::Claude),
+        Ok(false)
+    );
+    // Half an install is not an install: the launcher needs both files.
+    std::fs::write(root.path().join("node"), b"#!/bin/sh\n").unwrap();
+    assert_eq!(
+        probe(launch_files(root.path()), None, None).installed(AgentId::Claude),
+        Ok(false)
+    );
+}
+
+#[test]
+fn installing_the_agent_while_the_server_runs_changes_the_answer() {
+    // The regression this file exists for. Setup's "check again" is for the
+    // user who was not ready when it opened, and installing the agent is the
+    // most obvious way to become ready. One probe, built before the files
+    // existed, asked twice — the second answer must reflect the machine as it
+    // is now, not as it was when this process started.
+    let root = TempDir::new().unwrap();
+    let probe = probe(launch_files(root.path()), None, None);
+    assert_eq!(probe.installed(AgentId::Claude), Ok(false));
+    install(root.path());
+    assert_eq!(probe.installed(AgentId::Claude), Ok(true));
+}
+
+#[test]
+fn a_directory_where_a_file_belongs_is_not_an_installed_agent() {
+    let root = TempDir::new().unwrap();
+    install(root.path());
+    std::fs::remove_file(root.path().join("node")).unwrap();
+    std::fs::create_dir(root.path().join("node")).unwrap();
+    assert_eq!(
+        probe(launch_files(root.path()), None, None).installed(AgentId::Claude),
+        Ok(false)
+    );
+}
+
+/// Making a path unreadable needs Unix permissions, and root ignores them.
+#[cfg(unix)]
+mod when_the_path_cannot_be_read {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn an_unreadable_path_leaves_the_answer_undetermined_rather_than_no() {
+        // "I am not allowed to look" is not "the agent is not installed".
+        // Reported as a failure so setup does not offer an install to a user
+        // who already has one.
+        let root = TempDir::new().unwrap();
+        let sealed = root.path().join("sealed");
+        std::fs::create_dir(&sealed).unwrap();
+        install(&sealed);
+        std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Root is refused nothing, so on such a host there is no failure to see.
+        let enforced = std::fs::read_dir(&sealed).is_err();
+        let answer = probe(launch_files(&sealed), None, None).installed(AgentId::Claude);
+        // Restore before asserting so the temporary directory can be removed.
+        std::fs::set_permissions(&sealed, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if enforced {
+            assert_eq!(answer, Err(ProbeFailure::Unanswered));
+        }
+    }
 }
 
 #[test]
 fn nowhere_to_look_for_a_credentials_file_is_not_the_same_as_not_finding_one() {
     // No CLAUDE_CONFIG_DIR and no home directory: the question was never asked.
     assert_eq!(
-        probe(false, None, None).claude_credentials_file(),
+        probe(None, None, None).claude_credentials_file(),
         Err(ProbeFailure::NothingToAsk)
     );
 }
@@ -67,11 +159,11 @@ fn a_credentials_file_settles_the_question_before_the_keychain_is_asked() {
     )
     .unwrap();
     assert_eq!(
-        probe(false, Some(config.path()), None).claude_credentials_file(),
+        probe(None, Some(config.path()), None).claude_credentials_file(),
         Ok(true)
     );
     assert_eq!(
-        probe(false, Some(config.path()), None).authenticated(AgentId::Claude),
+        probe(None, Some(config.path()), None).authenticated(AgentId::Claude),
         Ok(true)
     );
 }
@@ -80,7 +172,7 @@ fn a_credentials_file_settles_the_question_before_the_keychain_is_asked() {
 fn an_api_key_in_the_environment_answers_before_anything_is_looked_at() {
     // A machine account signs in this way; no file and no keychain is consulted.
     assert_eq!(
-        probe(false, None, Some("key")).authenticated(AgentId::Claude),
+        probe(None, None, Some("key")).authenticated(AgentId::Claude),
         Ok(true)
     );
 }
@@ -96,7 +188,7 @@ mod without_a_keychain {
     fn a_host_with_no_keychain_answers_from_the_file_and_the_environment_alone() {
         let config = TempDir::new().unwrap();
         assert_eq!(
-            probe(false, Some(config.path()), None).authenticated(AgentId::Claude),
+            probe(None, Some(config.path()), None).authenticated(AgentId::Claude),
             Ok(false)
         );
     }
@@ -104,7 +196,7 @@ mod without_a_keychain {
     #[test]
     fn with_nowhere_to_look_at_all_the_answer_is_undetermined_rather_than_no() {
         assert_eq!(
-            probe(false, None, None).authenticated(AgentId::Claude),
+            probe(None, None, None).authenticated(AgentId::Claude),
             Err(ProbeFailure::NothingToAsk)
         );
     }

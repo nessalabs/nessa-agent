@@ -12,6 +12,7 @@ import {
   confirmAgent,
   dismissOnboarding,
   isOnboarding,
+  isOnboardingCompleted,
   pressSummon,
   startAgentChoice,
 } from "./onboarding"
@@ -54,7 +55,11 @@ describe("first-run setup", () => {
     })
     expect(isOnboarding(summon)).toBe(true)
     // The shortcut lesson is the last step: finishing it finishes setup.
-    expect(completeOnboarding(summonPressed())).toEqual({ step: "done", agent: "claude" })
+    expect(completeOnboarding(summonPressed())).toEqual({
+      step: "done",
+      outcome: "completed",
+      agent: "claude",
+    })
   })
 
   it("does not record an agent no provider can run", () => {
@@ -107,7 +112,11 @@ describe("first-run setup", () => {
     // Nothing else can: a configuration that registers no accelerator has
     // nothing to press, and refusing to finish left setup with no way out but
     // abandoning it, which records nothing and starts over next launch.
-    expect(completeOnboarding(atSummon())).toEqual({ step: "done", agent: "claude" })
+    expect(completeOnboarding(atSummon())).toEqual({
+      step: "done",
+      outcome: "completed",
+      agent: "claude",
+    })
   })
 
   it("ignores steps that do not apply to the current one", () => {
@@ -249,9 +258,12 @@ describe("what the runtimes answered", () => {
 
 describe("leaving setup without finishing it", () => {
   it("dismisses from any step and records no agent", () => {
-    expect(dismissOnboarding(beginOnboarding())).toEqual({ step: "done" })
+    expect(dismissOnboarding(beginOnboarding())).toEqual({
+      step: "done",
+      outcome: "dismissed",
+    })
     const chosen = chooseAgent(startAgentChoice(beginOnboarding()), "claude")
-    expect(dismissOnboarding(chosen)).toEqual({ step: "done" })
+    expect(dismissOnboarding(chosen)).toEqual({ step: "done", outcome: "dismissed" })
     expect(isOnboarding(dismissOnboarding(chosen))).toBe(false)
   })
 
@@ -259,5 +271,29 @@ describe("leaving setup without finishing it", () => {
     const done = completeOnboarding(summonPressed())
     expect(done.step).toBe("done")
     expect(dismissOnboarding(done)).toBe(done)
+    // Including the record of how it ended: a dismissal arriving after the
+    // finish must not downgrade a completion to a walk-out.
+    expect(isOnboardingCompleted(dismissOnboarding(done))).toBe(true)
+  })
+
+  it("says which of the two endings reached done", () => {
+    // Both land on the same step, and only one of them is somebody having
+    // chosen. Anything that writes setup off for good reads this rather than
+    // guessing from which way the surface got here.
+    const finished = completeOnboarding(summonPressed())
+    const left = dismissOnboarding(atSummon())
+    expect(finished.step).toBe(left.step)
+    expect(finished.outcome).toBe("completed")
+    expect(left.outcome).toBe("dismissed")
+    expect(isOnboardingCompleted(finished)).toBe(true)
+    expect(isOnboardingCompleted(left)).toBe(false)
+  })
+
+  it("does not read an unfinished step, or an outcome-less done, as finished", () => {
+    expect(isOnboardingCompleted(beginOnboarding())).toBe(false)
+    expect(isOnboardingCompleted(atSummon())).toBe(false)
+    // A done with nothing recorded about how it got there is not evidence that
+    // anybody chose anything.
+    expect(isOnboardingCompleted({ step: "done", agent: "claude" })).toBe(false)
   })
 })

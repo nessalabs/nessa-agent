@@ -1,6 +1,6 @@
 //! Local product dependency factory. Provider choices stay outside route handlers.
 use crate::{
-    agents::infrastructure::LocalAgentProbe,
+    agents::infrastructure::{AgentLaunchFiles, LocalAgentProbe},
     app::ports::Clock as ServerClock,
     browser_session::adapters::PersistentSessions,
     conversation::{
@@ -84,11 +84,13 @@ pub(super) fn product_state(
     // acts on: the configuration resolved above, and whether the two files it
     // would actually execute are there. A bundled desktop run and a plain
     // server run answer this the same way, because they answer it from the
-    // same place.
-    let agent_installed = settings
-        .agent
-        .as_ref()
-        .is_some_and(|agent| agent.node.is_file() && agent.acp_entry.is_file());
+    // same place. Composition settles *which* paths those are and hands them
+    // over; it does not settle whether they exist, because a user can install
+    // the agent long after this runs and setup has a button that says so.
+    let agent_launch_files = settings.agent.as_ref().map(|agent| AgentLaunchFiles {
+        runtime: agent.node.clone(),
+        entry: agent.acp_entry.clone(),
+    });
     let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
     let admin = Arc::new(LocalAdmin {
         store: store.clone(),
@@ -103,7 +105,7 @@ pub(super) fn product_state(
             clock: Arc::new(SystemClock),
             policy,
             uptime_clock: uptime,
-            agent_probe: Arc::new(LocalAgentProbe::from_environment(agent_installed)),
+            agent_probe: Arc::new(LocalAgentProbe::from_environment(agent_launch_files)),
         },
     )
     .with_admin(admin)

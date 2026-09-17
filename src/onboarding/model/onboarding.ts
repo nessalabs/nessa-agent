@@ -81,9 +81,31 @@ export const AGENT_CHOICES: readonly AgentChoice[] = Object.freeze([
  * someone and the thing they came for. */
 export type OnboardingStep = "welcome" | "agent" | "summon" | "done"
 
+/**
+ * How setup stopped being on screen.
+ *
+ * Both ways of leaving land on `done`, and they are not the same act: one is
+ * somebody having chosen, the other is somebody having left — Escape, the
+ * corner mark, or a click on the dimmed screen behind a window that covers the
+ * whole display. Everything downstream that treats "done forever" differently
+ * from "done for now" reads this, rather than inferring it from which callback
+ * a surface happened to run.
+ */
+export type OnboardingOutcome =
+  /** Setup was finished from the last step. */
+  | "completed"
+  /** Setup was left without finishing it. */
+  | "dismissed"
+
 /** What the panel is showing during first run. */
 export interface OnboardingState {
   step: OnboardingStep
+  /**
+   * How `done` was reached. Absent on every other step, and absent on a `done`
+   * state that predates this record — which is read as "not a completion",
+   * because the one thing this decides is whether to write setup off for good.
+   */
+  outcome?: OnboardingOutcome
   /** The agent picked so far, if any. Never an unavailable one. */
   agent?: AgentId
   /**
@@ -234,7 +256,7 @@ export function pressSummon(state: OnboardingState, showing: boolean): Onboardin
  * agent chosen on the way out is not a completed setup, and the next run starts
  * over. */
 export function dismissOnboarding(state: OnboardingState): OnboardingState {
-  return state.step === "done" ? state : { step: "done" }
+  return state.step === "done" ? state : { step: "done", outcome: "dismissed" }
 }
 
 /**
@@ -248,13 +270,29 @@ export function dismissOnboarding(state: OnboardingState): OnboardingState {
  * decides what to offer on the strength of it; refusing to finish is not that
  * decision. The lesson does not travel into the finished state — it was about
  * the step, not the setup.
+ *
+ * The finish is recorded in the state itself. Which of the two ways out was
+ * taken decides whether setup is written off for good, and that is a fact about
+ * the setup rather than about the order a surface's callbacks ran in.
  */
 export function completeOnboarding(state: OnboardingState): OnboardingState {
   if (state.step !== "summon") return state
-  return { step: "done", agent: state.agent }
+  return { step: "done", outcome: "completed", agent: state.agent }
 }
 
 /** Whether the panel should show setup instead of the conversation. */
 export function isOnboarding(state: OnboardingState): boolean {
   return state.step !== "done"
+}
+
+/**
+ * Whether setup was finished rather than left.
+ *
+ * False for every step that is still on screen, and false for a `done` that
+ * carries no outcome: without a recorded completion there is nothing to say
+ * somebody chose anything, and the cost of guessing wrong is first-run setup
+ * buried on a machine where nobody did.
+ */
+export function isOnboardingCompleted(state: OnboardingState): boolean {
+  return state.step === "done" && state.outcome === "completed"
 }
