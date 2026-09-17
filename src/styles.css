@@ -740,6 +740,31 @@ body {
 }
 
 /*
+ * A cap with its own key down.
+ *
+ * This answers someone pressing the chord one key at a time, which is most
+ * people the first time: holding Command and hunting for Shift is told
+ * nothing by a surface that only reacts to the finished accelerator, and what
+ * they need to know at that moment is that they have started correctly.
+ *
+ * It is a transition rather than an animation, because it has to be able to
+ * go back — a key is let go as often as it is pressed.
+ */
+.nessa-keycap {
+  transition:
+    background-color 90ms ease-out,
+    border-color 90ms ease-out,
+    translate 90ms ease-out;
+}
+
+.nessa-keycap[data-held] {
+  border-color: rgb(255 255 255 / 0.95);
+  background: rgb(255 255 255 / 0.22);
+  /* Down by the depth of its own front wall, as a real one would be. */
+  translate: 0 2px;
+}
+
+/*
  * A pressed cap.
  *
  * It travels the depth of its own front wall and stays down and lit, because

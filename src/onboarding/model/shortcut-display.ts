@@ -114,3 +114,75 @@ export function formatAccelerator(keys: string, platform: ShortcutPlatform): str
   const written = acceleratorKeys(keys, platform)
   return platform === "apple" ? written.join("") : written.join("+")
 }
+
+/**
+ * Which keys are down right now.
+ *
+ * Modifier state comes off any keyboard event, so this is knowable even for a
+ * chord the window never receives whole — pressing Command alone is a key
+ * event like any other, and only the completed accelerator is claimed by the
+ * system.
+ */
+export interface HeldKeys {
+  meta: boolean
+  ctrl: boolean
+  alt: boolean
+  shift: boolean
+  /** The non-modifier key held, lowercased, if there is one. */
+  key?: string
+}
+
+/** Nothing held: the resting state, and what a surface starts from. */
+export const NOTHING_HELD: HeldKeys = Object.freeze({
+  meta: false,
+  ctrl: false,
+  alt: false,
+  shift: false,
+})
+
+/** Whether a single accelerator token is currently down. Unknown tokens are
+ * compared as plain keys, which is what they are. */
+function tokenHeld(token: string, platform: ShortcutPlatform, held: HeldKeys): boolean {
+  switch (token) {
+    // The one binding that is two different keys depending on the keyboard.
+    case "cmdorctrl":
+    case "commandorcontrol":
+    case "cmd":
+    case "command":
+      return platform === "apple" ? held.meta : held.ctrl
+    case "super":
+    case "meta":
+      return held.meta
+    case "ctrl":
+    case "control":
+      return held.ctrl
+    case "alt":
+    case "option":
+      return held.alt
+    case "shift":
+      return held.shift
+    default:
+      return held.key === token
+  }
+}
+
+/**
+ * For each keycap of `keys`, whether that key is held down — in the same order
+ * as [`acceleratorKeys`], so a caller can pair them off by index.
+ *
+ * This is what lets the step answer a person pressing the chord one key at a
+ * time. Waiting for the whole accelerator tells someone who has Command down
+ * and is hunting for Shift nothing at all, and the thing they most need to
+ * know is that they have started correctly.
+ */
+export function heldAcceleratorKeys(
+  keys: string,
+  platform: ShortcutPlatform,
+  held: HeldKeys,
+): boolean[] {
+  return keys
+    .split("+")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .map((part) => tokenHeld(part.toLowerCase(), platform, held))
+}

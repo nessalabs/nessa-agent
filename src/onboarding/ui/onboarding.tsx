@@ -2,6 +2,7 @@ import * as React from "react"
 import { Check } from "lucide-react"
 import { AgentMark } from "./agent-mark"
 import { Keycaps } from "./keycaps"
+import { useHeldKeys } from "./use-held-keys"
 import type { ShortcutPlatform } from "../model/shortcut-display"
 import { Button } from "@nessa-ui/react/button"
 import {
@@ -174,6 +175,10 @@ export function Onboarding({
   onConfirm: () => void
   onFinish: () => void
 }) {
+  // Called unconditionally, as a hook must be; it only listens on the step
+  // that has keys to light.
+  const held = useHeldKeys(state.step === "summon")
+
   if (state.step === "welcome") {
     return (
       <SetupStage>
@@ -212,7 +217,12 @@ export function Onboarding({
             {summonHeading(state.summon, Boolean(accelerator))}
           </h1>
           {accelerator ? (
-            <Keycaps keys={accelerator} platform={platform} pressed={state.summon} />
+            <Keycaps
+              keys={accelerator}
+              platform={platform}
+              pressed={state.summon}
+              held={held}
+            />
           ) : null}
         </SetupStep>
       </SetupStage>
