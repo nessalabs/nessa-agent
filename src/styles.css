@@ -765,59 +765,44 @@ body {
 }
 
 /*
- * A pressed cap.
+ * A cap being pressed.
  *
- * It travels the depth of its own front wall and stays down and lit, because
- * a press is not a flourish — it is the thing the step was asking for, and the
- * cap is the receipt. The glow is warm rather than white so it belongs to the
- * wash behind it instead of reading as a focus ring.
+ * The press is a flash, not a state. A cap that stays lit after the fact is
+ * claiming a key is down when it is not, and with three of them lit at once
+ * the panel reads as a diagram of the shortcut rather than as keys answering
+ * a person — which also leaves nothing for an actual press to say. What the
+ * lesson has advanced is told by the line above them, which changes.
  */
-.nessa-keycap[data-pressed] {
-  border-color: rgb(255 255 255 / 0.95);
-  background: rgb(255 255 255 / 0.3);
-  box-shadow: 0 0 22px 2px rgb(255 255 255 / 0.35);
+.nessa-keycap[data-pressed="shown"] {
+  animation: nessa-keycap-press 280ms var(--nessa-motion-easing-arrival);
 }
 
 /*
- * The two presses of the toggle run the same motion under two names.
- *
- * An animation restarts when its *name* changes, not when some other attribute
- * does — so a single rule keyed on "pressed" would play once and then sit
- * there, and the second press, which is half the lesson, would land with no
- * acknowledgement at all.
+ * The second press runs the same motion under a second name. An animation
+ * restarts when its *name* changes and not when some other attribute does, so
+ * one rule would play once and leave the second press — half the lesson —
+ * with no acknowledgement at all.
  */
-.nessa-keycap[data-pressed="shown"] {
-  animation: nessa-keycap-press 260ms var(--nessa-motion-easing-arrival) both;
-}
-
 .nessa-keycap[data-pressed="hidden"] {
-  animation: nessa-keycap-press-again 260ms var(--nessa-motion-easing-arrival) both;
+  animation: nessa-keycap-press-again 280ms var(--nessa-motion-easing-arrival);
 }
 
 @keyframes nessa-keycap-press {
-  from {
-    transform: none;
-  }
-  45% {
+  40% {
     /* Bottomed out: the front wall is gone and the cap is flat on the board. */
-    transform: translateY(3px);
+    translate: 0 3px;
     border-bottom-width: 1.5px;
-  }
-  to {
-    transform: translateY(1px);
+    border-color: rgb(255 255 255 / 0.95);
+    background: rgb(255 255 255 / 0.34);
   }
 }
 
 @keyframes nessa-keycap-press-again {
-  from {
-    transform: translateY(1px);
-  }
-  45% {
-    transform: translateY(3px);
+  40% {
+    translate: 0 3px;
     border-bottom-width: 1.5px;
-  }
-  to {
-    transform: translateY(1px);
+    border-color: rgb(255 255 255 / 0.95);
+    background: rgb(255 255 255 / 0.34);
   }
 }
 
