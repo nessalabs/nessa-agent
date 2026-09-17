@@ -804,9 +804,9 @@ body {
   display: grid;
   place-items: center;
   --nessa-reveal-seed: 1450ms;
-  --nessa-reveal-bloom: 350ms;
+  --nessa-reveal-bloom: 760ms;
   --nessa-reveal-settle: 300ms;
-  --nessa-reveal-content: 2100ms;
+  --nessa-reveal-content: 2500ms;
   /* The palette the seed is lit with. It is the panel's own, so the glow that
      opens the window and the window's background are one colour scheme. */
   --nessa-reveal-glow-cool: 150 116 214;
@@ -884,9 +884,12 @@ body {
     0 0 90px 8px rgb(var(--nessa-reveal-glow-cool) / 0.34),
     0 0 170px 34px rgb(var(--nessa-reveal-glow-warm) / 0.17);
   animation:
-    nessa-setup-seed var(--nessa-reveal-seed) var(--nessa-motion-easing-standard) both,
-    nessa-setup-bloom var(--nessa-reveal-bloom) cubic-bezier(0.4, 0, 0.2, 1)
-      var(--nessa-reveal-seed) forwards;
+    /* Linear, because the shape's own drift is what should be felt, not an
+       easing curve pushing it about. */
+    nessa-setup-seed var(--nessa-reveal-seed) linear both,
+    /* Leaves without hurry and arrives without stopping dead. */ nessa-setup-bloom
+      var(--nessa-reveal-bloom) cubic-bezier(0.34, 0.16, 0.2, 1) var(--nessa-reveal-seed)
+      forwards;
 }
 
 /*
@@ -896,30 +899,36 @@ body {
 @keyframes nessa-setup-seed {
   0% {
     opacity: 0;
-    --nessa-orb-scale: 0.2;
-    --nessa-orb-wash: 3.1;
-    border-radius: 58% 42% 46% 54% / 52% 46% 54% 48%;
+    --nessa-orb-scale: 0.22;
+    --nessa-orb-wash: 2.86;
+    border-radius: 54% 46% 48% 52% / 51% 47% 53% 49%;
   }
-  22% {
+  26% {
     opacity: 1;
     --nessa-orb-scale: 0.3;
     --nessa-orb-wash: 2.1;
   }
-  45% {
-    --nessa-orb-scale: 0.33;
-    --nessa-orb-wash: 1.94;
-    border-radius: 32% 68% 74% 26% / 36% 70% 30% 64%;
+  /*
+   * Two shallow waypoints rather than a circuit of extreme ones. At this size,
+   * under this much blur, a large swing in the corners does not read as a
+   * shape changing — it reads as a small light twitching. The deviations are
+   * a few percent, and there is a lot of time to cross them.
+   */
+  50% {
+    --nessa-orb-scale: 0.32;
+    --nessa-orb-wash: 1.98;
+    border-radius: 47% 53% 55% 45% / 46% 54% 46% 54%;
   }
-  72% {
+  78% {
     --nessa-orb-scale: 0.31;
-    --nessa-orb-wash: 2.06;
-    border-radius: 70% 30% 24% 76% / 74% 28% 72% 26%;
+    --nessa-orb-wash: 2.03;
+    border-radius: 56% 44% 45% 55% / 57% 43% 57% 43%;
   }
   100% {
     opacity: 1;
-    --nessa-orb-scale: 0.34;
-    --nessa-orb-wash: 1.88;
-    border-radius: 52% 48% 44% 56% / 56% 44% 56% 44%;
+    --nessa-orb-scale: 0.33;
+    --nessa-orb-wash: 1.92;
+    border-radius: 51% 49% 49% 51% / 52% 48% 52% 48%;
   }
 }
 
@@ -930,9 +939,9 @@ body {
  */
 @keyframes nessa-setup-bloom {
   from {
-    --nessa-orb-scale: 0.34;
-    --nessa-orb-wash: 1.88;
-    border-radius: 52% 48% 44% 56% / 56% 44% 56% 44%;
+    --nessa-orb-scale: 0.33;
+    --nessa-orb-wash: 1.92;
+    border-radius: 51% 49% 49% 51% / 52% 48% 52% 48%;
     filter: blur(34px);
     box-shadow:
       0 0 90px 8px rgb(var(--nessa-reveal-glow-cool) / 0.34),
@@ -972,8 +981,15 @@ body {
   height: min(560px, 82vh);
   overflow: hidden;
   border-radius: 22px;
+  /*
+   * It comes up only once the form has all but filled its outline. Fading a
+   * full-size panel in over a form that is still small is a cut however soft
+   * the fade — there is a moment where two sizes of the same thing are on
+   * screen at once, and that reads as a switch rather than as an arrival.
+   */
   animation: nessa-setup-open var(--nessa-reveal-settle)
-    var(--nessa-motion-easing-standard) var(--nessa-reveal-seed) both;
+    var(--nessa-motion-easing-standard)
+    calc(var(--nessa-reveal-seed) + var(--nessa-reveal-bloom) - 120ms) both;
 }
 
 @keyframes nessa-setup-open {
