@@ -689,15 +689,30 @@ body {
  * A pressed cap.
  *
  * It travels the depth of its own front wall and stays down and lit, because
- * the press is not a flourish — it is the thing the step was asking for, and
- * the cap is the receipt. The glow is warm rather than white so it belongs to
- * the wash behind it instead of reading as a focus ring.
+ * a press is not a flourish — it is the thing the step was asking for, and the
+ * cap is the receipt. The glow is warm rather than white so it belongs to the
+ * wash behind it instead of reading as a focus ring.
  */
 .nessa-keycap[data-pressed] {
-  animation: nessa-keycap-press 260ms var(--nessa-motion-easing-arrival) both;
   border-color: rgb(255 255 255 / 0.95);
   background: rgb(255 255 255 / 0.3);
   box-shadow: 0 0 22px 2px rgb(255 255 255 / 0.35);
+}
+
+/*
+ * The two presses of the toggle run the same motion under two names.
+ *
+ * An animation restarts when its *name* changes, not when some other attribute
+ * does — so a single rule keyed on "pressed" would play once and then sit
+ * there, and the second press, which is half the lesson, would land with no
+ * acknowledgement at all.
+ */
+.nessa-keycap[data-pressed="shown"] {
+  animation: nessa-keycap-press 260ms var(--nessa-motion-easing-arrival) both;
+}
+
+.nessa-keycap[data-pressed="hidden"] {
+  animation: nessa-keycap-press-again 260ms var(--nessa-motion-easing-arrival) both;
 }
 
 @keyframes nessa-keycap-press {
@@ -706,6 +721,19 @@ body {
   }
   45% {
     /* Bottomed out: the front wall is gone and the cap is flat on the board. */
+    transform: translateY(3px);
+    border-bottom-width: 1.5px;
+  }
+  to {
+    transform: translateY(1px);
+  }
+}
+
+@keyframes nessa-keycap-press-again {
+  from {
+    transform: translateY(1px);
+  }
+  45% {
     transform: translateY(3px);
     border-bottom-width: 1.5px;
   }
@@ -788,6 +816,23 @@ body {
   initial-value: 0deg;
 }
 
+/*
+ * How large the wash is drawn, independent of the body over it.
+ *
+ * The exact inverse of the body's scale pins the wash to the window, which
+ * stops the zoom — but it also means a small body is a narrow crop of the
+ * gradient's middle, and the middle of a gradient is very nearly one flat
+ * colour. That is what made the opening look dead. These values hold the wash
+ * somewhat tighter than the inverse while the body is small, so real colour
+ * travels across it, and relax to the exact inverse as it fills. What is left
+ * of the zoom is a settle, not a magnification.
+ */
+@property --nessa-orb-wash {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 2.38;
+}
+
 .nessa-setup-orb {
   position: absolute;
   width: min(560px, 92vw);
@@ -797,6 +842,12 @@ body {
   scale: var(--nessa-orb-scale);
   rotate: var(--nessa-orb-turn);
   border-radius: 58% 42% 46% 54% / 52% 46% 54% 48%;
+  /* The light it throws on the dimmed screen. Not a blur of the body — the
+     body keeps its edge; this is what that solid is doing to the dark around
+     it, and it is most of why it reads as lit rather than flat. */
+  box-shadow:
+    0 0 90px 8px rgb(150 116 214 / 0.32),
+    0 0 170px 34px rgb(226 148 92 / 0.16);
   /*
    * The growth is timed by its keyframes rather than by an easing curve.
    * An ease-out across one long segment spends almost all of it in the first
@@ -814,37 +865,46 @@ body {
   from {
     opacity: 0;
     --nessa-orb-scale: 0.26;
+    --nessa-orb-wash: 2.38;
     --nessa-orb-turn: -14deg;
   }
   /* Gathered by ~510ms. */
   12% {
     opacity: 1;
     --nessa-orb-scale: 0.4;
+    --nessa-orb-wash: 1.55;
   }
   /* Then simply there, rolling, barely growing at all. The turn is spent by
      the end of it: a body may lean, but a window that is squaring off while
      still tilted just looks broken. */
   52% {
     --nessa-orb-scale: 0.45;
+    --nessa-orb-wash: 1.42;
     --nessa-orb-turn: 0deg;
   }
   /* And opening out, gathering pace before it settles. */
   64% {
     --nessa-orb-scale: 0.55;
+    --nessa-orb-wash: 1.27;
   }
   76% {
     --nessa-orb-scale: 0.7;
+    --nessa-orb-wash: 1.14;
   }
   88% {
     --nessa-orb-scale: 0.86;
+    --nessa-orb-wash: 1.05;
   }
   96% {
     --nessa-orb-scale: 0.96;
+    --nessa-orb-wash: 1.01;
   }
   to {
-    /* Filled the window, square to it, and handed it over. */
+    /* Filled the window, square to it, and handed it over: the wash is now
+       exactly the window's own, at the window's own size. */
     opacity: 1;
     --nessa-orb-scale: 1;
+    --nessa-orb-wash: 1;
   }
 }
 
@@ -854,11 +914,14 @@ body {
   0% {
     border-radius: 58% 42% 46% 54% / 52% 46% 54% 48%;
   }
-  30% {
-    border-radius: 38% 62% 68% 32% / 40% 64% 36% 60%;
+  25% {
+    border-radius: 32% 68% 74% 26% / 36% 70% 30% 64%;
   }
-  60% {
-    border-radius: 64% 36% 30% 70% / 68% 34% 66% 32%;
+  50% {
+    border-radius: 70% 30% 24% 76% / 74% 28% 72% 26%;
+  }
+  75% {
+    border-radius: 40% 60% 56% 44% / 62% 38% 66% 34%;
   }
   100% {
     border-radius: 58% 42% 46% 54% / 52% 46% 54% 48%;
@@ -873,9 +936,16 @@ body {
 @keyframes nessa-setup-orb-square {
   from {
     border-radius: 58% 42% 46% 54% / 52% 46% 54% 48%;
+    box-shadow:
+      0 0 90px 8px rgb(150 116 214 / 0.32),
+      0 0 170px 34px rgb(226 148 92 / 0.16);
   }
   to {
     border-radius: 22px;
+    /* A window casts a shadow rather than glowing; the box takes over. */
+    box-shadow:
+      0 0 0 0 rgb(150 116 214 / 0),
+      0 0 0 0 rgb(226 148 92 / 0);
   }
 }
 
@@ -883,7 +953,9 @@ body {
 .nessa-setup-orb-wash {
   position: absolute;
   inset: 0;
-  scale: calc(1 / var(--nessa-orb-scale));
+  scale: var(--nessa-orb-wash);
+  /* Rotation is cancelled exactly: it commutes with a uniform scale, and a
+     gradient that turns with the body gives the roll away. */
   rotate: calc(-1 * var(--nessa-orb-turn));
 }
 
@@ -895,7 +967,7 @@ body {
   position: absolute;
   inset: 0;
   box-shadow:
-    inset -34px -44px 96px -34px rgb(18 6 30 / 0.7),
+    inset -34px -44px 96px -34px rgb(18 6 30 / 0.55),
     inset 38px 42px 88px -36px rgb(255 255 255 / 0.45);
   background: radial-gradient(
     circle at 33% 26%,

@@ -17,9 +17,9 @@ function atSummon() {
   return confirmAgent(chooseAgent(startAgentChoice(beginOnboarding()), "claude"))
 }
 
-/** The summon step with the shortcut already pressed. */
+/** The summon step with the shortcut pressed both times: shown, then hidden. */
 function summonPressed() {
-  return pressSummon(atSummon())
+  return pressSummon(pressSummon(atSummon()))
 }
 
 describe("first-run setup", () => {
@@ -37,7 +37,7 @@ describe("first-run setup", () => {
     expect(chosen.agent).toBe("claude")
     const summon = confirmAgent(chosen)
     expect(summon).toEqual({ step: "summon", agent: "claude" })
-    const ready = confirmSummon(pressSummon(summon))
+    const ready = confirmSummon(pressSummon(pressSummon(summon)))
     expect(ready).toEqual({ step: "ready", agent: "claude" })
     expect(isOnboarding(ready)).toBe(true)
     expect(completeOnboarding(ready)).toEqual({ step: "done", agent: "claude" })
@@ -79,17 +79,28 @@ describe("first-run setup", () => {
 })
 
 describe("learning the summon shortcut", () => {
-  it("has no way on until the shortcut has been pressed", () => {
+  it("teaches both halves of the toggle before it offers a way on", () => {
     const summon = atSummon()
-    expect(summon.summoned).toBeUndefined()
+    expect(summon.summon).toBeUndefined()
     expect(confirmSummon(summon)).toBe(summon)
-    const pressed = pressSummon(summon)
-    expect(pressed.summoned).toBe(true)
-    expect(confirmSummon(pressed)).toEqual({ step: "ready", agent: "claude" })
+
+    // Summoning is only half the lesson, so it is not yet a way on.
+    const shown = pressSummon(summon)
+    expect(shown.summon).toBe("shown")
+    expect(confirmSummon(shown)).toBe(shown)
+
+    const hidden = pressSummon(shown)
+    expect(hidden.summon).toBe("hidden")
+    expect(confirmSummon(hidden)).toEqual({ step: "ready", agent: "claude" })
   })
 
-  it("does not carry the press into the step after it", () => {
-    expect(confirmSummon(summonPressed())).not.toHaveProperty("summoned")
+  it("stops teaching once the lesson is over", () => {
+    const hidden = summonPressed()
+    expect(pressSummon(hidden)).toBe(hidden)
+  })
+
+  it("does not carry the lesson into the step after it", () => {
+    expect(confirmSummon(summonPressed())).not.toHaveProperty("summon")
   })
 
   it("ignores presses outside the step that teaches it", () => {

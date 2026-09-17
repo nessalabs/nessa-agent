@@ -40,7 +40,7 @@ export function SetupGate({ children }: { children: React.ReactNode }) {
       <div className="nessa-setup-window" data-step={onboarding.state.step}>
         <Onboarding
           state={onboarding.state}
-          summon={onboarding.summon}
+          accelerator={onboarding.accelerator}
           onBegin={onboarding.begin}
           onChoose={onboarding.choose}
           onConfirm={onboarding.confirm}

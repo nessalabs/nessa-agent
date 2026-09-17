@@ -64,6 +64,20 @@ function SetupPanel({ children }: { children: React.ReactNode }) {
 }
 
 /**
+ * What the summon step says, which is a different thing at each press.
+ *
+ * The same keys do both jobs, so the copy has to name the one that has not
+ * been shown yet: first that it summons, then that the very same press puts it
+ * away, then that the pair of them is the whole trick.
+ */
+function summonHeading(summon: OnboardingState["summon"], configured: boolean) {
+  if (!configured) return "Set a summon shortcut"
+  if (summon === undefined) return "Summon it from anywhere"
+  if (summon === "shown") return "Press it again to hide"
+  return "That\u2019s the toggle"
+}
+
+/**
  * A step that is a line and a way on.
  *
  * The heading is centred in the box and the action is anchored to the bottom
@@ -144,7 +158,7 @@ function AgentOption({
  */
 export function Onboarding({
   state,
-  summon,
+  accelerator,
   onBegin,
   onChoose,
   onConfirm,
@@ -153,7 +167,7 @@ export function Onboarding({
   onConfirmSummon,
 }: {
   state: OnboardingState
-  summon?: string
+  accelerator?: string
   /** The keyboard conventions this device writes shortcuts in. */
   platform: ShortcutPlatform
   /** Move on from the summon step, once the shortcut has been pressed. */
@@ -184,13 +198,13 @@ export function Onboarding({
   if (state.step === "summon") {
     return (
       <SetupStage>
-        {/* This step asks for a press, so there is nothing to confirm until one
-          lands. Offering the way on beforehand invites a click straight past
-          the only thing the step is here to teach — and the button arriving
-          *because* the keys lit is what says the press worked. */}
+        {/* This step asks for presses, so there is nothing to confirm until
+          both have landed. Offering the way on beforehand invites a click
+          straight past the only thing the step is here to teach — and the
+          button arriving *because* the keys lit is what says they worked. */}
         <SetupStep
           action={
-            state.summoned ? (
+            state.summon === "hidden" ? (
               <Button size="lg" className={PILL} onClick={onConfirmSummon}>
                 Continue
               </Button>
@@ -198,10 +212,10 @@ export function Onboarding({
           }
         >
           <h1 className="nessa-setup-title nessa-setup-arrive font-semibold text-white drop-shadow-[0_1px_16px_rgba(0,0,0,0.35)]">
-            {summon ? "Summon it from anywhere" : "Set a summon shortcut"}
+            {summonHeading(state.summon, Boolean(accelerator))}
           </h1>
-          {summon ? (
-            <Keycaps keys={summon} platform={platform} pressed={state.summoned} />
+          {accelerator ? (
+            <Keycaps keys={accelerator} platform={platform} pressed={state.summon} />
           ) : null}
         </SetupStep>
       </SetupStage>

@@ -28,7 +28,10 @@ export function AgentBloom() {
         <MorphingMeshGradient
           colors={morphingMeshGradientPresets.glass}
           type="mesh"
-          speed={1.1}
+          // Faster than the box's own wash: the body is only on screen for a
+          // second and a half, and colour that has not moved in that time is
+          // what makes it look like a still image.
+          speed={2.4}
           blur={88}
           className="size-full"
         />

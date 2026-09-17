@@ -47,11 +47,15 @@ export interface OnboardingState {
   /** The agent picked so far, if any. Never an unavailable one. */
   agent?: AgentId
   /**
-   * Whether the summon step has been satisfied — the shortcut has been pressed
-   * and setup saw it. The step has nothing to confirm until then: it is asking
-   * for a press, not for agreement, so there is no way on until one arrives.
+   * How far the summon lesson has got, as what the shortcut last did.
+   *
+   * The shortcut is a toggle, and half a toggle is not a lesson: someone who
+   * only ever sees it summon has been taught how to put Nessa on screen and
+   * not how to get rid of it. So the step asks for both presses, and is only
+   * satisfied once the second has put it away again. Undefined means neither
+   * press has arrived yet.
    */
-  summoned?: boolean
+  summon?: "shown" | "hidden"
 }
 
 /** The state a panel with no completed setup starts from. */
@@ -84,19 +88,27 @@ export function confirmAgent(state: OnboardingState): OnboardingState {
   return state.agent ? { ...state, step: "summon" } : state
 }
 
-/** Record that the summon shortcut was pressed while setup was teaching it.
+/**
+ * Record a press of the summon shortcut while setup is teaching it: the first
+ * summons, the second puts it away. Further presses change nothing — the
+ * lesson is over and re-arming it would take the way on back off the screen.
+ *
  * Presses outside that step are somebody using their shortcut, not setup, and
- * change nothing. */
+ * change nothing either.
+ */
 export function pressSummon(state: OnboardingState): OnboardingState {
-  return state.step === "summon" ? { ...state, summoned: true } : state
+  if (state.step !== "summon") return state
+  if (state.summon === undefined) return { ...state, summon: "shown" }
+  if (state.summon === "shown") return { ...state, summon: "hidden" }
+  return state
 }
 
 /** Move on from the summon step, which only a step that has been satisfied can
- * do: until the shortcut has been pressed there is nothing to confirm. The
- * flag does not travel to the next step — it is about the step, not the
- * setup. */
+ * do: until the shortcut has both summoned and dismissed, there is nothing to
+ * confirm. The lesson does not travel to the next step — it is about the step,
+ * not the setup. */
 export function confirmSummon(state: OnboardingState): OnboardingState {
-  if (state.step !== "summon" || !state.summoned) return state
+  if (state.step !== "summon" || state.summon !== "hidden") return state
   return { step: "ready", agent: state.agent }
 }
 

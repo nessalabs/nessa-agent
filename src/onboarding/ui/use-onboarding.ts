@@ -51,7 +51,7 @@ export interface Onboarding {
    * configuration registers none. Setup says so rather than naming a shortcut
    * that would not work.
    */
-  summon?: string
+  accelerator?: string
   /** The keyboard conventions this device writes shortcuts in. */
   platform: ShortcutPlatform
   begin: () => void
@@ -133,14 +133,19 @@ export function useOnboarding(initial?: OnboardingState): Onboarding {
   // waiting and being stuck.
   React.useEffect(() => {
     if (!practising) return
-    const timer = window.setTimeout(() => setState(pressSummon), 7000)
+    // Both presses, because both are what the step is waiting on and neither
+    // of them can be observed on that host.
+    const timer = window.setTimeout(
+      () => setState((current) => pressSummon(pressSummon(current))),
+      7000,
+    )
     return () => window.clearTimeout(timer)
   }, [practising])
 
   return {
     state,
     active: isOnboarding(state),
-    summon: keys,
+    accelerator: keys,
     platform,
     begin: React.useCallback(() => setState(startAgentChoice), []),
     choose: React.useCallback(
