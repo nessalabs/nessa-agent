@@ -1,4 +1,4 @@
-import warmDissolve from "./warm-dissolve.mp3"
+import curiousSilence from "./curious-silence.mp3"
 import celebrationSound from "./sounds/celebration.m4a"
 import selectSound from "./sounds/select.m4a"
 import toggleOffSound from "./sounds/toggle-off.m4a"
@@ -36,7 +36,7 @@ export type Cue =
  * startling the first time and intolerable the tenth.
  */
 const CUES: Readonly<Record<Cue, { src: string; volume: number }>> = Object.freeze({
-  intro: { src: warmDissolve, volume: 0.35 },
+  intro: { src: curiousSilence, volume: 0.35 },
   // Choosing an agent is a thing being switched on, and it is the kit's toggle
   // that says so — the same sound the summon lesson uses, because it is the
   // same act.
