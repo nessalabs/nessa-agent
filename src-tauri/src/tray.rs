@@ -47,8 +47,14 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             .checked(crate::settings::load(app).stop_agents_on_quit)
             .build(app)?;
     let quit = MenuItemBuilder::with_id("quit", "Quit Nessa").build(app)?;
+    // First-run setup is not persisted yet, so it runs on every launch and
+    // there is no way to see it twice in one. This runs it on demand, which is
+    // what makes it possible to work on at all.
+    let setup = MenuItemBuilder::with_id("restart-onboarding", "Restart onboarding").build(app)?;
     let menu = MenuBuilder::new(app)
         .items(&[&toggle, &transparent])
+        .separator()
+        .items(&[&setup])
         .separator()
         .items(&[&stop_agents, &quit])
         .build()?;
@@ -62,7 +68,11 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         // panel, which is what a menu bar app is for.
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
-            "toggle" => panel::toggle(app),
+            // The tray is not teaching the shortcut, so it has no use for
+            // which way the panel went.
+            "toggle" => {
+                panel::toggle(app);
+            }
             // The frontend owns the choice, so the click is only a request.
             "surface" => {
                 let _ = app.emit(host::TOGGLE_SURFACE, ());
@@ -79,6 +89,7 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
                     Err(error) => eprintln!("[nessa] could not save settings: {error}"),
                 }
             }
+            "restart-onboarding" => crate::panel::restart_onboarding(app),
             "quit" => app.exit(0),
             _ => {}
         })

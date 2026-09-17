@@ -5,7 +5,7 @@ import { host } from "../../host"
 import { matchesAccelerator } from "../../host/accelerator"
 import { playCue } from "./sound"
 import type { ShortcutPlatform } from "../model/shortcut-display"
-import { loadShortcuts } from "../../host/window"
+import { loadShortcuts, onSummoned } from "../../host/window"
 import { summonAccelerator } from "../model/shortcut-display"
 import {
   beginOnboarding,
@@ -120,7 +120,10 @@ export function useOnboarding(initial?: OnboardingState): Onboarding {
   // to run more than once.
   const lesson = state.step === "summon" ? state.summon : undefined
   React.useEffect(() => {
-    if (!practising || !keys) return
+    // Only where nothing else reports the press. A native host holds this
+    // accelerator with the system and tells us about it, and counting both a
+    // key and a report would make one press look like two.
+    if (!practising || !keys || host.kind !== "browser") return
     function onKeyDown(event: KeyboardEvent) {
       if (event.repeat || !matchesAccelerator(event, keys)) return
       event.preventDefault()
@@ -132,22 +135,26 @@ export function useOnboarding(initial?: OnboardingState): Onboarding {
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [practising, keys, lesson])
 
-  // The desktop host registers this accelerator globally, so on that host the
-  // press can be taken before this window ever sees it — and a step that only
-  // opens to a press it cannot receive is a dead end. After long enough to have
-  // tried, setup opens the way on regardless. This goes away once the host
-  // forwards the summon it handled; until then it is the difference between
-  // waiting and being stuck.
+  // The desktop host registers this accelerator with the system, so the press
+  // is taken before this window sees a key — which is why it also reports the
+  // summon it handled. That report is what makes the lesson work on the one
+  // platform that ships: the panel really does appear and disappear, and the
+  // keys light because it did.
   React.useEffect(() => {
     if (!practising) return
-    // Both presses, because both are what the step is waiting on and neither
-    // of them can be observed on that host. Silently: nothing was pressed here
-    // that this window saw, and a cue would be claiming otherwise.
-    const timer = window.setTimeout(
-      () => setState((current) => pressSummon(pressSummon(current))),
-      7000,
-    )
-    return () => window.clearTimeout(timer)
+    let stop: (() => void) | undefined
+    let cancelled = false
+    void onSummoned((showing) => {
+      playCue(showing ? "summon" : "dismiss")
+      setState(pressSummon)
+    }).then((unlisten) => {
+      if (cancelled) unlisten()
+      else stop = unlisten
+    })
+    return () => {
+      cancelled = true
+      stop?.()
+    }
   }, [practising])
 
   return {

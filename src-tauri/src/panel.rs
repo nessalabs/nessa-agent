@@ -26,17 +26,56 @@ fn settings(app: &AppHandle) -> Settings {
         .unwrap_or_default()
 }
 
-pub fn toggle(app: &AppHandle) {
+/// Shows the panel if it is hidden, hides it if it is not. Returns whether it
+/// is showing afterwards, which is what a surface teaching the shortcut needs
+/// to know; a missing window reports hidden.
+pub fn toggle(app: &AppHandle) -> bool {
     let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
-        return;
+        return false;
     };
 
     if window.is_visible().unwrap_or(false) {
         let _ = window.hide();
-        return;
+        return false;
     }
 
     show(&window, &settings(app));
+    true
+}
+
+/// Opens first-run setup again, from the beginning.
+///
+/// Setup finishes by closing its own window, so there is usually nothing left
+/// to show and a fresh one is built to the same shape as the configured one. A
+/// window that is still open is reloaded rather than reused, because setup
+/// holds its progress in memory and showing it again mid-flow would resume it
+/// rather than restart it.
+pub fn restart_onboarding(app: &AppHandle) {
+    const SETUP_WINDOW: &str = "setup";
+    if let Some(window) = app.get_webview_window(SETUP_WINDOW) {
+        let _ = window.eval("window.location.reload()");
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+
+    let built = tauri::WebviewWindowBuilder::new(
+        app,
+        SETUP_WINDOW,
+        tauri::WebviewUrl::App("index.html?surface=setup".into()),
+    )
+    .title("Welcome to Nessa")
+    .resizable(false)
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .maximized(true)
+    .build();
+    if let Err(error) = built {
+        eprintln!("[nessa] could not reopen setup: {error}");
+    }
 }
 
 /// Places, fits, and focuses the panel, then hands the caret to the composer.

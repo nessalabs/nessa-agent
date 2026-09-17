@@ -3,7 +3,7 @@
 //! Binding comes from the stage-scoped `shortcuts.json` cache (`panel.summon`),
 //! not from settings ([ADR 0004](../../docs/adr/done/0004-server-owned-keybindings.md)).
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use crate::shortcuts::SummonRegistration;
@@ -26,7 +26,11 @@ pub fn register(app: &AppHandle, accelerator: &str) {
             // Both edges are delivered; acting on the release too would toggle the
             // panel straight back closed.
             if event.state() == ShortcutState::Pressed {
-                crate::panel::toggle(app);
+                let showing = crate::panel::toggle(app);
+                // The press was taken by the system, so no window saw a key.
+                // Setup teaches this shortcut and has to be able to tell that
+                // it worked, which it cannot do from a key it never receives.
+                let _ = app.emit(crate::host::SUMMONED, showing);
             }
         });
 

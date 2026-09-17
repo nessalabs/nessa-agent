@@ -10,6 +10,7 @@ const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 
 const HOST_EVENTS = {
   toggleSurface: "nessa://toggle-surface",
+  summoned: "nessa://summoned",
   focusComposer: "nessa://focus-composer",
   panelSized: "nessa://panel-sized",
   resizeStarted: "nessa://resize-started",
@@ -34,6 +35,20 @@ export async function onToggleSurface(handler: () => void) {
   if (!inTauri) return () => undefined
   const { listen } = await import("@tauri-apps/api/event")
   return listen(HOST_EVENTS.toggleSurface, () => handler())
+}
+
+/**
+ * Subscribes to the global summon accelerator, reporting whether the panel is
+ * now showing.
+ *
+ * The host registers that accelerator with the system, so the press is taken
+ * before any window sees a key. A surface that teaches the shortcut cannot
+ * learn it was pressed any other way.
+ */
+export async function onSummoned(handler: (showing: boolean) => void) {
+  if (!inTauri) return () => undefined
+  const { listen } = await import("@tauri-apps/api/event")
+  return listen<boolean>(HOST_EVENTS.summoned, ({ payload }) => handler(payload))
 }
 
 /**
