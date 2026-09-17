@@ -102,6 +102,9 @@ test(
   },
 )
 
+// Creating symlinks on Windows needs Developer Mode or an elevated shell; the
+// CI runners have it. A failure here on a non-elevated Windows host is that
+// missing privilege, not a containment defect.
 test("internal symlinks identify their target and cannot depend on external files", (t) => {
   const { root } = fixture(t)
   const link = join(root, "node-link")

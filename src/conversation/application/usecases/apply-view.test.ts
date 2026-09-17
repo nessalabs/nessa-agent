@@ -1,5 +1,5 @@
 import { expect, it } from "vitest"
-import { conversation, textContent } from "../../model"
+import { conversation, textContent, type Turn, type UserTurn } from "../../model"
 import { emptyLocalTabs } from "../local-tabs"
 import type { ConversationView } from "../view"
 import { applyView } from "./apply-view"
@@ -169,19 +169,47 @@ function stoppedQueue(queueComplete: boolean) {
   return { tabs: { ...tabs, conversations: [stopped] }, stopped }
 }
 
-function userReceipts(turns: { from: string }[]) {
+function userReceipts(turns: Turn[]) {
   return turns
-    .filter((turn) => turn.from === "user")
-    .map((turn) => [
-      (turn as { executionId?: string }).executionId,
-      (turn as { receipt?: string }).receipt,
-    ])
+    .filter((turn): turn is UserTurn => turn.from === "user")
+    .map((turn) => [turn.executionId, turn.receipt])
 }
 
 it("a complete empty queue retires confirmed queued rows the server no longer lists", () => {
   const { stopped } = stoppedQueue(true)
   expect(userReceipts(stopped.turns)).toEqual([["three", "delivered"]])
-  expect(stopped.phase).toBe("idle")
+  // The retired rows are omitted history, which the same view already marks.
+  expect(stopped.remote?.truncated).toBe(true)
+  expect(stopped.remote?.queueComplete).toBe(true)
+})
+
+it("an accepted row the server stops listing is retired by a complete queue", () => {
+  // A message the gateway reports as queued but omits from a complete pending
+  // list is confirmed by the gateway, not local intent.
+  const sent = beginSend(emptyLocalTabs(), {
+    conversationId: "c0",
+    executionId: "run",
+    actionId: "run-action",
+    mode: "queued",
+    content: textContent("read"),
+  })
+  const accepted = applyView(sent.conversations[0]!, {
+    ...view,
+    pending: [],
+    permissions: [],
+    tools: [],
+    messages: [{ ...view.messages[0]!, parts: [], status: "queued" }],
+  })
+  expect(userReceipts(accepted.turns)).toEqual([["run", "accepted"]])
+
+  const stopped = applyView(accepted, {
+    ...view,
+    messages: [],
+    pending: [],
+    permissions: [],
+    tools: [],
+  })
+  expect(userReceipts(stopped.turns)).toEqual([])
 })
 
 it("an incomplete queue proves nothing and keeps confirmed queued rows", () => {
