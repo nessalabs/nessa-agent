@@ -1,4 +1,10 @@
-import { textContent, type Conversation, type Turn, type UserTurn } from "../../model"
+import {
+  textContent,
+  type Conversation,
+  type Receipt,
+  type Turn,
+  type UserTurn,
+} from "../../model"
 import type { ConversationView } from "../view"
 
 /** Replace server facts while preserving unsent drafts and unacknowledged local submissions. */
@@ -72,15 +78,20 @@ export function applyView(current: Conversation, view: ConversationView): Conver
       mode: local?.mode,
     })
   }
-  // A view can race an admitted send. Keep unknown/sending/accepted local receipts
-  // until the server includes their identity; never resend as a side effect of read.
+  // A view can race an admitted send. Keep local intent the server has not
+  // acknowledged yet; never resend as a side effect of read. A queued receipt is
+  // the server's own fact, so a complete queue that omits that identity retires
+  // the classification instead of leaving it active work forever. An incomplete
+  // queue proves nothing, and local failures stay visible either way.
+  const confirmedQueued: Receipt[] = ["accepted", "queued"]
   for (const turn of current.turns) {
     if (
       turn.from === "user" &&
       turn.executionId &&
       turn.actionId &&
       !seen.has(turn.executionId) &&
-      turn.receipt !== "delivered"
+      turn.receipt !== "delivered" &&
+      !(view.queueComplete && confirmedQueued.includes(turn.receipt))
     )
       projected.push(turn)
   }

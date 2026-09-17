@@ -1,7 +1,9 @@
 import { expect, it } from "vitest"
 import { conversation, textContent } from "../../model"
+import { emptyLocalTabs } from "../local-tabs"
 import type { ConversationView } from "../view"
 import { applyView } from "./apply-view"
+import { beginSend, failSend } from "./send-draft"
 
 const view: ConversationView = {
   conversationId: "server",
@@ -122,4 +124,119 @@ it("keeps selected work in the transcript while the first output is still pendin
   })
   expect(projected.turns[0]).toMatchObject({ from: "user", receipt: "accepted" })
   expect(projected.remote?.pending).toEqual([])
+})
+
+/** Confirm several local submissions as queued, then stop that queue. */
+function stoppedQueue(queueComplete: boolean) {
+  const identities = ["one", "two", "three"]
+  let tabs = emptyLocalTabs()
+  for (const executionId of identities)
+    tabs = beginSend(tabs, {
+      conversationId: "c0",
+      executionId,
+      actionId: `${executionId}-action`,
+      mode: "queued",
+      content: textContent(executionId),
+    })
+  const queued = applyView(tabs.conversations[0]!, {
+    ...view,
+    messages: [],
+    permissions: [],
+    tools: [],
+    queueComplete: true,
+    pending: identities.map((executionId) => ({
+      executionId,
+      text: executionId,
+      mode: "queued" as const,
+    })),
+  })
+  expect(userReceipts(queued.turns)).toEqual([
+    ["one", "queued"],
+    ["two", "queued"],
+    ["three", "queued"],
+  ])
+  // The bounded replacement retains only the last cancelled row.
+  const stopped = applyView(queued, {
+    ...view,
+    pending: [],
+    permissions: [],
+    tools: [],
+    queueComplete,
+    messages: [
+      { executionId: "three", userText: "three", parts: [], status: "cancelled" },
+    ],
+  })
+  return { tabs: { ...tabs, conversations: [stopped] }, stopped }
+}
+
+function userReceipts(turns: { from: string }[]) {
+  return turns
+    .filter((turn) => turn.from === "user")
+    .map((turn) => [
+      (turn as { executionId?: string }).executionId,
+      (turn as { receipt?: string }).receipt,
+    ])
+}
+
+it("a complete empty queue retires confirmed queued rows the server no longer lists", () => {
+  const { stopped } = stoppedQueue(true)
+  expect(userReceipts(stopped.turns)).toEqual([["three", "delivered"]])
+  expect(stopped.phase).toBe("idle")
+})
+
+it("an incomplete queue proves nothing and keeps confirmed queued rows", () => {
+  const { stopped } = stoppedQueue(false)
+  expect(userReceipts(stopped.turns)).toEqual([
+    ["three", "delivered"],
+    ["one", "queued"],
+    ["two", "queued"],
+  ])
+})
+
+it("a complete queue still keeps unacknowledged local sends and local failures", () => {
+  const sent = beginSend(emptyLocalTabs(), {
+    conversationId: "c0",
+    executionId: "sending",
+    actionId: "sending-action",
+    mode: "queued",
+    content: textContent("in flight"),
+  })
+  const uncertain = failSend(
+    beginSend(sent, {
+      conversationId: "c0",
+      executionId: "uncertain",
+      actionId: "uncertain-action",
+      mode: "queued",
+      content: textContent("uncertain"),
+    }),
+    "c0",
+    "uncertain",
+    "offline",
+  )
+  const projected = applyView(uncertain.conversations[0]!, {
+    ...view,
+    messages: [],
+    pending: [],
+    permissions: [],
+    tools: [],
+    queueComplete: true,
+  })
+  expect(userReceipts(projected.turns)).toEqual([
+    ["sending", "sending"],
+    ["uncertain", "unknown"],
+  ])
+})
+
+it("stale queued rows no longer hold the conversation in thinking after an offline rejection", () => {
+  const { tabs } = stoppedQueue(true)
+  const sending = beginSend(tabs, {
+    conversationId: "c0",
+    executionId: "next",
+    actionId: "next-action",
+    mode: "queued",
+    content: textContent("next"),
+  })
+  const rejected = failSend(sending, "c0", "next", "Agent not configured", false)
+  expect(rejected.conversations[0]!.phase).toBe("idle")
+  expect(rejected.conversations[0]!.draft).toEqual(textContent("next"))
 })

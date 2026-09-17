@@ -11,7 +11,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs"
-import { tmpdir } from "node:os"
+import { platform, tmpdir } from "node:os"
 import { dirname, join, relative } from "node:path"
 import test from "node:test"
 import { runtimeFingerprint, verifyRuntimeFingerprint } from "./runtime-fingerprint.mjs"
@@ -72,15 +72,13 @@ test("locations, creation order, timestamps and the generated manifest are irrel
   assert.notEqual(runtimeFingerprint(first), original)
 })
 
-test("paths, executable permissions and byte boundaries are part of identity", (t) => {
+test("paths and byte boundaries are part of identity", (t) => {
   const { root } = fixture(t)
   const original = runtimeFingerprint(root)
   renameSync(join(root, "models.json"), join(root, "renamed.json"))
   assert.notEqual(runtimeFingerprint(root), original)
   renameSync(join(root, "renamed.json"), join(root, "models.json"))
-  chmodSync(join(root, "node"), 0o755)
-  assert.notEqual(runtimeFingerprint(root), original)
-  chmodSync(join(root, "node"), 0o644)
+  assert.equal(runtimeFingerprint(root), original)
   writeFileSync(join(root, "nessa"), "a")
   writeFileSync(join(root, "nessa-mcp"), "bc")
   const framed = runtimeFingerprint(root)
@@ -88,6 +86,21 @@ test("paths, executable permissions and byte boundaries are part of identity", (
   writeFileSync(join(root, "nessa-mcp"), "c")
   assert.notEqual(runtimeFingerprint(root), framed)
 })
+
+// Windows has no POSIX executable bit: chmod there cannot change what stat
+// reports, so this identity rule only exists on the hosts that ship one.
+test(
+  "executable permissions are part of identity",
+  { skip: platform() === "win32" },
+  (t) => {
+    const { root } = fixture(t)
+    const original = runtimeFingerprint(root)
+    chmodSync(join(root, "node"), 0o755)
+    assert.notEqual(runtimeFingerprint(root), original)
+    chmodSync(join(root, "node"), 0o644)
+    assert.equal(runtimeFingerprint(root), original)
+  },
+)
 
 test("internal symlinks identify their target and cannot depend on external files", (t) => {
   const { root } = fixture(t)

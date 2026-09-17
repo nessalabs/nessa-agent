@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync } from "node:fs"
-import { join, relative, sep } from "node:path"
+import { isAbsolute, join, relative, sep } from "node:path"
 
 /** Hash the shipped tree, excluding only the generated root manifest. Names,
  * entry kinds, executable bits, and lengths frame the bytes unambiguously.
@@ -14,7 +14,9 @@ export function runtimeFingerprint(directory) {
     if (stat.isSymbolicLink()) {
       const resolved = relative(root, realpathSync(path))
       const target = readlinkSync(path)
-      if (resolved === ".." || resolved.startsWith(`..${sep}`) || target.startsWith("/"))
+      // A link that names a location rather than a bundle-relative path does not
+      // survive relocation, including a Windows drive-absolute or UNC target.
+      if (resolved === ".." || resolved.startsWith(`..${sep}`) || isAbsolute(target))
         throw new Error(`Runtime link must stay inside the bundle: ${name}`)
       hash.update(JSON.stringify([name, "link", target]) + "\n")
     } else if (stat.isDirectory()) {
