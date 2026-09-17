@@ -67,10 +67,12 @@ function SetupWindowControls({
           <path d="M3.4 6h5.2" />
         </svg>
       </button>
-      {/* Grey and inert, which is how the system draws a control a window
-        cannot use: setup covers the screen, so there is no size for zoom to
-        toggle it to. It is a shape rather than a button, because a button that
-        does nothing when pressed is worse than one that was never offered. */}
+      {/* Green like the other two, because a grey one does not read as "this
+        window cannot zoom" — it reads as a set that is subtly wrong. Still a
+        shape rather than a button: setup covers the screen, so there is no
+        size for zoom to toggle to, and a button that does nothing when pressed
+        is worse than one that was never offered. It is the one light with no
+        glyph under the pointer, which is where the set says so. */}
       <span aria-hidden="true" className="nessa-setup-control nessa-setup-control-zoom" />
     </div>
   )
