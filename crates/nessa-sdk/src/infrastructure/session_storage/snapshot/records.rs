@@ -14,7 +14,7 @@ use crate::application::agent_execution::{
     sessions::storage::{InvocationRecord, StorageError},
 };
 use crate::domain::agent_execution::{
-    executions::{ExecutionId, MessageChunk, MessageKind},
+    executions::{ExecutionId, MessageChunk, MessageId, MessageKind},
     permissions::PermissionId,
     prompts::PromptText,
     sessions::ExecutionSessionId,
@@ -31,6 +31,7 @@ pub(super) struct Provider {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Metadata {
+    pub(super) target_event_offset: Option<usize>,
     pub(super) submission: Submission,
     pub(super) execution_id: String,
     pub(super) user_message: String,
@@ -46,6 +47,7 @@ pub(super) struct Metadata {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Event {
+    pub(super) message_id: Option<String>,
     pub(super) execution_id: String,
     pub(super) update: Update,
 }
@@ -67,6 +69,7 @@ pub(super) enum Update {
 impl From<&InvocationRecord> for Metadata {
     fn from(value: &InvocationRecord) -> Self {
         Self {
+            target_event_offset: value.target_event_offset,
             submission: value.submission.into(),
             execution_id: value.request.execution_id.as_str().into(),
             user_message: value.request.user_message.as_str().into(),
@@ -87,6 +90,10 @@ impl From<&InvocationRecord> for Metadata {
 impl From<ExecutionEvent> for Event {
     fn from(event: ExecutionEvent) -> Self {
         Self {
+            message_id: match event.update() {
+                ExecutionUpdate::Message(chunk) => chunk.message_id().map(str::to_owned),
+                _ => None,
+            },
             execution_id: event.execution_id().as_str().into(),
             update: match event.into_update() {
                 ExecutionUpdate::Finished(outcome) => Update::Finished(outcome.into()),
@@ -122,6 +129,7 @@ impl Provider {
 impl Metadata {
     pub(super) fn decode(self) -> Result<InvocationRecord, StorageError> {
         Ok(InvocationRecord {
+            target_event_offset: self.target_event_offset,
             submission: self.submission.into(),
             request: ExecutionRequest {
                 execution_id: ExecutionId::new(self.execution_id).map_err(corrupt)?,
@@ -189,6 +197,14 @@ impl Event {
                     options: permissions::decode_choices(options)?,
                 }
             }
+        };
+        let update = match (update, self.message_id) {
+            (ExecutionUpdate::Message(chunk), Some(id)) => {
+                let id = MessageId::new(id).map_err(corrupt)?;
+                ExecutionUpdate::Message(chunk.with_message_id(id))
+            }
+            (update, None) => update,
+            (_, Some(_)) => return Err(corrupt("message identity on a non-message observation")),
         };
         Ok(ExecutionEvent::new(execution_id.clone(), update))
     }

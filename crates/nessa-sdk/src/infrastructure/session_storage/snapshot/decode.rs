@@ -52,7 +52,7 @@ struct Seed {
 }
 impl Seed {
     fn child(&self, shape: Shape) -> Self {
-        let new_change = matches!(shape, Shape::Change);
+        let new_change = matches!(shape, Shape::Change | Shape::Reorder);
         let error = if matches!(shape, Shape::Error) {
             Some(self.error.clone().unwrap_or_default())
         } else {
@@ -202,6 +202,9 @@ impl<'de> Visitor<'de> for Seed {
                 })?
                 .is_none()
             {
+                if matches!(self.shape, Shape::Reorders) {
+                    self.indices.queue_events(count);
+                }
                 return Ok(());
             }
             count = count

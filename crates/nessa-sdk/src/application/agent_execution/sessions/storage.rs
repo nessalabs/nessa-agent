@@ -10,7 +10,8 @@ use crate::application::agent_execution::providers::{ExecutionReport, ProviderId
 use crate::domain::agent_execution::{
     executions::{
         ExecutionId, ExecutionOutcome, InvocationCancellation, InvocationKind, InvocationStage,
-        SchedulingCause, SchedulingInitiator, SchedulingTransition, SchedulingTransitionError,
+        QueueMutation, SchedulingCause, SchedulingInitiator, SchedulingTransition,
+        SchedulingTransitionError,
     },
     sessions::{ExecutionSessionId, SessionId},
 };
@@ -49,12 +50,35 @@ pub struct SessionSnapshot {
     pub provider_session_id: ExecutionSessionId,
     /// Submitted invocations in admission order, including unresolved work.
     pub invocations: Vec<InvocationRecord>,
+    /// Append-only global queue membership/order facts. Local selection precedes
+    /// provider dispatch; restoration clears pending membership without replay.
+    pub queue_history: Vec<QueueHistoryRecord>,
+}
+
+/// One queue membership decision, recorded in global scheduler order.
+/// These records distinguish local dequeue from later provider dispatch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueueHistoryRecord {
+    /// Exact membership or order change at the exclusive scheduler boundary.
+    pub mutation: QueueMutation,
+    /// Verified explicit initiator; selection, automatic stop and restoration use None.
+    pub actor: Option<ActionContext>,
+    /// Scheduling prefix at this fact for single-input changes. A selection can
+    /// precede Dispatched; withdrawal/stop records include their cancellation edge.
+    pub scheduling_length: Option<usize>,
+}
+impl QueueHistoryRecord {
+    /// Maximum actual reorder decisions retained; membership events have a
+    /// separate bound proportional to admitted invocation history.
+    pub const MAX_REORDERS: usize = 1024;
 }
 
 /// Saved input and observations. Never replay an input solely because its result
 /// is missing: pending, cancelled, or injected input may have no execution result.
 #[derive(Clone, Debug)]
 pub struct InvocationRecord {
+    /// Target observation count at steering admission; not a provider consumption acknowledgement.
+    pub target_event_offset: Option<usize>,
     /// Original delivery operation; retries must preserve this intent.
     pub submission: SubmissionMode,
     /// Exact submitted input and execution identity.

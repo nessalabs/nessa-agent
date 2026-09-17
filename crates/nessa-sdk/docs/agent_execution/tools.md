@@ -39,3 +39,9 @@ Tool schemas and raw arguments are parsed by infrastructure. The application's
 not a domain entity or a grant. [Permission review](permissions.md) pairs this
 input with the exact request. [Transport limits](transport.md) bound retained
 payloads separately from frames and queued events.
+
+Claude's profile now accepts bounded native tool names and configured MCP server
+names, retaining original permission inputs. Web fetch, execution and thinking
+categories retain their distinct domain/storage values. Native Bash and mode
+changes remain disabled; Nessa's shell is provided through MCP. Trusted
+`AcpConfig::mcp_servers` configurations are included in restoration identity.

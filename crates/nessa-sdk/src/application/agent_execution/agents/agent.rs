@@ -14,8 +14,8 @@ use crate::application::agent_execution::hooks::{
     HookRegistration, InvocationContext, InvocationHook, InvocationHooks,
 };
 use crate::application::agent_execution::permissions::{
-    ActionContext, PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
-    PermissionResolution,
+    ActionContext, PermissionAnswer, PermissionAnswerFailure, PermissionAnswerFuture,
+    PermissionCancellation, PermissionCancellationRequest, PermissionSelectionState,
 };
 use crate::application::agent_execution::providers::{
     AgentProvider, CleanupReport, CloseOutcome, ExecutionEventStream, ExecutionReportSource,
@@ -48,6 +48,7 @@ pub(super) struct Inner {
     pub(super) invocation: Arc<Mutex<()>>,
     hooks: RwLock<Vec<Arc<dyn InvocationHook>>>,
     updates: broadcast::Sender<ExecutionEvent>,
+    pub(super) reorder: Mutex<()>,
     pub(super) scheduler: Mutex<Scheduler>,
     pub(super) lifecycle: Arc<SessionLifecycle>,
 }
@@ -168,6 +169,7 @@ impl Agent {
                 events,
                 invocation: Arc::new(Mutex::new(())),
                 hooks: RwLock::new(Vec::new()),
+                reorder: Mutex::new(()),
                 scheduler: Mutex::new(Scheduler::new()),
                 lifecycle,
                 updates,
@@ -767,34 +769,48 @@ impl Agent {
     /// controls and interrupts pending response waits with `Closed`. A received
     /// receipt still completes local evidence validation. Admitted provider effects
     /// and mandatory audit remain owned by the adapter and settled by cleanup.
-    pub fn answer_permission(
-        &self,
-        answer: PermissionAnswer,
-    ) -> AgentFuture<'_, PermissionResolution> {
+    /// Failure returns [`PermissionAnswerFailure`](crate::application::agent_execution::permissions::PermissionAnswerFailure),
+    /// whose selection state distinguishes a still-pending review from a consumed
+    /// decision and from an interrupted outcome that must be reloaded.
+    pub fn answer_permission(&self, answer: PermissionAnswer) -> PermissionAnswerFuture<'_> {
         let agent = self.clone();
         Box::pin(async move {
-            let admission = agent.accept_control()?;
+            let admission = agent.accept_control().map_err(|error| {
+                PermissionAnswerFailure::new(error, PermissionSelectionState::Pending)
+            })?;
             let supervisor = agent.clone();
             let control_origin = admission.control_origin();
             tokio::spawn(async move {
                 let resolution = agent
-                    .run_control(admission.clone(), async {
+                    .run_control_observed(admission.clone(), async {
                         agent.inner.session.answer_permission(answer).await
                     })
-                    .await?;
+                    .await
+                    .map_err(|failure| {
+                        let selection = failure
+                            .permission_selection()
+                            .unwrap_or(PermissionSelectionState::Unknown);
+                        PermissionAnswerFailure::new(failure.into_error(), selection)
+                    })?;
                 agent
                     .validate_permission_receipt(
                         &admission,
                         resolution.request(),
                         resolution.input(),
                     )
-                    .await?;
+                    .await
+                    .map_err(|error| {
+                        PermissionAnswerFailure::new(error, PermissionSelectionState::Consumed)
+                    })?;
                 Ok(resolution)
             })
             .await
             .map_err(|_| {
                 supervisor.inner.lifecycle.block_control(control_origin);
-                AgentError::CleanupUncertain
+                PermissionAnswerFailure::new(
+                    AgentError::CleanupUncertain,
+                    PermissionSelectionState::Unknown,
+                )
             })?
         })
     }

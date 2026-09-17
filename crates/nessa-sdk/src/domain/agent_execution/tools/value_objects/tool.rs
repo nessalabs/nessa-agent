@@ -32,6 +32,18 @@ pub enum ToolKind {
     Edit,
     /// Searches resources or content.
     Search,
+    /// Retrieves remote content.
+    Fetch,
+    /// Runs a command or other executable activity.
+    Execute,
+    /// Plans or coordinates agent work.
+    Think,
+    /// Removes a resource.
+    Delete,
+    /// Moves or renames a resource.
+    Move,
+    /// Reports a provider mode transition.
+    SwitchMode,
     /// A provider activity outside the recognized categories.
     Other,
 }

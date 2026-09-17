@@ -74,6 +74,7 @@ fn answers(audit: &AnswerAudit) -> Vec<PermissionAnswerRecord> {
             ExecutionAuditRecord::Cancelled(_) => {
                 panic!("resolved answer must not be relabelled on cleanup")
             }
+            ExecutionAuditRecord::QueueReordered(_) => None,
         })
         .collect()
 }
@@ -178,13 +179,11 @@ async fn selection_and_delivery_audit_failures_are_visible_and_cleanup_still_run
             ..Default::default()
         });
         let (root, opened, active, answer) = fixture("permission", audit.clone()).await;
+        let failure = opened.session.answer_permission(answer).await.unwrap_err();
+        assert_eq!(failure.error(), &AgentError::AuditFailure);
         assert_eq!(
-            opened
-                .session
-                .answer_permission(answer)
-                .await
-                .map_err(|failure| failure.into_error()),
-            Err(AgentError::AuditFailure)
+            failure.permission_selection(),
+            Some(PermissionSelectionState::Consumed)
         );
         assert_eq!(active.await.unwrap(), Err(AgentError::AuditFailure));
         assert_eq!(
@@ -210,12 +209,12 @@ async fn failed_answer_write_retains_selected_decision_and_uncertain_delivery() 
     let _slot = process_test_slot().await;
     let audit = Arc::new(AnswerAudit::default());
     let (root, opened, active, answer) = fixture("permission-write-failure", audit.clone()).await;
-    let failure = opened
-        .session
-        .answer_permission(answer)
-        .await
-        .map_err(|failure| failure.into_error())
-        .unwrap_err();
+    let failure = opened.session.answer_permission(answer).await.unwrap_err();
+    assert_eq!(
+        failure.permission_selection(),
+        Some(PermissionSelectionState::Consumed)
+    );
+    let failure = failure.into_error();
     assert!(matches!(failure, AgentError::Transport(_)));
     assert!(active.await.unwrap().is_err());
     opened

@@ -17,6 +17,7 @@ pub use entities::{InvocationHistory, InvocationHistoryError, InvocationObservat
 pub use error::SchedulingError;
 pub use value_objects::{
     ExecutionId, ExecutionOutcome, InvocationCancellation, InvocationCancellationError,
-    InvocationKind, InvocationStage, MessageChunk, MessageKind, SchedulingCause,
-    SchedulingInitiator, SchedulingTransition, SchedulingTransitionError, SubmissionMode,
+    InvocationKind, InvocationStage, MessageChunk, MessageId, MessageKind, QueueMutation,
+    QueueOrderChange, QueueOrderError, QueueRemovalCause, SchedulingCause, SchedulingInitiator,
+    SchedulingTransition, SchedulingTransitionError, SubmissionMode,
 };

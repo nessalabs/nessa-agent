@@ -326,5 +326,7 @@ selected option and decision tied to that request.
 Queue follow-ups with `Agent::enqueue`, prioritize a later correction with
 `enqueue_steering`, or use advertised native injection with `steer`. Pending
 inputs can be withdrawn through `remove_queued` without deleting their evidence.
+Read `queued_ids` and use `reorder_queued` to change their complete order within
+each priority class while keeping their IDs, receipts and audit history.
 See [queueing and steering](docs/agent_execution/scheduling.md) for lifecycle,
 audit, and provider capability guarantees. Gateway wiring remains separate.

@@ -1,6 +1,7 @@
 use super::{
     attachment::AttachmentLease, InvocationCancellationEvent, InvocationRecord,
-    InvocationSchedulingEvent, SessionSnapshot, SessionStorage, SessionStorageLease, StorageError,
+    InvocationSchedulingEvent, QueueHistoryRecord, SessionSnapshot, SessionStorage,
+    SessionStorageLease, StorageError,
 };
 use crate::application::agent_execution::{
     agents::AgentError,
@@ -17,7 +18,8 @@ use crate::application::agent_execution::{
 };
 use crate::domain::agent_execution::{
     executions::{
-        ExecutionId, ExecutionOutcome, InvocationHistory, InvocationObservation, SchedulingCause,
+        ExecutionId, ExecutionOutcome, InvocationHistory, InvocationKind, InvocationObservation,
+        QueueMutation, QueueOrderChange, SchedulingCause,
     },
     permissions::PermissionRequest,
     sessions::SessionId,
@@ -269,12 +271,20 @@ impl SessionManager {
                 cleanup_result: Box::new(cleanup_result.into_result()),
             });
         }
-        let snapshot = saved.unwrap_or_else(|| SessionSnapshot {
+        let mut snapshot = saved.unwrap_or_else(|| SessionSnapshot {
+            queue_history: Vec::new(),
             id: self.id.clone(),
             provider: identity,
             provider_session_id: opened.session.id().clone(),
             invocations: Vec::new(),
         });
+        if !super::queue_validation::replay(&snapshot)
+            .map_err(AgentError::Storage)?
+            .is_empty()
+        {
+            Self::append_queue_mutation(&mut snapshot, QueueMutation::Restored, None)
+                .map_err(AgentError::Storage)?;
+        }
         if let Err(error) = self
             .storage_lease
             .save(snapshot.clone())
@@ -361,7 +371,18 @@ impl SessionManager {
                 ));
             }
             let mut next = snapshot.clone();
+            let target_event_offset = scheduling
+                .first()
+                .and_then(|edge| edge.target.as_ref())
+                .and_then(|target| {
+                    snapshot
+                        .invocations
+                        .iter()
+                        .find(|record| &record.request.execution_id == target)
+                })
+                .map(|record| record.events.len());
             next.invocations.push(InvocationRecord {
+                target_event_offset,
                 submission,
                 request,
                 actor,
@@ -505,6 +526,114 @@ impl SessionManager {
         record.cancellation = Some(cancellation);
         self.save_observed(&mut evidence).await
     }
+    /// Check the bounded session-level reorder budget before changing live order.
+    pub(crate) async fn check_queue_reorder_capacity(&self) -> Result<(), StorageError> {
+        let evidence = self.evidence.lock().await;
+        if evidence.observed.as_ref().is_some_and(|snapshot| {
+            snapshot
+                .queue_history
+                .iter()
+                .filter(|entry| matches!(entry.mutation, QueueMutation::Reordered(_)))
+                .count()
+                >= QueueHistoryRecord::MAX_REORDERS
+        }) {
+            return Err(StorageError::Io("queue reorder history is full".into()));
+        }
+        Ok(())
+    }
+    fn append_queue_mutation(
+        snapshot: &mut SessionSnapshot,
+        mutation: QueueMutation,
+        actor: Option<ActionContext>,
+    ) -> Result<(), StorageError> {
+        let scheduling_length = mutation
+            .id()
+            .map(|id| {
+                snapshot
+                    .invocations
+                    .iter()
+                    .find(|record| &record.request.execution_id == id)
+                    .map(|record| record.scheduling.len())
+                    .ok_or_else(|| StorageError::Corrupt("queue mutation has no invocation".into()))
+            })
+            .transpose()?;
+        snapshot.queue_history.push(QueueHistoryRecord {
+            mutation,
+            actor,
+            scheduling_length,
+        });
+        let _ = super::queue_validation::replay(snapshot)?;
+        Ok(())
+    }
+    /// Record actual queue membership after the scheduler changed it. Failure
+    /// retains observed evidence and must not roll back the live queue silently.
+    pub(crate) async fn record_queue_mutation(
+        &self,
+        mutation: QueueMutation,
+        actor: Option<ActionContext>,
+    ) -> Result<(), StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let snapshot = evidence
+            .observed
+            .as_mut()
+            .ok_or_else(|| StorageError::Corrupt("queue has no session".into()))?;
+        Self::append_queue_mutation(snapshot, mutation, actor)?;
+        self.save_observed(&mut evidence).await
+    }
+    /// Persist dequeue before releasing the scheduler, independently of later dispatch.
+    pub(crate) async fn record_queue_selection(&self, id: ExecutionId) -> Result<(), StorageError> {
+        self.record_queue_mutation(QueueMutation::Selected { id }, None)
+            .await
+    }
+    /// Persist actual admission, including native-steering fallback membership.
+    pub(crate) async fn record_queue_admission(
+        &self,
+        id: ExecutionId,
+        kind: InvocationKind,
+        actor: ActionContext,
+    ) -> Result<(), StorageError> {
+        self.record_queue_mutation(QueueMutation::Admitted { id, kind }, Some(actor))
+            .await
+    }
+    /// Retain one order decision and apply it to the live queue in a single
+    /// transition. `apply` runs while this call holds the evidence mutex, so the
+    /// retained history and the order the scheduler will dispatch cannot diverge.
+    ///
+    /// The only suspension point is acquiring that mutex, before either effect:
+    /// a caller that bounds this call with a timeout or close therefore either
+    /// retains and applies the change or leaves both unchanged. Writing the
+    /// retained evidence to storage is the caller's separate, interruptible
+    /// [`Self::flush_observed`].
+    pub(crate) async fn retain_queue_reorder(
+        &self,
+        change: QueueOrderChange,
+        actor: ActionContext,
+        apply: impl FnOnce() -> Result<(), StorageError>,
+    ) -> Result<(), StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        let snapshot = evidence
+            .observed
+            .as_mut()
+            .ok_or_else(|| StorageError::Corrupt("queue has no session".into()))?;
+        // Either both effects happen or neither does, so a refused order change
+        // leaves no retained mutation the live queue never made. Only this
+        // transition rolls back: every other queue record describes an effect
+        // the scheduler has already performed.
+        let retained = snapshot.queue_history.len();
+        let result =
+            Self::append_queue_mutation(snapshot, QueueMutation::Reordered(change), Some(actor))
+                .and_then(|()| apply());
+        if result.is_err() {
+            snapshot.queue_history.truncate(retained);
+        }
+        result
+    }
+    /// Write observed evidence retained by an earlier transition. An unchanged
+    /// retry flushes evidence an earlier failed write left observed.
+    pub(crate) async fn flush_observed(&self) -> Result<(), StorageError> {
+        let mut evidence = self.evidence.lock().await;
+        self.save_observed(&mut evidence).await
+    }
     /// Appends scheduling evidence to an existing input and saves it.
     /// Failed writes retain observed evidence for the next persistence attempt,
     /// while the committed snapshot remains unchanged.
@@ -513,14 +642,23 @@ impl SessionManager {
         index: usize,
         event: InvocationSchedulingEvent,
     ) -> Result<(), StorageError> {
+        self.record_scheduling_with_queue(index, event, None).await
+    }
+    /// Persist a lifecycle edge and its corresponding actual queue removal together.
+    pub(crate) async fn record_scheduling_with_queue(
+        &self,
+        index: usize,
+        event: InvocationSchedulingEvent,
+        mutation: Option<QueueMutation>,
+    ) -> Result<(), StorageError> {
         let mut evidence = self.evidence.lock().await;
-        let record = evidence
+        let snapshot = evidence
             .observed
             .as_mut()
-            .and_then(|snapshot| snapshot.invocations.get_mut(index))
-            .ok_or_else(|| {
-                StorageError::Corrupt("scheduling event has no submitted invocation".into())
-            })?;
+            .ok_or_else(|| StorageError::Corrupt("scheduling event has no session".into()))?;
+        let record = snapshot.invocations.get_mut(index).ok_or_else(|| {
+            StorageError::Corrupt("scheduling event has no submitted invocation".into())
+        })?;
         let mut history = super::validation::invocation_history(record)?;
         history
             .schedule(
@@ -531,7 +669,11 @@ impl SessionManager {
             .and_then(|()| history.validate_checkpoint())
             .map_err(|error| StorageError::Corrupt(error.to_string()))?;
         super::validation::validate_stop_actor(record.local_cancellation.as_ref(), Some(&event))?;
+        let actor = event.actor.clone();
         record.scheduling.push(event);
+        if let Some(mutation) = mutation {
+            Self::append_queue_mutation(snapshot, mutation, actor)?;
+        }
         self.save_observed(&mut evidence).await
     }
     /// Scope output authority to the owning observation loop, including unwind.

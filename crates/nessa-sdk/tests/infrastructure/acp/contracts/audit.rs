@@ -288,7 +288,18 @@ async fn every_permission_free_outcome_has_once_only_execution_evidence() {
         ),
     ] {
         let audit = Arc::new(RecordingAudit::default());
-        let (root, binding) = test_acp_binding_with_audit(mode, 16, audit.clone());
+        let (root, mut config, model) = test_acp_configuration(mode, 16);
+        // This test asserts audit semantics for completed provider outcomes. A
+        // short execution deadline turns scheduler contention into an unrelated
+        // deadline outcome when the real fixture process is under load.
+        config.execution_timeout = Some(Duration::from_secs(30));
+        let binding = ClaudeAcpProvider::new(
+            config,
+            &model,
+            TokenLimits::new(900, 100).unwrap(),
+            audit.clone(),
+        )
+        .unwrap();
         let opened = binding.open(None).await.unwrap();
         let session = opened.session.id().clone();
         let result = opened.session.execute(prompt("test")).await.into_result();
@@ -562,7 +573,17 @@ async fn malformed_startup_permission_closes_the_known_idle_context() {
         "startup-permission-null-id",
     ] {
         let audit = Arc::new(RecordingAudit::default());
-        let (root, binding) = test_acp_binding_with_audit(mode, 16, audit.clone());
+        let (root, mut config, model) = test_acp_configuration(mode, 16);
+        // The malformed frame is the behavior under test. Leave enough startup
+        // time for the real fixture process to run even on a contended builder.
+        config.startup_timeout = Duration::from_secs(30);
+        let binding = ClaudeAcpProvider::new(
+            config,
+            &model,
+            TokenLimits::new(900, 100).unwrap(),
+            audit.clone(),
+        )
+        .unwrap();
         let failure = binding.open(None).await.err().unwrap();
         assert!(matches!(failure.cause(), AgentError::Protocol(_)));
         assert!(failure.cleanup().is_none());

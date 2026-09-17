@@ -158,7 +158,7 @@ async fn answer_response_checks_session_execution_review_option_and_entire_attri
             assert_eq!(result, Ok(resolution));
         } else {
             assert!(
-                matches!(result, Err(AgentError::Protocol(_))),
+                matches!(result, Err(ref failure) if matches!(failure.error(), AgentError::Protocol(_))),
                 "field {field}: {result:?}"
             );
         }

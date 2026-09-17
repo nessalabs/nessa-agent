@@ -3,11 +3,14 @@
 
 use std::collections::{HashSet, VecDeque};
 
-use crate::domain::agent_execution::executions::{ExecutionId, InvocationKind, SchedulingError};
+use crate::domain::agent_execution::executions::{
+    ExecutionId, InvocationKind, QueueMutation, QueueOrderChange, QueueOrderError, SchedulingError,
+};
 
 /// Owns bounded pending work and remembers every successfully admitted identity.
 ///
-/// Steering work precedes ordinary work; each kind has its own FIFO deque.
+/// Steering work precedes ordinary work; each kind has its own deque, initially FIFO.
+/// Explicit order changes may rearrange inputs within each priority class.
 /// Dispatch checks at most two deque fronts, independent of pending capacity.
 /// The capacity bounds pending work only. Identity history grows for the queue's
 /// lifetime, including after dispatch or drain, so the owning agent must retain
@@ -138,6 +141,80 @@ impl InvocationQueue {
             drained.push(invocation);
         }
         drained
+    }
+
+    /// Copy pending identities and priorities in their current dispatch order.
+    /// Running and previously removed work is absent.
+    pub fn pending(&self) -> Vec<(ExecutionId, InvocationKind)> {
+        self.steering
+            .iter()
+            .map(|id| (id.clone(), InvocationKind::Steering))
+            .chain(
+                self.ordinary
+                    .iter()
+                    .map(|id| (id.clone(), InvocationKind::Queued)),
+            )
+            .collect()
+    }
+    /// Apply validated replacement order while preserving identities and kinds.
+    /// Returns QueueChanged if membership or ordering changed after validation.
+    /// The owner must separately retain and persist the change's audit evidence.
+    pub fn apply_order(&mut self, change: &QueueOrderChange) -> Result<(), QueueOrderError> {
+        if self.pending() != change.before() {
+            return Err(QueueOrderError::QueueChanged);
+        }
+        self.steering.clear();
+        self.ordinary.clear();
+        for id in change.after() {
+            match change
+                .before()
+                .iter()
+                .find(|(known, _)| known == id)
+                .expect("validated membership")
+                .1
+            {
+                InvocationKind::Steering => self.steering.push_back(id.clone()),
+                InvocationKind::Queued => self.ordinary.push_back(id.clone()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Replay this local membership fact. Rejects contradictory ordering, missing
+    /// membership, repeated admission, priority changes and unnecessary resets.
+    /// This aggregate retains admitted identities across restoration resets.
+    pub fn apply_mutation(&mut self, mutation: &QueueMutation) -> Result<(), &'static str> {
+        match mutation {
+            QueueMutation::Admitted { id, kind } => self
+                .enqueue(id.clone(), *kind)
+                .map_err(|_| "invalid queue admission"),
+            QueueMutation::Selected { id } => {
+                if self.pending().first().is_some_and(|(next, _)| next == id) {
+                    let _ = self.pop_next();
+                    Ok(())
+                } else {
+                    Err("queue selection disagrees with dispatch order")
+                }
+            }
+            QueueMutation::Removed { id, .. } => {
+                if self.remove(id).is_some() {
+                    Ok(())
+                } else {
+                    Err("removed input was not queued")
+                }
+            }
+            QueueMutation::Reordered(change) => self
+                .apply_order(change)
+                .map_err(|_| "reorder before-state disagrees with queue history"),
+            QueueMutation::Restored => {
+                if self.is_empty() {
+                    Err("empty queue restoration is not a transition")
+                } else {
+                    let _ = self.drain();
+                    Ok(())
+                }
+            }
+        }
     }
 
     /// Returns the number of pending invocations, excluding dispatched work.

@@ -3,7 +3,26 @@
 
 use crate::application::agent_execution::agents::AgentError;
 use crate::domain::agent_execution::permissions::PermissionOfferPolicy;
-use std::{collections::BTreeMap, ffi::OsString, path::PathBuf, time::Duration};
+use serde::Deserialize;
+use std::{
+    collections::{BTreeMap, HashSet},
+    ffi::OsString,
+    path::PathBuf,
+    time::Duration,
+};
+
+/// Trusted stdio MCP server. This is host configuration, never model-supplied input.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StdioMcpServer {
+    /// Unique ASCII server name (letters, digits, hyphen, underscore; at most 64 bytes).
+    pub name: String,
+    /// Absolute UTF-8 executable path, launched directly without shell interpolation.
+    pub command: PathBuf,
+    /// Ordered UTF-8 arguments. Never put credentials here; these enter the context fingerprint.
+    #[serde(default)]
+    pub args: Vec<String>,
+}
 
 /// Host-owned launch configuration. Environment is explicit, never inherited by
 /// the adapter. Use the normal HOME/auth environment without extracting secrets.
@@ -33,7 +52,10 @@ pub struct AcpConfig {
     /// Whether this binding accepts provider tool events and permission requests. When false,
     /// tool events are protocol errors and permission requests are cancelled; this switch is not
     /// an OS filesystem sandbox.
-    pub file_tools: bool,
+    pub tools_enabled: bool,
+    /// Trusted MCP servers exposed by profiles that support MCP. Empty disables custom tools.
+    /// Servers require tools_enabled and share the provider session lifetime.
+    pub mcp_servers: Vec<StdioMcpServer>,
     /// Allowed permission decisions offered for provider requests. Provider choices are
     /// restricted to this policy; the selected profile must support every configured scope. An
     /// answer still requires verified caller attribution and audit delivery.
@@ -73,6 +95,34 @@ pub struct AcpConfig {
 }
 impl AcpConfig {
     pub(crate) fn validate(&self) -> Result<(), AgentError> {
+        if self.mcp_servers.len() > 16 || (!self.tools_enabled && !self.mcp_servers.is_empty()) {
+            return Err(AgentError::Configuration(
+                "at most 16 MCP servers; MCP requires tools enabled".into(),
+            ));
+        }
+        let mut names = HashSet::new();
+        for server in &self.mcp_servers {
+            if server.name.is_empty()
+                || server.name.len() > 64
+                || server.name.contains("__")
+                || !server
+                    .name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                || !names.insert(&server.name)
+                || !server.command.is_absolute()
+                || server.command.to_str().is_none()
+                || server.args.len() > 64
+                || server
+                    .args
+                    .iter()
+                    .any(|arg| arg.len() > 8192 || arg.contains('\0'))
+            {
+                return Err(AgentError::Configuration(
+                    "invalid MCP server name, executable or arguments".into(),
+                ));
+            }
+        }
         if !cfg!(unix) {
             return Err(AgentError::Unsupported("native ACP process supervision requires Unix; Windows needs an owned Job Object adapter".into()));
         }

@@ -56,6 +56,7 @@ impl Future for PanicOpening<'_> {
                         ExecutionSessionId::new("opened-before-drop-panic").unwrap(),
                         self.0.cleanup.clone(),
                         capabilities(),
+                        Arc::new(AcceptingAudit),
                     ),
                     events: Box::new(TestEvents(events)),
                 }))

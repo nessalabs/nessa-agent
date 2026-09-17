@@ -7,11 +7,52 @@ use crate::infrastructure::json_rpc::protocol;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
-pub(in crate::infrastructure::claude_acp) const FILE_TOOLS: &[&str] =
-    &["Read", "Write", "Edit", "Glob", "Grep"];
+// Native shell and mode changes must not bypass Nessa's execution and permission owners.
+pub(in crate::infrastructure::claude_acp) const DISALLOWED_TOOLS: &[&str] = &[
+    "Bash",
+    "BashOutput",
+    "KillShell",
+    "EnterPlanMode",
+    "ExitPlanMode",
+];
+pub(in crate::infrastructure::claude_acp) const REVIEW_TOOLS: &[&str] = &[
+    "Read",
+    "Write",
+    "Edit",
+    "Glob",
+    "Grep",
+    "NotebookEdit",
+    "WebSearch",
+    "WebFetch",
+    "Agent",
+    "Task",
+    "TodoWrite",
+    "TaskCreate",
+    "TaskUpdate",
+    "TaskList",
+    "TaskGet",
+    "TaskOutput",
+    "TaskStop",
+    "Skill",
+];
+fn bounded_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+fn enabled_name(name: &str, mcp_prefixes: &[String]) -> bool {
+    bounded_name(name)
+        && (REVIEW_TOOLS.contains(&name)
+            || mcp_prefixes
+                .iter()
+                .any(|prefix| name.starts_with(prefix) && name.len() > prefix.len()))
+}
 pub(in crate::infrastructure::claude_acp) fn tool_call(
     value: &Value,
     names: &mut HashMap<String, String>,
+    mcp_prefixes: &[String],
 ) -> Result<ToolCallUpdate, AgentError> {
     // Validate the complete representation before retaining provider name state.
     let update = acp_tool_call(value)?;
@@ -20,14 +61,16 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
         .pointer("/_meta/claudeCode/toolName")
         .and_then(Value::as_str)
     {
-        // Only these fixed names are retained (currently at most five bytes).
-        // Together with 256-byte IDs and 4,096 entries, this bounds the map's
-        // string payload independently of incoming frame size.
-        if !FILE_TOOLS.contains(&name) {
+        // Only native tools included in the configured review policy and tools
+        // from configured MCP namespaces may reach Nessa's permission owner.
+        // Names are also bounded before retention; together with 256-byte IDs
+        // and 4,096 entries, this bounds the map's string payload independently
+        // of incoming frame size.
+        if !enabled_name(name, mcp_prefixes) {
             // A rejected name can occupy the entire frame. Do not copy it into
             // an error that teardown will retain and clone.
             return Err(AgentError::Unsupported(
-                "tool is outside the file-tool profile".into(),
+                "tool is outside the configured tool profile".into(),
             ));
         }
         if names.get(&id).is_some_and(|old| old != name) {
@@ -44,6 +87,7 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
 pub(in crate::infrastructure::claude_acp) fn tool_input(
     name: &str,
     value: &Value,
+    mcp_prefixes: &[String],
 ) -> Result<ToolReviewInput, AgentError> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -127,7 +171,8 @@ pub(in crate::infrastructure::claude_acp) fn tool_input(
                 return Err(protocol("conflicting search context fields"));
             }
         }
-        _ => return Err(protocol("permission for an unknown tool")),
+        _ if enabled_name(name, mcp_prefixes) && value.is_object() => {}
+        _ => return Err(protocol("permission for an invalid or disabled tool")),
     }
     Ok(ToolReviewInput {
         name: name.into(),

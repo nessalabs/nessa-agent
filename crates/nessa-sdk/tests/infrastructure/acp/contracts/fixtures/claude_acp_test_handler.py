@@ -117,10 +117,12 @@ for line in sys.stdin:
         options = msg["params"]["_meta"]["claudeCode"]["options"]
         assert options["model"] == model
         assert options["settingSources"] == []
-        assert options["tools"] == ["Read", "Write", "Edit", "Glob", "Grep"]
+        assert options["tools"] == {"type": "preset", "preset": "claude_code"}
+        assert "Bash" in options["disallowedTools"]
+        assert "WebSearch" in options["settings"]["permissions"]["ask"]
         assert options["settings"]["disableAllHooks"] is True
         assert options["settings"]["allowedMcpServers"] == []
-        assert options["settings"]["permissions"]["ask"] == options["tools"]
+        assert "Read" in options["settings"]["permissions"]["ask"]
         response = configs("alias" if mode == "wrong-model" else model)
         if mode.startswith("duplicate-session-"):
             response = duplicate_configs(mode.removeprefix("duplicate-session-"))
@@ -260,7 +262,12 @@ for line in sys.stdin:
         elif mode == "unknown-request":
             send({"id": "unsupported", "method": "terminal/create", "params": {"sessionId": session}})
         else:
-            if mode == "byte-generation":
+            if mode == "message-identities":
+                for identity, value in [("m1", "First "), ("m1", "reply."), ("m2", "Second reply.")]:
+                    update({"sessionUpdate": "agent_message_chunk", "messageId": identity, "content": {"type": "text", "text": value}})
+            elif mode == "empty-message-identity":
+                update({"sessionUpdate": "agent_message_chunk", "messageId": "", "content": {"type": "text", "text": "invalid"}})
+            elif mode == "byte-generation":
                 for _ in range(4):
                     text("x" * (3 * 1024 * 1024))
             else:

@@ -78,3 +78,68 @@ async fn custom_storage_cannot_restore_oversized_message_chunks() {
         super::custom_storage::assert_custom_retention_admission(value, false).await;
     }
 }
+
+#[tokio::test]
+async fn provider_message_identity_survives_file_storage_without_combining_fragments() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("private");
+    private::create_directory(&directory).unwrap();
+    let storage = LocalFileStorage::new(directory).unwrap();
+    let mut value = snapshot("message-identities");
+    let execution = value.invocations[0].request.execution_id.clone();
+    value.invocations[0].events = vec![
+        ExecutionEvent::new(
+            execution.clone(),
+            ExecutionUpdate::Message(
+                MessageChunk::text(" First ").with_message_id(MessageId::new("m1").unwrap()),
+            ),
+        ),
+        ExecutionEvent::new(
+            execution.clone(),
+            ExecutionUpdate::Message(
+                MessageChunk::text("answer.\n").with_message_id(MessageId::new("m1").unwrap()),
+            ),
+        ),
+        ExecutionEvent::new(
+            execution,
+            ExecutionUpdate::Message(
+                MessageChunk::text("Second answer.")
+                    .with_message_id(MessageId::new("x".repeat(256)).unwrap()),
+            ),
+        ),
+    ];
+    let lease = storage.open(value.id.clone()).await.unwrap();
+    lease.save(value.clone()).await.unwrap();
+    assert_same(&lease.load().await.unwrap().unwrap(), &value);
+}
+
+#[tokio::test]
+async fn empty_provider_message_identity_is_rejected_during_file_restoration() {
+    assert!(MessageId::new("").is_err());
+    let mut value = snapshot("empty-message-identity");
+    let execution = value.invocations[0].request.execution_id.clone();
+    value.invocations[0].events = vec![ExecutionEvent::new(
+        execution,
+        ExecutionUpdate::Message(
+            MessageChunk::text("x").with_message_id(MessageId::new("valid").unwrap()),
+        ),
+    )];
+    super::custom_storage::assert_custom_retention_admission(value.clone(), true).await;
+
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("private");
+    private::create_directory(&directory).unwrap();
+    let storage = LocalFileStorage::new(directory.clone()).unwrap();
+    let lease = storage.open(value.id.clone()).await.unwrap();
+    lease.save(value).await.unwrap();
+    let path = journal_path(&directory, "empty-message-identity");
+    let original = std::fs::read(&path).unwrap();
+    let mut invalid: serde_json::Value = snapshot_json(&original).unwrap();
+    *invalid
+        .pointer_mut("/invocations/0/events/0/message_id")
+        .unwrap() = "".into();
+    let bytes = journal_bytes(&invalid).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    assert!(matches!(lease.load().await, Err(StorageError::Corrupt(_))));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+}

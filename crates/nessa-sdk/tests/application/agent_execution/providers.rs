@@ -80,8 +80,10 @@ async fn adapter_substitution_keeps_instances_and_controls_isolated() {
                 id: PermissionId::new("1").unwrap(),
                 option_id: PermissionOptionId::new("approve-one").unwrap()
             })
-            .await,
-        Err(AgentError::StalePermission)
+            .await
+            .unwrap_err()
+            .error(),
+        &AgentError::StalePermission
     );
     assert_eq!(
         offline
@@ -91,8 +93,10 @@ async fn adapter_substitution_keeps_instances_and_controls_isolated() {
                 id: PermissionId::new("1").unwrap(),
                 option_id: PermissionOptionId::new("approve-one").unwrap()
             })
-            .await,
-        Err(AgentError::Closed)
+            .await
+            .unwrap_err()
+            .error(),
+        &AgentError::Closed
     );
     assert_eq!(
         online.close(close_action()).await.unwrap(),
@@ -122,6 +126,7 @@ impl AgentProvider for TestProvider {
                     ExecutionSessionId::new("fixture").unwrap(),
                     self.0.clone(),
                     capabilities(),
+                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(EmptyEvents),
             })
@@ -148,10 +153,12 @@ pub(super) async fn provider_agent_with_review(
     let lease = storage.open(id.clone()).await.unwrap();
     lease
         .save(SessionSnapshot {
+            queue_history: Vec::new(),
             id: id.clone(),
             provider: provider.identity(),
             provider_session_id: ExecutionSessionId::new("fixture").unwrap(),
             invocations: vec![InvocationRecord {
+                target_event_offset: None,
                 submission: SubmissionMode::Immediate,
                 request: ExecutionRequest {
                     execution_id: review.execution_id().clone(),

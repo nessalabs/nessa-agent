@@ -5,6 +5,7 @@
 //! `provider_identity` checks validated resume metadata; `custom_storage` supplies
 //! an unchecked adapter to prove application validation.
 use nessa_local_storage as private;
+mod benchmark;
 mod custom_storage;
 mod file_identity;
 use file_identity::journal_path;
@@ -20,6 +21,7 @@ mod messages;
 mod output_retention;
 mod permission_choices;
 mod provider_identity;
+mod queue_history;
 mod retention;
 mod robustness;
 mod scheduling;
@@ -51,10 +53,12 @@ fn id(value: &str) -> SessionId {
 fn snapshot(name: &str) -> SessionSnapshot {
     let execution_id = ExecutionId::new("execution").unwrap();
     SessionSnapshot {
+        queue_history: Vec::new(),
         id: id(name),
         provider: ProviderIdentity::new("fixture", "model", "workspace").unwrap(),
         provider_session_id: ExecutionSessionId::new("native-session").unwrap(),
         invocations: vec![InvocationRecord {
+            target_event_offset: None,
             provider_report: None,
             local_cancellation: None,
             local_outcome: None,
@@ -140,6 +144,7 @@ fn assert_same(actual: &SessionSnapshot, expected: &SessionSnapshot) {
             actual.request.reserved_output_tokens,
             expected.request.reserved_output_tokens
         );
+        assert_eq!(actual.target_event_offset, expected.target_event_offset);
         assert_eq!(actual.actor, expected.actor);
         assert_eq!(actual.events, expected.events);
         assert_eq!(actual.scheduling, expected.scheduling);

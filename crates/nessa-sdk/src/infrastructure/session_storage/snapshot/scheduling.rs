@@ -17,7 +17,7 @@ pub(super) struct SchedulingEvent {
     actor: Option<Actor>,
 }
 #[derive(Serialize, Deserialize)]
-enum Kind {
+pub(super) enum Kind {
     Queued,
     Steering,
 }

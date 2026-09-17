@@ -53,7 +53,10 @@ fn assert_identifier_limit(error: StorageError) {
     assert_eq!(
         error,
         StorageError::Corrupt(
-            AgentError::InvalidInput("execution identity exceeds binding limit".into()).to_string(),
+            AgentError::InvalidInput(
+                "observation identity must contain 1 through 256 bytes".into(),
+            )
+            .to_string(),
         )
     );
 }

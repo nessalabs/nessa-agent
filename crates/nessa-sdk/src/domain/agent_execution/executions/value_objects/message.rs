@@ -1,4 +1,34 @@
 #![deny(missing_docs)]
+use crate::domain::agent_execution::ExecutionError;
+
+/// Opaque provider identity shared by fragments of one streamed message.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MessageId(Box<str>);
+impl MessageId {
+    /// Maximum UTF-8 byte length retained across adapters and storage.
+    pub const MAX_BYTES: usize = 256;
+    /// Preserve exact nonempty `value` up to [`Self::MAX_BYTES`].
+    ///
+    /// Returns [`ExecutionError::EmptyValue`] for an empty identity and
+    /// [`ExecutionError::ValueTooLong`] when the UTF-8 representation is too long.
+    pub fn new(value: impl Into<String>) -> Result<Self, ExecutionError> {
+        let value = value.into();
+        if value.is_empty() {
+            return Err(ExecutionError::EmptyValue("message ID"));
+        }
+        if value.len() > Self::MAX_BYTES {
+            return Err(ExecutionError::ValueTooLong {
+                field: "message ID",
+                max_bytes: Self::MAX_BYTES,
+            });
+        }
+        Ok(Self(value.into_boxed_str()))
+    }
+    /// Borrow the exact provider identity without normalization.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// Which provider output channel an immutable message fragment belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,6 +51,7 @@ pub enum MessageKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MessageChunk {
     kind: MessageKind,
+    message_id: Option<MessageId>,
     text: Box<str>,
 }
 impl MessageChunk {
@@ -29,6 +60,7 @@ impl MessageChunk {
     /// provider or application size policy. Changes create a replacement value.
     pub fn text(text: impl Into<String>) -> Self {
         Self {
+            message_id: None,
             kind: MessageKind::Text,
             text: text.into().into_boxed_str(),
         }
@@ -37,9 +69,19 @@ impl MessageChunk {
     /// Construction is infallible, compacts spare capacity, and imposes no size policy.
     pub fn thought(text: impl Into<String>) -> Self {
         Self {
+            message_id: None,
             kind: MessageKind::Thought,
             text: text.into().into_boxed_str(),
         }
+    }
+    /// Retain a validated opaque provider message identity across streamed fragments.
+    pub fn with_message_id(mut self, id: MessageId) -> Self {
+        self.message_id = Some(id);
+        self
+    }
+    /// Provider message identity, when the transport exposes one.
+    pub fn message_id(&self) -> Option<&str> {
+        self.message_id.as_ref().map(MessageId::as_str)
     }
     /// Output channel associated with this exact fragment.
     pub fn kind(&self) -> MessageKind {
@@ -50,9 +92,10 @@ impl MessageChunk {
         &self.text
     }
     /// Retained UTF-8 payload bytes, excluding this value's fixed struct size.
-    /// Compact immutable storage makes this equal to the text byte length.
+    /// This is the exact text byte length plus the optional message ID byte length;
+    /// both allocations are compact and retain no caller spare capacity.
     pub fn payload_bytes(&self) -> usize {
-        self.text.len()
+        self.text.len() + self.message_id.as_ref().map_or(0, |id| id.as_str().len())
     }
     /// Consume the fragment and transfer its exact text allocation to the caller.
     /// The caller can inspect `kind()` before consumption when the channel matters.

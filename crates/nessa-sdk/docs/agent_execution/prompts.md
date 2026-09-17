@@ -54,6 +54,7 @@ assistant response; the client does not resend earlier messages or append assist
 messages itself. Create streamed output values with `MessageChunk::text(...)` or
 `MessageChunk::thought(...)`. These immutable values preserve empty text and
 whitespace, discard spare capacity, and expose `kind()`, `as_str()`, and
-`payload_bytes()`; they do not fabricate saved history or impose the application
+`payload_bytes()`; optional provider correlation uses a validated nonempty
+`MessageId` of at most 256 UTF-8 bytes. They do not fabricate saved history or impose the application
 chunk-size policy.
 See [ACP prompt turns](https://agentclientprotocol.com/protocol/v1/prompt-turn).

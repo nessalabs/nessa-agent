@@ -792,6 +792,15 @@ impl SessionLifecycle {
         permit: &WorkPermit,
         operation: impl Future<Output = Result<T, ProviderOperationFailure>>,
     ) -> Result<T, AgentError> {
+        self.run_provider_operation(permit, operation, false)
+            .await
+            .map_err(ProviderOperationFailure::into_error)
+    }
+    pub(super) async fn run_control_observed<T>(
+        &self,
+        permit: &WorkPermit,
+        operation: impl Future<Output = Result<T, ProviderOperationFailure>>,
+    ) -> Result<T, ProviderOperationFailure> {
         self.run_provider_operation(permit, operation, false).await
     }
     pub(super) async fn run_preparation<T>(
@@ -799,7 +808,10 @@ impl SessionLifecycle {
         permit: &WorkPermit,
         operation: impl Future<Output = Result<T, ProviderOperationFailure>>,
     ) -> Result<T, AgentError> {
-        let value = self.run_provider_operation(permit, operation, true).await?;
+        let value = self
+            .run_provider_operation(permit, operation, true)
+            .await
+            .map_err(ProviderOperationFailure::into_error)?;
         let mut state = self.state.lock().expect("session lifecycle");
         if state.work_generation != permit.work_generation
             || state.provider_generation != permit.provider_generation
@@ -816,7 +828,7 @@ impl SessionLifecycle {
         permit: &WorkPermit,
         operation: impl Future<Output = Result<T, ProviderOperationFailure>>,
         preparation: bool,
-    ) -> Result<T, AgentError> {
+    ) -> Result<T, ProviderOperationFailure> {
         let mut stop = permit.stop.clone();
         tokio::pin!(operation);
         let mut started = false;
@@ -836,7 +848,10 @@ impl SessionLifecycle {
                         &mut started,
                     ) {
                         Poll::Ready(result) => Poll::Ready(result),
-                        Poll::Pending => Poll::Ready(Err(AgentError::Closed)),
+                        Poll::Pending => Poll::Ready(Err(ProviderOperationFailure::new(
+                            AgentError::Closed,
+                            ProviderSessionState::CleanupRequired,
+                        ))),
                     }
                 }
                 Poll::Pending => Poll::Pending,
@@ -851,7 +866,7 @@ impl SessionLifecycle {
         cx: &mut Context<'_>,
         preparation: bool,
         started: &mut bool,
-    ) -> Poll<Result<T, AgentError>> {
+    ) -> Poll<Result<T, ProviderOperationFailure>> {
         let mut state = self.state.lock().expect("session lifecycle");
         let stopped = state.work_generation != permit.work_generation
             || state.provider_generation != permit.provider_generation
@@ -861,7 +876,10 @@ impl SessionLifecycle {
         // retain an already-ready acknowledgement before honoring a concurrent
         // stop; otherwise a confirmed external effect would be lost.
         if stopped && (!*started || preparation) {
-            return Poll::Ready(Err(AgentError::Closed));
+            return Poll::Ready(Err(ProviderOperationFailure::new(
+                AgentError::Closed,
+                ProviderSessionState::CleanupRequired,
+            )));
         }
         *started = true;
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -884,10 +902,13 @@ impl SessionLifecycle {
         match result {
             Poll::Ready(Err(failure)) => {
                 self.apply_control_state(&mut state, permit, failure.session_state());
-                Poll::Ready(Err(failure.into_error()))
+                Poll::Ready(Err(failure))
             }
             Poll::Ready(Ok(value)) => Poll::Ready(Ok(value)),
-            Poll::Pending if stopped => Poll::Ready(Err(AgentError::Closed)),
+            Poll::Pending if stopped => Poll::Ready(Err(ProviderOperationFailure::new(
+                AgentError::Closed,
+                ProviderSessionState::CleanupRequired,
+            ))),
             Poll::Pending => Poll::Pending,
         }
     }

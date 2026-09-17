@@ -198,7 +198,11 @@ async fn complete_retained_review_is_required_for_answers_and_cancellations() {
                     .await
                     .map(|_| ())
             } else {
-                agent.answer_permission(answer.clone()).await.map(|_| ())
+                agent
+                    .answer_permission(answer.clone())
+                    .await
+                    .map(|_| ())
+                    .map_err(|failure| failure.into_parts().0)
             };
             if change == ReviewChange::Original {
                 assert_eq!(result, Ok(()));
@@ -210,7 +214,11 @@ async fn complete_retained_review_is_required_for_answers_and_cancellations() {
                 let retry = if cancel {
                     agent.cancel_permission(cancellation).await.map(|_| ())
                 } else {
-                    agent.answer_permission(answer).await.map(|_| ())
+                    agent
+                        .answer_permission(answer)
+                        .await
+                        .map(|_| ())
+                        .map_err(|failure| failure.into_parts().0)
                 };
                 assert_eq!(retry, Err(AgentError::Closed));
                 assert_eq!(
@@ -288,7 +296,11 @@ async fn contradictory_receipt_never_hides_cleanup_or_audit_failure() {
             let result = if cancel {
                 agent.cancel_permission(cancellation).await.map(|_| ())
             } else {
-                agent.answer_permission(answer.clone()).await.map(|_| ())
+                agent
+                    .answer_permission(answer.clone())
+                    .await
+                    .map(|_| ())
+                    .map_err(|failure| failure.into_parts().0)
             };
             assert!(matches!(result, Err(AgentError::Protocol(_))));
             assert_eq!(
@@ -299,10 +311,8 @@ async fn contradictory_receipt_never_hides_cleanup_or_audit_failure() {
                     AgentError::CleanupUncertain
                 })
             );
-            assert_eq!(
-                agent.answer_permission(answer).await,
-                Err(AgentError::Closed)
-            );
+            let failure = agent.answer_permission(answer).await.unwrap_err();
+            assert_eq!(failure.error(), &AgentError::Closed);
             assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
             assert_eq!(
                 *backend.closes.lock().unwrap(),

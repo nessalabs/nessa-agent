@@ -39,6 +39,7 @@ impl AgentProvider for ReadyProvider {
                     ExecutionSessionId::new("ready").unwrap(),
                     self.backend.clone(),
                     capabilities(),
+                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(ReadyEvents(self.polls.clone(), self.backend.clone())),
             })

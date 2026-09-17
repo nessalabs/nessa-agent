@@ -133,6 +133,7 @@ async fn rejected_observation_fences_permission_controls_before_its_save_resumes
                                 })
                                 .await
                                 .map(|_| ())
+                                .map_err(|failure| failure.into_parts().0)
                         }
                     }
                 };

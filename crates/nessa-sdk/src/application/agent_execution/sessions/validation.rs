@@ -36,8 +36,28 @@ pub(crate) fn validate(snapshot: &SessionSnapshot) -> Result<(), StorageError> {
         let (full, history) = calls.get();
         calls.set((full + 1, history));
     });
+    let _ = super::queue_validation::replay(snapshot)?;
     let mut identities = HashMap::with_capacity(snapshot.invocations.len());
+    let mut event_counts = HashMap::new();
     for invocation in &snapshot.invocations {
+        if let Some(offset) = invocation.target_event_offset {
+            let target = invocation
+                .scheduling
+                .first()
+                .and_then(|edge| edge.target.as_ref());
+            if !target
+                .and_then(|target| event_counts.get(target))
+                .is_some_and(|count| offset <= *count)
+            {
+                return Err(corrupt(
+                    "steering offset is outside the preceding target history",
+                ));
+            }
+        }
+        event_counts.insert(
+            invocation.request.execution_id.clone(),
+            invocation.events.len(),
+        );
         if invocation.events.capacity() > MAX_RETAINED_OUTPUT_EVENTS {
             return Err(corrupt(
                 "retained observation capacity exceeds per-invocation limit",

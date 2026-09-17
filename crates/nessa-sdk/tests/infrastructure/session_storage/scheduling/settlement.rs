@@ -7,18 +7,18 @@ use serde_json::Value;
 
 #[tokio::test]
 async fn settled_history_requires_result_before_save_load_or_provider_restore() {
-    let root = tempfile::tempdir().unwrap();
-    private::create_directory(&root.path().join("private")).unwrap();
-    let stores: Vec<Arc<dyn SessionStorage>> = vec![
-        Arc::new(InMemoryStorage::new()),
-        Arc::new(LocalFileStorage::new(root.path().join("private")).unwrap()),
-    ];
     for mode in [
         SubmissionMode::Queued,
         SubmissionMode::BoundarySteering,
         SubmissionMode::Steering,
     ] {
         for dispatched in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            private::create_directory(&root.path().join("private")).unwrap();
+            let stores: Vec<Arc<dyn SessionStorage>> = vec![
+                Arc::new(InMemoryStorage::new()),
+                Arc::new(LocalFileStorage::new(root.path().join("private")).unwrap()),
+            ];
             let mut value = settled_snapshot(mode, dispatched);
             for storage in &stores {
                 let lease = storage.open(value.id.clone()).await.unwrap();
@@ -87,23 +87,24 @@ fn settled_snapshot(mode: SubmissionMode, dispatched: bool) -> SessionSnapshot {
         ..first
     });
     record.result = Some(Err(AgentError::Closed));
+    fixture_dispatches(&mut value);
     value
 }
 
 #[tokio::test]
 async fn failed_dispatch_rejects_successful_results_at_every_storage_boundary() {
-    let root = tempfile::tempdir().unwrap();
-    private::create_directory(&root.path().join("private")).unwrap();
-    let stores: Vec<Arc<dyn SessionStorage>> = vec![
-        Arc::new(InMemoryStorage::new()),
-        Arc::new(LocalFileStorage::new(root.path().join("private")).unwrap()),
-    ];
     for mode in [
         SubmissionMode::Queued,
         SubmissionMode::BoundarySteering,
         SubmissionMode::Steering,
     ] {
         for dispatched in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            private::create_directory(&root.path().join("private")).unwrap();
+            let stores: Vec<Arc<dyn SessionStorage>> = vec![
+                Arc::new(InMemoryStorage::new()),
+                Arc::new(LocalFileStorage::new(root.path().join("private")).unwrap()),
+            ];
             let mut valid = settled_snapshot(mode, dispatched);
             valid.invocations[0].scheduling.last_mut().unwrap().cause =
                 SchedulingCause::DispatchFailed;
@@ -156,16 +157,16 @@ async fn failed_dispatch_rejects_successful_results_at_every_storage_boundary() 
 
 #[tokio::test]
 async fn execution_settled_requires_an_exact_outcome_across_storage_boundaries() {
-    let root = tempfile::tempdir().unwrap();
-    let stores: Vec<Arc<dyn SessionStorage>> = vec![
-        Arc::new(InMemoryStorage::new()),
-        Arc::new(LocalFileStorage::new(root.path().join("private")).unwrap()),
-    ];
     for mode in [
         SubmissionMode::Queued,
         SubmissionMode::BoundarySteering,
         SubmissionMode::Steering,
     ] {
+        let root = tempfile::tempdir().unwrap();
+        let stores: Vec<Arc<dyn SessionStorage>> = vec![
+            Arc::new(InMemoryStorage::new()),
+            Arc::new(LocalFileStorage::new(root.path().join("private")).unwrap()),
+        ];
         let valid = settled_snapshot(mode, true);
         assert_custom_retention_admission(valid.clone(), true).await;
         let mut invalid = valid.clone();

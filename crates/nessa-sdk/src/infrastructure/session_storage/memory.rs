@@ -74,10 +74,17 @@ impl SessionStorageLease for MemoryStore {
                 .entries
                 .lock()
                 .map_err(|_| StorageError::Io("memory storage lock poisoned".into()))?;
-            entries
+            let entry = entries
                 .get_mut(self.id.as_str())
-                .expect("leased entry exists")
-                .snapshot = Some(snapshot);
+                .expect("leased entry exists");
+            if entry.snapshot.as_ref().is_some_and(|previous| {
+                !snapshot.queue_history.starts_with(&previous.queue_history)
+            }) {
+                return Err(StorageError::Corrupt(
+                    "saved queue history cannot be replaced or truncated".into(),
+                ));
+            }
+            entry.snapshot = Some(snapshot);
             Ok(())
         })
     }

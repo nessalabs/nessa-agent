@@ -1,8 +1,9 @@
 //! Deterministic checks at the control-result handoff before caller-side processing.
 use super::*;
+use crate::application::agent_execution::agents::AgentFuture;
 use crate::application::{
     agent_execution::{
-        executions::{ExecutionRequest, SubmissionMode},
+        executions::{ExecutionAudit, ExecutionAuditRecord, ExecutionRequest, SubmissionMode},
         permissions::{
             ActionContext, PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
             PermissionResolution,
@@ -18,6 +19,13 @@ use crate::application::{
     },
     dto::{ModalitiesDto, ModelMetadataDto},
 };
+
+struct AcceptingAudit;
+impl ExecutionAudit for AcceptingAudit {
+    fn record(&self, _record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
 use crate::domain::{
     agent_execution::{
         executions::{ExecutionId, ExecutionOutcome, InvocationStage, SchedulingCause},
@@ -96,6 +104,7 @@ impl AgentProvider for Provider {
                     ExecutionSessionId::new("handoff").unwrap(),
                     self.0.clone(),
                     capabilities,
+                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(ExhaustedEvents),
             })

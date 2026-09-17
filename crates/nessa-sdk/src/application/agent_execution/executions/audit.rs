@@ -3,9 +3,61 @@
 
 use crate::application::agent_execution::agents::{AgentError, AgentFuture};
 use crate::application::agent_execution::permissions::{
-    CancellationOrigin, PermissionAnswerRecord, PermissionCancellation,
+    ActionContext, CancellationOrigin, PermissionAnswerRecord, PermissionCancellation,
 };
+use crate::domain::agent_execution::executions::QueueOrderChange;
+use crate::domain::agent_execution::sessions::SessionId;
 use crate::domain::agent_execution::sessions::{ExecutionFinish, SessionClosure};
+
+/// Why a pending dispatch order was replaced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueueOrderCause {
+    /// A verified caller requested the complete replacement order.
+    CallerRequested,
+}
+
+/// Audited selection of one pending-order replacement before local application.
+/// The session snapshot remains authoritative for whether the selected order was
+/// subsequently applied and saved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueueOrderRecord {
+    session_id: SessionId,
+    change: QueueOrderChange,
+    actor: ActionContext,
+    cause: QueueOrderCause,
+}
+impl QueueOrderRecord {
+    /// Pair the owning `session_id`, validated complete `change`, and verified `actor`.
+    /// Construction performs no I/O and does not mutate the live queue.
+    pub fn caller_requested(
+        session_id: SessionId,
+        change: QueueOrderChange,
+        actor: ActionContext,
+    ) -> Self {
+        Self {
+            session_id,
+            change,
+            actor,
+            cause: QueueOrderCause::CallerRequested,
+        }
+    }
+    /// Local session whose pending order is affected.
+    pub fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+    /// Complete validated before/after order and immutable priorities.
+    pub fn change(&self) -> &QueueOrderChange {
+        &self.change
+    }
+    /// Host-verified caller attribution.
+    pub fn actor(&self) -> &ActionContext {
+        &self.actor
+    }
+    /// Causal reason for the order transition.
+    pub fn cause(&self) -> QueueOrderCause {
+        self.cause
+    }
+}
 
 /// The local live aggregate's closure, paired with its known initiator.
 /// This evidence does not claim provider deletion or completed process cleanup.
@@ -37,6 +89,8 @@ impl SessionClosureRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[must_use = "execution evidence must be recorded or its delivery failure reported"]
 pub enum ExecutionAuditRecord {
+    /// Caller-attributed order selected and acknowledged before local application.
+    QueueReordered(QueueOrderRecord),
     /// Once-only release of an active execution, including runs with no permissions.
     /// The runtime initiates this release after observing a terminal result; explicit
     /// shutdown attribution remains on the preceding SessionClosed record.

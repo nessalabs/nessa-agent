@@ -99,6 +99,7 @@ impl AgentProvider for HookProvider {
                     restore.unwrap_or_else(|| ExecutionSessionId::new("context").unwrap()),
                     self.0.clone(),
                     capabilities(),
+                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(EmptyEvents),
             })
@@ -548,6 +549,7 @@ impl AgentProvider for ObservationFailureProvider {
                     ExecutionSessionId::new("context").unwrap(),
                     backend.clone(),
                     capabilities(),
+                    Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(FailedEvents(backend)),
             })

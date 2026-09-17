@@ -21,14 +21,16 @@ use crate::application::agent_execution::executions::{
 
 use crate::application::agent_execution::permissions::{
     CancellationOrigin, PermissionAnswerDelivery, PermissionAnswerRecord, PermissionCancellation,
-    PermissionResolution,
+    PermissionResolution, PermissionSelectionState,
 };
 use crate::application::agent_execution::providers::{
     CleanupReport, ExecutionReport, ObservationFailureCause, OperationCapabilities,
     ProviderExecutionReply, ProviderOperationFailure, ProviderSessionState, ResourceCleanup,
     SessionCloseRequest, SteeringOutcome,
 };
-use crate::domain::agent_execution::executions::{ExecutionId, ExecutionOutcome, MessageChunk};
+use crate::domain::agent_execution::executions::{
+    ExecutionId, ExecutionOutcome, MessageChunk, MessageId,
+};
 use crate::domain::agent_execution::permissions::{
     PermissionCancellationReason, PermissionCancellationReasonView, PermissionId,
 };
@@ -797,8 +799,50 @@ impl<P: AcpProfile> Worker<P> {
                             .min();
                         self.message(execution, message?, deadline).await?;
                     }
-                    None if self.reader.decoding_yielded() => {}
-                    None => return Ok(DispatchReadiness::Ready),
+                    None if self.reader.decoding_yielded() => {
+                        // This Pending came from the decoder's explicit fairness
+                        // yield while it still owns buffered bytes, rather than
+                        // from an empty provider pipe. Finish that buffered work.
+                        tokio::task::yield_now().await;
+                    }
+                    None if self.reader.frame_in_progress() => {
+                        // Once the transport has observed bytes for the next
+                        // frame, an empty poll is not a dispatch boundary. Await
+                        // that frame or a lifecycle boundary; no scheduler-turn
+                        // count is used to guess when the writer is finished.
+                        let deadline = self
+                            .current_deadline()
+                            .into_iter()
+                            .chain(dispatch_deadline)
+                            .min();
+                        let message = tokio::select! { biased;
+                            _ = self.close_requested.changed() => {
+                                return Ok(DispatchReadiness::Interrupted(AgentError::Closed));
+                            }
+                            _ = self.events.closed() => {
+                                return Ok(DispatchReadiness::Interrupted(AgentError::Backpressure));
+                            }
+                            _ = wait_for_deadline(deadline), if deadline.is_some() => {
+                                self.failure_cause = ObservationFailureCause::DeadlineExceeded;
+                                self.cancellation_cause = Some((
+                                    PermissionCancellationReason::deadline_exceeded(),
+                                    CancellationOrigin::Runtime,
+                                ));
+                                return Err(AgentError::Deadline);
+                            }
+                            message = self.reader.next() => message,
+                        };
+                        self.message(execution, message?, deadline).await?;
+                    }
+                    None => {
+                        // ChildStdout readiness notification can lag a completed
+                        // provider write. Probe the nonblocking OS pipe before
+                        // treating an async Pending as the dispatch boundary.
+                        if self.reader.read_ready_os_bytes()? {
+                            continue;
+                        }
+                        return Ok(DispatchReadiness::Ready);
+                    }
                 }
             }
             tokio::task::yield_now().await;
@@ -975,9 +1019,10 @@ impl<P: AcpProfile> Worker<P> {
                 let record = match execution.cancel_review(input) {
                     Ok(record) => record,
                     Err(error) => {
-                        let _ = reply.send(Err(ProviderOperationFailure::new(
+                        let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
                             error,
                             ProviderSessionState::Usable,
+                            PermissionSelectionState::Pending,
                         )));
                         return Ok(());
                     }
@@ -987,9 +1032,10 @@ impl<P: AcpProfile> Worker<P> {
                     .remove(record.request().id())
                     .expect("pending wire permission");
                 if let Err(error) = self.record_cancellations(vec![record.clone()]).await {
-                    let _ = reply.send(Err(ProviderOperationFailure::new(
+                    let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
                         error.clone(),
                         ProviderSessionState::CleanupRequired,
+                        PermissionSelectionState::Consumed,
                     )));
                     return Err(error);
                 }
@@ -1009,9 +1055,10 @@ impl<P: AcpProfile> Worker<P> {
                 let resolution = match execution.answer_permission(answer) {
                     Ok(resolution) => resolution,
                     Err(error) => {
-                        let _ = reply.send(Err(ProviderOperationFailure::new(
+                        let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
                             error,
                             ProviderSessionState::Usable,
+                            PermissionSelectionState::Pending,
                         )));
                         return Ok(());
                     }
@@ -1020,9 +1067,10 @@ impl<P: AcpProfile> Worker<P> {
                     .record_answer(resolution.clone(), PermissionAnswerDelivery::Selected)
                     .await
                 {
-                    let _ = reply.send(Err(ProviderOperationFailure::new(
+                    let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
                         error.clone(),
                         ProviderSessionState::CleanupRequired,
+                        PermissionSelectionState::Consumed,
                     )));
                     return Err(error);
                 }
@@ -1046,14 +1094,19 @@ impl<P: AcpProfile> Worker<P> {
                         }
                         Ok(()) => error,
                     };
-                    let _ = reply.send(Err(ProviderOperationFailure::new(
+                    let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
                         error.clone(),
                         ProviderSessionState::CleanupRequired,
+                        PermissionSelectionState::Consumed,
                     )));
                     return Err(error);
                 }
                 let _ = reply.send(result.clone().map(|()| resolution).map_err(|error| {
-                    ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+                    ProviderOperationFailure::permission_answer(
+                        error,
+                        ProviderSessionState::CleanupRequired,
+                        PermissionSelectionState::Consumed,
+                    )
                 }));
                 result?;
             }
@@ -1280,16 +1333,22 @@ impl<P: AcpProfile> Worker<P> {
                 .and_then(Value::as_str)
                 .ok_or_else(|| json_rpc::protocol("invalid text content"))?
                 .to_owned();
-            self.emit(execution.message_event(
-                &target,
-                if kind == "agent_message_chunk" {
-                    MessageChunk::text(text)
-                } else {
-                    MessageChunk::thought(text)
-                },
-            )?)
+            let mut chunk = if kind == "agent_message_chunk" {
+                MessageChunk::text(text)
+            } else {
+                MessageChunk::thought(text)
+            };
+            if let Some(id) = update.get("messageId") {
+                let id = id
+                    .as_str()
+                    .ok_or_else(|| json_rpc::protocol("invalid message identity"))?;
+                let id = MessageId::new(id)
+                    .map_err(|_| json_rpc::protocol("invalid message identity"))?;
+                chunk = chunk.with_message_id(id);
+            }
+            self.emit(execution.message_event(&target, chunk)?)
         } else {
-            if !self.config.file_tools {
+            if !self.config.tools_enabled {
                 return Err(json_rpc::protocol("tool event in a text-only binding"));
             }
             let tool = self.profile.tool_call(update)?;
@@ -1304,7 +1363,7 @@ impl<P: AcpProfile> Worker<P> {
         response_deadline: Option<Instant>,
     ) -> Result<(), AgentError> {
         self.check_session(execution, &params)?;
-        if self.closing || self.active.is_none() || !self.config.file_tools {
+        if self.closing || self.active.is_none() || !self.config.tools_enabled {
             return self
                 .send_before(
                     permission_wire::permission_cancel(&wire_id),

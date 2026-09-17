@@ -30,7 +30,16 @@ pub(super) fn fingerprint(
         field(&mut hash, value.as_encoded_bytes());
     }
     field(&mut hash, config.workspace.as_os_str().as_encoded_bytes());
-    hash.update([u8::from(config.file_tools)]);
+    hash.update([u8::from(config.tools_enabled)]);
+    hash.update((config.mcp_servers.len() as u64).to_be_bytes());
+    for server in &config.mcp_servers {
+        field(&mut hash, server.name.as_bytes());
+        field(&mut hash, server.command.as_os_str().as_encoded_bytes());
+        hash.update((server.args.len() as u64).to_be_bytes());
+        for arg in &server.args {
+            field(&mut hash, arg.as_bytes());
+        }
+    }
     hash.update(limits.max_context_window().to_be_bytes());
     hash.update(limits.max_output().to_be_bytes());
     hash.update((config.permissions.decisions().len() as u64).to_be_bytes());

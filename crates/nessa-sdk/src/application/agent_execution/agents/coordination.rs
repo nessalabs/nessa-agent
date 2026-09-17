@@ -26,6 +26,16 @@ impl Agent {
             .run_control(&admission, operation)
             .await
     }
+    pub(super) async fn run_control_observed<T>(
+        &self,
+        admission: AcceptedControl,
+        operation: impl Future<Output = Result<T, ProviderOperationFailure>>,
+    ) -> Result<T, ProviderOperationFailure> {
+        self.inner
+            .lifecycle
+            .run_control_observed(&admission, operation)
+            .await
+    }
     // A received provider receipt is no longer an interruptible provider wait.
     // Keep its work permit through local validation so close cannot erase the
     // acknowledgement or reopen the generation before validation finishes.

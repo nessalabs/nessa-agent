@@ -28,7 +28,11 @@ async fn slow_consumer_hits_shared_byte_budget_and_still_audits_and_cleans_up() 
         };
         // Keep the event consumer alive without reading its large messages. Byte
         // exhaustion, not the 4096-slot count or consumer loss, must end execution.
-        let failure = timeout(Duration::from_secs(10), active)
+        // The fixture must decode more than the fixed 32 MiB queue budget to
+        // exercise this boundary. Debug builds can take longer than ten seconds
+        // to move that payload through the real child-process transport, so keep
+        // the timeout as a deadlock guard rather than a throughput assertion.
+        let failure = timeout(Duration::from_secs(30), active)
             .await
             .unwrap()
             .unwrap()
@@ -101,6 +105,7 @@ async fn protocol_failures_and_output_overflow_close_owned_scope() {
         "unknown-reason",
         "config-change",
         "unknown-tool",
+        "empty-message-identity",
         "provider-error",
         "eof",
         "flood",
@@ -350,4 +355,30 @@ async fn blocked_prompt_write_obeys_execution_deadline_or_the_default_write_boun
             &Err(PermissionCancellationReason::deadline_exceeded())
         );
     }
+}
+
+#[tokio::test]
+async fn acp_message_id_is_retained_for_each_streamed_fragment() {
+    let _slot = process_test_slot().await;
+    let (_root, binding) = test_acp_binding("message-identities", 16);
+    let mut opened = binding.open(None).await.unwrap();
+    let ProviderExecutionReply::Finished(report) = opened.session.execute(prompt("hello")).await
+    else {
+        panic!("dispatched")
+    };
+    report.into_result().unwrap();
+    for (id, text) in [("m1", "First "), ("m1", "reply."), ("m2", "Second reply.")] {
+        assert_eq!(
+            next(&mut opened).await,
+            ExecutionUpdate::Message(
+                MessageChunk::text(text).with_message_id(MessageId::new(id).unwrap()),
+            )
+        );
+    }
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
 }

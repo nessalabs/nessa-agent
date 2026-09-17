@@ -228,6 +228,9 @@ async fn audit_panics_attempt_all_cleanup_records_and_retain_process_for_retry()
                         ExecutionAuditRecord::Answered(_) => {
                             panic!("explicit close did not answer a review")
                         }
+                        ExecutionAuditRecord::QueueReordered(_) => {
+                            panic!("explicit close did not reorder pending work")
+                        }
                     }
                 }
                 for kind in 0..3 {

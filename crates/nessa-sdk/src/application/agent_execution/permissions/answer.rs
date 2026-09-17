@@ -1,8 +1,59 @@
 use super::ApprovalAttribution;
+use crate::application::agent_execution::agents::AgentError;
 use crate::domain::agent_execution::{
     executions::ExecutionId,
     permissions::{PermissionId, PermissionOptionId},
 };
+use std::{fmt, future::Future, pin::Pin};
+
+/// Whether an answer failure happened before or after the domain review was consumed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PermissionSelectionState {
+    /// The exact review was rejected before selecting its option and remains pending.
+    Pending,
+    /// The domain selected the option; audit or wire delivery subsequently failed.
+    Consumed,
+    /// Interruption prevented the SDK from proving either state; reload authoritative state.
+    Unknown,
+}
+
+/// Failed answer with selection state kept separate from its diagnostic cause.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PermissionAnswerFailure {
+    error: AgentError,
+    selection: PermissionSelectionState,
+}
+
+impl PermissionAnswerFailure {
+    pub(crate) fn new(error: AgentError, selection: PermissionSelectionState) -> Self {
+        Self { error, selection }
+    }
+    /// Diagnostic failure; never infer review state from its variant or message.
+    pub fn error(&self) -> &AgentError {
+        &self.error
+    }
+    /// Authoritative knowledge of whether the reviewed option was selected.
+    pub fn selection(&self) -> PermissionSelectionState {
+        self.selection
+    }
+    /// Split the diagnostic and selection fact for application error mapping.
+    pub fn into_parts(self) -> (AgentError, PermissionSelectionState) {
+        (self.error, self.selection)
+    }
+}
+impl fmt::Display for PermissionAnswerFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.error.fmt(formatter)
+    }
+}
+impl std::error::Error for PermissionAnswerFailure {}
+
+/// Result of an attributed permission answer.
+pub type PermissionAnswerResult = Result<super::PermissionResolution, PermissionAnswerFailure>;
+
+/// Owned permission-answer operation that preserves selection state on failure.
+pub type PermissionAnswerFuture<'a> =
+    Pin<Box<dyn Future<Output = PermissionAnswerResult> + Send + 'a>>;
 
 /// Host-authorized selection of one offered option for an exact pending review.
 /// This command is not an execution retry or proof of tool delivery. The Agent

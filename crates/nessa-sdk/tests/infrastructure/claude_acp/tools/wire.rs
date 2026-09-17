@@ -3,6 +3,17 @@ use super::*;
 use crate::domain::agent_execution::tools::{FilePath, ToolContent};
 use serde_json::json;
 
+fn tool_call(
+    value: &Value,
+    names: &mut HashMap<String, String>,
+) -> Result<ToolCallUpdate, AgentError> {
+    super::tool_call(value, names, &[])
+}
+
+fn tool_input(name: &str, value: &Value) -> Result<ToolReviewInput, AgentError> {
+    super::tool_input(name, value, &[])
+}
+
 #[test]
 fn validates_claude_schemas_and_preserves_complete_review_arguments() {
     for (name, input) in [
@@ -117,7 +128,7 @@ fn provider_name_retention_is_bounded_by_allowlist_identity_and_entry_limits() {
         );
         assert_eq!(
             error,
-            AgentError::Unsupported("tool is outside the file-tool profile".into())
+            AgentError::Unsupported("tool is outside the configured tool profile".into())
         );
         assert!(names.is_empty());
     }
@@ -158,4 +169,95 @@ fn provider_name_retention_is_bounded_by_allowlist_identity_and_entry_limits() {
     )
     .is_err());
     assert!(names.is_empty());
+}
+
+#[test]
+fn enabled_native_inputs_are_preserved_and_unmanaged_shell_is_rejected() {
+    let mut names = HashMap::new();
+    for (name, kind, args) in [
+        (
+            "WebSearch",
+            "fetch",
+            json!({"query":"Rust Shepherd process supervision", "allowed_domains":["github.com"]}),
+        ),
+        (
+            "WebFetch",
+            "fetch",
+            json!({"url":"https://example.com", "prompt":"Summarize"}),
+        ),
+        (
+            "Agent",
+            "think",
+            json!({"prompt":"Read project documentation", "description":"Inspect docs"}),
+        ),
+    ] {
+        tool_call(
+            &json!({"toolCallId":name,"kind":kind,"_meta":{"claudeCode":{"toolName":name}}}),
+            &mut names,
+        )
+        .unwrap();
+        assert_eq!(
+            tool_input(name, &args).unwrap().arguments_json,
+            args.to_string()
+        );
+    }
+    for name in DISALLOWED_TOOLS {
+        assert!(tool_call(
+            &json!({"toolCallId":"blocked","_meta":{"claudeCode":{"toolName":name}}}),
+            &mut names
+        )
+        .is_err());
+        assert!(tool_input(name, &json!({"command":"true"})).is_err());
+    }
+    assert!(tool_input("WebSearch", &json!("not an object")).is_err());
+}
+
+#[test]
+fn admission_matches_the_native_review_policy_and_configured_mcp_namespaces() {
+    for name in REVIEW_TOOLS {
+        assert!(enabled_name(name, &[]), "reviewed native tool {name}");
+    }
+    for name in [
+        "FutureNativeTool",
+        "ReadFile",
+        "Shell",
+        "mcp__nessa__shell",
+        "mcp__nessa__",
+    ] {
+        assert!(!enabled_name(name, &[]), "unconfigured tool {name}");
+    }
+    for name in DISALLOWED_TOOLS {
+        assert!(!enabled_name(name, &[]), "denied native tool {name}");
+    }
+
+    let configured = vec!["mcp__nessa__".to_owned()];
+    assert!(enabled_name("mcp__nessa__shell", &configured));
+    assert!(!enabled_name("mcp__nessa__", &configured));
+    assert!(!enabled_name("mcp__other__shell", &configured));
+
+    let mut names = HashMap::new();
+    let call = json!({
+        "toolCallId":"mcp",
+        "kind":"other",
+        "_meta":{"claudeCode":{"toolName":"mcp__nessa__shell"}}
+    });
+    super::tool_call(&call, &mut names, &configured).unwrap();
+    let args = json!({"command":"printf '%s' ' a\\b '\n", "timeoutSeconds":5});
+    assert_eq!(
+        super::tool_input("mcp__nessa__shell", &args, &configured)
+            .unwrap()
+            .arguments_json,
+        args.to_string()
+    );
+
+    let future = json!({
+        "toolCallId":"future",
+        "kind":"other",
+        "_meta":{"claudeCode":{"toolName":"FutureNativeTool"}}
+    });
+    assert!(matches!(
+        super::tool_call(&future, &mut names, &configured),
+        Err(AgentError::Unsupported(_))
+    ));
+    assert!(!names.contains_key("future"));
 }

@@ -35,6 +35,16 @@ impl ExecutionAudit for TracingExecutionAudit {
     fn record(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
         Box::pin(async move {
             match record {
+                ExecutionAuditRecord::QueueReordered(record) => {
+                    tracing::info!(
+                        session_id = %record.session_id().as_str(),
+                        before = ?record.change().before(),
+                        after = ?record.change().after(),
+                        actor = ?record.actor(),
+                        cause = ?record.cause(),
+                        "queue reorder selected before local application"
+                    );
+                }
                 ExecutionAuditRecord::Finished(record) => {
                     tracing::info!(session_id = %record.session_id().as_str(), execution_id = %record.execution_id().as_str(), result = ?record.result(), "execution released locally by runtime");
                 }
@@ -139,7 +149,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
             environment,
             credential_environment,
             workspace: workspace.clone(),
-            file_tools: mode.ends_with("write"),
+            tools_enabled: mode.ends_with("write"),
+            mcp_servers: Vec::new(),
             permissions: PermissionOfferPolicy::once_only(),
             startup_timeout: Duration::from_secs(45),
             execution_timeout: None,

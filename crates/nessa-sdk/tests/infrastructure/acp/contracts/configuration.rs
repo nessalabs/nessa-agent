@@ -1,6 +1,7 @@
 use super::support::*;
 use crate::application::agent_execution::sessions::SessionManager;
 use crate::domain::agent_execution::sessions::{ExecutionSessionId, SessionId};
+use crate::infrastructure::acp::sessions::StdioMcpServer;
 use crate::infrastructure::session_storage::InMemoryStorage;
 use serde_json::json;
 #[cfg(unix)]
@@ -154,7 +155,8 @@ fn native_configuration_cannot_enable_model_false_tools_or_extended_limits() {
         Err(AgentError::Configuration(_))
     ));
     let text_only = AcpConfig {
-        file_tools: false,
+        tools_enabled: false,
+        mcp_servers: Vec::new(),
         ..config.clone()
     };
     assert!(ClaudeAcpProvider::new(
@@ -593,4 +595,37 @@ async fn live_duplicate_configuration_retires_context_and_preserves_audit_failur
             assert_gone(&root, "pid");
         }
     }
+}
+
+#[test]
+fn mcp_launch_configuration_rejects_ambiguous_names_and_disabled_tools() {
+    let (_root, mut config, model) = test_acp_configuration("normal", 16);
+    let server = StdioMcpServer {
+        name: "nessa".into(),
+        command: "/trusted/nessa-mcp".into(),
+        args: vec!["--workspace".into(), "/workspace".into()],
+    };
+    config.mcp_servers = vec![server.clone()];
+    let build = |config| {
+        ClaudeAcpProvider::new(
+            config,
+            &model,
+            TokenLimits::new(900, 100).unwrap(),
+            Arc::new(RecordingAudit::default()),
+        )
+    };
+    assert!(build(config.clone()).is_ok());
+    for name in ["", "nessa__other", "nessa/other"] {
+        let mut changed = config.clone();
+        changed.mcp_servers[0].name = name.into();
+        assert!(build(changed).is_err());
+    }
+    let mut changed = config.clone();
+    changed.mcp_servers.push(server);
+    assert!(build(changed).is_err());
+    let mut changed = config.clone();
+    changed.mcp_servers[0].command = "relative".into();
+    assert!(build(changed).is_err());
+    config.tools_enabled = false;
+    assert!(build(config).is_err());
 }
