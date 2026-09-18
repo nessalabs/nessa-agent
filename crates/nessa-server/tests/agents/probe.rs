@@ -58,12 +58,13 @@ fn probe(
     )
 }
 
-/// The pair of paths composition would resolve for an agent rooted at `root`,
-/// whether or not anything has been written there yet.
+/// What composition would resolve for a harness rooted at `root`: an
+/// interpreter and the script handed to it, whether or not anything has been
+/// written there yet.
 fn launch_files(root: &Path) -> Option<AgentLaunchFiles> {
     Some(AgentLaunchFiles {
-        runtime: root.join("node"),
-        entry: root.join("acp-entry.js"),
+        command: root.join("node"),
+        paths: vec![root.join("acp-entry.js")],
     })
 }
 
@@ -117,6 +118,30 @@ fn a_configured_agent_missing_its_files_is_not_installed() {
     assert_eq!(
         probe(launch_files(root.path()), None, None).installed(AgentId::Claude),
         Ok(false)
+    );
+}
+
+#[test]
+fn an_agent_that_is_one_binary_is_installed_once_that_binary_is_there() {
+    // Not every agent is a script handed to an interpreter. One that speaks the
+    // protocol itself is launched as its own executable with a word of its own
+    // vocabulary after it — `acp`, here — and that word names nothing on this
+    // machine. Looking for it as a file would report every such agent missing.
+    let root = TempDir::new().unwrap();
+    let files = || {
+        Some(AgentLaunchFiles {
+            command: root.path().join("opencode"),
+            paths: vec![],
+        })
+    };
+    assert_eq!(
+        probe(files(), None, None).installed(AgentId::Claude),
+        Ok(false)
+    );
+    std::fs::write(root.path().join("opencode"), b"#!/bin/sh\n").unwrap();
+    assert_eq!(
+        probe(files(), None, None).installed(AgentId::Claude),
+        Ok(true)
     );
 }
 
@@ -264,4 +289,17 @@ mod without_a_keychain {
             Err(ProbeFailure::NothingToAsk)
         );
     }
+}
+
+#[test]
+fn an_agent_composition_resolved_nothing_for_is_one_with_nothing_to_launch() {
+    // Kept apart from "its files are missing": one is a fact about this build's
+    // configuration and the other about this machine, and only the second is
+    // fixed by installing anything.
+    let root = TempDir::new().unwrap();
+    install(root.path());
+    let configured = probe(launch_files(root.path()), None, None);
+    assert!(configured.configured(AgentId::Claude));
+    assert!(!configured.configured(AgentId::Codex));
+    assert!(!probe(None, None, None).configured(AgentId::Claude));
 }

@@ -1,18 +1,28 @@
 //! Trusted local agent configuration. Requests never select processes or workspaces.
 //!
 //! ```text
-//!   config.json "agent"
-//!     ├── shared: catalog, node, workspace, toolsEnabled, mcpServers
-//!     ├── claude: { acpEntry, model, contextTokens, outputTokens }
-//!     ├── codex:  { acpEntry, model, contextTokens, outputTokens }
-//!     └── selected: which of them a caller that names none runs on
+//!   config.json "agents"
+//!     ├── shared:   catalog, workspace, mcpServers
+//!     ├── selected: which agent a caller that names none runs on
+//!     └── runtimes: { "<agent>": { command, args, model, tokens, tools } , ... }
 //! ```
 //!
-//! What every agent on this machine shares is stated once: they run the same
-//! Node runtime against the same workspace and are offered the same Nessa MCP
-//! servers, because that is what makes them alternatives rather than separate
-//! installations. What differs is the harness entry point they are started
-//! with, the model they run, and the budget they run it in.
+//! What every agent on this machine shares is stated once: they work in the
+//! same workspace, against the same model catalog, and are offered the same
+//! Nessa MCP servers, because that is what makes them alternatives rather than
+//! separate installations.
+//!
+//! What differs is how the agent is started, which model it runs, the budget it
+//! runs in, and whether its own tools are on. Started is a command and its arguments rather than a
+//! runtime and an entry script: an agent that speaks ACP through a Node harness
+//! is `(node, [entry.js])` and one that speaks it natively is
+//! `(its own binary, ["acp"])`, and the second cannot be said at all in the
+//! narrower shape. `AcpConfig` has always taken a command and arguments; this
+//! is the configuration catching up with it.
+//!
+//! The agents are a map keyed by name rather than a field per agent, so a new
+//! agent is a new [`AgentId`] and nothing here. A name no adapter exists for is
+//! reported by name rather than ignored.
 //!
 //! An agent absent from the configuration is one this server cannot start.
 //! That is reported where it is asked about — setup says the agent is not
@@ -31,42 +41,75 @@ use std::{
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct AgentConfig {
+pub(super) struct AgentsConfig {
     pub catalog: PathBuf,
-    pub node: PathBuf,
     pub workspace: PathBuf,
-    #[serde(default)]
-    pub tools_enabled: bool,
     #[serde(default)]
     pub mcp_servers: Vec<StdioMcpServer>,
     /// The agent a conversation runs on when nothing else names one.
     ///
     /// Left out where only one agent is configured, because there is nothing to
     /// choose between; required where more than one is, because guessing which
-    /// of two configured agents the operator meant is not a default, it is a
-    /// coin toss with someone else's work on it.
+    /// of several configured agents the operator meant is not a default, it is
+    /// a coin toss with someone else's work on it.
     #[serde(default)]
     pub selected: Option<String>,
+    /// What this machine can start, by the name each agent is known by.
+    ///
+    /// Kept as written rather than as [`AgentId`] so an unfamiliar name
+    /// survives parsing and can be reported as the name the operator typed.
     #[serde(default)]
-    pub claude: Option<AgentRuntime>,
-    #[serde(default)]
-    pub codex: Option<AgentRuntime>,
+    pub runtimes: HashMap<String, AgentRuntime>,
 }
 
-/// What one agent is started as, within the shared configuration above.
+/// How one agent is started, within the shared configuration above.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct AgentRuntime {
-    pub acp_entry: PathBuf,
+    /// The executable this server runs for this agent.
+    pub command: PathBuf,
+    /// What that executable is handed. A Node harness takes its entry script; an
+    /// agent that speaks ACP itself takes its own subcommand.
+    #[serde(default)]
+    pub args: Vec<String>,
     pub model: String,
     #[serde(default = "context_tokens")]
     pub context_tokens: u32,
     #[serde(default = "output_tokens")]
     pub output_tokens: u32,
+    /// Whether this agent runs its own tools.
+    ///
+    /// Per agent rather than shared because it is not a preference every agent
+    /// can be asked about the same way: Codex has no text-only mode and refuses
+    /// to be built without it, so one shared `false` — set by someone thinking
+    /// about Claude — would take the whole server down over an agent they were
+    /// not configuring.
+    #[serde(default)]
+    pub tools_enabled: bool,
 }
 
-impl AgentConfig {
+impl AgentRuntime {
+    /// Every absolute path this server would hand the command.
+    ///
+    /// Exact rather than a guess about arguments: a path this server would pass
+    /// has to be on this machine for the launch to work, and an argument that is
+    /// not a path is the agent's own vocabulary — a subcommand or a flag — which
+    /// is nothing for this machine to be asked about.
+    pub fn paths(&self) -> Vec<PathBuf> {
+        self.args
+            .iter()
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .collect()
+    }
+}
+
+impl AgentsConfig {
     /// Each configured agent, in the order [`AgentId::ALL`] lists them.
+    ///
+    /// Silent about a name no adapter exists for; [`Self::unknown`] is what
+    /// reports one, so that reading the configuration and refusing it stay
+    /// separate concerns.
     pub fn agents(&self) -> Vec<(AgentId, &AgentRuntime)> {
         AgentId::ALL
             .iter()
@@ -77,10 +120,25 @@ impl AgentConfig {
     /// What this configuration says about one agent, or nothing when it says
     /// nothing about it.
     pub fn runtime(&self, agent: AgentId) -> Option<&AgentRuntime> {
-        match agent {
-            AgentId::Claude => self.claude.as_ref(),
-            AgentId::Codex => self.codex.as_ref(),
-        }
+        self.runtimes.get(agent.name())
+    }
+
+    /// The first configured name this build has no adapter for, if any.
+    ///
+    /// Reported rather than skipped: a typo under `runtimes` would otherwise be
+    /// an agent silently missing from setup, which reads as an agent that is not
+    /// installed on a machine where it is.
+    pub fn unknown(&self) -> Option<&str> {
+        let mut unknown: Vec<&str> = self
+            .runtimes
+            .keys()
+            .map(String::as_str)
+            .filter(|name| AgentId::parse(name).is_none())
+            .collect();
+        // The map has no order of its own, so the same configuration must not
+        // name a different one of its mistakes on each startup.
+        unknown.sort_unstable();
+        unknown.into_iter().next()
     }
 
     /// The agent a caller that names none runs on.
@@ -90,6 +148,11 @@ impl AgentConfig {
     /// no configuration under it, no agents at all, or several agents with no
     /// choice stated between them.
     pub fn selected(&self) -> Result<AgentId, RunError> {
+        if let Some(name) = self.unknown() {
+            return Err(RunError::Agent(format!(
+                "configured agent \"{name}\" has no adapter in Nessa"
+            )));
+        }
         let configured = self.agents();
         if let Some(name) = &self.selected {
             let agent = AgentId::parse(name).ok_or_else(|| {
@@ -97,7 +160,7 @@ impl AgentConfig {
             })?;
             if self.runtime(agent).is_none() {
                 return Err(RunError::Agent(format!(
-                    "selected agent \"{name}\" has no configuration under \"agent\""
+                    "selected agent \"{name}\" has no configuration under \"runtimes\""
                 )));
             }
             return Ok(agent);
@@ -105,7 +168,7 @@ impl AgentConfig {
         match configured.as_slice() {
             [(agent, _)] => Ok(*agent),
             [] => Err(RunError::Agent(
-                "configure at least one agent under \"agent\"".into(),
+                "configure at least one agent under \"agents.runtimes\"".into(),
             )),
             _ => Err(RunError::Agent(
                 "several agents are configured; name one in \"selected\"".into(),
@@ -115,20 +178,21 @@ impl AgentConfig {
 
     fn validate(&self) -> Result<(), RunError> {
         self.selected()?;
-        if [&self.catalog, &self.node, &self.workspace]
+        if [&self.catalog, &self.workspace]
             .iter()
             .any(|path| !path.is_absolute())
         {
             return Err(RunError::Agent("agent paths must be absolute".into()));
         }
         for (agent, runtime) in self.agents() {
-            if !runtime.acp_entry.is_absolute()
+            if !runtime.command.is_absolute()
+                || runtime.paths().iter().any(|path| !path.is_absolute())
                 || runtime.model.trim().is_empty()
                 || runtime.output_tokens == 0
                 || runtime.context_tokens <= runtime.output_tokens
             {
                 return Err(RunError::Agent(format!(
-                    "{}: acpEntry must be absolute, model nonempty, and token limits positive with room for input",
+                    "{}: command must be absolute, model nonempty, and token limits positive with room for input",
                     agent.name()
                 )));
             }
@@ -163,7 +227,7 @@ fn catalog_provider(agent: AgentId) -> &'static str {
 /// already on disk.
 #[cfg(unix)]
 pub(super) fn providers(
-    config: &AgentConfig,
+    config: &AgentsConfig,
     directory: &Path,
     clock: Arc<dyn Clock>,
 ) -> Result<HashMap<AgentId, ConversationAgent>, RunError> {
@@ -182,7 +246,7 @@ pub(super) fn providers(
 }
 #[cfg(not(unix))]
 pub(super) fn providers(
-    config: &AgentConfig,
+    config: &AgentsConfig,
     _: &Path,
     _: Arc<dyn Clock>,
 ) -> Result<HashMap<AgentId, ConversationAgent>, RunError> {
@@ -193,7 +257,7 @@ pub(super) fn providers(
 }
 #[cfg(unix)]
 mod build {
-    use super::{catalog_provider, AgentConfig, AgentId, AgentRuntime, RunError};
+    use super::{catalog_provider, AgentId, AgentRuntime, AgentsConfig, RunError};
     use crate::conversation::infrastructure::DurableExecutionAudit;
     use nessa_auth::application::ports::Clock;
     use nessa_sdk::{
@@ -266,7 +330,7 @@ mod build {
 
     pub(super) fn provider(
         agent: AgentId,
-        config: &AgentConfig,
+        config: &AgentsConfig,
         runtime: &AgentRuntime,
         directory: &Path,
         clock: Arc<dyn Clock>,
@@ -286,9 +350,12 @@ mod build {
             .workspace
             .canonicalize()
             .map_err(|_| RunError::Agent("workspace must exist".into()))?;
-        if !workspace.is_dir() || !config.node.is_file() || !runtime.acp_entry.is_file() {
+        if !workspace.is_dir()
+            || !runtime.command.is_file()
+            || runtime.paths().iter().any(|path| !path.exists())
+        {
             return Err(RunError::Agent(format!(
-                "{}: node and acpEntry must be existing absolute files; workspace must be a directory",
+                "{}: its command must be an existing file and every absolute path it is given must exist; workspace must be a directory",
                 agent.name()
             )));
         }
@@ -297,12 +364,12 @@ mod build {
         let audit =
             Arc::new(DurableExecutionAudit::new(directory.join("audit"), clock).map_err(invalid)?);
         let acp = AcpConfig {
-            executable: config.node.clone(),
-            arguments: vec![runtime.acp_entry.clone().into_os_string()],
+            executable: runtime.command.clone(),
+            arguments: runtime.args.iter().map(Into::into).collect(),
             environment: process_environment(agent),
             credential_environment: credential_environment(agent),
             workspace,
-            tools_enabled: config.tools_enabled,
+            tools_enabled: runtime.tools_enabled,
             mcp_servers: config.mcp_servers.clone(),
             permissions: PermissionOfferPolicy::once_only(),
             startup_timeout: Duration::from_secs(45),

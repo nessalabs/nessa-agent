@@ -6,17 +6,24 @@ use crate::agents::application::{AgentProbe, ProbeFailure};
 use crate::agents::domain::AgentId;
 use crate::agents::infrastructure::{claude, codex, credentials};
 
-/// The two files this server would actually execute to run an agent.
+/// What this server would have to find on this machine to run an agent.
+///
+/// A command and the paths it is handed, rather than a runtime and an entry
+/// script: an agent run through a shared runtime has one of each, and an agent
+/// that is one self-contained executable taking its own subcommand has a
+/// command and nothing else. The narrower pair could not describe the second
+/// at all.
 ///
 /// Composition owns *which* paths these are — it is what reads the launch
 /// configuration — but not whether they are present, because that changes while
 /// the server runs. Plain paths rather than the composition type that produced
 /// them, so the dependency keeps pointing inward.
 pub struct AgentLaunchFiles {
-    /// The runtime binary the launcher invokes.
-    pub runtime: PathBuf,
-    /// The entry point script it is handed.
-    pub entry: PathBuf,
+    /// The executable the launcher invokes.
+    pub command: PathBuf,
+    /// Every path the launcher hands that executable. Empty for an agent whose
+    /// arguments name nothing on this machine.
+    pub paths: Vec<PathBuf>,
 }
 
 /// Where one agent's sign-in could be on this machine, resolved once.
@@ -48,7 +55,7 @@ struct SignIn {
 /// that agent's own module. This type owns the order those sources are asked in
 /// and what an unanswered source means, which is the same for any agent.
 pub struct LocalAgentProbe {
-    /// The files each configured agent is made of. Composition resolves the
+    /// What each configured agent is made of. Composition resolves the
     /// paths, because composition is what owns the launch configuration;
     /// whether they are there is asked on every call, because a user can
     /// install an agent while the server is already running and expects the
@@ -104,6 +111,11 @@ impl LocalAgentProbe {
 }
 
 impl AgentProbe for LocalAgentProbe {
+    /// Whether composition resolved a launch for this agent.
+    fn configured(&self, agent: AgentId) -> bool {
+        self.launch_files.contains_key(&agent)
+    }
+
     /// Whether the agent this server would launch is really on this machine.
     ///
     /// Asked of the filesystem on every call rather than once at construction.
@@ -114,14 +126,21 @@ impl AgentProbe for LocalAgentProbe {
     /// are two metadata stats, and the caller already runs this on a blocking
     /// thread (see `entrypoint/http.rs`), so paying them per call is safe.
     ///
-    /// No configuration for this agent is a real no: the question was asked of
-    /// the configuration, and the answer is that there is nothing to launch.
+    /// Only ever asked about an agent this server has something to launch for,
+    /// so there is no "nothing configured" answer to give here: that question
+    /// is [`Self::configured`], and it is asked first.
     fn installed(&self, agent: AgentId) -> Result<bool, ProbeFailure> {
         let Some(files) = self.launch_files.get(&agent) else {
             return Ok(false);
         };
-        for path in [&files.runtime, &files.entry] {
-            if !is_file(path)? {
+        if !is_file(&files.command)? {
+            return Ok(false);
+        }
+        // A path this server would hand the command has to be there for the
+        // launch to work, but it is not required to be a regular file: an agent
+        // given a directory to work in is given a directory.
+        for path in &files.paths {
+            if !exists(path)? {
                 return Ok(false);
             }
         }
@@ -165,6 +184,18 @@ impl AgentProbe for LocalAgentProbe {
 fn is_file(path: &Path) -> Result<bool, ProbeFailure> {
     match path.metadata() {
         Ok(metadata) => Ok(metadata.is_file()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(ProbeFailure::Unanswered),
+    }
+}
+
+/// Whether there is anything at all at `path`, right now.
+///
+/// The same three-way answer as [`is_file`], and for the same reason: only a
+/// genuine not-found is a no.
+fn exists(path: &Path) -> Result<bool, ProbeFailure> {
+    match path.metadata() {
+        Ok(_) => Ok(true),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
         Err(_) => Err(ProbeFailure::Unanswered),
     }

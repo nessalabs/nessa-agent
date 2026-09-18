@@ -95,18 +95,18 @@ pub(super) fn product_state(
     // conversation would start on: setup lists them all and a person deciding
     // between them is entitled to the truth about each.
     let agent_launch_files: HashMap<AgentId, AgentLaunchFiles> = settings
-        .agent
+        .agents
         .as_ref()
-        .map(|agent| {
-            agent
+        .map(|agents| {
+            agents
                 .agents()
                 .into_iter()
                 .map(|(id, runtime)| {
                     (
                         id,
                         AgentLaunchFiles {
-                            runtime: agent.node.clone(),
-                            entry: runtime.acp_entry.clone(),
+                            command: runtime.command.clone(),
+                            paths: runtime.paths(),
                         },
                     )
                 })
@@ -136,7 +136,7 @@ pub(super) fn product_state(
         PersistentSessions::open(&directory.join("browser-sessions.jsonl")).map_err(setup_error)?,
     ));
     product.browser_http_allowed = config.browser_http_allowed();
-    if let Some(agent) = &settings.agent {
+    if let Some(agents) = &settings.agents {
         let root = directory
             .parent()
             .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
@@ -144,8 +144,8 @@ pub(super) fn product_state(
         nessa_local_storage::create_directory(&root)
             .map_err(|error| RunError::Agent(error.to_string()))?;
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-        let selected = agent.selected()?;
-        let agents = super::agent::providers(agent, &root, clock.clone())?;
+        let selected = agents.selected()?;
+        let configured = super::agent::providers(agents, &root, clock.clone())?;
         let storage = Arc::new(
             LocalFileStorage::new(root.join("sessions"))
                 .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -159,14 +159,14 @@ pub(super) fn product_state(
                 .map_err(|error| RunError::Agent(error.to_string()))?,
         );
         let service = ConversationService::new(
-            ConversationAgents::new(agents, selected)
+            ConversationAgents::new(configured, selected)
                 .map_err(|error| RunError::Agent(error.to_string()))?,
             storage,
             metadata,
             creation_audit,
             clock,
             ConversationLimits::default(),
-            Some(agent.workspace.to_string_lossy().into_owned()),
+            Some(agents.workspace.to_string_lossy().into_owned()),
         )
         .map_err(|error| RunError::Agent(error.to_string()))?;
         product = product.with_conversations(Arc::new(service));

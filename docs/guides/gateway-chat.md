@@ -28,45 +28,65 @@ Use the same stage, data directory and instance for the server and native panel.
 The panel connects to `ws://127.0.0.1:7420/session`. This authenticates local access;
 remote TLS/device provisioning is not included in this delivery.
 
-Add `agent` to the private namespace `config.json` (beside `auth/`). What every
-agent on this machine shares is stated once; what differs between them — the
-harness entry point, the model, the budgets — goes under that agent's own name:
+Add `agents` to the private namespace `config.json` (beside `auth/`). What every
+agent on this machine shares is stated once; what differs between them — how the
+agent is started, the model, the budgets, whether its own tools are on — goes
+under that agent's name in `runtimes`:
 
 ```json
 {
-  "agent": {
+  "agents": {
     "catalog": "/absolute/path/to/models.json",
-    "node": "/absolute/path/to/node",
     "workspace": "/absolute/path/to/your/project",
-    "toolsEnabled": true,
     "mcpServers": [{
       "name": "nessa",
       "command": "/absolute/path/to/nessa-agent/target/debug/nessa-mcp",
       "args": ["--workspace", "/absolute/path/to/your/project", "--audit-directory", "/absolute/path/to/private/process-audit"]
     }],
     "selected": "claude",
-    "claude": {
-      "acpEntry": "/absolute/path/to/claude-acp/dist/index.js",
-      "model": "exact-anthropic-model-id-from-catalog",
-      "contextTokens": 100000,
-      "outputTokens": 4096
-    },
-    "codex": {
-      "acpEntry": "/absolute/path/to/codex-acp/dist/index.js",
-      "model": "exact-openai-model-id-from-catalog",
-      "contextTokens": 100000,
-      "outputTokens": 4096
+    "runtimes": {
+      "claude": {
+        "command": "/absolute/path/to/node",
+        "args": ["/absolute/path/to/claude-acp/dist/index.js"],
+        "model": "exact-anthropic-model-id-from-catalog",
+        "toolsEnabled": true,
+        "contextTokens": 100000,
+        "outputTokens": 4096
+      },
+      "codex": {
+        "command": "/absolute/path/to/node",
+        "args": ["/absolute/path/to/codex-acp/dist/index.js"],
+        "model": "exact-openai-model-id-from-catalog",
+        "toolsEnabled": true,
+        "contextTokens": 100000,
+        "outputTokens": 4096
+      }
     }
   }
 }
 ```
 
+An agent is started by a command and the arguments handed to it, rather than by a
+shared Node and a per-agent entry script. A harness that runs under Node is
+`"command": ".../node"` with its entry script in `args`; an agent that speaks ACP
+itself is its own executable with its own subcommand, such as
+`"command": "/usr/local/bin/opencode", "args": ["acp"]`. Only the arguments that
+are absolute paths are looked for on this machine — anything else is the agent's
+own vocabulary and is passed through untouched.
+
+This replaces the earlier `agent` key with its `node`, `acpEntry` and per-agent
+sections, and there is no compatibility shim: a `config.json` written against the
+old shape fails startup naming the key it no longer knows, rather than starting
+with settings silently ignored. Rewrite it as above.
+
 Configure only the agents you have. An agent absent from here is one this server
-cannot start, and setup reports it as not installed rather than offering it.
+cannot start; setup reports it as not set up here rather than as not installed,
+because installing it would change nothing — it may already be on the machine.
 `selected` names the agent a conversation is created on when the caller does not
 name one; it may be left out when only one agent is configured, and is required
 once more than one is — guessing which of two the operator meant is a coin toss
-with somebody's next conversation on it.
+with somebody's next conversation on it. A name under `runtimes` that Nessa has
+no adapter for fails startup by name, rather than being skipped.
 
 A conversation records the agent it was created on and is reopened on that same
 agent for the rest of its life, so changing `selected` moves new conversations
@@ -74,8 +94,10 @@ only. Records written before this server knew a second agent name no agent and
 are read as Claude's. Each agent's model must come from its own vendor's entries
 in the catalog: Codex is signed in to OpenAI and cannot reach an Anthropic model,
 and the mismatch is reported at startup rather than by a provider refusing every
-prompt. Codex always runs its own tools, so `toolsEnabled` must be true wherever
-it is configured.
+prompt. `toolsEnabled` is asked of each agent separately: Codex has no text-only
+mode and refuses to start without its own tools, so turning them off for Claude
+must not be able to take the whole server down over an agent you were not
+configuring.
 
 The installed desktop supplies an agent automatically. Its unattached workspace is
 `~/.nessa/workspaces/default`; its directories are created below the private Nessa
@@ -92,7 +114,9 @@ own configured credential directory, and neither agent is handed the other's.
 Requests cannot supply executables, workspaces, environment variables or tokens.
 Missing agent configuration keeps authentication/health available and returns
 `agent_not_configured` for chat; so does a request naming an agent this server has
-no configuration for. Invalid supplied configuration fails startup. Process
+no configuration for. A conversation already on disk that names an agent this
+build has no adapter for returns `agent_unsupported` — its own code, not a
+storage failure, because storage is fine and retrying cannot change the answer. Invalid supplied configuration fails startup. Process
 supervision currently requires Unix; there is no production test-provider
 fallback.
 
