@@ -206,7 +206,7 @@ const TurnRow = React.memo(function TurnRow({
 
 function receiptLabel(receipt: Receipt) {
   return {
-    delivered: "Received",
+    delivered: "Seen",
     accepted: "Sent",
     queued: "Queued",
     sending: "Sending",
