@@ -47,13 +47,37 @@ fn an_agent_is_started_by_a_command_and_its_arguments() {
     assert_eq!(config.selected().unwrap(), AgentId::Codex);
 }
 
+/// An absolute path as *this* platform spells one.
+///
+/// What counts as a path this machine has to find is the platform's own
+/// question, and `/harness/index.js` is not absolute on Windows — it names no
+/// drive. Written as a Unix path, this test asserted that a relative argument
+/// was found, which is the opposite of what it is for.
+fn absolute(name: &str) -> String {
+    if cfg!(windows) {
+        format!("C:\\{name}")
+    } else {
+        format!("/{name}")
+    }
+}
+
 #[test]
 fn only_the_arguments_that_are_paths_are_this_machines_to_find() {
-    let value = r#"{"catalog":"/catalog.json","workspace":"/workspace","runtimes":{"claude":{"command":"/node","args":["/harness/index.js","--flag","relative/path"],"model":"m","toolsEnabled":true}}}"#;
-    let config: AgentsConfig = serde_json::from_str(value).unwrap();
+    let entry = absolute("harness/index.js");
+    let value = serde_json::json!({
+        "catalog": absolute("catalog.json"),
+        "workspace": absolute("workspace"),
+        "runtimes": {"claude": {
+            "command": absolute("node"),
+            "args": [&entry, "--flag", "relative/path"],
+            "model": "m",
+            "toolsEnabled": true,
+        }},
+    });
+    let config: AgentsConfig = serde_json::from_value(value).unwrap();
     assert_eq!(
         config.runtime(AgentId::Claude).unwrap().paths(),
-        [std::path::PathBuf::from("/harness/index.js")]
+        [std::path::PathBuf::from(entry)]
     );
 }
 
