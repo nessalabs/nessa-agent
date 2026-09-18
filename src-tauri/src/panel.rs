@@ -241,10 +241,17 @@ pub fn reveal_setup_window(window: WebviewWindow) {
     platform::current().reveal_overlay(&window);
 }
 
+/// Writes the first-run flag to the settings file, leaving every other key as
+/// the file has it.
+///
+/// Through `settings::update` rather than a load-change-save of its own: the
+/// startup load answers an unreadable or malformed file with the defaults so a
+/// launch can carry on, and saving *that* back would replace the person's real
+/// panel geometry and quit policy with defaults — a silent loss, since the
+/// write succeeds. `update` refuses instead, and the refusal is reported.
 fn set_onboarding(app: &AppHandle, onboarding: Onboarding) -> io::Result<()> {
-    let mut chosen = settings::load(app);
-    chosen.onboarding = onboarding;
-    settings::save(app, &chosen)
+    // The written value is the caller's to ignore: nothing here shows it back.
+    settings::update(app, |settings| settings.onboarding = onboarding).map(|_| ())
 }
 
 /// Opens first-run setup again, from the beginning.
@@ -546,7 +553,10 @@ mod tests {
         let steps = Steps::default();
         let handoff = hand_over(
             true,
-            || Ok(()),
+            || {
+                steps.took("show");
+                Ok(())
+            },
             || Err("could not record that setup finished: disk full".to_string()),
             || {
                 steps.took("close");
@@ -556,12 +566,47 @@ mod tests {
         .expect("the panel came up");
 
         // Survivable: the cost is one more run of setup, not the panel.
-        assert_eq!(steps.order(), ["close"]);
+        assert_eq!(steps.order(), ["show", "close"]);
         assert!(handoff.setup_closed);
         assert_eq!(
             handoff.record_error.as_deref(),
             Some("could not record that setup finished: disk full")
         );
+    }
+
+    /// A settings file that cannot be read is now *refused* the flag rather
+    /// than replaced with defaults carrying it. The refusal has to cost a
+    /// second run of setup and nothing more: the panel is still shown and the
+    /// setup window still closed, with the reason reported rather than
+    /// swallowed.
+    #[test]
+    fn a_settings_file_that_will_not_take_the_flag_still_hands_the_panel_over() {
+        let steps = Steps::default();
+        let refusal = format!(
+            "could not record that setup finished: {}",
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "settings.json is not valid settings: expected value at line 1 column 2",
+            )
+        );
+        let handoff = hand_over(
+            true,
+            || {
+                steps.took("show");
+                Ok(())
+            },
+            || Err(refusal.clone()),
+            || {
+                steps.took("close");
+                Ok(())
+            },
+        )
+        .expect("a file this build cannot read is not a reason to withhold the panel");
+
+        assert_eq!(steps.order(), ["show", "close"]);
+        assert!(handoff.setup_closed);
+        assert!(handoff.close_error.is_none());
+        assert_eq!(handoff.record_error.as_deref(), Some(refusal.as_str()));
     }
 
     #[test]

@@ -80,13 +80,16 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
             "surface" => {
                 let _ = app.emit(host::TOGGLE_SURFACE, ());
             }
+            // Through `update`, not load-change-save: a settings file that
+            // failed to parse must not be replaced by the defaults this toggle
+            // happened to flip. The tick follows what was actually written.
             "stop-agents-on-quit" => {
-                let mut chosen = settings::load(app);
-                chosen.stop_agents_on_quit = !chosen.stop_agents_on_quit;
-                match settings::save(app, &chosen) {
-                    Ok(()) => {
+                match settings::update(app, |chosen| {
+                    chosen.stop_agents_on_quit = !chosen.stop_agents_on_quit;
+                }) {
+                    Ok(written) => {
                         if let Some(item) = app.try_state::<QuitPolicyMenuItem>() {
-                            let _ = item.0.set_checked(chosen.stop_agents_on_quit);
+                            let _ = item.0.set_checked(written.stop_agents_on_quit);
                         }
                     }
                     Err(error) => eprintln!("[nessa] could not save settings: {error}"),
