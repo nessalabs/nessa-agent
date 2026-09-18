@@ -31,6 +31,9 @@ Thumbs.db
 
 # Claude Code local worktrees (full repo copies for agent sessions)
 .claude/worktrees/
+# Per-machine dev-server config for the agent's browser preview. The skills
+# beside it are shared and stay tracked.
+.claude/launch.json
 
 # --- Project-specific ---
 
