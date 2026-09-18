@@ -72,9 +72,10 @@ impl std::error::Error for InstallFailure {}
 /// download and an executable Nessa will launch, which is why it is in the use
 /// case rather than left to an adapter to remember.
 ///
-/// The three middle steps share one open file — see [`StagedArchive`] — so
-/// "the bytes that were measured" and "the bytes that were unpacked" are the
-/// same bytes by construction rather than by both steps agreeing on a path.
+/// The three middle steps share one open file — see [`StagedArchive`], which
+/// also states where that holds and where it would not — so "the bytes that
+/// were measured" and "the bytes that were unpacked" are the same bytes by
+/// construction rather than by both steps agreeing on a path.
 pub struct InstallAgentRuntime<'a> {
     pub source: &'a dyn ArchiveSource,
     pub store: &'a dyn RuntimeStore,

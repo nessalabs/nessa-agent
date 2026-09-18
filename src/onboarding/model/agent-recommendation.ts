@@ -14,8 +14,8 @@
  * naming one here would put that truth in two places that could disagree.
  */
 
-import { AGENT_CHOICES, agentChoice, isChoosable } from "./onboarding"
-import type { AgentId, OnboardingState } from "./onboarding"
+import { AGENT_CHOICES, agentChoice, agentReadiness, isChoosable } from "./onboarding"
+import type { AgentId, AgentReadiness, OnboardingState } from "./onboarding"
 
 /**
  * What setup should offer.
@@ -45,30 +45,45 @@ function anythingReady(state: OnboardingState): boolean {
 }
 
 /**
- * Whether anybody actually answered about the agents on this machine.
+ * The answers that mean a runtime was asked and said it cannot start here.
  *
- * Not the same question as whether a report arrived. A report is an object, and
- * an empty one is truthy: a gateway that answers `{"agents":[]}`, or one that
- * has gained a readiness state this build does not recognise — which the
- * adapter drops rather than passes on — produces a report that says nothing
- * about any agent. Treating that as "this machine has no agents" would offer
- * somebody a large download on the strength of a question nobody answered.
+ * A closed list, and short on purpose. `ready` is the opposite. `unknown` is
+ * the absence of an answer, which the readiness type says outright is never
+ * grounds for an offer. `not-supported` is a fact about Nessa's own listing
+ * rather than anything a runtime reported.
+ *
+ * Closed rather than "anything that is not `ready`" because the two questions
+ * take opposite defaults, and each takes the careful one. Letting somebody
+ * *pick* an agent needs a definite yes, so a state nobody has heard of does not
+ * count as one. Offering somebody a hundred-megabyte *download* needs a
+ * definite no, so a state nobody has heard of does not count as that either. A
+ * readiness added on the server later should make neither decision by itself.
  */
-function anybodyAnswered(state: OnboardingState): boolean {
-  return AGENT_CHOICES.some((choice) => state.readiness?.[choice.id] !== undefined)
-}
+const CANNOT_START: readonly AgentReadiness[] = ["needs-authentication", "not-installed"]
 
 /**
- * Whether Nessa could actually put this agent in front of somebody.
+ * Whether Nessa could actually put this agent in front of somebody, and has
+ * been told it needs to.
  *
- * Being installable is not enough. The server can pin a release for an agent
- * this build has no adapter for — that is exactly the state an agent passes
+ * Two conditions, and both are about this agent rather than about the machine
+ * in general. Being installable is not enough: the server can pin a release for
+ * an agent this build has no adapter for — exactly the state an agent passes
  * through while it is being added — and offering to download one would end with
  * a hundred megabytes on disk and a row in the picker that still cannot be
  * selected.
+ *
+ * Neither is somebody else's answer enough. Read through `agentReadiness`, the
+ * same way the picker reads it, so that an answer the listing overrides is not
+ * quietly treated as evidence. A gateway that answered about codex and said
+ * nothing about claude has not told Nessa anything about claude, and offering
+ * to install claude on the strength of it would be a download proposed to
+ * somebody whose claude is sitting there working.
  */
-function canBeOffered(agent: AgentId): boolean {
-  return agentChoice(agent)?.supported === true
+function canBeOffered(state: OnboardingState, agent: AgentId): boolean {
+  return (
+    agentChoice(agent)?.supported === true &&
+    CANNOT_START.includes(agentReadiness(state, agent))
+  )
 }
 
 /**
@@ -78,22 +93,25 @@ function canBeOffered(agent: AgentId): boolean {
  * this build rather than about the machine. Passing it in rather than naming an
  * agent here keeps that single source of truth on the side that owns it.
  *
- * Deliberately not offered on the strength of a missing answer: a report that
- * never arrived, or one that arrived saying nothing about any listed agent, is
- * not evidence that somebody has no agent. Offering a large download to a
- * person whose gateway was briefly unreachable would be acting on a question
- * nobody answered. That is the rule the rest of setup follows, and it is why an
- * unanswered ask reads as no recommendation rather than as an empty machine.
+ * Deliberately not offered on the strength of a missing answer. A report that
+ * never arrived, one that arrived empty, and one that answered about a
+ * different agent are all the same thing here: nobody said this agent cannot
+ * start. Offering a large download to a person whose gateway was briefly
+ * unreachable, or whose own agent is sitting there working, would be acting on
+ * a question nobody answered. That is the rule the rest of setup follows, and
+ * it is why an unanswered ask reads as no recommendation rather than as an
+ * empty machine.
  */
 export function recommendAgent(
   state: OnboardingState,
   installable: readonly AgentId[],
 ): AgentRecommendation {
-  // Nobody said anything about any agent. Not an empty machine: an unanswered
-  // question, which reads the same whether the ask failed or came back with
-  // nothing in it.
-  if (!anybodyAnswered(state)) return { kind: "nothing" }
   if (anythingReady(state)) return { kind: "choose" }
-  const offer = installable.find(canBeOffered)
+  // No separate guard for "nobody answered". An agent is offered only when it
+  // was itself answered about, so a report that arrived empty, an ask that
+  // failed, and a machine nobody has asked about yet all fall through here on
+  // their own — rather than through a check that could pass on one agent's
+  // answer and then offer a different one.
+  const offer = installable.find((agent) => canBeOffered(state, agent))
   return offer ? { kind: "install", agent: offer } : { kind: "nothing" }
 }

@@ -1,10 +1,10 @@
 use std::fs::{self, File};
-use std::io::{self, Read, Seek};
+use std::io::{self, Read, Seek, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 use nessa_local_storage::{create_directory, open, sync_directory, OpenMode, PrivateTempFile};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -25,6 +25,9 @@ const NAME_ATTEMPTS: u8 = 10;
 /// expand a thousandfold. A few times the largest runtime Nessa pins, so the
 /// bound is only ever reached by an archive that is not what it claims to be.
 const MAXIMUM_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
+
+/// How much of an entry is moved out of the archive at a time.
+const UNPACK_CHUNK: usize = 64 * 1024;
 
 /// What is recorded beside an installed runtime.
 ///
@@ -115,6 +118,25 @@ impl ManagedRuntimes {
         sync_directory(&directory).map_err(unwritable)
     }
 
+    /// Take an executable back out after the install failed to complete.
+    ///
+    /// Best effort on purpose, and the reason it returns nothing: the caller
+    /// already has a failure to report, and it is the one worth reporting. A
+    /// second one about the clean-up would replace the cause with its
+    /// consequence. What cannot be removed is logged, so that a directory
+    /// holding an unrecorded runtime is at least explainable.
+    fn withdraw(&self, executable: &Path) {
+        if let Err(error) = fs::remove_file(executable) {
+            if error.kind() != io::ErrorKind::NotFound {
+                tracing::debug!(
+                    path = %executable.display(),
+                    %error,
+                    "could not withdraw an agent runtime that was not recorded"
+                );
+            }
+        }
+    }
+
     /// Unpack the one entry the release names, into a file this store chose.
     ///
     /// Reports `false` when the archive simply does not contain it, which is a
@@ -129,7 +151,11 @@ impl ManagedRuntimes {
         limit: u64,
     ) -> Result<bool, StoreFailure> {
         staged.file_mut().rewind().map_err(unreadable)?;
-        let mut tar = tar::Archive::new(GzDecoder::new(staged.file_mut()));
+        // `MultiGzDecoder`, not `GzDecoder`: the latter stops at the end of the
+        // first gzip member, so a multi-member archive whose entry lives past
+        // it would be reported as an archive that does not contain the pinned
+        // executable — blaming the pin for a decoder that stopped early.
+        let mut tar = tar::Archive::new(MultiGzDecoder::new(staged.file_mut()));
         let entries = tar.entries().map_err(malformed)?;
         let wanted = release.executable().as_str().as_bytes();
         for entry in entries {
@@ -161,11 +187,28 @@ impl ManagedRuntimes {
             // executable that happens to be exactly that size. `limit` is
             // passed in rather than read from the constant so that the bound can
             // be exercised by a test without moving half a gigabyte.
+            // `Entry::size`, not `header().size()`: a PAX extension can carry
+            // the real length for an entry whose header field cannot hold it,
+            // and the header's own number is then not the one to hold the
+            // archive to.
+            let declared = entry.size();
             let mut bounded = entry.by_ref().take(limit + 1);
-            let unpacked = io::copy(&mut bounded, staging.as_file_mut()).map_err(unwritable)?;
+            let unpacked = expand(&mut bounded, staging.as_file_mut(), release)?;
             if unpacked > limit {
                 return Err(StoreFailure::MalformedArchive(format!(
                     "{} unpacks to more than {limit} bytes",
+                    release.executable()
+                )));
+            }
+            // Against the header rather than against zero. An entry whose data
+            // was cut short still decompresses to something, and a `> 0` test
+            // is satisfied by one byte of it — which would be made executable,
+            // recorded as the tested runtime and handed out to launch. The
+            // header is the archive's own statement of how long the file is, so
+            // this holds the archive to it.
+            if unpacked != declared {
+                return Err(StoreFailure::MalformedArchive(format!(
+                    "{} is {unpacked} bytes in the archive, which says it is {declared}",
                     release.executable()
                 )));
             }
@@ -315,7 +358,21 @@ impl RuntimeStore for ManagedRuntimes {
                 release.executable().as_str().to_owned(),
             ));
         }
-        self.record(agent, release)?;
+        // The record is written last, because it is what makes the install
+        // true: `installed` answers from it, so writing it before the
+        // executable exists would claim an install that does not.
+        //
+        // That ordering leaves one window. If the record cannot be written, the
+        // executable is already durable, and returning the failure on its own
+        // would tell somebody nothing was installed while a hundred megabytes
+        // of runtime sat in a directory no record names, which nothing would
+        // ever look at again — on a disk that, in the likeliest cause of this
+        // failure, is the thing that ran out. So the executable is taken back
+        // out, and the message is true when it is read.
+        if let Err(failure) = self.record(agent, release) {
+            self.withdraw(&destination);
+            return Err(failure);
+        }
         Ok(destination)
     }
 
@@ -363,6 +420,35 @@ fn release_name(path: &Path) -> Result<(), StoreFailure> {
 #[cfg(not(unix))]
 fn release_name(_path: &Path) -> Result<(), StoreFailure> {
     Ok(())
+}
+
+/// Move one entry's data onto a staging file, keeping the two faults apart.
+///
+/// Not `io::copy`, for the same reason the HTTPS client does not use it: a read
+/// that fails here is the archive coming apart — a gzip stream cut short, a
+/// header that does not agree with its data — and a write that fails is this
+/// machine. Reporting a corrupt archive as "could not write the agent runtime"
+/// sends somebody to look at their disk over a pin that is wrong.
+fn expand(
+    entry: &mut impl Read,
+    staging: &mut File,
+    release: &PinnedRelease,
+) -> Result<u64, StoreFailure> {
+    let mut buffer = vec![0u8; UNPACK_CHUNK];
+    let mut unpacked: u64 = 0;
+    loop {
+        let read = entry.read(&mut buffer).map_err(|error| {
+            StoreFailure::MalformedArchive(format!(
+                "{} could not be read out of the archive: {error}",
+                release.executable()
+            ))
+        })?;
+        if read == 0 {
+            return Ok(unpacked);
+        }
+        unpacked += read as u64;
+        staging.write_all(&buffer[..read]).map_err(unwritable)?;
+    }
 }
 
 /// Whether a tar entry is a file with bytes of its own.

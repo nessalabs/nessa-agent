@@ -1,7 +1,10 @@
 use super::*;
 use std::io::Write;
-use std::path::Path;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
+use sha2::Sha256;
 use tar::{EntryType, Header};
 
 use crate::agent_install::domain::{AgentName, ArchivePath, ArchiveUrl, ReleasePlatform};
@@ -71,7 +74,7 @@ fn publish(
     store: &ManagedRuntimes,
     release: &PinnedRelease,
     bytes: &[u8],
-) -> Result<std::path::PathBuf, StoreFailure> {
+) -> Result<PathBuf, StoreFailure> {
     let mut staged = staged(store, bytes);
     store.publish(&agent(), release, &mut staged)
 }
@@ -80,10 +83,15 @@ fn publish(
 ///
 /// Made with the store's own primitive rather than `create_dir_all`, because
 /// the store refuses a directory anybody else can read — which is the point.
-fn version_directory(root: &Path) -> std::path::PathBuf {
+fn version_directory(root: &Path) -> PathBuf {
     let directory = root.join("opencode").join("1.18.31");
     nessa_local_storage::create_directory(&directory).expect("a private version directory");
     directory
+}
+
+/// Where `publish` puts the executable for the release these tests use.
+fn installed_path(root: &Path) -> PathBuf {
+    root.join("opencode").join("1.18.31").join("opencode")
 }
 
 fn write(path: &Path, bytes: &[u8]) {
@@ -141,7 +149,6 @@ fn a_published_runtime_is_executable() {
 
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
         let mode = published
             .metadata()
             .expect("reading the published runtime")
@@ -554,7 +561,7 @@ fn a_digest_of_something_larger_than_the_read_buffer_is_still_right() {
     let mut staged = staged(&store, &body);
 
     let expected = {
-        let mut hasher = sha2::Sha256::new();
+        let mut hasher = Sha256::new();
         hasher.update(&body);
         hasher
             .finalize()
@@ -610,7 +617,6 @@ fn two_installs_at_once_do_not_share_a_download() {
 fn an_agent_directory_is_private_to_this_user() {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().expect("temporary root");
         let store = ManagedRuntimes::new(root.path());
         let _staged = store.stage(&agent()).expect("a staged file");
@@ -659,4 +665,183 @@ fn a_discarded_archive_leaves_nothing_behind() {
         .map(|entry| entry.expect("an entry").file_name())
         .collect();
     assert!(left.is_empty(), "a discarded install left {left:?} behind");
+}
+
+/// The uncompressed tar bytes for each of `entries`, in order.
+fn tarball(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut builder = tar::Builder::new(Vec::new());
+    for (path, body) in entries {
+        let mut header = Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o644);
+        header.set_entry_type(EntryType::Regular);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, path, *body)
+            .expect("appending to an in-memory archive");
+    }
+    builder.into_inner().expect("finishing the tar")
+}
+
+/// One tar stream, compressed as two gzip members back to back.
+///
+/// This is what a `.tar.gz` assembled by concatenation looks like, and it is
+/// the case a decoder that stops at the first member gets wrong. Concatenating
+/// two *archives* would not test it: tar stops at the first one's
+/// end-of-archive marker long before the decoder matters.
+fn split_across_gzip_members(tar: &[u8]) -> Vec<u8> {
+    let (first, second) = tar.split_at(tar.len() / 2);
+    let mut members = Vec::new();
+    for part in [first, second] {
+        let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gzip.write_all(part).expect("compressing a test archive");
+        members.extend_from_slice(&gzip.finish().expect("finishing a gzip member"));
+    }
+    members
+}
+
+/// A gzip tar whose entry header claims `declared` bytes but carries `body`.
+///
+/// Built by hand rather than with `tar::Builder`, which writes the header from
+/// the data it is given and so cannot produce the disagreement being tested.
+fn short_entry_archive(path: &str, body: &[u8], declared: u64) -> Vec<u8> {
+    let mut header = Header::new_gnu();
+    header.set_size(declared);
+    header.set_mode(0o644);
+    header.set_entry_type(EntryType::Regular);
+    header
+        .set_path(path)
+        .expect("a path for an in-memory archive");
+    header.set_cksum();
+
+    let mut tar = Vec::new();
+    tar.extend_from_slice(header.as_bytes());
+    tar.extend_from_slice(body);
+    // Pad the data to the 512-byte block tar counts in, then the two zero
+    // blocks that mark the end of the archive.
+    tar.resize(tar.len().next_multiple_of(512), 0);
+    tar.resize(tar.len() + 1024, 0);
+
+    let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gzip.write_all(&tar).expect("compressing a test archive");
+    gzip.finish().expect("finishing the gzip stream")
+}
+
+#[test]
+fn an_entry_shorter_than_its_header_says_is_not_installed() {
+    // The digest has already matched at this point, so nothing downstream will
+    // catch this. Without the check, tar hands over the 512 bytes that are
+    // there plus the padding it reads past them, and that becomes a file made
+    // executable and recorded as the tested runtime — a binary that is
+    // genuinely a fragment of one.
+    let root = tempfile::tempdir().expect("temporary root");
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "package/bin/opencode");
+    let truncated = short_entry_archive("package/bin/opencode", &[b'x'; 512], 100_000);
+
+    let failure = publish(&store, &release, &truncated).expect_err("a short entry is not a file");
+
+    assert!(
+        matches!(failure, StoreFailure::MalformedArchive(_)),
+        "a truncated entry is the archive's fault, not this machine's: {failure:?}"
+    );
+    let message = failure.to_string();
+    assert!(
+        message.contains("100000"),
+        "the message should say what the archive claimed: {message}"
+    );
+    assert_eq!(
+        store.installed(&agent(), &release),
+        Ok(None),
+        "a fragment of an executable must not be recorded as the runtime"
+    );
+    assert!(
+        !installed_path(root.path()).exists(),
+        "a refused entry left an executable behind"
+    );
+}
+
+#[test]
+fn an_entry_whose_bytes_come_apart_is_the_archives_fault() {
+    // `io::copy` reports a read failure and a write failure as the same thing.
+    // A gzip stream that stops half way through the entry is a corrupt archive,
+    // and telling somebody their machine could not write it sends them to look
+    // at a disk that is fine.
+    let root = tempfile::tempdir().expect("temporary root");
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "package/bin/opencode");
+    let whole = archive("package/bin/opencode", &vec![b'x'; 200_000]);
+    let cut = &whole[..whole.len() / 2];
+
+    let failure = publish(&store, &release, cut).expect_err("a truncated gzip stream");
+
+    assert!(
+        matches!(failure, StoreFailure::MalformedArchive(_)),
+        "a stream that came apart is not a machine that could not write: {failure:?}"
+    );
+}
+
+#[test]
+fn an_executable_past_the_first_gzip_member_is_still_found() {
+    // A `.tar.gz` may be several gzip members back to back, and a decoder that
+    // stops at the first would report an archive that plainly contains the
+    // pinned executable as one that does not — blaming the pin for its own
+    // early stop.
+    let root = tempfile::tempdir().expect("temporary root");
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "package/bin/opencode");
+    // A filler entry large enough that the halfway split lands inside it, so
+    // the pinned entry begins only in the second member. Splitting a small
+    // archive would put the whole entry in the first one, and the test would
+    // pass with a decoder that never reads the second.
+    let filler = vec![b'.'; 16 * 1024];
+    let split = split_across_gzip_members(&tarball(&[
+        ("package/other", filler.as_slice()),
+        ("package/bin/opencode", b"the runtime"),
+    ]));
+
+    let installed = publish(&store, &release, &split).expect("the second member is read");
+
+    assert_eq!(
+        std::fs::read(&installed).expect("the installed runtime reads"),
+        b"the runtime"
+    );
+}
+
+#[test]
+fn an_install_that_cannot_be_recorded_leaves_no_runtime_behind() {
+    // The record is written after the executable, so there is a moment where
+    // one exists and the other does not. Reporting "nothing was installed"
+    // while a hundred megabytes sits in a directory nothing will ever look at
+    // again is the message being false — and on a full disk, which is the
+    // likeliest way to get here, it is false in the direction that hurts.
+    let root = tempfile::tempdir().expect("temporary root");
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "package/bin/opencode");
+    // A directory where the record goes: the rename onto it cannot succeed.
+    let record = root.path().join("opencode").join("installed.json");
+    nessa_local_storage::create_directory(&record).expect("a directory in the record's place");
+
+    let failure = publish(
+        &store,
+        &release,
+        &archive("package/bin/opencode", b"the runtime"),
+    )
+    .expect_err("a record that cannot be written fails the publish");
+
+    assert!(
+        matches!(failure, StoreFailure::Unwritable(_)),
+        "a record that would not write is this machine's doing: {failure:?}"
+    );
+    assert!(
+        !installed_path(root.path()).exists(),
+        "a failed install left a runtime nothing records"
+    );
+    // Not `Ok(None)`: a directory where the record belongs is a store that
+    // cannot answer, and it says so. What matters here is that it does not
+    // answer with an installation.
+    assert!(
+        !matches!(store.installed(&agent(), &release), Ok(Some(_))),
+        "a failed install was reported as one that worked"
+    );
 }

@@ -69,6 +69,15 @@ describe("recommendAgent", () => {
     })
   })
 
+  it("offers an install on either answer that means the agent cannot start", () => {
+    for (const readiness of ["not-installed", "needs-authentication"] as const) {
+      expect(
+        recommendAgent(asked({ claude: readiness }), INSTALLABLE),
+        `${readiness} is an agent reporting that it cannot start`,
+      ).toEqual({ kind: "install", agent: "claude" })
+    }
+  })
+
   it("offers an install when the agents present only need a sign-in", () => {
     // Installed but signed out is still nothing this person can use right now.
     const state = asked({ claude: "needs-authentication" })
@@ -97,34 +106,44 @@ describe("recommendAgent", () => {
     expect(recommendAgent(state, ["nonesuch" as AgentId])).toEqual({ kind: "nothing" })
   })
 
-  it("treats every readiness that is not `ready` as nothing to start with", () => {
-    // `not-supported` and `unknown` are part of the readiness union but never
-    // come off the wire — the adapter refuses both, on the grounds that neither
-    // is a fact a runtime gets to assert about itself. They reach this function
-    // from Nessa's own side instead, so the offer has to be right for them
-    // here.
-    for (const readiness of ["not-supported", "unknown"] as const) {
+  it("offers nothing on a readiness that is the absence of an answer", () => {
+    // `unknown` and `not-supported` are part of the union but never come off
+    // the wire — the adapter refuses both, on the grounds that neither is a
+    // fact a runtime gets to assert about itself. They reach this function from
+    // Nessa's own side, and neither is a runtime saying it cannot start, so
+    // neither is grounds for proposing a download.
+    for (const readiness of ["unknown", "not-supported"] as const) {
       expect(
         recommendAgent(asked({ claude: readiness }), INSTALLABLE),
-        `a ${readiness} agent is not one this person can start`,
-      ).toEqual({ kind: "install", agent: "claude" })
+        `${readiness} is not an agent reporting that it cannot start`,
+      ).toEqual({ kind: "nothing" })
     }
   })
 
-  it("does not treat a readiness this build has not heard of as ready", () => {
+  it("offers nothing on a readiness this build has not heard of", () => {
     // The cast is the point: it stands in for a state added to the union after
     // this was written, which is the one case the compiler cannot flag here.
     // Not something the gateway can send today — the adapter drops a value it
-    // does not know — so this is the second of the two places that hold the
-    // rule, not the first.
+    // does not know — so this is the second of the two places holding the rule.
     //
-    // The rule being held is that only a plain `ready` suppresses the offer.
-    // The opposite default would mean a state added on the server quietly
-    // stopping setup from offering anything to someone with no agent at all.
+    // A new state is not a runtime saying it cannot start. Reading it as one
+    // would mean a readiness added on the server quietly starting to propose a
+    // hundred-megabyte download to people who did not need it.
     const state = asked({ claude: "not-configured" as never })
-    expect(recommendAgent(state, INSTALLABLE)).toEqual({
-      kind: "install",
-      agent: "claude",
+    expect(recommendAgent(state, INSTALLABLE)).toEqual({ kind: "nothing" })
+  })
+
+  it("offers nothing for an agent nobody answered about", () => {
+    // The defect this guards: a global "did anybody answer" check passes on
+    // codex's answer, and the offer is then made about claude, which nothing
+    // was said about. Somebody whose claude is installed and working — but
+    // whose entry the adapter dropped, because its readiness spelling is one
+    // this build does not recognise — would be offered a download for it.
+    expect(recommendAgent(asked({ codex: "not-installed" }), INSTALLABLE)).toEqual({
+      kind: "nothing",
+    })
+    expect(recommendAgent(asked({ codex: "ready" }), INSTALLABLE)).toEqual({
+      kind: "nothing",
     })
   })
 

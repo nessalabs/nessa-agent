@@ -87,13 +87,24 @@ impl std::error::Error for StoreFailure {}
 /// each other. One handle, opened once, cannot come apart that way.
 ///
 /// The store creates it exclusively, and where the platform allows it lets go
-/// of the name at once. What that buys is precise, and worth stating precisely:
-/// nothing holding only the *name* can reach the file — not to truncate it
-/// between the hash and the unpack, not to replace it — and two installs running
-/// at the same time stage into two files rather than over one another. It is not
-/// unreachable in general: a process running as the same user can still find the
-/// open descriptor, and a user who can do that can equally write over the
-/// installed runtime afterwards. That is the limit of what this can defend.
+/// of the name at once. Where it does, what that buys is precise and worth
+/// stating precisely: nothing holding only the *name* can reach the file — not
+/// to truncate it between the hash and the unpack, not to replace it — and two
+/// installs running at the same time stage into two files rather than over one
+/// another. It is not unreachable in general: a process running as the same
+/// user can still find the open descriptor, and a user who can do that can
+/// equally write over the installed runtime afterwards. That is the limit of
+/// what this can defend.
+///
+/// Where the platform does not allow it — today that is Windows, where a file
+/// cannot be unlinked while it is open — the name survives, and with it the
+/// substitution this type exists to prevent: a same-user process could rewrite
+/// the staged file between the digest and the unpack, and the install would
+/// then measure one thing and unpack another. Nothing reaches that path at
+/// present, because no release is pinned for Windows and the use case refuses a
+/// platform the pin does not cover before it stages anything. Pinning one is
+/// what would make this real, so it is written down here rather than discovered
+/// then.
 ///
 /// The use case never reads or writes it — it only passes it along in order,
 /// and hands it back to be discarded.
