@@ -68,12 +68,12 @@ pub fn toggle(app: &AppHandle) -> Option<bool> {
 /// a panel.
 pub const SETUP_WINDOW: &str = "setup";
 
-/// The size setup opens at on hosts that do not place it themselves.
+/// The size setup opens at on hosts that do not cover the screen with it.
 ///
 /// `place_overlay` replaces this frame with the whole screen where the host can
-/// do that. Where it is an explicit no-op, this *is* the window somebody gets,
-/// so it has to be a window rather than whatever default the window system
-/// hands out for a size nobody asked for.
+/// do that. Where it cannot, this *is* the window somebody gets — centred by the
+/// same call — so it has to be a window rather than whatever default the window
+/// system hands out for a size nobody asked for.
 const SETUP_WIDTH: f64 = 960.0;
 const SETUP_HEIGHT: f64 = 640.0;
 
@@ -85,6 +85,19 @@ const SETUP_HEIGHT: f64 = 640.0;
 ///
 /// Built hidden: a window is on screen the moment it exists, and its page
 /// reveals it once it has rendered (`reveal_setup_window`).
+///
+/// A size, and deliberately no position: where the window goes is
+/// [`platform::Host::place_overlay`]'s alone, and asking the builder for one as
+/// well does not merely duplicate that — it overrides it, one turn of the event
+/// loop later. `.center()` is resolved into an explicit position at build time,
+/// and Tauri then re-applies that position through `setFrameTopLeftPoint`, which
+/// AppKit will not take off the main thread and which tao therefore *queues*
+/// (`set_frame_top_left_point_async`). `place_overlay` runs during `setup`,
+/// before the event loop turns at all, so the queued block landed afterwards and
+/// dragged the already screen-sized window's top left corner back to where a
+/// 960×640 window would have been centred — leaving setup 255pt in from the left
+/// and 175pt down from the top of a 1470×956 screen, with the menu bar and a
+/// strip of desktop undimmed beside it.
 fn build_setup_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     WebviewWindowBuilder::new(
         app,
@@ -93,7 +106,6 @@ fn build_setup_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     )
     .title("Welcome to Nessa")
     .inner_size(SETUP_WIDTH, SETUP_HEIGHT)
-    .center()
     .resizable(false)
     .transparent(true)
     .decorations(false)

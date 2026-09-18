@@ -11,6 +11,7 @@ import {
   hasImmediateCfg,
   hasNoImmediateCfg,
 } from "./architecture/platform-boundaries.mjs"
+import { overlayPlacementViolations } from "./architecture/overlay-placement.mjs"
 import {
   normalizedPath,
   rustBoundaryViolations,
@@ -59,10 +60,11 @@ for (const rustRoot of workspaceRustSourceRoots(root, metadata)) {
   const source = join(rustRoot, "src")
   if (!existsSync(source)) continue
   for (const file of rustFiles(source)) {
-    for (const violation of rustBoundaryViolations(
-      rel(file),
-      readFileSync(file, "utf8"),
-    )) {
+    const text = readFileSync(file, "utf8")
+    for (const violation of rustBoundaryViolations(rel(file), text)) {
+      fail(file, violation)
+    }
+    for (const violation of overlayPlacementViolations(rel(file), text)) {
       fail(file, violation)
     }
   }

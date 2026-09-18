@@ -42,12 +42,26 @@ pub trait Host: Send + Sync {
     /// Placing is not showing. The setup window is placed while still hidden and
     /// revealed by its own page once that page has rendered, so this must not
     /// order the window in or activate the app; [`Host::reveal_overlay`] does
-    /// that. Hosts where an ordinary window already covers what it needs to
-    /// leave the frame alone.
+    /// that.
     ///
     /// Rendered, not painted: a window left hidden here is never drawn, so its
     /// page is served no animation frames and cannot wait for one.
-    fn place_overlay(&self, _window: &WebviewWindow) {}
+    ///
+    /// This is the *only* place the overlay is positioned, and the default below
+    /// is why: a host that cannot cover the screen still needs its overlay put
+    /// somewhere sensible, and the alternative — asking the window builder to
+    /// centre it — is not a fallback but a competitor. A builder position is
+    /// re-applied asynchronously on macOS, so it landed *after* this call and
+    /// pulled the screen-sized window back to where the unplaced one would have
+    /// gone. One owner, and no second request for the window system to honour
+    /// later. See `panel::build_setup_window`.
+    fn place_overlay(&self, window: &WebviewWindow) {
+        // Losing the placement costs a window in the wrong corner, not setup, so
+        // it is reported rather than fatal.
+        if let Err(error) = window.center() {
+            eprintln!("[nessa] could not centre setup: {error}");
+        }
+    }
 
     /// Bring an already-placed overlay to the front and give it focus.
     ///
