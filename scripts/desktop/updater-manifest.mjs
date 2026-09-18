@@ -42,6 +42,40 @@ export function releaseManifest({ version, notes, target, signature, url, publis
   }
 }
 
+/** The artifact name a check-only run announces and then does not have.
+ *
+ * It is named for what it is, because it shows up in two places a person will
+ * read: the `url` in the served manifest, and the 404 logged if a click ever
+ * asks for it. */
+export const CHECK_ONLY_ARTIFACT = "check-only-has-no-artifact.tar.gz"
+
+/** The `signature` field a check-only run puts in the manifest.
+ *
+ * The plugin reads this field while parsing and only *uses* it once bytes have
+ * been downloaded, so a check succeeds with any string here. It says in plain
+ * words what it is, so a manifest captured from this mode can never be mistaken
+ * for one that was signed. */
+export const CHECK_ONLY_SIGNATURE = Buffer.from(
+  "check-only harness: not a signature, and never verified",
+).toString("base64")
+
+/** The manifest a check-only run serves: real shape, absent release.
+ *
+ * Everything the plugin's *check* reads is genuine — the version it compares,
+ * the RFC 3339 date it parses, the `{os}-{arch}` key it looks up. Everything
+ * the plugin's *install* would read is deliberately not: the URL points at
+ * nothing and the signature is a sentence. */
+export function checkOnlyManifest({ version, notes, target, origin, published }) {
+  return releaseManifest({
+    version,
+    notes,
+    target,
+    signature: CHECK_ONLY_SIGNATURE,
+    url: `${origin}/${CHECK_ONLY_ARTIFACT}`,
+    published,
+  })
+}
+
 /** Where `createUpdaterArtifacts` leaves the thing an update installs.
  *
  * One per platform, because the plugin installs a different kind of thing on

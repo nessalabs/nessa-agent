@@ -270,6 +270,60 @@ rows from the shared Transcript; it does not parse provider wire formats.
   and no `connect-src` entry exist for it. `src-tauri/capabilities/` stays as it
   was.
 
+#### Watching the update flow locally
+
+Two recipes, and they stop in different places. Neither publishes anything and
+neither needs a release build.
+
+- **`NESSA_FAKE_UPDATE=<version> pnpm app` — the decision, with no network.**
+  A debug build reads the variable and answers the check from it instead of
+  asking the endpoint, so the tray grows an "Update to 9.9.9" item within a
+  second of launch, with no server, no artifact, and no signing key. It is the
+  inner loop for `updater::offer`, `tray::offer_update`, and the click handler.
+  `updater::simulated` is the whole rule: a `major.minor.patch` of digits is
+  announced, an unset or empty value is an ordinary run, and anything else is
+  reported on stderr and falls through to the real endpoint — the value becomes
+  the tray item's text, and "Update to banana" claims something no real check
+  could have found.
+
+  Nothing is faked beyond the answer. There is no release behind the offer, so
+  clicking the item downloads nothing, installs nothing, and restarts nothing;
+  it says exactly that on stderr rather than returning silently, which from the
+  menu would be indistinguishable from a broken item. Everything this path needs
+  — `SIMULATED_UPDATE`, `simulated`, `SimulatedReleases`, `SimulatedUpdate`, and
+  the two call sites — is `#[cfg(debug_assertions)]` and is not compiled into a
+  release build at all, the same shape as `tray.rs`'s `SHOW_SETUP_ITEM`. A
+  shipped app that can be told an update exists is one an attacker can tell that
+  to. The tests are gated the same way; `cargo clippy -p nessa-app --all-targets
+  --release -- -D warnings` is what proves the release arm still builds clean
+  with none of it present.
+
+  It does not touch the endpoint, the manifest, the download, the signature, or
+  the install. It is the tray and the decision, nothing else.
+
+- **`--check-only` plus a `--config` merge on `dev` — the real plugin, a local
+  server.** This is the more valuable of the two, because the code doing the
+  work is `tauri-plugin-updater` itself rather than a substitute:
+
+      node scripts/desktop/updater-harness.mjs --check-only
+      pnpm tauri dev --config '{"plugins":{"updater":{"endpoints":["http://127.0.0.1:7430/latest.json"]}}}'
+
+  `--config` merges on `dev` exactly as it does on `build` (verified against the
+  CLI in this tree, `@tauri-apps/cli` 2.x), so this needs no new runtime switch
+  and adds nothing to the shipped config. Check-only mode serves a well-formed
+  manifest announcing `99.0.0` — above whatever `tauri.conf.json` says, so it
+  reads as newer without lowering the build — and no artifact at all, which is
+  what lets it skip the slow release build the full harness requires.
+
+  Real, through the plugin: the HTTP fetch, the manifest parse including its
+  RFC 3339 `pub_date`, the `{os}-{arch}` lookup, and the version comparison.
+  Not reached, on purpose: the announced URL 404s, so a click fails at the
+  download and signature verification never happens — the manifest's
+  `signature` field is a base64 sentence saying so. Install and restart are
+  untested here. The banner and the 404 log line both say this; a clean run is
+  not an end-to-end pass. For the download, the signature, the install, and the
+  restart, build a real artifact and run the harness without `--check-only`.
+
 #### Verifying the updater before a release exists
 
 Two layers, because the updater has one failure that cannot be repaired after
@@ -307,8 +361,8 @@ can fix it, because no later release can be installed.
   failures being tested: endpoint unreachable, manifest unreadable or
   inapplicable, and signature rejected. `scripts/desktop/updater-manifest.mjs`
   holds the parts worth testing without a key or a server — the `{os}-{arch}`
-  target key the plugin looks up, the manifest fields, the artifact locations —
-  and `updater-harness.test.mjs` covers them.
+  target key the plugin looks up, the manifest fields, the check-only manifest,
+  the artifact locations — and `updater-harness.test.mjs` covers them.
 
   Redirection is a build-time `--config` merge and nothing else. The shipped
   `tauri.conf.json` keeps the GitHub endpoint and gains no switch: a setting that

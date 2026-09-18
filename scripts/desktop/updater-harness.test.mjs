@@ -2,6 +2,9 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import test from "node:test"
 import {
+  CHECK_ONLY_ARTIFACT,
+  CHECK_ONLY_SIGNATURE,
+  checkOnlyManifest,
   defaultArtifacts,
   option,
   releaseManifest,
@@ -46,6 +49,46 @@ test("the served manifest carries every field the plugin's release reader requir
   // `pub_date` is parsed as RFC 3339 before the platform is looked at, so a
   // non-conforming date rejects the whole manifest rather than one platform.
   assert.equal(new Date(manifest.pub_date).toISOString(), manifest.pub_date)
+})
+
+test("a check-only manifest is complete enough to check and honest about the rest", () => {
+  const manifest = checkOnlyManifest({
+    version: "99.0.0",
+    notes: "local",
+    target: "darwin-aarch64",
+    origin: "http://127.0.0.1:7430",
+    published: "2026-09-17T12:00:00.000Z",
+  })
+  // Everything the plugin's *check* reads is genuinely there, in the shape it
+  // reads it: a missing field or a bad date makes the check fail rather than
+  // succeed, which would test nothing.
+  assert.equal(manifest.version, "99.0.0")
+  assert.equal(new Date(manifest.pub_date).toISOString(), manifest.pub_date)
+  assert.deepEqual(Object.keys(manifest.platforms), ["darwin-aarch64"])
+  assert.equal(
+    manifest.platforms["darwin-aarch64"].url,
+    `http://127.0.0.1:7430/${CHECK_ONLY_ARTIFACT}`,
+  )
+  // And the part that is not tested says what it is, in words, in the manifest
+  // itself — so a captured check-only manifest cannot be mistaken for a signed
+  // one by anyone who opens it.
+  assert.match(
+    Buffer.from(manifest.platforms["darwin-aarch64"].signature, "base64").toString(),
+    /not a signature/,
+  )
+  assert.equal(manifest.platforms["darwin-aarch64"].signature, CHECK_ONLY_SIGNATURE)
+})
+
+test("check-only announces a version above the shipped one and says where it stops", () => {
+  const harness = readFileSync("scripts/desktop/updater-harness.mjs", "utf8")
+  // The dev app reports the shipped version, so the announced one has to beat
+  // it for the check to produce an offer at all.
+  assert.ok(
+    Number(harness.match(/checkOnly \? "(\d+)\.0\.0"/)[1]) >
+      Number(config.version.split(".")[0]),
+  )
+  assert.match(harness, /pnpm tauri dev --config/)
+  assert.match(harness, /What this mode does NOT test/)
 })
 
 test("the harness looks for artifacts the release build is configured to produce", () => {

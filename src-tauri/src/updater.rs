@@ -15,10 +15,10 @@
 //!   check_in_background ──spawn──▶ run_check
 //!                                   │      │
 //!                     ReleaseSource ◀┘      └▶ CheckOutcome
-//!                       │        │              │        │
-//!              PluginReleases  fake       TrayOutcome   recorder
-//!                       │                       │
-//!                 PendingUpdate ──────▶ install_and_restart ◀── click
+//!                    │      │       │              │        │
+//!       PluginReleases  Simulated  fake      TrayOutcome   recorder
+//!                    │      │                      │
+//!        PendingUpdate  SimulatedUpdate ─▶ install_and_restart ◀── click
 //! ```
 //!
 //! Both sides of a check are ports. The answer comes off the network and the
@@ -30,7 +30,18 @@
 //! `Checked` is what one check found and `Offer` is what the tray does about
 //! it; [`offer`] is the whole of the rule connecting them, kept pure so the
 //! "say nothing" cases are decided in one readable place.
+//!
+//! `Simulated` is the third source and is compiled only into a debug build: it
+//! answers "yes, `9.9.9`" from `NESSA_FAKE_UPDATE` without a network, so the
+//! decision, the tray item, and the click can be watched in `pnpm app` with
+//! nothing published. It cannot install anything and the click says so. The
+//! *other* way to watch this locally — the real plugin, real HTTP, real
+//! manifest parse, against a server on this machine — needs no code here at
+//! all: it is a `--config` endpoint merge, `scripts/desktop/updater-harness.mjs
+//! --check-only`, and `docs/codebase-structure.md` has both recipes.
 
+#[cfg(debug_assertions)]
+use std::env;
 use std::future::Future;
 use std::sync::Mutex;
 
@@ -159,6 +170,98 @@ impl ReleaseSource for PluginReleases {
     }
 }
 
+/// The variable a debug build reads to pretend a release was published.
+///
+/// Set it to the version to announce — `NESSA_FAKE_UPDATE=9.9.9 pnpm app` — and
+/// the check answers from it instead of asking the endpoint. It is the inner
+/// loop for the decision, the tray item, and the click: no server, no artifact,
+/// no signing key. Nothing it produces can be installed, and it says so.
+#[cfg(debug_assertions)]
+const SIMULATED_UPDATE: &str = "NESSA_FAKE_UPDATE";
+
+/// What [`SIMULATED_UPDATE`] asked a debug build to do.
+///
+/// Decided here, away from the environment and the app handle, so the two ways
+/// of getting the real endpoint back — not setting the variable, and setting it
+/// to something that is not a version — are one readable rule with a test each.
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Simulated {
+    /// Announce this version. The release endpoint is not asked at all.
+    Announce(String),
+    /// A value was set that is not a version. The real endpoint answers, and
+    /// the caller says on stderr that the value was ignored — a silent
+    /// fall-through would read as "the simulation is broken".
+    Ignored(String),
+    /// Nothing was asked for: an ordinary debug run.
+    Off,
+}
+
+/// The one rule for the variable: a `major.minor.patch` of digits is a version
+/// to announce, anything else set is a typo worth reporting, and unset is a
+/// normal run. Deliberately stricter than "non-empty" — the string goes
+/// straight into the tray item's text, and "Update to banana" is not honest
+/// about what a real check would ever produce.
+#[cfg(debug_assertions)]
+fn simulated(requested: Option<&str>) -> Simulated {
+    let Some(requested) = requested else {
+        return Simulated::Off;
+    };
+    let version = requested.trim();
+    if version.is_empty() {
+        return Simulated::Off;
+    }
+
+    let parts: Vec<&str> = version.split('.').collect();
+    let numbered = parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+
+    match numbered {
+        true => Simulated::Announce(version.to_string()),
+        false => Simulated::Ignored(version.to_string()),
+    }
+}
+
+/// A source that answers from [`SIMULATED_UPDATE`] without a network.
+///
+/// Separate from the `FakeReleases` the tests use, and not the same thing: that
+/// one replays any [`Checked`] a test hands it, including failures, and retains
+/// nothing because no click ever follows it. This one exists to drive a running
+/// app, so it does what the real source does — answer, and record what a later
+/// click will find — and what it records is that there is nothing to install.
+/// Widening the test double's `cfg` would put a test fixture in the dev binary
+/// and still leave that second job undone.
+#[cfg(debug_assertions)]
+struct SimulatedReleases {
+    app: AppHandle,
+    version: String,
+}
+
+#[cfg(debug_assertions)]
+impl ReleaseSource for SimulatedReleases {
+    fn check(&self) -> impl Future<Output = Checked> + Send {
+        let app = self.app.clone();
+        let version = self.version.clone();
+        async move {
+            // The real source retains the update a click installs; this retains
+            // the fact that no such update exists, which is what makes the
+            // click able to say so instead of doing nothing.
+            app.manage(SimulatedUpdate(version.clone()));
+            eprintln!(
+                "[nessa] {SIMULATED_UPDATE}={version}: offering a simulated update. \
+                 The release endpoint was not asked and nothing was downloaded."
+            );
+            Checked::Newer { version }
+        }
+    }
+}
+
+/// Managed when a simulated update is offered, so the click can be honest.
+#[cfg(debug_assertions)]
+struct SimulatedUpdate(String);
+
 /// The real outcome: the tray menu, and the app's stderr diagnostics.
 struct TrayOutcome(AppHandle);
 
@@ -217,7 +320,29 @@ fn retain(app: &AppHandle, update: Update) {
 pub fn check_in_background(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        run_check(&PluginReleases(app.clone()), &TrayOutcome(app)).await;
+        let outcome = TrayOutcome(app.clone());
+
+        // Debug builds only, and gone rather than disabled in a release build:
+        // a shipped app that can be told an update exists is a shipped app an
+        // attacker can tell that to. The same shape as `tray.rs`'s setup item.
+        #[cfg(debug_assertions)]
+        match simulated(env::var(SIMULATED_UPDATE).ok().as_deref()) {
+            Simulated::Announce(version) => {
+                let simulated = SimulatedReleases {
+                    app: app.clone(),
+                    version,
+                };
+                run_check(&simulated, &outcome).await;
+                return;
+            }
+            Simulated::Ignored(value) => eprintln!(
+                "[nessa] ignoring {SIMULATED_UPDATE}={value}: not a version like 9.9.9. \
+                 Checking the real release endpoint instead."
+            ),
+            Simulated::Off => {}
+        }
+
+        run_check(&PluginReleases(app), &outcome).await;
     });
 }
 
@@ -246,6 +371,21 @@ async fn run_check(source: &impl ReleaseSource, outcome: &impl CheckOutcome) {
 /// running on the version it has, and the item stays in the menu to be tried
 /// again.
 pub fn install_and_restart(app: &AppHandle) {
+    // A simulated offer has no release behind it, so there is nothing here to
+    // download, install, or restart onto — and the click must say that rather
+    // than return silently, which from the menu is indistinguishable from a
+    // broken item. Nothing is faked: no progress, no restart.
+    #[cfg(debug_assertions)]
+    if let Some(simulated) = app.try_state::<SimulatedUpdate>() {
+        eprintln!(
+            "[nessa] the offer of {} came from {SIMULATED_UPDATE}: there is no release to \
+             install. Nothing was downloaded and the app is not restarting. Use the local \
+             endpoint recipe to exercise a real download.",
+            simulated.0
+        );
+        return;
+    }
+
     let Some(pending) = app.try_state::<PendingUpdate>() else {
         return;
     };
@@ -409,6 +549,67 @@ mod tests {
 
         assert!(outcome.offered().is_empty());
         assert_eq!(outcome.failures(), vec!["connection refused".to_string()]);
+    }
+
+    /// The rule for `NESSA_FAKE_UPDATE`, in the build that is allowed to have
+    /// one. There is no release counterpart to these: in a release build
+    /// [`simulated`] and `SimulatedReleases` are not compiled at all, so a test
+    /// calling them there would not compile either — `cargo clippy -p nessa-app
+    /// --all-targets --release -- -D warnings` is what proves the release arm
+    /// builds clean without them, and a release binary has nothing to consult.
+    #[cfg(debug_assertions)]
+    mod simulation {
+        use super::*;
+
+        #[test]
+        fn a_version_is_announced_without_asking_the_endpoint() {
+            assert_eq!(
+                simulated(Some("9.9.9")),
+                Simulated::Announce("9.9.9".to_string())
+            );
+            // Shells and `.env` files hand over the surrounding spaces too.
+            assert_eq!(
+                simulated(Some("  0.2.0  ")),
+                Simulated::Announce("0.2.0".to_string())
+            );
+        }
+
+        #[test]
+        fn an_unset_or_empty_variable_is_an_ordinary_run() {
+            assert_eq!(simulated(None), Simulated::Off);
+            assert_eq!(simulated(Some("")), Simulated::Off);
+            assert_eq!(simulated(Some("   ")), Simulated::Off);
+        }
+
+        #[test]
+        fn a_value_that_is_not_a_version_falls_through_to_the_real_source() {
+            // Reported rather than obeyed: the value becomes the tray item's
+            // own text, and an item reading "Update to banana" claims something
+            // no real check could ever have found.
+            for garbage in ["banana", "9.9", "9.9.9.9", "v9.9.9", "9.9.x", "9..9"] {
+                assert_eq!(
+                    simulated(Some(garbage)),
+                    Simulated::Ignored(garbage.to_string()),
+                    "{garbage} should not be announced as a version"
+                );
+            }
+        }
+
+        #[test]
+        fn an_announced_version_drives_the_same_offer_the_real_source_would() {
+            // The simulation's whole claim is that it reaches the tray by the
+            // ordinary path, so the decision is checked with the announced
+            // version rather than trusted.
+            let Simulated::Announce(version) = simulated(Some("9.9.9")) else {
+                panic!("9.9.9 is a version");
+            };
+            let outcome = check(Checked::Newer {
+                version: version.clone(),
+            });
+
+            assert_eq!(outcome.offered(), vec![version]);
+            assert!(outcome.failures().is_empty());
+        }
     }
 
     #[test]

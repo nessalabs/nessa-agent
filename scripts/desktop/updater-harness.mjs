@@ -78,6 +78,32 @@
  *   If the click fails and the artifact was *not* requested, the download never
  *   started and the `url` in the manifest is wrong — not the signature.
  *
+ * ## Check-only mode, for a dev run
+ *
+ * A release build is slow and needs the whole bundled runtime, which is a lot
+ * to pay to watch a check happen. `--check-only` serves a well-formed manifest
+ * and no artifact:
+ *
+ *   node scripts/desktop/updater-harness.mjs --check-only
+ *
+ * then, in another terminal, the documented `--config` merge on `dev`:
+ *
+ *   pnpm tauri dev --config '{"plugins":{"updater":{"endpoints":["http://127.0.0.1:7430/latest.json"]}}}'
+ *
+ * The plugin does the whole of its check for real — fetches over HTTP, parses
+ * the manifest, reads `pub_date`, looks up this machine's target key, compares
+ * versions — and the tray grows the item. It stops exactly there. The announced
+ * URL 404s, so a click fails at the download; signature verification is never
+ * reached, and the manifest's `signature` field is an honest sentence saying so
+ * rather than anything that could be mistaken for a signature. Install and
+ * restart are untested in this mode. It is not an end-to-end pass and the
+ * banner it prints says so.
+ *
+ * Neither this nor the full harness is the fastest loop. Nothing here needs a
+ * server to exercise the *decision*, the tray item, and the click: a debug
+ * build reads `NESSA_FAKE_UPDATE=9.9.9` and answers from it with no network at
+ * all (`src-tauri/src/updater.rs`). That path installs nothing and says so.
+ *
  * ## What this cannot tell you
  *
  * Only that the plugin accepts what *this* machine signs and serves. It does
@@ -98,6 +124,8 @@ import {
 import { createServer } from "node:http"
 import { basename, resolve } from "node:path"
 import {
+  CHECK_ONLY_ARTIFACT,
+  checkOnlyManifest,
   defaultArtifacts,
   option,
   releaseManifest,
@@ -144,8 +172,16 @@ const config = JSON.parse(
   readFileSync(resolve(root, "src-tauri/tauri.conf.json"), "utf8"),
 )
 
+// Serve a manifest and nothing else: no artifact, no signing key, no release
+// build. The plugin's check runs for real against it; its install cannot.
+const checkOnly = args.includes("--check-only")
+
 const port = Number(option(args, "port", "7430"))
-const version = option(args, "version", config.version)
+const origin = `http://127.0.0.1:${port}`
+// A check-only run is compared against whatever `pnpm tauri dev` reports, which
+// is the shipped version, so it announces something plainly above it instead of
+// asking for a lowered build.
+const version = option(args, "version", checkOnly ? "99.0.0" : config.version)
 const notes = option(args, "notes", `Local harness build of ${config.productName}.`)
 const target = option(args, "target", updaterTarget(process.platform, process.arch))
 // Low enough that the served manifest is unambiguously newer, and obviously not
@@ -153,61 +189,100 @@ const target = option(args, "target", updaterTarget(process.platform, process.ar
 const buildVersion = option(args, "build-version", "0.0.1")
 
 const named = option(args, "artifact", undefined)
-const candidates = (
-  named ? [named] : defaultArtifacts(process.platform, config.version)
-).map((candidate) => resolve(root, candidate))
-const artifact = candidates.find((candidate) => existsSync(candidate))
-if (!artifact) {
-  console.error(
-    `No updater artifact to serve. Looked for:\n` +
-      `${candidates.map((candidate) => `  ${candidate}`).join("\n")}\n\n` +
-      `Build one first — this deliberately does not, because a release build is slow\n` +
-      `and needs the whole bundled runtime:\n\n` +
-      `  pnpm app:build\n\n` +
-      `then re-run, or pass --artifact <path> if yours is somewhere else.`,
-  )
-  process.exit(1)
-}
-
-// Copied out of the bundle directory before anything is signed: the build in
-// step 3 writes to that same directory and would replace the artifact under the
-// signature about to be made, leaving a manifest describing bytes that are no
-// longer there — which fails as a rejected signature and looks like a key fault.
+const published = new Date().toISOString()
 const served = resolve(root, "target/updater-harness")
 mkdirSync(served, { recursive: true })
-const name = basename(artifact)
-const copy = resolve(served, name)
-copyFileSync(artifact, copy)
 
-const url = `http://localhost:${port}/${encodeURIComponent(name)}`
-const manifest = releaseManifest({
-  version,
-  notes,
-  target,
-  signature: sign(root, copy),
-  url,
-  published: new Date().toISOString(),
-})
+/** In check-only mode: a manifest, an announced name, and no bytes anywhere. */
+function withoutAnArtifact() {
+  return {
+    name: CHECK_ONLY_ARTIFACT,
+    copy: undefined,
+    url: `${origin}/${CHECK_ONLY_ARTIFACT}`,
+    manifest: checkOnlyManifest({ version, notes, target, origin, published }),
+  }
+}
+
+/** The full path: find what a release build produced, sign it, serve it. */
+function withTheBuiltArtifact() {
+  const candidates = (
+    named ? [named] : defaultArtifacts(process.platform, config.version)
+  ).map((candidate) => resolve(root, candidate))
+  const artifact = candidates.find((candidate) => existsSync(candidate))
+  if (!artifact) {
+    console.error(
+      `No updater artifact to serve. Looked for:\n` +
+        `${candidates.map((candidate) => `  ${candidate}`).join("\n")}\n\n` +
+        `Build one first — this deliberately does not, because a release build is slow\n` +
+        `and needs the whole bundled runtime:\n\n` +
+        `  pnpm app:build\n\n` +
+        `then re-run, or pass --artifact <path> if yours is somewhere else.\n\n` +
+        `To exercise only the *check* — real HTTP, real manifest parse, real version\n` +
+        `comparison, no download and no signature verification — no artifact is needed:\n\n` +
+        `  node scripts/desktop/updater-harness.mjs --check-only`,
+    )
+    process.exit(1)
+  }
+
+  // Copied out of the bundle directory before anything is signed: the build in
+  // step 3 writes to that same directory and would replace the artifact under
+  // the signature about to be made, leaving a manifest describing bytes that
+  // are no longer there — which fails as a rejected signature and looks like a
+  // key fault.
+  const name = basename(artifact)
+  const copy = resolve(served, name)
+  copyFileSync(artifact, copy)
+  const url = `${origin}/${encodeURIComponent(name)}`
+
+  return {
+    name,
+    copy,
+    url,
+    manifest: releaseManifest({
+      version,
+      notes,
+      target,
+      signature: sign(root, copy),
+      url,
+      published,
+    }),
+  }
+}
+
+const { name, copy, url, manifest } = checkOnly
+  ? withoutAnArtifact()
+  : withTheBuiltArtifact()
 const manifestBody = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`)
 writeFileSync(resolve(served, "latest.json"), manifestBody)
 
 const endpointConfig = JSON.stringify({
   version: buildVersion,
-  plugins: { updater: { endpoints: [`http://localhost:${port}/latest.json`] } },
+  plugins: { updater: { endpoints: [`${origin}/latest.json`] } },
+})
+const devConfig = JSON.stringify({
+  plugins: { updater: { endpoints: [`${origin}/latest.json`] } },
 })
 
 const server = createServer((request, response) => {
   // Two paths, matched exactly. A harness that serves a directory is a file
   // server pointed at a build tree, which is more than this needs to be.
-  const path = new URL(request.url, `http://localhost:${port}`).pathname
+  const path = new URL(request.url, origin).pathname
   const body =
     path === "/latest.json"
       ? { bytes: manifestBody, type: "application/json" }
-      : decodeURIComponent(path) === `/${name}`
+      : copy && decodeURIComponent(path) === `/${name}`
         ? { bytes: readFileSync(copy), type: "application/octet-stream" }
         : undefined
   console.log(`  ${request.method} ${path} -> ${body ? 200 : 404}`)
   if (!body) {
+    // The one 404 worth explaining: a click on the offered item in check-only
+    // mode. It is the mode working as described, not a fault to chase.
+    if (checkOnly && decodeURIComponent(path) === `/${name}`)
+      console.log(
+        `  ^ the announced artifact does not exist: --check-only serves no bytes, so the\n` +
+          `    download fails here and signature verification is never reached. Run the full\n` +
+          `    harness against a real 'pnpm app:build' artifact to test install and restart.`,
+      )
     response.writeHead(404).end()
     return
   }
@@ -219,22 +294,51 @@ const server = createServer((request, response) => {
 })
 
 server.listen(port, "127.0.0.1", () => {
-  const size = (statSync(copy).size / 1024 / 1024).toFixed(1)
-  console.log(
-    [
-      ``,
-      `Serving ${name} (${size} MiB) as version ${version} for ${target}`,
-      `  manifest  http://localhost:${port}/latest.json`,
-      `  artifact  ${url}`,
-      ``,
-      `Now build the older app that will find it, in another terminal:`,
-      ``,
-      `  pnpm app:build --config '${endpointConfig}'`,
-      ``,
-      `Install and launch what that produces. It reports itself as ${buildVersion}, so the`,
-      `manifest above reads as newer and the tray grows an "Update to ${version}" item.`,
-      `Requests arrive below; Ctrl-C when you are done.`,
-      ``,
-    ].join("\n"),
-  )
+  const banner = checkOnly
+    ? [
+        ``,
+        `CHECK ONLY — announcing version ${version} for ${target}, with no artifact behind it.`,
+        `  manifest  ${origin}/latest.json`,
+        `  artifact  ${url}  (announced; this server answers 404 for it)`,
+        ``,
+        `Point a dev run at it, in another terminal — no release build, no signing key:`,
+        ``,
+        `  pnpm tauri dev --config '${devConfig}'`,
+        ``,
+        `The running app reports itself as ${config.version}, so ${version} reads as newer and the`,
+        `tray grows an "Update to ${version}" item.`,
+        ``,
+        `What this mode tests, for real, through the actual tauri-plugin-updater:`,
+        `  - the endpoint is fetched over HTTP by the plugin, not by anything in this repo`,
+        `  - the manifest is parsed by the plugin, including its RFC 3339 pub_date`,
+        `  - the ${target} key is looked up and the versions are compared by the plugin`,
+        `  - the offer reaches the tray through the app's own check`,
+        ``,
+        `What this mode does NOT test, at all:`,
+        `  - the download: the announced URL 404s here, on purpose`,
+        `  - signature verification: never reached, and the manifest's signature field is a`,
+        `    sentence, not a signature`,
+        `  - install, restart, and coming back up on the new version`,
+        `A clean run here is not an end-to-end pass. For those four, build a real artifact`,
+        `and run this without --check-only.`,
+        ``,
+        `Requests arrive below; Ctrl-C when you are done.`,
+        ``,
+      ]
+    : [
+        ``,
+        `Serving ${name} (${(statSync(copy).size / 1024 / 1024).toFixed(1)} MiB) as version ${version} for ${target}`,
+        `  manifest  ${origin}/latest.json`,
+        `  artifact  ${url}`,
+        ``,
+        `Now build the older app that will find it, in another terminal:`,
+        ``,
+        `  pnpm app:build --config '${endpointConfig}'`,
+        ``,
+        `Install and launch what that produces. It reports itself as ${buildVersion}, so the`,
+        `manifest above reads as newer and the tray grows an "Update to ${version}" item.`,
+        `Requests arrive below; Ctrl-C when you are done.`,
+        ``,
+      ]
+  console.log(banner.join("\n"))
 })
