@@ -270,6 +270,54 @@ rows from the shared Transcript; it does not parse provider wire formats.
   and no `connect-src` entry exist for it. `src-tauri/capabilities/` stays as it
   was.
 
+#### Verifying the updater before a release exists
+
+Two layers, because the updater has one failure that cannot be repaired after
+shipping: if `plugins.updater.pubkey` is not the public half of the key releases
+are signed with, every shipped build rejects every update forever and the only
+remedy is a manual reinstall by every person who installed it. No later release
+can fix it, because no later release can be installed.
+
+- `src-tauri/tests/updater_key_pairing.rs` is the key-pair gate, and it is fast
+  and automatic. It signs a fixture with the release private key through
+  `pnpm tauri signer sign`, then verifies that signature against the pubkey read
+  out of `tauri.conf.json` — read, not copied, so the gate cannot drift from what
+  ships. It verifies through `minisign-verify`, a `[dev-dependencies]` entry and
+  the same crate `tauri-plugin-updater` resolves to at runtime, decoding the
+  base64 wrappers and allowing legacy signatures exactly as the plugin's
+  `verify_signature` does; a pass is the real verifier saying yes. Nothing about
+  it is compiled into the app. `scripts/desktop/config.test.mjs` still checks the
+  key's *shape*, which a well-formed key from the wrong pair passes.
+
+  A *mismatch* fails everywhere, unconditionally. The private key is absent from
+  an ordinary `cargo test`, and that prints a loud multi-line skip naming what
+  went unverified rather than a quiet pass. Wherever the key is present — above
+  all the release workflow, which holds it as `TAURI_SIGNING_PRIVATE_KEY` — set
+  `NESSA_REQUIRE_UPDATER_KEY_PAIRING=1` and the absence becomes a failure too, so
+  a release cannot be built on a runner where the secret silently went missing.
+  A release job must run this test with that variable set before it bundles.
+
+- `scripts/desktop/updater-harness.mjs` is the end-to-end harness, run on demand.
+  It takes an artifact `createUpdaterArtifacts` already produced (it does not
+  build one — that is slow and needs the whole bundled runtime), signs it, copies
+  it clear of the bundle directory, writes a `latest.json` in the plugin's own
+  shape, serves both from `node:http` on localhost, and prints the `pnpm
+  app:build --config` command that builds an older app pointed at it. Its header
+  says what a successful run looks like from the tray and separates the three
+  failures being tested: endpoint unreachable, manifest unreadable or
+  inapplicable, and signature rejected. `scripts/desktop/updater-manifest.mjs`
+  holds the parts worth testing without a key or a server — the `{os}-{arch}`
+  target key the plugin looks up, the manifest fields, the artifact locations —
+  and `updater-harness.test.mjs` covers them.
+
+  Redirection is a build-time `--config` merge and nothing else. The shipped
+  `tauri.conf.json` keeps the GitHub endpoint and gains no switch: a setting that
+  redirects the updater is a setting an attacker can redirect it with.
+
+  What neither layer covers: that the release workflow signs with the key the
+  gate was run against (run the gate *in* that workflow), and GitHub's release
+  hosting, redirects, and TLS, which only a published release exercises.
+
 The first update from a gateway that predates retirement acknowledgement uses a
 single explicit legacy bootout after its sole listening PID matches the exact
 loaded launchd service PID. A listener

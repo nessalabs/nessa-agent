@@ -2524,9 +2524,11 @@ dependencies = [
 name = "nessa-app"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "block2",
  "gtk",
  "libc",
+ "minisign-verify",
  "nessa-local-storage",
  "objc2",
  "objc2-app-kit",
