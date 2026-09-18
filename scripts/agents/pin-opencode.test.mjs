@@ -71,6 +71,22 @@ test("a package holding it as an empty file is not", (t) => {
   assert.equal(containsExecutable(tarball), false)
 })
 
+test("a package whose entries are written with a leading ./ is pinnable", (t) => {
+  // The size is measured by extracting the entry, so the name asked for has to
+  // be the one the archive actually stores. An archive written as `./package`
+  // lists its entries that way, and asking tar for `package/bin/opencode`
+  // instead could come back with nothing.
+  const root = mkdtempSync(join(tmpdir(), "nessa-pin-"))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const contents = join(root, "contents")
+  mkdirSync(join(contents, "package/bin"), { recursive: true })
+  writeFileSync(join(contents, "package/bin/opencode"), "binary")
+  const tarball = join(root, "archive.tgz")
+  execFileSync("tar", ["-czf", tarball, "-C", contents, "./package"])
+
+  assert.equal(containsExecutable(tarball), true)
+})
+
 /** An archive on disk, with npm's own checksums for exactly those bytes. */
 function measured(t, body) {
   const root = mkdtempSync(join(tmpdir(), "nessa-pin-"))

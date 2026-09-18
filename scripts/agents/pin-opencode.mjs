@@ -14,7 +14,13 @@
 // a published archive was replaced, which is not something to wave through.
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { mkdirSync, readFileSync, writeFileSync, createWriteStream, rmSync } from "node:fs"
+import {
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  createWriteStream,
+  rmSync,
+} from "node:fs"
 import { dirname, resolve, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { pipeline } from "node:stream/promises"
@@ -87,18 +93,35 @@ export function containsExecutable(archive) {
   // Listed with the platform's own tar rather than a dependency: this script
   // runs on a maintainer's machine, not in the app.
   const listing = execFileSync("tar", ["-tvzf", archive], { encoding: "utf8" })
-  return listing.split("\n").some((line) => {
+  const named = listing.split("\n").find((line) => {
     const fields = line.trim().split(/\s+/)
     const [mode] = fields
     if (!mode || !mode.startsWith("-")) return false
-    if (fields.at(-1)?.replace(/^\.\//, "") !== EXECUTABLE) return false
-    // `-tvzf` prints mode, owner, size, then the date and the name. Both GNU
-    // and BSD tar put the size third from the left, and an unparsable one is
-    // treated as a listing this check cannot vouch for.
-    const size = Number(fields[2])
-    return Number.isInteger(size) && size > 0
+    return fields.at(-1)?.replace(/^\.\//, "") === EXECUTABLE
   })
+  if (!named) return false
+
+  // The size is measured by extracting the entry, not by reading a column out
+  // of the listing. GNU tar prints `mode owner/group size date name` and BSD
+  // tar prints `mode links owner group size date name`, so the column that
+  // holds the size on one holds a link count on the other — and a check that
+  // reads the link count would refuse every good archive on macOS.
+  //
+  // Extracted under the name the listing gave, rather than under the pin's
+  // spelling of it, so an entry written as `./package/bin/opencode` is asked
+  // for the way it is actually stored.
+  const stored = named.trim().split(/\s+/).at(-1)
+  const body = execFileSync("tar", ["-xzOf", archive, stored], {
+    maxBuffer: MAXIMUM_ENTRY_BYTES,
+  })
+  return body.length > 0
 }
+
+// How much of an entry this script will hold in memory to measure it.
+//
+// The same bound the installer applies to an unpacked executable, so an archive
+// this script accepts is one the installer would not refuse for its size.
+const MAXIMUM_ENTRY_BYTES = 512 * 1024 * 1024
 
 // The `integrity` algorithms this script knows how to check.
 const INTEGRITY_ALGORITHMS = ["sha512", "sha384", "sha256"]
