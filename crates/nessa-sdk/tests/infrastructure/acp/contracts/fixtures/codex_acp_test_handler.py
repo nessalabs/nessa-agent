@@ -85,7 +85,11 @@ for line in sys.stdin:
         # else: a model or a tool policy arriving here would be this binding
         # configuring a session Codex does not configure that way.
         assert set(params) <= {"cwd", "mcpServers", "sessionId"}
-        assert params["cwd"] == str(root)
+        # Compared as resolved paths. `Path.cwd()` is the physical directory,
+        # and on macOS a temporary directory reaches this process as a symlink
+        # into /private, so comparing the strings would fail everywhere the
+        # workspace is correct but spelled the other way.
+        assert pathlib.Path(params["cwd"]).resolve() == root
         assert params["mcpServers"] == []
         if method == "session/resume":
             session = params["sessionId"]
