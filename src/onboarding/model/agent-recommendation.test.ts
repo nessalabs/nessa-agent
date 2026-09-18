@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { offersInstall, recommendAgent } from "./agent-recommendation"
+import { recommendAgent } from "./agent-recommendation"
 import { beginOnboarding, recordReadiness, recordReadinessFailure } from "./onboarding"
 import type { AgentId, AgentReadinessReport, OnboardingState } from "./onboarding"
 
@@ -24,6 +24,19 @@ describe("recommendAgent", () => {
     // The picker has not asked yet. Offering a download here would be acting on
     // a question nobody has answered.
     expect(recommendAgent(beginOnboarding(), INSTALLABLE)).toEqual({ kind: "nothing" })
+  })
+
+  it("suggests nothing when the report says nothing about any agent", () => {
+    // A report is an object, and an empty one is truthy. A gateway answering
+    // `{"agents":[]}` — or one that has gained a readiness state this build
+    // does not recognise, which the adapter drops rather than passes on — is
+    // not a machine with no agents on it.
+    expect(recommendAgent(asked({}), INSTALLABLE)).toEqual({ kind: "nothing" })
+  })
+
+  it("suggests nothing when the report names only agents setup does not list", () => {
+    const state = asked({ nonesuch: "not-installed" } as AgentReadinessReport)
+    expect(recommendAgent(state, INSTALLABLE)).toEqual({ kind: "nothing" })
   })
 
   it("suggests nothing when the ask itself failed", () => {
@@ -99,13 +112,5 @@ describe("recommendAgent", () => {
     const state = asked({ claude: "not-installed" })
     const several = ["codex", "claude"] as readonly AgentId[]
     expect(recommendAgent(state, several)).toEqual({ kind: "install", agent: "claude" })
-  })
-})
-
-describe("offersInstall", () => {
-  it("is true only for an install", () => {
-    expect(offersInstall({ kind: "install", agent: "claude" })).toBe(true)
-    expect(offersInstall({ kind: "choose" })).toBe(false)
-    expect(offersInstall({ kind: "nothing" })).toBe(false)
   })
 })

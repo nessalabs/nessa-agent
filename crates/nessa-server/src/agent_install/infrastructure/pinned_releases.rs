@@ -1,9 +1,12 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+use std::fmt;
 
+use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde::Deserialize;
 
 use crate::agent_install::domain::{
-    ArchiveDigest, ArchivePath, PinRejected, PinnedRelease, ReleasePlatform, ReleaseVersion,
+    AgentName, ArchiveDigest, ArchivePath, ArchiveUrl, PinRejected, PinnedRelease, ReleasePlatform,
+    ReleaseVersion,
 };
 
 /// The releases Nessa has tested, compiled into the server.
@@ -28,7 +31,46 @@ struct ReleaseDocument {
 
 #[derive(Debug, Deserialize)]
 struct PinDocument {
-    agents: HashMap<String, Vec<ReleaseDocument>>,
+    #[serde(deserialize_with = "agents_pinned_once")]
+    agents: BTreeMap<String, Vec<ReleaseDocument>>,
+}
+
+/// Read the agents map, refusing a name that appears twice.
+///
+/// A map decoder resolves a repeated key silently, and which of the two entries
+/// wins is a property of the decoder rather than a decision anybody made. The
+/// value being chosen here is the digest of a binary Nessa will execute, so a
+/// file that says two things is refused rather than resolved.
+fn agents_pinned_once<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, Vec<ReleaseDocument>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct Agents;
+
+    impl<'de> Visitor<'de> for Agents {
+        type Value = BTreeMap<String, Vec<ReleaseDocument>>;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a map of agent names to their pinned releases")
+        }
+
+        fn visit_map<A>(self, mut entries: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut agents = BTreeMap::new();
+            while let Some((agent, releases)) = entries.next_entry::<String, Vec<_>>()? {
+                if agents.insert(agent.clone(), releases).is_some() {
+                    return Err(de::Error::custom(format!("{agent:?} is pinned twice")));
+                }
+            }
+            Ok(agents)
+        }
+    }
+
+    deserializer.deserialize_map(Agents)
 }
 
 /// Why the compiled-in pin file is not usable.
@@ -42,14 +84,23 @@ pub enum PinFileError {
     Malformed(String),
     /// A release in the document is not a valid pin.
     Invalid { agent: String, reason: PinRejected },
+    /// One agent has two releases for the same platform, so which one is
+    /// installed would depend on the order they happen to be written in.
+    PlatformPinnedTwice {
+        agent: String,
+        platform: ReleasePlatform,
+    },
 }
 
-impl std::fmt::Display for PinFileError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for PinFileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Malformed(detail) => write!(f, "the pinned release file is malformed: {detail}"),
             Self::Invalid { agent, reason } => {
                 write!(f, "the pinned release for {agent} is invalid: {reason}")
+            }
+            Self::PlatformPinnedTwice { agent, platform } => {
+                write!(f, "{agent} is pinned twice for {platform}")
             }
         }
     }
@@ -73,26 +124,38 @@ pub fn host_platform() -> ReleasePlatform {
 /// Parsed on each call rather than cached: this is read once when somebody asks
 /// to install an agent, and a lazily initialised global would be a process-wide
 /// handle for no gain.
-pub fn releases_for(agent: &str) -> Result<Vec<PinnedRelease>, PinFileError> {
+pub fn releases_for(agent: &AgentName) -> Result<Vec<PinnedRelease>, PinFileError> {
     let document: PinDocument =
         serde_json::from_str(PINS).map_err(|error| PinFileError::Malformed(error.to_string()))?;
-    let Some(entries) = document.agents.get(agent) else {
+    let Some(entries) = document.agents.get(agent.as_str()) else {
         return Ok(Vec::new());
     };
-    entries
+    let releases = entries
         .iter()
         .map(|entry| {
             release(entry).map_err(|reason| PinFileError::Invalid {
-                agent: agent.to_owned(),
+                agent: agent.to_string(),
                 reason,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    for (index, release) in releases.iter().enumerate() {
+        if releases[..index]
+            .iter()
+            .any(|earlier| earlier.runs_on(release.platform()))
+        {
+            return Err(PinFileError::PlatformPinnedTwice {
+                agent: agent.to_string(),
+                platform: release.platform().clone(),
+            });
+        }
+    }
+    Ok(releases)
 }
 
 /// The tested release for `agent` on `platform`, when there is one.
 pub fn release_for(
-    agent: &str,
+    agent: &AgentName,
     platform: &ReleasePlatform,
 ) -> Result<Option<PinnedRelease>, PinFileError> {
     Ok(releases_for(agent)?
@@ -107,13 +170,13 @@ pub fn release_for(
 /// archive, a plain-http URL — is a build that fails a test rather than a
 /// download that installs something unexpected.
 fn release(entry: &ReleaseDocument) -> Result<PinnedRelease, PinRejected> {
-    PinnedRelease::new(
+    Ok(PinnedRelease::new(
         ReleaseVersion::parse(&entry.version)?,
         ReleasePlatform::new(&entry.operating_system, &entry.architecture)?,
-        &entry.archive_url,
+        ArchiveUrl::parse(&entry.archive_url)?,
         ArchiveDigest::parse(&entry.archive_digest)?,
         ArchivePath::parse(&entry.executable)?,
-    )
+    ))
 }
 
 #[cfg(test)]

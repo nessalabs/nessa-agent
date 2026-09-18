@@ -9,4 +9,4 @@
 mod install;
 mod ports;
 pub use install::{InstallAgentRuntime, InstallFailure, InstalledRuntime};
-pub use ports::{ArchiveSource, InstalledRecord, RuntimeStore, SourceFailure, StoreFailure};
+pub use ports::{ArchiveSource, RuntimeStore, SourceFailure, StagedArchive, StoreFailure};

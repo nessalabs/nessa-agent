@@ -1,9 +1,9 @@
 use std::fmt;
 use std::path::PathBuf;
 
-use super::ports::{ArchiveSource, RuntimeStore, SourceFailure, StoreFailure};
+use super::ports::{ArchiveSource, RuntimeStore, SourceFailure, StagedArchive, StoreFailure};
 use crate::agent_install::domain::{
-    ArchiveRejected, PinnedRelease, ReleasePlatform, ReleaseVersion,
+    AgentName, ArchiveRejected, PinnedRelease, ReleasePlatform, ReleaseVersion,
 };
 
 /// An agent runtime that is on this machine and ready to launch.
@@ -71,6 +71,10 @@ impl std::error::Error for InstallFailure {}
 /// its version. That ordering is the only thing standing between a replaced
 /// download and an executable Nessa will launch, which is why it is in the use
 /// case rather than left to an adapter to remember.
+///
+/// The three middle steps share one open file — see [`StagedArchive`] — so
+/// "the bytes that were measured" and "the bytes that were unpacked" are the
+/// same bytes by construction rather than by both steps agreeing on a path.
 pub struct InstallAgentRuntime<'a> {
     pub source: &'a dyn ArchiveSource,
     pub store: &'a dyn RuntimeStore,
@@ -84,7 +88,7 @@ impl InstallAgentRuntime<'_> {
     /// attempt finished, and a user who presses it twice should not wait twice.
     pub fn execute(
         &self,
-        agent: &str,
+        agent: &AgentName,
         release: &PinnedRelease,
         platform: &ReleasePlatform,
     ) -> Result<InstalledRuntime, InstallFailure> {
@@ -94,12 +98,12 @@ impl InstallAgentRuntime<'_> {
         if let Some(runtime) = self.already_installed(agent, release)? {
             return Ok(runtime);
         }
-        let scratch = self.store.scratch(agent).map_err(InstallFailure::Store)?;
-        let outcome = self.fetch_and_publish(agent, release, &scratch);
+        let mut staged = self.store.stage(agent).map_err(InstallFailure::Store)?;
+        let outcome = self.fetch_and_publish(agent, release, &mut staged);
         // The archive has served its purpose either way, and it is the largest
         // thing this operation writes. Discarding it on the failure path too is
         // what keeps a run of refused downloads from filling the disk.
-        self.store.discard(&scratch);
+        self.store.discard(staged);
         Ok(InstalledRuntime {
             version: release.version().clone(),
             executable: outcome?,
@@ -107,25 +111,23 @@ impl InstallAgentRuntime<'_> {
         })
     }
 
-    /// The runtime already on disk, when it is the pinned version.
+    /// The runtime already on disk, when it is this release.
     ///
     /// A different version installed is not reused and not deleted here: the
     /// pin moving is an install of the new one, and what happens to the old one
     /// is the store's business.
     fn already_installed(
         &self,
-        agent: &str,
+        agent: &AgentName,
         release: &PinnedRelease,
     ) -> Result<Option<InstalledRuntime>, InstallFailure> {
-        let Some(record) = self.store.installed(agent).map_err(InstallFailure::Store)? else {
-            return Ok(None);
-        };
-        if &record.version != release.version() {
-            return Ok(None);
-        }
-        Ok(Some(InstalledRuntime {
-            version: record.version,
-            executable: record.executable,
+        let installed = self
+            .store
+            .installed(agent, release)
+            .map_err(InstallFailure::Store)?;
+        Ok(installed.map(|executable| InstalledRuntime {
+            version: release.version().clone(),
+            executable,
             downloaded: false,
         }))
     }
@@ -134,17 +136,17 @@ impl InstallAgentRuntime<'_> {
     /// if any step of it fails.
     fn fetch_and_publish(
         &self,
-        agent: &str,
+        agent: &AgentName,
         release: &PinnedRelease,
-        scratch: &std::path::Path,
+        staged: &mut StagedArchive,
     ) -> Result<PathBuf, InstallFailure> {
         self.source
-            .download(release.archive_url(), scratch)
+            .download(release.archive_url().as_str(), staged)
             .map_err(InstallFailure::Download)?;
-        let digest = self.store.digest(scratch).map_err(InstallFailure::Store)?;
+        let digest = self.store.digest(staged).map_err(InstallFailure::Store)?;
         release.accept(&digest).map_err(InstallFailure::Rejected)?;
         self.store
-            .publish(agent, release, scratch)
+            .publish(agent, release, staged)
             .map_err(InstallFailure::Store)
     }
 }

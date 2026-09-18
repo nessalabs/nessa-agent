@@ -2,14 +2,16 @@
 //! can be tested without fetching a hundred megabytes or writing to the
 //! developer's own machine.
 
+use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::agent_install::application::{
-    ArchiveSource, InstalledRecord, RuntimeStore, SourceFailure, StoreFailure,
+    ArchiveSource, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
-    ArchiveDigest, ArchivePath, PinnedRelease, ReleasePlatform, ReleaseVersion,
+    AgentName, ArchiveDigest, ArchivePath, ArchiveUrl, PinnedRelease, ReleasePlatform,
+    ReleaseVersion,
 };
 
 /// The digest of an archive no test ever produces, used wherever a test needs a
@@ -21,16 +23,20 @@ pub(crate) const OTHER_DIGEST: &str =
 pub(crate) const PINNED_DIGEST: &str =
     "1111111111111111111111111111111111111111111111111111111111111111";
 
+/// The agent these tests install.
+pub(crate) fn agent() -> AgentName {
+    AgentName::parse("opencode").expect("test agent name is plain")
+}
+
 /// A release pinned for the platform the test says it is running on.
 pub(crate) fn release(version: &str, digest: &str, platform: &ReleasePlatform) -> PinnedRelease {
     PinnedRelease::new(
         ReleaseVersion::parse(version).expect("test version is usable"),
         platform.clone(),
-        "https://example.invalid/runtime.tgz",
+        ArchiveUrl::parse("https://example.invalid/runtime.tgz").expect("test url is fetchable"),
         ArchiveDigest::parse(digest).expect("test digest is usable"),
         ArchivePath::parse("package/bin/opencode").expect("test path is contained"),
     )
-    .expect("test release is well formed")
 }
 
 /// The platform these tests pretend to run on, so that a result never depends
@@ -52,7 +58,7 @@ pub(crate) struct FakeSource {
 }
 
 impl FakeSource {
-    /// A source that succeeds, writing `body` wherever it is pointed.
+    /// A source that succeeds, writing `body` into whatever it is handed.
     pub(crate) fn serving(body: &[u8]) -> Self {
         Self {
             body: Ok(body.to_vec()),
@@ -75,14 +81,17 @@ impl FakeSource {
 }
 
 impl ArchiveSource for FakeSource {
-    fn download(&self, url: &str, destination: &Path) -> Result<(), SourceFailure> {
+    fn download(&self, url: &str, staged: &mut StagedArchive) -> Result<(), SourceFailure> {
         self.calls
             .lock()
             .expect("fake source lock")
             .urls
             .push(url.to_owned());
         let body = self.body.clone()?;
-        std::fs::write(destination, body).expect("fake source writes to a temporary directory");
+        staged
+            .file_mut()
+            .write_all(&body)
+            .expect("fake source writes to a temporary file");
         Ok(())
     }
 }
@@ -92,6 +101,8 @@ impl ArchiveSource for FakeSource {
 pub(crate) struct StoreCalls {
     pub(crate) published: Vec<String>,
     pub(crate) discarded: Vec<PathBuf>,
+    pub(crate) measured: Vec<Vec<u8>>,
+    pub(crate) unpacked: Vec<Vec<u8>>,
 }
 
 /// A store backed by a temporary directory, with its answers fixed in advance.
@@ -100,9 +111,14 @@ pub(crate) struct StoreCalls {
 /// hashes to. That keeps these tests about the *ordering* — that publishing
 /// never happens after a rejection — rather than about SHA-256, which the
 /// adapter's own test covers against a real archive.
+///
+/// It does read the staged file at both steps, though, and remembers what it
+/// read. Tests that care can then assert the thing the ordering is for: that
+/// the bytes measured and the bytes unpacked are the same bytes.
 pub(crate) struct FakeStore {
     root: PathBuf,
-    installed: Result<Option<InstalledRecord>, StoreFailure>,
+    installed: Result<Option<PathBuf>, StoreFailure>,
+    stage: Option<StoreFailure>,
     digest: Result<ArchiveDigest, StoreFailure>,
     publish: Result<PathBuf, StoreFailure>,
     calls: Mutex<StoreCalls>,
@@ -114,21 +130,20 @@ impl FakeStore {
         Self {
             root: root.to_owned(),
             installed: Ok(None),
+            stage: None,
             digest: Ok(ArchiveDigest::parse(PINNED_DIGEST).expect("test digest is usable")),
             publish: Ok(root.join("opencode")),
             calls: Mutex::new(StoreCalls::default()),
         }
     }
 
-    /// A store already holding `version`, with its executable present.
-    pub(crate) fn holding(root: &Path, version: &str) -> Self {
+    /// A store already holding the release under test, with its executable
+    /// present.
+    pub(crate) fn holding(root: &Path) -> Self {
         let executable = root.join("opencode");
         std::fs::write(&executable, b"installed").expect("fake store writes to a temporary root");
         Self {
-            installed: Ok(Some(InstalledRecord {
-                version: ReleaseVersion::parse(version).expect("test version is usable"),
-                executable,
-            })),
+            installed: Ok(Some(executable)),
             ..Self::empty(root)
         }
     }
@@ -151,6 +166,12 @@ impl FakeStore {
         self
     }
 
+    /// The same store, but it cannot make a file to download into.
+    pub(crate) fn failing_to_stage(mut self, failure: StoreFailure) -> Self {
+        self.stage = Some(failure);
+        self
+    }
+
     /// Every agent this store was asked to publish, in order.
     pub(crate) fn published(&self) -> Vec<String> {
         self.calls
@@ -160,7 +181,7 @@ impl FakeStore {
             .clone()
     }
 
-    /// Every scratch path this store was asked to discard.
+    /// Every staged file this store was asked to discard.
     pub(crate) fn discarded(&self) -> Vec<PathBuf> {
         self.calls
             .lock()
@@ -168,40 +189,79 @@ impl FakeStore {
             .discarded
             .clone()
     }
+
+    /// What this store read when it was asked to hash something.
+    pub(crate) fn measured(&self) -> Vec<Vec<u8>> {
+        self.calls.lock().expect("fake store lock").measured.clone()
+    }
+
+    /// What this store read when it was asked to unpack something.
+    pub(crate) fn unpacked(&self) -> Vec<Vec<u8>> {
+        self.calls.lock().expect("fake store lock").unpacked.clone()
+    }
+
+    fn read(&self, staged: &mut StagedArchive) -> Vec<u8> {
+        let file = staged.file_mut();
+        file.rewind().expect("a staged file can be rewound");
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).expect("a staged file reads");
+        bytes
+    }
 }
 
 impl RuntimeStore for FakeStore {
-    fn installed(&self, _agent: &str) -> Result<Option<InstalledRecord>, StoreFailure> {
+    fn installed(
+        &self,
+        _agent: &AgentName,
+        _release: &PinnedRelease,
+    ) -> Result<Option<PathBuf>, StoreFailure> {
         self.installed.clone()
     }
 
-    fn scratch(&self, agent: &str) -> Result<PathBuf, StoreFailure> {
-        Ok(self.root.join(format!("{agent}.download")))
+    fn stage(&self, agent: &AgentName) -> Result<StagedArchive, StoreFailure> {
+        if let Some(failure) = self.stage.clone() {
+            return Err(failure);
+        }
+        let path = self.root.join(format!("{agent}.download"));
+        let file = std::fs::File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .expect("fake store stages in a temporary root");
+        Ok(StagedArchive::new(file, path))
     }
 
-    fn digest(&self, _archive: &Path) -> Result<ArchiveDigest, StoreFailure> {
+    fn digest(&self, staged: &mut StagedArchive) -> Result<ArchiveDigest, StoreFailure> {
+        let bytes = self.read(staged);
+        self.calls
+            .lock()
+            .expect("fake store lock")
+            .measured
+            .push(bytes);
         self.digest.clone()
     }
 
     fn publish(
         &self,
-        agent: &str,
+        agent: &AgentName,
         _release: &PinnedRelease,
-        _archive: &Path,
+        staged: &mut StagedArchive,
     ) -> Result<PathBuf, StoreFailure> {
-        self.calls
-            .lock()
-            .expect("fake store lock")
-            .published
-            .push(agent.to_owned());
+        let bytes = self.read(staged);
+        let mut calls = self.calls.lock().expect("fake store lock");
+        calls.published.push(agent.to_string());
+        calls.unpacked.push(bytes);
+        drop(calls);
         self.publish.clone()
     }
 
-    fn discard(&self, scratch: &Path) {
+    fn discard(&self, staged: StagedArchive) {
         self.calls
             .lock()
             .expect("fake store lock")
             .discarded
-            .push(scratch.to_owned());
+            .push(staged.path().to_owned());
     }
 }

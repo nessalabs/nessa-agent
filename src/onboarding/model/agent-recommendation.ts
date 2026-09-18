@@ -14,7 +14,7 @@
  * naming one here would put that truth in two places that could disagree.
  */
 
-import { AGENT_CHOICES, agentChoice, agentReadiness } from "./onboarding"
+import { AGENT_CHOICES, agentChoice, isChoosable } from "./onboarding"
 import type { AgentId, OnboardingState } from "./onboarding"
 
 /**
@@ -36,13 +36,26 @@ export type AgentRecommendation =
 /**
  * Whether any listed agent is ready to start.
  *
- * Only `ready` counts. Every other state — needing a sign-in, missing, not
- * configured, unsupported, unanswered — is not an agent somebody can use right
- * now, and this deliberately does not enumerate them: a state added later is
- * not ready until somebody decides it is.
+ * `isChoosable` is the same question the picker asks before it lets somebody
+ * select a row, and it is reused rather than restated so that the offer and the
+ * picker cannot come to disagree about what "ready" means.
  */
 function anythingReady(state: OnboardingState): boolean {
-  return AGENT_CHOICES.some((choice) => agentReadiness(state, choice.id) === "ready")
+  return AGENT_CHOICES.some((choice) => isChoosable(state, choice.id))
+}
+
+/**
+ * Whether anybody actually answered about the agents on this machine.
+ *
+ * Not the same question as whether a report arrived. A report is an object, and
+ * an empty one is truthy: a gateway that answers `{"agents":[]}`, or one that
+ * has gained a readiness state this build does not recognise — which the
+ * adapter drops rather than passes on — produces a report that says nothing
+ * about any agent. Treating that as "this machine has no agents" would offer
+ * somebody a large download on the strength of a question nobody answered.
+ */
+function anybodyAnswered(state: OnboardingState): boolean {
+  return AGENT_CHOICES.some((choice) => state.readiness?.[choice.id] !== undefined)
 }
 
 /**
@@ -54,7 +67,7 @@ function anythingReady(state: OnboardingState): boolean {
  * a hundred megabytes on disk and a row in the picker that still cannot be
  * selected.
  */
-function offerable(agent: AgentId): boolean {
+function canBeOffered(agent: AgentId): boolean {
   return agentChoice(agent)?.supported === true
 }
 
@@ -66,24 +79,21 @@ function offerable(agent: AgentId): boolean {
  * agent here keeps that single source of truth on the side that owns it.
  *
  * Deliberately not offered on the strength of a missing answer: a report that
- * never arrived is not evidence that somebody has no agent, and offering a
- * large download to a person whose gateway was briefly unreachable would be
- * acting on a question nobody answered. That is the rule the rest of setup
- * follows, and it is why an unanswered ask reads as no recommendation rather
- * than as an empty machine.
+ * never arrived, or one that arrived saying nothing about any listed agent, is
+ * not evidence that somebody has no agent. Offering a large download to a
+ * person whose gateway was briefly unreachable would be acting on a question
+ * nobody answered. That is the rule the rest of setup follows, and it is why an
+ * unanswered ask reads as no recommendation rather than as an empty machine.
  */
 export function recommendAgent(
   state: OnboardingState,
   installable: readonly AgentId[],
 ): AgentRecommendation {
-  // Nothing reported at all. Not an empty machine: an unasked question.
-  if (!state.readiness) return { kind: "nothing" }
+  // Nobody said anything about any agent. Not an empty machine: an unanswered
+  // question, which reads the same whether the ask failed or came back with
+  // nothing in it.
+  if (!anybodyAnswered(state)) return { kind: "nothing" }
   if (anythingReady(state)) return { kind: "choose" }
-  const offer = installable.find(offerable)
+  const offer = installable.find(canBeOffered)
   return offer ? { kind: "install", agent: offer } : { kind: "nothing" }
-}
-
-/** Whether setup should show an install offer at all. */
-export function offersInstall(recommendation: AgentRecommendation): boolean {
-  return recommendation.kind === "install"
 }

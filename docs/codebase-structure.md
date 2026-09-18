@@ -337,12 +337,53 @@ handler receives the shared reader over it alone via `FromRef`. Tests under
 reader's bounds, the HTTP boundary, the local probe's failure modes, and
 Claude's own sign-in conventions.
 
+## Installing an agent runtime
+
+`crates/nessa-server/src/agent_install/` puts an agent's own runtime on the
+machine at the version Nessa has tested. Claude and Codex are expected to be
+installed already; Opencode is the one Nessa fetches, because it is the agent a
+first-time user can reach with nothing signed in.
+
+`domain/value_objects/` owns what is true before any file exists: `AgentName`,
+which is the identity in this context and is constrained to what can also be a
+directory name; `PinnedRelease` and the values it is made of — `ReleaseVersion`,
+`ReleasePlatform`, `ArchiveUrl`, `ArchiveDigest` and `ArchivePath` — each of
+which refuses its own malformed spellings at construction, so a bad pin is a
+failing test rather than a surprising install. `PinnedRelease::accept` is the
+one comparison between what was pinned and what arrived.
+
+`application/` owns the order and none of the effects: `InstallAgentRuntime`
+does installed-already, then download, hash, accept, publish, and never unpacks
+an archive that was not accepted. Its two ports are `ArchiveSource` (the
+network) and `RuntimeStore` (this machine's disk), whose `StagedArchive` carries
+an open file rather than a path, so the bytes that are measured are the bytes
+that are unpacked.
+
+`infrastructure/` holds the three outside things: `pinned_releases.rs` reads
+`data/agent-releases.json`, compiled in so the tested version cannot depend on
+what is beside the binary; `https_archives.rs` fetches over HTTPS only, through
+a bounded redirect chain and a bounded body; `managed_runtimes.rs` keeps
+installed runtimes under one private directory, unpacking each version beside
+the last and writing its record durably once the executable is really there.
+
+`composition/install_command.rs` wires those for `nessa install-agent NAME` and
+reports one line of JSON on stdout. `scripts/agents/pin-opencode.mjs` regenerates
+the pin file by downloading and hashing every platform's archive. Tests under
+`tests/agent_install/` split the domain's rules, the ordering, the two adapters
+and the command's output.
+
 ## Command-line surface
 
 The `nessa-server` crate builds the `nessa` executable. `cli/entrypoint/` parses
 commands, `cli/application/` coordinates token requests through its gateway port,
 and `cli/infrastructure/` implements the bounded local WebSocket adapter.
 `composition/cli.rs` wires the adapter, clock, identities and stdout/stderr.
+`install-agent` is parsed here too — its agent name is read into `AgentName` at
+this edge, so nothing further in holds a name it still has to doubt — and
+`composition/install_command.rs` runs it on a blocking thread, because the work
+is a download, a hash and an unpack and the HTTP client it uses declines to run
+inside the async runtime. See [installing an agent
+runtime](#installing-an-agent-runtime).
 Tests mirror those responsibilities under `tests/cli/`; `scripts/smoke-auth.mjs`
 checks actual process output and authenticated server effects. Offline bootstrap
 remains in `composition/auth_command.rs`; it requires explicit `--local` selection.

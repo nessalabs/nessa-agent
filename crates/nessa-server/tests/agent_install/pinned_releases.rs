@@ -1,4 +1,11 @@
 use super::*;
+use std::collections::BTreeSet;
+
+use crate::agent_install::domain::AgentName;
+
+fn opencode() -> AgentName {
+    AgentName::parse("opencode").expect("a plain agent name")
+}
 
 /// Every platform the pin file is expected to cover.
 ///
@@ -18,13 +25,13 @@ fn the_compiled_in_pins_are_valid() {
     // through the domain's rules here means a hand-edited digest, an http URL,
     // or a path that escapes the archive is a failing test rather than a
     // surprise at install time on someone's machine.
-    let releases = releases_for("opencode").expect("the pinned releases parse");
+    let releases = releases_for(&opencode()).expect("the pinned releases parse");
     assert!(!releases.is_empty(), "opencode has at least one pin");
 }
 
 #[test]
 fn every_supported_platform_is_pinned() {
-    let releases = releases_for("opencode").expect("the pinned releases parse");
+    let releases = releases_for(&opencode()).expect("the pinned releases parse");
     for (operating_system, architecture) in COVERED {
         let platform =
             ReleasePlatform::new(operating_system, architecture).expect("usable platform");
@@ -39,8 +46,8 @@ fn every_supported_platform_is_pinned() {
 fn every_pin_names_one_version() {
     // One version across platforms is what makes "the version Nessa tested" a
     // single answer rather than four.
-    let releases = releases_for("opencode").expect("the pinned releases parse");
-    let versions: std::collections::BTreeSet<_> = releases
+    let releases = releases_for(&opencode()).expect("the pinned releases parse");
+    let versions: BTreeSet<_> = releases
         .iter()
         .map(|release| release.version().as_str())
         .collect();
@@ -53,10 +60,10 @@ fn every_pin_names_one_version() {
 
 #[test]
 fn every_pin_is_fetched_over_https() {
-    let releases = releases_for("opencode").expect("the pinned releases parse");
+    let releases = releases_for(&opencode()).expect("the pinned releases parse");
     for release in releases {
         assert!(
-            release.archive_url().starts_with("https://"),
+            release.archive_url().as_str().starts_with("https://"),
             "{} is not https",
             release.archive_url()
         );
@@ -67,7 +74,7 @@ fn every_pin_is_fetched_over_https() {
 fn each_platform_is_pinned_once() {
     // Two pins for one platform would make which archive gets installed depend
     // on the order of the file.
-    let releases = releases_for("opencode").expect("the pinned releases parse");
+    let releases = releases_for(&opencode()).expect("the pinned releases parse");
     for (operating_system, architecture) in COVERED {
         let platform =
             ReleasePlatform::new(operating_system, architecture).expect("usable platform");
@@ -83,10 +90,10 @@ fn each_platform_is_pinned_once() {
 fn each_platform_has_its_own_archive() {
     // Four platforms sharing one digest would mean the generator hashed the
     // same download four times.
-    let releases = releases_for("opencode").expect("the pinned releases parse");
-    let urls: std::collections::BTreeSet<_> = releases
+    let releases = releases_for(&opencode()).expect("the pinned releases parse");
+    let urls: BTreeSet<_> = releases
         .iter()
-        .map(|release| release.archive_url())
+        .map(|release| release.archive_url().as_str())
         .collect();
     assert_eq!(urls.len(), releases.len(), "two pins share an archive");
 }
@@ -95,13 +102,14 @@ fn each_platform_has_its_own_archive() {
 fn an_agent_with_no_pins_has_no_releases() {
     // Claude and Codex are not installed by Nessa. Asking is not an error; the
     // answer is that there is nothing to install.
-    assert_eq!(releases_for("claude"), Ok(Vec::new()));
+    let claude = AgentName::parse("claude").expect("a plain agent name");
+    assert_eq!(releases_for(&claude), Ok(Vec::new()));
 }
 
 #[test]
 fn a_release_is_found_by_platform() {
     let platform = ReleasePlatform::new("macos", "aarch64").expect("usable platform");
-    let release = release_for("opencode", &platform)
+    let release = release_for(&opencode(), &platform)
         .expect("the pinned releases parse")
         .expect("macos arm64 is pinned");
     assert!(release.runs_on(&platform));
@@ -110,7 +118,22 @@ fn a_release_is_found_by_platform() {
 #[test]
 fn an_unpinned_platform_has_no_release() {
     let platform = ReleasePlatform::new("windows", "x86_64").expect("usable platform");
-    assert_eq!(release_for("opencode", &platform), Ok(None));
+    assert_eq!(release_for(&opencode(), &platform), Ok(None));
+}
+
+#[test]
+fn an_agent_pinned_twice_is_refused_rather_than_resolved() {
+    // A repeated key is resolved silently by a map decoder, and which of the
+    // two wins is a property of the decoder rather than a decision anybody
+    // made. The value being chosen is the digest of a binary Nessa will run.
+    let twice = r#"{"agents":{"opencode":[],"opencode":[]}}"#;
+    let parsed: Result<serde_json::Value, _> = serde_json::from_str(twice);
+    assert!(parsed.is_ok(), "the fixture is well-formed json");
+    let document: Result<PinDocument, _> = serde_json::from_str(twice);
+    assert!(
+        document.is_err(),
+        "an agent pinned twice was resolved instead of refused"
+    );
 }
 
 #[test]

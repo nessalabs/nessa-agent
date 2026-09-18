@@ -1,4 +1,33 @@
 use super::*;
+use std::path::Path;
+
+use crate::agent_install::application::{InstalledRuntime, StoreFailure};
+use crate::agent_install::domain::{ArchiveDigest, ArchiveRejected, ReleaseVersion};
+
+fn opencode() -> AgentName {
+    AgentName::parse("opencode").expect("a plain agent name")
+}
+
+fn digest(byte: char) -> ArchiveDigest {
+    ArchiveDigest::parse(&std::iter::repeat_n(byte, 64).collect::<String>())
+        .expect("a run of one hex character is a digest")
+}
+
+fn rejection() -> ArchiveRejected {
+    let platform = host_platform();
+    let release = crate::agent_install::domain::PinnedRelease::new(
+        ReleaseVersion::parse("1.0.0").expect("usable version"),
+        platform,
+        crate::agent_install::domain::ArchiveUrl::parse("https://registry.example/runtime.tgz")
+            .expect("a fetchable url"),
+        digest('a'),
+        crate::agent_install::domain::ArchivePath::parse("package/bin/opencode")
+            .expect("contained path"),
+    );
+    release
+        .accept(&digest('b'))
+        .expect_err("another archive is not the pinned one")
+}
 
 /// Install the pinned Opencode release the way the command really does it:
 /// through the async runtime this process starts with.
@@ -28,19 +57,13 @@ fn installs_from_inside_the_runtime() {
             // the task outside `block_on` would be a different thing entirely —
             // `spawn_blocking` needs a runtime context to be called at all.
             let root = root.path().to_owned();
-            tokio::task::spawn_blocking(move || install("opencode", &root)).await
+            tokio::task::spawn_blocking(move || install(&opencode(), &root)).await
         })
         .expect("the installer finishes")
         .expect("the pinned release installs");
 
-    assert_eq!(installed["agent"], "opencode");
-    assert_eq!(installed["downloaded"], true);
-    assert!(std::path::Path::new(
-        installed["executable"]
-            .as_str()
-            .expect("an executable path")
-    )
-    .is_file());
+    assert!(installed.downloaded);
+    assert!(installed.executable.is_file());
 }
 
 #[test]
@@ -49,7 +72,8 @@ fn an_agent_nessa_does_not_install_is_named_as_such() {
     // install one is a mistake worth a clear answer rather than a download that
     // fails obscurely — and it must not touch the network to say so.
     let root = tempfile::tempdir().expect("temporary root");
-    let failure = install("claude", root.path()).expect_err("claude is not installed by nessa");
+    let claude = AgentName::parse("claude").expect("a plain agent name");
+    let failure = install(&claude, root.path()).expect_err("claude is not installed by nessa");
     assert!(
         failure.to_string().contains("not an agent nessa installs"),
         "unhelpful message: {failure}"
@@ -57,11 +81,108 @@ fn an_agent_nessa_does_not_install_is_named_as_such() {
 }
 
 #[test]
+fn an_agent_with_no_build_for_this_machine_is_told_so() {
+    // The opposite message: the agent is one Nessa installs, this machine is
+    // just not one there is a tested build for. Telling that person Opencode
+    // "is not an agent nessa installs" would be false.
+    let elsewhere = ReleasePlatform::new("plan9", "sparc64").expect("usable platform");
+    let failure = pinned(&opencode(), &elsewhere).expect_err("plan9 is not a pinned platform");
+    let message = failure.to_string();
+    assert!(
+        message.contains("no tested opencode release") && message.contains("plan9"),
+        "unhelpful message: {message}"
+    );
+}
+
+#[test]
 fn nothing_is_written_for_an_agent_with_no_release() {
     let root = tempfile::tempdir().expect("temporary root");
-    let _ = install("claude", root.path());
+    let claude = AgentName::parse("claude").expect("a plain agent name");
+    let _ = install(&claude, root.path());
     assert!(
         !root.path().join("claude").exists(),
         "a refused install left a directory behind"
     );
+}
+
+#[test]
+fn a_rejected_archive_is_the_one_failure_that_says_not_to_retry() {
+    // The whole reason the install use case reports typed failures. A digest
+    // that did not match is not a bad connection, and the last line somebody
+    // reads should not invite them to run the command again.
+    let retry = explain(&InstallFailure::Download(SourceFailure::Unreachable(
+        "timed out".into(),
+    )));
+    assert!(retry.contains("try again"), "unhelpful message: {retry}");
+
+    let stop = explain(&InstallFailure::Rejected(rejection()));
+    assert!(!stop.contains("try again"), "misleading message: {stop}");
+    assert!(stop.contains("not worth retrying"), "unhelpful: {stop}");
+}
+
+#[test]
+fn a_withdrawn_release_is_distinguished_from_a_bad_connection() {
+    let withdrawn = explain(&InstallFailure::Download(SourceFailure::Refused(404)));
+    assert!(withdrawn.contains("404"), "unhelpful message: {withdrawn}");
+    assert!(
+        withdrawn.contains("withdrawn"),
+        "unhelpful message: {withdrawn}"
+    );
+}
+
+#[test]
+fn a_failure_says_that_nothing_was_installed() {
+    // Somebody whose install failed needs to know whether they have half a
+    // runtime on the machine.
+    for failure in [
+        InstallFailure::Download(SourceFailure::Unreachable("offline".into())),
+        InstallFailure::Rejected(rejection()),
+        InstallFailure::Store(StoreFailure::Unwritable("no room".into())),
+    ] {
+        let message = explain(&failure);
+        assert!(
+            message.contains("nothing was installed"),
+            "{failure:?} does not say whether anything was installed: {message}"
+        );
+    }
+}
+
+#[test]
+fn what_the_command_prints_is_one_line_of_json() {
+    // The output is a contract: this command is meant to be read by the app as
+    // well as by a person, and a second line or a missing newline breaks a
+    // reader that takes it a line at a time.
+    let installed = InstalledRuntime {
+        version: ReleaseVersion::parse("1.18.31").expect("usable version"),
+        executable: Path::new("/tmp/agents/opencode/1.18.31/opencode").to_owned(),
+        downloaded: true,
+    };
+    let mut written = Vec::new();
+
+    write_report(&mut written, &report(&opencode(), &installed)).expect("the report is written");
+
+    let text = String::from_utf8(written).expect("the report is text");
+    assert!(text.ends_with('\n'), "the report is not a line: {text:?}");
+    assert_eq!(text.lines().count(), 1, "the report is more than one line");
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("the report is json");
+    assert_eq!(parsed["agent"], "opencode");
+    assert_eq!(parsed["version"], "1.18.31");
+    assert_eq!(
+        parsed["executable"],
+        "/tmp/agents/opencode/1.18.31/opencode"
+    );
+    assert_eq!(parsed["downloaded"], true);
+}
+
+#[test]
+fn an_install_that_downloaded_nothing_says_so() {
+    // The difference between "downloaded a hundred megabytes" and "looked at a
+    // directory", which a surface reading this has no other way to know.
+    let installed = InstalledRuntime {
+        version: ReleaseVersion::parse("1.18.31").expect("usable version"),
+        executable: Path::new("/tmp/agents/opencode/1.18.31/opencode").to_owned(),
+        downloaded: false,
+    };
+
+    assert_eq!(report(&opencode(), &installed)["downloaded"], false);
 }

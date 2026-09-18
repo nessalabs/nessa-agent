@@ -1,7 +1,8 @@
 use std::fmt;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use crate::agent_install::domain::{ArchiveDigest, PinnedRelease, ReleaseVersion};
+use crate::agent_install::domain::{AgentName, ArchiveDigest, PinnedRelease};
 
 /// Why an archive could not be fetched.
 ///
@@ -15,6 +16,16 @@ pub enum SourceFailure {
     /// Something answered and said no. Carries the status so a 404 — the pin
     /// naming a release that no longer exists — is distinguishable from a 503.
     Refused(u16),
+    /// The response kept coming past any size an agent runtime is. Not a
+    /// rejection of the archive — nothing has been measured yet — but a refusal
+    /// to keep filling a disk on the strength of a `Content-Length` nobody
+    /// checked.
+    TooLarge(u64),
+    /// The bytes arrived and this machine could not keep them: a full disk, or
+    /// a file that stopped being writable part-way. Its own variant because
+    /// telling somebody the download could not be reached when their disk is
+    /// full sends them to look at the wrong thing.
+    NotStored(String),
 }
 
 impl fmt::Display for SourceFailure {
@@ -23,6 +34,12 @@ impl fmt::Display for SourceFailure {
             Self::Unreachable(detail) => write!(f, "could not reach the release archive: {detail}"),
             Self::Refused(status) => {
                 write!(f, "the release archive was refused with status {status}")
+            }
+            Self::TooLarge(limit) => {
+                write!(f, "the release archive is larger than {limit} bytes")
+            }
+            Self::NotStored(detail) => {
+                write!(f, "could not store the release archive: {detail}")
             }
         }
     }
@@ -61,15 +78,51 @@ impl fmt::Display for StoreFailure {
 
 impl std::error::Error for StoreFailure {}
 
-/// An agent runtime already present on this machine.
+/// The private file one install downloads its archive into.
 ///
-/// Both halves together: a version with no executable beside it is not an
-/// installation, and an executable Nessa cannot name a version for is not one
-/// it can say it tested.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InstalledRecord {
-    pub version: ReleaseVersion,
-    pub executable: PathBuf,
+/// An open handle rather than a path, and that is the whole point of the type.
+/// The order this context exists to guarantee is download, measure, accept,
+/// unpack: a *path* can name a different file at each of those steps, so a
+/// digest taken from one open and an unpack from another prove nothing about
+/// each other. One handle, opened once, cannot come apart that way.
+///
+/// The store creates it exclusively, and where the platform allows it lets go
+/// of the name at once: an open file with no name is one nothing else can
+/// reach, to truncate between the hash and the unpack or otherwise. Two installs
+/// running at the same time therefore stage into two files rather than over one
+/// another.
+///
+/// The use case never reads or writes it — it only passes it along in order,
+/// and hands it back to be discarded.
+#[derive(Debug)]
+pub struct StagedArchive {
+    file: File,
+    path: PathBuf,
+}
+
+impl StagedArchive {
+    /// Take ownership of a file the store has just created for this install.
+    ///
+    /// For store adapters. The file is expected to be private, empty, and
+    /// reachable by no name anything else knows.
+    pub fn new(file: File, path: PathBuf) -> Self {
+        Self { file, path }
+    }
+
+    /// The handle every step reads and writes through.
+    pub fn file_mut(&mut self) -> &mut File {
+        &mut self.file
+    }
+
+    /// The name the file was created under.
+    ///
+    /// Not a name that necessarily still refers to it: a store is expected to
+    /// release it as soon as the file exists. It is kept so that a store which
+    /// cannot do that has something to remove, and so a diagnostic can say
+    /// where the download was.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 /// Where release archives come from.
@@ -78,16 +131,16 @@ pub struct InstalledRecord {
 /// network: every test in this context substitutes an archive that is already
 /// on disk, or a failure, and none of them reaches the internet.
 ///
-/// The archive is written to a path rather than returned as bytes because these
-/// archives are large — a runtime is on the order of a hundred megabytes — and
-/// holding one in memory to hash it and then again to unpack it is a cost with
-/// nothing to show for it.
+/// The archive is written into a file rather than returned as bytes because
+/// these archives are large — a runtime is on the order of a hundred megabytes —
+/// and holding one in memory to hash it and then again to unpack it is a cost
+/// with nothing to show for it.
 pub trait ArchiveSource: Send + Sync {
-    /// Fetch `url` into `destination`, replacing anything already there.
+    /// Fetch `url` into `staged`, which is empty when this is called.
     ///
-    /// A failure leaves nothing at `destination` that a caller should treat as
-    /// an archive; the caller is expected to discard the path either way.
-    fn download(&self, url: &str, destination: &Path) -> Result<(), SourceFailure>;
+    /// A failure may leave bytes in `staged`; the caller discards it either way
+    /// and never asks for its digest.
+    fn download(&self, url: &str, staged: &mut StagedArchive) -> Result<(), SourceFailure>;
 }
 
 /// Where installed runtimes live on this machine.
@@ -99,45 +152,60 @@ pub trait ArchiveSource: Send + Sync {
 /// because the point of the type is that an agent runtime can only be put in
 /// the one place Nessa manages.
 pub trait RuntimeStore: Send + Sync {
-    /// What is installed for `agent` right now.
+    /// Where `release` is already installed for `agent`, if it really is.
     ///
-    /// `None` is a real answer — nothing usable is installed — and is what
+    /// `None` is a real answer — this release is not installed — and is what
     /// makes a second install of the same pin free.
     ///
-    /// The implementation reports `Some` only when the recorded version *and*
-    /// the executable it names are both really there. Answering from the record
-    /// alone would let a half-finished install, or one whose executable was
-    /// since deleted, be reported as a runtime Nessa can launch. Keeping that
-    /// check here rather than at the call site is what lets the use case above
-    /// touch no files at all.
-    fn installed(&self, agent: &str) -> Result<Option<InstalledRecord>, StoreFailure>;
+    /// Deliberately asked about one release rather than "what is installed":
+    /// the only thing a caller can do with the answer is skip a download it
+    /// would otherwise start, and a store that answered more generally would be
+    /// handing out a launch path for a runtime nobody named.
+    ///
+    /// The implementation reports `Some` only when what it recorded agrees with
+    /// `release` on both the version and the executable, and when that
+    /// executable is really on the disk. Answering from the record alone would
+    /// let a half-finished install, or one whose executable was since deleted,
+    /// be reported as a runtime Nessa can launch. Keeping those checks here
+    /// rather than at the call site is what lets the use case above touch no
+    /// files.
+    fn installed(
+        &self,
+        agent: &AgentName,
+        release: &PinnedRelease,
+    ) -> Result<Option<PathBuf>, StoreFailure>;
 
-    /// A private path this install may download an archive into.
+    /// Create a private file this install may download into.
     ///
     /// Owned by the store rather than chosen by the caller so that a partial
-    /// download is always somewhere the store knows how to clean up, and never
-    /// beside the executable that is still in use.
-    fn scratch(&self, agent: &str) -> Result<PathBuf, StoreFailure>;
+    /// download is always somewhere the store knows how to clean up, never
+    /// beside the executable that is still in use, and never a name a second
+    /// install would pick too.
+    fn stage(&self, agent: &AgentName) -> Result<StagedArchive, StoreFailure>;
 
-    /// The SHA-256 of a file already on disk.
-    fn digest(&self, archive: &Path) -> Result<ArchiveDigest, StoreFailure>;
+    /// The SHA-256 of what has been staged.
+    fn digest(&self, staged: &mut StagedArchive) -> Result<ArchiveDigest, StoreFailure>;
 
-    /// Unpack the release's executable out of `archive` and make it the
+    /// Unpack the release's executable out of `staged` and make it the
     /// installed runtime for `agent`, returning where it now is.
     ///
-    /// Called only after [`PinnedRelease::accept`] has passed, so an
-    /// implementation may assume the archive is the pinned one. It may not
-    /// assume anything about its *contents*: the executable named by the pin
-    /// can still be absent, which is [`StoreFailure::MissingExecutable`].
+    /// Called only after [`PinnedRelease::accept`] has passed, and given the
+    /// same open file that was measured, so an implementation may assume it is
+    /// unpacking the pinned bytes. It may not assume anything about their
+    /// *contents*: the executable named by the pin can still be absent, which
+    /// is [`StoreFailure::MissingExecutable`].
+    ///
+    /// Durable on return: an executable this reports is one a machine that
+    /// loses power immediately afterwards still has.
     fn publish(
         &self,
-        agent: &str,
+        agent: &AgentName,
         release: &PinnedRelease,
-        archive: &Path,
+        staged: &mut StagedArchive,
     ) -> Result<PathBuf, StoreFailure>;
 
-    /// Forget a scratch download. Never fails the install: a leftover file in a
+    /// Forget a staged download. Never fails the install: a leftover file in a
     /// directory Nessa owns is survivable, and reporting it would turn a
     /// successful install into a failed one.
-    fn discard(&self, scratch: &Path);
+    fn discard(&self, staged: StagedArchive);
 }

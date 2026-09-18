@@ -1,3 +1,4 @@
+use crate::agent_install::domain::AgentName;
 use crate::cli::entrypoint::{parse, Command};
 fn args(words: &[&str]) -> Vec<String> {
     words.iter().map(|s| (*s).into()).collect()
@@ -62,7 +63,7 @@ fn install_agent_names_one_agent() {
     assert_eq!(
         parse(&args(&["install-agent", "opencode"])),
         Ok(Command::InstallAgent {
-            agent: "opencode".into()
+            agent: AgentName::parse("opencode").expect("a plain agent name")
         })
     );
 }
@@ -81,8 +82,18 @@ fn install_agent_refuses_a_name_that_could_be_a_path() {
 
 #[test]
 fn install_agent_wants_exactly_one_agent() {
-    assert!(parse(&args(&["install-agent"])).is_err());
-    assert!(parse(&args(&["install-agent", "opencode", "codex"])).is_err());
+    // Named rather than answered with the whole help text: somebody who typed
+    // the command already knows it exists and needs the one thing they left out.
+    for words in [
+        vec!["install-agent"],
+        vec!["install-agent", "opencode", "codex"],
+    ] {
+        let refusal = parse(&args(&words)).expect_err("{words:?} names no single agent");
+        assert!(
+            refusal.contains("one agent name"),
+            "unhelpful message for {words:?}: {refusal}"
+        );
+    }
 }
 
 #[test]

@@ -1,9 +1,7 @@
 use super::*;
 use crate::agent_install_test_support::{
-    platform, release, FakeSource, FakeStore, OTHER_DIGEST, PINNED_DIGEST,
+    agent, platform, release, FakeSource, FakeStore, OTHER_DIGEST, PINNED_DIGEST,
 };
-
-const AGENT: &str = "opencode";
 
 #[test]
 fn a_matching_archive_is_published() {
@@ -17,7 +15,7 @@ fn a_matching_archive_is_published() {
         store: &store,
     }
     .execute(
-        AGENT,
+        &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &platform,
     )
@@ -25,7 +23,7 @@ fn a_matching_archive_is_published() {
 
     assert_eq!(installed.version.as_str(), "1.18.31");
     assert!(installed.downloaded);
-    assert_eq!(store.published(), vec![AGENT.to_string()]);
+    assert_eq!(store.published(), vec!["opencode".to_string()]);
 }
 
 #[test]
@@ -43,7 +41,7 @@ fn a_mismatched_archive_is_never_unpacked() {
         store: &store,
     }
     .execute(
-        AGENT,
+        &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &platform,
     )
@@ -51,8 +49,8 @@ fn a_mismatched_archive_is_never_unpacked() {
 
     match failure {
         InstallFailure::Rejected(rejection) => {
-            assert_eq!(rejection.expected.as_str(), PINNED_DIGEST);
-            assert_eq!(rejection.actual.as_str(), OTHER_DIGEST);
+            assert_eq!(rejection.expected().as_str(), PINNED_DIGEST);
+            assert_eq!(rejection.actual().as_str(), OTHER_DIGEST);
         }
         other => panic!("expected a rejection, got {other:?}"),
     }
@@ -76,7 +74,7 @@ fn a_rejected_archive_is_discarded() {
         store: &store,
     }
     .execute(
-        AGENT,
+        &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &platform,
     );
@@ -96,7 +94,7 @@ fn a_successful_install_discards_its_archive_too() {
         store: &store,
     }
     .execute(
-        AGENT,
+        &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &platform,
     )
@@ -109,7 +107,7 @@ fn a_successful_install_discards_its_archive_too() {
 fn installing_what_is_already_installed_downloads_nothing() {
     let root = tempfile::tempdir().expect("temporary root");
     let source = FakeSource::serving(b"archive bytes");
-    let store = FakeStore::holding(root.path(), "1.18.31");
+    let store = FakeStore::holding(root.path());
     let platform = platform();
 
     let installed = InstallAgentRuntime {
@@ -117,7 +115,7 @@ fn installing_what_is_already_installed_downloads_nothing() {
         store: &store,
     }
     .execute(
-        AGENT,
+        &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &platform,
     )
@@ -132,12 +130,13 @@ fn installing_what_is_already_installed_downloads_nothing() {
 }
 
 #[test]
-fn a_different_installed_version_is_replaced() {
-    // The pin moving is an install. An older runtime sitting there is not a
-    // reason to skip the one Nessa has now tested.
+fn a_release_the_store_does_not_hold_is_downloaded() {
+    // The store answers about one release, so "nothing installed" here covers
+    // an empty machine and one holding a different version alike. Either way
+    // the pinned release is fetched.
     let root = tempfile::tempdir().expect("temporary root");
     let source = FakeSource::serving(b"archive bytes");
-    let store = FakeStore::holding(root.path(), "1.17.0");
+    let store = FakeStore::empty(root.path());
     let platform = platform();
 
     let installed = InstallAgentRuntime {
@@ -145,7 +144,7 @@ fn a_different_installed_version_is_replaced() {
         store: &store,
     }
     .execute(
-        AGENT,
+        &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &platform,
     )
@@ -154,6 +153,60 @@ fn a_different_installed_version_is_replaced() {
     assert!(installed.downloaded);
     assert_eq!(installed.version.as_str(), "1.18.31");
     assert_eq!(source.requested().len(), 1);
+}
+
+#[test]
+fn what_is_measured_is_what_is_unpacked() {
+    // The reason the three middle steps share one open file. A store that was
+    // handed a path could be measuring one file and unpacking another, and
+    // every assertion about ordering above would still pass.
+    let root = tempfile::tempdir().expect("temporary root");
+    let source = FakeSource::serving(b"archive bytes");
+    let store = FakeStore::empty(root.path());
+    let platform = platform();
+
+    InstallAgentRuntime {
+        source: &source,
+        store: &store,
+    }
+    .execute(
+        &agent(),
+        &release("1.18.31", PINNED_DIGEST, &platform),
+        &platform,
+    )
+    .expect("a matching archive installs");
+
+    assert_eq!(store.measured(), vec![b"archive bytes".to_vec()]);
+    assert_eq!(store.unpacked(), store.measured());
+}
+
+#[test]
+fn a_store_that_cannot_stage_a_download_fails_before_fetching() {
+    // No file to download into is not a network problem, and asking for a
+    // hundred megabytes with nowhere to put them helps nobody.
+    let root = tempfile::tempdir().expect("temporary root");
+    let source = FakeSource::serving(b"archive bytes");
+    let unwritable = StoreFailure::Unwritable("no room".into());
+    let store = FakeStore::empty(root.path()).failing_to_stage(unwritable.clone());
+    let platform = platform();
+
+    let failure = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+    }
+    .execute(
+        &agent(),
+        &release("1.18.31", PINNED_DIGEST, &platform),
+        &platform,
+    )
+    .expect_err("a store with nowhere to stage fails the install");
+
+    assert_eq!(failure, InstallFailure::Store(unwritable));
+    assert!(source.requested().is_empty());
+    assert!(
+        store.discarded().is_empty(),
+        "there is nothing to discard when nothing was staged"
+    );
 }
 
 #[test]
@@ -168,7 +221,7 @@ fn a_release_for_another_platform_is_refused_before_anything_is_fetched() {
         store: &store,
     }
     .execute(
-        AGENT,
+        &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform()),
         &elsewhere,
     )
@@ -190,7 +243,7 @@ fn a_download_failure_is_reported_as_one() {
         store: &store,
     }
     .execute(
-        AGENT,
+        &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &platform,
     )
@@ -219,7 +272,7 @@ fn an_archive_without_the_pinned_executable_fails_as_a_store_problem() {
         store: &store,
     }
     .execute(
-        AGENT,
+        &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &platform,
     )
@@ -244,7 +297,7 @@ fn a_store_that_cannot_say_what_is_installed_does_not_download() {
         store: &store,
     }
     .execute(
-        AGENT,
+        &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
         &platform,
     )
@@ -266,8 +319,11 @@ fn the_pinned_url_is_what_gets_fetched() {
         source: &source,
         store: &store,
     }
-    .execute(AGENT, &release, &platform)
+    .execute(&agent(), &release, &platform)
     .expect("a matching archive installs");
 
-    assert_eq!(source.requested(), vec![release.archive_url().to_string()]);
+    assert_eq!(
+        source.requested(),
+        vec![release.archive_url().as_str().to_string()]
+    );
 }

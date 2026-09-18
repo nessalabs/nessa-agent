@@ -12,10 +12,11 @@
 //! untrue without anything having changed on our side.
 //!
 //! ```text
-//! composition -> application::InstallAgentRuntime -> application::ArchiveSource
+//! composition -> infrastructure::releases_for    (which release, if any)
+//!             -> application::InstallAgentRuntime -> application::ArchiveSource
 //!                                                 -> application::RuntimeStore
 //! infrastructure::HttpsArchives ------------------> ArchiveSource
-//! infrastructure::ManagedRuntimes -----------------> RuntimeStore
+//! infrastructure::ManagedRuntimes ----------------> RuntimeStore
 //! domain::PinnedRelease --------------------------> what is allowed to be installed
 //! ```
 //! Arrows mean construction or calls. Dependencies point inward: the domain

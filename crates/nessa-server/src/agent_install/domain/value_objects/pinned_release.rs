@@ -1,5 +1,7 @@
 use std::fmt;
 
+use url::Url;
+
 /// What a pinned release can be wrong about, at the moment it is described.
 ///
 /// Every variant is a fault in the pin itself — a value checked into this
@@ -9,19 +11,23 @@ use std::fmt;
 /// different mistakes to make and different ones to report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PinRejected {
-    /// A version that cannot also be a directory name: empty, or carrying a
-    /// path separator, whitespace, or a relative-path segment.
+    /// A version that cannot also be a directory name everywhere Nessa runs:
+    /// empty, too long, carrying something outside the version alphabet, or
+    /// spelling a name some filesystem reserves.
     Version(String),
     /// An operating system or architecture token that is empty or not a plain
     /// lowercase identifier.
     Platform(String),
     /// Not sixty-four lowercase hexadecimal characters.
     Digest(String),
-    /// Not `https://`. Plain HTTP would put the archive on the wire for anyone
-    /// to replace, and the digest below is checked *after* the bytes arrive.
+    /// Not a URL at all, or not one an archive may be fetched from: anything
+    /// but `https`, a URL with no host, or one carrying credentials. Plain HTTP
+    /// would put the archive on the wire for anyone to replace, and the digest
+    /// below is checked *after* the bytes arrive.
     ArchiveUrl(String),
-    /// A path inside the archive that is absolute, empty, or contains a `..`
-    /// segment — one that could write outside the directory being unpacked into.
+    /// A path inside the archive that is absolute, empty, drive-relative, or
+    /// contains a `..` segment — one that could name a file outside the archive
+    /// or, once joined, outside the directory being unpacked into.
     ExecutablePath(String),
 }
 
@@ -37,7 +43,9 @@ impl fmt::Display for PinRejected {
                 f,
                 "archive digest is not sixty-four lowercase hex characters: {value:?}"
             ),
-            Self::ArchiveUrl(value) => write!(f, "archive must be served over https: {value:?}"),
+            Self::ArchiveUrl(value) => {
+                write!(f, "archive must be named by an https url: {value:?}")
+            }
             Self::ExecutablePath(value) => {
                 write!(f, "executable path escapes the archive: {value:?}")
             }
@@ -88,29 +96,60 @@ impl fmt::Display for ArchiveDigest {
     }
 }
 
+/// The longest a version may be.
+///
+/// A version becomes one path component, and every filesystem Nessa runs on
+/// stops somewhere around 255 bytes. Far below that, because a version longer
+/// than this is not a version.
+const MAXIMUM_VERSION_LENGTH: usize = 64;
+
+/// Names Windows reserves for devices, which it answers to in any directory and
+/// with any extension.
+const RESERVED_NAMES: &[&str] = &[
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
 /// The version of an agent's runtime that Nessa has tested against.
 ///
-/// Constrained to what can also be a single directory name, because that is
-/// what it becomes: an installed runtime lives under its version, so that
-/// changing the pin installs beside the old one rather than half-overwriting
-/// it. A version carrying a separator would put it somewhere else entirely.
+/// Constrained to what can also be a single directory name — on every
+/// filesystem Nessa runs on, not just this one — because that is what it
+/// becomes: an installed runtime lives under its version, so that changing the
+/// pin installs beside the old one rather than half-overwriting it.
+///
+/// Three of the rules below are there for that last sentence rather than for
+/// the shell of it. Uppercase is refused because macOS and Windows would give
+/// `1.0-Beta` and `1.0-beta` the same directory, and two versions sharing a
+/// directory is exactly the half-overwrite this design exists to avoid. A
+/// trailing dot and the reserved device names are refused because Windows does
+/// not store them as written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReleaseVersion(String);
 
 impl ReleaseVersion {
     /// Read a version, rejecting anything that could not be a directory name.
     pub fn parse(value: &str) -> Result<Self, PinRejected> {
-        let usable = !value.is_empty()
-            && value != "."
-            && value != ".."
-            && !value.contains(['/', '\\'])
-            && !value.contains(char::is_whitespace)
-            && value.is_ascii();
-        if usable {
-            Ok(Self(value.to_owned()))
-        } else {
-            Err(PinRejected::Version(value.to_owned()))
+        let rejected = || PinRejected::Version(value.to_owned());
+        if value.is_empty() || value.len() > MAXIMUM_VERSION_LENGTH {
+            return Err(rejected());
         }
+        // A closed alphabet rather than a list of things to exclude: it is what
+        // a published version is spelled with, and everything a filesystem
+        // treats specially — separators, drive colons, control characters,
+        // spaces — is outside it without having to be named.
+        let spelled = value.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'-' | b'+' | b'_')
+        });
+        let device = value
+            .split('.')
+            .next()
+            .is_some_and(|stem| RESERVED_NAMES.contains(&stem));
+        if !spelled || device || value.ends_with('.') || value == "." || value == ".." {
+            return Err(rejected());
+        }
+        Ok(Self(value.to_owned()))
     }
 
     /// The version as written.
@@ -182,13 +221,22 @@ pub struct ArchivePath(String);
 
 impl ArchivePath {
     /// Read a path that stays inside the archive it describes.
+    ///
+    /// One separator is allowed, `/`, which is the one a tar entry uses. A
+    /// backslash is refused rather than treated as a separator: accepting it
+    /// would mean every reader of this value had to agree on which characters
+    /// divide the segments, and the unpacker, the installed file's name and
+    /// this type would each have had to be taught the same rule.
+    ///
+    /// A colon goes with it. `C:evil` is one legal Unix filename and a
+    /// drive-relative path on Windows, where joining it onto a directory
+    /// replaces the directory rather than extending it.
     pub fn parse(value: &str) -> Result<Self, PinRejected> {
         let contained = !value.is_empty()
             && !value.starts_with('/')
-            && !value.starts_with('\\')
-            && !value.contains('\0')
+            && !value.contains(['\\', '\0', ':'])
             && value
-                .split(['/', '\\'])
+                .split('/')
                 .all(|segment| !segment.is_empty() && segment != "." && segment != "..");
         if contained {
             Ok(Self(value.to_owned()))
@@ -201,11 +249,64 @@ impl ArchivePath {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The last segment: what the file is called inside the archive.
+    ///
+    /// Path semantics belong to the value object that holds the invariant, not
+    /// to whichever adapter needs the name — and because `parse` refuses an
+    /// empty path and empty segments, there is always one to return.
+    pub fn file_name(&self) -> &str {
+        self.0.rsplit('/').next().unwrap_or(&self.0)
+    }
 }
 
 impl fmt::Display for ArchivePath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+/// Where one release's archive is fetched from.
+///
+/// Parsed rather than pattern-matched, because the rules that matter here are
+/// about the parts of a URL — its scheme, its host, whether it carries
+/// credentials — and a prefix test cannot see any of them. `https://` on its own
+/// passes `starts_with`, and names nothing.
+///
+/// Why the scheme is settled here rather than at the adapter: the digest is
+/// checked *after* the bytes have arrived, so plain HTTP would let anyone on the
+/// path spend a user's bandwidth and have the failure look like a corrupted
+/// download.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchiveUrl(Url);
+
+impl ArchiveUrl {
+    /// Read a URL an archive may be fetched from.
+    pub fn parse(value: &str) -> Result<Self, PinRejected> {
+        let rejected = || PinRejected::ArchiveUrl(value.to_owned());
+        let parsed = Url::parse(value).map_err(|_| rejected())?;
+        // Credentials are refused rather than carried: a pin is a value checked
+        // into this repository, and a URL is the wrong place to keep a secret.
+        let usable = parsed.scheme() == "https"
+            && parsed.host().is_some()
+            && parsed.username().is_empty()
+            && parsed.password().is_none();
+        if usable {
+            Ok(Self(parsed))
+        } else {
+            Err(rejected())
+        }
+    }
+
+    /// The URL as it will be requested.
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl fmt::Display for ArchiveUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0.as_str())
     }
 }
 
@@ -217,8 +318,20 @@ impl fmt::Display for ArchivePath {
 /// that was full, and the only one that should never be retried silently.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveRejected {
-    pub expected: ArchiveDigest,
-    pub actual: ArchiveDigest,
+    expected: ArchiveDigest,
+    actual: ArchiveDigest,
+}
+
+impl ArchiveRejected {
+    /// What the pin says the archive hashes to.
+    pub fn expected(&self) -> &ArchiveDigest {
+        &self.expected
+    }
+
+    /// What the downloaded bytes actually hashed to.
+    pub fn actual(&self) -> &ArchiveDigest {
+        &self.actual
+    }
 }
 
 impl fmt::Display for ArchiveRejected {
@@ -244,35 +357,32 @@ impl std::error::Error for ArchiveRejected {}
 pub struct PinnedRelease {
     version: ReleaseVersion,
     platform: ReleasePlatform,
-    archive_url: String,
+    archive_url: ArchiveUrl,
     archive_digest: ArchiveDigest,
     executable: ArchivePath,
 }
 
 impl PinnedRelease {
-    /// Describe a release, refusing any pin that is not self-consistent.
+    /// Describe a release.
     ///
-    /// The URL is required to be `https://` here rather than at the adapter,
-    /// because the digest check below happens *after* the bytes have arrived:
-    /// plain HTTP would let anyone on the path spend a user's bandwidth and
-    /// have the failure look like a corrupted download.
+    /// Infallible: every part of a pin that can be wrong is wrong at the moment
+    /// that part is read, and each one is its own type above. Assembling four
+    /// values that are each already valid cannot produce an invalid release, so
+    /// there is nothing left here to refuse.
     pub fn new(
         version: ReleaseVersion,
         platform: ReleasePlatform,
-        archive_url: &str,
+        archive_url: ArchiveUrl,
         archive_digest: ArchiveDigest,
         executable: ArchivePath,
-    ) -> Result<Self, PinRejected> {
-        if !archive_url.starts_with("https://") {
-            return Err(PinRejected::ArchiveUrl(archive_url.to_owned()));
-        }
-        Ok(Self {
+    ) -> Self {
+        Self {
             version,
             platform,
-            archive_url: archive_url.to_owned(),
+            archive_url,
             archive_digest,
             executable,
-        })
+        }
     }
 
     pub fn version(&self) -> &ReleaseVersion {
@@ -283,7 +393,7 @@ impl PinnedRelease {
         &self.platform
     }
 
-    pub fn archive_url(&self) -> &str {
+    pub fn archive_url(&self) -> &ArchiveUrl {
         &self.archive_url
     }
 
