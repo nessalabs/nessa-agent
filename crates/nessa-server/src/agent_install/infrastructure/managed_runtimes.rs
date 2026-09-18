@@ -118,6 +118,22 @@ impl ManagedRuntimes {
         sync_directory(&directory).map_err(unwritable)
     }
 
+    /// Make an unpacked executable durable and record it as installed.
+    ///
+    /// Its own step so that everything which can fail after the rename sits in
+    /// one place the caller can guard. Adding a step here rather than to
+    /// `publish` directly is what keeps it inside that guard.
+    fn settle(
+        &self,
+        agent: &AgentName,
+        release: &PinnedRelease,
+        directory: &Path,
+    ) -> Result<(), StoreFailure> {
+        // The rename survives a crash only once the directory holding it does.
+        sync_directory(directory).map_err(unwritable)?;
+        self.record(agent, release)
+    }
+
     /// Take an executable back out after the install failed to complete.
     ///
     /// Best effort on purpose, and the reason it returns nothing: the caller
@@ -128,12 +144,23 @@ impl ManagedRuntimes {
     fn withdraw(&self, executable: &Path) {
         if let Err(error) = fs::remove_file(executable) {
             if error.kind() != io::ErrorKind::NotFound {
-                tracing::debug!(
+                // `warn`, not `debug`: the shipped default keeps `info` and
+                // above, and a line nobody sees would make the sentence above
+                // untrue. This is the only trace that a runtime was left
+                // somewhere nothing will look for it again.
+                tracing::warn!(
                     path = %executable.display(),
                     %error,
                     "could not withdraw an agent runtime that was not recorded"
                 );
             }
+        }
+        // The version directory was created before the archive was known to
+        // hold anything, so a refused install leaves one behind. Removed only
+        // when it is empty — `remove_dir` says so by failing — which is exactly
+        // the case where it holds nothing anybody wants.
+        if let Some(directory) = executable.parent() {
+            let _ = fs::remove_dir(directory);
         }
     }
 
@@ -170,9 +197,9 @@ impl ManagedRuntimes {
             // A link or a directory carries no data, so unpacking one writes an
             // empty file that this store would then record as the installed
             // runtime and hand out as something to launch.
-            if !is_regular(entry.header().entry_type()) {
+            if let Some(reason) = refused_kind(entry.header().entry_type()) {
                 return Err(StoreFailure::MalformedArchive(format!(
-                    "{} is not a regular file in the archive",
+                    "{} {reason}",
                     release.executable()
                 )));
             }
@@ -220,8 +247,11 @@ impl ManagedRuntimes {
             }
             make_executable(staging.as_file()).map_err(unwritable)?;
             staging.as_file().sync_all().map_err(unwritable)?;
+            // The rename is the last thing this does. Making the directory
+            // durable belongs to the caller, because from here on a failure
+            // has an executable to take back out — and a `?` inside this loop
+            // would return past the only code that knows to do that.
             staging.persist(destination).map_err(unwritable)?;
-            sync_directory(directory).map_err(unwritable)?;
             return Ok(true);
         }
         Ok(false)
@@ -354,22 +384,29 @@ impl RuntimeStore for ManagedRuntimes {
             &directory,
             MAXIMUM_EXECUTABLE_BYTES,
         )? {
+            // Nothing was unpacked, so this only sweeps the version directory
+            // that was made a moment ago in the expectation that something
+            // would be.
+            self.withdraw(&destination);
             return Err(StoreFailure::MissingExecutable(
                 release.executable().as_str().to_owned(),
             ));
         }
-        // The record is written last, because it is what makes the install
-        // true: `installed` answers from it, so writing it before the
-        // executable exists would claim an install that does not.
+        // Everything from the rename onwards is guarded together, because from
+        // that moment an executable exists and a failure would otherwise leave
+        // it behind.
         //
-        // That ordering leaves one window. If the record cannot be written, the
-        // executable is already durable, and returning the failure on its own
+        // The record is written last, since it is what makes the install true:
+        // `installed` answers from it, so writing it before the executable
+        // exists would claim an install that does not. That ordering leaves a
+        // window, and it is not only the record that can fail in it — making
+        // the directory durable can too. Returning either failure on its own
         // would tell somebody nothing was installed while a hundred megabytes
         // of runtime sat in a directory no record names, which nothing would
         // ever look at again — on a disk that, in the likeliest cause of this
         // failure, is the thing that ran out. So the executable is taken back
         // out, and the message is true when it is read.
-        if let Err(failure) = self.record(agent, release) {
+        if let Err(failure) = self.settle(agent, release, &directory) {
             self.withdraw(&destination);
             return Err(failure);
         }
@@ -438,10 +475,24 @@ fn expand(
     let mut unpacked: u64 = 0;
     loop {
         let read = entry.read(&mut buffer).map_err(|error| {
-            StoreFailure::MalformedArchive(format!(
-                "{} could not be read out of the archive: {error}",
-                release.executable()
-            ))
+            // Branched on the kind, not on the message. The readers stacked
+            // underneath this — tar over gzip over the staged file — report a
+            // stream that does not decode as invalid or as ending early, and
+            // pass a real device failure through as itself. Calling the second
+            // one a malformed archive would be this function committing the
+            // mistake it exists to avoid, in the other direction: `digest`
+            // reports the same fault on the same handle as `Unreadable`.
+            match error.kind() {
+                io::ErrorKind::InvalidData
+                | io::ErrorKind::InvalidInput
+                | io::ErrorKind::UnexpectedEof => StoreFailure::MalformedArchive(format!(
+                    "{} could not be read out of the archive: {error}",
+                    release.executable()
+                )),
+                _ => StoreFailure::Unreadable(format!(
+                    "reading the downloaded archive back: {error}"
+                )),
+            }
         })?;
         if read == 0 {
             return Ok(unpacked);
@@ -451,12 +502,28 @@ fn expand(
     }
 }
 
-/// Whether a tar entry is a file with bytes of its own.
+/// Why an entry of this kind cannot be the runtime, if it cannot.
 ///
 /// A link entry names another file and carries no data; a directory carries
-/// none either. Neither is an executable, and unpacking one writes nothing.
-fn is_regular(kind: EntryType) -> bool {
-    matches!(kind, EntryType::Regular | EntryType::Continuous)
+/// none either. Neither is an executable, and unpacking one writes an empty
+/// file that this store would then record as the installed runtime and hand
+/// out as something to launch.
+///
+/// A sparse entry is refused for the same reason — what would be written is not
+/// the file the archive describes — but it gets its own sentence, because it
+/// *is* a regular file and being told it is not would send whoever reads the
+/// message looking for something that is not the problem.
+///
+/// Its own function, returning the reason rather than a bool, so that the
+/// wording for each kind can be tested without an archive: a sparse entry
+/// cannot be built in memory by the tar writer, and building one with the
+/// system `tar` would make this suite depend on which `tar` is installed.
+fn refused_kind(kind: EntryType) -> Option<&'static str> {
+    match kind {
+        EntryType::Regular | EntryType::Continuous => None,
+        EntryType::GNUSparse => Some("is stored sparsely, which nessa does not unpack"),
+        _ => Some("is not a regular file in the archive"),
+    }
 }
 
 /// Make `path` a directory only this user can reach, or say which one it was.

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::agent_install::application::{
-    InstallAgentRuntime, InstallFailure, InstalledRuntime, SourceFailure,
+    InstallAgentRuntime, InstallFailure, InstalledRuntime, SourceFailure, StoreFailure,
 };
 use crate::agent_install::domain::{AgentName, PinnedRelease, ReleasePlatform};
 use crate::agent_install::infrastructure::{
@@ -110,12 +110,31 @@ fn explain(failure: &InstallFailure) -> String {
         InstallFailure::Download(SourceFailure::Refused(status)) => {
             format!("{failure}; the pinned release may have been withdrawn ({status})")
         }
-        InstallFailure::Download(_) => format!("{failure}; nothing was installed, try again"),
-        InstallFailure::Rejected(rejection) => format!(
-            "{rejection}; nothing was installed and this is not worth retrying — \
-             report it rather than running the command again"
+        // A body that overran the bound will overrun it again, so this belongs
+        // with the faults below rather than with the connection that dropped.
+        InstallFailure::Download(SourceFailure::TooLarge(_))
+        | InstallFailure::Rejected(_)
+        | InstallFailure::Store(
+            StoreFailure::MissingExecutable(_) | StoreFailure::MalformedArchive(_),
+        ) => format!(
+            "{report}; nothing was installed and this is not worth retrying — \
+             report it rather than running the command again",
+            report = reported(failure)
         ),
+        InstallFailure::Download(_) => format!("{failure}; nothing was installed, try again"),
         InstallFailure::Store(failure) => format!("{failure}; nothing was installed"),
+    }
+}
+
+/// The part of a failure worth putting in front of a person.
+///
+/// A digest mismatch names both digests itself, and prefixing it with the use
+/// case's own wording would say the same thing twice. Everything else reads
+/// better through `InstallFailure`.
+fn reported(failure: &InstallFailure) -> String {
+    match failure {
+        InstallFailure::Rejected(rejection) => rejection.to_string(),
+        other => other.to_string(),
     }
 }
 

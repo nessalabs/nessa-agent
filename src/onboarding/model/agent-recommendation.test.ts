@@ -69,22 +69,14 @@ describe("recommendAgent", () => {
     })
   })
 
-  it("offers an install on either answer that means the agent cannot start", () => {
-    for (const readiness of ["not-installed", "needs-authentication"] as const) {
-      expect(
-        recommendAgent(asked({ claude: readiness }), INSTALLABLE),
-        `${readiness} is an agent reporting that it cannot start`,
-      ).toEqual({ kind: "install", agent: "claude" })
-    }
-  })
-
-  it("offers an install when the agents present only need a sign-in", () => {
-    // Installed but signed out is still nothing this person can use right now.
+  it("does not offer to install an agent that is installed and signed out", () => {
+    // The near miss. `needs-authentication` looks like a problem an offer could
+    // solve and is not: the agent is already on the machine, so the install
+    // would find the pinned version, fetch nothing, and leave the row as
+    // unselectable as before — having told somebody their sign-in problem was a
+    // missing install.
     const state = asked({ claude: "needs-authentication" })
-    expect(recommendAgent(state, INSTALLABLE)).toEqual({
-      kind: "install",
-      agent: "claude",
-    })
+    expect(recommendAgent(state, INSTALLABLE)).toEqual({ kind: "nothing" })
   })
 
   it("offers nothing when Nessa can install nothing", () => {

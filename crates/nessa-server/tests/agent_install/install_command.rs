@@ -119,6 +119,54 @@ fn a_rejected_archive_is_the_one_failure_that_says_not_to_retry() {
 }
 
 #[test]
+fn every_failure_nothing_can_be_done_about_says_so() {
+    // "Try again" is advice, and it is wrong for each of these. A body that
+    // overran the bound will overrun it again; an archive that does not hold
+    // the pinned executable will not grow one; an archive that does not unpack
+    // is the same archive next time. Each is a fault in the pin or the release,
+    // and the only thing that helps is somebody being told to report it.
+    for failure in [
+        InstallFailure::Download(SourceFailure::TooLarge(512)),
+        InstallFailure::Rejected(rejection()),
+        InstallFailure::Store(StoreFailure::MissingExecutable(
+            "package/bin/opencode".into(),
+        )),
+        InstallFailure::Store(StoreFailure::MalformedArchive("not a tar".into())),
+    ] {
+        let message = explain(&failure);
+        assert!(
+            !message.contains("try again"),
+            "{failure:?} invites a retry that cannot help: {message}"
+        );
+        assert!(
+            message.contains("not worth retrying"),
+            "{failure:?} does not say to stop: {message}"
+        );
+        assert!(
+            message.contains("nothing was installed"),
+            "{failure:?} does not say whether anything was installed: {message}"
+        );
+    }
+}
+
+#[test]
+fn a_failure_this_machine_may_recover_from_still_invites_a_retry() {
+    // The other half of the rule above. A connection that dropped and a disk
+    // that was briefly full are worth another go, and telling somebody to
+    // report them instead would send them to file a bug about their wifi.
+    for failure in [
+        InstallFailure::Download(SourceFailure::Unreachable("connection reset".into())),
+        InstallFailure::Download(SourceFailure::NotStored("no space".into())),
+    ] {
+        let message = explain(&failure);
+        assert!(
+            message.contains("try again"),
+            "{failure:?} should be worth another go: {message}"
+        );
+    }
+}
+
+#[test]
 fn a_withdrawn_release_is_distinguished_from_a_bad_connection() {
     let withdrawn = explain(&InstallFailure::Download(SourceFailure::Refused(404)));
     assert!(withdrawn.contains("404"), "unhelpful message: {withdrawn}");

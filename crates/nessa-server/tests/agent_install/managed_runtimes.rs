@@ -845,3 +845,70 @@ fn an_install_that_cannot_be_recorded_leaves_no_runtime_behind() {
         "a failed install was reported as one that worked"
     );
 }
+
+#[test]
+fn an_entry_that_cannot_be_written_out_is_this_machines_doing() {
+    // The other half of what `expand` exists for. The sibling loop in the HTTPS
+    // client has this test; the unpacker's write branch had the fix and not the
+    // test, which is half a guarantee.
+    let root = tempfile::tempdir().expect("temporary root");
+    let path = root.path().join("staging");
+    write(&path, b"");
+    let mut readable = std::fs::File::open(&path).expect("a handle that cannot be written");
+
+    let failure = expand(
+        &mut b"the runtime".as_slice(),
+        &mut readable,
+        &release("1.18.31", "package/bin/opencode"),
+    )
+    .expect_err("a staging file that cannot be written");
+
+    assert!(
+        matches!(failure, StoreFailure::Unwritable(_)),
+        "a write that could not complete is not a corrupt archive: {failure:?}"
+    );
+}
+
+#[test]
+fn only_an_entry_with_bytes_of_its_own_is_unpackable() {
+    assert_eq!(refused_kind(EntryType::Regular), None);
+    assert_eq!(refused_kind(EntryType::Continuous), None);
+    for carries_nothing in [
+        EntryType::Symlink,
+        EntryType::Link,
+        EntryType::Directory,
+        EntryType::Fifo,
+        EntryType::Char,
+        EntryType::Block,
+    ] {
+        assert_eq!(
+            refused_kind(carries_nothing),
+            Some("is not a regular file in the archive"),
+            "{carries_nothing:?} carries no data"
+        );
+    }
+    // A sparse entry is a regular file, so this one refusal has to say
+    // something else — otherwise the message is false about what it refused.
+    assert_eq!(
+        refused_kind(EntryType::GNUSparse),
+        Some("is stored sparsely, which nessa does not unpack")
+    );
+}
+
+#[test]
+fn an_archive_without_the_pinned_executable_leaves_no_directory_behind() {
+    // The version directory is made before the archive is known to hold
+    // anything. A pin that is wrong about its own contents would otherwise
+    // leave an empty one on every attempt.
+    let root = tempfile::tempdir().expect("temporary root");
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "package/bin/opencode");
+
+    publish(&store, &release, &archive("package/bin/other", b"binary"))
+        .expect_err("an archive without the pinned executable");
+
+    assert!(
+        !root.path().join("opencode").join("1.18.31").exists(),
+        "a refused install left its version directory behind"
+    );
+}

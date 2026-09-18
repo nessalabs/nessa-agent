@@ -15,7 +15,7 @@
  */
 
 import { AGENT_CHOICES, agentChoice, agentReadiness, isChoosable } from "./onboarding"
-import type { AgentId, AgentReadiness, OnboardingState } from "./onboarding"
+import type { AgentId, OnboardingState } from "./onboarding"
 
 /**
  * What setup should offer.
@@ -45,21 +45,30 @@ function anythingReady(state: OnboardingState): boolean {
 }
 
 /**
- * The answers that mean a runtime was asked and said it cannot start here.
+ * The one answer that means installing this agent would help.
  *
- * A closed list, and short on purpose. `ready` is the opposite. `unknown` is
- * the absence of an answer, which the readiness type says outright is never
- * grounds for an offer. `not-supported` is a fact about Nessa's own listing
- * rather than anything a runtime reported.
+ * Exactly `not-installed`, and the narrowness is the point: this decides
+ * whether to propose a download, so it has to mean the agent is not here.
  *
- * Closed rather than "anything that is not `ready`" because the two questions
- * take opposite defaults, and each takes the careful one. Letting somebody
- * *pick* an agent needs a definite yes, so a state nobody has heard of does not
- * count as one. Offering somebody a hundred-megabyte *download* needs a
- * definite no, so a state nobody has heard of does not count as that either. A
- * readiness added on the server later should make neither decision by itself.
+ * `needs-authentication` is the near miss. It reads like a problem an offer
+ * could solve, and it is not: the readiness type spells it out as *installed*,
+ * but with nothing signed in. Downloading the version that is already on the
+ * machine would find it, fetch nothing, and leave the row exactly as
+ * unselectable as before, having told somebody their sign-in problem was a
+ * missing install. `ready` is the opposite answer, `unknown` is the absence of
+ * one, and `not-supported` is a fact about Nessa's listing rather than
+ * something a runtime reported.
+ *
+ * Read as a single answer rather than as "anything that is not `ready`",
+ * because the two decisions on this screen take opposite defaults and each
+ * takes the careful one. Letting somebody *pick* an agent needs a definite yes,
+ * so a state nobody has heard of does not count as one. Proposing a
+ * hundred-megabyte *download* needs a definite "it is not here", so a state
+ * nobody has heard of does not count as that either.
  */
-const CANNOT_START: readonly AgentReadiness[] = ["needs-authentication", "not-installed"]
+function isMissing(state: OnboardingState, agent: AgentId): boolean {
+  return agentReadiness(state, agent) === "not-installed"
+}
 
 /**
  * Whether Nessa could actually put this agent in front of somebody, and has
@@ -80,10 +89,7 @@ const CANNOT_START: readonly AgentReadiness[] = ["needs-authentication", "not-in
  * somebody whose claude is sitting there working.
  */
 function canBeOffered(state: OnboardingState, agent: AgentId): boolean {
-  return (
-    agentChoice(agent)?.supported === true &&
-    CANNOT_START.includes(agentReadiness(state, agent))
-  )
+  return agentChoice(agent)?.supported === true && isMissing(state, agent)
 }
 
 /**

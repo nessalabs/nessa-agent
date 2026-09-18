@@ -102,42 +102,42 @@ function measured(t, body) {
   }
 }
 
-test("an archive matching what the registry published is accepted", (t) => {
+test("an archive matching what the registry published is accepted", async (t) => {
   const { path, dist } = measured(t, "the archive bytes")
-  assert.doesNotThrow(() => agreesWithRegistry(path, dist, "opencode@1.0.0"))
+  await assert.doesNotReject(() => agreesWithRegistry(path, dist, "opencode@1.0.0"))
 })
 
-test("an archive that is not what the registry published is refused", (t) => {
+test("an archive that is not what the registry published is refused", async (t) => {
   // The only check in the chain that can catch a download arriving wrong.
   // Everything after this verifies that the *same* bytes arrive again, so a bad
   // measurement here would be pinned permanently and verify perfectly forever.
   const { path, dist } = measured(t, "the archive bytes")
   writeFileSync(path, "different bytes")
 
-  assert.throws(
+  await assert.rejects(
     () => agreesWithRegistry(path, dist, "opencode@1.0.0"),
     /does not match the integrity/,
   )
-  assert.throws(
+  await assert.rejects(
     () => agreesWithRegistry(path, { shasum: dist.shasum }, "opencode@1.0.0"),
     /does not match the shasum/,
   )
 })
 
-test("metadata without checksums is not itself a failure", (t) => {
+test("metadata without checksums is not itself a failure", async (t) => {
   // Both fields are optional in the registry's own schema. A release that omits
   // them is still pinnable — the digest this script measures is what the
   // guarantee rests on, and this is corroboration on top of it.
   const { path } = measured(t, "the archive bytes")
-  assert.doesNotThrow(() => agreesWithRegistry(path, {}, "opencode@1.0.0"))
-  assert.doesNotThrow(() => agreesWithRegistry(path, undefined, "opencode@1.0.0"))
+  await assert.doesNotReject(() => agreesWithRegistry(path, {}, "opencode@1.0.0"))
+  await assert.doesNotReject(() => agreesWithRegistry(path, undefined, "opencode@1.0.0"))
 })
 
-test("an integrity algorithm this script does not know is passed over", (t) => {
+test("an integrity algorithm this script does not know is passed over", async (t) => {
   // `createHash` throws on a name it does not recognise, and a registry that
   // starts publishing a new one should not break pinning outright.
   const { path } = measured(t, "the archive bytes")
-  assert.doesNotThrow(() =>
+  await assert.doesNotReject(() =>
     agreesWithRegistry(path, { integrity: "sha3-512-AAAA" }, "opencode@1.0.0"),
   )
 })

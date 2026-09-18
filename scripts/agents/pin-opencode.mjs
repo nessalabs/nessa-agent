@@ -15,12 +15,15 @@
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import {
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
+  createReadStream,
   createWriteStream,
+  mkdirSync,
+  mkdtempSync,
   rmSync,
+  statSync,
+  writeFileSync,
 } from "node:fs"
+import { tmpdir } from "node:os"
 import { dirname, resolve, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { pipeline } from "node:stream/promises"
@@ -111,17 +114,15 @@ export function containsExecutable(archive) {
   // spelling of it, so an entry written as `./package/bin/opencode` is asked
   // for the way it is actually stored.
   const stored = named.trim().split(/\s+/).at(-1)
-  const body = execFileSync("tar", ["-xzOf", archive, stored], {
-    maxBuffer: MAXIMUM_ENTRY_BYTES,
-  })
-  return body.length > 0
+  const extracted = mkdtempSync(join(tmpdir(), "nessa-entry-"))
+  try {
+    execFileSync("tar", ["-xzf", archive, "-C", extracted, stored])
+    return statSync(join(extracted, stored)).size > 0
+  } finally {
+    // The entry is a hundred megabytes, and this runs once per platform.
+    rmSync(extracted, { recursive: true, force: true })
+  }
 }
-
-// How much of an entry this script will hold in memory to measure it.
-//
-// The same bound the installer applies to an unpacked executable, so an archive
-// this script accepts is one the installer would not refuse for its size.
-const MAXIMUM_ENTRY_BYTES = 512 * 1024 * 1024
 
 // The `integrity` algorithms this script knows how to check.
 const INTEGRITY_ALGORITHMS = ["sha512", "sha384", "sha256"]
@@ -132,25 +133,40 @@ const INTEGRITY_ALGORITHMS = ["sha512", "sha384", "sha256"]
 // not a failure — but a present one that disagrees is, because the two ways to
 // get here are a download that arrived wrong and an archive that is not the one
 // the metadata describes, and neither should become a pin.
-export function agreesWithRegistry(archive, dist, named) {
-  const bytes = readFileSync(archive)
+export async function agreesWithRegistry(archive, dist, named) {
   const integrity = dist?.integrity
-  if (typeof integrity === "string") {
-    const [algorithm, expected] = integrity.split("-", 2)
-    // A closed set, because `createHash` throws on a name it does not know and
-    // a registry that starts publishing a new one should not break pinning.
-    if (INTEGRITY_ALGORITHMS.includes(algorithm) && expected) {
-      const actual = createHash(algorithm).update(bytes).digest("base64")
-      if (actual !== expected)
-        throw new Error(`${named} does not match the integrity the registry published`)
-    }
-  }
+  const [algorithm, expected] =
+    typeof integrity === "string" ? integrity.split("-", 2) : []
   const shasum = dist?.shasum
-  if (typeof shasum === "string") {
-    const actual = createHash("sha1").update(bytes).digest("hex")
-    if (actual !== shasum)
-      throw new Error(`${named} does not match the shasum the registry published`)
+
+  // A closed set, because `createHash` throws on a name it does not know and a
+  // registry that starts publishing a new one should not break pinning.
+  const checkable = INTEGRITY_ALGORITHMS.includes(algorithm) && expected
+  if (!checkable && typeof shasum !== "string") {
+    // Said out loud rather than passed over, because a skipped check and a
+    // passed one look the same from outside, and this is the only check in the
+    // chain that can catch a download that arrived wrong.
+    process.stderr.write(`${named} published no checksum to cross-check against\n`)
+    return
   }
+
+  // Streamed, for the reason `digestOf` gives: an archive is around fifty
+  // megabytes and neither pass over it should hold one in memory. Held by name
+  // rather than in a list, so that neither check depends on whether the other
+  // one is running.
+  const integrityHash = checkable ? createHash(algorithm) : undefined
+  const shasumHash = typeof shasum === "string" ? createHash("sha1") : undefined
+  await pipeline(createReadStream(archive), async function (source) {
+    for await (const chunk of source) {
+      integrityHash?.update(chunk)
+      shasumHash?.update(chunk)
+    }
+  })
+
+  if (integrityHash && integrityHash.digest("base64") !== expected)
+    throw new Error(`${named} does not match the integrity the registry published`)
+  if (shasumHash && shasumHash.digest("hex") !== shasum)
+    throw new Error(`${named} does not match the shasum the registry published`)
 }
 
 // Measure every platform's archive and write the pin file.
@@ -183,7 +199,7 @@ async function pin() {
     // catch a download that arrived wrong: everything downstream checks that
     // the *same* bytes arrive again, so a bad measurement made here would be
     // pinned permanently and would verify perfectly forever.
-    agreesWithRegistry(scratch, detail.dist, `${platform.package}@${version}`)
+    await agreesWithRegistry(scratch, detail.dist, `${platform.package}@${version}`)
     if (!containsExecutable(scratch))
       throw new Error(
         `${platform.package}@${version} does not contain ${EXECUTABLE} as a file`,
