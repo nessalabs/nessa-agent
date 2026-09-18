@@ -408,18 +408,27 @@ it("never treats permission details as state for a different control", async () 
   expect(error).toMatchObject({ permissionSelection: undefined, uncertain: true })
 })
 
-it("reports missing provider as a known rejection rather than unknown delivery", async () => {
-  const request = vi
-    .fn()
-    .mockRejectedValue(new NessaRpcError("agent_not_configured", "agent_not_configured"))
-  const ids = [conversationId, "identity"]
-  let next = 0
-  const api = createConversationApi({ request }, () => ids[next++]!)
-  const error = await api.create().catch((error) => error)
-  expect(error).toBeInstanceOf(NessaConversationMutationError)
-  expect(error.uncertain).toBe(false)
-  expect(error.message).toContain("Configure Claude ACP")
-})
+it.each([
+  // Three different situations, and only one of them is fixed by configuring
+  // anything. A caller told the wrong one goes and changes what was never the
+  // problem — so each states its own, and none of them is uncertain: the
+  // gateway refused before the command reached an agent.
+  ["conversations_not_configured", "not set up to run conversations"],
+  ["agent_not_configured", "not set up for the agent"],
+  ["agent_unsupported", "this version of Nessa cannot open"],
+])(
+  "reports %s as its own known rejection rather than unknown delivery",
+  async (code, said) => {
+    const request = vi.fn().mockRejectedValue(new NessaRpcError(code, code))
+    const ids = [conversationId, "identity"]
+    let next = 0
+    const api = createConversationApi({ request }, () => ids[next++]!)
+    const error = await api.create().catch((error) => error)
+    expect(error).toBeInstanceOf(NessaConversationMutationError)
+    expect(error.uncertain).toBe(false)
+    expect(error.message).toContain(said)
+  },
+)
 it("reports invalid requests as known pre-admission rejections", async () => {
   const request = vi
     .fn()

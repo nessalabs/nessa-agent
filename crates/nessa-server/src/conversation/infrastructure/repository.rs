@@ -28,6 +28,16 @@ struct StoredConversation {
     /// Claude was the only agent this server could start. Absent is read as
     /// Claude for exactly that reason, and every record written since names its
     /// agent, so the absence never has to be interpreted twice.
+    ///
+    /// This is a reader for data written by an older build, which
+    /// `CODING_STANDARDS.md` ("One current contract") forbids without an
+    /// explicit decision to support compatibility. It is here, declared rather
+    /// than quiet, because the alternative is that every conversation already on
+    /// a person's disk stops opening — and because the retrofit the standard
+    /// prefers would mean rewriting their records, which is a larger thing to do
+    /// unasked than reading a missing field. It is the only backwards path on
+    /// this change; the configuration rename alongside it has none. If the call
+    /// goes the other way, deleting these four lines is the whole of it.
     #[serde(default)]
     agent: Option<String>,
 }

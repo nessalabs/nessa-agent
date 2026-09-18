@@ -94,10 +94,11 @@ only. Records written before this server knew a second agent name no agent and
 are read as Claude's. Each agent's model must come from its own vendor's entries
 in the catalog: Codex is signed in to OpenAI and cannot reach an Anthropic model,
 and the mismatch is reported at startup rather than by a provider refusing every
-prompt. `toolsEnabled` is asked of each agent separately: Codex has no text-only
-mode and refuses to start without its own tools, so turning them off for Claude
-must not be able to take the whole server down over an agent you were not
-configuring.
+prompt. `toolsEnabled` is asked of each agent separately and has to be stated:
+Codex has no text-only mode and refuses to start without its own tools, so
+neither turning them off for Claude nor leaving the field out should be able to
+take the whole server down over an agent you were not configuring. Omitting it
+fails to parse, naming the field.
 
 The installed desktop supplies an agent automatically. Its unattached workspace is
 `~/.nessa/workspaces/default`; its directories are created below the private Nessa

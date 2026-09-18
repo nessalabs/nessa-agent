@@ -29,8 +29,13 @@ same code the Claude binding runs on. What differs is behind `AcpProfile`:
   approval preset through separate `session/set_config_option` requests and the
   model must be settled first, so `AcpProfile::session_configuration` returns the
   steps in the order the provider must receive them. Only the last response is
-  verified as fully configured; the earlier ones are checked for the value they
-  set. Duplicate configuration IDs are rejected before any value is read.
+  verified as fully configured — it must read back both selections exactly, and
+  nothing is published as ready before it does. An earlier response is checked
+  only for the model being one Codex offers, because a selection this binding has
+  not made yet cannot be required to read back. The same allowance covers a
+  `config_option_update` notification arriving mid-configuration, which is Codex
+  reporting the state it still has. Duplicate configuration IDs are rejected
+  before any value is read.
 - **A permission request is passed whole.** Codex puts the reviewable facts in
   `_meta.codex` and does not always send `toolCall.rawInput`, so
   `AcpProfile::permission_input` receives the complete request rather than its
@@ -107,10 +112,12 @@ tests that drive a real subprocess speaking ACP —
 `tests/infrastructure/acp/contracts/fixtures/codex_acp_test_handler.py` — through
 the same shared runtime the Claude binding uses. Those cover the ordered
 configuration steps, a harness or version that is not the pinned one, a model the
-provider does not offer, a refused model or mode, terminal content and
-resource-link content arriving where this client advertises neither, a permission
-request carrying its facts in `_meta.codex`, and the instructions reaching the
-provider through its own configuration rather than the session request.
+provider does not offer, a refused model or mode, terminal content arriving where
+this client advertises none, a configuration notification arriving while the
+session is still being configured, a permission request carrying its facts in
+`_meta.codex`, and the instructions reaching the provider through its own
+configuration rather than the session request. Resource-link content is covered
+by the wire-mapping unit tests rather than through a subprocess.
 
 They are adapter and process tests. They establish that this binding speaks the
 protocol it claims to and fails closed where it says it does; they establish

@@ -130,11 +130,11 @@ mod gateway {
         response
     }
     #[tokio::test]
-    async fn conversation_requires_chat_grant_and_configured_agent() {
+    async fn conversation_requires_chat_grant_and_a_gateway_that_runs_conversations() {
         let state = chat_state();
         for (credential, expected) in [
             ("reader", "forbidden"),
-            ("owner-phone", "agent_not_configured"),
+            ("owner-phone", "conversations_not_configured"),
             ("foreign", "forbidden"),
         ] {
             let session = chat_session(&state, credential).await;
@@ -201,7 +201,7 @@ mod gateway {
         let value = response(&mut peer).await;
         assert_eq!(value["id"], "control");
         assert_eq!(
-            value["error"]["code"], "agent_not_configured",
+            value["error"]["code"], "conversations_not_configured",
             "reserved control capacity must reach the handler"
         );
         drop(peer.input);

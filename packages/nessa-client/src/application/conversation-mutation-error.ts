@@ -19,6 +19,21 @@ function permissionSelection(
 }
 
 /** Failed conversation creation or message admission with its original identities and a safe same-command retry. No request is replayed automatically. */
+/** Refusals this gateway states outright, and what each one means to a person.
+ *
+ * Kept apart from one another rather than sharing a code: "this gateway runs no
+ * conversations", "it is not set up for the agent you asked for" and "no build
+ * here can open that conversation at all" are three different situations, and
+ * only one of them is fixed by configuring anything. A caller told the wrong one
+ * goes and changes something that was never the problem. */
+const REFUSALS: Record<string, string> = {
+  conversations_not_configured: "This gateway is not set up to run conversations.",
+  agent_not_configured:
+    "This gateway is not set up for the agent this conversation asked for.",
+  agent_unsupported:
+    "This conversation runs on an agent this version of Nessa cannot open.",
+}
+
 export class NessaConversationMutationError<T> extends Error {
   /** False only when the gateway explicitly rejected the command before admission. */
   readonly uncertain: boolean
@@ -34,14 +49,16 @@ export class NessaConversationMutationError<T> extends Error {
     private readonly repeat: () => Promise<T>,
   ) {
     super(
-      cause instanceof NessaRpcError && cause.code === "agent_not_configured"
-        ? "The gateway has no agent configured. Configure Claude ACP before sending messages."
-        : "Conversation command failed",
+      (cause instanceof NessaRpcError ? REFUSALS[cause.code] : undefined) ??
+        "Conversation command failed",
       { cause },
     )
+    // A refusal is a decision this gateway has already made, so the command
+    // never reached an agent and nothing about it is in doubt. Everything else
+    // may have been admitted before the failure and is reported as uncertain.
     this.uncertain = !(
       cause instanceof NessaRpcError &&
-      ["agent_not_configured", "invalid_request"].includes(cause.code)
+      (cause.code in REFUSALS || cause.code === "invalid_request")
     )
     this.name = "NessaConversationMutationError"
   }

@@ -1,5 +1,5 @@
-//! Who may read the answer, and the three names it is given in. The host is a
-//! stub: this test must never ask the machine it runs on about credentials.
+//! Who may read the answer, and the names it is given in. The host is a stub:
+//! this test must never ask the machine it runs on about credentials.
 
 use super::*;
 use crate::agents::application::{AgentProbe, ProbeFailure};
@@ -232,9 +232,31 @@ async fn answers_a_caller_that_is_not_a_page_at_all() {
         .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
 }
 
+/// Every readiness this route can name, as a list the compiler keeps complete.
+///
+/// The match is the point of it: a new [`Readiness`] state fails to compile here
+/// rather than quietly escaping the seam guard below, which is exactly what
+/// happened when the list of names was written out by hand.
+const EVERY_READINESS: [Readiness; 5] = [
+    Readiness::Ready,
+    Readiness::NeedsAuthentication,
+    Readiness::AuthenticationUnknown,
+    Readiness::NotInstalled,
+    Readiness::NotConfigured,
+];
+fn _every_readiness_is_listed(readiness: Readiness) -> usize {
+    match readiness {
+        Readiness::Ready => 0,
+        Readiness::NeedsAuthentication => 1,
+        Readiness::AuthenticationUnknown => 2,
+        Readiness::NotInstalled => 3,
+        Readiness::NotConfigured => 4,
+    }
+}
+
 /// The other side of this route is `src/onboarding/adapters/agents.ts`, which
-/// hardcodes the same path and the same three readiness names because they
-/// cross a language boundary nothing else checks. This is the same shape of
+/// hardcodes the same path and every readiness name this route can send, because
+/// they cross a language boundary nothing else checks. This is the same shape of
 /// guard as `host.rs`'s seam test: a rename on either side fails here instead
 /// of at runtime.
 #[test]
@@ -244,7 +266,8 @@ fn the_frontend_adapter_reads_the_same_path_and_names() {
         adapter.contains("/onboarding/agents"),
         "src/onboarding/adapters/agents.ts does not request /onboarding/agents"
     );
-    for name in ["ready", "needs-authentication", "not-installed"] {
+    for readiness in EVERY_READINESS {
+        let name = readiness_name(readiness);
         assert!(
             adapter.contains(&format!("\"{name}\"")),
             "src/onboarding/adapters/agents.ts does not recognize {name:?}"

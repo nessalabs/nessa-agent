@@ -2,14 +2,23 @@ use super::*;
 
 /// The shared part of the configuration, with one agent under it.
 fn one_agent() -> &'static str {
-    r#"{"catalog":"/catalog.json","workspace":"/workspace","runtimes":{"claude":{"command":"/node","args":["/acp.js"],"model":"configured-model"}}}"#
+    r#"{"catalog":"/catalog.json","workspace":"/workspace","runtimes":{"claude":{"command":"/node","args":["/acp.js"],"model":"configured-model","toolsEnabled":true}}}"#
 }
 
 #[test]
 fn agent_configuration_is_explicit_and_rejects_unknown_provider_switches() {
     let config: AgentsConfig = serde_json::from_str(one_agent()).unwrap();
     let claude = config.runtime(AgentId::Claude).unwrap();
-    assert!(!claude.tools_enabled);
+    assert!(claude.tools_enabled);
+    // Whether an agent runs its own tools is stated, never defaulted: `false` is
+    // the one value Codex cannot start on, so a default would have failed the
+    // whole gateway for anyone who left the field out.
+    let mut value: serde_json::Value = serde_json::from_str(one_agent()).unwrap();
+    value["runtimes"]["claude"]
+        .as_object_mut()
+        .unwrap()
+        .remove("toolsEnabled");
+    assert!(serde_json::from_value::<AgentsConfig>(value).is_err());
     assert_eq!(claude.output_tokens, 4096);
     assert_eq!(claude.context_tokens, 100000);
     let mut value: serde_json::Value = serde_json::from_str(one_agent()).unwrap();
@@ -26,7 +35,7 @@ fn an_agent_is_started_by_a_command_and_its_arguments() {
     // Not a runtime and an entry script: an agent that speaks the protocol
     // itself is its own command with its own subcommand, and that could not be
     // said at all in the narrower shape.
-    let value = r#"{"catalog":"/catalog.json","workspace":"/workspace","runtimes":{"codex":{"command":"/usr/local/bin/codex","args":["acp"],"model":"configured-model"}}}"#;
+    let value = r#"{"catalog":"/catalog.json","workspace":"/workspace","runtimes":{"codex":{"command":"/usr/local/bin/codex","args":["acp"],"model":"configured-model","toolsEnabled":true}}}"#;
     let config: AgentsConfig = serde_json::from_str(value).unwrap();
     let codex = config.runtime(AgentId::Codex).unwrap();
     assert_eq!(codex.command, std::path::Path::new("/usr/local/bin/codex"));
@@ -40,7 +49,7 @@ fn an_agent_is_started_by_a_command_and_its_arguments() {
 
 #[test]
 fn only_the_arguments_that_are_paths_are_this_machines_to_find() {
-    let value = r#"{"catalog":"/catalog.json","workspace":"/workspace","runtimes":{"claude":{"command":"/node","args":["/harness/index.js","--flag","relative/path"],"model":"m"}}}"#;
+    let value = r#"{"catalog":"/catalog.json","workspace":"/workspace","runtimes":{"claude":{"command":"/node","args":["/harness/index.js","--flag","relative/path"],"model":"m","toolsEnabled":true}}}"#;
     let config: AgentsConfig = serde_json::from_str(value).unwrap();
     assert_eq!(
         config.runtime(AgentId::Claude).unwrap().paths(),
@@ -60,8 +69,7 @@ fn a_second_agent_makes_the_choice_between_them_a_thing_to_state() {
     // conversation on an agent they never named, which is the whole reason the
     // choice exists.
     let mut value: serde_json::Value = serde_json::from_str(one_agent()).unwrap();
-    value["runtimes"]["codex"] =
-        serde_json::json!({"command":"/node","args":["/codex.js"],"model":"configured-model"});
+    value["runtimes"]["codex"] = serde_json::json!({"command":"/node","args":["/codex.js"],"model":"configured-model","toolsEnabled":true});
     let config: AgentsConfig = serde_json::from_value(value.clone()).unwrap();
     assert!(config.selected().is_err());
     value["selected"] = serde_json::json!("codex");
@@ -84,8 +92,7 @@ fn an_agent_name_with_no_adapter_is_reported_rather_than_skipped() {
     // Skipping it would leave that agent missing from setup, which reads as an
     // agent that is not installed on a machine where it is.
     let mut value: serde_json::Value = serde_json::from_str(one_agent()).unwrap();
-    value["runtimes"]["gemini"] =
-        serde_json::json!({"command":"/node","args":["/gemini.js"],"model":"configured-model"});
+    value["runtimes"]["gemini"] = serde_json::json!({"command":"/node","args":["/gemini.js"],"model":"configured-model","toolsEnabled":true});
     let config: AgentsConfig = serde_json::from_value(value).unwrap();
     assert_eq!(config.unknown(), Some("gemini"));
     let refused = config.selected().unwrap_err().to_string();

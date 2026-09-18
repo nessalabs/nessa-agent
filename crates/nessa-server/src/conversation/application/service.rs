@@ -484,6 +484,27 @@ impl ConversationService {
                                     _cleanup: None,
                                     retryable: true,
                                 })?;
+                            // The agent the record names, never this server's
+                            // current default: a conversation restores a
+                            // provider session that belongs to one agent, and
+                            // reopening it on another would hand that session
+                            // to a harness that never wrote it.
+                            //
+                            // Settled before the storage lease is taken. A
+                            // conversation this build cannot open is refused the
+                            // same way on every attempt, and there is no reason
+                            // for each of those attempts to acquire the
+                            // exclusive lease and drop it again.
+                            let configured = service
+                                .inner
+                                .agents
+                                .get(record.agent())
+                                .cloned()
+                                .ok_or(OpeningFailure {
+                                    cause: ConversationError::AgentNotConfigured,
+                                    _cleanup: None,
+                                    retryable: false,
+                                })?;
                             let session_id =
                                 SessionId::new(id.to_string()).expect("UUID session key");
                             let manager = SessionManager::open(
@@ -496,21 +517,6 @@ impl ConversationService {
                                 let retryable = matches!(error, StorageError::Busy | StorageError::Io(_));
                                 OpeningFailure { cause: ConversationError::Storage(error), _cleanup: None, retryable }
                             })?;
-                            // The agent the record names, never this server's
-                            // current default: a conversation restores a
-                            // provider session that belongs to one agent, and
-                            // reopening it on another would hand that session
-                            // to a harness that never wrote it.
-                            let configured = service
-                                .inner
-                                .agents
-                                .get(record.agent())
-                                .cloned()
-                                .ok_or(OpeningFailure {
-                                    cause: ConversationError::AgentNotConfigured,
-                                    _cleanup: None,
-                                    retryable: false,
-                                })?;
                             let agent = Agent::new(configured.provider.clone(), manager)
                                 .await
                                 .map_err(|error| {

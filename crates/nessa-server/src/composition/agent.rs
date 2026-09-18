@@ -25,8 +25,9 @@
 //! reported by name rather than ignored.
 //!
 //! An agent absent from the configuration is one this server cannot start.
-//! That is reported where it is asked about — setup says the agent is not
-//! installed — rather than substituted for at startup.
+//! That is reported where it is asked about — setup says the agent is not set
+//! up here, which is a fact about this installation and not about the machine —
+//! rather than substituted for at startup.
 use crate::agents::domain::AgentId;
 use crate::conversation::application::ConversationAgent;
 use crate::core::RunError;
@@ -84,7 +85,12 @@ pub(super) struct AgentRuntime {
     /// to be built without it, so one shared `false` — set by someone thinking
     /// about Claude — would take the whole server down over an agent they were
     /// not configuring.
-    #[serde(default)]
+    ///
+    /// Stated rather than defaulted, for the same reason. `false` is the one
+    /// value Codex cannot start on, so a default would have reproduced exactly
+    /// that failure for anyone who simply left the field out — and reproduced it
+    /// as the whole gateway refusing to start, since every configured agent is
+    /// built. Omitting it now fails to parse, naming the field.
     pub tools_enabled: bool,
 }
 
@@ -185,8 +191,11 @@ impl AgentsConfig {
             return Err(RunError::Agent("agent paths must be absolute".into()));
         }
         for (agent, runtime) in self.agents() {
+            // Only the command is required to be absolute. A relative argument
+            // is not a path this server resolves at all — it is the agent's own
+            // vocabulary, passed through untouched — so there is nothing here to
+            // reject it for.
             if !runtime.command.is_absolute()
-                || runtime.paths().iter().any(|path| !path.is_absolute())
                 || runtime.model.trim().is_empty()
                 || runtime.output_tokens == 0
                 || runtime.context_tokens <= runtime.output_tokens

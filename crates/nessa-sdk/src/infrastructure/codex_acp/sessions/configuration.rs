@@ -9,12 +9,15 @@ use serde_json::Value;
 /// config options. So the two checks are different questions, and `mode` is what
 /// tells them apart.
 ///
-/// `None` — the session has just been created and this profile has not made its
-/// selections yet. The only thing that can be settled is whether the model this
-/// binding is configured for is one Codex will accept, which is worth settling
-/// here: "Codex does not offer this model" is a configuration mistake, and
-/// finding it out at the moment of selection would report it as a refused
-/// selection instead.
+/// `None` — this profile's selections are not all applied yet. That covers the
+/// newly created session, the response to the model request that precedes the
+/// mode request, and any `config_option_update` Codex sends while those requests
+/// are still going out. The only thing that can be settled is whether the model
+/// this binding is configured for is one Codex will accept, which is worth
+/// settling here: "Codex does not offer this model" is a configuration mistake,
+/// and finding it out at the moment of selection would report it as a refused
+/// selection instead. What it deliberately does not check is `currentValue`: the
+/// selection that would set it is the one still in flight.
 ///
 /// `Some(mode)` — every selection has been applied, and the response must now
 /// read back exactly what was asked for.

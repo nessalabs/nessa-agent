@@ -29,8 +29,12 @@ pub(super) async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
+    // This build runs no conversations at all, which is not the same fact as a
+    // caller naming an agent this one is not configured for. Sharing a code
+    // between them made the panel tell someone with a working Claude that the
+    // gateway has no agent configured.
     let Some(service) = state.conversations.as_ref() else {
-        return failure(&frame.id, "agent_not_configured");
+        return failure(&frame.id, "conversations_not_configured");
     };
     macro_rules! params {
         ($kind:ty) => {

@@ -25,7 +25,8 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
     /// `configured` is true only for the last configuration response, when every
     /// request from [`Self::session_configuration`] has been applied. Before
     /// that the session is still being configured, so a profile checks only what
-    /// its own ordering has already settled.
+    /// it can already require — which is what its own requests have not yet
+    /// changed, not everything they will eventually settle.
     fn verify_session(
         &self,
         result: &Value,

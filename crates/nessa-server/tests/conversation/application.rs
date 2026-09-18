@@ -1484,6 +1484,154 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
 }
 
 #[tokio::test]
+async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_storage() {
+    // The other side of the record deciding: an operator drops an agent from the
+    // configuration and restarts, and every conversation created on it is now
+    // unopenable. It must say so as a refusal nobody should retry, and it must
+    // not take the exclusive storage lease to find that out — the answer is the
+    // same on every attempt and leasing is what a reopen that could work does.
+    let codex = Arc::new(ProviderFactory::default());
+    let claude = Arc::new(ProviderFactory::default());
+    let repository = Arc::new(MemoryRepository::default());
+    let storage = Arc::new(InMemoryStorage::new());
+    let agent = |id, factory: &Arc<ProviderFactory>| {
+        (
+            id,
+            ConversationAgent {
+                provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+                reserved_output_tokens: 4096,
+            },
+        )
+    };
+    let service = ConversationService::new(
+        ConversationAgents::new(
+            HashMap::from([
+                agent(AgentId::Claude, &claude),
+                agent(AgentId::Codex, &codex),
+            ]),
+            AgentId::Claude,
+        )
+        .unwrap(),
+        storage.clone(),
+        repository.clone(),
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller("panel", "create"), Some(AgentId::Codex))
+        .await
+        .unwrap();
+    service.shutdown().await.unwrap();
+    drop(service);
+    tokio::task::yield_now().await;
+
+    // Restarted with Codex no longer configured at all.
+    let without_codex = ConversationService::new(
+        ConversationAgents::new(
+            HashMap::from([agent(AgentId::Claude, &claude)]),
+            AgentId::Claude,
+        )
+        .unwrap(),
+        storage.clone(),
+        repository,
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    assert!(matches!(
+        without_codex
+            .create(id.clone(), caller("panel", "reopen"), None)
+            .await,
+        Err(ConversationError::AgentNotConfigured)
+    ));
+    // Never opened on the agent that is still here, and never opened at all.
+    assert_eq!(claude.open_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(codex.open_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_leased() {
+    // Held by someone else, this conversation's storage would answer `Busy` to
+    // anyone who opened it. So a refusal that still says `AgentNotConfigured` is
+    // proof the agent was settled first — and that a conversation no build here
+    // can open stops taking and dropping an exclusive lease on every attempt.
+    let claude = Arc::new(ProviderFactory::default());
+    let codex = Arc::new(ProviderFactory::default());
+    let repository = Arc::new(MemoryRepository::default());
+    let storage = Arc::new(InMemoryStorage::new());
+    let agent = |id, factory: &Arc<ProviderFactory>| {
+        (
+            id,
+            ConversationAgent {
+                provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+                reserved_output_tokens: 4096,
+            },
+        )
+    };
+    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    {
+        let service = ConversationService::new(
+            ConversationAgents::new(
+                HashMap::from([
+                    agent(AgentId::Claude, &claude),
+                    agent(AgentId::Codex, &codex),
+                ]),
+                AgentId::Claude,
+            )
+            .unwrap(),
+            storage.clone(),
+            repository.clone(),
+            Arc::new(AcceptingCreationAudit),
+            Arc::new(TestClock),
+            ConversationLimits::default(),
+            None,
+        )
+        .unwrap();
+        service
+            .create(id.clone(), caller("panel", "create"), Some(AgentId::Codex))
+            .await
+            .unwrap();
+        service.shutdown().await.unwrap();
+    }
+    tokio::task::yield_now().await;
+
+    // Somebody else is holding this conversation's storage.
+    let held = storage
+        .open(SessionId::new(id.to_string()).unwrap())
+        .await
+        .unwrap();
+
+    let without_codex = ConversationService::new(
+        ConversationAgents::new(
+            HashMap::from([agent(AgentId::Claude, &claude)]),
+            AgentId::Claude,
+        )
+        .unwrap(),
+        storage.clone(),
+        repository,
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let refusal = without_codex
+        .create(id.clone(), caller("panel", "reopen"), None)
+        .await;
+    assert!(
+        matches!(refusal, Err(ConversationError::AgentNotConfigured)),
+        "the agent must be settled before the storage lease is asked for, got {refusal:?}"
+    );
+    drop(held);
+}
+
+#[tokio::test]
 async fn an_agent_this_server_cannot_start_is_refused_before_anything_is_written() {
     let (service, provider, repository, _) = fixture(ConversationLimits::default());
     let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
