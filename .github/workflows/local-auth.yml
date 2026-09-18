@@ -107,6 +107,10 @@ jobs:
           root.mkdir()
           shutil.copytree('packages/nessa-client', root / 'packages/nessa-client')
           shutil.copytree('scripts', root / 'scripts')
+          # The scripts resolve stage defaults — the gateway port among them —
+          # from `protocol/`, relative to the tree they are in. Copied because
+          # the harness is that tree here, not the checkout beside it.
+          shutil.copytree('protocol/defaults', root / 'protocol/defaults')
           target = root / 'target/debug'
           target.mkdir(parents=True)
           binary = 'nessa.exe' if '${{ runner.os }}' == 'Windows' else 'nessa'
