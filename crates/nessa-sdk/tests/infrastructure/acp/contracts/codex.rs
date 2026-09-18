@@ -254,3 +254,31 @@ async fn a_binding_codex_cannot_honour_is_refused_before_a_process_starts() {
     );
     assert!(CodexAcpProvider::new(config, &model, limits, audit).is_ok());
 }
+
+#[tokio::test]
+async fn codex_reporting_its_configuration_while_it_is_being_configured_is_not_a_failure() {
+    // This profile applies its selections in order — model, then mode — and a
+    // provider is free to report its options between the two. Held to the
+    // finished state, that notification says the model is not the configured
+    // one, because the request that selects it is the one still in flight, and
+    // the session dies during startup over a provider telling the truth.
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_codex_binding("startup-update-configuring", 16);
+    let opened = binding.open(None).await.unwrap();
+    assert_eq!(
+        opened
+            .session
+            .execute(prompt("after the update"))
+            .await
+            .into_result()
+            .unwrap(),
+        ExecutionOutcome::Completed
+    );
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
+}

@@ -93,6 +93,7 @@ impl AcpProfile for TestAcpProfile {
         _: &str,
         _: &Value,
         _: &EffectiveCapabilities,
+        _: bool,
     ) -> Result<(), AgentError> {
         Ok(())
     }
@@ -572,8 +573,10 @@ impl AcpProfile for GatedReadyProfile {
         kind: &str,
         update: &Value,
         capabilities: &EffectiveCapabilities,
+        configured: bool,
     ) -> Result<(), AgentError> {
-        self.inner.verify_update(kind, update, capabilities)
+        self.inner
+            .verify_update(kind, update, capabilities, configured)
     }
     fn validate_execution(
         &self,

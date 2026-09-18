@@ -96,6 +96,11 @@ for line in sys.stdin:
         configured_steps.append(params["configId"])
         if params["configId"] == "model":
             assert params["value"] == model
+            # Codex reporting its own configuration while this binding is still
+            # applying it: the model it names is the one it had, because the
+            # selection being answered here has not been made yet.
+            if mode == "startup-update-configuring":
+                update({"sessionUpdate": "config_option_update", **configs()})
             if mode == "model-refused":
                 send({"id": msg["id"], "error": {"code": -32042, "message": "unknown model"}})
                 continue

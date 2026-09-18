@@ -26,6 +26,12 @@ impl StubAgentProbe {
 }
 
 impl AgentProbe for StubAgentProbe {
+    /// Configured for every agent: these tests are about what the machine
+    /// answers, and an unconfigured agent is never asked.
+    fn configured(&self, _agent: AgentId) -> bool {
+        true
+    }
+
     fn installed(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
         self.installed
     }
@@ -116,6 +122,10 @@ impl WaitingAgentProbe {
 }
 
 impl AgentProbe for WaitingAgentProbe {
+    fn configured(&self, _agent: AgentId) -> bool {
+        true
+    }
+
     fn installed(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
         self.probe();
         Ok(true)

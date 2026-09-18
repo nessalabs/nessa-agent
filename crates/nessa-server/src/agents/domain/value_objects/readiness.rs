@@ -13,6 +13,13 @@ pub enum Readiness {
     NeedsAuthentication,
     /// The adapter is not installed beside this server.
     NotInstalled,
+    /// This server has nothing configured to launch for this agent.
+    ///
+    /// Apart from [`Self::NotInstalled`] because it is a fact about this
+    /// installation and not about the machine. Reported as "not installed", a
+    /// person with the agent already on their machine would be sent to install
+    /// it again, and nothing would change when they did.
+    NotConfigured,
     /// Installed, but this machine would not say whether anything is signed in
     /// to it. Kept apart from a plain no so that a locked keychain is not
     /// reported as a fact about the person's account.
@@ -20,13 +27,23 @@ pub enum Readiness {
 }
 
 impl Readiness {
-    /// What two answers from the host make of an agent.
+    /// What the host's answers make of an agent, where there was anything to
+    /// ask about.
     ///
-    /// Installation is decided first, because it is the reason signing in would
-    /// not help. An agent this machine cannot locate is one this server cannot
-    /// start, so an undetermined installation is reported as not installed —
-    /// the same advice, honestly reached.
-    pub fn from_host(installed: HostAnswer, authenticated: HostAnswer) -> Self {
+    /// `None` is an agent this server has no configuration to launch. It comes
+    /// before the other two questions rather than as a third answer among them,
+    /// because where nothing would be launched neither question is about this
+    /// agent's presence on the machine — they are about a launch nobody
+    /// configured.
+    ///
+    /// Otherwise installation is decided first, because it is the reason
+    /// signing in would not help. An agent this machine cannot locate is one
+    /// this server cannot start, so an undetermined installation is reported as
+    /// not installed — the same advice, honestly reached.
+    pub fn from_host(answers: Option<(HostAnswer, HostAnswer)>) -> Self {
+        let Some((installed, authenticated)) = answers else {
+            return Readiness::NotConfigured;
+        };
         match (installed, authenticated) {
             (HostAnswer::No | HostAnswer::Undetermined, _) => Readiness::NotInstalled,
             (HostAnswer::Yes, HostAnswer::Yes) => Readiness::Ready,

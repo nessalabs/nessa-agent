@@ -108,10 +108,15 @@ impl AcpProfile for ClaudeProfile {
         kind: &str,
         update: &Value,
         capabilities: &EffectiveCapabilities,
+        configured: bool,
     ) -> Result<(), AgentError> {
         match kind {
+            // Checked against whatever this runtime has actually applied. A
+            // provider is entitled to report its options before the selection
+            // this binding asked for has been answered, and failing the session
+            // over that would be failing it for being early.
             "config_option_update" => {
-                configuration::verify_config(update, capabilities.model().model_id(), true)
+                configuration::verify_config(update, capabilities.model().model_id(), configured)
             }
             "current_mode_update" if string(update, "currentModeId")? != "default" => {
                 Err(protocol("permission mode changed"))

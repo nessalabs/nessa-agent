@@ -32,11 +32,20 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
         capabilities: &EffectiveCapabilities,
         configured: bool,
     ) -> Result<(), AgentError>;
+    /// Check a configuration notification against the configured context.
+    ///
+    /// `configured` means the same thing it does above, and is here for the same
+    /// reason: a provider may report its configuration while this runtime is
+    /// still applying it, and a profile that applies its requests in order has
+    /// not settled the later ones yet. Holding such a notification to the final
+    /// state would fail the session over a notification that was telling the
+    /// truth.
     fn verify_update(
         &self,
         kind: &str,
         update: &Value,
         capabilities: &EffectiveCapabilities,
+        configured: bool,
     ) -> Result<(), AgentError>;
     fn validate_execution(
         &self,

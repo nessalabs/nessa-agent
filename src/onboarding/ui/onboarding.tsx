@@ -200,6 +200,10 @@ function readinessNote(
   if (readiness === "not-supported") return "Coming soon"
   if (readiness === "needs-authentication") return "Needs sign-in"
   if (readiness === "not-installed") return "Not installed"
+  // Not "not installed": this Nessa was not set up to run it, and the agent may
+  // be sitting on the machine already. Telling someone to install what they
+  // have is advice that cannot work however many times they take it.
+  if (readiness === "not-configured") return "Not set up here"
   if (failure === "unreachable") return "Can’t reach Nessa"
   if (failure === "unreadable") return "Unexpected answer"
   return "Checking…"

@@ -32,10 +32,13 @@ export function gatewayEffects(
       if (existing) return existing
       // The transport is checked before the agent is asked for, so a
       // disconnected panel still fails as a disconnected panel rather than
-      // waiting on the host first.
-      const conversation = api()
+      // waiting on the host first. The handle that check produced is thrown
+      // away rather than held across the await: asking the host is a round
+      // trip, and a session that was retired inside it must not be the one
+      // this create is sent over.
+      api()
       const request = chosenAgent()
-        .then((agent) => conversation.create({ conversationId, agent }))
+        .then((agent) => api().create({ conversationId, agent }))
         .catch((error) => {
           creations.delete(conversationId)
           throw error

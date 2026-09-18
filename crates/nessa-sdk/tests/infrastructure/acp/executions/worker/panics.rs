@@ -345,8 +345,10 @@ impl AcpProfile for PanicProfile {
         kind: &str,
         value: &Value,
         capabilities: &EffectiveCapabilities,
+        configured: bool,
     ) -> Result<(), AgentError> {
-        self.inner.verify_update(kind, value, capabilities)
+        self.inner
+            .verify_update(kind, value, capabilities, configured)
     }
     fn validate_execution(
         &self,

@@ -99,9 +99,19 @@ impl AcpProfile for CodexProfile {
         kind: &str,
         update: &Value,
         _: &EffectiveCapabilities,
+        configured: bool,
     ) -> Result<(), AgentError> {
         match kind {
-            "config_option_update" => configuration::verify_config(update, &self.model, Some(MODE)),
+            // Held to the same standard as the configuration responses, and no
+            // higher: this profile sets the model before the mode, so between
+            // those two requests a provider reporting its options is correct to
+            // say the mode is not `read-only` yet.
+            "config_option_update" => {
+                configuration::verify_config(update, &self.model, configured.then_some(MODE))
+            }
+            // A mode this binding has already put the session into, changing
+            // afterwards, is a different matter: that is the session leaving
+            // the approval policy it was given, whenever it arrives.
             "current_mode_update" if string(update, "currentModeId")? != MODE => {
                 Err(protocol("approval mode changed"))
             }

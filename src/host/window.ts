@@ -322,8 +322,12 @@ export async function revealSetupWindow() {
  */
 export async function loadChosenAgent(): Promise<string | undefined> {
   if (!inTauri) return undefined
-  const { invoke } = await import("@tauri-apps/api/core")
   try {
+    // The import is inside the try with the call it makes. Loading the host
+    // module is a fetch like any other and can fail on its own; left outside,
+    // that failure would come back as a rejection from a function whose whole
+    // contract is that it answers.
+    const { invoke } = await import("@tauri-apps/api/core")
     return (await invoke<string | null>("chosen_agent")) ?? undefined
   } catch (cause) {
     // Survivable: the conversation starts on the gateway's default instead of

@@ -37,6 +37,7 @@ impl AcpProfile for PolicyProfile {
         kind: &str,
         value: &Value,
         _: &EffectiveCapabilities,
+        _: bool,
     ) -> Result<(), AgentError> {
         let count = self.updates.fetch_add(1, Ordering::SeqCst) + 1;
         if let Some((threshold, close)) = &self.close_after {
@@ -179,6 +180,7 @@ async fn worker_with_ready_frames_boundary(
             operation_capabilities,
             permissions: HashMap::new(),
             shutdown_deadline: None,
+            configured: true,
             closing: false,
             deferred_outcome: None,
             provider_result: None,

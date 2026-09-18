@@ -78,13 +78,17 @@ fn read(root: &Path, id: &ConversationId) -> Result<Option<Conversation>, Conver
     if stored_id != *id {
         return Err(ConversationError::Metadata);
     }
-    // A record naming an agent this server has no adapter for is unreadable
-    // rather than reopened on some other agent: the conversation's transcript
-    // and restored session belong to the agent named, and the honest answer is
-    // that this build cannot open it.
+    // A record naming an agent this server has no adapter for is refused rather
+    // than reopened on some other agent: the conversation's transcript and
+    // restored session belong to the agent named, and the honest answer is that
+    // this build cannot open it.
+    //
+    // Refused as its own failure and not as unreadable metadata. The record
+    // parsed, storage is working, and a retry will not change the answer, which
+    // is what an "unavailable" would have promised.
     let agent = match value.agent.as_deref() {
         None => AgentId::Claude,
-        Some(name) => AgentId::parse(name).ok_or(ConversationError::Metadata)?,
+        Some(name) => AgentId::parse(name).ok_or(ConversationError::AgentUnsupported)?,
     };
     Ok(Some(
         Conversation::new(

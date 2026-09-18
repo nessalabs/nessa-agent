@@ -28,8 +28,16 @@ export function createDependencies(
   // written down before the panel exists and nothing changes it while the panel
   // runs, so re-asking would be one host round trip per new conversation for an
   // answer that cannot have moved.
+  //
+  // What is never kept is a failure. Every conversation is created through this,
+  // so a remembered rejection is not one lost answer, it is a panel that can no
+  // longer start, send, close or answer a permission until it is restarted.
   let chosen: Promise<string | undefined> | undefined
-  const chosenAgent = () => (chosen ??= loadChosenAgent())
+  const chosenAgent = () =>
+    (chosen ??= loadChosenAgent().catch((cause: unknown) => {
+      chosen = undefined
+      throw cause
+    }))
   return {
     session,
     attachments: createAttachmentResources(),

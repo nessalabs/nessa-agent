@@ -174,9 +174,11 @@ async fn a_record_naming_an_agent_this_build_cannot_start_is_not_opened_on_anoth
     )
     .unwrap();
     drop(file);
-    assert!(matches!(
-        repository.load(&id).await,
-        Err(ConversationError::Metadata)
-    ));
+    // Its own failure, and never "storage is unavailable": the record was read
+    // without trouble and a retry cannot change the answer, so a caller told
+    // storage was down would go on asking a question this build cannot answer.
+    let failure = repository.load(&id).await;
+    assert!(matches!(failure, Err(ConversationError::AgentUnsupported)));
+    assert!(!matches!(failure, Err(ConversationError::Metadata)));
     std::fs::remove_dir_all(root).ok();
 }

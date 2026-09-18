@@ -39,6 +39,10 @@ struct CountingProbe {
 }
 
 impl AgentProbe for CountingProbe {
+    fn configured(&self, _agent: AgentId) -> bool {
+        true
+    }
+
     fn installed(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
         self.asked.fetch_add(1, Ordering::SeqCst);
         Ok(true)
@@ -54,6 +58,10 @@ impl AgentProbe for CountingProbe {
 struct PanickingProbe;
 
 impl AgentProbe for PanickingProbe {
+    fn configured(&self, _agent: AgentId) -> bool {
+        true
+    }
+
     fn installed(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
         panic!("this machine came apart while being asked");
     }

@@ -87,6 +87,13 @@ struct Worker<P> {
     operation_capabilities: watch::Sender<OperationCapabilities>,
     permissions: HashMap<PermissionId, RpcId>,
     shutdown_deadline: Option<Instant>,
+    /// True once every request from `session_configuration` has been applied.
+    ///
+    /// The session's configuration requests are answered in order, and the
+    /// provider may send `config_option_update` while they are still going out.
+    /// Checking such a notification against the finished state would reject it
+    /// for reporting the state this runtime had not asked for yet.
+    configured: bool,
     closing: bool,
     deferred_outcome: Option<ExecutionOutcome>,
     provider_result: Option<Result<ExecutionOutcome, AgentError>>,
@@ -134,6 +141,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         operation_capabilities,
         permissions: HashMap::new(),
         shutdown_deadline: None,
+        configured: false,
         closing: false,
         deferred_outcome: None,
         provider_result: None,
@@ -618,6 +626,7 @@ impl<P: AcpProfile> Worker<P> {
             self.profile
                 .verify_session(&result, &self.capabilities, step == last)?;
         }
+        self.configured = true;
         self.operation_capabilities
             .send_replace(OperationCapabilities {
                 native_steering: self.steering_supported,
@@ -1309,7 +1318,12 @@ impl<P: AcpProfile> Worker<P> {
         let kind = fields::string(update, "sessionUpdate")?;
         match kind {
             "config_option_update" | "current_mode_update" => {
-                return self.profile.verify_update(kind, update, &self.capabilities);
+                return self.profile.verify_update(
+                    kind,
+                    update,
+                    &self.capabilities,
+                    self.configured,
+                );
             }
             "agent_message_chunk" | "agent_thought_chunk" | "tool_call" | "tool_call_update" => {
                 if self.active.is_none() {

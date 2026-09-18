@@ -215,6 +215,7 @@ fn error_code(error: &ConversationError) -> &'static str {
         ConversationError::InvalidInput => "invalid_request",
         ConversationError::NotFound => "conversation_not_found",
         ConversationError::AgentNotConfigured => "agent_not_configured",
+        ConversationError::AgentUnsupported => "agent_unsupported",
         ConversationError::Capacity => "conversation_capacity",
         ConversationError::Unavailable
         | ConversationError::Retirement(_)

@@ -71,7 +71,16 @@ cpSync(
 // an installation that cannot offer that agent, and the server says so on
 // startup rather than after someone picks it.
 const harnesses = {}
-for (const name of ["claude-acp", "codex-acp"]) {
+// Each harness and the one package it exists to pin. Named rather than taken
+// from the manifest, because what goes into the runtime fingerprint has to be
+// the version of a package we chose: reading "whichever dependency is listed
+// first" would silently start fingerprinting something else the day a harness
+// gains a second one.
+const HARNESSES = {
+  "claude-acp": "@agentclientprotocol/claude-agent-acp",
+  "codex-acp": "@agentclientprotocol/codex-acp",
+}
+for (const [name, pinned] of Object.entries(HARNESSES)) {
   const harness = join(out, name)
   mkdirSync(harness, { recursive: true })
   for (const file of ["package.json", "package-lock.json"])
@@ -82,7 +91,9 @@ for (const name of ["claude-acp", "codex-acp"]) {
   })
   materializeBinLinks(join(harness, "node_modules"))
   const manifest = JSON.parse(readFileSync(join(harness, "package.json"), "utf8"))
-  harnesses[name] = Object.values(manifest.dependencies)[0]
+  const version = manifest.dependencies?.[pinned]
+  if (!version) throw new Error(`${name} no longer pins ${pinned}`)
+  harnesses[name] = version
 }
 cpSync(join(root, "crates/nessa-sdk/data/models.json"), join(out, "models.json"))
 // Ad-hoc sign nested executables for local distribution. Release signing remains Tauri's responsibility.

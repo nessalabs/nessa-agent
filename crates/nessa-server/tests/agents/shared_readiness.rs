@@ -88,6 +88,10 @@ struct InstalledOnSecondAsk {
 }
 
 impl AgentProbe for InstalledOnSecondAsk {
+    fn configured(&self, _agent: AgentId) -> bool {
+        true
+    }
+
     fn installed(&self, agent: AgentId) -> Result<bool, ProbeFailure> {
         Ok(!self.asked.lock().unwrap().insert(agent))
     }
@@ -121,6 +125,10 @@ async fn an_answer_is_never_kept_for_a_caller_who_was_not_waiting_for_it() {
 struct PanickingProbe;
 
 impl AgentProbe for PanickingProbe {
+    fn configured(&self, _agent: AgentId) -> bool {
+        true
+    }
+
     fn installed(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
         panic!("this machine came apart while being asked");
     }

@@ -1,10 +1,11 @@
 /** First-run setup: which agent runs a conversation, and how far setup has got.
  *
  * This is the panel's own chrome state, not product state: it decides what the
- * window shows before a conversation exists. The choice is recorded here and
- * nothing else — connecting the selected agent to a live gateway is a separate
- * step that does not exist yet, so nothing in this module claims an agent is
- * ready to run.
+ * window shows before a conversation exists. The choice made here is what the
+ * panel later starts conversations on — the host records it on the way out of
+ * setup and the panel reads it back — so this module decides which agent runs,
+ * and says nothing about whether that agent is working. Readiness is the
+ * gateway's answer, asked for separately and never inferred from a choice.
  */
 
 /** An agent Nessa can be set up against. */
@@ -26,6 +27,10 @@ export type AgentReadiness =
   | "needs-authentication"
   /** Nothing to sign in to: the agent's own runtime is not on this machine. */
   | "not-installed"
+  /** The agent is one Nessa supports, and this installation of Nessa was not
+   * set up to run it. Apart from `not-installed` because installing the agent
+   * would change nothing: it may already be on the machine. */
+  | "not-configured"
   /** Nessa has no adapter for this agent at all. The one reason that will not
    * change by doing anything on this machine. */
   | "not-supported"
