@@ -37,7 +37,7 @@ use crate::domain::agent_execution::permissions::{
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::infrastructure::{
-    json_rpc::{self, Envelope, Reader, RpcId},
+    json_rpc::{self, Envelope, Reader, RpcError, RpcId},
     process::ProcessScope,
 };
 use serde_json::{json, Value};
@@ -56,6 +56,28 @@ use tokio::{
     sync::{mpsc, oneshot, watch},
     time::{timeout, Instant},
 };
+
+/// Turn a provider's error response into this adapter's error, reporting what
+/// the provider said on the way past.
+///
+/// The error itself carries only the code, because the code is what decides
+/// anything. The text is the operator's: `-32000` from a Codex that is not
+/// signed in is indistinguishable from any other provider refusal, and
+/// "Authentication required" is the entire answer. Logged once, here, so every
+/// provider failure says as much as the provider said.
+fn provider_failure(phase: &str, error: RpcError) -> AgentError {
+    match &error.message {
+        Some(message) => {
+            tracing::warn!(code = error.code, phase, %message, "provider refused")
+        }
+        None => tracing::warn!(
+            code = error.code,
+            phase,
+            "provider refused without a message"
+        ),
+    }
+    AgentError::Provider { code: error.code }
+}
 
 type ExecutionReply = oneshot::Sender<ProviderExecutionReply>;
 enum DispatchReadiness {
@@ -547,7 +569,7 @@ impl<P: AcpProfile> Worker<P> {
                 return Err(json_rpc::protocol("unexpected startup response"));
             }
             if let Some(error) = message.error {
-                return Err(AgentError::Provider { code: error.code });
+                return Err(provider_failure("startup", error));
             }
             return message
                 .result
@@ -1197,7 +1219,7 @@ impl<P: AcpProfile> Worker<P> {
             .is_some_and(|pending| message.id == Some(RpcId::Number(pending.id)))
         {
             let result = match message.error {
-                Some(error) => Err(AgentError::Provider { code: error.code }),
+                Some(error) => Err(provider_failure("steering", error)),
                 None => message
                     .result
                     .ok_or_else(|| json_rpc::protocol("missing steering result"))
@@ -1224,7 +1246,7 @@ impl<P: AcpProfile> Worker<P> {
         }
         if let Some(error) = message.error {
             // Keep the reply until teardown has recorded pending cancellations.
-            let error = AgentError::Provider { code: error.code };
+            let error = provider_failure("prompt", error);
             self.provider_result = Some(Err(error.clone()));
             return Err(error);
         }
