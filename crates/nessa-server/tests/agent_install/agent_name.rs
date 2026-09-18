@@ -46,14 +46,36 @@ fn a_name_longer_than_a_path_component_is_not_a_name() {
 }
 
 #[test]
-fn a_refusal_says_what_was_offered_and_what_is_allowed() {
-    let refusal = AgentName::parse("Opencode").expect_err("uppercase is not a name");
-    assert_eq!(refusal.offered(), "Opencode");
+fn a_refusal_names_the_rule_that_was_broken_and_no_other() {
+    // The message is the whole of what a person gets back from
+    // `nessa install-agent`. A line naming a rule the name already satisfies
+    // reads as a contradiction and leaves nothing to act on — so each rule has
+    // to answer for itself, and for itself only.
+    let long = "a".repeat(65);
+    for (offered, expected, wrong) in [
+        ("Opencode", "lowercase letters", "device"),
+        ("con", "device", "lowercase letters"),
+        (long.as_str(), "at most 64", "lowercase letters"),
+    ] {
+        let refusal = AgentName::parse(offered).expect_err("not an agent name");
+        assert_eq!(refusal.offered(), offered);
+        let message = refusal.to_string();
+        assert!(
+            message.contains(expected),
+            "{offered:?} should be told about {expected:?}: {message}"
+        );
+        assert!(
+            !message.contains(wrong),
+            "{offered:?} was told about {wrong:?}, which it does not break: {message}"
+        );
+    }
+    // Nothing offered at all has nothing to quote back, so it says what is
+    // wanted instead.
+    let nothing = AgentName::parse("").expect_err("an empty name");
+    assert_eq!(nothing, NotAnAgentName::Empty);
     assert!(
-        refusal
-            .to_string()
-            .contains("lowercase letters, digits and hyphens"),
-        "unhelpful message: {refusal}"
+        nothing.to_string().contains("opencode"),
+        "an empty name should suggest one: {nothing}"
     );
 }
 
@@ -65,7 +87,7 @@ fn a_name_windows_answers_to_as_a_device_is_not_an_agent_name() {
     for reserved in ["con", "nul", "aux", "com1", "lpt9", "nul.txt"] {
         assert_eq!(
             AgentName::parse(reserved),
-            Err(NotAnAgentName(reserved.to_string())),
+            Err(NotAnAgentName::ReservedDevice(reserved.to_string())),
             "{reserved:?} cannot be a directory name everywhere"
         );
     }
@@ -73,13 +95,4 @@ fn a_name_windows_answers_to_as_a_device_is_not_an_agent_name() {
     for ordinary in ["console", "com10", "nullify"] {
         assert!(AgentName::parse(ordinary).is_ok(), "{ordinary:?} is a name");
     }
-    // The message is the only thing a person gets, and `con` satisfies the
-    // alphabet — so a message that names only the alphabet contradicts itself.
-    let message = AgentName::parse("con")
-        .expect_err("a device is not a name")
-        .to_string();
-    assert!(
-        message.contains("device"),
-        "a refused device name should say so: {message}"
-    );
 }

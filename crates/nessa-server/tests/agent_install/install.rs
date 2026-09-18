@@ -327,3 +327,24 @@ fn the_pinned_url_is_what_gets_fetched() {
         vec![release.archive_url().as_str().to_string()]
     );
 }
+
+#[test]
+fn the_fake_store_stages_the_way_the_real_one_does() {
+    // A test double is only as good as the part of the port it models. The real
+    // store creates a name of its own each time so that two installs at once
+    // cannot truncate each other's download, and `StagedArchive` makes that a
+    // promise of the port — so a fake that staged over one fixed path would let
+    // a test assert an ordering guarantee while quietly modelling the thing the
+    // guarantee exists to prevent.
+    let root = tempfile::tempdir().expect("temporary root");
+    let store = FakeStore::empty(root.path());
+
+    let first = store.stage(&agent()).expect("a staged file");
+    let second = store.stage(&agent()).expect("a second staged file");
+
+    assert_ne!(
+        first.path(),
+        second.path(),
+        "two downloads shared one staged file"
+    );
+}

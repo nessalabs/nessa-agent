@@ -3,32 +3,53 @@ use std::fmt;
 use super::device_names::names_a_device;
 
 /// Why a string is not an agent name.
+///
+/// One variant per rule rather than one message for all of them. `parse`
+/// enforces four things, and the only thing a person gets back is this line: a
+/// message naming rules the input already satisfies tells them nothing and
+/// reads as a contradiction. Somebody who typed sixty-five lowercase letters
+/// should be told about the length, not about the alphabet they used correctly.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NotAnAgentName(String);
+pub enum NotAnAgentName {
+    /// Nothing was offered.
+    Empty,
+    /// Longer than a name has any reason to be.
+    TooLong(String),
+    /// Something outside lowercase letters, digits and hyphens.
+    Spelling(String),
+    /// A name Windows answers to as a device rather than as a directory.
+    ReservedDevice(String),
+}
 
 impl NotAnAgentName {
     /// What was offered, for a diagnostic.
     pub fn offered(&self) -> &str {
-        &self.0
+        match self {
+            Self::Empty => "",
+            Self::TooLong(value) | Self::Spelling(value) | Self::ReservedDevice(value) => value,
+        }
     }
 }
 
 impl fmt::Display for NotAnAgentName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Both rules, because a name can break either one. Naming only the
-        // alphabet would tell somebody who typed `con` that it needs lowercase
-        // letters, which it already is — a message that contradicts itself and
-        // leaves nothing to do about it.
-        write!(
-            f,
-            "an agent name is lowercase letters, digits and hyphens, \
-             and not a name windows keeps for a device: {:?}",
-            self.0
-        )
+        match self {
+            Self::Empty => f.write_str("an agent name is needed, such as opencode"),
+            Self::TooLong(value) => write!(
+                f,
+                "an agent name is at most {MAXIMUM_NAME_LENGTH} characters: {value:?}"
+            ),
+            Self::Spelling(value) => write!(
+                f,
+                "an agent name is lowercase letters, digits and hyphens: {value:?}"
+            ),
+            Self::ReservedDevice(value) => write!(
+                f,
+                "an agent name cannot be one windows keeps for a device: {value:?}"
+            ),
+        }
     }
 }
-
-impl std::error::Error for NotAnAgentName {}
 
 /// The longest an agent name may be.
 ///
@@ -69,18 +90,22 @@ impl AgentName {
     /// can accept. The rule is shared rather than restated so the two cannot
     /// come apart.
     pub fn parse(value: &str) -> Result<Self, NotAnAgentName> {
-        if names_a_device(value) {
-            return Err(NotAnAgentName(value.to_owned()));
+        if value.is_empty() {
+            return Err(NotAnAgentName::Empty);
         }
-        let plain = !value.is_empty()
-            && value.len() <= MAXIMUM_NAME_LENGTH
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+        if value.len() > MAXIMUM_NAME_LENGTH {
+            return Err(NotAnAgentName::TooLong(value.to_owned()));
+        }
+        if names_a_device(value) {
+            return Err(NotAnAgentName::ReservedDevice(value.to_owned()));
+        }
+        let plain = value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
         if plain {
             Ok(Self(value.to_owned()))
         } else {
-            Err(NotAnAgentName(value.to_owned()))
+            Err(NotAnAgentName::Spelling(value.to_owned()))
         }
     }
 
