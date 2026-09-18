@@ -79,7 +79,7 @@ export function Transcript({
   return (
     <>
       <MessageScroller key={conversation.id} className="min-h-0 flex-1">
-        <MessageScrollerViewport className="flex flex-col px-3 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <MessageScrollerViewport className="flex flex-col px-3 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <MessageScrollerContent
             aria-label={`${conversation.title} transcript, ${sentTurns} sent`}
             className="mt-auto gap-5 select-text"
