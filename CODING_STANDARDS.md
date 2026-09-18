@@ -34,8 +34,11 @@ must apply these merge gates together with [AGENTS.md](AGENTS.md),
 9. **Outside data sits behind a seam.** Reads from outside the process —
    network, filesystem, subprocess, OS service, clock — go through a trait or
    interface owned by the calling side, injected from composition, with a
-   substitute in tests. Every crate and package, the Tauri host included.
-   Follow [seams at the process boundary](#seams-at-the-process-boundary).
+   substitute in tests. Every crate and package, the Tauri host included. What
+   the process was *started* with is not one of these reads, and developer
+   tooling under `scripts/` is not bound; both are spelled out in
+   [seams at the process boundary](#seams-at-the-process-boundary), which this
+   gate is read together with.
 
 If a gate fails, fix it in the same PR.
 
@@ -325,6 +328,24 @@ outside thing — the release channel, the keychain, the clock — not a wrapper
 call site. A port says what the caller needs, in the caller's vocabulary, and
 returns Nessa-owned types; one that hands back a third-party library's own type
 has relocated the dependency rather than isolated it.
+
+Configuration the process was started with — environment variables, command-line
+arguments — is not one of these reads. It arrives once, before anything runs,
+and what consults it is composition deciding which implementation to build; a
+port in front of that is a port in front of composition. Two things still hold.
+The *interpretation* does not live there: what a value means is a pure function
+with its own tests. And the outside thing the choice selects is still behind its
+own port. `src-tauri/src/updater.rs` is the shape to copy — `simulated()` owns
+the rule for the variable, `ReleaseSource` owns the release channel, and the
+variable does nothing but choose between two implementations of that port.
+
+Developer tooling under `scripts/` is neither a crate nor a package and is not
+bound by this gate. A harness whose whole purpose is to read this repository's
+configuration and drive a signer would, behind an injected port, be testing
+itself. What it can be held to is the same split as everywhere else: the pure
+pieces live in a module a test can import — `updater-manifest.mjs` beside
+`updater-harness.mjs`, which starts a server the moment it is imported — and
+what the tool cannot verify about itself is said plainly rather than implied.
 
 The substitute must be able to produce the failure cases, not only the happy
 path: offline, refused, malformed, slow, absent. Those paths are the least
