@@ -40,12 +40,34 @@ start:
     set -m
     port="$(node scripts/gateway-port.mjs dev)"
     server_pid=""
+    app_pid=""
+    # The app goes first, then the gateway it talks to: the other order leaves a
+    # window up with its server pulled out from under it, which is the state this
+    # cleanup exists to prevent.
+    #
+    # Each is signalled as a process group. `set -m` above puts every job in one
+    # of its own, so a plain `kill "${pid}"` reaches the recipe's own `just` and
+    # not the tauri/vite/app subtree beneath it — which is how an app came to
+    # outlive the run that started it. The bare-pid fallback is for a job that
+    # was not made a group leader after all; signalling a group we do not lead
+    # is not a thing to guess at.
+    stop() {
+      local what="$1" pid="$2"
+      [[ -n "${pid}" ]] || return 0
+      echo "→ stopping ${what} (pid ${pid})"
+      kill -TERM -"${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null || true
+      wait "${pid}" 2>/dev/null || true
+    }
+    # Runs twice on a signal — once for the signal, once for the EXIT it causes —
+    # so each pid is forgotten as it is stopped. Otherwise the second pass
+    # announces stopping things that are already gone, and a pid that has since
+    # been reused would be signalled for nothing to do with us.
     cleanup() {
-      if [[ -n "${server_pid}" ]]; then
-        echo "→ stopping nessa-server (pid ${server_pid})"
-        kill -TERM -"${server_pid}" 2>/dev/null || kill -TERM "${server_pid}" 2>/dev/null || true
-        wait "${server_pid}" 2>/dev/null || true
-      fi
+      local app="${app_pid}" server="${server_pid}"
+      app_pid=""
+      server_pid=""
+      stop "the app" "${app}"
+      stop "nessa-server" "${server}"
     }
     trap cleanup EXIT INT TERM
 
@@ -74,7 +96,14 @@ start:
     fi
     echo "→ nessa-server ready on :${port}"
 
-    just dev
+    # Started as a job rather than run in the foreground, so its process group is
+    # known and `cleanup` can take the whole subtree down. `wait` keeps this
+    # recipe blocking until the app exits, exactly as the foreground call did,
+    # and the trap fires either way round: quitting the app stops the gateway,
+    # and stopping this run stops the app.
+    just dev &
+    app_pid=$!
+    wait "${app_pid}"
 
 # UI in a browser only; window controls no-op.
 web:
@@ -98,10 +127,15 @@ dev:
       export WEBKIT_DISABLE_DMABUF_RENDERER=1
       export WEBKIT_DISABLE_COMPOSITING_MODE=1
     fi
-    exec pnpm app
+    exec bash scripts/run-dev-app.sh
 
 # Desktop app in dev mode (`tauri dev`).
 [macos]
+dev:
+    bash scripts/run-dev-app.sh
+
+# Desktop app in dev mode (`tauri dev`). cmd has no traps, so the app is not
+# taken down with this command the way it is on Unix; quit it from the tray.
 [windows]
 dev:
     pnpm app
