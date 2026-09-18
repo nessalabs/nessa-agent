@@ -57,9 +57,11 @@ export interface AgentChoice {
 
 /** The agents offered at first run, in presentation order.
  *
- * Codex is listed and explicitly unavailable rather than hidden: the roadmap is
- * part of the choice, and an unavailable entry cannot be selected, so the panel
- * never offers a capability the runtime lacks.
+ * Both have an adapter now, so neither is listed as unavailable. What is left
+ * between an entry and being chosen is what this machine reports about it —
+ * installed, signed in — which is a different answer and one somebody can act
+ * on. `supported` stays, because the day a third agent is listed before its
+ * adapter exists it is the only honest thing to say about it.
  */
 export const AGENT_CHOICES: readonly AgentChoice[] = Object.freeze([
   Object.freeze({
@@ -70,7 +72,7 @@ export const AGENT_CHOICES: readonly AgentChoice[] = Object.freeze([
   Object.freeze({
     id: "codex" as const,
     name: "Codex",
-    supported: false,
+    supported: true,
   }),
 ])
 

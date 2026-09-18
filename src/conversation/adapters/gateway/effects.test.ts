@@ -21,6 +21,10 @@ it("joins concurrent creation and forwards exact stable submission IDs", async (
   )
   const first = effects.create("server")
   const second = effects.create("server")
+  // The agent setup chose is asked for before the creation goes out, so the
+  // call lands a turn later; joining it does not wait for that.
+  expect(first).toBe(second)
+  await Promise.resolve()
   expect(create).toHaveBeenCalledOnce()
   gate.resolve({ conversationId: "server" })
   await Promise.all([first, second])

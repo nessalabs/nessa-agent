@@ -15,6 +15,7 @@ import {
   isOnboardingCompleted,
   pressSummon,
   startAgentChoice,
+  type AgentId,
 } from "./onboarding"
 
 /** Setup with Claude reported ready, which is the only way it is choosable. */
@@ -62,9 +63,12 @@ describe("first-run setup", () => {
     })
   })
 
-  it("does not record an agent no provider can run", () => {
+  it("does not record an agent this machine has not said is ready", () => {
+    // Codex has an adapter now, so what stands between it and being picked is
+    // what the machine reported — here, that it is not on this one.
     const picking = startAgentChoice(withClaudeReady())
-    expect(agentChoice("codex")?.supported).toBe(false)
+    expect(agentChoice("codex")?.supported).toBe(true)
+    expect(agentReadiness(picking, "codex")).toBe("not-installed")
     expect(chooseAgent(picking, "codex")).toBe(picking)
   })
 
@@ -86,13 +90,25 @@ describe("first-run setup", () => {
     expect(chooseAgent(picking, "claude")).toBe(picking)
   })
 
-  it("never offers an agent it has no adapter for, whatever is reported", () => {
-    // A runtime cannot talk Nessa into running something it cannot drive.
+  it("offers the second agent on the same terms as the first", () => {
     const picking = recordReadiness(startAgentChoice(beginOnboarding()), {
       codex: "ready",
     })
-    expect(agentReadiness(picking, "codex")).toBe("not-supported")
-    expect(chooseAgent(picking, "codex")).toBe(picking)
+    expect(agentReadiness(picking, "codex")).toBe("ready")
+    expect(chooseAgent(picking, "codex").agent).toBe("codex")
+  })
+
+  it("never offers an agent it has no adapter for, whatever is reported", () => {
+    // A gateway newer than this panel can report an agent the listing does not
+    // have, which is why the cast is here: the type says what this build lists,
+    // and the wire does not have to agree. A runtime cannot talk Nessa into
+    // running something it cannot drive.
+    const unlisted = "gemini" as AgentId
+    const picking = recordReadiness(startAgentChoice(beginOnboarding()), {
+      [unlisted]: "ready",
+    })
+    expect(agentReadiness(picking, unlisted)).toBe("not-supported")
+    expect(chooseAgent(picking, unlisted)).toBe(picking)
   })
 
   it("does not leave the picker without a recorded agent", () => {
@@ -130,7 +146,9 @@ describe("first-run setup", () => {
   it("offers Claude first and marks every listed agent honestly", () => {
     expect(AGENT_CHOICES.map((choice) => choice.id)).toEqual(["claude", "codex"])
     expect(AGENT_CHOICES.map((choice) => choice.name)).toEqual(["Claude", "Codex"])
-    expect(AGENT_CHOICES.filter((choice) => choice.supported)).toHaveLength(1)
+    // Both have an adapter now. What is left between a listed agent and being
+    // picked is what this machine reports about it.
+    expect(AGENT_CHOICES.every((choice) => choice.supported)).toBe(true)
   })
 })
 
@@ -201,8 +219,9 @@ describe("what the runtimes answered", () => {
     // Not a fact about Claude: nobody answered for it.
     expect(agentReadiness(asked, "claude")).toBe("unknown")
     expect(asked.readinessFailure).toBe("unreachable")
-    // Which is a different thing from Codex, about which there is an answer.
-    expect(agentReadiness(asked, "codex")).toBe("not-supported")
+    // Which is a different thing from an agent this build cannot drive, about
+    // which there is an answer whatever any gateway says.
+    expect(agentReadiness(asked, "gemini" as AgentId)).toBe("not-supported")
     expect(isChoosable(asked, "claude")).toBe(false)
   })
 

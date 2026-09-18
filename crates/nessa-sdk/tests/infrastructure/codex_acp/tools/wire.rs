@@ -70,7 +70,10 @@ fn output_a_tool_call_never_streamed_is_carried_from_its_completion() {
         &mut tools,
     )
     .unwrap();
-    assert_eq!(completed.content().as_deref(), Some(&vec![text("only once\n")][..]));
+    assert_eq!(
+        completed.content().as_deref(),
+        Some(&vec![text("only once\n")][..])
+    );
     // Having carried it, the same aggregate arriving again does not repeat it.
     let repeated = tool_call(
         &json!({"sessionUpdate":"tool_call_update","toolCallId":"command-2",
@@ -124,8 +127,11 @@ fn provider_identity_is_retained_and_bounded_and_never_silently_replaced() {
     .unwrap();
     assert_eq!(
         permission_input(
-            &permission(json!({"toolCallId":"command-3","kind":"execute","status":"pending",
-                               "rawInput":{"command":"npm test","cwd":"/workspace"}}), None),
+            &permission(
+                json!({"toolCallId":"command-3","kind":"execute","status":"pending",
+                               "rawInput":{"command":"npm test","cwd":"/workspace"}}),
+                None
+            ),
             &tools
         )
         .unwrap()
@@ -172,11 +178,18 @@ fn retained_identities_are_bounded_and_cleared_between_executions() {
         .unwrap();
     }
     assert_eq!(
-        tool_call(&json!({"toolCallId":"one-too-many","kind":"execute"}), &mut tools),
+        tool_call(
+            &json!({"toolCallId":"one-too-many","kind":"execute"}),
+            &mut tools
+        ),
         Err(AgentError::Protocol("tool count limit exceeded".into()))
     );
     // A call already known keeps being accepted at the limit.
-    assert!(tool_call(&json!({"toolCallId":"call-0","status":"completed"}), &mut tools).is_ok());
+    assert!(tool_call(
+        &json!({"toolCallId":"call-0","status":"completed"}),
+        &mut tools
+    )
+    .is_ok());
 }
 
 #[test]
@@ -235,8 +248,14 @@ fn a_permission_nothing_can_be_said_about_is_refused_rather_than_reviewed_empty(
         json!({"sessionId":"session-1","toolCall":{"kind":"edit"}}),
         // Named, but with nothing said about what it would do.
         permission(json!({"toolCallId":"file-2","kind":"edit"}), None),
-        permission(json!({"toolCallId":"file-2","kind":"edit","rawInput":null}), None),
-        permission(json!({"toolCallId":"file-2","kind":"edit","rawInput":"text"}), None),
+        permission(
+            json!({"toolCallId":"file-2","kind":"edit","rawInput":null}),
+            None,
+        ),
+        permission(
+            json!({"toolCallId":"file-2","kind":"edit","rawInput":"text"}),
+            None,
+        ),
         // Asking about something it will not name.
         permission(
             json!({"toolCallId":"file-2","rawInput":{"path":"/a"}}),

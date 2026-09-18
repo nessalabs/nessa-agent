@@ -1,9 +1,9 @@
 //! Shared conversation ownership and admission tests use real SDK scheduling.
 use super::{
-    ConversationAgent, ConversationCaller, ConversationCreation, ConversationCreationAudit,
-    ConversationCreationAuditRecord, ConversationDisposition, ConversationError,
-    ConversationFuture, ConversationLimits, ConversationMessageStatus, ConversationOwnershipState,
-    ConversationRepository, ConversationService, SubmissionMode,
+    ConversationAgent, ConversationAgents, ConversationCaller, ConversationCreation,
+    ConversationCreationAudit, ConversationCreationAuditRecord, ConversationDisposition,
+    ConversationError, ConversationFuture, ConversationLimits, ConversationMessageStatus,
+    ConversationOwnershipState, ConversationRepository, ConversationService, SubmissionMode,
 };
 use crate::{
     agents::domain::AgentId,
@@ -139,7 +139,6 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
     });
     let service = ConversationService::new(
         only(Arc::new(Provider(provider.clone()))),
-        AgentId::Claude,
         storage,
         repository.clone(),
         audit.clone(),
@@ -190,7 +189,6 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
     });
     let service = ConversationService::new(
         only(Arc::new(Provider(provider.clone()))),
-        AgentId::Claude,
         storage,
         repository.clone(),
         audit.clone(),
@@ -284,7 +282,6 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
     });
     let service = ConversationService::new(
         only(Arc::new(Provider(provider.clone()))),
-        AgentId::Claude,
         storage,
         repository.clone(),
         audit.clone(),
@@ -381,7 +378,6 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
     });
     let service = ConversationService::new(
         only(Arc::new(Provider(provider.clone()))),
-        AgentId::Claude,
         storage,
         repository.clone(),
         audit.clone(),
@@ -401,7 +397,6 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
     // A fresh owner map, so the next create must open the provider again.
     let service = ConversationService::new(
         only(Arc::new(Provider(provider.clone()))),
-        AgentId::Claude,
         Arc::new(InMemoryStorage::new()),
         repository,
         audit.clone(),
@@ -462,7 +457,6 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
     });
     let service = ConversationService::new(
         only(Arc::new(Provider(provider.clone()))),
-        AgentId::Claude,
         storage,
         repository,
         audit.clone(),
@@ -719,7 +713,6 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
 
     let restarted = ConversationService::new(
         only(Arc::new(Provider(provider.clone()))),
-        AgentId::Claude,
         storage,
         repository,
         Arc::new(AcceptingCreationAudit),
@@ -891,7 +884,6 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
     });
     let service = ConversationService::new(
         only(Arc::new(Provider(provider.clone()))),
-        AgentId::Claude,
         storage.clone(),
         repository,
         Arc::new(AcceptingCreationAudit),
@@ -949,7 +941,6 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
     });
     let service = ConversationService::new(
         only(Arc::new(Provider(provider))),
-        AgentId::Claude,
         storage,
         repository.clone(),
         Arc::new(AcceptingCreationAudit),
@@ -1011,7 +1002,6 @@ async fn resource_free_provider_failure_retires_slot_for_retry() {
     });
     let service = ConversationService::new(
         only(provider.clone()),
-        AgentId::Claude,
         storage,
         repository,
         Arc::new(AcceptingCreationAudit),
@@ -1068,7 +1058,6 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
     });
     let service = ConversationService::new(
         only(provider.clone()),
-        AgentId::Claude,
         storage,
         repository,
         Arc::new(AcceptingCreationAudit),
@@ -1133,7 +1122,6 @@ async fn restart_restores_saved_messages_without_replaying_input() {
     tokio::task::yield_now().await;
     let restored = ConversationService::new(
         only(Arc::new(Provider(provider.clone()))),
-        AgentId::Claude,
         storage,
         repository,
         Arc::new(AcceptingCreationAudit),
@@ -1167,7 +1155,6 @@ async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
     let (_, provider, repository, _) = fixture(ConversationLimits::default());
     let service = ConversationService::new(
         only(Arc::new(Provider(provider))),
-        AgentId::Claude,
         Arc::new(PanickingStorage),
         repository,
         Arc::new(AcceptingCreationAudit),
@@ -1320,7 +1307,6 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
     let (_, provider, repository, _) = fixture(ConversationLimits::default());
     let service = ConversationService::new(
         only(Arc::new(Provider(provider))),
-        AgentId::Claude,
         Arc::new(HostileStorage),
         repository,
         Arc::new(AcceptingCreationAudit),
@@ -1429,24 +1415,31 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
     let codex = Arc::new(ProviderFactory::default());
     let repository = Arc::new(MemoryRepository::default());
     let storage = Arc::new(InMemoryStorage::new());
+    // Claude is the default, so a creation naming nothing would go to it.
+    let both = || {
+        ConversationAgents::new(
+            HashMap::from([
+                (
+                    AgentId::Claude,
+                    ConversationAgent {
+                        provider: Arc::new(Provider(claude.clone())),
+                        reserved_output_tokens: 4096,
+                    },
+                ),
+                (
+                    AgentId::Codex,
+                    ConversationAgent {
+                        provider: Arc::new(Provider(codex.clone())),
+                        reserved_output_tokens: 4096,
+                    },
+                ),
+            ]),
+            AgentId::Claude,
+        )
+        .unwrap()
+    };
     let service = ConversationService::new(
-        HashMap::from([
-            (
-                AgentId::Claude,
-                ConversationAgent {
-                    provider: Arc::new(Provider(claude.clone())),
-                    reserved_output_tokens: 4096,
-                },
-            ),
-            (
-                AgentId::Codex,
-                ConversationAgent {
-                    provider: Arc::new(Provider(codex.clone())),
-                    reserved_output_tokens: 4096,
-                },
-            ),
-        ]),
-        AgentId::Claude,
+        both(),
         storage.clone(),
         repository.clone(),
         Arc::new(AcceptingCreationAudit),
@@ -1473,23 +1466,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
     drop(service);
     tokio::task::yield_now().await;
     let restarted = ConversationService::new(
-        HashMap::from([
-            (
-                AgentId::Claude,
-                ConversationAgent {
-                    provider: Arc::new(Provider(claude.clone())),
-                    reserved_output_tokens: 4096,
-                },
-            ),
-            (
-                AgentId::Codex,
-                ConversationAgent {
-                    provider: Arc::new(Provider(codex.clone())),
-                    reserved_output_tokens: 4096,
-                },
-            ),
-        ]),
-        AgentId::Claude,
+        both(),
         storage,
         repository,
         Arc::new(AcceptingCreationAudit),

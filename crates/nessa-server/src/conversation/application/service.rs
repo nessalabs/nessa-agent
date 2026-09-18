@@ -96,6 +96,47 @@ pub struct ConversationAgent {
     /// The output budget every submission to this agent reserves.
     pub reserved_output_tokens: u32,
 }
+
+/// Every agent this server can start, and the one a caller who names none gets.
+///
+/// One value rather than two parameters, because the two are only valid
+/// together: a default that is not among the configured agents would accept a
+/// creation this server can never open. Checked once, here, so nothing further
+/// in has to ask again.
+#[derive(Clone)]
+pub struct ConversationAgents {
+    agents: HashMap<AgentId, ConversationAgent>,
+    default_agent: AgentId,
+}
+impl ConversationAgents {
+    /// # Errors
+    /// Returns [`ConversationError::InvalidInput`] when `default_agent` is not
+    /// among `agents`, or when any agent reserves no output at all.
+    pub fn new(
+        agents: HashMap<AgentId, ConversationAgent>,
+        default_agent: AgentId,
+    ) -> Result<Self, ConversationError> {
+        if !agents.contains_key(&default_agent)
+            || agents
+                .values()
+                .any(|agent| agent.reserved_output_tokens == 0)
+        {
+            return Err(ConversationError::InvalidInput);
+        }
+        Ok(Self {
+            agents,
+            default_agent,
+        })
+    }
+    /// What runs this agent, or nothing where this server cannot start it.
+    fn get(&self, agent: AgentId) -> Option<&ConversationAgent> {
+        self.agents.get(&agent)
+    }
+    /// The agent a creation that names none is made on.
+    fn default_agent(&self) -> AgentId {
+        self.default_agent
+    }
+}
 #[derive(Clone, Copy)]
 pub enum SubmissionMode {
     Queue,
@@ -121,10 +162,9 @@ struct Slot {
 }
 struct Inner {
     workspace: Option<String>,
-    /// Every agent this server can start, by name.
-    agents: HashMap<AgentId, ConversationAgent>,
-    /// The agent a conversation is created on when the caller names none.
-    default_agent: AgentId,
+    /// Every agent this server can start, and which of them a creation that
+    /// names none is made on.
+    agents: ConversationAgents,
     storage: Arc<dyn SessionStorage>,
     metadata: Arc<dyn ConversationRepository>,
     creation_audit: Arc<dyn super::ConversationCreationAudit>,
@@ -157,13 +197,9 @@ fn retryable_agent_open(error: &AgentError) -> bool {
     )
 }
 impl ConversationService {
-    /// Own every configured agent, and name the one a caller gets by default.
-    ///
-    /// `agents` must contain `default_agent`: a service whose own default is an
-    /// agent it cannot start would accept a creation it can never open.
+    /// Own every configured agent, and the one a caller gets by default.
     pub fn new(
-        agents: HashMap<AgentId, ConversationAgent>,
-        default_agent: AgentId,
+        agents: ConversationAgents,
         storage: Arc<dyn SessionStorage>,
         metadata: Arc<dyn ConversationRepository>,
         creation_audit: Arc<dyn super::ConversationCreationAudit>,
@@ -175,10 +211,6 @@ impl ConversationService {
             || limits.max_conversations == 0
             || limits.max_input_bytes == 0
             || limits.max_input_bytes > 8192
-            || !agents.contains_key(&default_agent)
-            || agents
-                .values()
-                .any(|agent| agent.reserved_output_tokens == 0)
         {
             return Err(ConversationError::InvalidInput);
         }
@@ -186,7 +218,6 @@ impl ConversationService {
             inner: Arc::new(Inner {
                 workspace,
                 agents,
-                default_agent,
                 storage,
                 metadata,
                 creation_audit,
@@ -219,8 +250,8 @@ impl ConversationService {
             if service.inner.retirement.get().is_some() {
                 return Err(ConversationError::Unavailable);
             }
-            let agent = agent.unwrap_or(service.inner.default_agent);
-            if !service.inner.agents.contains_key(&agent) {
+            let agent = agent.unwrap_or_else(|| service.inner.agents.default_agent());
+            if service.inner.agents.get(agent).is_none() {
                 return Err(ConversationError::AgentNotConfigured);
             }
             let requested_at_ms = service.inner.clock.unix_milliseconds();
@@ -468,7 +499,7 @@ impl ConversationService {
                             let configured = service
                                 .inner
                                 .agents
-                                .get(&record.agent())
+                                .get(record.agent())
                                 .cloned()
                                 .ok_or(OpeningFailure {
                                     cause: ConversationError::AgentNotConfigured,

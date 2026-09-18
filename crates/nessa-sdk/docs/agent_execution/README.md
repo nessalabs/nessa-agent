@@ -17,6 +17,7 @@ separate proposed work. Local snapshots and submission retry recovery are implem
 | [Tools](tools.md) | Immutable sparse updates, observed snapshots, and review input |
 | [Transport](transport.md) | ACP dispatch, framing, event delivery, limits, and process cleanup |
 | [Claude provider](../claude-acp.md) | Supported native profile, installation, composition, and live verification |
+| [Codex provider](../codex-acp.md) | What is Codex's own: ordered session configuration, its read-only preset, and what that preset does not buy |
 
 ## Composition and public modules
 

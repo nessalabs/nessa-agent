@@ -2,10 +2,12 @@
 
 The first implemented slice of [ADR 0008](../../docs/adr/todo/0008-agent-client-api.md)
 includes the public Agent entry point, session storage, hooks, queueing/steering,
-idempotent retries, model metadata, and effective capability snapshots. A local
-Claude ACP adapter implements the execution provider port. See the [execution guides](docs/agent_execution/README.md) for lifecycle, permissions,
+idempotent retries, model metadata, and effective capability snapshots. Two local
+ACP adapters implement the execution provider port, one for Claude and one for
+Codex, over one shared runtime. See the [execution guides](docs/agent_execution/README.md) for lifecycle, permissions,
 prompts, and transport; the [Claude guide](docs/claude-acp.md) covers provider setup
-and verified native limits.
+and verified native limits, and the [Codex guide](docs/codex-acp.md) covers what is
+that provider's own.
 Shared conversation coordination and its durable event stream, harness settings
 readers, and gateway/UI integration remain future work; local session snapshots
 are already implemented.
@@ -159,6 +161,10 @@ automatic session storage, hooks, invocation, and UI integration.
   mappings to/from domain types. Import calls domain constructors; query results
   are projections. Application errors add entry context and setup guidance.
 - `infrastructure/claude_acp/`: Claude settings, model limits, system-prompt extension, and tool schemas.
+- `infrastructure/codex_acp/`: Codex's harness identity, its approval preset, and the
+  content normalization that keeps its terminal and resource-link updates inside the
+  shared vocabulary. A third agent gets a third sibling here, not a branch inside one
+  of these two.
   Shared ACP exchange, JSON-RPC framing, and process supervision live in
   `infrastructure/acp`, `infrastructure/json_rpc`, and `infrastructure/process.rs`.
 - `infrastructure/session_storage/`: in-memory snapshots and private JSONL session storage,
@@ -280,13 +286,14 @@ combinations, boolean feature restrictions, configuration and input budget
 boundaries, error diagnostics, and snapshot isolation.
 
 Shared ACP execution infrastructure lives in `infrastructure/acp`, with provider
-profiles injected by `infrastructure::claude_acp::sessions::ClaudeAcpProvider`.
+profiles injected by `infrastructure::claude_acp::sessions::ClaudeAcpProvider` and
+`infrastructure::codex_acp::sessions::CodexAcpProvider`.
 `infrastructure::acp::sessions::AcpConfig` supplies
 common launch and runtime limits. JSON-RPC framing reuses the pinned event-stream
 codec; process ownership lives in `infrastructure/process.rs`. See the
 [session and boundary guide](docs/agent_execution/lifecycle.md).
 
-`ClaudeAcpProvider::new` requires an injected `ExecutionAudit`. The
+Either provider's `new` requires an injected `ExecutionAudit`. The
 host chooses its storage and durability contract. Answer records retain exact
 decisions and attribution before wire effects, then their delivery observation.
 Cancellation records retain the

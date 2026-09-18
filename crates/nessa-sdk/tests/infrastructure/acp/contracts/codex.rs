@@ -179,7 +179,11 @@ async fn a_session_is_refused_rather_than_run_half_configured() {
         let _process_slot = process_test_slot().await;
         let (root, binding) = test_codex_binding(mode, 16);
         assert_eq!(
-            binding.open(None).await.err().map(|failure| failure.cause().clone()),
+            binding
+                .open(None)
+                .await
+                .err()
+                .map(|failure| failure.cause().clone()),
             Some(AgentError::Protocol(expected.into())),
             "{mode}"
         );

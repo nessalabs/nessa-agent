@@ -159,9 +159,16 @@ pub struct SetupHandoff {
 /// alive, which is the point.
 ///
 /// `completed` is the surface's own account of how setup ended: finished, or
-/// left. Leaving stays free to change its mind, so only a finish is recorded.
+/// left. Leaving stays free to change its mind, so only a finish is recorded,
+/// and `agent` — the choice that finish was made on — is recorded with it. The
+/// panel reads it back (see [`chosen_agent`]), because it is a different window
+/// and nothing setup knows survives into it.
 #[tauri::command]
-pub fn finish_setup(app: AppHandle, completed: bool) -> Result<SetupHandoff, String> {
+pub fn finish_setup(
+    app: AppHandle,
+    completed: bool,
+    agent: Option<String>,
+) -> Result<SetupHandoff, String> {
     hand_over(
         completed,
         || {
@@ -182,8 +189,14 @@ pub fn finish_setup(app: AppHandle, completed: bool) -> Result<SetupHandoff, Str
             // does. The managed `Settings` is deliberately not updated in place:
             // nothing after startup reads this flag, and the launch that does
             // reads it off disk before anything is managed at all.
-            set_onboarding(&app, Onboarding { completed: true })
-                .map_err(|error| format!("could not record that setup finished: {error}"))
+            set_onboarding(
+                &app,
+                Onboarding {
+                    completed: true,
+                    agent: agent.clone(),
+                },
+            )
+            .map_err(|error| format!("could not record that setup finished: {error}"))
         },
         || match app.get_webview_window(SETUP_WINDOW) {
             // Closing it destroys it, which is what lets the panel back down to
@@ -252,6 +265,17 @@ pub fn reveal_setup_window(window: WebviewWindow) {
 fn set_onboarding(app: &AppHandle, onboarding: Onboarding) -> io::Result<()> {
     // The written value is the caller's to ignore: nothing here shows it back.
     settings::update(app, |settings| settings.onboarding = onboarding).map(|_| ())
+}
+
+/// The agent first-run setup chose, or nothing where nobody has chosen one.
+///
+/// Read off disk on every ask, the same place the launch reads completion from.
+/// The managed `Settings` is a startup snapshot and setup writes this after it,
+/// so a panel shown by the very handoff that recorded the choice would
+/// otherwise be told there was none.
+#[tauri::command]
+pub fn chosen_agent(app: AppHandle) -> Option<String> {
+    settings::load(&app).onboarding.agent
 }
 
 /// Opens first-run setup again, from the beginning.

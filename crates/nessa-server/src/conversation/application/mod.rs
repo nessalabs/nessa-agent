@@ -13,7 +13,8 @@ pub use ports::{
     ConversationOwnershipState, ConversationRepository,
 };
 pub use service::{
-    ConversationAgent, ConversationCaller, ConversationLimits, ConversationService, SubmissionMode,
+    ConversationAgent, ConversationAgents, ConversationCaller, ConversationLimits,
+    ConversationService, SubmissionMode,
 };
 pub use view::{
     ConversationCapabilities, ConversationDisposition, ConversationMessage,

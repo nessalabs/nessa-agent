@@ -136,7 +136,10 @@ pub(super) fn test_acp_binding(mode: &str, capacity: usize) -> (TempDir, ClaudeA
 }
 /// The same fixture setup for Codex, which is launched and configured
 /// differently enough that sharing one builder would hide the difference.
-pub(super) fn codex_configuration(mode: &str, capacity: usize) -> (TempDir, AcpConfig, ModelMetadata) {
+pub(super) fn codex_configuration(
+    mode: &str,
+    capacity: usize,
+) -> (TempDir, AcpConfig, ModelMetadata) {
     let (root, mut config, _) = test_acp_configuration(mode, capacity);
     config.arguments = vec![
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))

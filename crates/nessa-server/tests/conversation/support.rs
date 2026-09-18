@@ -1,7 +1,7 @@
 //! Test-only provider and metadata ports; all scheduling runs through the real SDK Agent.
 use crate::agents::domain::AgentId;
 use crate::conversation::application::{
-    ConversationAgent, ConversationCreation, ConversationCreationAudit,
+    ConversationAgent, ConversationAgents, ConversationCreation, ConversationCreationAudit,
     ConversationCreationAuditRecord, ConversationCreationDisposition, ConversationFuture,
     ConversationLimits, ConversationRepository, ConversationService,
 };
@@ -132,14 +132,18 @@ pub(crate) struct ProviderFactory {
 /// Most of these tests are about what happens while a conversation runs, not
 /// about which agent it runs on, so they configure the one agent and let every
 /// creation take it by default.
-pub(crate) fn only(provider: Arc<dyn AgentProvider>) -> HashMap<AgentId, ConversationAgent> {
-    HashMap::from([(
+pub(crate) fn only(provider: Arc<dyn AgentProvider>) -> ConversationAgents {
+    ConversationAgents::new(
+        HashMap::from([(
+            AgentId::Claude,
+            ConversationAgent {
+                provider,
+                reserved_output_tokens: 4096,
+            },
+        )]),
         AgentId::Claude,
-        ConversationAgent {
-            provider,
-            reserved_output_tokens: 4096,
-        },
-    )])
+    )
+    .expect("one configured agent is its own default")
 }
 pub(crate) fn fixture(
     limits: ConversationLimits,
@@ -154,7 +158,6 @@ pub(crate) fn fixture(
     let storage = Arc::new(InMemoryStorage::new());
     let service = ConversationService::new(
         only(Arc::new(Provider(provider.clone()))),
-        AgentId::Claude,
         storage.clone(),
         repository.clone(),
         Arc::new(AcceptingCreationAudit),

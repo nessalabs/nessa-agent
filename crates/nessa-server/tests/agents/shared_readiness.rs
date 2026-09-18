@@ -5,7 +5,6 @@
 use super::*;
 use crate::agents::application::ProbeFailure;
 use crate::agents_test_support::WaitingAgentProbe;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 /// What a host that answers the same way about every agent produces: one entry

@@ -29,6 +29,7 @@ fn main() {
             platform::panel_size,
             platform::flush_compositor,
             panel::finish_setup,
+            panel::chosen_agent,
             panel::reveal_setup_window,
             surface_credential::load_surface_credential,
             shortcuts::load_shortcuts,

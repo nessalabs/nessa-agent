@@ -9,7 +9,7 @@ cannot impersonate another surface or principal.
 
 ```text
 Panel Send -> NessaClient.conversation.send -> authorized gateway command
-  -> shared ConversationService -> Agent.enqueue -> Claude ACP process
+  -> shared ConversationService -> Agent.enqueue -> this conversation's ACP process
   <- bounded conversation.read view <- live SDK observations + saved history
 ```
 
@@ -28,27 +28,54 @@ Use the same stage, data directory and instance for the server and native panel.
 The panel connects to `ws://127.0.0.1:7420/session`. This authenticates local access;
 remote TLS/device provisioning is not included in this delivery.
 
-Add `agent` to the private namespace `config.json` (beside `auth/`):
+Add `agent` to the private namespace `config.json` (beside `auth/`). What every
+agent on this machine shares is stated once; what differs between them — the
+harness entry point, the model, the budgets — goes under that agent's own name:
 
 ```json
 {
   "agent": {
     "catalog": "/absolute/path/to/models.json",
     "node": "/absolute/path/to/node",
-    "acpEntry": "/absolute/path/to/claude-acp/dist/index.js",
     "workspace": "/absolute/path/to/your/project",
-    "model": "exact-model-id-from-catalog",
     "toolsEnabled": true,
     "mcpServers": [{
       "name": "nessa",
       "command": "/absolute/path/to/nessa-agent/target/debug/nessa-mcp",
       "args": ["--workspace", "/absolute/path/to/your/project", "--audit-directory", "/absolute/path/to/private/process-audit"]
     }],
-    "contextTokens": 100000,
-    "outputTokens": 4096
+    "selected": "claude",
+    "claude": {
+      "acpEntry": "/absolute/path/to/claude-acp/dist/index.js",
+      "model": "exact-anthropic-model-id-from-catalog",
+      "contextTokens": 100000,
+      "outputTokens": 4096
+    },
+    "codex": {
+      "acpEntry": "/absolute/path/to/codex-acp/dist/index.js",
+      "model": "exact-openai-model-id-from-catalog",
+      "contextTokens": 100000,
+      "outputTokens": 4096
+    }
   }
 }
 ```
+
+Configure only the agents you have. An agent absent from here is one this server
+cannot start, and setup reports it as not installed rather than offering it.
+`selected` names the agent a conversation is created on when the caller does not
+name one; it may be left out when only one agent is configured, and is required
+once more than one is — guessing which of two the operator meant is a coin toss
+with somebody's next conversation on it.
+
+A conversation records the agent it was created on and is reopened on that same
+agent for the rest of its life, so changing `selected` moves new conversations
+only. Records written before this server knew a second agent name no agent and
+are read as Claude's. Each agent's model must come from its own vendor's entries
+in the catalog: Codex is signed in to OpenAI and cannot reach an Anthropic model,
+and the mismatch is reported at startup rather than by a provider refusing every
+prompt. Codex always runs its own tools, so `toolsEnabled` must be true wherever
+it is configured.
 
 The installed desktop supplies an agent automatically. Its unattached workspace is
 `~/.nessa/workspaces/default`; its directories are created below the private Nessa
@@ -59,13 +86,15 @@ only after the user explicitly attaches or configures that folder. Because macOS
 protects folders such as Documents, configuring one of those paths can produce a
 system access prompt.
 
-Use the SDK's [Claude ACP harness setup](../../crates/nessa-sdk/README.md)
-for the pinned process. Provider credentials stay in the server environment or
-Claude's configured credential directory. Requests cannot supply executables,
-workspaces, environment variables or tokens. Missing agent configuration keeps
-authentication/health available and returns `agent_not_configured` for chat.
-Invalid supplied configuration fails startup. Claude process supervision currently
-requires Unix; there is no production test-provider fallback.
+Use the SDK's [harness setup](../../crates/nessa-sdk/README.md) for the pinned
+processes. Provider credentials stay in the server environment or in each agent's
+own configured credential directory, and neither agent is handed the other's.
+Requests cannot supply executables, workspaces, environment variables or tokens.
+Missing agent configuration keeps authentication/health available and returns
+`agent_not_configured` for chat; so does a request naming an agent this server has
+no configuration for. Invalid supplied configuration fails startup. Process
+supervision currently requires Unix; there is no production test-provider
+fallback.
 
 Build `cargo build -p nessa-server -p nessa-mcp` before starting the gateway.
 `toolsEnabled: true` exposes Claude's native tool preset, including WebSearch and
@@ -256,11 +285,11 @@ or unsupported sharing actions. Rename does not change gateway conversation IDs.
 ## Installed macOS runtime
 
 The DMG contains `Nessa.app` with the gateway, `nessa-mcp` (including Shepherd),
-an official Node runtime, the locked Claude ACP harness and its dependencies,
+an official Node runtime, one locked ACP harness per agent with its dependencies,
 and the model catalog under `Contents/Resources/runtime`. Install the app in
 Applications before launching it. No repository checkout, Cargo, npm, or Homebrew
-Node is needed at runtime. Claude credentials remain in the user's local Claude
-configuration; credentials and chat history are never shipped inside the app.
+Node is needed at runtime. Each agent's credentials remain in that agent's own
+local configuration; credentials and chat history are never shipped inside the app.
 
 Before changing any service, the desktop stages its bundled runtime under
 `~/Library/Application Support/Nessa/gateway-runtimes/<service-label>/<fingerprint>/`.

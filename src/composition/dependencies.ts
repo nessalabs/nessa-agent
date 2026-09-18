@@ -8,6 +8,7 @@ import { createSessionHandle } from "../session/adapters/client/handle"
 import { connectDevSession } from "../session/adapters/client/dev-session"
 import type { ConversationEffects } from "../conversation/application/ports"
 import { httpAgentReadiness } from "../onboarding/adapters/agents"
+import { loadChosenAgent } from "../host"
 import type { AgentReadinessSource } from "../onboarding/application/ports"
 
 /** Construct once per application. Overrides are explicit, never a service locator. */
@@ -23,6 +24,12 @@ export function createDependencies(
 ) {
   const config = options.environment ?? loadEnvironment({})
   const session = createSessionHandle()
+  // Asked once per application rather than once per conversation. The answer is
+  // written down before the panel exists and nothing changes it while the panel
+  // runs, so re-asking would be one host round trip per new conversation for an
+  // answer that cannot have moved.
+  let chosen: Promise<string | undefined> | undefined
+  const chosenAgent = () => (chosen ??= loadChosenAgent())
   return {
     session,
     attachments: createAttachmentResources(),
@@ -42,7 +49,7 @@ export function createDependencies(
       options.conversation ??
       (config.conversation.backend === "scenario"
         ? scenarioEffects(config.conversation.scenario)
-        : gatewayEffects(() => session.get())),
+        : gatewayEffects(() => session.get(), chosenAgent)),
   }
 }
 export type AppDependencies = ReturnType<typeof createDependencies>

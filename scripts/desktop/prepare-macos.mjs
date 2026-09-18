@@ -67,15 +67,23 @@ cpSync(
   join(cache, `node-v${version}-darwin-${process.arch}`, "LICENSE"),
   join(out, "NODE-LICENSE"),
 )
-const harness = join(out, "claude-acp")
-mkdirSync(harness, { recursive: true })
-for (const name of ["package.json", "package-lock.json"])
-  cpSync(join(root, "crates/nessa-sdk/harnesses/claude-acp", name), join(harness, name))
-execFileSync("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], {
-  cwd: harness,
-  stdio: "inherit",
-})
-materializeBinLinks(join(harness, "node_modules"))
+// One harness per agent the gateway can start. A bundle missing any of them is
+// an installation that cannot offer that agent, and the server says so on
+// startup rather than after someone picks it.
+const harnesses = {}
+for (const name of ["claude-acp", "codex-acp"]) {
+  const harness = join(out, name)
+  mkdirSync(harness, { recursive: true })
+  for (const file of ["package.json", "package-lock.json"])
+    cpSync(join(root, "crates/nessa-sdk/harnesses", name, file), join(harness, file))
+  execFileSync("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], {
+    cwd: harness,
+    stdio: "inherit",
+  })
+  materializeBinLinks(join(harness, "node_modules"))
+  const manifest = JSON.parse(readFileSync(join(harness, "package.json"), "utf8"))
+  harnesses[name] = Object.values(manifest.dependencies)[0]
+}
 cpSync(join(root, "crates/nessa-sdk/data/models.json"), join(out, "models.json"))
 // Ad-hoc sign nested executables for local distribution. Release signing remains Tauri's responsibility.
 for (const name of ["node", "nessa", "nessa-mcp"])
@@ -86,7 +94,8 @@ writeFileSync(
   JSON.stringify(
     {
       node: version,
-      claudeAcp: "0.76.0",
+      claudeAcp: harnesses["claude-acp"],
+      codexAcp: harnesses["codex-acp"],
       target: host,
       fingerprint,
     },

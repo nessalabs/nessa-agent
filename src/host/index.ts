@@ -18,6 +18,7 @@ export {
   closeSetupWindow,
   finishSetupWindow,
   hasNativeHost,
+  loadChosenAgent,
   loadAssignedSurfaceCredential,
   flushCompositor,
   onFocusComposer,

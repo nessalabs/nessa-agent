@@ -46,9 +46,7 @@ pub(in crate::infrastructure::codex_acp) struct ObservedTool {
 /// name — bounded, printable, and on one line — not that it matches a shape this
 /// repository invented.
 fn bounded_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= MAX_NAME_BYTES
-        && name.bytes().all(|b| b.is_ascii_graphic())
+    !name.is_empty() && name.len() <= MAX_NAME_BYTES && name.bytes().all(|b| b.is_ascii_graphic())
 }
 
 /// The provider tool name on this frame, when it declared one.
