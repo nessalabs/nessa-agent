@@ -55,6 +55,12 @@ export default defineConfig({
         target: process.env.NESSA_BROWSER_GATEWAY_URL ?? "http://127.0.0.1:7420",
         ws: true,
       },
+      // The gateway's pre-authentication surface, which setup asks before it
+      // has a session. Proxied so a browser preview reaches it on its own
+      // origin; the packaged app talks to the gateway directly.
+      "/onboarding": {
+        target: process.env.NESSA_BROWSER_GATEWAY_URL ?? "http://127.0.0.1:7420",
+      },
     },
     port: 1420,
     strictPort: true,

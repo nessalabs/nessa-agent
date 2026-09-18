@@ -1,6 +1,7 @@
 //! macOS host: accessory app, native frost, WKWebView pin, AppKit live resize.
 
 mod live_resize;
+mod overlay;
 mod vibrancy;
 mod viewport;
 
@@ -20,6 +21,18 @@ impl Host for Macos {
         if let Err(error) = app.set_activation_policy(tauri::ActivationPolicy::Accessory) {
             eprintln!("[nessa] could not set accessory activation policy: {error}");
         }
+    }
+
+    fn place_overlay(&self, window: &WebviewWindow) {
+        overlay::place(window)
+    }
+
+    fn reveal_overlay(&self, window: &WebviewWindow) {
+        overlay::reveal(window)
+    }
+
+    fn set_above_overlay(&self, window: &WebviewWindow, above: bool) {
+        overlay::set_above_overlay(window, above)
     }
 
     fn set_frosted(&self, window: &WebviewWindow, frosted: bool) -> Result<(), String> {

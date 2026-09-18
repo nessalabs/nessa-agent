@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest"
 
 import type { ShortcutsDocument } from "@nessa/client"
 
-import { matchFocusedShortcut, parseAccelerator } from "./tab-shortcuts"
+import { parseAccelerator } from "../../host/accelerator"
+import { matchFocusedShortcut } from "./tab-shortcuts"
 
 const sample: ShortcutsDocument = {
   version: 1,

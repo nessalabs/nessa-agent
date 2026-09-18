@@ -15,6 +15,9 @@ export default defineConfig({
       "@nessa-ui/react/message-markdown": resolve(
         "node_modules/@nessa-ui/react/src/components/message-markdown.tsx",
       ),
+      "@nessa-ui/react/morphing-mesh-gradient": resolve(
+        "node_modules/@nessa-ui/react/src/components/morphing-mesh-gradient.tsx",
+      ),
       "@nessa-ui/react/button": resolve(
         "node_modules/@nessa-ui/react/src/components/button.tsx",
       ),

@@ -1,3 +1,4 @@
+use crate::agents::entrypoint::http as agents_handler;
 use crate::browser_session::entrypoint as browser;
 use crate::health::entrypoint::handler as health_handler;
 use crate::protocol::MAX_PAYLOAD_BYTES;
@@ -13,6 +14,13 @@ use axum::routing::{get, post, Router};
 pub fn router(product: crate::product::ProductRouteState) -> Router {
     Router::new()
         .route("/health", get(health_handler::handle_http_health))
+        // Asked while Nessa is being set up, when there is no session yet and
+        // nothing to authenticate with. Discloses which agents could start
+        // here and nothing else — no paths, no accounts, never a credential.
+        .route(
+            "/onboarding/agents",
+            get(agents_handler::handle_http_agents),
+        )
         .route("/session", get(product_upgrade))
         .route("/browser/login", post(browser::login))
         .route("/browser/check", post(browser::check))

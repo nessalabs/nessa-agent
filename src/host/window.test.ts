@@ -3,12 +3,15 @@ import { superviseSession } from "../session/adapters/lifecycle/supervisor"
 import { createSessionHandle } from "../session/adapters/client/handle"
 import type { EstablishedDevSession } from "../session/adapters/client/dev-session"
 
-const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }))
+const { invoke, close } = vi.hoisted(() => ({ invoke: vi.fn(), close: vi.fn() }))
 vi.mock("@tauri-apps/api/core", () => ({ invoke }))
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ close }) }))
 
 beforeEach(() => {
   vi.resetModules()
   invoke.mockReset()
+  close.mockReset()
+  close.mockResolvedValue(undefined)
   vi.stubGlobal("window", { __TAURI_INTERNALS__: {} })
 })
 afterEach(() => vi.unstubAllGlobals())
@@ -81,5 +84,111 @@ describe("native surface credential failures", () => {
     expect(invoke).toHaveBeenCalledTimes(2)
     expect(session.get()).toBe(client)
     stopRetry()
+  })
+})
+
+describe("closing the setup window", () => {
+  it("reports the close it performed", async () => {
+    const { closeSetupWindow } = await import("./window")
+    await expect(closeSetupWindow()).resolves.toEqual({ outcome: "closed" })
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  // The setup surface offers this from a screen whose only other control is a
+  // retry. A rejection out of that handler would take both away with it.
+  it("returns a refused close rather than throwing it", async () => {
+    const { closeSetupWindow } = await import("./window")
+    const cause = new Error("the window server said no")
+    close.mockRejectedValue(cause)
+    await expect(closeSetupWindow()).resolves.toEqual({
+      outcome: "close-failed",
+      cause,
+    })
+  })
+
+  it("has no window of its own to close outside the desktop host", async () => {
+    vi.stubGlobal("window", {})
+    vi.resetModules()
+    const { closeSetupWindow } = await import("./window")
+    await expect(closeSetupWindow()).resolves.toEqual({ outcome: "no-native-host" })
+    expect(close).not.toHaveBeenCalled()
+  })
+})
+
+describe("handing setup over to the panel", () => {
+  /** What the host reports when every step of the handoff did what it should. */
+  const landed = { setupClosed: true, closeError: null, recordError: null }
+
+  it("hands the host the one fact it does not have, and carries on", async () => {
+    const { finishSetupWindow } = await import("./window")
+    invoke.mockResolvedValue(landed)
+    await expect(finishSetupWindow(true)).resolves.toEqual({ outcome: "handed-over" })
+    // One call, not three. Showing the panel, writing setup off and closing this
+    // window are ordered on the host, in the process that outlives this window.
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith("finish_setup", { completed: true })
+    // Nothing closes the window from here any more.
+    expect(close).not.toHaveBeenCalled()
+  })
+
+  it("tells the host that somebody left rather than finished", async () => {
+    const { finishSetupWindow } = await import("./window")
+    invoke.mockResolvedValue(landed)
+    await expect(finishSetupWindow(false)).resolves.toEqual({ outcome: "handed-over" })
+    // Leaving stays free to change its mind: the host records nothing for it.
+    expect(invoke).toHaveBeenCalledWith("finish_setup", { completed: false })
+  })
+
+  it("says the panel did not come up rather than closing over nothing", async () => {
+    const { finishSetupWindow } = await import("./window")
+    const cause = new Error("there is no panel to summon")
+    invoke.mockRejectedValue(cause)
+    await expect(finishSetupWindow(true)).resolves.toEqual({
+      outcome: "panel-unavailable",
+      cause,
+    })
+    expect(close).not.toHaveBeenCalled()
+  })
+
+  // The defect this distinction exists for: the panel was up, and the surface
+  // said "Nessa could not open the panel" over the top of it.
+  it("reports a window that would not close as exactly that, panel and all", async () => {
+    const { finishSetupWindow } = await import("./window")
+    invoke.mockResolvedValue({
+      setupClosed: false,
+      closeError: "could not close setup: the window server said no",
+      recordError: null,
+    })
+    await expect(finishSetupWindow(true)).resolves.toEqual({
+      outcome: "setup-close-failed",
+      panelShown: true,
+      cause: "could not close setup: the window server said no",
+    })
+  })
+
+  // Survivable: a settings file that would not take the flag costs a second run
+  // of setup, not the panel somebody is waiting on.
+  it("hands over anyway when the completion write was refused", async () => {
+    const { finishSetupWindow } = await import("./window")
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    invoke.mockResolvedValue({
+      setupClosed: true,
+      closeError: null,
+      recordError: "could not record that setup finished: disk full",
+    })
+    await expect(finishSetupWindow(true)).resolves.toEqual({ outcome: "handed-over" })
+    expect(warn).toHaveBeenCalledWith(
+      "[nessa] could not record that setup finished",
+      "could not record that setup finished: disk full",
+    )
+    warn.mockRestore()
+  })
+
+  it("has no second window to hand over to outside the desktop host", async () => {
+    vi.stubGlobal("window", {})
+    vi.resetModules()
+    const { finishSetupWindow } = await import("./window")
+    await expect(finishSetupWindow(true)).resolves.toEqual({ outcome: "no-native-host" })
+    expect(invoke).not.toHaveBeenCalled()
   })
 })

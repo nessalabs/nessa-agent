@@ -28,6 +28,8 @@ fn main() {
             platform::set_frosted,
             platform::panel_size,
             platform::flush_compositor,
+            panel::finish_setup,
+            panel::reveal_setup_window,
             surface_credential::load_surface_credential,
             shortcuts::load_shortcuts,
             shortcuts::apply_shortcuts,
@@ -76,24 +78,56 @@ fn main() {
                 platform::bind_window(&window, &settings);
             }
 
+            // First run only: setup records that it finished, and a launch that
+            // reads that record opens straight into the panel. The settings
+            // loaded above are the same ones the panel is sized from — the file
+            // is read once per launch, not once per question.
+            //
+            // Setup is a takeover: it covers the screen, menu bar included, and
+            // is the active window when it does. It is placed while still
+            // hidden and shown by its own page, once that page has a frame to
+            // show — see `panel::reveal_setup_window`.
+            if !settings.onboarding.completed {
+                panel::open_setup_window(app.handle());
+            }
+
             // The panel reads these on every show, to re-fit the frame.
             app.manage(settings);
 
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                // With a tray, close dismisses the panel. Without one — Linux
-                // with no StatusNotifierItem — close has to end the process,
-                // or there is no quit path at all.
-                let tray = window
-                    .app_handle()
-                    .try_state::<tray::Present>()
-                    .map(|state| state.0)
-                    .unwrap_or(false);
-                if tray {
-                    api.prevent_close();
-                    let _ = window.hide();
+            // Close-to-dismiss is the panel's policy alone. Setup closes its own
+            // window to finish, and a hidden, undestroyed setup window would
+            // leave the panel lifted over the menu bar for the rest of the
+            // session — the cleanup below only runs on an actual destroy.
+            if window.label() == panel::MAIN_WINDOW {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    // With a tray, close dismisses the panel. Without one — Linux
+                    // with no StatusNotifierItem — close has to end the process,
+                    // or there is no quit path at all.
+                    let tray = window
+                        .app_handle()
+                        .try_state::<tray::Present>()
+                        .map(|state| state.0)
+                        .unwrap_or(false);
+                    if tray {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                }
+            }
+            // The panel is lifted over setup while setup is on screen. If it is
+            // still showing when setup goes, it would be left floating above
+            // the menu bar for the rest of the session.
+            //
+            // A safety net, not the handoff's cleanup path: `panel::finish_setup`
+            // owns the finishing order and closes setup itself. This catches the
+            // ways setup can go that nothing coordinates — a dismissal, a
+            // crashed webview — and is idempotent with the handoff's own close.
+            if matches!(event, WindowEvent::Destroyed) && window.label() == panel::SETUP_WINDOW {
+                if let Some(panel) = window.app_handle().get_webview_window(panel::MAIN_WINDOW) {
+                    platform::current().set_above_overlay(&panel, false);
                 }
             }
             platform::current().on_window_event(window, event);
