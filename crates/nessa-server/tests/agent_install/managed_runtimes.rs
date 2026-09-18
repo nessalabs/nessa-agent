@@ -300,14 +300,16 @@ fn a_record_cannot_name_a_launch_path_of_its_own() {
     let elsewhere = root.path().join("hostile");
     write(&elsewhere, b"not the runtime");
     let record = root.path().join("opencode").join("installed.json");
-    write(
-        &record,
-        format!(
-            r#"{{"version":"1.18.31","executable":"{}"}}"#,
-            elsewhere.display()
-        )
-        .as_bytes(),
-    );
+    // Serialised rather than formatted into the string: a Windows path is full
+    // of backslashes, and pasting one into JSON by hand writes a record that is
+    // not JSON at all — which would refuse for the wrong reason and prove
+    // nothing about the rule under test.
+    let hostile_record = serde_json::json!({
+        "version": "1.18.31",
+        "executable": elsewhere,
+    })
+    .to_string();
+    write(&record, hostile_record.as_bytes());
 
     assert_eq!(
         store.installed(&agent(), &release),
@@ -578,7 +580,22 @@ fn a_digest_of_something_larger_than_the_read_buffer_is_still_right() {
     );
 }
 
+// Unix only, because what this stages the attack through is. Reading both
+// steps off one handle is written the same way everywhere, but the attack it
+// defends against needs a name to aim at, and `release_name` says in its own
+// documentation that Windows will not unlink a file that is still open. There
+// the name stays, a truncating write through it reaches the very file object
+// the handle holds, and the property is false — a gap that is already written
+// down beside the code that leaves it, and that nothing reaches today because
+// Nessa pins no Windows release.
+//
+// Not rewritten to swap by rename so that it could run everywhere. That
+// replaces the name rather than the file behind it, which is a weaker attack
+// and one Windows survives, so a green result there would say the property
+// holds when it does not. [`a_staged_download_has_no_name_to_reach_it_by`]
+// covers the unlinking on its own.
 #[test]
+#[cfg(unix)]
 fn what_was_hashed_is_what_gets_unpacked() {
     // The reason a staged download is a handle rather than a path. Replacing
     // the file between the two steps must not change what comes out, because
@@ -916,7 +933,12 @@ fn an_archive_without_the_pinned_executable_leaves_no_directory_behind() {
     );
 }
 
+// Unix only, because the directory sync this asserts on is. Windows takes the
+// same durability from the write-through move in `replace`, and
+// `sync_directory` documents itself as a no-op there, so `settle` has no
+// failure to report and there is no distinction left to assert.
 #[test]
+#[cfg(unix)]
 fn an_install_is_not_settled_until_its_directory_is_durable() {
     // The rename survives a crash only once the directory holding it does, so
     // that sync belongs after the executable exists and inside the same guard
