@@ -8,6 +8,7 @@ import {
   defaultArtifacts,
   option,
   releaseManifest,
+  requestedPath,
   updaterTarget,
 } from "./updater-manifest.mjs"
 
@@ -171,4 +172,13 @@ test("local redirection stays a build-time merge and never enters the shipped co
   const harness = readFileSync("scripts/desktop/updater-harness.mjs", "utf8")
   assert.match(harness, /pnpm app:build --config/)
   assert.doesNotMatch(harness, /writeFileSync\([^)]*tauri\.conf\.json/)
+})
+
+test("a path the harness cannot decode is a 404, not the end of the run", () => {
+  assert.equal(requestedPath("/nessa.app.tar.gz"), "/nessa.app.tar.gz")
+  assert.equal(requestedPath("/nessa%20one.app.tar.gz"), "/nessa one.app.tar.gz")
+  // `decodeURIComponent` throws on these. Nothing catches inside the request
+  // handler, so before this they took the harness down mid-validation.
+  for (const malformed of ["/%ZZ", "/%", "/%E0%A4%A"])
+    assert.equal(requestedPath(malformed), undefined)
 })
