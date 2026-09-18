@@ -22,4 +22,6 @@ mod agent;
 
 mod desktop;
 
+mod provisioning;
+
 mod cli;

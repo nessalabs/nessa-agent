@@ -1,5 +1,26 @@
 # Use local authentication
 
+## Develop on this machine
+
+For a developer running the desktop app, there is one command:
+
+```sh
+just start
+```
+
+`just start` and `just server` run `nessa server --provision-local`. Before
+binding the port, that creates what the local namespace is missing: the
+credential registry and an owner credential at `<root>/owner.token` if there is
+no registry, and the panel's own credential at
+`auth/surfaces/nessa-panel.token` if that file is absent. Both checks are
+guards. An existing registry is never re-initialized and an existing surface
+credential is never rotated, so restarting the server cannot invalidate a token
+in use. If either step fails, the server reports which step and why, and exits
+without serving.
+
+Everything below is the deliberate path, and the only path for a server you
+operate: plain `nessa server` provisions nothing.
+
 ## Create owner access
 
 Build with Rust 1.89 or newer, then initialize once:
@@ -7,7 +28,7 @@ Build with Rust 1.89 or newer, then initialize once:
 ```sh
 cargo build -p nessa-server
 target/debug/nessa auth init --local
-pnpm server:run
+target/debug/nessa server
 ```
 
 The executable is `nessa`; the Rust package remains `nessa-server`. Install it on
@@ -132,7 +153,7 @@ Stop the server, then use a new token path:
 
 ```sh
 target/debug/nessa auth recover-owner --local --owner-token-file "$HOME/nessa-owner-next.token"
-pnpm server:run
+target/debug/nessa server
 ```
 
 Recovery keeps the same gateway and organization and revokes previous

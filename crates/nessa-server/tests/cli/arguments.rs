@@ -1,4 +1,4 @@
-use crate::cli::entrypoint::{parse, Command};
+use crate::cli::entrypoint::{parse, Command, LocalProvisioning};
 fn args(words: &[&str]) -> Vec<String> {
     words.iter().map(|s| (*s).into()).collect()
 }
@@ -21,7 +21,14 @@ fn local_bootstrap_is_explicit_and_cloud_never_falls_back() {
             credential_file: None
         })
     ));
-    assert_eq!(parse(&args(&["server"])).unwrap(), Command::Server);
+    assert_eq!(
+        parse(&args(&["server"])).unwrap(),
+        Command::Server(LocalProvisioning::Manual)
+    );
+    assert_eq!(
+        parse(&args(&["server", "--provision-local"])).unwrap(),
+        Command::Server(LocalProvisioning::Automatic)
+    );
     assert_eq!(parse(&[]).unwrap(), Command::Help);
     for words in [
         vec!["auth", "init"],
@@ -31,6 +38,9 @@ fn local_bootstrap_is_explicit_and_cloud_never_falls_back() {
         vec!["doctor", "--local", "--local"],
         vec!["auth", "token", "--credential-file", "relative"],
         vec!["server", "extra"],
+        vec!["server", "--provision-local", "--provision-local"],
+        vec!["server", "--provision-local", "extra"],
+        vec!["--provision-local"],
         vec!["desktop-service", "/tmp"],
     ] {
         assert!(parse(&args(&words)).is_err(), "{words:?}");

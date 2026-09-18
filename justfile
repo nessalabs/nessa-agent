@@ -24,7 +24,8 @@ release-bundle := if os() == "macos" { "dmg" } else if os() == "windows" { "nsis
 default:
     @just --list
 
-# Local gateway (stage=dev, 127.0.0.1:7420; run nessa auth init --local first).
+# Local gateway (stage=dev, 127.0.0.1:7420). Creates the dev owner and chat
+# credentials on first run; existing ones are never replaced.
 server:
     pnpm server:run
 

@@ -64,6 +64,32 @@ impl SurfaceCredential {
     }
 }
 
+/// Say which of the two things went wrong, because the repairs differ.
+///
+/// A file that is not there has never been provisioned, and starting the local
+/// server provisions it. A file that is there and was refused is a permissions
+/// problem the server will not touch, because provisioning never replaces an
+/// existing credential. The old wording covered both with "missing or unsafe"
+/// and named no command, so neither case told anybody what to do. Anything else
+/// keeps the operating system's own words rather than a guessed cause.
+fn unreadable(error: &std::io::Error) -> String {
+    match error.kind() {
+        std::io::ErrorKind::NotFound => {
+            "No chat credential has been provisioned yet. Start the local server \
+             (`just start`, or `just server`), which creates one on first run."
+                .into()
+        }
+        std::io::ErrorKind::PermissionDenied => {
+            "The chat credential was refused: it, or a directory above it, must be \
+             yours alone (mode 0600/0700 on Unix, a private DACL on Windows). Repair \
+             those permissions, or remove the credential file and start the local \
+             server to provision a new one."
+                .into()
+        }
+        _ => format!("The chat credential could not be opened: {error}."),
+    }
+}
+
 impl SurfaceCredentials for SurfaceCredential {
     fn read(&self, stage: &str) -> Result<String, String> {
         if stage != self.stage {
@@ -78,7 +104,7 @@ impl SurfaceCredentials for SurfaceCredential {
             &self.relative,
             nessa_local_storage::OpenMode::ReadNonblocking,
         )
-        .map_err(|_| "Chat credential missing or unsafe; run local auth setup")?;
+        .map_err(|error| unreadable(&error))?;
         if file
             .metadata()
             .map_err(|_| "Cannot inspect chat credential")?
@@ -272,15 +298,33 @@ mod tests {
     }
 
     /// The credential's own refusal reaches the surface unchanged: it is the
-    /// only thing that can tell somebody to run local auth setup.
+    /// only thing that knows whether the file is absent or was refused, and so
+    /// the only thing that can name the next step.
     #[test]
     fn a_missing_credential_is_reported_as_the_source_put_it() {
-        let credential =
-            FakeCredentials::refusing("Chat credential missing or unsafe; run local auth setup");
+        let reason = unreadable(&std::io::Error::from(std::io::ErrorKind::NotFound));
+        let credential = FakeCredentials::refusing(&reason);
 
         assert_eq!(
             load(panel::MAIN_WINDOW, None, &credential).err(),
-            Some("Chat credential missing or unsafe; run local auth setup".to_string())
+            Some(reason)
+        );
+    }
+
+    /// Absent and refused are different sentences with different instructions,
+    /// and an unexpected failure is neither: it keeps the OS's own words.
+    #[test]
+    fn absence_and_refusal_are_told_apart() {
+        let absent = unreadable(&std::io::Error::from(std::io::ErrorKind::NotFound));
+        let refused = unreadable(&std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+
+        assert!(absent.contains("provisioned yet"), "{absent}");
+        assert!(absent.contains("just start"), "{absent}");
+        assert!(refused.contains("refused"), "{refused}");
+        assert!(!refused.contains("provisioned yet"), "{refused}");
+        assert!(
+            unreadable(&std::io::Error::from(std::io::ErrorKind::TimedOut))
+                .contains("could not be opened")
         );
     }
 
@@ -311,11 +355,23 @@ mod tests {
         };
         assert_eq!(storage.read("ci").unwrap(), "fixture-only");
         assert!(storage.read("prod").is_err());
+        let absent = SurfaceCredential {
+            root: Some(root.clone()),
+            relative: "never-provisioned.token".into(),
+            stage: "ci".into(),
+        };
+        assert!(
+            absent.read("ci").unwrap_err().contains("provisioned yet"),
+            "an absent credential names provisioning as the next step"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-            assert!(storage.read("ci").is_err());
+            assert!(
+                storage.read("ci").unwrap_err().contains("refused"),
+                "a readable-by-others credential is refused, not reported as absent"
+            );
         }
         drop(file);
         fs::remove_dir_all(root).unwrap();

@@ -314,7 +314,11 @@ through its application ports. See the [MCP server](../crates/nessa-mcp/README.m
 
 ## CLI surface
 
-The `nessa` executable runs the gateway with `nessa server`. Online `auth token`
+The `nessa` executable runs the gateway with `nessa server`. That command serves
+only what was already provisioned; `nessa server --provision-local` additionally
+creates the namespace's owner and panel credentials when they are absent, which
+is what the desktop app and the `just start` / `just server` developer loop ask
+for. Provisioning is a guard, never a rotation. Online `auth token`
 and `doctor` commands use the existing authenticated product protocol as the CLI
 surface; they do not access the server registry. Offline `auth init --local`
 bootstraps first access, and local recovery/provisioning retain their exclusive

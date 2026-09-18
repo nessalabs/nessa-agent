@@ -69,14 +69,26 @@ implementation per OS, injected by `current()` — and in
 
 ```bash
 pnpm install
-just server   # terminal 1 — nessa server on ws://127.0.0.1:7420
-just dev      # terminal 2 — panel; connects with stage=dev
+just start    # one terminal — server on ws://127.0.0.1:7420, then the panel
 ```
 
-Before the first server run, initialize its private local credentials:
-`cargo run -p nessa-server -- auth init --local --owner-token-file "$HOME/nessa-owner.token"`.
-This requires no signup. See [local authentication](docs/adr/done/0010-local-authentication.md)
-for scoped clients, environment isolation, and owner recovery.
+That is the whole setup from a clone. `just start` (and `just server` on its
+own) runs `nessa server --provision-local`, which creates the dev namespace's
+owner credential at `$HOME/.nessa/owner.token` and the panel's own credential at
+`$HOME/.nessa/dev/auth/surfaces/nessa-panel.token` when they are absent. It never
+replaces credentials that already exist, so restarting the server does not
+invalidate a token you are using. No signup, no account.
+
+Use two terminals instead if you prefer (`just server`, then `just dev`). A
+server you run yourself — `nessa server` without `--provision-local` — provisions
+nothing; use the offline `nessa auth` commands and choose your own token paths.
+See [local authentication](docs/guides/local-auth.md) for that, and
+[the ADR](docs/adr/done/0010-local-authentication.md) for scoped clients,
+environment isolation, and owner recovery.
+
+If the panel says no chat credential has been provisioned, the local server is
+not the one that started it: run `just server` in that same namespace
+(`NESSA_DATA_DIR`, `NESSA_STAGE`, `NESSA_INSTANCE` must match).
 
 [`just`](https://just.systems) is the entry ([justfile](justfile)). `just`
 lists recipes. `just server` runs the WebSocket control plane. `just dev` is
