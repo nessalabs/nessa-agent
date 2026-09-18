@@ -25,7 +25,9 @@ The server does not implement another scheduler.
 
 First provision the gateway and panel credential using [local auth](local-auth.md).
 Use the same stage, data directory and instance for the server and native panel.
-The panel connects to `ws://127.0.0.1:7420/session`. This authenticates local access;
+The panel connects to `ws://127.0.0.1:7421/session` in the dev stage — the stage
+decides the port (`protocol/defaults/gateway-ports.json`), and the installed
+app's `prod` service keeps 7420. This authenticates local access;
 remote TLS/device provisioning is not included in this delivery.
 
 Add `agent` to the private namespace `config.json` (beside `auth/`):
@@ -330,8 +332,9 @@ admission open. An actual service shutdown flushes agent journals before exit.
 First launch provisions private local credentials if absent. Existing credentials,
 workspace/model settings and histories are preserved. Bundle-owned runtime paths
 are supplied by composition, without writing installation paths into user config.
-The service uses port 7420; a separately started development gateway must be stopped
-once before enabling the installed service. Its working directory is `~/.nessa` and its log is `~/.nessa/logs/gateway.log`. User credentials stay under `~/.nessa` (stage and instance
+The installed service uses the `prod` port, 7420. A development gateway runs on
+the dev stage's own port (7421), so the two coexist and neither has to be stopped
+for the other. Its working directory is `~/.nessa` and its log is `~/.nessa/logs/gateway.log`. User credentials stay under `~/.nessa` (stage and instance
 namespaces still apply). Custom user-supplied MCP servers are not packaged.
 
 `pnpm app:build --bundles dmg` prepares the complete runtime, builds the disk

@@ -6,6 +6,8 @@ import { defineConfig, searchForWorkspaceRoot } from "vite"
 import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 
+import { gatewayOrigin } from "./src/env/gateway-ports"
+
 /**
  * Nessa UI is consumed as source, not as its published bundle.
  *
@@ -37,6 +39,9 @@ try {
 // Tauri drives this dev server, so the port is fixed and the Rust sources are
 // left to cargo's own watcher.
 const host = process.env.TAURI_DEV_HOST
+// This dev server fronts a dev-stage gateway, which listens beside the port an
+// installed Nessa holds. One table decides that port: see src/env/gateway-ports.
+const gatewayTarget = process.env.NESSA_BROWSER_GATEWAY_URL ?? gatewayOrigin("dev")
 const tlsCert = process.env.NESSA_BROWSER_TLS_CERT
 const tlsKey = process.env.NESSA_BROWSER_TLS_KEY
 if (Boolean(tlsCert) !== Boolean(tlsKey))
@@ -52,14 +57,14 @@ export default defineConfig({
         : undefined,
     proxy: {
       "/browser": {
-        target: process.env.NESSA_BROWSER_GATEWAY_URL ?? "http://127.0.0.1:7420",
+        target: gatewayTarget,
         ws: true,
       },
       // The gateway's pre-authentication surface, which setup asks before it
       // has a session. Proxied so a browser preview reaches it on its own
       // origin; the packaged app talks to the gateway directly.
       "/onboarding": {
-        target: process.env.NESSA_BROWSER_GATEWAY_URL ?? "http://127.0.0.1:7420",
+        target: gatewayTarget,
       },
     },
     port: 1420,

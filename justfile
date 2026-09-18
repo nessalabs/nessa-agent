@@ -24,17 +24,21 @@ release-bundle := if os() == "macos" { "dmg" } else if os() == "windows" { "nsis
 default:
     @just --list
 
-# Local gateway (stage=dev, 127.0.0.1:7420). Creates the dev owner and chat
-# credentials on first run; existing ones are never replaced.
+# Local gateway (stage=dev, 127.0.0.1:7421). Creates the dev owner and chat
+# credentials on first run; existing ones are never replaced. An installed Nessa
+# keeps :7420 through its background service, so both can run at once.
 server:
     pnpm server:run
 
-# Desktop app + local nessa server (always restarts :7420 so code changes load).
+# Desktop app + local nessa server (always restarts the dev port so code changes
+# load). It restarts a dev server this checkout started and nothing else — see
+# scripts/free-gateway-port.mjs for why a launchd service is not ours to kill.
 [unix]
 start:
     #!/usr/bin/env bash
     set -euo pipefail
     set -m
+    port="$(node scripts/gateway-port.mjs dev)"
     server_pid=""
     cleanup() {
       if [[ -n "${server_pid}" ]]; then
@@ -45,25 +49,14 @@ start:
     }
     trap cleanup EXIT INT TERM
 
-    if curl -sf --connect-timeout 0.3 "http://127.0.0.1:7420/health" >/dev/null; then
-      echo "→ stopping existing nessa-server on :7420"
-      if command -v lsof >/dev/null 2>&1; then
-        lsof -tiTCP:7420 -sTCP:LISTEN | xargs kill -TERM 2>/dev/null || true
-      fi
-      for _ in $(seq 1 20); do
-        if ! curl -sf --connect-timeout 0.3 "http://127.0.0.1:7420/health" >/dev/null; then
-          break
-        fi
-        sleep 0.25
-      done
-    fi
+    node scripts/free-gateway-port.mjs dev
 
     echo "→ starting nessa-server"
     pnpm server:run &
     server_pid=$!
     ready=0
     for _ in $(seq 1 120); do
-      if curl -sf --connect-timeout 0.3 "http://127.0.0.1:7420/health" >/dev/null; then
+      if curl -sf --connect-timeout 0.3 "http://127.0.0.1:${port}/health" >/dev/null; then
         ready=1
         break
       fi
@@ -76,10 +69,10 @@ start:
       sleep 0.5
     done
     if [[ "${ready}" -ne 1 ]]; then
-      echo "→ nessa-server did not become healthy on :7420"
+      echo "→ nessa-server did not become healthy on :${port}"
       exit 1
     fi
-    echo "→ nessa-server ready on :7420"
+    echo "→ nessa-server ready on :${port}"
 
     just dev
 

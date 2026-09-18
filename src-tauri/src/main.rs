@@ -10,6 +10,7 @@ mod platform;
 mod settings;
 mod shortcut;
 mod shortcuts;
+mod stage_port;
 mod surface_credential;
 mod tray;
 mod updater;
@@ -218,6 +219,7 @@ mod tests {
                 "instance".into(),
                 "generation".into(),
                 7,
+                7420,
             ))
         }
 

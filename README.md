@@ -69,8 +69,18 @@ implementation per OS, injected by `current()` — and in
 
 ```bash
 pnpm install
-just start    # one terminal — server on ws://127.0.0.1:7420, then the panel
+just start    # one terminal — server on ws://127.0.0.1:7421, then the panel
 ```
+
+**Dev and an installed Nessa run side by side.** A packaged install keeps
+`127.0.0.1:7420` through a launchd background service that deliberately outlives
+the app — quitting Nessa does not stop it, and killing its listener only makes
+launchd start it again. So the dev stage listens on its own port, 7421. The one
+stage → port table is
+[protocol/defaults/gateway-ports.json](protocol/defaults/gateway-ports.json);
+`nessa-server`, the desktop host, the frontend and the Vite proxy all read it,
+and `NESSA_PORT` still overrides it for a single run. If something else is
+holding the dev port, `just start` names the owner instead of killing it.
 
 That is the whole setup from a clone. `just start` (and `just server` on its
 own) runs `nessa server --provision-local`, which creates the dev namespace's

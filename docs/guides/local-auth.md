@@ -94,7 +94,7 @@ to restrict initial chat access. Client metadata never grants permissions.
 First list credentials to obtain your organization and gateway IDs:
 
 ```sh
-pnpm auth:cli list --url ws://127.0.0.1:7420 --credential-file "$HOME/nessa-owner.token"
+pnpm auth:cli list --url ws://127.0.0.1:7421 --credential-file "$HOME/nessa-owner.token"
 ```
 
 Save this request as an absolute-path JSON file. Replace `ORG_ID`, `GATEWAY_ID`,
@@ -124,7 +124,7 @@ it does not grant authority.
 ```
 
 ```sh
-pnpm auth:cli issue --url ws://127.0.0.1:7420 --credential-file "$HOME/nessa-owner.token" --input /absolute/issue.json --out /absolute/terminal.token
+pnpm auth:cli issue --url ws://127.0.0.1:7421 --credential-file "$HOME/nessa-owner.token" --input /absolute/issue.json --out /absolute/terminal.token
 ```
 
 The output path must be new. The CLI writes the secret privately and prints its
@@ -140,7 +140,7 @@ while reusing its request ID fails.
 ## Revoke a token
 
 ```sh
-pnpm auth:cli revoke CREDENTIAL_ID --url ws://127.0.0.1:7420 --credential-file "$HOME/nessa-owner.token"
+pnpm auth:cli revoke CREDENTIAL_ID --url ws://127.0.0.1:7421 --credential-file "$HOME/nessa-owner.token"
 ```
 
 Revocation persists across restarts. Attached idle clients close on their next
@@ -372,7 +372,7 @@ pnpm exec vite --host 127.0.0.1 --port 1443
 ```
 
 Open `https://127.0.0.1:1443`. The certificate must cover `127.0.0.1`. Vite forwards
-`/browser` HTTP and WebSocket requests to the local gateway on port 7420; set
+`/browser` HTTP and WebSocket requests to the dev gateway on port 7421; set
 `NESSA_BROWSER_GATEWAY_URL` to target a different test gateway. The browser uses
 HTTPS/WSS on this URL, or HTTP/WS for loopback development; the proxy's upstream
 hop is local loopback HTTP. Native

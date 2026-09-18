@@ -228,6 +228,7 @@ mod tests {
             "instance".into(),
             "generation".into(),
             42,
+            7420,
         )
     }
 
