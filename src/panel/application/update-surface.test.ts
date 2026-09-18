@@ -214,11 +214,65 @@ describe("a download that was refused", () => {
   })
 })
 
+describe("the headline, which is the tab's loudest line", () => {
+  const taken = panel({ kind: "announced", release: published }, { kind: "install" })
+
+  it("says what a download in flight is doing, measured or not", () => {
+    expect(updateTab(taken)?.headline).toBe("Downloading the update")
+    expect(
+      updateTab(afterUpdate(taken, { kind: "progress", downloaded: 620, total: 1_000 }))
+        ?.headline,
+    ).toBe("Downloading the update")
+  })
+
+  it("says the restart is coming once the last byte is in", () => {
+    const full = afterUpdate(taken, {
+      kind: "progress",
+      downloaded: 1_000,
+      total: 1_000,
+    })
+
+    expect(updateTab(full)?.headline).toBe("Restarting to finish the update")
+  })
+
+  it("stops claiming a download the moment one is refused", () => {
+    // The defect this exists for: the tab headed "Downloading the update" while
+    // the sentence under it said the download had not finished.
+    const failed = afterUpdate(taken, { kind: "failed" })
+    const tab = updateTab(failed)
+
+    expect(tab?.headline).toBe("The update did not install")
+    expect(tab?.headline).not.toMatch(/downloading/i)
+    expect(tab?.progress.kind).toBe("failed")
+  })
+
+  it("goes back to the download when the retry is taken", () => {
+    const retried = panel(
+      { kind: "announced", release: published },
+      { kind: "install" },
+      { kind: "failed" },
+      { kind: "install" },
+    )
+
+    expect(updateTab(retried)?.headline).toBe("Downloading the update")
+  })
+
+  it("keeps a bar that is not quite full from announcing the restart", () => {
+    const nearly = afterUpdate(taken, {
+      kind: "progress",
+      downloaded: 999,
+      total: 1_000,
+    })
+
+    expect(updateTab(nearly)?.headline).toBe("Downloading the update")
+  })
+})
+
 describe("what the release published", () => {
   it("holds up when it published nothing, which is what ships first", () => {
     const notes = releaseNotes(null)
 
-    expect(notes.headline).toBe("Downloading the update")
+    expect(notes.title).toBeNull()
     expect(notes.points).toEqual([])
     expect(notes.empty).toBe("This release published no notes.")
   })
@@ -227,14 +281,14 @@ describe("what the release published", () => {
     expect(releaseNotes("  \n \n ").empty).toBe("This release published no notes.")
   })
 
-  it("reads the first line as the headline and the rest as the points", () => {
+  it("reads the first line as the release's title and the rest as the points", () => {
     const notes = releaseNotes(
       "Setup stops running every launch\n" +
         "- First-run setup is remembered.\n" +
         "* Settings are never replaced when the file cannot be read.\n",
     )
 
-    expect(notes.headline).toBe("Setup stops running every launch")
+    expect(notes.title).toBe("Setup stops running every launch")
     expect(notes.points).toEqual([
       "First-run setup is remembered.",
       "Settings are never replaced when the file cannot be read.",
@@ -245,7 +299,26 @@ describe("what the release published", () => {
   it("says nothing about emptiness when there is a single line", () => {
     const notes = releaseNotes("A quiet release")
 
-    expect(notes).toEqual({ headline: "A quiet release", points: [], empty: null })
+    expect(notes).toEqual({ title: "A quiet release", points: [], empty: null })
+  })
+
+  it("never lets the release's own title stand in for the state", () => {
+    // The title is whatever the release called itself; the headline is what the
+    // download is doing. Keeping them apart is the whole of the fix — a tab
+    // that says "Downloading" because of a *string in the manifest* would say
+    // it over a failure too.
+    const after = panel(
+      {
+        kind: "announced",
+        release: { from: "0.1.0", version: "0.1.1", notes: "Faster startup" },
+      },
+      { kind: "install" },
+      { kind: "failed" },
+    )
+
+    const tab = updateTab(after)
+    expect(tab?.notes.title).toBe("Faster startup")
+    expect(tab?.headline).toBe("The update did not install")
   })
 
   it("carries the notes into the tab", () => {

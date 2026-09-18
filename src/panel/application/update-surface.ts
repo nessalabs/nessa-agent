@@ -173,8 +173,8 @@ export function updateNotice(state: UpdateState): UpdateNotice | null {
 
 /** What the release published, as the tab lays it out. */
 export interface ReleaseNotes {
-  /** The line under the versions. */
-  headline: string
+  /** What the release calls itself, or `null` when it published no notes. */
+  title: string | null
   /** The rest of the notes, one per line published. */
   points: readonly string[]
   /** Said instead of the notes when the release published none. */
@@ -182,11 +182,15 @@ export interface ReleaseNotes {
 }
 
 /**
- * The notes, split into a headline and the points under it.
+ * The notes, split into the release's own title and the points under it.
  *
- * The manifest publishes one `notes` string. Its first line is the headline and
+ * The manifest publishes one `notes` string. Its first line is the title and
  * the remaining lines are the points, which is how release notes are written
  * anyway; leading list markers are dropped because the tab draws its own.
+ *
+ * The title is what the release says about itself and never what the download
+ * is doing — the tab's headline owns that, and a released title standing in for
+ * it is how the tab came to say "Downloading the update" over a failure.
  *
  * Nothing fills that field yet, so the empty case is the one that ships first
  * and it is a written sentence rather than a blank space.
@@ -196,15 +200,15 @@ export function releaseNotes(notes: string | null): ReleaseNotes {
     .split("\n")
     .map((line) => line.replace(/^\s*[-*•]\s+/, "").trim())
     .filter((line) => line.length > 0)
-  const [headline, ...points] = lines
-  if (headline === undefined) {
+  const [title, ...points] = lines
+  if (title === undefined) {
     return {
-      headline: "Downloading the update",
+      title: null,
       points: [],
       empty: "This release published no notes.",
     }
   }
-  return { headline, points, empty: null }
+  return { title, points, empty: null }
 }
 
 /** The download's own line, under the notes. */
@@ -230,6 +234,8 @@ export interface UpdateTab {
   from: string
   /** The version it is going to. */
   to: string
+  /** The line that says where the update has got to. See `updateHeadline`. */
+  headline: string
   notes: ReleaseNotes
   progress: UpdateProgress
   /**
@@ -244,25 +250,46 @@ export interface UpdateTab {
 export function updateTab(state: UpdateState): UpdateTab | null {
   if (state.release === null) return null
   if (state.stage !== "downloading" && state.stage !== "failed") return null
+  const progress: UpdateProgress =
+    state.stage === "failed"
+      ? {
+          kind: "failed",
+          statement: "The download did not finish. Nessa is still on the version it had.",
+          retryLabel: `Retry update ${state.release.version}`,
+        }
+      : {
+          kind: "downloading",
+          label: "Downloading",
+          percent: downloadedPercent(state),
+        }
   return {
     from: state.release.from,
     to: state.release.version,
+    headline: updateHeadline(progress),
     notes: releaseNotes(state.release.notes),
-    progress:
-      state.stage === "failed"
-        ? {
-            kind: "failed",
-            statement:
-              "The download did not finish. Nessa is still on the version it had.",
-            retryLabel: `Retry update ${state.release.version}`,
-          }
-        : {
-            kind: "downloading",
-            label: "Downloading",
-            percent: downloadedPercent(state),
-          },
+    progress,
     closeable: state.stage === "failed",
   }
+}
+
+/**
+ * The headline, which is the state of the download and nothing else.
+ *
+ * It is derived from the progress rather than from the notes because it has to
+ * agree with what is drawn under it: a tab headed "Downloading the update" over
+ * a sentence saying the download did not finish says two things at once, and
+ * the one somebody reads first is the wrong one.
+ *
+ * There are three, matching the three things that can be true. A full bar is
+ * its own state and lasts only moments — the host restarts the app once the
+ * bytes are in — but it is the last thing seen before the window goes, so it
+ * says what is about to happen rather than leaving "Downloading" up over a bar
+ * that has stopped moving.
+ */
+function updateHeadline(progress: UpdateProgress): string {
+  if (progress.kind === "failed") return "The update did not install"
+  if (progress.percent === 100) return "Restarting to finish the update"
+  return "Downloading the update"
 }
 
 /**
