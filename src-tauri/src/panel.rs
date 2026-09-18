@@ -8,13 +8,14 @@ use std::io;
 
 use serde::Serialize;
 use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalSize, WebviewUrl,
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder,
 };
 
+use crate::composition::HostDependencies;
 use crate::host;
 use crate::platform;
-use crate::settings::{self, Onboarding, Panel, Settings};
+use crate::settings::{Onboarding, Panel, Settings, SettingsStore};
 
 /// The panel itself. Named here because the window policies that single it out
 /// — close dismisses it rather than quitting — live in the host's event handler.
@@ -161,7 +162,12 @@ pub struct SetupHandoff {
 /// `completed` is the surface's own account of how setup ended: finished, or
 /// left. Leaving stays free to change its mind, so only a finish is recorded.
 #[tauri::command]
-pub fn finish_setup(app: AppHandle, completed: bool) -> Result<SetupHandoff, String> {
+pub fn finish_setup(
+    app: AppHandle,
+    deps: State<'_, HostDependencies>,
+    completed: bool,
+) -> Result<SetupHandoff, String> {
+    let settings_store = deps.settings.clone();
     hand_over(
         completed,
         || {
@@ -176,15 +182,12 @@ pub fn finish_setup(app: AppHandle, completed: bool) -> Result<SetupHandoff, Str
             show(&window, &settings(&app))
                 .map_err(|error| format!("could not show the panel: {error}"))
         },
-        || {
-            // Written through the settings file, which is the one durable store
-            // the app has — the same load, change, save the tray's own toggle
-            // does. The managed `Settings` is deliberately not updated in place:
-            // nothing after startup reads this flag, and the launch that does
-            // reads it off disk before anything is managed at all.
-            set_onboarding(&app, Onboarding { completed: true })
-                .map_err(|error| format!("could not record that setup finished: {error}"))
-        },
+        // Written through the settings store, which is the one durable store
+        // the app has — the same load, change, save the tray's own toggle does.
+        // The managed `Settings` snapshot is deliberately not updated in place:
+        // nothing after startup reads this flag, and the launch that does reads
+        // it off disk before anything is managed at all.
+        || record_completion(&*settings_store),
         || match app.get_webview_window(SETUP_WINDOW) {
             // Closing it destroys it, which is what lets the panel back down to
             // its ordinary level (see the `Destroyed` handler in `main.rs`).
@@ -241,17 +244,28 @@ pub fn reveal_setup_window(window: WebviewWindow) {
     platform::current().reveal_overlay(&window);
 }
 
+/// The handoff's record step, as the caller reports it.
+fn record_completion(settings: &dyn SettingsStore) -> Result<(), String> {
+    set_onboarding(settings, Onboarding { completed: true })
+        .map_err(|error| format!("could not record that setup finished: {error}"))
+}
+
 /// Writes the first-run flag to the settings file, leaving every other key as
 /// the file has it.
 ///
-/// Through `settings::update` rather than a load-change-save of its own: the
-/// startup load answers an unreadable or malformed file with the defaults so a
-/// launch can carry on, and saving *that* back would replace the person's real
-/// panel geometry and quit policy with defaults — a silent loss, since the
-/// write succeeds. `update` refuses instead, and the refusal is reported.
-fn set_onboarding(app: &AppHandle, onboarding: Onboarding) -> io::Result<()> {
+/// Through [`SettingsStore::update`] rather than a load-change-save of its own:
+/// the startup load answers an unreadable or malformed file with the defaults so
+/// a launch can carry on, and saving *that* back would replace the person's real
+/// panel geometry and quit policy with defaults — a silent loss, since the write
+/// succeeds. `update` refuses instead, and the refusal is reported.
+///
+/// The store is a parameter rather than something looked up from the app: this
+/// is the decision, and the decision is what a test has to be able to hold.
+fn set_onboarding(settings: &dyn SettingsStore, onboarding: Onboarding) -> io::Result<()> {
     // The written value is the caller's to ignore: nothing here shows it back.
-    settings::update(app, |settings| settings.onboarding = onboarding).map(|_| ())
+    settings
+        .update(&mut |chosen| chosen.onboarding = onboarding.clone())
+        .map(|_| ())
 }
 
 /// Opens first-run setup again, from the beginning.
@@ -271,11 +285,11 @@ fn set_onboarding(app: &AppHandle, onboarding: Onboarding) -> io::Result<()> {
 /// only way to see it a second time while working on it; it is not a feature
 /// anybody asked for, so it does not ship until it is one.
 #[cfg(debug_assertions)]
-pub fn restart_onboarding(app: &AppHandle) {
+pub fn restart_onboarding(app: &AppHandle, settings: &dyn SettingsStore) {
     // Clearing it is what makes this a restart rather than a preview. A file
     // that will not take the change costs the next launch's setup, not this
     // window, so it is reported and the window opens anyway.
-    if let Err(error) = set_onboarding(app, Onboarding::default()) {
+    if let Err(error) = set_onboarding(settings, Onboarding::default()) {
         eprintln!("[nessa] could not reopen setup for the next launch: {error}");
     }
 
@@ -633,6 +647,96 @@ mod tests {
         // a decision: leaving stays free to run setup again.
         assert_eq!(steps.order(), ["show", "close"]);
         assert!(handoff.record_error.is_none());
+    }
+
+    /// The handoff's record step, wired to a settings store rather than to a
+    /// closure a test wrote: the flag reaches the file, and every other key the
+    /// file has survives it. This needed a running app before.
+    #[test]
+    fn the_handoff_records_completion_through_the_settings_store() {
+        let settings = crate::settings::testing::in_memory();
+        settings.storage.put(
+            &settings.path,
+            br#"{"panel":{"width":640},"stopAgentsOnQuit":true}"#,
+        );
+        let steps = Steps::default();
+
+        let handoff = hand_over(
+            true,
+            || {
+                steps.took("show");
+                Ok(())
+            },
+            || record_completion(&settings.store),
+            || {
+                steps.took("close");
+                Ok(())
+            },
+        )
+        .expect("the panel came up");
+
+        assert_eq!(steps.order(), ["show", "close"]);
+        assert!(handoff.record_error.is_none());
+        let saved = settings.store.load();
+        assert!(saved.onboarding.completed);
+        assert_eq!(saved.panel.width, 640.0);
+        assert!(saved.stop_agents_on_quit);
+    }
+
+    /// Leaving setup writes nothing at all, which is what keeps it free to
+    /// change its mind — checked against the file this time, not a counter.
+    #[test]
+    fn leaving_setup_writes_nothing_to_the_settings_file() {
+        let settings = crate::settings::testing::in_memory();
+
+        hand_over(
+            false,
+            || Ok(()),
+            || record_completion(&settings.store),
+            || Ok(()),
+        )
+        .expect("the panel came up");
+
+        assert_eq!(settings.storage.get(&settings.path), None);
+    }
+
+    /// The refusal the handoff is built to survive, produced by a real settings
+    /// store over a file this build cannot parse: the flag is refused, the
+    /// person's bytes are still on disk, and the panel is handed over anyway.
+    #[test]
+    fn a_settings_file_that_will_not_parse_refuses_the_flag_and_keeps_its_bytes() {
+        let settings = crate::settings::testing::in_memory();
+        let original = br#"{ "panel": { "width": 640 }, "#.to_vec();
+        settings.storage.put(&settings.path, &original);
+
+        let handoff = hand_over(
+            true,
+            || Ok(()),
+            || record_completion(&settings.store),
+            || Ok(()),
+        )
+        .expect("a file this build cannot read is not a reason to withhold the panel");
+
+        assert!(handoff.setup_closed);
+        assert!(handoff
+            .record_error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("could not record that setup finished:")));
+        assert_eq!(settings.storage.get(&settings.path), Some(original));
+    }
+
+    /// Clearing the flag is what makes the debug-only tray item a restart
+    /// rather than a preview: the next launch opens setup again, because the
+    /// file no longer claims it is done.
+    #[test]
+    fn clearing_the_first_run_flag_un_finishes_setup() {
+        let settings = crate::settings::testing::in_memory();
+        record_completion(&settings.store).expect("an absent file takes the change");
+        assert!(settings.store.load().onboarding.completed);
+
+        set_onboarding(&settings.store, Onboarding::default()).expect("the file takes the change");
+
+        assert!(!settings.store.load().onboarding.completed);
     }
 
     #[test]

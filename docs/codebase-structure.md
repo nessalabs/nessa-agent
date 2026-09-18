@@ -63,8 +63,16 @@ These additional Nessa-specific invariants must stay true:
 
 1. `domain/` contains no `tauri`, `serde`-transport, async-runtime, or
    filesystem import.
-2. `main.rs` is the app composition root. OS-specific hosts are injected by
-   `platform::current()`; shared modules never construct a macOS or Linux host.
+2. `main.rs` is the app composition root, and `composition.rs` is what it
+   assembles: one `HostDependencies` holding the settings file, the shortcut
+   cache, the surface credential, the registered gateway, and the release
+   source. Resolution happens at entry points — `setup`, a command's
+   `State<HostDependencies>`, a handler that captured the bundle or resolves it
+   once at the top — and the logic below them takes explicit parameters. OS-specific
+   hosts are injected by `platform::current()`; shared modules never construct a
+   macOS or Linux host. Live objects (menu items, the summon registration slot,
+   the pending update, the startup settings snapshot) stay managed state: they
+   are not read from outside the process and have nothing to substitute.
 3. The panel frame is reapplied on every show. Nothing caches a frame across
    shows — that is the bug the design exists to prevent.
 4. Every host call goes through `src/host/window.ts` and no-ops outside Tauri.

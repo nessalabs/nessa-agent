@@ -12,12 +12,16 @@
 //! app that works, and an update they have not heard of is not news.
 //!
 //! ```text
-//!   check_in_background ──spawn──▶ run_check
-//!                                   │      │
-//!                     ReleaseSource ◀┘      └▶ CheckOutcome
-//!                    │      │       │              │        │
-//!       PluginReleases  Simulated  fake      TrayOutcome   recorder
-//!                    │      │                      │
+//!   composition ──release_source──▶ ReleaseSource ──┐
+//!                                   │     │     │   │
+//!                      PluginReleases  Simulated  fake
+//!                                   │     │           │
+//!   check_in_background ──spawn──▶ run_check ◀────────┘
+//!                                        │
+//!                                  CheckOutcome
+//!                                   │         │
+//!                            TrayOutcome    recorder
+//!                                   │
 //!        PendingUpdate  SimulatedUpdate ─▶ install_and_restart ◀── click
 //! ```
 //!
@@ -43,7 +47,8 @@
 #[cfg(debug_assertions)]
 use std::env;
 use std::future::Future;
-use std::sync::Mutex;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
@@ -120,10 +125,16 @@ pub fn offer(checked: &Checked, offering: Offering) -> Offer {
 /// cannot fabricate. Keeping the update off the port is also the honest
 /// ownership: the release the tray item installs is the one the real source
 /// found and kept, and no decision here ever reads it.
-trait ReleaseSource {
+pub trait ReleaseSource: Send + Sync {
     /// Asks once. A source that finds an update also retains it, so that the
     /// item offered below and the update a click installs are the same one.
-    fn check(&self) -> impl Future<Output = Checked> + Send;
+    ///
+    /// Boxed rather than `impl Future` because composition holds the chosen
+    /// source behind a pointer: which one a build asks is a composition
+    /// decision, and a trait a bundle can carry has to be object safe. Every
+    /// implementation clones what it needs before the future starts, so the
+    /// future borrows nothing from the source.
+    fn check(&self) -> Pin<Box<dyn Future<Output = Checked> + Send>>;
 }
 
 /// What a finished check is allowed to do: one tray item, one diagnostic line.
@@ -146,9 +157,9 @@ trait CheckOutcome {
 struct PluginReleases(AppHandle);
 
 impl ReleaseSource for PluginReleases {
-    fn check(&self) -> impl Future<Output = Checked> + Send {
+    fn check(&self) -> Pin<Box<dyn Future<Output = Checked> + Send>> {
         let app = self.0.clone();
-        async move {
+        Box::pin(async move {
             let found = match app.updater() {
                 Ok(updater) => updater.check().await,
                 // A misconfigured or unbuildable updater is the same kind of
@@ -166,7 +177,7 @@ impl ReleaseSource for PluginReleases {
                 Ok(None) => Checked::Current,
                 Err(error) => Checked::Failed(error.to_string()),
             }
-        }
+        })
     }
 }
 
@@ -241,10 +252,10 @@ struct SimulatedReleases {
 
 #[cfg(debug_assertions)]
 impl ReleaseSource for SimulatedReleases {
-    fn check(&self) -> impl Future<Output = Checked> + Send {
+    fn check(&self) -> Pin<Box<dyn Future<Output = Checked> + Send>> {
         let app = self.app.clone();
         let version = self.version.clone();
-        async move {
+        Box::pin(async move {
             // The real source retains the update a click installs; this retains
             // the fact that no such update exists, which is what makes the
             // click able to say so instead of doing nothing.
@@ -254,7 +265,7 @@ impl ReleaseSource for SimulatedReleases {
                  The release endpoint was not asked and nothing was downloaded."
             );
             Checked::Newer { version }
-        }
+        })
     }
 }
 
@@ -311,38 +322,48 @@ fn retain(app: &AppHandle, update: Update) {
     app.manage(PendingUpdate(Mutex::new(Some(update))));
 }
 
+/// Which release source this build asks. The updater's own adapter factory,
+/// called from composition.
+///
+/// The choice is made here, once, while the app is being assembled, rather than
+/// inside the spawned check: it is a decision about which outside thing the
+/// host talks to, which is what composition is for.
+///
+/// The simulated source is compiled into a debug build only, and is gone rather
+/// than disabled in a release one: a shipped app that can be told an update
+/// exists is a shipped app an attacker can tell that to. The same shape as
+/// `tray.rs`'s setup item.
+pub fn release_source(app: &AppHandle) -> Arc<dyn ReleaseSource> {
+    #[cfg(debug_assertions)]
+    match simulated(env::var(SIMULATED_UPDATE).ok().as_deref()) {
+        Simulated::Announce(version) => {
+            return Arc::new(SimulatedReleases {
+                app: app.clone(),
+                version,
+            })
+        }
+        Simulated::Ignored(value) => eprintln!(
+            "[nessa] ignoring {SIMULATED_UPDATE}={value}: not a version like 9.9.9. \
+             Checking the real release endpoint instead."
+        ),
+        Simulated::Off => {}
+    }
+
+    Arc::new(PluginReleases(app.clone()))
+}
+
 /// Asks the release endpoint once, off the startup path.
 ///
 /// Called from `main`'s `setup` after the tray exists, because the tray menu is
 /// where the answer goes. It returns immediately: the request itself happens on
 /// the async runtime, so a slow or hanging endpoint delays nothing on screen —
 /// not the panel, and not first-run setup.
-pub fn check_in_background(app: &AppHandle) {
+///
+/// The source is handed in rather than chosen here; see [`release_source`].
+pub fn check_in_background(app: &AppHandle, source: Arc<dyn ReleaseSource>) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let outcome = TrayOutcome(app.clone());
-
-        // Debug builds only, and gone rather than disabled in a release build:
-        // a shipped app that can be told an update exists is a shipped app an
-        // attacker can tell that to. The same shape as `tray.rs`'s setup item.
-        #[cfg(debug_assertions)]
-        match simulated(env::var(SIMULATED_UPDATE).ok().as_deref()) {
-            Simulated::Announce(version) => {
-                let simulated = SimulatedReleases {
-                    app: app.clone(),
-                    version,
-                };
-                run_check(&simulated, &outcome).await;
-                return;
-            }
-            Simulated::Ignored(value) => eprintln!(
-                "[nessa] ignoring {SIMULATED_UPDATE}={value}: not a version like 9.9.9. \
-                 Checking the real release endpoint instead."
-            ),
-            Simulated::Off => {}
-        }
-
-        run_check(&PluginReleases(app), &outcome).await;
+        run_check(&*source, &TrayOutcome(app)).await;
     });
 }
 
@@ -350,7 +371,7 @@ pub fn check_in_background(app: &AppHandle) {
 ///
 /// Everything outside the process is on one of the two ports, so this is the
 /// whole of what a check does and all of it is exercised in [`tests`].
-async fn run_check(source: &impl ReleaseSource, outcome: &impl CheckOutcome) {
+async fn run_check(source: &dyn ReleaseSource, outcome: &impl CheckOutcome) {
     // Read before the check, not after: a source that finds an update retains
     // it, and what it retains is the same thing this asks about.
     let offering = outcome.offering();
@@ -425,9 +446,9 @@ mod tests {
     struct FakeReleases(Checked);
 
     impl ReleaseSource for FakeReleases {
-        fn check(&self) -> impl Future<Output = Checked> + Send {
+        fn check(&self) -> Pin<Box<dyn Future<Output = Checked> + Send>> {
             let checked = self.0.clone();
-            async move { checked }
+            Box::pin(async move { checked })
         }
     }
 

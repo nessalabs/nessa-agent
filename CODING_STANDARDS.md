@@ -34,7 +34,9 @@ must apply these merge gates together with [AGENTS.md](AGENTS.md),
 9. **Outside data sits behind a seam.** Reads from outside the process —
    network, filesystem, subprocess, OS service, clock — go through a trait or
    interface owned by the calling side, injected from composition, with a
-   substitute in tests. Every crate and package, the Tauri host included.
+   substitute in tests. Every crate and package, the Tauri host included; in the
+   host, composition is the bundle `main`'s `setup` assembles, and logic takes
+   what it needs as parameters rather than looking anything up.
    Follow [seams at the process boundary](#seams-at-the-process-boundary).
 
 If a gate fails, fix it in the same PR.
@@ -338,6 +340,30 @@ is injected from composition; the tests supply `StubAgentProbe`, `CountingProbe`
 and `PanickingProbe`. That is what let the readiness endpoint be tested for
 origin refusal, concurrent coalescing, and a probe that panics, without a real
 keychain anywhere near it.
+
+### What composition means in the desktop host
+
+"Injected from composition" needs an answer in `src-tauri`, which has no server
+to build state for. It is `HostDependencies` in `composition.rs`: one bundle,
+assembled once at the top of `main`'s `setup`, holding every outside thing the
+host talks to. From there it is handed down — to `tray::create`, to the check
+the updater spawns — and managed so Tauri can supply it.
+
+Resolution happens at entry points; logic takes explicit parameters. There are
+three kinds of entry point and no others: `setup`, which builds the bundle and
+passes it by hand; a `#[tauri::command]`, which declares
+`State<'_, HostDependencies>` and is given it; and a handler the framework calls
+with only an `&AppHandle`, which either captured the bundle when it was built or
+resolves it once, at the top, and passes downwards what it found. Nothing below
+an entry point looks anything up. A decision that reaches for a dependency
+instead of receiving one is the defect this rule exists to catch, because it is
+the one shape a test cannot reproduce.
+
+Managed state is not thereby forbidden — it is where live objects belong. Menu
+items, window handles, registration slots, and the settings snapshot a launch
+was sized from are not outside things and have no substitute worth writing;
+wrapping them in ports is the speculative abstraction this document warns
+against elsewhere. The test is whether the value reads from outside the process.
 
 Be honest about the limit. A seam makes the decision testable, not the adapter.
 The real implementation still needs its own boundary test — parsing,

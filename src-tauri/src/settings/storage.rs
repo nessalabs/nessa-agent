@@ -7,7 +7,7 @@ use std::{io, io::Read, io::Write, path::Path};
 
 const MAX_SETTINGS_BYTES: u64 = 64 * 1024;
 
-pub(super) trait Storage: Send + Sync {
+pub(crate) trait Storage: Send + Sync {
     fn read(&self, path: &Path) -> io::Result<String>;
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()>;
 }
@@ -38,6 +38,65 @@ impl Storage for FileStorage {
         temporary.as_file().sync_all()?;
         temporary.persist(path)?;
         nessa_local_storage::sync_directory(parent)
+    }
+}
+
+/// The whole settings file, in a map, with either effect made to fail on demand.
+///
+/// It lives beside the real adapter rather than inside one module's test block
+/// because the decisions that read and write settings are spread across the
+/// host — the first-run flag in `panel`, the quit policy in `tray`, the quit
+/// policy again on exit — and each of them is tested against this one substitute
+/// through [`super::SettingsStore`]. A second in-memory settings store would be
+/// a second account of what a settings file does.
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct MemoryStorage {
+    pub(crate) files: std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, Vec<u8>>>,
+    /// Consumed by the next read, which fails with this kind instead.
+    pub(crate) read_error: std::sync::Mutex<Option<io::ErrorKind>>,
+    /// Consumed by the next write, the same way.
+    pub(crate) write_error: std::sync::Mutex<Option<io::ErrorKind>>,
+}
+
+#[cfg(test)]
+impl MemoryStorage {
+    /// Puts bytes on the "disk" without going through the settings writer, so a
+    /// test can start from a file this build cannot parse.
+    pub(crate) fn put(&self, path: &Path, bytes: &[u8]) {
+        self.files
+            .lock()
+            .unwrap()
+            .insert(path.to_owned(), bytes.to_vec());
+    }
+
+    /// The bytes currently on the "disk", for asserting that a refused write
+    /// left the person's file exactly as it was.
+    pub(crate) fn get(&self, path: &Path) -> Option<Vec<u8>> {
+        self.files.lock().unwrap().get(path).cloned()
+    }
+}
+
+#[cfg(test)]
+impl Storage for MemoryStorage {
+    fn read(&self, path: &Path) -> io::Result<String> {
+        if let Some(kind) = self.read_error.lock().unwrap().take() {
+            return Err(io::Error::from(kind));
+        }
+        let files = self.files.lock().unwrap();
+        let bytes = files
+            .get(path)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        String::from_utf8(bytes.clone())
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }
+
+    fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()> {
+        if let Some(kind) = self.write_error.lock().unwrap().take() {
+            return Err(io::Error::from(kind));
+        }
+        self.put(path, bytes);
+        Ok(())
     }
 }
 
