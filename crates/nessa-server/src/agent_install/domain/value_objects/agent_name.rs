@@ -15,9 +15,14 @@ impl NotAnAgentName {
 
 impl fmt::Display for NotAnAgentName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Both rules, because a name can break either one. Naming only the
+        // alphabet would tell somebody who typed `con` that it needs lowercase
+        // letters, which it already is — a message that contradicts itself and
+        // leaves nothing to do about it.
         write!(
             f,
-            "an agent name is lowercase letters, digits and hyphens: {:?}",
+            "an agent name is lowercase letters, digits and hyphens, \
+             and not a name windows keeps for a device: {:?}",
             self.0
         )
     }

@@ -49,11 +49,16 @@ struct InstallationRecord {
 /// The runtimes Nessa installed, under one directory it owns.
 ///
 /// ```text
-/// <root>/<agent>/installed.json      what is installed, written last
-/// <root>/<agent>/<version>/<name>    the executable itself
-/// <root>/<agent>/.nessa-<hex>.download  a download in progress, unnamed on unix
-/// <root>/<agent>/.nessa-<hex>.tmp       a record or executable being written
+/// <root>/<agent>/installed.json            what is installed, written last
+/// <root>/<agent>/versions/<version>/<name> the executable itself
+/// <root>/<agent>/.nessa-<hex>.download     a download in progress, unnamed on unix
+/// <root>/<agent>/.nessa-<hex>.tmp          a record or executable being written
 /// ```
+///
+/// Versions sit under `versions/` so that nothing the store names for itself
+/// can be named by a pin: a version is allowed to be spelled `installed.json`,
+/// and one directory for both would make which of them won a question about
+/// the order things happened in.
 ///
 /// A runtime is unpacked under its version rather than over the previous one,
 /// so a pin that moves does not half-overwrite a binary that something may
@@ -87,8 +92,17 @@ impl ManagedRuntimes {
     }
 
     /// Where `agent`'s executable lives for `version`.
+    ///
+    /// Under `versions/` rather than directly under the agent, so that a
+    /// version can never name one of the store's own files. `installed.json`
+    /// and a staged `.nessa-….download` are both spellings [`ReleaseVersion`]
+    /// admits, and a pin naming one would have `publish` and `record` fighting
+    /// over a single path. Kept apart by the layout rather than by a rule the
+    /// domain would have to know about this directory to write.
     fn version_root(&self, agent: &AgentName, version: &ReleaseVersion) -> PathBuf {
-        self.agent_root(agent).join(version.as_str())
+        self.agent_root(agent)
+            .join("versions")
+            .join(version.as_str())
     }
 
     fn record_path(&self, agent: &AgentName) -> PathBuf {
@@ -424,16 +438,20 @@ impl RuntimeStore for ManagedRuntimes {
         // failure, is the thing that ran out. So the executable is taken back
         // out, and the message is true when it is read.
         if let Err(failure) = self.settle(agent, release, &directory) {
-            // One exception to taking it back out. Two installs of the same
-            // release can run at once — nothing here excludes them — and both
-            // rename onto the same path. If one of them got all the way to a
-            // record while this one was failing, that file is the install it
-            // finished, and removing it would leave a record naming nothing.
-            // This narrows the window rather than closing it; closing it needs
-            // exclusion, which is not what this change is.
-            if !matches!(self.installed(agent, release), Ok(Some(_))) {
-                self.withdraw(&destination);
-            }
+            // Unconditional, deliberately. Two installs of the same release can
+            // run at once, since nothing here excludes them, and both rename
+            // onto this path — so a failure here could in principle be taking
+            // away a file another process just finished. There is no way to
+            // tell that apart from a record left over from an earlier install
+            // whose executable went missing, because the two records say the
+            // same thing; a guard that skipped the withdraw would skip it in
+            // both cases, and then this call would report a failure while
+            // leaving a live, recorded install behind. Between reporting
+            // something untrue and losing a race, the race is the better
+            // outcome: the loser's record names a file that is gone, which
+            // `installed` reads as nothing installed, and the next run puts it
+            // back.
+            self.withdraw(&destination);
             return Err(failure);
         }
         Ok(destination)

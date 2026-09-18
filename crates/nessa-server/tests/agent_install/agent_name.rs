@@ -73,4 +73,13 @@ fn a_name_windows_answers_to_as_a_device_is_not_an_agent_name() {
     for ordinary in ["console", "com10", "nullify"] {
         assert!(AgentName::parse(ordinary).is_ok(), "{ordinary:?} is a name");
     }
+    // The message is the only thing a person gets, and `con` satisfies the
+    // alphabet — so a message that names only the alphabet contradicts itself.
+    let message = AgentName::parse("con")
+        .expect_err("a device is not a name")
+        .to_string();
+    assert!(
+        message.contains("device"),
+        "a refused device name should say so: {message}"
+    );
 }

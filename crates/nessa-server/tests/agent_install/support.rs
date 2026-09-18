@@ -121,6 +121,8 @@ pub(crate) struct FakeStore {
     stage: Option<StoreFailure>,
     digest: Result<ArchiveDigest, StoreFailure>,
     publish: Result<PathBuf, StoreFailure>,
+    /// How many archives this store has staged, so each gets its own name.
+    staged: std::sync::atomic::AtomicUsize,
     calls: Mutex<StoreCalls>,
 }
 
@@ -133,6 +135,7 @@ impl FakeStore {
             stage: None,
             digest: Ok(ArchiveDigest::parse(PINNED_DIGEST).expect("test digest is usable")),
             publish: Ok(root.join("opencode")),
+            staged: std::sync::atomic::AtomicUsize::new(0),
             calls: Mutex::new(StoreCalls::default()),
         }
     }
@@ -222,12 +225,20 @@ impl RuntimeStore for FakeStore {
         if let Some(failure) = self.stage.clone() {
             return Err(failure);
         }
-        let path = self.root.join(format!("{agent}.download"));
+        // A name of its own each time, created rather than opened, the way the
+        // real store does it. `StagedArchive`'s doc makes that a promise of the
+        // port — two installs at once get two files, and neither can truncate a
+        // download the other is still measuring — and a fake that staged over
+        // one fixed path would be modelling the thing the real one exists to
+        // prevent.
+        let staged = self
+            .staged
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = self.root.join(format!("{agent}.{staged}.download"));
         let file = std::fs::File::options()
             .read(true)
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .open(&path)
             .expect("fake store stages in a temporary root");
         Ok(StagedArchive::new(file, path))

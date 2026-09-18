@@ -79,19 +79,28 @@ fn publish(
     store.publish(&agent(), release, &mut staged)
 }
 
-/// The directory `publish` would unpack into, created the way the store does.
+/// Where `publish` puts the version directory for the release these tests use.
+///
+/// The layout is named once here, so that moving it is one edit rather than a
+/// search — and so that a test asserting on it is asserting on the store's
+/// shape rather than restating a guess about it.
+fn version_path(root: &Path) -> PathBuf {
+    root.join("opencode").join("versions").join("1.18.31")
+}
+
+/// That same directory, created the way the store does.
 ///
 /// Made with the store's own primitive rather than `create_dir_all`, because
 /// the store refuses a directory anybody else can read — which is the point.
 fn version_directory(root: &Path) -> PathBuf {
-    let directory = root.join("opencode").join("1.18.31");
+    let directory = version_path(root);
     nessa_local_storage::create_directory(&directory).expect("a private version directory");
     directory
 }
 
 /// Where `publish` puts the executable for the release these tests use.
 fn installed_path(root: &Path) -> PathBuf {
-    root.join("opencode").join("1.18.31").join("opencode")
+    version_path(root).join("opencode")
 }
 
 fn write(path: &Path, bytes: &[u8]) {
@@ -505,13 +514,7 @@ fn an_archive_entry_cannot_direct_the_write() {
         "{} escaped the runtime root",
         published.display()
     );
-    assert_eq!(
-        published,
-        root.path()
-            .join("opencode")
-            .join("1.18.31")
-            .join("opencode")
-    );
+    assert_eq!(published, installed_path(root.path()));
 }
 
 #[test]
@@ -908,7 +911,7 @@ fn an_archive_without_the_pinned_executable_leaves_no_directory_behind() {
         .expect_err("an archive without the pinned executable");
 
     assert!(
-        !root.path().join("opencode").join("1.18.31").exists(),
+        !version_path(root.path()).exists(),
         "a refused install left its version directory behind"
     );
 }
@@ -1010,8 +1013,81 @@ fn every_way_of_refusing_an_archive_sweeps_the_directory_it_made() {
         publish(&store, &release, &bytes).expect_err(named);
 
         assert!(
-            !root.path().join("opencode").join("1.18.31").exists(),
+            !version_path(root.path()).exists(),
             "{named} left its version directory behind"
         );
     }
+}
+
+#[test]
+fn a_version_may_be_spelled_like_the_stores_own_files() {
+    // `installed.json` is a version the domain admits, and it named the record
+    // when versions sat directly under the agent. Installing one and then
+    // reading it back is what shows the two no longer share a path.
+    let root = tempfile::tempdir().expect("temporary root");
+    let store = ManagedRuntimes::new(root.path());
+    let awkward = release("installed.json", "package/bin/opencode");
+
+    let published = publish(
+        &store,
+        &awkward,
+        &archive("package/bin/opencode", b"the runtime"),
+    )
+    .expect("a version spelled like the record still installs");
+
+    assert_eq!(
+        store.installed(&agent(), &awkward),
+        Ok(Some(published.clone()))
+    );
+    assert_eq!(
+        std::fs::read(&published).expect("the runtime reads"),
+        b"the runtime"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn a_failure_after_the_rename_says_nothing_was_installed_and_means_it() {
+    // The case a guard here used to get wrong. A record left over from an
+    // earlier install whose executable went missing reads as nothing installed,
+    // so the command publishes again — and if settling that install fails, the
+    // executable has to go back out. Leaving it would mean reporting a failure
+    // with a live, recorded runtime on the disk.
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().expect("temporary root");
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "package/bin/opencode");
+    let installed = publish(
+        &store,
+        &release,
+        &archive("package/bin/opencode", b"the runtime"),
+    )
+    .expect("the first install works");
+    // The executable goes, the record stays: what a tidy-up leaves behind.
+    std::fs::remove_file(&installed).expect("losing the executable");
+    assert_eq!(store.installed(&agent(), &release), Ok(None));
+    // Staged before the directory is loosened, because staging goes through the
+    // same rule and would otherwise fail first — which is not the case here.
+    let mut staged = staged(&store, &archive("package/bin/opencode", b"the runtime"));
+    // Settling cannot finish: the record is written through a private temporary
+    // file in the agent directory, and that directory is no longer private. The
+    // version directory below it still is, so the unpack and the rename both
+    // succeed and the failure lands exactly in the window being tested.
+    let agent_root = root.path().join("opencode");
+    std::fs::set_permissions(&agent_root, std::fs::Permissions::from_mode(0o755))
+        .expect("loosening the agent directory");
+
+    let failure = store
+        .publish(&agent(), &release, &mut staged)
+        .expect_err("an install that cannot be settled");
+
+    assert!(
+        matches!(failure, StoreFailure::Unwritable(_)),
+        "a record that would not write is this machine's doing: {failure:?}"
+    );
+    assert!(
+        !installed.exists(),
+        "a reported failure left a runtime behind that the old record now names"
+    );
 }
