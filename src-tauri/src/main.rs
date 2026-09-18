@@ -10,6 +10,12 @@ mod platform;
 mod settings;
 mod shortcut;
 mod shortcuts;
+// Read by the launchd registration alone, which is the macOS gateway adapter:
+// the table it consults says which loopback port a stage's background service
+// gets, and no other platform registers one yet. Gated to match that adapter
+// rather than carried everywhere and unused, which `-D warnings` calls dead on
+// the platforms that never reach it.
+#[cfg(target_os = "macos")]
 mod stage_port;
 mod surface_credential;
 mod tray;
