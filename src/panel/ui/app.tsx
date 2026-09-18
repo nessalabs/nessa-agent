@@ -1,7 +1,8 @@
 import { ComposerDeliveryMode } from "@nessa-ui/react/composer-queue"
 import type { AttachmentResources } from "../adapters/attachment-resources"
 import * as React from "react"
-import { Square, X } from "lucide-react"
+import { CircleArrowUp, Download, Square, X } from "lucide-react"
+import { AgentNotification } from "@nessa-ui/react/agent-notification"
 import {
   ChatComposerAction,
   ChatComposerAttachments,
@@ -41,7 +42,6 @@ import { useSurface, type Surface } from "../adapters/surface"
 import { useTabShortcuts } from "../adapters/use-tab-shortcuts"
 import { useUpdate } from "../adapters/use-update"
 import { UPDATE_TAB_ID } from "../application/update-surface"
-import { UpdateNotice } from "./update-notice"
 import { UpdateTab } from "./update-tab"
 import { useComposer } from "./use-composer"
 import { useFileAttachments } from "./use-file-attachments"
@@ -419,10 +419,25 @@ export function App({
               draft, the attachments, and the caret are all in here, and a
               detour through an update must not cost somebody their message. */}
           <div className="nessa-composer" hidden={update.viewing || undefined}>
+            {/* The same surface the connection notice uses, carrying a notice
+                that is not about the connection. `state` is the component's
+                connection vocabulary, and "disconnected" is the only one of the
+                four that renders the primary action at all — so a notice with
+                something to do declares itself disconnected whatever it is
+                about, exactly as the conversation notices below already do. The
+                heading, glyphs, and labels here are all ours; nothing of the
+                connection wording survives. */}
             {update.notice && (
-              <UpdateNotice
-                notice={update.notice}
-                onInstall={update.install}
+              <AgentNotification
+                className="mb-2"
+                state="disconnected"
+                icon={CircleArrowUp}
+                title="Update available"
+                description={update.notice.version}
+                retryIcon={Download}
+                retryLabel={update.notice.installLabel}
+                onRetry={update.install}
+                dismissLabel={update.notice.dismissLabel}
                 onDismiss={update.dismiss}
               />
             )}
