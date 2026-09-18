@@ -103,3 +103,21 @@ export function option(args, name, fallback) {
   const equals = args.find((argument) => argument.startsWith(`--${name}=`))
   return equals ? equals.slice(name.length + 3) : fallback
 }
+
+/**
+ * The path a request meant, or undefined when it cannot be read.
+ *
+ * A malformed percent escape — `/%ZZ` — is not a request for anything the
+ * harness serves, so it answers 404 along with every other unknown path. It
+ * lives here, decoded once and away from the request handler, because
+ * `decodeURIComponent` throws on such a path and nothing catches it there: a
+ * stray request would end the harness in the middle of a run somebody is
+ * watching.
+ */
+export function requestedPath(path) {
+  try {
+    return decodeURIComponent(path)
+  } catch {
+    return undefined
+  }
+}

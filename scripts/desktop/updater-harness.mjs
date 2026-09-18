@@ -129,6 +129,7 @@ import {
   defaultArtifacts,
   option,
   releaseManifest,
+  requestedPath,
   updaterTarget,
 } from "./updater-manifest.mjs"
 
@@ -267,17 +268,18 @@ const server = createServer((request, response) => {
   // Two paths, matched exactly. A harness that serves a directory is a file
   // server pointed at a build tree, which is more than this needs to be.
   const path = new URL(request.url, origin).pathname
+  const asked = requestedPath(path)
   const body =
     path === "/latest.json"
       ? { bytes: manifestBody, type: "application/json" }
-      : copy && decodeURIComponent(path) === `/${name}`
+      : copy && asked === `/${name}`
         ? { bytes: readFileSync(copy), type: "application/octet-stream" }
         : undefined
   console.log(`  ${request.method} ${path} -> ${body ? 200 : 404}`)
   if (!body) {
     // The one 404 worth explaining: a click on the offered item in check-only
     // mode. It is the mode working as described, not a fault to chase.
-    if (checkOnly && decodeURIComponent(path) === `/${name}`)
+    if (checkOnly && asked === `/${name}`)
       console.log(
         `  ^ the announced artifact does not exist: --check-only serves no bytes, so the\n` +
           `    download fails here and signature verification is never reached. Run the full\n` +
