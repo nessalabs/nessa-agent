@@ -98,6 +98,13 @@ pub(super) struct AgentRuntime {
     /// that failure for anyone who simply left the field out — and reproduced it
     /// as the whole gateway refusing to start, since every configured agent is
     /// built. Omitting it now fails to parse, naming the field.
+    ///
+    /// Read only where a binding is built, which is Unix alone: the whole point
+    /// of the field is what it tells an agent's binding, and on a platform that
+    /// builds none there is no one to tell. It is still parsed and still
+    /// required there, because a configuration is either well-formed or it is
+    /// not, and that does not vary by host.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub tools_enabled: bool,
 }
 
@@ -223,18 +230,6 @@ fn output_tokens() -> u32 {
     4096
 }
 
-/// Which model catalog entries an agent's harness is allowed to run.
-///
-/// Not a preference: each harness speaks to one vendor's API and is signed in
-/// to it, so a catalog entry from another vendor is a model that agent cannot
-/// reach, and saying so at startup beats a provider refusing every prompt.
-fn catalog_provider(agent: AgentId) -> &'static str {
-    match agent {
-        AgentId::Claude => "anthropic",
-        AgentId::Codex => "openai",
-    }
-}
-
 /// Build a provider for every configured agent.
 ///
 /// All of them, not only the selected one: a conversation records the agent it
@@ -273,7 +268,7 @@ pub(super) fn providers(
 }
 #[cfg(unix)]
 mod build {
-    use super::{catalog_provider, AgentId, AgentRuntime, AgentsConfig, RunError};
+    use super::{AgentId, AgentRuntime, AgentsConfig, RunError};
     use crate::conversation::infrastructure::DurableExecutionAudit;
     use nessa_auth::application::ports::Clock;
     use nessa_sdk::{
@@ -292,6 +287,19 @@ mod build {
         },
     };
     use std::{collections::BTreeMap, fs::File, path::Path, sync::Arc, time::Duration};
+
+    /// Which model catalog entries an agent's harness is allowed to run.
+    ///
+    /// Not a preference: each harness speaks to one vendor's API and is signed
+    /// in to it, so a catalog entry from another vendor is a model that agent
+    /// cannot reach, and saying so at startup beats a provider refusing every
+    /// prompt.
+    fn catalog_provider(agent: AgentId) -> &'static str {
+        match agent {
+            AgentId::Claude => "anthropic",
+            AgentId::Codex => "openai",
+        }
+    }
 
     /// The environment every agent process inherits, beyond its credentials.
     ///
