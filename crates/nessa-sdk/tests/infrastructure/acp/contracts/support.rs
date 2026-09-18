@@ -11,6 +11,7 @@ pub(super) use crate::domain::common::value_objects::TokenLimits;
 pub(super) use crate::domain::model_metadata::entities::ModelMetadata;
 pub(super) use crate::infrastructure::acp::sessions::AcpConfig;
 pub(super) use crate::infrastructure::claude_acp::sessions::ClaudeAcpProvider;
+pub(super) use crate::infrastructure::codex_acp::sessions::CodexAcpProvider;
 pub(super) use std::{
     collections::BTreeMap,
     path::PathBuf,
@@ -133,6 +134,52 @@ pub(super) fn test_acp_binding(mode: &str, capacity: usize) -> (TempDir, ClaudeA
         .unwrap(),
     )
 }
+/// The same fixture setup for Codex, which is launched and configured
+/// differently enough that sharing one builder would hide the difference.
+pub(super) fn codex_configuration(mode: &str, capacity: usize) -> (TempDir, AcpConfig, ModelMetadata) {
+    let (root, mut config, _) = test_acp_configuration(mode, capacity);
+    config.arguments = vec![
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/infrastructure/acp/contracts/fixtures/codex_acp_test_handler.py")
+            .into_os_string(),
+        mode.into(),
+    ];
+    let text = ModalitiesDto {
+        text: true,
+        image: false,
+        audio: false,
+    };
+    let model = ModelMetadata::try_from(ModelMetadataDto {
+        provider: "openai".into(),
+        model_id: "exact-fixture-model".into(),
+        display_name: "Fixture".into(),
+        input: text,
+        output: text,
+        tool_use: true,
+        reasoning: true,
+        max_context_window_tokens: 1000,
+        max_output_tokens: 200,
+        knowledge_cutoff: "2026-01".into(),
+        documentation_url: "https://example.com".into(),
+    })
+    .unwrap();
+    (root, config, model)
+}
+
+pub(super) fn test_codex_binding(mode: &str, capacity: usize) -> (TempDir, CodexAcpProvider) {
+    let (root, config, model) = codex_configuration(mode, capacity);
+    (
+        root,
+        CodexAcpProvider::new(
+            config,
+            &model,
+            TokenLimits::new(900, 100).unwrap(),
+            Arc::new(RecordingAudit::default()),
+        )
+        .unwrap(),
+    )
+}
+
 pub(super) fn prompt(text: &str) -> ExecutionRequest {
     ExecutionRequest {
         execution_id: ExecutionId::new(text).unwrap(),

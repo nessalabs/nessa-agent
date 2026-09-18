@@ -8,6 +8,10 @@ use std::{error::Error, fmt};
 pub enum ConversationError {
     InvalidInput,
     NotFound,
+    /// The agent asked for is one this server has no configuration to start.
+    /// Kept apart from an invalid request because the request was valid and the
+    /// answer is about this installation, which is something setup can fix.
+    AgentNotConfigured,
     Capacity,
     Unavailable,
     Metadata,

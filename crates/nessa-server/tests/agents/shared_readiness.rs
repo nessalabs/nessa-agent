@@ -8,6 +8,15 @@ use crate::agents_test_support::WaitingAgentProbe;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
+/// What a host that answers the same way about every agent produces: one entry
+/// per agent this server reports on, in listing order.
+fn every_agent(readiness: Readiness) -> Vec<(AgentId, Readiness)> {
+    AgentId::ALL
+        .iter()
+        .map(|agent| (*agent, readiness))
+        .collect()
+}
+
 /// A reader over `probe` whose callers wait no longer than `deadline`.
 fn reader(probe: Arc<dyn AgentProbe>, deadline: Duration) -> Arc<SharedAgentReadiness> {
     Arc::new(SharedAgentReadiness::with_deadline(probe, deadline))
@@ -43,7 +52,7 @@ async fn a_caller_arriving_while_a_probe_runs_joins_it_instead_of_starting_anoth
 
     probe.release();
     let answers = first.await.unwrap().unwrap();
-    assert_eq!(answers, vec![(AgentId::Claude, Readiness::Ready)]);
+    assert_eq!(answers, every_agent(Readiness::Ready));
     assert_eq!(probe.most_at_once(), 1);
 }
 
@@ -73,12 +82,15 @@ async fn a_machine_that_will_not_answer_is_left_rather_than_waited_on() {
 /// which is what a person installing the agent mid-setup looks like.
 #[derive(Default)]
 struct InstalledOnSecondAsk {
-    asked: AtomicUsize,
+    /// Per agent, because one probe asks about every agent: counting asks
+    /// across all of them would make the first probe's later agents look like
+    /// a second probe.
+    asked: std::sync::Mutex<std::collections::HashSet<AgentId>>,
 }
 
 impl AgentProbe for InstalledOnSecondAsk {
-    fn installed(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
-        Ok(self.asked.fetch_add(1, Ordering::SeqCst) > 0)
+    fn installed(&self, agent: AgentId) -> Result<bool, ProbeFailure> {
+        Ok(!self.asked.lock().unwrap().insert(agent))
     }
 
     fn authenticated(&self, _agent: AgentId) -> Result<bool, ProbeFailure> {
@@ -97,11 +109,11 @@ async fn an_answer_is_never_kept_for_a_caller_who_was_not_waiting_for_it() {
 
     assert_eq!(
         shared.read().await,
-        Ok(vec![(AgentId::Claude, Readiness::NotInstalled)])
+        Ok(every_agent(Readiness::NotInstalled))
     );
     assert_eq!(
         shared.read().await,
-        Ok(vec![(AgentId::Claude, Readiness::Ready)]),
+        Ok(every_agent(Readiness::Ready)),
         "a later caller must be told what this machine says now"
     );
 }

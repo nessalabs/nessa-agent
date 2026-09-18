@@ -1,9 +1,9 @@
-//! Configures and opens a Claude harness context through shared ACP sessions.
+//! Configures and opens a Codex context through shared ACP sessions.
 //!
 //! ```text
-//! host config -> ClaudeAcpProvider -> profile -> ACP session
+//! host config -> CodexAcpProvider -> profile -> ACP session
 //!                                     |
-//!                             Claude configuration checks
+//!                          Codex selections and their checks
 //! ```
 //! Arrows show construction and validation. Process startup, resume, and the
 //! launch-input fingerprint that identifies a restorable context remain shared
@@ -11,4 +11,4 @@
 mod binding;
 mod configuration;
 mod profile;
-pub use binding::ClaudeAcpProvider;
+pub use binding::CodexAcpProvider;

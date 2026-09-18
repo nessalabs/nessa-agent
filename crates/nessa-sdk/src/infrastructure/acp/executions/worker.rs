@@ -600,7 +600,13 @@ impl<P: AcpProfile> Worker<P> {
         }
         self.profile
             .verify_session(&result, &self.capabilities, false)?;
-        if let Some(params) = self.profile.session_configuration(execution.id().as_str()) {
+        // Applied in the profile's own order, because a provider can reject a
+        // later selection that an earlier one has not made available yet. Only
+        // the last response is checked as fully configured; the ones before it
+        // are checked against what the profile has settled so far.
+        let configuration = self.profile.session_configuration(execution.id().as_str());
+        let last = configuration.len().saturating_sub(1);
+        for (step, params) in configuration.into_iter().enumerate() {
             let result = self
                 .rpc(
                     "session/set_config_option",
@@ -610,7 +616,7 @@ impl<P: AcpProfile> Worker<P> {
                 )
                 .await?;
             self.profile
-                .verify_session(&result, &self.capabilities, true)?;
+                .verify_session(&result, &self.capabilities, step == last)?;
         }
         self.operation_capabilities
             .send_replace(OperationCapabilities {
@@ -1376,11 +1382,12 @@ impl<P: AcpProfile> Worker<P> {
                 "permission request limit or duplicate ID",
             ));
         }
-        let tool = params
-            .get("toolCall")
-            .ok_or_else(|| json_rpc::protocol("missing permission tool"))?;
-        let input = self.profile.tool_input(tool)?;
-        let tool = self.profile.tool_call(tool)?;
+        let input = self.profile.permission_input(&params)?;
+        let tool = self.profile.tool_call(
+            params
+                .get("toolCall")
+                .ok_or_else(|| json_rpc::protocol("missing permission tool"))?,
+        )?;
         let options = permission_wire::permission_options(&params, &self.config.permissions)?;
         let sequence = self
             .permission_sequence

@@ -90,8 +90,10 @@ impl AcpProfile for ClaudeProfile {
         }
         params
     }
-    fn session_configuration(&self, session_id: &str) -> Option<Value> {
-        Some(json!({"sessionId":session_id,"configId":"mode","value":"default"}))
+    fn session_configuration(&self, session_id: &str) -> Vec<Value> {
+        // The model is pinned in the session parameters and verified with the
+        // session itself, so permission mode is the only selection left.
+        vec![json!({"sessionId":session_id,"configId":"mode","value":"default"})]
     }
     fn verify_session(
         &self,
@@ -135,7 +137,10 @@ impl AcpProfile for ClaudeProfile {
     fn tool_call(&mut self, value: &Value) -> Result<ToolCallUpdate, AgentError> {
         wire::tool_call(value, &mut self.tool_names, &self.mcp_prefixes)
     }
-    fn tool_input(&self, tool: &Value) -> Result<ToolReviewInput, AgentError> {
+    fn permission_input(&self, request: &Value) -> Result<ToolReviewInput, AgentError> {
+        let tool = request
+            .get("toolCall")
+            .ok_or_else(|| protocol("missing permission tool"))?;
         let id = identifier(tool, "toolCallId")?;
         let name = self
             .tool_names

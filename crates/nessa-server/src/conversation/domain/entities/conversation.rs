@@ -1,3 +1,4 @@
+use crate::agents::domain::AgentId;
 use crate::conversation::domain::ConversationId;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 
@@ -10,6 +11,7 @@ pub struct Conversation {
     creator_surface: String,
     creation_action: String,
     creation_requested_at_ms: u64,
+    agent: AgentId,
 }
 impl Conversation {
     /// Bind an identity to the authenticated creator. Ownership never comes from prompt data.
@@ -20,6 +22,7 @@ impl Conversation {
         creator_surface: String,
         creation_action: String,
         creation_requested_at_ms: u64,
+        agent: AgentId,
     ) -> Result<Self, &'static str> {
         for value in [&creator_surface, &creation_action] {
             if value.trim().is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
@@ -33,6 +36,7 @@ impl Conversation {
             creator_surface,
             creation_action,
             creation_requested_at_ms,
+            agent,
         })
     }
     pub fn id(&self) -> &ConversationId {
@@ -52,6 +56,15 @@ impl Conversation {
     }
     pub fn creation_requested_at_ms(&self) -> u64 {
         self.creation_requested_at_ms
+    }
+    /// The agent this conversation runs on, fixed when it was created.
+    ///
+    /// Fixed rather than chosen per prompt: the transcript, the restored
+    /// provider session and the permissions already answered all belong to one
+    /// agent, and handing them to another is not a switch, it is a different
+    /// conversation wearing this one's identity.
+    pub fn agent(&self) -> AgentId {
+        self.agent
     }
     /// Both organization and principal must agree; knowing an ID grants no access.
     pub fn allows(&self, organization: &OrganizationId, principal: &PrincipalId) -> bool {

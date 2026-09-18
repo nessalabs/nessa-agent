@@ -1,7 +1,13 @@
 //! Desktop composition: relocatable application resources plus private user data.
-use super::{agent::AgentConfig, runtime_config::RuntimeConfig};
-use crate::{core::RunError, desktop_runtime::domain::RunningRuntime, env::Environment};
-use std::path::Path;
+use super::{
+    agent::{AgentConfig, AgentRuntime},
+    runtime_config::RuntimeConfig,
+};
+use crate::{
+    agents::domain::AgentId, core::RunError, desktop_runtime::domain::RunningRuntime,
+    env::Environment,
+};
+use std::path::{Path, PathBuf};
 
 pub(super) fn prepare(config: &Environment) -> Result<(), RunError> {
     let auth = config
@@ -32,6 +38,35 @@ pub(super) fn prepare(config: &Environment) -> Result<(), RunError> {
     Ok(())
 }
 
+/// The agent the desktop starts with when nothing else has been chosen.
+///
+/// Both agents are bundled, so this decides only which one a caller that names
+/// none runs on. Claude, because that is the agent Nessa shipped with and the
+/// one every conversation already on disk belongs to.
+const DEFAULT_AGENT: AgentId = AgentId::Claude;
+
+/// Where each agent's harness sits inside the application bundle.
+fn harness_entry(agent: AgentId) -> &'static str {
+    match agent {
+        AgentId::Claude => {
+            "claude-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"
+        }
+        AgentId::Codex => "codex-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js",
+    }
+}
+
+/// The model each agent runs until someone configures another.
+///
+/// A starting point rather than a recommendation: each is a current model from
+/// the bundled catalog that the agent's own harness can reach, and `config.json`
+/// replaces it without rebuilding.
+fn default_model(agent: AgentId) -> &'static str {
+    match agent {
+        AgentId::Claude => "claude-sonnet-5",
+        AgentId::Codex => "gpt-5.6-terra",
+    }
+}
+
 pub(super) fn configure(
     settings: &mut RuntimeConfig,
     bundle: &Path,
@@ -41,11 +76,16 @@ pub(super) fn configure(
         return Err(failure("runtime directory must be absolute"));
     }
     let node = bundle.join("node");
-    let entry =
-        bundle.join("claude-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js");
     let catalog = bundle.join("models.json");
     let mcp = bundle.join("nessa-mcp");
-    for path in [&node, &entry, &catalog, &mcp] {
+    let entries: Vec<(AgentId, PathBuf)> = AgentId::ALL
+        .iter()
+        .map(|agent| (*agent, bundle.join(harness_entry(*agent))))
+        .collect();
+    for path in [&node, &catalog, &mcp]
+        .into_iter()
+        .chain(entries.iter().map(|(_, entry)| entry))
+    {
         if !path.is_file() {
             return Err(failure(format!(
                 "missing bundled runtime file: {}",
@@ -59,19 +99,49 @@ pub(super) fn configure(
         settings.agent = Some(AgentConfig {
             catalog: catalog.clone(),
             node: node.clone(),
-            acp_entry: entry.clone(),
             workspace: data.join(relative_workspace),
-            model: "claude-sonnet-5".into(),
             tools_enabled: true,
             mcp_servers: vec![],
-            context_tokens: 100_000,
-            output_tokens: 4096,
+            selected: None,
+            claude: None,
+            codex: None,
         });
     }
     let agent = settings.agent.as_mut().expect("agent configured above");
+    // Whichever agent the existing configuration already answered for stays the
+    // default. Filling in the agent it did not mention must not silently move a
+    // running installation onto a different agent, and leaving the choice unset
+    // once both are configured is a startup failure rather than a guess.
+    let selected = agent
+        .selected
+        .take()
+        .or_else(|| match agent.agents().as_slice() {
+            [(only, _)] => Some(only.name().into()),
+            _ => None,
+        })
+        .unwrap_or_else(|| DEFAULT_AGENT.name().into());
+    agent.selected = Some(selected);
     agent.catalog = catalog;
     agent.node = node;
-    agent.acp_entry = entry;
+    for (id, entry) in entries {
+        let slot = match id {
+            AgentId::Claude => &mut agent.claude,
+            AgentId::Codex => &mut agent.codex,
+        };
+        match slot {
+            // Only the bundled harness path is replaced. A configured model and
+            // its budgets are the user's and survive every upgrade.
+            Some(runtime) => runtime.acp_entry = entry,
+            None => {
+                *slot = Some(AgentRuntime {
+                    acp_entry: entry,
+                    model: default_model(id).into(),
+                    context_tokens: 100_000,
+                    output_tokens: 4096,
+                })
+            }
+        }
+    }
     // Only the Nessa-owned server is replaced. User-configured MCP servers retain their settings.
     agent.mcp_servers.retain(|server| server.name != "nessa");
     agent

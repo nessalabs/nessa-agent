@@ -7,6 +7,7 @@ use super::{
     },
     ConversationError, ConversationRepository,
 };
+use crate::agents::domain::AgentId;
 use crate::conversation::domain::{Conversation, ConversationId};
 use futures_util::{future::join_all, FutureExt};
 use nessa_auth::application::ports::Clock;
@@ -65,20 +66,35 @@ impl ConversationCaller {
     }
 }
 /// Server-selected admission limits. Clients cannot choose provider budgets or owner capacity.
+///
+/// What is here is the same for every agent. The output budget a submission
+/// reserves is not: it is the ceiling that agent was configured with, so it
+/// travels with the agent, in [`ConversationAgent`].
 #[derive(Clone, Copy)]
 pub struct ConversationLimits {
     pub max_conversations: usize,
     pub max_input_bytes: usize,
-    pub reserved_output_tokens: u32,
 }
 impl Default for ConversationLimits {
     fn default() -> Self {
         Self {
             max_conversations: 32,
             max_input_bytes: 8192,
-            reserved_output_tokens: 4096,
         }
     }
+}
+
+/// One agent this server can run conversations on.
+///
+/// Composition builds one of these per configured agent and the service keeps
+/// them all: a conversation is reopened on the agent it was created on, so the
+/// agent nobody has selected is still the agent yesterday's conversations need.
+#[derive(Clone)]
+pub struct ConversationAgent {
+    /// What opens an execution session for it.
+    pub provider: Arc<dyn AgentProvider>,
+    /// The output budget every submission to this agent reserves.
+    pub reserved_output_tokens: u32,
 }
 #[derive(Clone, Copy)]
 pub enum SubmissionMode {
@@ -87,6 +103,9 @@ pub enum SubmissionMode {
 }
 struct LiveConversation {
     agent: Agent,
+    /// The configured output reservation of the agent this conversation runs
+    /// on, read once when it was opened.
+    reserved_output_tokens: u32,
     projection: Mutex<Projection>,
     watched: Mutex<HashSet<String>>,
 }
@@ -102,7 +121,10 @@ struct Slot {
 }
 struct Inner {
     workspace: Option<String>,
-    provider: Arc<dyn AgentProvider>,
+    /// Every agent this server can start, by name.
+    agents: HashMap<AgentId, ConversationAgent>,
+    /// The agent a conversation is created on when the caller names none.
+    default_agent: AgentId,
     storage: Arc<dyn SessionStorage>,
     metadata: Arc<dyn ConversationRepository>,
     creation_audit: Arc<dyn super::ConversationCreationAudit>,
@@ -135,8 +157,13 @@ fn retryable_agent_open(error: &AgentError) -> bool {
     )
 }
 impl ConversationService {
+    /// Own every configured agent, and name the one a caller gets by default.
+    ///
+    /// `agents` must contain `default_agent`: a service whose own default is an
+    /// agent it cannot start would accept a creation it can never open.
     pub fn new(
-        provider: Arc<dyn AgentProvider>,
+        agents: HashMap<AgentId, ConversationAgent>,
+        default_agent: AgentId,
         storage: Arc<dyn SessionStorage>,
         metadata: Arc<dyn ConversationRepository>,
         creation_audit: Arc<dyn super::ConversationCreationAudit>,
@@ -148,14 +175,18 @@ impl ConversationService {
             || limits.max_conversations == 0
             || limits.max_input_bytes == 0
             || limits.max_input_bytes > 8192
-            || limits.reserved_output_tokens == 0
+            || !agents.contains_key(&default_agent)
+            || agents
+                .values()
+                .any(|agent| agent.reserved_output_tokens == 0)
         {
             return Err(ConversationError::InvalidInput);
         }
         Ok(Self {
             inner: Arc::new(Inner {
                 workspace,
-                provider,
+                agents,
+                default_agent,
                 storage,
                 metadata,
                 creation_audit,
@@ -169,10 +200,17 @@ impl ConversationService {
         })
     }
     /// Persist ownership before opening a provider. Repeating the same UUID never changes its owner.
+    ///
+    /// `agent` is the agent the conversation runs on for the rest of its life;
+    /// `None` takes this server's configured default. It is only consulted for
+    /// a conversation that does not exist yet: repeating a UUID reopens the
+    /// conversation on record, on the agent it was created with, whatever this
+    /// caller asked for.
     pub async fn create(
         &self,
         id: ConversationId,
         caller: ConversationCaller,
+        agent: Option<AgentId>,
     ) -> Result<(), ConversationError> {
         let service = self.clone();
         supervised(async move {
@@ -180,6 +218,10 @@ impl ConversationService {
             caller.actor()?;
             if service.inner.retirement.get().is_some() {
                 return Err(ConversationError::Unavailable);
+            }
+            let agent = agent.unwrap_or(service.inner.default_agent);
+            if !service.inner.agents.contains_key(&agent) {
+                return Err(ConversationError::AgentNotConfigured);
             }
             let requested_at_ms = service.inner.clock.unix_milliseconds();
             let proposed = Conversation::new(
@@ -189,6 +231,7 @@ impl ConversationService {
                 caller.surface_id.clone(),
                 caller.action_id.clone(),
                 requested_at_ms,
+                agent,
             )
             .map_err(|_| ConversationError::InvalidInput)?;
             // Serialize create/reopen decisions without holding the live-owner map
@@ -417,7 +460,22 @@ impl ConversationService {
                                 let retryable = matches!(error, StorageError::Busy | StorageError::Io(_));
                                 OpeningFailure { cause: ConversationError::Storage(error), _cleanup: None, retryable }
                             })?;
-                            let agent = Agent::new(service.inner.provider.clone(), manager)
+                            // The agent the record names, never this server's
+                            // current default: a conversation restores a
+                            // provider session that belongs to one agent, and
+                            // reopening it on another would hand that session
+                            // to a harness that never wrote it.
+                            let configured = service
+                                .inner
+                                .agents
+                                .get(&record.agent())
+                                .cloned()
+                                .ok_or(OpeningFailure {
+                                    cause: ConversationError::AgentNotConfigured,
+                                    _cleanup: None,
+                                    retryable: false,
+                                })?;
+                            let agent = Agent::new(configured.provider.clone(), manager)
                                 .await
                                 .map_err(|error| {
                                 tracing::error!(conversation_id = %id, %error, "conversation restoration failed");
@@ -439,13 +497,14 @@ impl ConversationService {
                             let mut projection =
                                 Projection::new(id.to_string(), capabilities, snapshot.as_ref());
                             if let Some(workspace) = &service.inner.workspace {
-                                let identity = service.inner.provider.identity();
+                                let identity = configured.provider.identity();
                                 projection.view.runtime = Some(ConversationRuntime {
                                     model: identity.model_id().into(), provider: identity.name().into(), workspace: workspace.clone(),
                                 });
                             }
                             let live = Arc::new(LiveConversation {
                                 agent,
+                                reserved_output_tokens: configured.reserved_output_tokens,
                                 projection: Mutex::new(projection),
                                 watched: Mutex::new(HashSet::new()),
                             });
@@ -560,18 +619,15 @@ impl ConversationService {
             // ACP owns hidden context/tokenization; this is a conservative admission
             // reservation, not a claim about actual token usage or provider billing.
             let limits = live.agent.capabilities().limits();
-            if service.inner.limits.reserved_output_tokens > limits.max_output()
-                || service.inner.limits.reserved_output_tokens >= limits.max_context_window()
-            {
+            let reserved = live.reserved_output_tokens;
+            if reserved > limits.max_output() || reserved >= limits.max_context_window() {
                 return Err(ConversationError::InvalidInput);
             }
             let request = ExecutionRequest {
                 execution_id: execution,
                 user_message: prompt,
-                estimated_input_tokens: u64::from(
-                    limits.max_context_window() - service.inner.limits.reserved_output_tokens,
-                ),
-                reserved_output_tokens: service.inner.limits.reserved_output_tokens,
+                estimated_input_tokens: u64::from(limits.max_context_window() - reserved),
+                reserved_output_tokens: reserved,
             };
             let receipt = match mode {
                 SubmissionMode::Queue => Some(live.agent.enqueue(request, actor).await?),

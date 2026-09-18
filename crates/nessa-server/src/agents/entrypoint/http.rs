@@ -27,16 +27,6 @@ pub struct AgentsReadinessView {
     agents: Vec<AgentReadinessView>,
 }
 
-/// The name this agent is known by on the wire and in the interface.
-///
-/// The domain has no opinion about this; a rename here is a wire change, not a
-/// change to what an agent is.
-fn agent_name(agent: AgentId) -> &'static str {
-    match agent {
-        AgentId::Claude => "claude",
-    }
-}
-
 /// The name a readiness is reported under.
 ///
 /// The wire has three names. A sign-in this machine could not determine is
@@ -116,7 +106,7 @@ fn view(agents: Vec<(AgentId, Readiness)>) -> Vec<AgentReadinessView> {
     agents
         .into_iter()
         .map(|(agent, state)| AgentReadinessView {
-            id: agent_name(agent),
+            id: agent.name(),
             readiness: readiness_name(state),
         })
         .collect()

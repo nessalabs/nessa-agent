@@ -1,8 +1,9 @@
 //! Test-only provider and metadata ports; all scheduling runs through the real SDK Agent.
+use crate::agents::domain::AgentId;
 use crate::conversation::application::{
-    ConversationCreation, ConversationCreationAudit, ConversationCreationAuditRecord,
-    ConversationCreationDisposition, ConversationFuture, ConversationLimits,
-    ConversationRepository, ConversationService,
+    ConversationAgent, ConversationCreation, ConversationCreationAudit,
+    ConversationCreationAuditRecord, ConversationCreationDisposition, ConversationFuture,
+    ConversationLimits, ConversationRepository, ConversationService,
 };
 use crate::conversation::domain::{Conversation, ConversationId};
 use nessa_sdk::{
@@ -126,6 +127,20 @@ pub(crate) struct ProviderFactory {
     pub(crate) close_gate: Mutex<Option<oneshot::Receiver<()>>>,
     pub(crate) close_requests: Mutex<Vec<SessionCloseRequest>>,
 }
+/// A service that can start exactly one agent.
+///
+/// Most of these tests are about what happens while a conversation runs, not
+/// about which agent it runs on, so they configure the one agent and let every
+/// creation take it by default.
+pub(crate) fn only(provider: Arc<dyn AgentProvider>) -> HashMap<AgentId, ConversationAgent> {
+    HashMap::from([(
+        AgentId::Claude,
+        ConversationAgent {
+            provider,
+            reserved_output_tokens: 4096,
+        },
+    )])
+}
 pub(crate) fn fixture(
     limits: ConversationLimits,
 ) -> (
@@ -138,7 +153,8 @@ pub(crate) fn fixture(
     let repository = Arc::new(MemoryRepository::default());
     let storage = Arc::new(InMemoryStorage::new());
     let service = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
+        only(Arc::new(Provider(provider.clone()))),
+        AgentId::Claude,
         storage.clone(),
         repository.clone(),
         Arc::new(AcceptingCreationAudit),

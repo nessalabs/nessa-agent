@@ -1,13 +1,17 @@
 //! Shared conversation ownership and admission tests use real SDK scheduling.
 use super::{
-    ConversationCaller, ConversationCreation, ConversationCreationAudit,
+    ConversationAgent, ConversationCaller, ConversationCreation, ConversationCreationAudit,
     ConversationCreationAuditRecord, ConversationDisposition, ConversationError,
     ConversationFuture, ConversationLimits, ConversationMessageStatus, ConversationOwnershipState,
     ConversationRepository, ConversationService, SubmissionMode,
 };
 use crate::{
+    agents::domain::AgentId,
     conversation::domain::{Conversation, ConversationId},
-    conversation_test_support::{fixture, AcceptingCreationAudit, Provider, TestClock},
+    conversation_test_support::{
+        fixture, only, AcceptingCreationAudit, MemoryRepository, Provider, ProviderFactory,
+        TestClock,
+    },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::{
@@ -25,6 +29,7 @@ use nessa_sdk::{
     domain::agent_execution::sessions::{ExecutionSessionId, SessionId},
     infrastructure::session_storage::InMemoryStorage,
 };
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
@@ -133,7 +138,8 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
         gate: Mutex::new(None),
     });
     let service = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
+        only(Arc::new(Provider(provider.clone()))),
+        AgentId::Claude,
         storage,
         repository.clone(),
         audit.clone(),
@@ -145,7 +151,7 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
     let id = id();
     assert!(matches!(
         service
-            .create(id.clone(), caller("panel", "create-1"))
+            .create(id.clone(), caller("panel", "create-1"), None)
             .await,
         Err(ConversationError::Audit)
     ));
@@ -183,7 +189,8 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
         accepted: Mutex::new(Vec::new()),
     });
     let service = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
+        only(Arc::new(Provider(provider.clone()))),
+        AgentId::Claude,
         storage,
         repository.clone(),
         audit.clone(),
@@ -196,7 +203,7 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
 
     assert!(matches!(
         service
-            .create(id.clone(), caller("panel", "create-original"))
+            .create(id.clone(), caller("panel", "create-original"), None)
             .await,
         Err(ConversationError::Audit)
     ));
@@ -204,7 +211,7 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
 
     service
-        .create(id, caller("phone", "create-retry"))
+        .create(id, caller("phone", "create-retry"), None)
         .await
         .unwrap();
 
@@ -276,7 +283,8 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
         records: Mutex::new(Vec::new()),
     });
     let service = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
+        only(Arc::new(Provider(provider.clone()))),
+        AgentId::Claude,
         storage,
         repository.clone(),
         audit.clone(),
@@ -288,7 +296,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
     let id = id();
     assert!(matches!(
         service
-            .create(id.clone(), caller("panel", "create-1"))
+            .create(id.clone(), caller("panel", "create-1"), None)
             .await,
         Err(ConversationError::Audit)
     ));
@@ -372,7 +380,8 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
         records: Mutex::new(Vec::new()),
     });
     let service = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
+        only(Arc::new(Provider(provider.clone()))),
+        AgentId::Claude,
         storage,
         repository.clone(),
         audit.clone(),
@@ -383,7 +392,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
     .unwrap();
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create-1"))
+        .create(id.clone(), caller("panel", "create-1"), None)
         .await
         .unwrap();
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
@@ -391,7 +400,8 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
 
     // A fresh owner map, so the next create must open the provider again.
     let service = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
+        only(Arc::new(Provider(provider.clone()))),
+        AgentId::Claude,
         Arc::new(InMemoryStorage::new()),
         repository,
         audit.clone(),
@@ -405,7 +415,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
     audit.reject_reopen.store(true, Ordering::SeqCst);
     assert!(matches!(
         service
-            .create(id.clone(), caller("phone", "create-2"))
+            .create(id.clone(), caller("phone", "create-2"), None)
             .await,
         Err(ConversationError::Audit)
     ));
@@ -415,7 +425,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
 
     audit.reject_reopen.store(false, Ordering::SeqCst);
     service
-        .create(id, caller("phone", "create-3"))
+        .create(id, caller("phone", "create-3"), None)
         .await
         .unwrap();
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
@@ -451,7 +461,8 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
         gate: Mutex::new(Some(gate)),
     });
     let service = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
+        only(Arc::new(Provider(provider.clone()))),
+        AgentId::Claude,
         storage,
         repository,
         audit.clone(),
@@ -464,7 +475,11 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
     let caller_task = tokio::spawn({
         let service = service.clone();
         let id = id.clone();
-        async move { service.create(id, caller("panel", "caller-lost")).await }
+        async move {
+            service
+                .create(id, caller("panel", "caller-lost"), None)
+                .await
+        }
     });
     audit.started.notified().await;
     caller_task.abort();
@@ -495,6 +510,7 @@ async fn malformed_controls_do_not_open_a_dormant_owned_provider() {
             "panel".into(),
             "create".into(),
             1_700_000_000_123,
+            AgentId::Claude,
         )
         .unwrap(),
     );
@@ -544,7 +560,7 @@ async fn consumed_permission_failure_is_not_reoffered_on_the_immediate_read() {
     *provider.permission_gate.lock().unwrap() = Some(execution_gate);
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"))
+        .create(id.clone(), caller("panel", "create"), None)
         .await
         .unwrap();
     service
@@ -628,6 +644,7 @@ fn ownership_and_creation_context_are_domain_state() {
         "panel".into(),
         "create".into(),
         1_700_000_000_123,
+        AgentId::Claude,
     )
     .unwrap();
     assert!(record.allows(
@@ -652,6 +669,7 @@ fn ownership_and_creation_context_are_domain_state() {
         "\n".into(),
         "create".into(),
         1_700_000_000_123,
+        AgentId::Claude,
     )
     .is_err());
 }
@@ -660,8 +678,8 @@ async fn surfaces_share_one_agent_and_keep_original_creator() {
     let (service, provider, repository, _) = fixture(ConversationLimits::default());
     let id = id();
     let (a, b) = tokio::join!(
-        service.create(id.clone(), caller("panel", "original")),
-        service.create(id.clone(), caller("phone", "retry"))
+        service.create(id.clone(), caller("panel", "original"), None),
+        service.create(id.clone(), caller("phone", "retry"), None)
     );
     a.unwrap();
     b.unwrap();
@@ -692,7 +710,7 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
     });
     let id = id();
     service
-        .create(id.clone(), caller("panel", "original"))
+        .create(id.clone(), caller("panel", "original"), None)
         .await
         .unwrap();
     service.shutdown().await.unwrap();
@@ -700,7 +718,8 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
     tokio::task::yield_now().await;
 
     let restarted = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
+        only(Arc::new(Provider(provider.clone()))),
+        AgentId::Claude,
         storage,
         repository,
         Arc::new(AcceptingCreationAudit),
@@ -715,13 +734,13 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
     let mut foreign = caller("other-surface", "foreign-reopen");
     foreign.principal_id = PrincipalId::new("intruder").unwrap();
     assert!(matches!(
-        restarted.create(id.clone(), foreign).await,
+        restarted.create(id.clone(), foreign, None).await,
         Err(ConversationError::NotFound)
     ));
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
 
     restarted
-        .create(id, caller("phone", "owner-reopen"))
+        .create(id, caller("phone", "owner-reopen"), None)
         .await
         .unwrap();
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
@@ -732,7 +751,7 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"))
+        .create(id.clone(), caller("panel", "create"), None)
         .await
         .unwrap();
     let (release, gate) = oneshot::channel();
@@ -803,7 +822,7 @@ async fn caller_loss_does_not_cancel_initialization() {
     let task = tokio::spawn({
         let service = service.clone();
         let id = id.clone();
-        async move { service.create(id, caller("panel", "create")).await }
+        async move { service.create(id, caller("panel", "create"), None).await }
     });
     provider.opening.notified().await;
     task.abort();
@@ -825,6 +844,7 @@ async fn first_read_caller_loss_cannot_leave_an_unstarted_shutdown_slot() {
             "panel".into(),
             "create".into(),
             1_700_000_000_123,
+            AgentId::Claude,
         )
         .unwrap(),
     );
@@ -870,7 +890,8 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
         inner: storage,
     });
     let service = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
+        only(Arc::new(Provider(provider.clone()))),
+        AgentId::Claude,
         storage.clone(),
         repository,
         Arc::new(AcceptingCreationAudit),
@@ -881,10 +902,15 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
     .unwrap();
     let id = id();
     assert!(matches!(
-        service.create(id.clone(), caller("panel", "create")).await,
+        service
+            .create(id.clone(), caller("panel", "create"), None)
+            .await,
         Err(ConversationError::Storage(StorageError::Io(_)))
     ));
-    service.create(id, caller("panel", "retry")).await.unwrap();
+    service
+        .create(id, caller("panel", "retry"), None)
+        .await
+        .unwrap();
     assert_eq!(storage.attempts.load(Ordering::SeqCst), 2);
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
     service.shutdown().await.unwrap();
@@ -922,7 +948,8 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
         started: Notify::new(),
     });
     let service = ConversationService::new(
-        Arc::new(Provider(provider)),
+        only(Arc::new(Provider(provider))),
+        AgentId::Claude,
         storage,
         repository.clone(),
         Arc::new(AcceptingCreationAudit),
@@ -933,14 +960,18 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
     .unwrap();
     let first = id();
     service
-        .create(first.clone(), caller("panel", "first"))
+        .create(first.clone(), caller("panel", "first"), None)
         .await
         .unwrap();
     *repository.gate.lock().unwrap() = Some(gate);
     let second = id();
     let creating = tokio::spawn({
         let service = service.clone();
-        async move { service.create(second, caller("phone", "second")).await }
+        async move {
+            service
+                .create(second, caller("phone", "second"), None)
+                .await
+        }
     });
     repository.started.notified().await;
     tokio::time::timeout(
@@ -979,7 +1010,8 @@ async fn resource_free_provider_failure_retires_slot_for_retry() {
         delegate: Provider(provider.clone()),
     });
     let service = ConversationService::new(
-        provider.clone(),
+        only(provider.clone()),
+        AgentId::Claude,
         storage,
         repository,
         Arc::new(AcceptingCreationAudit),
@@ -990,10 +1022,15 @@ async fn resource_free_provider_failure_retires_slot_for_retry() {
     .unwrap();
     let id = id();
     assert!(matches!(
-        service.create(id.clone(), caller("panel", "first")).await,
+        service
+            .create(id.clone(), caller("panel", "first"), None)
+            .await,
         Err(ConversationError::Agent(AgentError::Deadline))
     ));
-    service.create(id, caller("panel", "retry")).await.unwrap();
+    service
+        .create(id, caller("panel", "retry"), None)
+        .await
+        .unwrap();
     assert_eq!(provider.attempts.load(Ordering::SeqCst), 2);
     service.shutdown().await.unwrap();
 }
@@ -1030,7 +1067,8 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
         identity: ProviderIdentity::new("gateway-test", "test", "test").unwrap(),
     });
     let service = ConversationService::new(
-        provider.clone(),
+        only(provider.clone()),
+        AgentId::Claude,
         storage,
         repository,
         Arc::new(AcceptingCreationAudit),
@@ -1042,7 +1080,7 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
     let id = id();
     for action in ["first", "retry"] {
         assert!(service
-            .create(id.clone(), caller("panel", action))
+            .create(id.clone(), caller("panel", action), None)
             .await
             .is_err());
     }
@@ -1057,14 +1095,14 @@ async fn rejected_capacity_does_not_write_metadata_even_with_concurrent_creates(
         ..ConversationLimits::default()
     });
     let (a, b) = tokio::join!(
-        service.create(id(), caller("panel", "a")),
-        service.create(id(), caller("phone", "b"))
+        service.create(id(), caller("panel", "a"), None),
+        service.create(id(), caller("phone", "b"), None)
     );
     assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
     assert_eq!(repository.records.lock().unwrap().len(), 1);
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
     assert!(matches!(
-        service.create(id(), caller("panel", "c")).await,
+        service.create(id(), caller("panel", "c"), None).await,
         Err(ConversationError::Capacity)
     ));
     assert_eq!(repository.records.lock().unwrap().len(), 1);
@@ -1075,7 +1113,7 @@ async fn restart_restores_saved_messages_without_replaying_input() {
     let (service, provider, repository, storage) = fixture(ConversationLimits::default());
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"))
+        .create(id.clone(), caller("panel", "create"), None)
         .await
         .unwrap();
     service
@@ -1094,7 +1132,8 @@ async fn restart_restores_saved_messages_without_replaying_input() {
     // Receipt and observation supervisors release their temporary Agent references.
     tokio::task::yield_now().await;
     let restored = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
+        only(Arc::new(Provider(provider.clone()))),
+        AgentId::Claude,
         storage,
         repository,
         Arc::new(AcceptingCreationAudit),
@@ -1127,7 +1166,8 @@ impl SessionStorage for PanickingStorage {
 async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
     let (_, provider, repository, _) = fixture(ConversationLimits::default());
     let service = ConversationService::new(
-        Arc::new(Provider(provider)),
+        only(Arc::new(Provider(provider))),
+        AgentId::Claude,
         Arc::new(PanickingStorage),
         repository,
         Arc::new(AcceptingCreationAudit),
@@ -1139,7 +1179,7 @@ async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
     assert!(matches!(
         tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            service.create(id(), caller("panel", "create"))
+            service.create(id(), caller("panel", "create"), None)
         )
         .await
         .unwrap(),
@@ -1155,7 +1195,7 @@ async fn boundary_steering_can_be_removed_without_dispatch() {
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"))
+        .create(id.clone(), caller("panel", "create"), None)
         .await
         .unwrap();
     let (release, gate) = oneshot::channel();
@@ -1209,7 +1249,7 @@ async fn close_then_replay_does_not_reopen_or_dispatch_and_new_input_still_works
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"))
+        .create(id.clone(), caller("panel", "create"), None)
         .await
         .unwrap();
     service
@@ -1279,7 +1319,8 @@ impl SessionStorage for HostileStorage {
 async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
     let (_, provider, repository, _) = fixture(ConversationLimits::default());
     let service = ConversationService::new(
-        Arc::new(Provider(provider)),
+        only(Arc::new(Provider(provider))),
+        AgentId::Claude,
         Arc::new(HostileStorage),
         repository,
         Arc::new(AcceptingCreationAudit),
@@ -1291,7 +1332,7 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
     assert!(matches!(
         tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            service.create(id(), caller("panel", "create"))
+            service.create(id(), caller("panel", "create"), None)
         )
         .await
         .unwrap(),
@@ -1316,6 +1357,7 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
             "panel".into(),
             "create".into(),
             1_700_000_000_123,
+            AgentId::Claude,
         )
         .unwrap(),
     );
@@ -1356,13 +1398,13 @@ async fn desktop_quit_keeps_gateway_admission_open() {
     let (service, _, _, _) = fixture(ConversationLimits::default());
     let first = id();
     service
-        .create(first, caller("panel", "create-first"))
+        .create(first, caller("panel", "create-first"), None)
         .await
         .unwrap();
     service.stop_active_agents().await.unwrap();
     let next = id();
     service
-        .create(next.clone(), caller("panel", "create-next"))
+        .create(next.clone(), caller("panel", "create-next"), None)
         .await
         .unwrap();
     service
@@ -1377,4 +1419,103 @@ async fn desktop_quit_keeps_gateway_admission_open() {
         .unwrap();
     completed(&service, &next, 1).await;
     service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_default() {
+    // Two agents configured, the default being the one the conversation was not
+    // created on. What proves the record decided is which process was opened.
+    let claude = Arc::new(ProviderFactory::default());
+    let codex = Arc::new(ProviderFactory::default());
+    let repository = Arc::new(MemoryRepository::default());
+    let storage = Arc::new(InMemoryStorage::new());
+    let service = ConversationService::new(
+        HashMap::from([
+            (
+                AgentId::Claude,
+                ConversationAgent {
+                    provider: Arc::new(Provider(claude.clone())),
+                    reserved_output_tokens: 4096,
+                },
+            ),
+            (
+                AgentId::Codex,
+                ConversationAgent {
+                    provider: Arc::new(Provider(codex.clone())),
+                    reserved_output_tokens: 4096,
+                },
+            ),
+        ]),
+        AgentId::Claude,
+        storage.clone(),
+        repository.clone(),
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(id.clone(), caller("panel", "create"), Some(AgentId::Codex))
+        .await
+        .unwrap();
+    assert_eq!(codex.open_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(claude.open_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        repository.records.lock().unwrap()[&id].agent(),
+        AgentId::Codex
+    );
+
+    // Reopened after a restart, still on Codex, although a creation that names
+    // nothing would start on Claude.
+    service.shutdown().await.unwrap();
+    drop(service);
+    tokio::task::yield_now().await;
+    let restarted = ConversationService::new(
+        HashMap::from([
+            (
+                AgentId::Claude,
+                ConversationAgent {
+                    provider: Arc::new(Provider(claude.clone())),
+                    reserved_output_tokens: 4096,
+                },
+            ),
+            (
+                AgentId::Codex,
+                ConversationAgent {
+                    provider: Arc::new(Provider(codex.clone())),
+                    reserved_output_tokens: 4096,
+                },
+            ),
+        ]),
+        AgentId::Claude,
+        storage,
+        repository,
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    restarted
+        .create(id.clone(), caller("panel", "reopen"), None)
+        .await
+        .unwrap();
+    assert_eq!(codex.open_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(claude.open_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn an_agent_this_server_cannot_start_is_refused_before_anything_is_written() {
+    let (service, provider, repository, _) = fixture(ConversationLimits::default());
+    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    assert!(matches!(
+        service
+            .create(id.clone(), caller("panel", "create"), Some(AgentId::Codex))
+            .await,
+        Err(ConversationError::AgentNotConfigured)
+    ));
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+    assert!(!repository.records.lock().unwrap().contains_key(&id));
 }

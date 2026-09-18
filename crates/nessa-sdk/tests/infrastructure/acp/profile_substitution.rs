@@ -74,8 +74,8 @@ impl AcpProfile for TestAcpProfile {
     fn new_session_params(&self, config: &AcpConfig, _: &EffectiveCapabilities) -> Value {
         json!({"cwd":config.workspace,"mcpServers":[]})
     }
-    fn session_configuration(&self, _: &str) -> Option<Value> {
-        None
+    fn session_configuration(&self, _: &str) -> Vec<Value> {
+        Vec::new()
     }
     fn verify_session(
         &self,
@@ -107,7 +107,8 @@ impl AcpProfile for TestAcpProfile {
     fn tool_call(&mut self, value: &Value) -> Result<ToolCallUpdate, AgentError> {
         wire::tool_call(value)
     }
-    fn tool_input(&self, tool: &Value) -> Result<ToolReviewInput, AgentError> {
+    fn permission_input(&self, request: &Value) -> Result<ToolReviewInput, AgentError> {
+        let tool = &request["toolCall"];
         wire::path(fields::string(&tool["rawInput"], "target")?)?;
         Ok(ToolReviewInput {
             name: "fixture-read".into(),
@@ -538,7 +539,7 @@ impl AcpProfile for GatedReadyProfile {
     ) -> Value {
         self.inner.new_session_params(config, capabilities)
     }
-    fn session_configuration(&self, session_id: &str) -> Option<Value> {
+    fn session_configuration(&self, session_id: &str) -> Vec<Value> {
         self.inner.session_configuration(session_id)
     }
     fn verify_session(
@@ -587,8 +588,8 @@ impl AcpProfile for GatedReadyProfile {
     fn tool_call(&mut self, value: &Value) -> Result<ToolCallUpdate, AgentError> {
         self.inner.tool_call(value)
     }
-    fn tool_input(&self, tool: &Value) -> Result<ToolReviewInput, AgentError> {
-        self.inner.tool_input(tool)
+    fn permission_input(&self, request: &Value) -> Result<ToolReviewInput, AgentError> {
+        self.inner.permission_input(request)
     }
 }
 

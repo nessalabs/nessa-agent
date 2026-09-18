@@ -21,7 +21,7 @@ impl AcpProfile for PolicyProfile {
     fn new_session_params(&self, config: &AcpConfig, caps: &EffectiveCapabilities) -> Value {
         self.inner.new_session_params(config, caps)
     }
-    fn session_configuration(&self, id: &str) -> Option<Value> {
+    fn session_configuration(&self, id: &str) -> Vec<Value> {
         self.inner.session_configuration(id)
     }
     fn verify_session(
@@ -72,8 +72,8 @@ impl AcpProfile for PolicyProfile {
     fn tool_call(&mut self, value: &Value) -> Result<ToolCallUpdate, AgentError> {
         self.inner.tool_call(value)
     }
-    fn tool_input(&self, value: &Value) -> Result<ToolReviewInput, AgentError> {
-        self.inner.tool_input(value)
+    fn permission_input(&self, request: &Value) -> Result<ToolReviewInput, AgentError> {
+        self.inner.permission_input(request)
     }
 }
 fn request() -> ExecutionRequest {

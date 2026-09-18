@@ -5,12 +5,13 @@
 //! model JSON -> model_metadata_json -> application model catalog -> domain
 //!
 //! host -> claude_acp::sessions -> acp::sessions -> acp::executions
-//!              |                                      |
-//!              v                                      v
-//!       Claude tool schemas                 application execution controller
-//!                                                     |
-//!                                                     v
-//!                                               domain sessions
+//!      -> codex_acp::sessions  ->      |               |
+//!              |                                       |
+//!              v                                       v
+//!    provider tool translation             application execution controller
+//!                                                      |
+//!                                                      v
+//!                                                domain sessions
 //!
 //! SessionManager -> session_storage -> leased memory / private snapshot files
 //!
@@ -24,6 +25,7 @@
 
 pub mod acp;
 pub mod claude_acp;
+pub mod codex_acp;
 pub mod model_metadata_json;
 pub mod session_storage;
 

@@ -1,3 +1,4 @@
+use crate::agents::domain::AgentId;
 use crate::conversation::{
     application::{
         ConversationCreation, ConversationCreationDisposition, ConversationError,
@@ -23,6 +24,12 @@ struct StoredConversation {
     creator_surface: String,
     creation_action: String,
     creation_requested_at_ms: u64,
+    /// The agent this conversation runs on, absent in records written while
+    /// Claude was the only agent this server could start. Absent is read as
+    /// Claude for exactly that reason, and every record written since names its
+    /// agent, so the absence never has to be interpreted twice.
+    #[serde(default)]
+    agent: Option<String>,
 }
 /// Private create-once files bind conversation IDs to owners before any provider opens.
 pub struct LocalConversationRepository {
@@ -71,6 +78,14 @@ fn read(root: &Path, id: &ConversationId) -> Result<Option<Conversation>, Conver
     if stored_id != *id {
         return Err(ConversationError::Metadata);
     }
+    // A record naming an agent this server has no adapter for is unreadable
+    // rather than reopened on some other agent: the conversation's transcript
+    // and restored session belong to the agent named, and the honest answer is
+    // that this build cannot open it.
+    let agent = match value.agent.as_deref() {
+        None => AgentId::Claude,
+        Some(name) => AgentId::parse(name).ok_or(ConversationError::Metadata)?,
+    };
     Ok(Some(
         Conversation::new(
             stored_id,
@@ -79,6 +94,7 @@ fn read(root: &Path, id: &ConversationId) -> Result<Option<Conversation>, Conver
             value.creator_surface,
             value.creation_action,
             value.creation_requested_at_ms,
+            agent,
         )
         .map_err(|_| ConversationError::Metadata)?,
     ))
@@ -116,6 +132,7 @@ impl ConversationRepository for LocalConversationRepository {
                     creator_surface: conversation.creator_surface().into(),
                     creation_action: conversation.creation_action().into(),
                     creation_requested_at_ms: conversation.creation_requested_at_ms(),
+                    agent: Some(conversation.agent().name().into()),
                 };
                 let bytes = serde_json::to_vec(&value).map_err(|_| ConversationError::Metadata)?;
                 if bytes.len() > 4096 {
