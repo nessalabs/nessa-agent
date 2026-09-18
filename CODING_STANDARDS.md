@@ -31,6 +31,11 @@ must apply these merge gates together with [AGENTS.md](AGENTS.md),
    keep source, tests, and documentation navigable by the same vocabulary.
    Follow the [repository-wide organization checks](#organization-across-the-repository).
    Update module diagrams and links when ownership or paths change.
+9. **Outside data sits behind a seam.** Reads from outside the process —
+   network, filesystem, subprocess, OS service, clock — go through a trait or
+   interface owned by the calling side, injected from composition, with a
+   substitute in tests. Every crate and package, the Tauri host included.
+   Follow [seams at the process boundary](#seams-at-the-process-boundary).
 
 If a gate fails, fix it in the same PR.
 
@@ -301,6 +306,43 @@ revocation data when converting auth records, and never silently reset a registr
 Do not bump protocol, schema, or package versions merely because implementation
 changes. Compatibility support or a version transition requires an explicit user
 request. This is a hard rule for this repository.
+
+## Seams at the process boundary
+
+Anything that reads data from outside the process is reached through a trait
+(Rust) or interface (TypeScript) owned by the calling side: network requests,
+filesystem reads, subprocesses, OS services such as keychains and window
+servers, and the clock. Composition constructs the real implementation and
+injects it; tests substitute their own. This applies to every crate and package
+in this repository, not only the DDD contexts in `crates/nessa-server`. The
+desktop host `src-tauri` is not a context and is bound by it anyway: a fetch
+written straight into a function there is unverifiable for exactly the reason it
+would be in an application layer, and a host has more outside things in it than
+anywhere else in the tree.
+
+The seam is for the boundary, not for every function. One port per kind of
+outside thing — the release channel, the keychain, the clock — not a wrapper per
+call site. A port says what the caller needs, in the caller's vocabulary, and
+returns Nessa-owned types; one that hands back a third-party library's own type
+has relocated the dependency rather than isolated it.
+
+The substitute must be able to produce the failure cases, not only the happy
+path: offline, refused, malformed, slow, absent. Those paths are the least
+likely to be exercised any other way, so a double that can only succeed leaves
+them as unverified as no seam at all. Write the double; do not add a dependency
+for something that is a few lines of code.
+
+`crates/nessa-server/src/agents/application/ports.rs` is the precedent to copy.
+`AgentProbe` asks two narrow questions, answers with a typed `ProbeFailure`, and
+is injected from composition; the tests supply `StubAgentProbe`, `CountingProbe`,
+and `PanickingProbe`. That is what let the readiness endpoint be tested for
+origin refusal, concurrent coalescing, and a probe that panics, without a real
+keychain anywhere near it.
+
+Be honest about the limit. A seam makes the decision testable, not the adapter.
+The real implementation still needs its own boundary test — parsing,
+translation, failure mapping — or an explicit statement of what is unverified
+and why, in the module and in the change's report. Behind a trait is not tested.
 
 ## Audit evidence is part of the behavior
 

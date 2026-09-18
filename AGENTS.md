@@ -129,6 +129,10 @@ Inspect the resulting layout and verify module maps, moved links, and checks.
 - Construct backend choices in composition. Inject narrow dependencies into consumers.
 - Keep local use independent of hosted signup; provider selection cannot bypass policy.
 - Test adapter substitution and application isolation when adding dependency seams.
+- Everything read from outside the process sits behind a caller-owned port with
+  the real implementation injected and a substitute in tests. This covers every
+  crate and package, including the `src-tauri` desktop host, which is not a DDD
+  context; see [seams at the process boundary](CODING_STANDARDS.md#seams-at-the-process-boundary).
 - Proposed ADRs and plans are not implemented features. Do not implement unrelated
   future systems merely because their ports are discussed in design documents.
 
