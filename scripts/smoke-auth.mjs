@@ -302,9 +302,11 @@ try {
   assert.notEqual(chat.productSession.credentialId, identity.credentialId)
   assert.notEqual(chat.productSession.principalId, identity.principalId)
   assert.equal((await chat.server.health()).ok, true)
+  // This smoke server is configured with no conversations at all, which is its
+  // own answer and not "the agent you asked for is missing".
   await assert.rejects(
     chat.conversation.read(randomUUID()),
-    (error) => error.code === "agent_not_configured",
+    (error) => error.code === "conversations_not_configured",
   )
   assert.ok((await chat.credentials.list()).credentials.length >= 2)
   const request = {

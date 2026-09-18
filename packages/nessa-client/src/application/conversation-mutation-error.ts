@@ -18,7 +18,6 @@ function permissionSelection(
     : undefined
 }
 
-/** Failed conversation creation or message admission with its original identities and a safe same-command retry. No request is replayed automatically. */
 /** Refusals this gateway states outright, and what each one means to a person.
  *
  * Kept apart from one another rather than sharing a code: "this gateway runs no
@@ -34,6 +33,7 @@ const REFUSALS: Record<string, string> = {
     "This conversation runs on an agent this version of Nessa cannot open.",
 }
 
+/** Failed conversation creation or message admission with its original identities and a safe same-command retry. No request is replayed automatically. */
 export class NessaConversationMutationError<T> extends Error {
   /** False only when the gateway explicitly rejected the command before admission. */
   readonly uncertain: boolean

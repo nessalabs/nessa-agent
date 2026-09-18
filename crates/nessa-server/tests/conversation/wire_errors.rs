@@ -38,3 +38,30 @@ fn permission_answer_failure_preserves_selection_separately_from_diagnostic_code
         );
     }
 }
+
+/// The other side of these codes is `REFUSALS` in
+/// `packages/nessa-client/src/application/conversation-mutation-error.ts`, which
+/// hardcodes each string and turns it into the sentence a person reads. They
+/// cross a language boundary nothing else checks, so a rename on either side
+/// fails here rather than at runtime — the same guard the readiness names have
+/// in `tests/agents/http.rs`.
+#[test]
+fn every_refusal_this_gateway_states_is_understood_by_the_client() {
+    let client = include_str!(
+        "../../../../packages/nessa-client/src/application/conversation-mutation-error.ts"
+    );
+    for error in [
+        ConversationError::AgentNotConfigured,
+        ConversationError::AgentUnsupported,
+    ] {
+        let code = error_code(&error);
+        assert!(
+            client.contains(&format!("{code}:")),
+            "the client does not recognize {code:?}"
+        );
+    }
+    // `conversations_not_configured` is stated where there is no service to
+    // fail, so it has no `ConversationError` to derive it from; it is pinned
+    // end to end by the gateway tests instead.
+    assert!(client.contains("conversations_not_configured:"));
+}

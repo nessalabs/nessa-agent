@@ -3,8 +3,11 @@ use crate::agents::domain::value_objects::HostAnswer;
 /// What stands between an agent and running.
 ///
 /// The states are kept apart because they call for different things from the
-/// person: nothing, a sign-in, or an install. Collapsing them into
-/// "unavailable" would be easier to produce and useless to act on.
+/// person: nothing, a sign-in, an install, or — where this build was never set
+/// up for the agent — nothing they can do on this machine at all. Collapsing
+/// them into "unavailable" would be easier to produce and useless to act on,
+/// and collapsing the last into the third is worse than useless: it is an
+/// instruction to install what may already be installed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Readiness {
     /// Installed and signed in. The only state that may be offered.

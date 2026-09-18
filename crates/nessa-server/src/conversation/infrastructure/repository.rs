@@ -24,22 +24,15 @@ struct StoredConversation {
     creator_surface: String,
     creation_action: String,
     creation_requested_at_ms: u64,
-    /// The agent this conversation runs on, absent in records written while
-    /// Claude was the only agent this server could start. Absent is read as
-    /// Claude for exactly that reason, and every record written since names its
-    /// agent, so the absence never has to be interpreted twice.
+    /// The agent this conversation runs on. Every record states it.
     ///
-    /// This is a reader for data written by an older build, which
-    /// `CODING_STANDARDS.md` ("One current contract") forbids without an
-    /// explicit decision to support compatibility. It is here, declared rather
-    /// than quiet, because the alternative is that every conversation already on
-    /// a person's disk stops opening — and because the retrofit the standard
-    /// prefers would mean rewriting their records, which is a larger thing to do
-    /// unasked than reading a missing field. It is the only backwards path on
-    /// this change; the configuration rename alongside it has none. If the call
-    /// goes the other way, deleting these four lines is the whole of it.
-    #[serde(default)]
-    agent: Option<String>,
+    /// Not optional, and not defaulted to Claude for records written before
+    /// there was a second agent. That would be a reader for data written by an
+    /// older build, which "One current contract" forbids outright without an
+    /// explicit decision to support compatibility — and a decision that has not
+    /// been made is not one a comment can make on its behalf. A record written
+    /// before this change fails to parse, naming the field it is missing.
+    agent: String,
 }
 /// Private create-once files bind conversation IDs to owners before any provider opens.
 pub struct LocalConversationRepository {
@@ -96,10 +89,7 @@ fn read(root: &Path, id: &ConversationId) -> Result<Option<Conversation>, Conver
     // Refused as its own failure and not as unreadable metadata. The record
     // parsed, storage is working, and a retry will not change the answer, which
     // is what an "unavailable" would have promised.
-    let agent = match value.agent.as_deref() {
-        None => AgentId::Claude,
-        Some(name) => AgentId::parse(name).ok_or(ConversationError::AgentUnsupported)?,
-    };
+    let agent = AgentId::parse(&value.agent).ok_or(ConversationError::AgentUnsupported)?;
     Ok(Some(
         Conversation::new(
             stored_id,
@@ -146,7 +136,7 @@ impl ConversationRepository for LocalConversationRepository {
                     creator_surface: conversation.creator_surface().into(),
                     creation_action: conversation.creation_action().into(),
                     creation_requested_at_ms: conversation.creation_requested_at_ms(),
-                    agent: Some(conversation.agent().name().into()),
+                    agent: conversation.agent().name().into(),
                 };
                 let bytes = serde_json::to_vec(&value).map_err(|_| ConversationError::Metadata)?;
                 if bytes.len() > 4096 {

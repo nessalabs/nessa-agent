@@ -113,9 +113,11 @@ Use the SDK's [harness setup](../../crates/nessa-sdk/README.md) for the pinned
 processes. Provider credentials stay in the server environment or in each agent's
 own configured credential directory, and neither agent is handed the other's.
 Requests cannot supply executables, workspaces, environment variables or tokens.
-Missing agent configuration keeps authentication/health available and returns
-`agent_not_configured` for chat; so does a request naming an agent this server has
-no configuration for. A conversation already on disk that names an agent this
+A gateway with no conversation service at all keeps authentication/health
+available and returns `conversations_not_configured` for chat. A request naming
+an agent this server has no configuration for returns `agent_not_configured`.
+They are separate codes because they are separate situations, and only the
+second is about the agent that was asked for. A conversation already on disk that names an agent this
 build has no adapter for returns `agent_unsupported` — its own code, not a
 storage failure, because storage is fine and retrying cannot change the answer. Invalid supplied configuration fails startup. Process
 supervision currently requires Unix; there is no production test-provider

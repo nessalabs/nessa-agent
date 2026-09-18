@@ -139,10 +139,12 @@ async fn a_record_carries_the_agent_it_was_created_on() {
 }
 
 #[tokio::test]
-async fn a_record_written_before_there_was_a_second_agent_is_claudes() {
+async fn a_record_that_does_not_name_its_agent_is_unreadable_rather_than_assumed() {
     // Records published while Claude was the only agent this server could start
-    // name no agent at all. They are that agent's, and reading them as anything
-    // else would hand a person's own transcript to a harness that never wrote it.
+    // name no agent at all. Reading them as Claude's would be a reader for data
+    // written by an older build, which this repository forbids outright without
+    // an explicit decision to support compatibility. So it is refused, and the
+    // error names the field rather than guessing which agent wrote it.
     let root = std::env::temp_dir().join(format!("nessa-conversation-legacy-{}", Uuid::new_v4()));
     let repository = LocalConversationRepository::new(root.clone()).unwrap();
     let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
@@ -155,8 +157,10 @@ async fn a_record_written_before_there_was_a_second_agent_is_claudes() {
     )
     .unwrap();
     drop(file);
-    let record = repository.load(&id).await.unwrap().unwrap();
-    assert_eq!(record.agent(), AgentId::Claude);
+    assert!(matches!(
+        repository.load(&id).await,
+        Err(ConversationError::Metadata)
+    ));
     std::fs::remove_dir_all(root).ok();
 }
 

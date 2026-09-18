@@ -126,12 +126,16 @@ impl AgentProbe for LocalAgentProbe {
     /// are two metadata stats, and the caller already runs this on a blocking
     /// thread (see `entrypoint/http.rs`), so paying them per call is safe.
     ///
-    /// Only ever asked about an agent this server has something to launch for,
-    /// so there is no "nothing configured" answer to give here: that question
-    /// is [`Self::configured`], and it is asked first.
+    /// An agent with nothing to launch is not answered here. Whether this
+    /// server is configured for it is [`Self::configured`]'s question and is
+    /// asked first, so this is not reached for one — and if a second caller ever
+    /// does reach it, it reports that it has nothing to go on rather than a no.
+    /// `Ok(false)` would become "not installed", which is an instruction to
+    /// install what may already be on the machine, and that is a policy the
+    /// domain decides and this adapter must not.
     fn installed(&self, agent: AgentId) -> Result<bool, ProbeFailure> {
         let Some(files) = self.launch_files.get(&agent) else {
-            return Ok(false);
+            return Err(ProbeFailure::NothingToAsk);
         };
         if !is_file(&files.command)? {
             return Ok(false);

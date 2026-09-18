@@ -3,7 +3,8 @@
 //!
 //! ```text
 //! Environment -> private runtime config -> auth + ConversationService
-//!                                         -> provider / storage / audit
+//!                                   -> one provider per configured agent
+//!                                   -> storage / audit
 //! ProductRouteState -> authenticated HTTP/WebSocket router
 //! ```
 //! Arrows show construction and injection. Conversations share the service across

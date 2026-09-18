@@ -101,8 +101,8 @@ pub struct ConversationAgent {
 ///
 /// One value rather than two parameters, because the two are only valid
 /// together: a default that is not among the configured agents would accept a
-/// creation this server can never open. Checked once, here, so nothing further
-/// in has to ask again.
+/// creation this server can never open. Checked here, so that no code holding a
+/// [`ConversationAgents`] has to consider the pairing invalid.
 #[derive(Clone)]
 pub struct ConversationAgents {
     agents: HashMap<AgentId, ConversationAgent>,

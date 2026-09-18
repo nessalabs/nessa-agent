@@ -75,12 +75,15 @@ fn install(root: &Path) {
 }
 
 #[test]
-fn a_machine_with_no_agent_configured_at_all_is_a_real_no() {
-    // Nothing to launch is an answer, not a failure to look: composition asked
-    // the configuration and the configuration said there is no agent.
+fn a_machine_with_no_agent_configured_at_all_is_asked_nothing_about_the_machine() {
+    // Whether this server is configured for an agent is its own question, and
+    // it is the one that gets asked. Answering "not installed" from here would
+    // be this adapter deciding what the domain decides — and deciding it wrong,
+    // since the agent may be sitting on the machine already.
+    assert!(!probe(None, None, None).configured(AgentId::Claude));
     assert_eq!(
         probe(None, None, None).installed(AgentId::Claude),
-        Ok(false)
+        Err(ProbeFailure::NothingToAsk)
     );
 }
 
@@ -218,9 +221,13 @@ fn an_agent_this_server_knows_nothing_about_is_a_question_it_cannot_answer() {
         claude_only.authenticated(AgentId::Codex),
         Err(ProbeFailure::NothingToAsk)
     );
-    // Installation is different: the configuration was asked, and it says there
-    // is nothing to launch.
-    assert_eq!(claude_only.installed(AgentId::Codex), Ok(false));
+    // Installation answers the same way, for the same reason: nothing was
+    // resolved for this agent, so there is nothing here to have looked at.
+    assert_eq!(
+        claude_only.installed(AgentId::Codex),
+        Err(ProbeFailure::NothingToAsk)
+    );
+    assert!(!claude_only.configured(AgentId::Codex));
 }
 
 #[test]

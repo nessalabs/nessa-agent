@@ -1,10 +1,17 @@
-//! Trusted local agent configuration. Requests never select processes or workspaces.
+//! Trusted local agent configuration.
+//!
+//! A request may name which configured agent it wants, and nothing more: the
+//! executable, its arguments, the workspace and the credentials are this file's
+//! to decide. So a request chooses between processes this machine already
+//! trusts; it never supplies one, and never selects a workspace.
 //!
 //! ```text
 //!   config.json "agents"
 //!     ├── shared:   catalog, workspace, mcpServers
 //!     ├── selected: which agent a caller that names none runs on
-//!     └── runtimes: { "<agent>": { command, args, model, tokens, tools } , ... }
+//!     └── runtimes: { "<agent>": { command, args, model,
+//!                                   contextTokens, outputTokens,
+//!                                   toolsEnabled } , ... }
 //! ```
 //!
 //! What every agent on this machine shares is stated once: they work in the

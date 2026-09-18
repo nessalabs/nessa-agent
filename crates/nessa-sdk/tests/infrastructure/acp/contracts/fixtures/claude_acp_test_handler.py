@@ -145,6 +145,10 @@ for line in sys.stdin:
             update({"sessionUpdate": "current_mode_update", "currentModeId": "default"}, "other-session")
         elif mode == "startup-update-output":
             text("unsolicited startup output")
+        elif mode == "startup-update-mode-option":
+            # The mode this binding is in the act of setting, reported while the
+            # request that sets it is still in flight.
+            update({"sessionUpdate": "config_option_update", **configs(permission_mode="bypassPermissions")})
         elif mode == "startup-update-valid":
             update({"sessionUpdate": "config_option_update", **configs()})
             update({"sessionUpdate": "current_mode_update", "currentModeId": "default"})

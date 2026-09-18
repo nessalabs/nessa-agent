@@ -1664,3 +1664,40 @@ async fn reopening_is_never_refused_over_an_agent_that_conversation_does_not_nee
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
     service.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_default_agent_nobody_configured_is_refused_before_any_conversation_exists() {
+    // The pairing is the invariant, not either half of it. A default that is not
+    // among the configured agents would accept a creation naming nothing and
+    // then have nothing to open it with — at which point the conversation is
+    // already on disk.
+    let factory = Arc::new(ProviderFactory::default());
+    let configured = || {
+        HashMap::from([(
+            AgentId::Claude,
+            ConversationAgent {
+                provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+                reserved_output_tokens: 4096,
+            },
+        )])
+    };
+    assert!(matches!(
+        ConversationAgents::new(configured(), AgentId::Codex),
+        Err(ConversationError::InvalidInput)
+    ));
+    assert!(ConversationAgents::new(configured(), AgentId::Claude).is_ok());
+
+    // An agent that reserves no output at all is refused for its own reason: a
+    // submission would be admitted against a budget with nothing left in it.
+    let nothing_reserved = HashMap::from([(
+        AgentId::Claude,
+        ConversationAgent {
+            provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+            reserved_output_tokens: 0,
+        },
+    )]);
+    assert!(matches!(
+        ConversationAgents::new(nothing_reserved, AgentId::Claude),
+        Err(ConversationError::InvalidInput)
+    ));
+}
