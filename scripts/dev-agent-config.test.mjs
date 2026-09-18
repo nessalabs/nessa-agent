@@ -19,6 +19,19 @@ import { agentBlock, namespaceRoot } from "./dev-agent-config.mjs"
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const script = join(root, "scripts/dev-agent-config.mjs")
 
+/**
+ * Configuring a dev agent is a Unix capability — `dev-agent-config.mjs` says so
+ * itself and writes nothing on Windows — so there is nothing here for a Windows
+ * checkout to be right or wrong about. That covers the paths as much as the
+ * writing: they are built with POSIX separators for the machine that would run
+ * the agent, and asserting them against `win32` semantics would be testing a
+ * shape this script never produces there.
+ */
+const unixOnly =
+  process.platform === "win32"
+    ? { skip: "Claude ACP needs Unix process supervision" }
+    : {}
+
 /** Run the script against an isolated data root; never the developer's own. */
 function run(dataDir, extra = {}) {
   return execFileSync("node", [script], {
@@ -32,7 +45,7 @@ function temporaryRoot() {
   return mkdtempSync(join(tmpdir(), "nessa-dev-agent-"))
 }
 
-test("the namespace matches the server's stage and instance layout", () => {
+test("the namespace matches the server's stage and instance layout", unixOnly, () => {
   assert.equal(
     namespaceRoot({ NESSA_DATA_DIR: "/data", NESSA_STAGE: "dev" }),
     "/data/dev",
@@ -50,7 +63,7 @@ test("the namespace matches the server's stage and instance layout", () => {
   assert.throws(() => namespaceRoot({ NESSA_DATA_DIR: "relative" }))
 })
 
-test("every configured path is absolute and the MCP server is opt-in", () => {
+test("every configured path is absolute and the MCP server is opt-in", unixOnly, () => {
   const without = agentBlock({
     checkout: "/checkout",
     namespace: "/data/dev",
@@ -76,57 +89,61 @@ test("every configured path is absolute and the MCP server is opt-in", () => {
   ])
 })
 
-test("a fresh namespace gets a private config the workspace of which exists", (t) => {
-  if (process.platform === "win32")
-    return t.skip("Claude ACP needs Unix process supervision")
-  if (!existsSync(join(root, "crates/nessa-sdk/harnesses/claude-acp/node_modules")))
-    return t.skip("the Claude ACP harness is not installed in this checkout")
-  const data = temporaryRoot()
-  const output = run(data)
-  assert.match(output, /dev agent configured/)
-  const path = join(data, "dev/config.json")
-  const config = JSON.parse(readFileSync(path, "utf8"))
-  assert.equal(config.agent.model, "claude-sonnet-5")
-  assert.ok(existsSync(config.agent.node))
-  assert.ok(existsSync(config.agent.acpEntry))
-  assert.ok(existsSync(config.agent.catalog))
-  assert.ok(statSync(config.agent.workspace).isDirectory())
-  // The gateway refuses to read anything under this root that others can see.
-  assert.equal(statSync(path).mode & 0o077, 0)
-  assert.equal(statSync(config.agent.workspace).mode & 0o077, 0)
+test(
+  "a fresh namespace gets a private config the workspace of which exists",
+  unixOnly,
+  (t) => {
+    if (!existsSync(join(root, "crates/nessa-sdk/harnesses/claude-acp/node_modules")))
+      return t.skip("the Claude ACP harness is not installed in this checkout")
+    const data = temporaryRoot()
+    const output = run(data)
+    assert.match(output, /dev agent configured/)
+    const path = join(data, "dev/config.json")
+    const config = JSON.parse(readFileSync(path, "utf8"))
+    assert.equal(config.agent.model, "claude-sonnet-5")
+    assert.ok(existsSync(config.agent.node))
+    assert.ok(existsSync(config.agent.acpEntry))
+    assert.ok(existsSync(config.agent.catalog))
+    assert.ok(statSync(config.agent.workspace).isDirectory())
+    // The gateway refuses to read anything under this root that others can see.
+    assert.equal(statSync(path).mode & 0o077, 0)
+    assert.equal(statSync(config.agent.workspace).mode & 0o077, 0)
 
-  // Running the dev loop again must not churn the file.
-  const before = readFileSync(path, "utf8")
-  assert.match(run(data), /already configured/)
-  assert.equal(readFileSync(path, "utf8"), before)
-})
+    // Running the dev loop again must not churn the file.
+    const before = readFileSync(path, "utf8")
+    assert.match(run(data), /already configured/)
+    assert.equal(readFileSync(path, "utf8"), before)
+  },
+)
 
-test("settings a developer wrote are preserved, and their own agent is never replaced", (t) => {
-  if (process.platform === "win32")
-    return t.skip("Claude ACP needs Unix process supervision")
-  if (!existsSync(join(root, "crates/nessa-sdk/harnesses/claude-acp/node_modules")))
-    return t.skip("the Claude ACP harness is not installed in this checkout")
-  const data = temporaryRoot()
-  mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
-  const path = join(data, "dev/config.json")
-  writeFileSync(path, JSON.stringify({ session: { writeTimeoutMs: 75 } }), {
-    mode: 0o600,
-  })
-  run(data)
-  const merged = JSON.parse(readFileSync(path, "utf8"))
-  assert.equal(merged.session.writeTimeoutMs, 75)
-  assert.ok(merged.agent)
+test(
+  "settings a developer wrote are preserved, and their own agent is never replaced",
+  unixOnly,
+  (t) => {
+    if (!existsSync(join(root, "crates/nessa-sdk/harnesses/claude-acp/node_modules")))
+      return t.skip("the Claude ACP harness is not installed in this checkout")
+    const data = temporaryRoot()
+    mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+    const path = join(data, "dev/config.json")
+    writeFileSync(path, JSON.stringify({ session: { writeTimeoutMs: 75 } }), {
+      mode: 0o600,
+    })
+    run(data)
+    const merged = JSON.parse(readFileSync(path, "utf8"))
+    assert.equal(merged.session.writeTimeoutMs, 75)
+    assert.ok(merged.agent)
 
-  const mine = { agent: { node: "/nowhere/node", acpEntry: "/nowhere/index.js" } }
-  writeFileSync(path, JSON.stringify(mine), { mode: 0o600 })
-  const output = run(data)
-  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), mine)
-  // A hand-written block that cannot launch is reported rather than repaired.
-  assert.match(output, /points at files that are not there/)
-  assert.match(output, /\/nowhere\/node/)
-})
+    const mine = { agent: { node: "/nowhere/node", acpEntry: "/nowhere/index.js" } }
+    writeFileSync(path, JSON.stringify(mine), { mode: 0o600 })
+    const output = run(data)
+    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), mine)
+    // A hand-written block that cannot launch is reported rather than repaired.
+    assert.match(output, /points at files that are not there/)
+    assert.match(output, /\/nowhere\/node/)
+  },
+)
 
-test("a config that does not parse is reported, not overwritten", () => {
+test("a config that does not parse is reported, not overwritten", unixOnly, () => {
   const data = temporaryRoot()
   mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
   const path = join(data, "dev/config.json")
@@ -136,25 +153,31 @@ test("a config that does not parse is reported, not overwritten", () => {
   assert.equal(readFileSync(path, "utf8"), "{ not json")
 })
 
-test("a clone with no harness installed is told what to run, and writes nothing", (t) => {
-  if (process.platform === "win32")
-    return t.skip("Claude ACP needs Unix process supervision")
-  // A copy of this script with the checked-in catalog beside it and no
-  // node_modules: exactly what someone has a minute after `git clone`.
-  const checkout = mkdtempSync(join(tmpdir(), "nessa-fresh-clone-"))
-  mkdirSync(join(checkout, "scripts"), { recursive: true })
-  mkdirSync(join(checkout, "crates/nessa-sdk/data"), { recursive: true })
-  copyFileSync(script, join(checkout, "scripts/dev-agent-config.mjs"))
-  copyFileSync(
-    join(root, "crates/nessa-sdk/data/models.json"),
-    join(checkout, "crates/nessa-sdk/data/models.json"),
-  )
-  const data = temporaryRoot()
-  const output = execFileSync("node", [join(checkout, "scripts/dev-agent-config.mjs")], {
-    encoding: "utf8",
-    env: { ...process.env, NESSA_DATA_DIR: data, NESSA_STAGE: "dev" },
-  })
-  assert.match(output, /harness is not installed/)
-  assert.match(output, /npm ci --omit=dev/)
-  assert.equal(existsSync(join(data, "dev/config.json")), false)
-})
+test(
+  "a clone with no harness installed is told what to run, and writes nothing",
+  unixOnly,
+  () => {
+    // A copy of this script with the checked-in catalog beside it and no
+    // node_modules: exactly what someone has a minute after `git clone`.
+    const checkout = mkdtempSync(join(tmpdir(), "nessa-fresh-clone-"))
+    mkdirSync(join(checkout, "scripts"), { recursive: true })
+    mkdirSync(join(checkout, "crates/nessa-sdk/data"), { recursive: true })
+    copyFileSync(script, join(checkout, "scripts/dev-agent-config.mjs"))
+    copyFileSync(
+      join(root, "crates/nessa-sdk/data/models.json"),
+      join(checkout, "crates/nessa-sdk/data/models.json"),
+    )
+    const data = temporaryRoot()
+    const output = execFileSync(
+      "node",
+      [join(checkout, "scripts/dev-agent-config.mjs")],
+      {
+        encoding: "utf8",
+        env: { ...process.env, NESSA_DATA_DIR: data, NESSA_STAGE: "dev" },
+      },
+    )
+    assert.match(output, /harness is not installed/)
+    assert.match(output, /npm ci --omit=dev/)
+    assert.equal(existsSync(join(data, "dev/config.json")), false)
+  },
+)
