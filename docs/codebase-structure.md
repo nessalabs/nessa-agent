@@ -253,6 +253,23 @@ rows from the shared Transcript; it does not parse provider wire formats.
 - `settings.stopAgentsOnQuit` controls agent cleanup on desktop exit; launchd owns gateway lifetime independently.
 - `settings.onboarding.completed` records that first-run setup finished. `src-tauri/src/main.rs` opens the setup window only when it is false. `panel::finish_setup` owns the whole handoff and its order — show the panel, record completion, close the setup window — in the process that outlives that window; a panel that will not show abandons the handoff and writes nothing, while a refused write is logged and the close still happens. `src/host/window.ts`'s `finishSetupWindow` is a single invoke of it, carrying only whether setup was finished or left (`isOnboardingCompleted`), and maps the reported steps onto the `SetupHandoff` outcomes. `src/onboarding/application/setup-recovery.ts` decides what the setup window shows when it is still there afterwards: a panel that never came up offers the handoff again, a panel that came up over a window that would not close offers only that window's close. The `Destroyed` handler in `main.rs` is a safety net for dismissal and crashes, not the handoff's cleanup path. The debug-only tray item clears the flag through `panel::restart_onboarding`.
 
+### Updating the app itself
+
+- `src-tauri/src/updater.rs` asks the release endpoint in `tauri.conf.json`
+  (`plugins.updater`) once per launch, spawned from the end of `main.rs`'s `setup`
+  so it cannot delay the panel or first-run setup. Its `offer` is the whole rule
+  and is pure: only a newer published version produces anything, while being
+  current and a check that did not complete both produce nothing at all. A failed
+  check is expected (an offline machine) and goes to stderr, never to the screen.
+- `tray::offer_update` is the only surface. It prepends one item naming the
+  version to the existing tray menu, and clicking it runs
+  `updater::install_and_restart`. No dialog, prompt, or window is involved, which
+  is what keeps the check safe to run while setup owns the screen.
+- The check, the download, and the install all run in the host process, so the
+  webview neither calls the updater nor reaches the endpoint: no capability grant
+  and no `connect-src` entry exist for it. `src-tauri/capabilities/` stays as it
+  was.
+
 The first update from a gateway that predates retirement acknowledgement uses a
 single explicit legacy bootout after its sole listening PID matches the exact
 loaded launchd service PID. A listener
