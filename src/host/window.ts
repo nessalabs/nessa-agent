@@ -365,12 +365,16 @@ export async function finishSetupWindow(completed: boolean): Promise<SetupHandof
 }
 
 /**
- * Show the setup window, once its page has a frame to show.
+ * Show the setup window, once its page has rendered.
  *
  * It is created hidden: a window is on screen the moment it exists, and a
  * webview has painted nothing the moment it is created, so a window visible
  * from the start shows whatever the window server has for it until the first
  * frame lands — a flash at exactly the point the opening begins from darkness.
+ *
+ * Rendered, not painted. A hidden window is never drawn, so its page cannot
+ * wait for a frame to arrive before asking for this — see
+ * `onboarding/ui/reveal-on-first-render.ts`, which is where that waiting stopped.
  */
 export async function revealSetupWindow() {
   if (!inTauri) return

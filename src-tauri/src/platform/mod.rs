@@ -40,10 +40,13 @@ pub trait Host: Send + Sync {
     /// dim that stops at the menu bar is not a dim.
     ///
     /// Placing is not showing. The setup window is placed while still hidden and
-    /// revealed by its own page once that page has a frame to show, so this must
-    /// not order the window in or activate the app; [`Host::reveal_overlay`]
-    /// does that. Hosts where an ordinary window already covers what it needs to
+    /// revealed by its own page once that page has rendered, so this must not
+    /// order the window in or activate the app; [`Host::reveal_overlay`] does
+    /// that. Hosts where an ordinary window already covers what it needs to
     /// leave the frame alone.
+    ///
+    /// Rendered, not painted: a window left hidden here is never drawn, so its
+    /// page is served no animation frames and cannot wait for one.
     fn place_overlay(&self, _window: &WebviewWindow) {}
 
     /// Bring an already-placed overlay to the front and give it focus.

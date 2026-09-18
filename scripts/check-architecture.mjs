@@ -222,6 +222,21 @@ for (const file of walk(src)) {
     fail(file, "app.tsx renders; effects belong in a hook")
   }
 
+  // The setup window is created hidden and revealed by its own page. A hidden
+  // macOS window is never drawn, so that page is served no animation frames:
+  // anything the reveal waits on a frame for, it waits on for good. Setup then
+  // runs — sound and all — behind a window nobody ever sees.
+  const revealsTheSetupWindow =
+    path === "src/onboarding/ui/setup-gate.tsx" ||
+    path === "src/onboarding/ui/reveal-on-first-render.ts" ||
+    path === "src/host/window.ts"
+  if (revealsTheSetupWindow && /requestAnimationFrame\s*\(/.test(text)) {
+    fail(
+      file,
+      "the setup window is hidden until its page reveals it, and a hidden window is served no animation frames; see src/onboarding/ui/reveal-on-first-render.ts",
+    )
+  }
+
   if (path === "src/store.ts" && /from\s+["']\.\/app["']/.test(text)) {
     fail(file, "the store must not import the panel chrome")
   }

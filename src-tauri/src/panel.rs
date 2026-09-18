@@ -84,7 +84,7 @@ const SETUP_HEIGHT: f64 = 640.0;
 /// of one window are two things to keep in step with nothing comparing them.
 ///
 /// Built hidden: a window is on screen the moment it exists, and its page
-/// reveals it once it has a frame to show (`reveal_setup_window`).
+/// reveals it once it has rendered (`reveal_setup_window`).
 fn build_setup_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     WebviewWindowBuilder::new(
         app,
@@ -231,13 +231,18 @@ fn hand_over(
     })
 }
 
-/// Put the setup window on screen, now that its page has something to show.
+/// Put the setup window on screen, now that its page has rendered.
 ///
 /// It is created hidden. A window is on screen the moment it exists, and a
 /// webview has not painted anything the moment it is created — so a window
 /// visible from the start shows whatever the window server has for it until
 /// the first frame arrives, which is a flash of nothing at the very point the
 /// opening is trying to begin from darkness.
+///
+/// The page asks for this on its first render and not one frame later: a hidden
+/// window is not drawn, so its webview is served no animation frames, and a
+/// reveal that waited for one waited for a paint this call is the precondition
+/// for. See `src/onboarding/ui/reveal-on-first-render.ts`.
 #[tauri::command]
 pub fn reveal_setup_window(window: WebviewWindow) {
     let _ = window.show();
