@@ -35,7 +35,7 @@
     "sdk:check": "pnpm sdk:fmt:check && pnpm sdk:clippy && pnpm sdk:test && pnpm sdk:docs:check",
     "desktop:check": "node scripts/check-desktop.mjs",
     "mcp:check": "node scripts/check-mcp.mjs",
-    "server:run": "cargo run -p nessa-server -- server --provision-local",
+    "server:run": "node scripts/dev-agent-config.mjs && cargo run -p nessa-server -- server --provision-local",
     "server:smoke": "tsx scripts/smoke-connect.mjs",
     "check": "pnpm frontend:check && pnpm server:fmt:check && pnpm server:clippy && pnpm server:test && pnpm auth:fmt:check && pnpm auth:clippy && pnpm auth:test && pnpm sdk:check && pnpm mcp:check && pnpm desktop:check",
     "ui:types": "node scripts/ensure-nessa-ui.mjs --update",

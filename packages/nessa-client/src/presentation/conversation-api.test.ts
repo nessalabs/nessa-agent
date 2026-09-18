@@ -418,7 +418,9 @@ it("reports missing provider as a known rejection rather than unknown delivery",
   const error = await api.create().catch((error) => error)
   expect(error).toBeInstanceOf(NessaConversationMutationError)
   expect(error.uncertain).toBe(false)
-  expect(error.message).toContain("Configure Claude ACP")
+  expect(error.message).toContain("started without an agent")
+  // The remedy is named, not just the symptom.
+  expect(error.message).toContain("just server")
 })
 it("reports invalid requests as known pre-admission rejections", async () => {
   const request = vi

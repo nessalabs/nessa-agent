@@ -30,6 +30,11 @@ decides the port (`protocol/defaults/gateway-ports.json`), and the installed
 app's `prod` service keeps 7420. This authenticates local access;
 remote TLS/device provisioning is not included in this delivery.
 
+From a checkout, `just server` writes this section for you
+([scripts/dev-agent-config.mjs](../../scripts/dev-agent-config.mjs)) and leaves
+an existing one alone; everything below is the deliberate path, and the contract
+that script writes to.
+
 Add `agent` to the private namespace `config.json` (beside `auth/`):
 
 ```json

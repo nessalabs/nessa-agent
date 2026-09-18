@@ -89,6 +89,31 @@ owner credential at `$HOME/.nessa/owner.token` and the panel's own credential at
 replaces credentials that already exist, so restarting the server does not
 invalidate a token you are using. No signup, no account.
 
+**Credentials are not enough to chat, so the same loop also names an agent.**
+A packaged install gets one from its bundle; a checkout has to say where its own
+pieces are, and the server is deliberately not allowed to go looking for
+`crates/`. So `just server` first runs
+[scripts/dev-agent-config.mjs](scripts/dev-agent-config.mjs), which writes an
+`agent` block into `$HOME/.nessa/dev/config.json` pointing at this checkout's
+Claude ACP harness, `crates/nessa-sdk/data/models.json`, the Node running the
+dev loop, a workspace at `$HOME/.nessa/dev/workspaces/default`, and
+`target/debug/nessa-mcp` when it has been built. An `agent` block that is
+already there is never touched, merged, or repaired — the only thing a later run
+does with someone's own configuration is say so when its executables have gone
+missing.
+
+The harness itself is not vendored. On a fresh clone the script says so and the
+gateway still starts; install it once with:
+
+```bash
+(cd crates/nessa-sdk/harnesses/claude-acp && npm ci --omit=dev)
+```
+
+Nothing here ever blocks the dev loop: anything missing is printed with the
+command that fixes it, and the gateway starts without an agent rather than not
+at all. `docs/guides/gateway-chat.md` documents the same file for a server you
+configure by hand.
+
 Use two terminals instead if you prefer (`just server`, then `just dev`). A
 server you run yourself — `nessa server` without `--provision-local` — provisions
 nothing; use the offline `nessa auth` commands and choose your own token paths.

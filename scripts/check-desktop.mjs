@@ -3,6 +3,7 @@ import { readdirSync } from "node:fs"
 
 const tests = [
   "scripts/ensure-nessa-ui.test.mjs",
+  "scripts/dev-agent-config.test.mjs",
   ...readdirSync("scripts/desktop")
     .filter((name) => name.endsWith(".test.mjs"))
     .map((name) => `scripts/desktop/${name}`),

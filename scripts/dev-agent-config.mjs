@@ -1,0 +1,311 @@
+#!/usr/bin/env node
+/**
+ * Give a dev gateway an agent, from the checkout that knows where its pieces are.
+ *
+ * `settings.agent` in the namespace's `config.json` is the only thing that makes
+ * `nessa server` able to run a conversation. A packaged install gets one from
+ * its bundle (`crates/nessa-server/src/composition/desktop.rs`), which a
+ * checkout does not have — so a developer could connect and authenticate, then
+ * be told "the gateway has no agent configured" on the first message.
+ *
+ * The server must not learn what a git checkout is: `crates/nessa-sdk/...` is
+ * not a path a gateway may go looking for. So this runs on the outside, beside
+ * `nessa server --provision-local`, and writes the same kind of file a person
+ * would write by hand. It complements provisioning rather than duplicating it:
+ * that command creates credentials, this one names the agent.
+ *
+ *   node scripts/dev-agent-config.mjs
+ *
+ * Guarantees, in the order they matter:
+ *
+ * - **An existing `agent` block is never touched.** Not merged, not repaired,
+ *   not reordered. Someone who wrote one by hand owns it; all this does then is
+ *   check that its two executables are still there and say so if they are not.
+ * - **Never leaves a broken file.** `config.json` beside `auth/` fails the
+ *   gateway at startup when it is malformed, so the merged document is parsed
+ *   back before anything is renamed into place, and an existing file that does
+ *   not parse is left exactly as it is.
+ * - **Idempotent.** A second run finds the `agent` block and writes nothing.
+ * - **Degrades honestly.** Anything missing is reported with the command that
+ *   fixes it, and the exit status stays 0 — a gateway with no agent is still a
+ *   gateway worth starting, and blocking the dev loop would help nobody.
+ */
+import { execFileSync } from "node:child_process"
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs"
+import { homedir } from "node:os"
+import { dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+
+/** The lowest Node major the Claude ACP harness is exercised on. The bundle ships 26. */
+const MINIMUM_NODE_MAJOR = 20
+
+const HARNESS = "crates/nessa-sdk/harnesses/claude-acp"
+const ACP_ENTRY = `${HARNESS}/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js`
+const INSTALL_HARNESS = `(cd ${HARNESS} && npm ci --omit=dev)`
+
+function say(message) {
+  process.stdout.write(`${message}\n`)
+}
+
+/** Report why there is no agent, and leave the gateway to start without one. */
+function skip(reason, remedy) {
+  say(`→ dev agent not configured: ${reason}`)
+  const lines = Array.isArray(remedy) ? remedy : [remedy]
+  for (const line of lines.filter(Boolean)) say(`  ${line}`)
+  say("  the gateway will start, but sending a message will report no agent")
+  process.exit(0)
+}
+
+/**
+ * The stage/instance namespace, resolved the way the server resolves it in
+ * `crates/nessa-server/src/env/paths.rs` — that file is the contract; this
+ * mirrors it because a `.mjs` script cannot call into the Rust crate.
+ *
+ * @returns {string} absolute namespace root, the directory holding `auth/`
+ */
+export function namespaceRoot(env = process.env, home = homedir()) {
+  const stage = env.NESSA_STAGE ?? "dev"
+  // An empty NESSA_INSTANCE is set, not absent, and the server rejects it as a
+  // segment rather than quietly serving the stage's shared namespace.
+  const instance = env.NESSA_INSTANCE === undefined ? undefined : env.NESSA_INSTANCE
+  for (const segment of [stage, ...(instance === undefined ? [] : [instance])]) {
+    if (!/^[A-Za-z0-9_-]+$/.test(segment))
+      throw new Error(
+        `stage and NESSA_INSTANCE must be nonempty alphanumeric, hyphen or underscore segments: ${segment}`,
+      )
+  }
+  const dataDir = env.NESSA_DATA_DIR
+  let base
+  if (dataDir) {
+    if (!dataDir.startsWith("/"))
+      throw new Error("NESSA_DATA_DIR must be an absolute path")
+    base = dataDir
+  } else {
+    if (!home || !home.startsWith("/")) throw new Error("HOME must be an absolute path")
+    base = join(home, ".nessa")
+  }
+  const staged = stage === "prod" ? base : join(base, stage)
+  return instance === undefined ? staged : join(staged, "instances", instance)
+}
+
+/**
+ * The agent block this checkout would write.
+ *
+ * Every path is absolute and checked here rather than left to fail inside
+ * provider construction, where the message is about "node and acpEntry" and not
+ * about the thing a developer forgot to install.
+ *
+ * @returns {object} the `agent` value, ready to merge
+ */
+export function agentBlock({ checkout, namespace, node, mcpBinary }) {
+  return {
+    catalog: join(checkout, "crates/nessa-sdk/data/models.json"),
+    node,
+    acpEntry: join(checkout, ACP_ENTRY),
+    workspace: join(namespace, "workspaces/default"),
+    model: "claude-sonnet-5",
+    toolsEnabled: true,
+    contextTokens: 100000,
+    outputTokens: 4096,
+    ...(mcpBinary
+      ? {
+          mcpServers: [
+            {
+              name: "nessa",
+              command: mcpBinary,
+              args: [
+                "--workspace",
+                join(namespace, "workspaces/default"),
+                "--audit-directory",
+                join(namespace, "process-audit"),
+              ],
+            },
+          ],
+        }
+      : {}),
+  }
+}
+
+/**
+ * Which node to record.
+ *
+ * `process.execPath` — the interpreter running this script. It is the only node
+ * on this machine we have actually executed, so it is the only one whose
+ * existence and version we can state rather than assume. A name off `PATH`
+ * would read as more stable and is not: `which node` under a version manager is
+ * a per-shell directory that disappears when the shell does.
+ *
+ * It can still go stale when someone upgrades or uninstalls that version. That
+ * is why a later run re-checks an already-written block and says so, instead of
+ * letting the gateway fail at startup with a message about absolute files.
+ */
+function chooseNode() {
+  const path = process.execPath
+  const major = Number.parseInt(process.versions.node.split(".")[0], 10)
+  if (!Number.isInteger(major) || major < MINIMUM_NODE_MAJOR)
+    skip(
+      `this script is running on Node ${process.versions.node}; the Claude ACP harness needs ${MINIMUM_NODE_MAJOR} or newer`,
+      "install a supported Node and run the dev loop again",
+    )
+  if (!existsSync(path)) skip(`the running Node (${path}) is not a readable file`, "")
+  return path
+}
+
+/** The built `nessa-mcp`, or undefined. A configured-but-absent MCP server is worse than none. */
+function findMcpBinary() {
+  let targetDirectory = join(root, "target")
+  try {
+    targetDirectory = JSON.parse(
+      execFileSync("cargo", ["metadata", "--no-deps", "--format-version", "1"], {
+        cwd: root,
+        encoding: "utf8",
+      }),
+    ).target_directory
+  } catch {
+    // No cargo on PATH is not this script's problem to report; the debug tree
+    // under the checkout is the only place a dev build could be anyway.
+  }
+  for (const profile of ["debug", "release"]) {
+    const candidate = join(targetDirectory, profile, "nessa-mcp")
+    if (existsSync(candidate) && statSync(candidate).isFile()) return candidate
+  }
+  return undefined
+}
+
+/** Parse an existing config, or report that it is not ours to repair. */
+function readExisting(path) {
+  if (!existsSync(path)) return {}
+  let text
+  try {
+    text = readFileSync(path, "utf8")
+  } catch (error) {
+    skip(
+      `${path} could not be read (${error.message})`,
+      "fix its permissions, then run again",
+    )
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch (error) {
+    skip(
+      `${path} is not valid JSON (${error.message})`,
+      "it was left untouched; repair it by hand — the gateway also refuses to start on it",
+    )
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed))
+    skip(`${path} is not a JSON object`, "it was left untouched; repair it by hand")
+  return parsed
+}
+
+/** Warn about an agent someone else owns whose executables have gone missing. */
+function checkExisting(agent, path) {
+  const missing = [agent.node, agent.acpEntry, agent.catalog].filter(
+    (value) => typeof value === "string" && !existsSync(value),
+  )
+  if (missing.length === 0) {
+    say(`→ dev agent already configured in ${path}; left as it is`)
+    return
+  }
+  say(`→ dev agent in ${path} points at files that are not there:`)
+  for (const value of missing) say(`    ${value}`)
+  say('  it was left untouched. Reinstall what moved, or remove the "agent" block')
+  say(
+    `  and run the dev loop again to have one written (${INSTALL_HARNESS} installs the harness)`,
+  )
+}
+
+function main() {
+  if (process.platform === "win32")
+    skip(
+      "Claude ACP needs Unix process supervision, so a Windows checkout has no agent to configure",
+      "",
+    )
+  let namespace
+  try {
+    namespace = namespaceRoot()
+  } catch (error) {
+    skip(error.message, "")
+  }
+  const configPath = join(namespace, "config.json")
+  const existing = readExisting(configPath)
+  if (existing.agent !== undefined) {
+    checkExisting(existing.agent, configPath)
+    return
+  }
+
+  const checkout = realpathSync(root)
+  const acpEntry = join(checkout, ACP_ENTRY)
+  if (!existsSync(acpEntry))
+    skip("the Claude ACP harness is not installed in this checkout", [
+      `run: ${INSTALL_HARNESS}`,
+      "then start the dev loop again",
+    ])
+  const catalog = join(checkout, "crates/nessa-sdk/data/models.json")
+  if (!existsSync(catalog))
+    skip(
+      `the model catalog is missing: ${catalog}`,
+      "this file is checked in; restore it",
+    )
+
+  const node = chooseNode()
+  const mcpBinary = findMcpBinary()
+
+  // The namespace and the agent's workspace must exist, with the private
+  // permissions the gateway insists on for everything under this root.
+  mkdirSync(join(namespace, "workspaces/default"), { recursive: true, mode: 0o700 })
+  const agent = agentBlock({ checkout, namespace, node, mcpBinary })
+
+  const merged = { ...existing, agent }
+  const text = `${JSON.stringify(merged, null, 2)}\n`
+  // Parse it back before it can become the file the gateway reads. A config.json
+  // that does not parse is not a missing agent, it is a server that will not start.
+  const round = JSON.parse(text)
+  if (round.agent.acpEntry !== acpEntry || round.agent.node !== node)
+    skip("the generated configuration did not survive a round trip", "please report this")
+
+  const temporary = `${configPath}.${process.pid}.tmp`
+  try {
+    writeFileSync(temporary, text, { mode: 0o600, flag: "wx" })
+    chmodSync(temporary, 0o600)
+    renameSync(temporary, configPath)
+  } catch (error) {
+    try {
+      unlinkSync(temporary)
+    } catch {
+      // Nothing to clean up.
+    }
+    skip(
+      `could not write ${configPath} (${error.message})`,
+      "check the namespace's permissions",
+    )
+  }
+
+  say(`→ dev agent configured in ${configPath}`)
+  say(`    node       ${node}`)
+  say(`    acpEntry   ${acpEntry}`)
+  say(`    workspace  ${agent.workspace}`)
+  say(
+    mcpBinary
+      ? `    nessa MCP  ${mcpBinary}`
+      : '    nessa MCP  not built; omitted (cargo build -p nessa-mcp, then delete the "agent" block and rerun)',
+  )
+}
+
+// Both sides are resolved before comparison: Node resolves `import.meta.url`
+// through symlinks and `/var` → `/private/var`, but leaves `argv[1]` as typed,
+// and a script that silently did nothing would be the worst failure here.
+const invoked = process.argv[1] ? realpathSync(process.argv[1]) : ""
+if (invoked === realpathSync(fileURLToPath(import.meta.url))) main()
