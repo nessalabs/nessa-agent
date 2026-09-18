@@ -6,9 +6,7 @@
 
 use tauri::{
     image::Image,
-    menu::{
-        CheckMenuItem, CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, PredefinedMenuItem,
-    },
+    menu::{CheckMenuItem, CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, Wry,
 };
@@ -19,7 +17,6 @@ use crate::composition::HostDependencies;
 use crate::host;
 use crate::panel;
 use crate::settings::SettingsStore;
-use crate::updater;
 
 /// The surface control lives in the tray menu rather than in the panel's
 /// header: the header is only two lines tall and the panel is dismissed by the
@@ -33,13 +30,6 @@ pub struct SurfaceMenuItem(pub CheckMenuItem<Wry>);
 pub struct Present(pub bool);
 struct QuitPolicyMenuItem(CheckMenuItem<Wry>);
 
-/// The menu itself, kept because one item is not built with the rest of it.
-///
-/// The update check finishes after the tray is already on screen — and usually
-/// finds nothing — so the item it would add is added to this menu later, or
-/// never. See [`offer_update`].
-struct TrayMenu(Menu<Wry>);
-
 const TRAY_ID: &str = "nessa-tray";
 /// Reopens first-run setup, and un-finishes it: `panel::restart_onboarding`
 /// clears the persisted completion as well as showing the window, so this is a
@@ -50,9 +40,6 @@ const TRAY_ID: &str = "nessa-tray";
 /// anybody asked for, so it does not ship until it is one.
 #[cfg(debug_assertions)]
 const SHOW_SETUP_ITEM: &str = "show-setup";
-/// Installs the update the background check found and comes back up on it.
-/// Only ever in the menu when there is such an update — see [`offer_update`].
-const UPDATE_ITEM: &str = "install-update";
 /// The menu bar icon, compiled in rather than resolved as a bundle resource so
 /// dev and packaged builds load the identical bytes with no path lookup.
 ///
@@ -99,7 +86,6 @@ pub fn create(app: &AppHandle, deps: &HostDependencies) -> tauri::Result<()> {
 
     app.manage(SurfaceMenuItem(transparent));
     app.manage(QuitPolicyMenuItem(stop_agents));
-    app.manage(TrayMenu(menu.clone()));
 
     // Captured, not looked up: the handler is built here, where the bundle is
     // already in hand, so nothing inside it has to ask the app for a dependency.
@@ -129,9 +115,6 @@ pub fn create(app: &AppHandle, deps: &HostDependencies) -> tauri::Result<()> {
                 }
                 Err(error) => eprintln!("[nessa] could not save settings: {error}"),
             },
-            // The click is the whole of the consent: nothing was downloaded
-            // before it, and the restart is named in the item's own text.
-            UPDATE_ITEM => updater::install_and_restart(app),
             #[cfg(debug_assertions)]
             SHOW_SETUP_ITEM => panel::restart_onboarding(app, &*deps.settings),
             "quit" => app.exit(0),
@@ -162,32 +145,6 @@ pub fn create(app: &AppHandle, deps: &HostDependencies) -> tauri::Result<()> {
 
     builder.build(app)?;
     Ok(())
-}
-
-/// Puts the update at the top of the menu, above everything the menu already
-/// offers, with a separator under it so it reads as its own thing rather than
-/// another panel control.
-///
-/// This is the only thing an available update does. It waits in a menu nobody
-/// has to open, and the version is in the text so the click is an informed one.
-///
-/// A tray that could not be created has no menu to grow, and a menu that
-/// refuses the item leaves the app exactly as it was on the version it has:
-/// both are reported and survivable, like every other tray failure here.
-pub fn offer_update(app: &AppHandle, version: &str) {
-    let Some(menu) = app.try_state::<TrayMenu>() else {
-        return;
-    };
-
-    let item = MenuItemBuilder::with_id(UPDATE_ITEM, format!("Update to {version} and restart"))
-        .build(app);
-    let placed = item.and_then(|item| {
-        let separator = PredefinedMenuItem::separator(app)?;
-        menu.0.prepend_items(&[&item, &separator])
-    });
-    if let Err(error) = placed {
-        eprintln!("[nessa] could not offer the update in the tray: {error}");
-    }
 }
 
 #[cfg(test)]

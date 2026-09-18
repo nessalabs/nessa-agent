@@ -32,7 +32,7 @@ locations. Existing SDK layout changes are tracked in [the SDK organization task
 src/                      composition root (`main.tsx`, `store.ts`)
   conversation/           product vertical (model / use cases / gateway / UI)
   session/                wire session to nessa-server (@nessa/client)
-  panel/                  floating-window chrome (model / adapters / UI)
+  panel/                  floating-window chrome (model / application / adapters / UI)
   host/                   injected OS features + the window seam
 src-tauri/src/
   <context>/
@@ -71,7 +71,8 @@ These additional Nessa-specific invariants must stay true:
    once at the top — and the logic below them takes explicit parameters. OS-specific
    hosts are injected by `platform::current()`; shared modules never construct a
    macOS or Linux host. Live objects (menu items, the summon registration slot,
-   the pending update, the startup settings snapshot) stay managed state: they
+   the pending update, the announced release, the startup settings snapshot)
+   stay managed state: they
    are not read from outside the process and have nothing to substitute.
 3. The panel frame is reapplied on every show. Nothing caches a frame across
    shows — that is the bug the design exists to prevent.
@@ -269,14 +270,35 @@ rows from the shared Transcript; it does not parse provider wire formats.
   and is pure: only a newer published version produces anything, while being
   current and a check that did not complete both produce nothing at all. A failed
   check is expected (an offline machine) and goes to stderr, never to the screen.
-- `tray::offer_update` is the only surface. It prepends one item naming the
-  version to the existing tray menu, and clicking it runs
-  `updater::install_and_restart`. No dialog, prompt, or window is involved, which
-  is what keeps the check safe to run while setup owns the screen.
+- The panel is the only surface, and the tray has no update item at all. A found
+  release is kept in `updater::Announced` and sent to the panel window alone
+  (`host::UPDATE_AVAILABLE`); the panel also asks for it on mount through
+  `updater::available_update`, because the check can finish before that page has
+  listeners — or while the panel is closed, in which case the update simply waits
+  there. Both read the one value the host holds. No dialog, prompt, or window is
+  involved, and setup is a different window, which is what keeps the check safe
+  to run while setup owns the screen.
+- `src/panel/application/update-surface.ts` owns everything the panel decides:
+  the notice above the composer, the tab the install opens, the download's line,
+  and the dismissal. It is pure and tested beside itself. Dismissal is scoped to
+  a version and to a launch — it lives in the panel's own memory and is never
+  written down, so a newer version notices again and the same one does not until
+  the app restarts. `src/panel/adapters/use-update.ts` is the wiring: three host
+  subscriptions, the question on mount, and the invoke that starts the download.
 - The check, the download, and the install all run in the host process, so the
-  webview neither calls the updater nor reaches the endpoint: no capability grant
-  and no `connect-src` entry exist for it. `src-tauri/capabilities/` stays as it
-  was.
+  webview neither calls the updater nor reaches the endpoint: `install_update`
+  is an app command, so no capability grant and no `connect-src` entry exist for
+  it. `src-tauri/capabilities/` stays as it was.
+- Progress comes from the plugin's own chunk callback, throttled by
+  `updater::worth_reporting` to one event per whole percent — or, when the server
+  declares no length, one per 256 KiB — so a real artifact does not send
+  thousands of IPC messages at a bar with a hundred positions. A download the
+  server did not measure draws an unmeasured bar rather than a made-up
+  percentage.
+- A refused install is the one update failure that reaches the screen, because it
+  is the one somebody asked for: `host::UPDATE_FAILED` turns the tab's line into
+  a plain statement and a retry, and the update goes back in its slot so the
+  retry has something to download. A refused *check* stays on stderr.
 
 #### Watching the update flow locally
 
@@ -285,19 +307,19 @@ neither needs a release build.
 
 - **`NESSA_FAKE_UPDATE=<version> pnpm app` — the decision, with no network.**
   A debug build reads the variable and answers the check from it instead of
-  asking the endpoint, so the tray grows an "Update to 9.9.9" item within a
-  second of launch, with no server, no artifact, and no signing key. It is the
-  inner loop for `updater::offer`, `tray::offer_update`, and the click handler.
+  asking the endpoint, so the panel's notice offers 9.9.9 within a second of
+  launch, with no server, no artifact, and no signing key. It is the inner loop
+  for `updater::offer`, the notice, the tab, and the dismissal.
   `updater::simulated` is the whole rule: a `major.minor.patch` of digits is
   announced, an unset or empty value is an ordinary run, and anything else is
   reported on stderr and falls through to the real endpoint — the value becomes
-  the tray item's text, and "Update to banana" claims something no real check
-  could have found.
+  the notice's own text, and "Update available / banana" claims something no real
+  check could have found.
 
   Nothing is faked beyond the answer. There is no release behind the offer, so
-  clicking the item downloads nothing, installs nothing, and restarts nothing;
-  it says exactly that on stderr rather than returning silently, which from the
-  menu would be indistinguishable from a broken item. Everything this path needs
+  taking the install downloads nothing, installs nothing, and restarts nothing;
+  it travels the same `UPDATE_FAILED` path a refused download does, so the tab
+  says so rather than sitting at nought per cent. Everything this path needs
   — `SIMULATED_UPDATE`, `simulated`, `SimulatedReleases`, `SimulatedUpdate`, and
   the two call sites — is `#[cfg(debug_assertions)]` and is not compiled into a
   release build at all, the same shape as `tray.rs`'s `SHOW_SETUP_ITEM`. A
@@ -307,7 +329,8 @@ neither needs a release build.
   with none of it present.
 
   It does not touch the endpoint, the manifest, the download, the signature, or
-  the install. It is the tray and the decision, nothing else.
+  the install. It is the panel and the decision, nothing else — including the
+  tab's refused state, which is the one part of a real download it can show.
 
 - **`--check-only` plus a `--config` merge on `dev` — the real plugin, a local
   server.** This is the more valuable of the two, because the code doing the
@@ -325,8 +348,8 @@ neither needs a release build.
 
   Real, through the plugin: the HTTP fetch, the manifest parse including its
   RFC 3339 `pub_date`, the `{os}-{arch}` lookup, and the version comparison.
-  Not reached, on purpose: the announced URL 404s, so a click fails at the
-  download and signature verification never happens — the manifest's
+  Not reached, on purpose: the announced URL 404s, so the update tab ends in its
+  refused state and signature verification never happens — the manifest's
   `signature` field is a base64 sentence saying so. Install and restart are
   untested here. The banner and the 404 log line both say this; a clean run is
   not an end-to-end pass. For the download, the signature, the install, and the

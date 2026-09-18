@@ -39,6 +39,10 @@ import { useEdgeReveal } from "../adapters/edge-reveal"
 import { useHostPanel } from "../adapters/host-panel"
 import { useSurface, type Surface } from "../adapters/surface"
 import { useTabShortcuts } from "../adapters/use-tab-shortcuts"
+import { useUpdate } from "../adapters/use-update"
+import { UPDATE_TAB_ID } from "../application/update-surface"
+import { UpdateNotice } from "./update-notice"
+import { UpdateTab } from "./update-tab"
 import { useComposer } from "./use-composer"
 import { useFileAttachments } from "./use-file-attachments"
 import { useFolderDrop } from "./use-folder-drop"
@@ -105,6 +109,11 @@ export function App({
     attachments.setError,
   )
   const session = useSession()
+  // Panel-level, not conversation-level: an available update is a fact about
+  // the application, it outlives every tab somebody opens or closes, and both
+  // of its surfaces — the notice over the composer and the tab beside the
+  // conversation tabs — are the panel's own chrome.
+  const update = useUpdate()
   const {
     composerRef,
     setComposerRef,
@@ -123,13 +132,24 @@ export function App({
     focusComposer,
     pasteAttachment,
   })
+  // Every shortcut that names a conversation is also a way out of the update
+  // tab: the tab strip is one strip, and a shortcut that selected a
+  // conversation while leaving the update on screen would be selecting nothing.
+  const leaveUpdateTab = React.useEffectEvent(() => update.setViewing(false))
   const openTab = React.useEffectEvent(() => {
     closePaste()
+    leaveUpdateTab()
     chat.openConversation()
     focusComposer()
   })
   const closeActiveTab = React.useEffectEvent(() => {
     closePaste()
+    // The update tab cannot be closed while its download runs, and when it can
+    // be, closing it is the same answer as dismissing the notice was.
+    if (update.viewing) {
+      if (update.tab?.closeable) update.close()
+      return
+    }
     chat.closeConversation(chat.active.id)
   })
   const activateTab = React.useEffectEvent(
@@ -138,6 +158,7 @@ export function App({
         const open = chat.conversations.some((item) => item.id === target.conversationId)
         if (open) {
           closePaste()
+          leaveUpdateTab()
           chat.setActive(target.conversationId)
           return
         }
@@ -146,11 +167,13 @@ export function App({
       const next = chat.conversations[target.index]
       if (!next) return
       closePaste()
+      leaveUpdateTab()
       chat.setActive(next.id)
     },
   )
   const moveActiveTab = React.useEffectEvent((direction: -1 | 1) => {
     closePaste()
+    leaveUpdateTab()
     chat.moveActive(direction)
   })
   useHostPanel(surface, toggleSurface, composerRef)
@@ -177,6 +200,16 @@ export function App({
       />
     ),
   }))
+  // After the conversations, because it arrived after them and because a strip
+  // that reorders itself under somebody's pointer is worse than a long one.
+  if (update.tab) {
+    tabs.push({
+      id: UPDATE_TAB_ID,
+      title: "Update",
+      closeable: update.tab.closeable,
+      icon: <span aria-hidden="true" className="nessa-update-tab-dot" />,
+    })
+  }
 
   return (
     <div className="nessa-stage" data-host={host.kind}>
@@ -261,31 +294,48 @@ export function App({
             className="nessa-chrome shrink-0 px-2 pt-2 pb-1"
           >
             <ChatTabs
-              wrapTab={(tab, node) => (
-                <ConversationTabMenu
-                  key={tab.id}
-                  onDetails={() => {
-                    chat.setActive(tab.id)
-                    setTabDetails({ id: tab.id, rename: false })
-                  }}
-                  onRename={() => setTabDetails({ id: tab.id, rename: true })}
-                >
-                  {node}
-                </ConversationTabMenu>
-              )}
+              wrapTab={(tab, node) =>
+                // The update has no title to rename and no agent to describe,
+                // so the conversation menu does not belong on it.
+                tab.id === UPDATE_TAB_ID ? (
+                  node
+                ) : (
+                  <ConversationTabMenu
+                    key={tab.id}
+                    onDetails={() => {
+                      update.setViewing(false)
+                      chat.setActive(tab.id)
+                      setTabDetails({ id: tab.id, rename: false })
+                    }}
+                    onRename={() => setTabDetails({ id: tab.id, rename: true })}
+                  >
+                    {node}
+                  </ConversationTabMenu>
+                )
+              }
               label="Conversations"
               tabs={tabs}
-              value={chat.active.id}
+              value={update.viewing ? UPDATE_TAB_ID : chat.active.id}
               onValueChange={(id) => {
                 closePaste()
+                if (id === UPDATE_TAB_ID) {
+                  update.setViewing(true)
+                  return
+                }
+                update.setViewing(false)
                 chat.setActive(id)
               }}
               onClose={(id) => {
                 closePaste()
+                if (id === UPDATE_TAB_ID) {
+                  update.close()
+                  return
+                }
                 chat.closeConversation(id)
               }}
               onNew={() => {
                 closePaste()
+                update.setViewing(false)
                 chat.openConversation()
                 focusComposer()
               }}
@@ -296,57 +346,64 @@ export function App({
           {/* Keyed so a layout compositor drops the previous conversation's
             tiles instead of leaving them over the wallpaper. */}
           <div className="nessa-transcript-region relative flex min-h-0 flex-1 flex-col">
-            <Transcript
-              key={chat.active.id}
-              conversation={chat.active}
-              ground={ground}
-              animateMount={host.animateMount}
-              streamText={host.streamText}
-              emptyState={host.emptyState}
-              statusLabel={session.statusLabel}
-              gatewayAvailable={chat.gatewayAvailable}
-              onOpenPaste={openPaste}
-            />
+            {update.viewing && update.tab ? (
+              <UpdateTab tab={update.tab} onRetry={update.install} />
+            ) : (
+              <>
+                <Transcript
+                  key={chat.active.id}
+                  conversation={chat.active}
+                  ground={ground}
+                  animateMount={host.animateMount}
+                  streamText={host.streamText}
+                  emptyState={host.emptyState}
+                  statusLabel={session.statusLabel}
+                  gatewayAvailable={chat.gatewayAvailable}
+                  onOpenPaste={openPaste}
+                />
 
-            {attachments.viewed && (
-              <Sheet
-                className="nessa-detail-sheet"
-                label={attachments.viewed.name}
-                onClose={attachments.close}
-                onReturnFocus={focusComposer}
-              >
-                <SheetHandle />
-                <SheetHeader>
-                  <SheetExpand />
-                  <SheetTitle>{attachments.viewed.name}</SheetTitle>
-                  <SheetAction>Done</SheetAction>
-                </SheetHeader>
-                <SheetBody>
-                  <React.Suspense fallback={<p role="status">Loading preview…</p>}>
-                    <AttachmentPreview file={attachments.viewed} />
-                  </React.Suspense>
-                </SheetBody>
-              </Sheet>
-            )}
-            {!attachments.viewed && viewedPaste?.conversationId === chat.active.id && (
-              <Sheet
-                className="nessa-detail-sheet"
-                label="Pasted text"
-                onClose={closePaste}
-                onReturnFocus={focusComposer}
-              >
-                <SheetHandle />
-                <SheetHeader>
-                  <SheetExpand />
-                  <SheetTitle>Pasted text</SheetTitle>
-                  <SheetAction>Done</SheetAction>
-                </SheetHeader>
-                <SheetBody>
-                  <PastedMarkdown className="select-text min-w-0 [&_p]:whitespace-pre-wrap">
-                    {viewedPaste.text}
-                  </PastedMarkdown>
-                </SheetBody>
-              </Sheet>
+                {attachments.viewed && (
+                  <Sheet
+                    className="nessa-detail-sheet"
+                    label={attachments.viewed.name}
+                    onClose={attachments.close}
+                    onReturnFocus={focusComposer}
+                  >
+                    <SheetHandle />
+                    <SheetHeader>
+                      <SheetExpand />
+                      <SheetTitle>{attachments.viewed.name}</SheetTitle>
+                      <SheetAction>Done</SheetAction>
+                    </SheetHeader>
+                    <SheetBody>
+                      <React.Suspense fallback={<p role="status">Loading preview…</p>}>
+                        <AttachmentPreview file={attachments.viewed} />
+                      </React.Suspense>
+                    </SheetBody>
+                  </Sheet>
+                )}
+                {!attachments.viewed &&
+                  viewedPaste?.conversationId === chat.active.id && (
+                    <Sheet
+                      className="nessa-detail-sheet"
+                      label="Pasted text"
+                      onClose={closePaste}
+                      onReturnFocus={focusComposer}
+                    >
+                      <SheetHandle />
+                      <SheetHeader>
+                        <SheetExpand />
+                        <SheetTitle>Pasted text</SheetTitle>
+                        <SheetAction>Done</SheetAction>
+                      </SheetHeader>
+                      <SheetBody>
+                        <PastedMarkdown className="select-text min-w-0 [&_p]:whitespace-pre-wrap">
+                          {viewedPaste.text}
+                        </PastedMarkdown>
+                      </SheetBody>
+                    </Sheet>
+                  )}
+              </>
             )}
           </div>
           {tabDetails && detailsConversation && (
@@ -358,7 +415,17 @@ export function App({
               onRename={(title) => chat.rename(tabDetails.id, title)}
             />
           )}
-          <div className="nessa-composer">
+          {/* Hidden rather than unmounted while the update tab is up: the
+              draft, the attachments, and the caret are all in here, and a
+              detour through an update must not cost somebody their message. */}
+          <div className="nessa-composer" hidden={update.viewing || undefined}>
+            {update.notice && (
+              <UpdateNotice
+                notice={update.notice}
+                onInstall={update.install}
+                onDismiss={update.dismiss}
+              />
+            )}
             <ConversationNotification
               conversation={chat.active}
               connection={session}

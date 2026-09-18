@@ -37,6 +37,8 @@ fn main() {
             surface_credential::load_surface_credential,
             shortcuts::load_shortcuts,
             shortcuts::apply_shortcuts,
+            updater::available_update,
+            updater::install_update,
         ])
         .setup(|app| {
             // Registered here rather than in the builder chain because there is
@@ -103,15 +105,16 @@ fn main() {
                 panel::open_setup_window(app.handle());
             }
 
-            // Last, and on purpose. The check needs the tray to already exist,
-            // because the tray menu is the only place its answer can go; and it
-            // must not delay anything above it, so it is spawned rather than
-            // awaited and every window on screen is already placed before it
-            // starts. It is safe next to first-run setup for the same reason it
-            // is quiet in general: finding an update adds a menu item and
-            // nothing else — no window, no focus change, no prompt — so setup
-            // keeps the screen it took whether the check succeeds, finds
-            // nothing, or fails.
+            // Last, and on purpose. It must not delay anything above it, so it
+            // is spawned rather than awaited and every window on screen is
+            // already placed before it starts. It is safe next to first-run
+            // setup for the same reason it is quiet in general: finding an
+            // update puts a notice inside the panel and nothing else — no
+            // window, no focus change, no prompt — and setup is a different
+            // window, so setup keeps the screen it took whether the check
+            // succeeds, finds nothing, or fails. A panel that is closed, or
+            // whose page has not loaded yet, is not a missed announcement
+            // either: the host keeps it and the panel asks on mount.
             #[cfg(desktop)]
             updater::check_in_background(app.handle(), deps.releases.clone());
 

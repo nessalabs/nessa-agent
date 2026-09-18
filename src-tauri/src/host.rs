@@ -29,6 +29,20 @@ pub const RESIZE_STARTED: &str = "nessa://resize-started";
 /// [`RESIZE_STARTED`].
 #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
 pub const RESIZE_ENDED: &str = "nessa://resize-ended";
+/// A check found a newer published release; the payload is
+/// [`crate::updater::Release`]. Sent to the panel alone — setup has nowhere to
+/// put it — and kept on the host as well, so a panel that was closed or had not
+/// loaded yet can ask for the same value on mount.
+pub const UPDATE_AVAILABLE: &str = "nessa://update-available";
+/// How far the download the panel asked for has got; the payload is
+/// [`crate::updater::Downloaded`]. Throttled to one event per position of the
+/// bar rather than one per chunk.
+pub const UPDATE_PROGRESS: &str = "nessa://update-progress";
+/// The install the panel asked for did not happen; the payload is the reason.
+/// The panel turns it into a plain statement and a retry — this is the one
+/// update failure that reaches the screen, because it is the one somebody
+/// asked for.
+pub const UPDATE_FAILED: &str = "nessa://update-failed";
 
 /// Points, which are CSS pixels: the webview does its own scaling, so no device
 /// ratio enters into it.
@@ -62,6 +76,9 @@ mod tests {
             PANEL_SIZED,
             RESIZE_STARTED,
             RESIZE_ENDED,
+            UPDATE_AVAILABLE,
+            UPDATE_PROGRESS,
+            UPDATE_FAILED,
         ] {
             assert!(
                 shell.contains(&format!("\"{event}\"")),
