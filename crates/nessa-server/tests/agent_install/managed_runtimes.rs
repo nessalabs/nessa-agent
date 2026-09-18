@@ -912,3 +912,106 @@ fn an_archive_without_the_pinned_executable_leaves_no_directory_behind() {
         "a refused install left its version directory behind"
     );
 }
+
+#[test]
+fn an_install_is_not_settled_until_its_directory_is_durable() {
+    // The rename survives a crash only once the directory holding it does, so
+    // that sync belongs after the executable exists and inside the same guard
+    // as the record. Asserted directly on `settle`, because that is what tells
+    // the two apart: with the sync back inside `unpack`, settling a directory
+    // that is not there would write the record and report success.
+    let root = tempfile::tempdir().expect("temporary root");
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "package/bin/opencode");
+    // The agent directory has to exist, or writing the record would fail on its
+    // own and this would pass without the sync ever being reached.
+    nessa_local_storage::create_directory(&root.path().join("opencode"))
+        .expect("a private agent directory");
+
+    let failure = store
+        .settle(&agent(), &release, &root.path().join("not-there"))
+        .expect_err("a directory that cannot be opened is not durable");
+
+    assert!(
+        matches!(failure, StoreFailure::Unwritable(_)),
+        "a directory that will not sync is this machine's doing: {failure:?}"
+    );
+    assert_eq!(
+        store.installed(&agent(), &release),
+        Ok(None),
+        "an install that was never made durable must not be recorded"
+    );
+}
+
+#[test]
+fn a_failed_install_does_not_remove_a_runtime_it_did_not_write() {
+    // A working install whose record goes missing — a tidy-up, a partial
+    // restore — reads as nothing installed, so the use case publishes again. If
+    // that archive turns out not to hold the pinned executable, the clean-up
+    // must sweep what this attempt made and nothing else. Taking the runtime
+    // away would mean a pin that is wrong about its own contents deleting the
+    // binary somebody was using.
+    let root = tempfile::tempdir().expect("temporary root");
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "package/bin/opencode");
+    let installed = publish(
+        &store,
+        &release,
+        &archive("package/bin/opencode", b"the runtime"),
+    )
+    .expect("the first install works");
+    std::fs::remove_file(root.path().join("opencode").join("installed.json"))
+        .expect("losing the record");
+
+    let failure = publish(&store, &release, &archive("package/bin/other", b"binary"))
+        .expect_err("an archive without the pinned executable");
+
+    assert!(
+        matches!(failure, StoreFailure::MissingExecutable(_)),
+        "{failure:?}"
+    );
+    assert_eq!(
+        std::fs::read(&installed).expect("the runtime is still there"),
+        b"the runtime",
+        "a refused install removed a runtime it had not written"
+    );
+}
+
+#[test]
+fn every_way_of_refusing_an_archive_sweeps_the_directory_it_made() {
+    // The version directory is created before the archive is known to hold
+    // anything, and there are several ways for it not to. Each of them leaves
+    // an empty directory unless the sweep covers the lot.
+    for (named, bytes) in [
+        ("not an archive at all", b"this is not a gzip tar".to_vec()),
+        (
+            "an entry that carries no data",
+            entry_archive(
+                "package/bin/opencode",
+                b"",
+                EntryType::Symlink,
+                Some("elsewhere"),
+            ),
+        ),
+        ("an empty executable", archive("package/bin/opencode", b"")),
+        (
+            "an entry shorter than its header",
+            short_entry_archive("package/bin/opencode", &[b'x'; 512], 100_000),
+        ),
+        (
+            "an archive without the pinned executable",
+            archive("package/bin/other", b"binary"),
+        ),
+    ] {
+        let root = tempfile::tempdir().expect("temporary root");
+        let store = ManagedRuntimes::new(root.path());
+        let release = release("1.18.31", "package/bin/opencode");
+
+        publish(&store, &release, &bytes).expect_err(named);
+
+        assert!(
+            !root.path().join("opencode").join("1.18.31").exists(),
+            "{named} left its version directory behind"
+        );
+    }
+}

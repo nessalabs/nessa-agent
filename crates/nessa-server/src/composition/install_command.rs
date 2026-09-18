@@ -117,24 +117,11 @@ fn explain(failure: &InstallFailure) -> String {
         | InstallFailure::Store(
             StoreFailure::MissingExecutable(_) | StoreFailure::MalformedArchive(_),
         ) => format!(
-            "{report}; nothing was installed and this is not worth retrying — \
-             report it rather than running the command again",
-            report = reported(failure)
+            "{failure}; nothing was installed and this is not worth retrying — \
+             report it rather than running the command again"
         ),
         InstallFailure::Download(_) => format!("{failure}; nothing was installed, try again"),
         InstallFailure::Store(failure) => format!("{failure}; nothing was installed"),
-    }
-}
-
-/// The part of a failure worth putting in front of a person.
-///
-/// A digest mismatch names both digests itself, and prefixing it with the use
-/// case's own wording would say the same thing twice. Everything else reads
-/// better through `InstallFailure`.
-fn reported(failure: &InstallFailure) -> String {
-    match failure {
-        InstallFailure::Rejected(rejection) => rejection.to_string(),
-        other => other.to_string(),
     }
 }
 

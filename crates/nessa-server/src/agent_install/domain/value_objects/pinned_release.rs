@@ -2,6 +2,8 @@ use std::fmt;
 
 use url::Url;
 
+use super::device_names::names_a_device;
+
 /// What a pinned release can be wrong about, at the moment it is described.
 ///
 /// Every variant is a fault in the pin itself — a value checked into this
@@ -107,13 +109,6 @@ impl fmt::Display for ArchiveDigest {
 /// than this is not a version.
 const MAXIMUM_VERSION_LENGTH: usize = 64;
 
-/// Names Windows reserves for devices, which it answers to in any directory and
-/// with any extension.
-const RESERVED_NAMES: &[&str] = &[
-    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
-    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
-];
-
 /// The version of an agent's runtime that Nessa has tested against.
 ///
 /// Constrained to what can also be a single directory name — on every
@@ -146,11 +141,12 @@ impl ReleaseVersion {
                 || byte.is_ascii_digit()
                 || matches!(byte, b'.' | b'-' | b'+' | b'_')
         });
-        let device = value
-            .split('.')
-            .next()
-            .is_some_and(|stem| RESERVED_NAMES.contains(&stem));
-        if !spelled || device || value.ends_with('.') || value == "." || value == ".." {
+        if !spelled
+            || names_a_device(value)
+            || value.ends_with('.')
+            || value == "."
+            || value == ".."
+        {
             return Err(rejected());
         }
         Ok(Self(value.to_owned()))

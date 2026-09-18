@@ -1,5 +1,7 @@
 use std::fmt;
 
+use super::device_names::names_a_device;
+
 /// Why a string is not an agent name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotAnAgentName(String);
@@ -55,7 +57,16 @@ impl AgentName {
     /// requires on purpose: the set of things an agent is actually called is
     /// small, and every character outside it is more likely a typo or an attempt
     /// to escape the directory than a real name.
+    ///
+    /// The device names Windows reserves are refused too, for the same reason
+    /// [`super::ReleaseVersion`] refuses them: both become a path component, and
+    /// a name that is a directory here and a device there is not one this domain
+    /// can accept. The rule is shared rather than restated so the two cannot
+    /// come apart.
     pub fn parse(value: &str) -> Result<Self, NotAnAgentName> {
+        if names_a_device(value) {
+            return Err(NotAnAgentName(value.to_owned()));
+        }
         let plain = !value.is_empty()
             && value.len() <= MAXIMUM_NAME_LENGTH
             && value

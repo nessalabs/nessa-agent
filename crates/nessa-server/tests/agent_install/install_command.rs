@@ -27,15 +27,21 @@ fn rejection() -> ArchiveRejected {
     .expect_err("another archive is not the pinned one")
 }
 
-/// Install the pinned Opencode release the way the command really does it:
-/// through the async runtime this process starts with.
+/// Install the pinned Opencode release from inside an async runtime, the way
+/// the command does.
 ///
 /// Ignored by default alongside the other live test — it fetches the real
-/// archive. It exists because the unit tests cannot catch the one thing that is
-/// only true at runtime: the HTTP client used here refuses to run inside a
-/// Tokio runtime, so `install` being reached through `spawn_blocking` rather
-/// than directly is load-bearing, and a refactor that inlined it would panic in
-/// production while every other test stayed green.
+/// archive. What it proves is that `install` works when it is reached through
+/// `spawn_blocking` from inside a runtime: the HTTP client it uses refuses to
+/// run on a runtime thread and panics rather than blocking, so that arrangement
+/// is load-bearing and nothing else in the suite exercises it.
+///
+/// What it does not prove is that `execute` still uses `spawn_blocking`, since
+/// it builds the call itself rather than going through `execute` — `execute`
+/// resolves its root from `NESSA_DATA_DIR` or the home directory, and pointing
+/// that somewhere safe means setting a process-wide variable underneath a suite
+/// that runs in parallel. Inlining the call in `execute` would therefore still
+/// leave this green; what catches that is running the command.
 ///
 /// ```text
 /// cargo test -p nessa-server --lib -- --ignored installs_from_inside_the_runtime

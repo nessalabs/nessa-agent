@@ -12,6 +12,15 @@
  * Deliberately not written around one agent's name. Which agents Nessa can
  * fetch is a fact the server owns — it pins the releases it has tested — and
  * naming one here would put that truth in two places that could disagree.
+ *
+ * Nothing calls this yet, and that is worth saying out loud rather than
+ * leaving somebody to discover by grep. The server pins Opencode, and
+ * `AgentId` cannot name Opencode: it lists the agents the picker offers, and
+ * Opencode is not one of them until it has an adapter to drive it with. So the
+ * screen that would consume this is the screen that adds Opencode to the
+ * listing, and it arrives with it. What is here is the decision, settled and
+ * under test, rather than a screen half-built around an agent that cannot be
+ * selected — but it is a decision without a caller until then.
  */
 
 import { AGENT_CHOICES, agentChoice, agentReadiness, isChoosable } from "./onboarding"

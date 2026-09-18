@@ -56,3 +56,21 @@ fn a_refusal_says_what_was_offered_and_what_is_allowed() {
         "unhelpful message: {refusal}"
     );
 }
+
+#[test]
+fn a_name_windows_answers_to_as_a_device_is_not_an_agent_name() {
+    // A name becomes a directory under Nessa's own data directory, and `con` or
+    // `nul` there is not a directory on Windows at all. The same rule the
+    // version has, for the same reason, so that one of the two cannot drift.
+    for reserved in ["con", "nul", "aux", "com1", "lpt9", "nul.txt"] {
+        assert_eq!(
+            AgentName::parse(reserved),
+            Err(NotAnAgentName(reserved.to_string())),
+            "{reserved:?} cannot be a directory name everywhere"
+        );
+    }
+    // Neighbours that merely look like one.
+    for ordinary in ["console", "com10", "nullify"] {
+        assert!(AgentName::parse(ordinary).is_ok(), "{ordinary:?} is a name");
+    }
+}

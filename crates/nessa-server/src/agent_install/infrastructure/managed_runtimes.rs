@@ -155,13 +155,19 @@ impl ManagedRuntimes {
                 );
             }
         }
-        // The version directory was created before the archive was known to
-        // hold anything, so a refused install leaves one behind. Removed only
-        // when it is empty — `remove_dir` says so by failing — which is exactly
-        // the case where it holds nothing anybody wants.
         if let Some(directory) = executable.parent() {
-            let _ = fs::remove_dir(directory);
+            self.sweep(directory);
         }
+    }
+
+    /// Remove a version directory this install made and then had no use for.
+    ///
+    /// Only when it is empty, which `remove_dir` decides by failing otherwise —
+    /// and empty is exactly the case where it holds nothing anybody wants.
+    /// Silent, because a directory that will not go costs one inode and saying
+    /// so would bury the failure that actually matters.
+    fn sweep(&self, directory: &Path) {
+        let _ = fs::remove_dir(directory);
     }
 
     /// Unpack the one entry the release names, into a file this store chose.
@@ -377,20 +383,31 @@ impl RuntimeStore for ManagedRuntimes {
         let directory = self.version_root(agent, release.version());
         private_directory(&directory)?;
         let destination = directory.join(release.executable().file_name());
-        if !self.unpack(
+        let unpacked = self.unpack(
             release,
             staged,
             &destination,
             &directory,
             MAXIMUM_EXECUTABLE_BYTES,
-        )? {
-            // Nothing was unpacked, so this only sweeps the version directory
-            // that was made a moment ago in the expectation that something
-            // would be.
-            self.withdraw(&destination);
-            return Err(StoreFailure::MissingExecutable(
-                release.executable().as_str().to_owned(),
-            ));
+        );
+        // Every way of not getting an executable ends the same: the version
+        // directory was made a moment ago in the expectation of one, and
+        // sweeping it is the whole of the clean-up, because nothing was
+        // written. Deliberately not `withdraw`: this call put no file at that
+        // path, and removing whatever is there would mean a pin that is wrong
+        // about its own contents deleting a runtime somebody was using.
+        match unpacked {
+            Err(failure) => {
+                self.sweep(&directory);
+                return Err(failure);
+            }
+            Ok(false) => {
+                self.sweep(&directory);
+                return Err(StoreFailure::MissingExecutable(
+                    release.executable().as_str().to_owned(),
+                ));
+            }
+            Ok(true) => {}
         }
         // Everything from the rename onwards is guarded together, because from
         // that moment an executable exists and a failure would otherwise leave
@@ -407,7 +424,16 @@ impl RuntimeStore for ManagedRuntimes {
         // failure, is the thing that ran out. So the executable is taken back
         // out, and the message is true when it is read.
         if let Err(failure) = self.settle(agent, release, &directory) {
-            self.withdraw(&destination);
+            // One exception to taking it back out. Two installs of the same
+            // release can run at once — nothing here excludes them — and both
+            // rename onto the same path. If one of them got all the way to a
+            // record while this one was failing, that file is the install it
+            // finished, and removing it would leave a record naming nothing.
+            // This narrows the window rather than closing it; closing it needs
+            // exclusion, which is not what this change is.
+            if !matches!(self.installed(agent, release), Ok(Some(_))) {
+                self.withdraw(&destination);
+            }
             return Err(failure);
         }
         Ok(destination)
