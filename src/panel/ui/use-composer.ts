@@ -5,6 +5,8 @@ import type {
   ChatComposerEditorHandle,
 } from "@nessa-ui/react/chat-composer-editor"
 import { fromEditor, pastedTextLabel, type useConversation } from "../../conversation"
+import type { PillComposerExpansionReason } from "@nessa-ui/react/pill-composer"
+import { takesExpansion } from "../application/composer-expansion"
 
 /** Own editor lifecycle and pasted-viewer state; App only composes the surfaces. */
 export function useComposer(
@@ -26,12 +28,34 @@ export function useComposer(
     (text: string) => setViewedPaste({ conversationId: chat.active.id, text }),
     [chat.active.id],
   )
+  // Whether the full-pane editor is open. Owned here rather than left to the
+  // composer because only this side knows whether a submit actually sent
+  // anything: the rules below turn some away, and a draft that never left is
+  // the one thing worth keeping the pane open for.
+  const [expanded, setExpanded] = React.useState(false)
+  // Whether the last submit sent anything. Read only when the composer says a
+  // submit is why it wants to collapse, so it needs no clearing: every other
+  // reason is taken whatever this holds. See `takesExpansion`.
+  const sent = React.useRef(false)
+  // A fresh conversation gets a fresh composer — the pane does not follow
+  // somebody into a tab they did not open it in.
+  React.useEffect(() => setExpanded(false), [chat.active.id])
+
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    sent.current = false
     const content = composerRef.current?.getContent()
     if (isAttachmentPending(chat.active.id)) return
     if (chat.active.draft.some((part) => part.type === "file")) return
-    if (content) chat.submit(fromEditor(content))
+    if (content) {
+      chat.submit(fromEditor(content))
+      sent.current = true
+    }
+  }
+
+  /** Every expansion change the composer proposes, minus the ones we decline. */
+  function changeExpanded(next: boolean, reason: PillComposerExpansionReason) {
+    if (takesExpansion(next, reason, sent.current)) setExpanded(next)
   }
   function changeContent(content: ChatComposerContent) {
     chat.setDraft([
@@ -51,6 +75,8 @@ export function useComposer(
     })
   }
   return {
+    expanded,
+    changeExpanded,
     composerRef,
     setComposerRef,
     viewedPaste,

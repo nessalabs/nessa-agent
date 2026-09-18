@@ -115,6 +115,8 @@ export function App({
   // conversation tabs — are the panel's own chrome.
   const update = useUpdate()
   const {
+    expanded,
+    changeExpanded,
     composerRef,
     setComposerRef,
     viewedPaste,
@@ -477,7 +479,11 @@ export function App({
             <PillComposer
               key={chat.active.id}
               expandable={viewedPaste === null && attachments.viewed === null}
-
+              // Controlled, so the pane survives a submit this panel turned
+              // away — an attachment still reading, an empty draft — and closes
+              // only once a message has actually gone. See `useComposer`.
+              expanded={expanded}
+              onExpandedChange={changeExpanded}
               generating={false}
               onSubmit={submit}
             >
