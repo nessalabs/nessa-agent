@@ -8,7 +8,14 @@
  */
 import { spawn, spawnSync } from "node:child_process"
 import { setTimeout as sleep } from "node:timers/promises"
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs"
+import {
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  chmodSync,
+  existsSync,
+} from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { randomUUID } from "node:crypto"
@@ -29,6 +36,17 @@ const model = process.env.E2E_MODEL ?? "gpt-5.6-luna"
 // gets a process that exits immediately and reads as "provider stdout closed".
 const command = process.execPath
 const args = [join(harness, "@agentclientprotocol/codex-acp/dist/index.js")]
+
+// The harness is installed, not committed, so a fresh checkout has none. Said
+// here rather than left to the gateway, which can only report that a file it
+// was pointed at does not exist — true, and no help at all in finding out why.
+if (!existsSync(args[0])) {
+  console.error(
+    `no ACP harness at ${args[0]}\n` +
+      `install it first: (cd crates/nessa-sdk/harnesses/codex-acp && npm install)`,
+  )
+  process.exit(1)
+}
 
 // Beside auth/, not at the top of the data directory, and readable by this user
 // alone: the gateway refuses local storage any wider than that.
