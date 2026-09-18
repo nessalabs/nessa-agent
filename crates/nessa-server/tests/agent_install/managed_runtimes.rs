@@ -284,3 +284,54 @@ fn a_discarded_archive_is_gone() {
 
     assert!(!scratch.exists());
 }
+
+#[test]
+fn an_agent_name_that_could_be_a_path_is_refused() {
+    // The name becomes a directory under the runtime root. A caller that could
+    // pass `..` or an absolute path could point the whole store — the
+    // executable, the record, the scratch download — anywhere the process can
+    // write.
+    let root = tempfile::tempdir().expect("temporary root");
+    let store = ManagedRuntimes::new(root.path());
+
+    for hostile in [
+        "",
+        "..",
+        ".",
+        "../escape",
+        "/etc",
+        "a/b",
+        "a\\b",
+        "Opencode",
+        "open code",
+    ] {
+        assert!(
+            matches!(store.installed(hostile), Err(StoreFailure::Unwritable(_))),
+            "installed({hostile:?}) should refuse the name"
+        );
+        assert!(
+            matches!(store.scratch(hostile), Err(StoreFailure::Unwritable(_))),
+            "scratch({hostile:?}) should refuse the name"
+        );
+        assert!(
+            matches!(
+                store.publish(
+                    hostile,
+                    &release("1.0.0", "package/bin/opencode"),
+                    root.path()
+                ),
+                Err(StoreFailure::Unwritable(_))
+            ),
+            "publish({hostile:?}) should refuse the name"
+        );
+    }
+}
+
+#[test]
+fn an_ordinary_agent_name_is_accepted() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let store = ManagedRuntimes::new(root.path());
+    for name in ["opencode", "claude", "codex", "some-agent2"] {
+        assert_eq!(store.installed(name), Ok(None), "{name} should be nameable");
+    }
+}

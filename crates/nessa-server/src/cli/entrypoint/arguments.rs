@@ -1,6 +1,11 @@
 use std::path::PathBuf;
 
-pub const HELP: &str = "Nessa\n\n  nessa server\n  nessa auth init --local [--owner-token-file PATH]\n  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]\n  nessa doctor [--local] [--credential-file PATH]\n  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]\n  nessa auth recover-owner --local --owner-token-file PATH\n\nLocal is the current backend. Cloud auth is not implemented.\nNESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.\nToken defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.\n";
+pub const HELP: &str = "Nessa\n\n  nessa server\n  nessa auth init --local [--owner-token-file PATH]\n  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]\n  nessa doctor [--local] [--credential-file PATH]
+  nessa install-agent NAME\n  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]\n  nessa auth recover-owner --local --owner-token-file PATH\n\ninstall-agent downloads the release of an agent's own runtime that Nessa has
+tested, verifies it against a compiled-in digest, and reports what it installed
+as JSON on stdout. Installing one already present downloads nothing.
+
+Local is the current backend. Cloud auth is not implemented.\nNESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.\nToken defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.\n";
 
 #[derive(Debug, PartialEq)]
 pub enum Command {
@@ -15,6 +20,26 @@ pub enum Command {
     Doctor {
         credential_file: Option<PathBuf>,
     },
+    /// Put an agent's own runtime on this machine, at the tested version.
+    InstallAgent {
+        /// The agent as Nessa names it, such as `opencode`. Constrained to a
+        /// plain lowercase identifier here because it goes on to name a
+        /// directory; the store refuses anything else as well, but a person who
+        /// mistypes it deserves the answer before anything is downloaded.
+        agent: String,
+    },
+}
+
+/// Whether `value` is a name Nessa could have an agent under.
+///
+/// The same shape the runtime store enforces, checked here so that a typo is
+/// refused by the argument parser rather than by a filesystem adapter several
+/// layers in.
+fn is_agent_name(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
@@ -26,6 +51,16 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     }
     if args == ["server"] {
         return Ok(Command::Server);
+    }
+    if let [install, agent] = args {
+        if install == "install-agent" {
+            if !is_agent_name(agent) {
+                return Err("an agent name is lowercase letters, digits and hyphens".into());
+            }
+            return Ok(Command::InstallAgent {
+                agent: agent.clone(),
+            });
+        }
     }
     if let [server, flag, directory] = args {
         if server == "server"

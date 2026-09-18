@@ -49,24 +49,45 @@ impl ManagedRuntimes {
     /// The file name comes from the pin's own path inside the archive, so that
     /// the installed binary is called what the agent calls itself and a person
     /// looking in the directory recognises it.
-    fn executable_path(&self, agent: &str, release: &PinnedRelease) -> PathBuf {
+    fn executable_path(
+        &self,
+        agent: &str,
+        release: &PinnedRelease,
+    ) -> Result<PathBuf, StoreFailure> {
         let name = release
             .executable()
             .as_str()
             .rsplit('/')
             .next()
             .unwrap_or("runtime");
-        self.agent_root(agent)
+        Ok(self
+            .agent_root(agent)?
             .join(release.version().as_str())
-            .join(name)
+            .join(name))
     }
 
-    fn agent_root(&self, agent: &str) -> PathBuf {
-        self.root.join(agent)
+    /// The directory holding one agent's runtimes.
+    ///
+    /// The name becomes a path segment, so it is checked here rather than
+    /// trusted. Everything else in this type routes through this method, which
+    /// makes this the one place a caller could otherwise have pointed the whole
+    /// store somewhere outside the root — with `..`, an absolute path, or a
+    /// separator — and the one place that has to refuse.
+    fn agent_root(&self, agent: &str) -> Result<PathBuf, StoreFailure> {
+        let plain = !agent.is_empty()
+            && agent
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+        if !plain {
+            return Err(StoreFailure::Unwritable(format!(
+                "{agent:?} is not an agent name"
+            )));
+        }
+        Ok(self.root.join(agent))
     }
 
-    fn record_path(&self, agent: &str) -> PathBuf {
-        self.agent_root(agent).join("installed.json")
+    fn record_path(&self, agent: &str) -> Result<PathBuf, StoreFailure> {
+        Ok(self.agent_root(agent)?.join("installed.json"))
     }
 
     /// Note what is now installed, once it really is.
@@ -75,23 +96,30 @@ impl ManagedRuntimes {
     /// half-written record: on this path the alternative is a record naming a
     /// version whose executable is not there, which is exactly the state
     /// [`RuntimeStore::installed`] promises callers cannot observe.
-    fn record(&self, agent: &str, release: &PinnedRelease, executable: &Path) -> io::Result<()> {
+    fn record(
+        &self,
+        agent: &str,
+        release: &PinnedRelease,
+        executable: &Path,
+    ) -> Result<(), StoreFailure> {
         let record = InstallationRecord {
             version: release.version().as_str().to_owned(),
             executable: executable.to_string_lossy().into_owned(),
         };
-        let destination = self.record_path(agent);
+        let destination = self.record_path(agent)?;
         let staging = destination.with_extension("json.writing");
         let encoded = serde_json::to_vec_pretty(&record)
-            .map_err(|error| io::Error::other(error.to_string()))?;
-        fs::write(&staging, encoded)?;
+            .map_err(|error| StoreFailure::Unwritable(error.to_string()))?;
+        fs::write(&staging, encoded)
+            .map_err(|error| StoreFailure::Unwritable(error.to_string()))?;
         fs::rename(&staging, &destination)
+            .map_err(|error| StoreFailure::Unwritable(error.to_string()))
     }
 }
 
 impl RuntimeStore for ManagedRuntimes {
     fn installed(&self, agent: &str) -> Result<Option<InstalledRecord>, StoreFailure> {
-        let path = self.record_path(agent);
+        let path = self.record_path(agent)?;
         let encoded = match fs::read(&path) {
             Ok(bytes) => bytes,
             // Nothing recorded is a real "nothing is installed". Any other
@@ -120,7 +148,7 @@ impl RuntimeStore for ManagedRuntimes {
     }
 
     fn scratch(&self, agent: &str) -> Result<PathBuf, StoreFailure> {
-        let directory = self.agent_root(agent);
+        let directory = self.agent_root(agent)?;
         fs::create_dir_all(&directory)
             .map_err(|error| StoreFailure::Unwritable(error.to_string()))?;
         Ok(directory.join("download.tgz"))
@@ -157,7 +185,7 @@ impl RuntimeStore for ManagedRuntimes {
         release: &PinnedRelease,
         archive: &Path,
     ) -> Result<PathBuf, StoreFailure> {
-        let destination = self.executable_path(agent, release);
+        let destination = self.executable_path(agent, release)?;
         let directory = destination
             .parent()
             .ok_or_else(|| StoreFailure::Unwritable("runtime path has no directory".into()))?;
@@ -201,8 +229,7 @@ impl RuntimeStore for ManagedRuntimes {
                 .map_err(|error| StoreFailure::Unwritable(error.to_string()))?;
             fs::rename(&staging, &destination)
                 .map_err(|error| StoreFailure::Unwritable(error.to_string()))?;
-            self.record(agent, release, &destination)
-                .map_err(|error| StoreFailure::Unwritable(error.to_string()))?;
+            self.record(agent, release, &destination)?;
             return Ok(destination);
         }
         Err(StoreFailure::MissingExecutable(wanted.to_owned()))
