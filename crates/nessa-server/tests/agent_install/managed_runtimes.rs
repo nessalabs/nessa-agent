@@ -287,34 +287,44 @@ fn a_record_cannot_name_a_launch_path_of_its_own() {
     // `installed.json` is a note this store wrote, not an oracle. Somebody who
     // can rewrite it must not be able to make Nessa hand out a path to a binary
     // of their choosing — the most it can do is make Nessa install again.
+    //
+    // A record naming anything but the release's own file name is refused
+    // before a path is worked out at all, which is
+    // `a_record_naming_another_executable_is_not_this_release`. So a record
+    // that gets as far as the path is one holding the name this store itself
+    // would write, and what is left to prove is the half that runs after that
+    // check: the directory the name is joined to comes from the release, never
+    // from the record. The record is written out here rather than left as the
+    // store wrote it, identical though it is, because the rewriting is the
+    // premise: this is what somebody who can edit the file is left with once
+    // every other spelling has been refused.
     let root = tempfile::tempdir().expect("temporary root");
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
-    publish(
+    let published = publish(
         &store,
         &release,
         &archive("package/bin/opencode", b"binary"),
     )
     .expect("the executable is unpacked");
 
-    let elsewhere = root.path().join("hostile");
+    // A binary of that same name in the agent's own root, outside `versions/`
+    // altogether: where the name would land if it were joined to anything but
+    // the directory the release names.
+    let elsewhere = root.path().join("opencode").join("opencode");
     write(&elsewhere, b"not the runtime");
     let record = root.path().join("opencode").join("installed.json");
-    // Serialised rather than formatted into the string: a Windows path is full
-    // of backslashes, and pasting one into JSON by hand writes a record that is
-    // not JSON at all — which would refuse for the wrong reason and prove
-    // nothing about the rule under test.
-    let hostile_record = serde_json::json!({
+    let rewritten = serde_json::json!({
         "version": "1.18.31",
-        "executable": elsewhere,
+        "executable": "opencode",
     })
     .to_string();
-    write(&record, hostile_record.as_bytes());
+    write(&record, rewritten.as_bytes());
 
     assert_eq!(
         store.installed(&agent(), &release),
-        Ok(None),
-        "a record naming a path outside this store describes nothing installed"
+        Ok(Some(published)),
+        "the launch path came from somewhere a record could point at"
     );
 }
 
@@ -583,17 +593,19 @@ fn a_digest_of_something_larger_than_the_read_buffer_is_still_right() {
 // Unix only, because what this stages the attack through is. Reading both
 // steps off one handle is written the same way everywhere, but the attack it
 // defends against needs a name to aim at, and `release_name` says in its own
-// documentation that Windows will not unlink a file that is still open. There
-// the name stays, a truncating write through it reaches the very file object
-// the handle holds, and the property is false — a gap that is already written
-// down beside the code that leaves it, and that nothing reaches today because
-// Nessa pins no Windows release.
+// documentation that Windows will not unlink a file that is still open. What
+// that doc draws out of it is the download left behind by an install that
+// died; the other consequence, and the one this check is about, is that a
+// truncating write through the name that stays reaches the very file object
+// the handle holds. So on Windows this property is false. Nothing reaches it
+// today because Nessa pins no Windows release, and if that changes it is the
+// staged download that has to be closed to writers, not this check that has to
+// be relaxed.
 //
 // Not rewritten to swap by rename so that it could run everywhere. That
 // replaces the name rather than the file behind it, which is a weaker attack
 // and one Windows survives, so a green result there would say the property
-// holds when it does not. [`a_staged_download_has_no_name_to_reach_it_by`]
-// covers the unlinking on its own.
+// holds when it does not.
 #[test]
 #[cfg(unix)]
 fn what_was_hashed_is_what_gets_unpacked() {
