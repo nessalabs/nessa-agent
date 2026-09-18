@@ -30,15 +30,33 @@ export function updaterTarget(platform, arch) {
 /** The release manifest, in the shape the plugin's `RemoteRelease` reads.
  *
  * `version`, `notes` and `pub_date` describe the release; `platforms.<target>`
- * is what this machine downloads and the signature it is checked against.
+ * is what a machine downloads and the signature it is checked against.
  * `pub_date` must be RFC 3339 or the plugin rejects the whole manifest while
- * parsing it, before it ever looks at the platform. */
-export function releaseManifest({ version, notes, target, signature, url, published }) {
+ * parsing it, before it ever looks at the platform.
+ *
+ * `platforms` is a map because one published manifest answers every machine
+ * that asks: a real release builds Apple Silicon and Intel on separate runners
+ * and puts both keys in one file. The local harness serves one. Same builder,
+ * so there is exactly one place that knows this shape. */
+export function releaseManifest({ version, notes, platforms, published }) {
+  const targets = Object.keys(platforms)
+  if (targets.length === 0)
+    throw new Error("A release manifest with no platforms applies to nothing")
+  for (const target of targets) {
+    const { signature, url } = platforms[target]
+    if (!signature) throw new Error(`No signature for ${target}`)
+    if (!url) throw new Error(`No artifact URL for ${target}`)
+  }
   return {
     version,
     notes,
     pub_date: published,
-    platforms: { [target]: { signature, url } },
+    platforms: Object.fromEntries(
+      targets.map((target) => [
+        target,
+        { signature: platforms[target].signature, url: platforms[target].url },
+      ]),
+    ),
   }
 }
 
@@ -69,9 +87,12 @@ export function checkOnlyManifest({ version, notes, target, origin, published })
   return releaseManifest({
     version,
     notes,
-    target,
-    signature: CHECK_ONLY_SIGNATURE,
-    url: `${origin}/${CHECK_ONLY_ARTIFACT}`,
+    platforms: {
+      [target]: {
+        signature: CHECK_ONLY_SIGNATURE,
+        url: `${origin}/${CHECK_ONLY_ARTIFACT}`,
+      },
+    },
     published,
   })
 }

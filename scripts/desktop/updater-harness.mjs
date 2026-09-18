@@ -112,8 +112,10 @@
  *
  * Only that the plugin accepts what *this* machine signs and serves. It does
  * not prove the release workflow signs with the same key — that is the
- * key-pair gate, run with the workflow's own secret — and it does not exercise
- * GitHub's release hosting, its redirects, or its TLS.
+ * key-pair gate, which `.github/workflows/release.yml` runs with the workflow's
+ * own secret and `NESSA_REQUIRE_UPDATER_KEY_PAIRING=1` before it builds
+ * anything — and it does not exercise GitHub's release hosting, its redirects,
+ * or its TLS.
  */
 
 import { spawnSync } from "node:child_process"
@@ -245,9 +247,7 @@ function withTheBuiltArtifact() {
     manifest: releaseManifest({
       version,
       notes,
-      target,
-      signature: sign(root, copy),
-      url,
+      platforms: { [target]: { signature: sign(root, copy), url } },
       published,
     }),
   }
