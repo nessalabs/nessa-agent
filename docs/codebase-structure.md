@@ -196,7 +196,7 @@ own current lifecycle and API contracts.
 | `application/agent_execution/providers/`, `hooks/` | Injected execution ports, operation capabilities, and typed invocation callbacks. |
 | `application/agent_execution/sessions/` | Local session identity, exclusive storage lease, retained attachment resources, and snapshot evidence mapped through domain history rules. |
 | `application/agent_execution/executions/`, `permissions/`, `tools/` | Domain coordination, attributed decisions, and observation/review projections. |
-| `infrastructure/acp/`, `claude_acp/` | Shared transport lifecycle and provider-specific configuration/tool translation. |
+| `infrastructure/acp/`, `claude_acp/`, `codex_acp/` | Shared transport lifecycle, and one module per provider for its own configuration and tool translation. |
 | `infrastructure/session_storage/` | Memory snapshots, incremental JSONL file persistence, and explicit evidence serialization. |
 | `infrastructure/json_rpc/`, `process.rs`, `model_metadata_json.rs` | Framing, process supervision, and model catalog parsing. |
 | `tests/{domain,application,infrastructure}/` | Matching invariant, public orchestration, and storage boundaries. ACP tests live in `tests/infrastructure/acp/` and are included by the library through a test-only path declaration to exercise crate-private controls; Python handlers stay beside those contracts under `fixtures/`. |
@@ -224,8 +224,12 @@ or Tauri dependency; callers inject the resulting adapters through composition.
 
 `crates/nessa-server/src/conversation/` groups durable conversation identity/access
 (domain), shared Agent orchestration and bounded views (application), and private
-metadata/audit adapters (infrastructure). `product/conversation.rs` maps the
-canonical product wire contract; composition supplies provider, storage and audit.
+metadata/audit adapters (infrastructure). A conversation records the agent it was
+created on and is reopened on that same agent for the rest of its life, so
+`composition/agent.rs` builds a provider for every configured agent rather than
+only the selected one — yesterday's conversations need the agent nobody selected
+today. `product/conversation.rs` maps the canonical product wire contract;
+composition supplies the agents, storage and audit.
 Tests follow those responsibilities under `crates/nessa-server/tests/conversation/`.
 The floating panel uses injected conversation effects and NessaClient; neither
 owns SDK scheduling. See [gateway chat](guides/gateway-chat.md).
@@ -316,26 +320,32 @@ the auth registry resolves current identity and access state on every admission.
 
 `crates/nessa-server/src/agents/` answers which coding agents could actually
 start here, before there is a session to authenticate with.
-`domain/value_objects/` owns `AgentId`, the host's three-way `HostAnswer`, and
-the `Readiness` rule that turns two answers into one thing to tell the person;
+`domain/value_objects/` owns `AgentId` — which carries the one name an agent is
+known by outside the server, because configuration, this route, the socket and
+the conversation records on disk must all spell it the same way — the host's
+three-way `HostAnswer`, and the `Readiness` rule that turns two answers into one
+thing to tell the person;
 `application/` owns the `AgentProbe` port, whose typed `ProbeFailure` keeps "not
 signed in" apart from "could not tell", the `ReadAgentReadiness` use case that
 only asks and maps, and `SharedAgentReadiness`, which bounds what one
 unauthenticated request can cost: concurrent callers share a single in-flight
 probe (never a cached answer) and stop waiting for it at a deadline;
-`infrastructure/local.rs` asks this machine, with the
-runtime root, API key and config directory resolved once in composition, while
-`infrastructure/claude.rs` holds what is true of Claude Code alone — its
-keychain item, its credentials file and what makes one a real sign-in, and the
-environment variables the launcher passes through — so a second agent gets a
-sibling module rather than a branch; `entrypoint/http.rs` owns the wire
+`infrastructure/local.rs` asks this machine about every configured agent, owning
+only the order sources are asked in and what an unanswered source means, with the
+launch files, environment credentials and config directories resolved once in
+composition; `infrastructure/claude.rs` and `infrastructure/codex.rs` each hold
+what is true of that agent alone — where it keeps a credentials file, whether it
+has a keychain item at all, and the environment variables the launcher passes
+through — and `infrastructure/credentials.rs` holds what makes a variable a
+credential and a file a sign-in, which is the same for both, so a third agent
+gets a third sibling rather than a branch inside either; `entrypoint/http.rs` owns the wire
 vocabulary and the cross-origin rule for `GET /onboarding/agents`, and answers a
 reading it could not obtain with 503 rather than an invented readiness.
 Composition injects `LocalAgentProbe` through `ProductDependencies`, and the
 handler receives the shared reader over it alone via `FromRef`. Tests under
 `tests/agents/` split domain rules, application orchestration, the shared
-reader's bounds, the HTTP boundary, the local probe's failure modes, and
-Claude's own sign-in conventions.
+reader's bounds, the HTTP boundary, the local probe's failure modes, what makes
+a file a sign-in, and each agent's own conventions.
 
 ## Command-line surface
 

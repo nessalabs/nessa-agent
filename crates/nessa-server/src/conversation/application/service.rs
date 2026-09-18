@@ -251,9 +251,6 @@ impl ConversationService {
                 return Err(ConversationError::Unavailable);
             }
             let agent = agent.unwrap_or_else(|| service.inner.agents.default_agent());
-            if service.inner.agents.get(agent).is_none() {
-                return Err(ConversationError::AgentNotConfigured);
-            }
             let requested_at_ms = service.inner.clock.unix_milliseconds();
             let proposed = Conversation::new(
                 id.clone(),
@@ -302,6 +299,14 @@ impl ConversationService {
                 }
                 service.resolve(&id, &caller).await?;
                 return Ok(());
+            }
+            // Only now does the agent this caller asked for matter. Checking it
+            // before the record above would have refused to reopen somebody's
+            // existing Claude conversation because the panel's remembered choice
+            // names an agent this server is no longer configured for — a
+            // conversation that does not need that agent at all.
+            if service.inner.agents.get(agent).is_none() {
+                return Err(ConversationError::AgentNotConfigured);
             }
             {
                 let owners = service.inner.conversations.lock().await;

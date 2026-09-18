@@ -1496,3 +1496,23 @@ async fn an_agent_this_server_cannot_start_is_refused_before_anything_is_written
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
     assert!(!repository.records.lock().unwrap().contains_key(&id));
 }
+
+#[tokio::test]
+async fn reopening_is_never_refused_over_an_agent_that_conversation_does_not_need() {
+    // The panel sends the agent it remembers on every creation, reopens
+    // included. A conversation already on record runs on the agent it was
+    // created with, so a remembered choice this server can no longer start is
+    // nothing to do with it.
+    let (service, provider, _, _) = fixture(ConversationLimits::default());
+    let id = id();
+    service
+        .create(id.clone(), caller("panel", "create"), None)
+        .await
+        .unwrap();
+    service
+        .create(id.clone(), caller("panel", "reopen"), Some(AgentId::Codex))
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    service.shutdown().await.unwrap();
+}
