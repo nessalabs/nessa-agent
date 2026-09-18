@@ -87,10 +87,13 @@ impl std::error::Error for StoreFailure {}
 /// each other. One handle, opened once, cannot come apart that way.
 ///
 /// The store creates it exclusively, and where the platform allows it lets go
-/// of the name at once: an open file with no name is one nothing else can
-/// reach, to truncate between the hash and the unpack or otherwise. Two installs
-/// running at the same time therefore stage into two files rather than over one
-/// another.
+/// of the name at once. What that buys is precise, and worth stating precisely:
+/// nothing holding only the *name* can reach the file — not to truncate it
+/// between the hash and the unpack, not to replace it — and two installs running
+/// at the same time stage into two files rather than over one another. It is not
+/// unreachable in general: a process running as the same user can still find the
+/// open descriptor, and a user who can do that can equally write over the
+/// installed runtime afterwards. That is the limit of what this can defend.
 ///
 /// The use case never reads or writes it — it only passes it along in order,
 /// and hands it back to be discarded.

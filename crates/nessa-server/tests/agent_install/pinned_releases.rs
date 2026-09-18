@@ -1,7 +1,7 @@
 use super::*;
 use std::collections::BTreeSet;
 
-use crate::agent_install::domain::AgentName;
+use crate::agent_install::domain::{AgentName, PinRejected};
 
 fn opencode() -> AgentName {
     AgentName::parse("opencode").expect("a plain agent name")
@@ -107,18 +107,32 @@ fn an_agent_with_no_pins_has_no_releases() {
 }
 
 #[test]
-fn a_release_is_found_by_platform() {
-    let platform = ReleasePlatform::new("macos", "aarch64").expect("usable platform");
-    let release = release_for(&opencode(), &platform)
-        .expect("the pinned releases parse")
-        .expect("macos arm64 is pinned");
-    assert!(release.runs_on(&platform));
+fn an_unpinned_platform_has_no_release() {
+    let platform = ReleasePlatform::new("windows", "x86_64").expect("usable platform");
+    let pinned = releases_for(&opencode()).expect("the pinned releases parse");
+    assert!(!pinned.iter().any(|release| release.runs_on(&platform)));
 }
 
 #[test]
-fn an_unpinned_platform_has_no_release() {
-    let platform = ReleasePlatform::new("windows", "x86_64").expect("usable platform");
-    assert_eq!(release_for(&opencode(), &platform), Ok(None));
+fn the_url_that_is_requested_is_the_url_the_file_records() {
+    // A URL is parsed now rather than matched on, and parsing normalises: an
+    // uppercase host, a default port or a percent-escape would be requested in
+    // a different spelling than the pin file records, and the digest would then
+    // be measured against bytes nobody wrote that line for.
+    let document: serde_json::Value =
+        serde_json::from_str(PINS).expect("the pin file is well-formed json");
+    let written: Vec<&str> = document["agents"]["opencode"]
+        .as_array()
+        .expect("opencode is pinned")
+        .iter()
+        .map(|entry| entry["archiveUrl"].as_str().expect("an archive url"))
+        .collect();
+    let requested: Vec<String> = releases_for(&opencode())
+        .expect("the pinned releases parse")
+        .iter()
+        .map(|release| release.archive_url().as_str().to_owned())
+        .collect();
+    assert_eq!(requested, written);
 }
 
 #[test]
@@ -126,14 +140,76 @@ fn an_agent_pinned_twice_is_refused_rather_than_resolved() {
     // A repeated key is resolved silently by a map decoder, and which of the
     // two wins is a property of the decoder rather than a decision anybody
     // made. The value being chosen is the digest of a binary Nessa will run.
-    let twice = r#"{"agents":{"opencode":[],"opencode":[]}}"#;
-    let parsed: Result<serde_json::Value, _> = serde_json::from_str(twice);
-    assert!(parsed.is_ok(), "the fixture is well-formed json");
-    let document: Result<PinDocument, _> = serde_json::from_str(twice);
-    assert!(
-        document.is_err(),
-        "an agent pinned twice was resolved instead of refused"
+    //
+    // Both orders and the repeated-equal case, because "last one wins" and
+    // "first one wins" are each invisible in one of the three.
+    let pinned_twice = [
+        r#"{"agents":{"opencode":[],"opencode":[]}}"#,
+        r#"{"agents":{"opencode":[],"opencode":[{"operatingSystem":"macos","architecture":"aarch64","version":"1.0.0","archiveUrl":"https://registry.example/a.tgz","archiveDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","executable":"package/bin/opencode"}]}}"#,
+        r#"{"agents":{"opencode":[{"operatingSystem":"macos","architecture":"aarch64","version":"1.0.0","archiveUrl":"https://registry.example/a.tgz","archiveDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","executable":"package/bin/opencode"}],"opencode":[]}}"#,
+    ];
+    for document in pinned_twice {
+        assert!(
+            serde_json::from_str::<serde_json::Value>(document).is_ok(),
+            "the fixture is well-formed json"
+        );
+        assert!(
+            matches!(
+                releases_in(document, &opencode()),
+                Err(PinFileError::Malformed(_))
+            ),
+            "an agent pinned twice was resolved instead of refused: {document}"
+        );
+    }
+}
+
+#[test]
+fn a_platform_pinned_twice_is_refused_rather_than_resolved() {
+    // Which of two entries for one platform gets installed would otherwise be
+    // decided by the order they happen to be written in.
+    let document = r#"{"agents":{"opencode":[
+        {"operatingSystem":"macos","architecture":"aarch64","version":"1.0.0","archiveUrl":"https://registry.example/a.tgz","archiveDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","executable":"package/bin/opencode"},
+        {"operatingSystem":"macos","architecture":"aarch64","version":"1.0.0","archiveUrl":"https://registry.example/b.tgz","archiveDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","executable":"package/bin/opencode"}
+    ]}}"#;
+    let platform = ReleasePlatform::new("macos", "aarch64").expect("usable platform");
+    assert_eq!(
+        releases_in(document, &opencode()),
+        Err(PinFileError::PlatformPinnedTwice {
+            agent: "opencode".into(),
+            platform,
+        })
     );
+}
+
+#[test]
+fn a_pin_that_breaks_a_domain_rule_names_the_rule_it_broke() {
+    // The file is generated, but it is also checked in and editable. A pin that
+    // is wrong has to say which field and why, because the only thing anyone
+    // can do about it is edit that field.
+    let document = r#"{"agents":{"opencode":[
+        {"operatingSystem":"macos","architecture":"aarch64","version":"1.0.0","archiveUrl":"http://registry.example/a.tgz","archiveDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","executable":"package/bin/opencode"}
+    ]}}"#;
+    let failure = releases_in(document, &opencode()).expect_err("http is not a pin");
+    assert_eq!(
+        failure,
+        PinFileError::Invalid {
+            agent: "opencode".into(),
+            reason: PinRejected::ArchiveUrl("http://registry.example/a.tgz".into()),
+        }
+    );
+    let message = failure.to_string();
+    assert!(
+        message.contains("opencode") && message.contains("https"),
+        "unhelpful message: {message}"
+    );
+}
+
+#[test]
+fn a_document_that_is_not_the_shape_this_build_reads_is_named_as_malformed() {
+    let failure = releases_in(r#"{"agents":{"opencode":"one"}}"#, &opencode())
+        .expect_err("a string is not a list of releases");
+    assert!(matches!(failure, PinFileError::Malformed(_)), "{failure:?}");
+    assert!(failure.to_string().contains("malformed"), "{failure}");
 }
 
 #[test]

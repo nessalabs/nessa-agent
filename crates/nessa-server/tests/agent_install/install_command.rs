@@ -2,7 +2,9 @@ use super::*;
 use std::path::Path;
 
 use crate::agent_install::application::{InstalledRuntime, StoreFailure};
-use crate::agent_install::domain::{ArchiveDigest, ArchiveRejected, ReleaseVersion};
+use crate::agent_install::domain::{
+    ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveUrl, PinnedRelease, ReleaseVersion,
+};
 
 fn opencode() -> AgentName {
     AgentName::parse("opencode").expect("a plain agent name")
@@ -14,19 +16,15 @@ fn digest(byte: char) -> ArchiveDigest {
 }
 
 fn rejection() -> ArchiveRejected {
-    let platform = host_platform();
-    let release = crate::agent_install::domain::PinnedRelease::new(
+    PinnedRelease::new(
         ReleaseVersion::parse("1.0.0").expect("usable version"),
-        platform,
-        crate::agent_install::domain::ArchiveUrl::parse("https://registry.example/runtime.tgz")
-            .expect("a fetchable url"),
+        host_platform(),
+        ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url"),
         digest('a'),
-        crate::agent_install::domain::ArchivePath::parse("package/bin/opencode")
-            .expect("contained path"),
-    );
-    release
-        .accept(&digest('b'))
-        .expect_err("another archive is not the pinned one")
+        ArchivePath::parse("package/bin/opencode").expect("contained path"),
+    )
+    .accept(&digest('b'))
+    .expect_err("another archive is not the pinned one")
 }
 
 /// Install the pinned Opencode release the way the command really does it:
@@ -135,6 +133,9 @@ fn a_failure_says_that_nothing_was_installed() {
     // Somebody whose install failed needs to know whether they have half a
     // runtime on the machine.
     for failure in [
+        InstallFailure::UnsupportedPlatform(
+            ReleasePlatform::new("windows", "x86_64").expect("usable platform"),
+        ),
         InstallFailure::Download(SourceFailure::Unreachable("offline".into())),
         InstallFailure::Rejected(rejection()),
         InstallFailure::Store(StoreFailure::Unwritable("no room".into())),

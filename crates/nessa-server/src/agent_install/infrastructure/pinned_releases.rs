@@ -125,8 +125,18 @@ pub fn host_platform() -> ReleasePlatform {
 /// to install an agent, and a lazily initialised global would be a process-wide
 /// handle for no gain.
 pub fn releases_for(agent: &AgentName) -> Result<Vec<PinnedRelease>, PinFileError> {
-    let document: PinDocument =
-        serde_json::from_str(PINS).map_err(|error| PinFileError::Malformed(error.to_string()))?;
+    releases_in(PINS, agent)
+}
+
+/// The same, over a document given rather than the compiled-in one.
+///
+/// Split out so that the ways a pin file can be wrong have somewhere to be
+/// tested from. They cannot be reached through [`releases_for`] by any input
+/// this build can be given — the document is compiled in and valid — and a
+/// refusal with no test is a refusal nobody has read.
+fn releases_in(document: &str, agent: &AgentName) -> Result<Vec<PinnedRelease>, PinFileError> {
+    let document: PinDocument = serde_json::from_str(document)
+        .map_err(|error| PinFileError::Malformed(error.to_string()))?;
     let Some(entries) = document.agents.get(agent.as_str()) else {
         return Ok(Vec::new());
     };
@@ -151,16 +161,6 @@ pub fn releases_for(agent: &AgentName) -> Result<Vec<PinnedRelease>, PinFileErro
         }
     }
     Ok(releases)
-}
-
-/// The tested release for `agent` on `platform`, when there is one.
-pub fn release_for(
-    agent: &AgentName,
-    platform: &ReleasePlatform,
-) -> Result<Option<PinnedRelease>, PinFileError> {
-    Ok(releases_for(agent)?
-        .into_iter()
-        .find(|release| release.runs_on(platform)))
 }
 
 /// Turn one documented release into a pin, applying the domain's rules.

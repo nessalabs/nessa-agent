@@ -12,8 +12,9 @@ use url::Url;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PinRejected {
     /// A version that cannot also be a directory name everywhere Nessa runs:
-    /// empty, too long, carrying something outside the version alphabet, or
-    /// spelling a name some filesystem reserves.
+    /// empty, too long, carrying something outside the version alphabet,
+    /// spelling a name some filesystem reserves, `.` or `..`, or ending in a
+    /// dot, which Windows drops rather than stores.
     Version(String),
     /// An operating system or architecture token that is empty or not a plain
     /// lowercase identifier.
@@ -25,9 +26,12 @@ pub enum PinRejected {
     /// would put the archive on the wire for anyone to replace, and the digest
     /// below is checked *after* the bytes arrive.
     ArchiveUrl(String),
-    /// A path inside the archive that is absolute, empty, drive-relative, or
-    /// contains a `..` segment — one that could name a file outside the archive
-    /// or, once joined, outside the directory being unpacked into.
+    /// A path inside the archive that is not plainly one file below it: empty,
+    /// absolute, drive-relative, containing a backslash or a NUL, or having a
+    /// segment that is empty, `.` or `..`. Each could name a file outside the
+    /// archive or, once joined, outside the directory being unpacked into — or
+    /// leave this type and the unpacker disagreeing about where the segments
+    /// divide, which comes to the same thing.
     ExecutablePath(String),
 }
 

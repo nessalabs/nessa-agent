@@ -49,6 +49,7 @@ struct InstallationRecord {
 /// <root>/<agent>/installed.json      what is installed, written last
 /// <root>/<agent>/<version>/<name>    the executable itself
 /// <root>/<agent>/.nessa-<hex>.download  a download in progress, unnamed on unix
+/// <root>/<agent>/.nessa-<hex>.tmp       a record or executable being written
 /// ```
 ///
 /// A runtime is unpacked under its version rather than over the previous one,
@@ -125,6 +126,7 @@ impl ManagedRuntimes {
         staged: &mut StagedArchive,
         destination: &Path,
         directory: &Path,
+        limit: u64,
     ) -> Result<bool, StoreFailure> {
         staged.file_mut().rewind().map_err(unreadable)?;
         let mut tar = tar::Archive::new(GzDecoder::new(staged.file_mut()));
@@ -156,12 +158,14 @@ impl ManagedRuntimes {
             // Bounded, because the digest that has already matched says nothing
             // about how far these bytes expand. One byte over the limit is read
             // deliberately, so that reaching it is distinguishable from an
-            // executable that happens to be exactly that size.
-            let mut bounded = entry.by_ref().take(MAXIMUM_EXECUTABLE_BYTES + 1);
+            // executable that happens to be exactly that size. `limit` is
+            // passed in rather than read from the constant so that the bound can
+            // be exercised by a test without moving half a gigabyte.
+            let mut bounded = entry.by_ref().take(limit + 1);
             let unpacked = io::copy(&mut bounded, staging.as_file_mut()).map_err(unwritable)?;
-            if unpacked > MAXIMUM_EXECUTABLE_BYTES {
+            if unpacked > limit {
                 return Err(StoreFailure::MalformedArchive(format!(
-                    "{} unpacks to more than {MAXIMUM_EXECUTABLE_BYTES} bytes",
+                    "{} unpacks to more than {limit} bytes",
                     release.executable()
                 )));
             }
@@ -187,8 +191,13 @@ impl RuntimeStore for ManagedRuntimes {
         agent: &AgentName,
         release: &PinnedRelease,
     ) -> Result<Option<PathBuf>, StoreFailure> {
-        let encoded = match fs::read(self.record_path(agent)) {
-            Ok(bytes) => bytes,
+        // Opened through the private-file primitive rather than read by path:
+        // the record is a file this store wrote, so it is entitled to insist on
+        // one it recognises — a single link, owned by this user, readable by
+        // nobody else, and not a symbolic link to somewhere else's json.
+        // `fs::read` would have followed that link and answered from it.
+        let mut record = match open(&self.record_path(agent), OpenMode::ReadNonblocking) {
+            Ok(file) => file,
             // Nothing recorded is a real "nothing is installed". Any other
             // failure is this machine declining to answer, and is reported
             // rather than turned into a missing runtime that would be
@@ -196,6 +205,8 @@ impl RuntimeStore for ManagedRuntimes {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(unreadable(error)),
         };
+        let mut encoded = Vec::new();
+        record.read_to_end(&mut encoded).map_err(unreadable)?;
         let record: InstallationRecord = serde_json::from_slice(&encoded)
             .map_err(|error| StoreFailure::Unreadable(error.to_string()))?;
         // Everything below that does not match is answered with "not
@@ -218,13 +229,26 @@ impl RuntimeStore for ManagedRuntimes {
         let executable = self
             .version_root(agent, release.version())
             .join(release.executable().file_name());
-        let usable = fs::metadata(&executable).is_ok_and(|it| it.is_file() && it.len() > 0);
-        Ok(usable.then_some(executable))
+        // `symlink_metadata`, not `metadata`: the second follows a symbolic
+        // link and reports on whatever it points at, so a link planted at this
+        // path would be handed back as the tested runtime — with no download,
+        // no digest and none of the archive's own checks ever running. A link
+        // is not what this store published, so it is not an installation.
+        let installed = match fs::symlink_metadata(&executable) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            // Not "nothing is installed": a directory that cannot be searched,
+            // or a path that will not resolve, is this machine declining to
+            // answer. Reporting it as missing would send every later attempt
+            // to download a hundred megabytes and fail at the same place.
+            Err(error) => return Err(unreadable(error)),
+        };
+        Ok((installed.is_file() && installed.len() > 0).then_some(executable))
     }
 
     fn stage(&self, agent: &AgentName) -> Result<StagedArchive, StoreFailure> {
         let directory = self.agent_root(agent);
-        create_directory(&directory).map_err(unwritable)?;
+        private_directory(&directory)?;
         for _ in 0..NAME_ATTEMPTS {
             let mut random = [0u8; 16];
             getrandom::fill(&mut random)
@@ -240,7 +264,7 @@ impl RuntimeStore for ManagedRuntimes {
                     return Ok(StagedArchive::new(file, path));
                 }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(unwritable(error)),
+                Err(error) => return Err(at(&path, error)),
             }
         }
         Err(StoreFailure::Unwritable(
@@ -278,9 +302,15 @@ impl RuntimeStore for ManagedRuntimes {
         staged: &mut StagedArchive,
     ) -> Result<PathBuf, StoreFailure> {
         let directory = self.version_root(agent, release.version());
-        create_directory(&directory).map_err(unwritable)?;
+        private_directory(&directory)?;
         let destination = directory.join(release.executable().file_name());
-        if !self.unpack(release, staged, &destination, &directory)? {
+        if !self.unpack(
+            release,
+            staged,
+            &destination,
+            &directory,
+            MAXIMUM_EXECUTABLE_BYTES,
+        )? {
             return Err(StoreFailure::MissingExecutable(
                 release.executable().as_str().to_owned(),
             ));
@@ -319,10 +349,15 @@ impl RuntimeStore for ManagedRuntimes {
 /// platform that does not allow this.
 ///
 /// Windows will not unlink a file that is still open, so there the name stays
-/// until [`RuntimeStore::discard`] removes it.
+/// until [`RuntimeStore::discard`] removes it — which means an install killed
+/// part-way leaves its download behind on that platform, and nothing sweeps it.
+/// Nessa pins no Windows release today, so nothing reaches this yet.
 #[cfg(unix)]
 fn release_name(path: &Path) -> Result<(), StoreFailure> {
-    fs::remove_file(path).map_err(unwritable)
+    // Named in the failure because this is the one path where the file is
+    // created and then abandoned: the handle is dropped with the install, and
+    // an empty file nobody swept is left under a name only this message gives.
+    fs::remove_file(path).map_err(|error| at(path, error))
 }
 
 #[cfg(not(unix))]
@@ -336,6 +371,21 @@ fn release_name(_path: &Path) -> Result<(), StoreFailure> {
 /// none either. Neither is an executable, and unpacking one writes nothing.
 fn is_regular(kind: EntryType) -> bool {
     matches!(kind, EntryType::Regular | EntryType::Continuous)
+}
+
+/// Make `path` a directory only this user can reach, or say which one it was.
+///
+/// The refusal this can produce — a directory that already exists and is
+/// readable by somebody else — names no path of its own, and a caller looking
+/// at a message about "local storage" has three directories in play. Naming it
+/// is the difference between an error somebody can act on and one they cannot.
+fn private_directory(path: &Path) -> Result<(), StoreFailure> {
+    create_directory(path).map_err(|error| at(path, error))
+}
+
+/// A write failure, said of the path it happened to.
+fn at(path: &Path, error: io::Error) -> StoreFailure {
+    StoreFailure::Unwritable(format!("{}: {error}", path.display()))
 }
 
 fn unwritable(error: io::Error) -> StoreFailure {

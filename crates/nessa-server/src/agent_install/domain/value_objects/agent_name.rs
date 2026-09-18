@@ -23,6 +23,13 @@ impl fmt::Display for NotAnAgentName {
 
 impl std::error::Error for NotAnAgentName {}
 
+/// The longest an agent name may be.
+///
+/// A name becomes one path component, and every filesystem stops somewhere
+/// around 255 bytes. Far below that, because a name longer than this is not the
+/// name of an agent.
+const MAXIMUM_NAME_LENGTH: usize = 64;
+
 /// The name an agent is known by when Nessa installs its runtime.
 ///
 /// A value object rather than a `&str` because the name becomes a directory
@@ -50,6 +57,7 @@ impl AgentName {
     /// to escape the directory than a real name.
     pub fn parse(value: &str) -> Result<Self, NotAnAgentName> {
         let plain = !value.is_empty()
+            && value.len() <= MAXIMUM_NAME_LENGTH
             && value
                 .bytes()
                 .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');

@@ -76,6 +76,16 @@ fn publish(
     store.publish(&agent(), release, &mut staged)
 }
 
+/// The directory `publish` would unpack into, created the way the store does.
+///
+/// Made with the store's own primitive rather than `create_dir_all`, because
+/// the store refuses a directory anybody else can read — which is the point.
+fn version_directory(root: &Path) -> std::path::PathBuf {
+    let directory = root.join("opencode").join("1.18.31");
+    nessa_local_storage::create_directory(&directory).expect("a private version directory");
+    directory
+}
+
 fn write(path: &Path, bytes: &[u8]) {
     let mut file = std::fs::File::create(path).expect("writing a test file");
     file.write_all(bytes).expect("writing a test file");
@@ -197,6 +207,62 @@ fn a_record_naming_another_executable_is_not_this_release() {
     assert_eq!(
         store.installed(&agent(), &release("1.18.31", "package/bin/opencode-cli")),
         Ok(None)
+    );
+}
+
+#[test]
+fn a_symbolic_link_is_not_an_installed_runtime() {
+    // Answering with a link would hand out whatever it points at as the tested
+    // runtime, with no download, no digest and none of the archive's own checks
+    // ever running. A link is not what this store published.
+    let root = tempfile::tempdir().expect("temporary root");
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "package/bin/opencode");
+    let published = publish(
+        &store,
+        &release,
+        &archive("package/bin/opencode", b"binary"),
+    )
+    .expect("the executable is unpacked");
+    let elsewhere = root.path().join("elsewhere");
+    write(&elsewhere, b"not the runtime");
+
+    std::fs::remove_file(&published).expect("removing the published runtime");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&elsewhere, &published).expect("planting a link");
+    #[cfg(not(unix))]
+    write(&published, b"not the runtime");
+
+    #[cfg(unix)]
+    assert_eq!(store.installed(&agent(), &release), Ok(None));
+}
+
+#[test]
+#[cfg(unix)]
+fn a_record_that_is_a_symbolic_link_is_not_read_through() {
+    // `installed.json` is a private file this store wrote. A link in its place
+    // is not one, and following it would answer from a document somebody else
+    // put somewhere else.
+    let root = tempfile::tempdir().expect("temporary root");
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "package/bin/opencode");
+    publish(
+        &store,
+        &release,
+        &archive("package/bin/opencode", b"binary"),
+    )
+    .expect("the executable is unpacked");
+    let record = root.path().join("opencode").join("installed.json");
+    let elsewhere = root.path().join("elsewhere.json");
+    std::fs::rename(&record, &elsewhere).expect("moving the record aside");
+    std::os::unix::fs::symlink(&elsewhere, &record).expect("planting a link");
+
+    assert!(
+        matches!(
+            store.installed(&agent(), &release),
+            Err(StoreFailure::Unreadable(_))
+        ),
+        "a linked record was read through"
     );
 }
 
@@ -349,44 +415,53 @@ fn an_entry_that_is_not_a_regular_file_installs_nothing() {
 }
 
 #[test]
-fn an_archive_that_expands_without_end_is_refused() {
+fn an_archive_that_expands_past_the_bound_is_refused() {
     // A digest fixes the compressed size and says nothing about the extracted
     // one, so a pin that matches exactly can still describe a gzip member that
-    // fills the disk.
+    // fills the disk. The bound is handed in rather than taken from the
+    // constant, so that reaching it costs a kilobyte here instead of half a
+    // gigabyte.
     let root = tempfile::tempdir().expect("temporary root");
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
-    // Not the real bound — half a gigabyte of zeroes is not a test. This checks
-    // the entry is read through a limit at all, by way of a header that claims
-    // more than the archive carries.
-    let mut header = Header::new_gnu();
-    header.set_size(64 * 1024);
-    header.set_mode(0o644);
-    header.set_entry_type(EntryType::Regular);
-    header.set_cksum();
-    let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
-        Vec::new(),
-        flate2::Compression::fast(),
-    ));
-    builder
-        .append_data(
-            &mut header,
-            "package/bin/opencode",
-            &vec![0u8; 64 * 1024][..],
-        )
-        .expect("appending to an in-memory archive");
-    let bytes = builder
-        .into_inner()
-        .expect("finishing the tar")
-        .finish()
-        .expect("finishing the gzip stream");
+    // A kilobyte of zeroes compresses to almost nothing, which is the shape of
+    // the attack: small on the wire, large on the disk.
+    let mut staged = staged(&store, &archive("package/bin/opencode", &[0u8; 1024]));
+    let directory = version_directory(root.path());
+    let destination = directory.join("opencode");
 
-    let published = publish(&store, &release, &bytes).expect("a compressible file still installs");
+    let failure = store
+        .unpack(&release, &mut staged, &destination, &directory, 512)
+        .expect_err("an entry past the bound");
+
+    assert!(
+        matches!(failure, StoreFailure::MalformedArchive(_)),
+        "{failure:?}"
+    );
+    assert!(
+        !destination.exists(),
+        "an entry past the bound was published anyway"
+    );
+}
+
+#[test]
+fn an_archive_exactly_at_the_bound_is_unpacked() {
+    let root = tempfile::tempdir().expect("temporary root");
+    let store = ManagedRuntimes::new(root.path());
+    let release = release("1.18.31", "package/bin/opencode");
+    let mut staged = staged(&store, &archive("package/bin/opencode", &[0u8; 512]));
+    let directory = version_directory(root.path());
+    let destination = directory.join("opencode");
+
     assert_eq!(
-        std::fs::metadata(&published)
+        store.unpack(&release, &mut staged, &destination, &directory, 512),
+        Ok(true)
+    );
+    assert_eq!(
+        std::fs::metadata(&destination)
             .expect("reading the published runtime")
             .len(),
-        64 * 1024
+        512
     );
 }
 
@@ -479,7 +554,6 @@ fn a_digest_of_something_larger_than_the_read_buffer_is_still_right() {
     let mut staged = staged(&store, &body);
 
     let expected = {
-        use sha2::Digest as _;
         let mut hasher = sha2::Sha256::new();
         hasher.update(&body);
         hasher

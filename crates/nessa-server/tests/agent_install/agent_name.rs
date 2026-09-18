@@ -38,6 +38,14 @@ fn a_name_is_not_normalised_into_one() {
 }
 
 #[test]
+fn a_name_longer_than_a_path_component_is_not_a_name() {
+    // The name becomes one directory. Without this the filesystem refuses it
+    // instead, and a name fault arrives as a machine that could not write.
+    assert!(AgentName::parse(&"a".repeat(64)).is_ok());
+    assert!(AgentName::parse(&"a".repeat(65)).is_err());
+}
+
+#[test]
 fn a_refusal_says_what_was_offered_and_what_is_allowed() {
     let refusal = AgentName::parse("Opencode").expect_err("uppercase is not a name");
     assert_eq!(refusal.offered(), "Opencode");

@@ -1,10 +1,12 @@
 use super::*;
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::thread;
 
 use crate::agent_install::application::{InstallAgentRuntime, RuntimeStore};
 use crate::agent_install::domain::AgentName;
-use crate::agent_install::infrastructure::{host_platform, release_for, ManagedRuntimes};
+use crate::agent_install::infrastructure::{host_platform, releases_for, ManagedRuntimes};
 
 /// A staged file in a temporary directory, so the tests below can write into
 /// something real without the store's own rules getting in the way.
@@ -130,17 +132,66 @@ fn a_body_exactly_at_the_bound_is_kept() {
     store(&mut body.as_slice(), &mut staged, 4096).expect("a body at the bound is not over it");
 }
 
+/// A one-shot HTTP server on loopback, answering the first request with `body`.
+///
+/// Returns the port and a handle that finishes once that request has been
+/// served. Nothing here is asserted on directly; it exists so that the test
+/// below is asking about the client's own rule rather than about whether a
+/// connection could be made.
+fn one_plain_http_reply(body: &'static [u8]) -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+    let port = listener.local_addr().expect("the bound address").port();
+    let served = thread::spawn(move || {
+        let Ok((mut connection, _)) = listener.accept() else {
+            return;
+        };
+        // Read just the request line and headers, so the client is not left
+        // waiting on a response to something half-read.
+        let mut request = Vec::new();
+        let mut byte = [0u8; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            match connection.read(&mut byte) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => request.push(byte[0]),
+            }
+        }
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/gzip\r\n\r\n",
+            body.len()
+        );
+        let _ = connection
+            .write_all(header.as_bytes())
+            .and_then(|()| connection.write_all(body))
+            .and_then(|()| connection.flush());
+    });
+    (port, served)
+}
+
 #[test]
 fn a_plain_http_url_is_never_fetched() {
     // The pin's own rule is that an archive comes over https, and the digest is
     // only checked after the bytes have arrived. This is the client refusing to
     // be the place that rule stops holding.
+    //
+    // The url points at a real server answering 200 with a real body, so the
+    // fetch would plainly succeed if the rule were dropped. Aiming at a closed
+    // port instead would fail for the wrong reason, and go on passing after
+    // somebody removed `https_only`.
+    //
+    // What this cannot reach is the other half of the same rule: an https url
+    // that redirects to http. Following that needs a server presenting a
+    // certificate this client will accept, which is a TLS fixture rather than a
+    // unit test. Both halves are the one `https_only` setting, so this covers
+    // the setting; it does not cover the redirect path separately.
+    let archive = b"archive bytes that would be stored if http were fetched";
+    let (port, served) = one_plain_http_reply(archive);
+
     let root = tempfile::tempdir().expect("temporary root");
     let mut staged = staged(root.path());
     let source = HttpsArchives::new().expect("an https client");
 
     let failure = source
-        .download("http://127.0.0.1:1/runtime.tgz", &mut staged)
+        .download(&format!("http://127.0.0.1:{port}/runtime.tgz"), &mut staged)
         .expect_err("plain http is not fetched");
 
     assert!(
@@ -154,6 +205,15 @@ fn a_plain_http_url_is_never_fetched() {
         0,
         "nothing may be written for a url that was never fetched"
     );
+
+    // The server is still waiting to be asked, which is the point: the request
+    // never left this process. Asking it once releases the accept so the thread
+    // ends with the test rather than outliving it.
+    assert!(
+        TcpStream::connect(("127.0.0.1", port)).is_ok(),
+        "the server was listening the whole time"
+    );
+    served.join().expect("the one-shot server finishes");
 }
 
 /// Install the real pinned Opencode release, over the real network.
@@ -176,7 +236,11 @@ fn a_plain_http_url_is_never_fetched() {
 fn installs_the_pinned_release() {
     let platform = host_platform();
     let agent = AgentName::parse("opencode").expect("a plain agent name");
-    let Some(release) = release_for(&agent, &platform).expect("the pinned releases parse") else {
+    let pinned = releases_for(&agent).expect("the pinned releases parse");
+    let Some(release) = pinned
+        .into_iter()
+        .find(|release| release.runs_on(&platform))
+    else {
         // Not a failure: the pin covers the platforms Nessa installs on, and a
         // developer on another one should not see a red test for it.
         eprintln!("no opencode release pinned for {platform}; nothing to install");

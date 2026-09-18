@@ -97,10 +97,30 @@ describe("recommendAgent", () => {
     expect(recommendAgent(state, ["nonesuch" as AgentId])).toEqual({ kind: "nothing" })
   })
 
-  it("does not treat an unrecognised readiness as ready", () => {
-    // Readiness states get added — the server has gained them before. Anything
-    // that is not plainly `ready` is not somebody's working agent, so a new one
-    // must not silently suppress the offer.
+  it("treats every readiness that is not `ready` as nothing to start with", () => {
+    // `not-supported` and `unknown` are part of the readiness union but never
+    // come off the wire — the adapter refuses both, on the grounds that neither
+    // is a fact a runtime gets to assert about itself. They reach this function
+    // from Nessa's own side instead, so the offer has to be right for them
+    // here.
+    for (const readiness of ["not-supported", "unknown"] as const) {
+      expect(
+        recommendAgent(asked({ claude: readiness }), INSTALLABLE),
+        `a ${readiness} agent is not one this person can start`,
+      ).toEqual({ kind: "install", agent: "claude" })
+    }
+  })
+
+  it("does not treat a readiness this build has not heard of as ready", () => {
+    // The cast is the point: it stands in for a state added to the union after
+    // this was written, which is the one case the compiler cannot flag here.
+    // Not something the gateway can send today — the adapter drops a value it
+    // does not know — so this is the second of the two places that hold the
+    // rule, not the first.
+    //
+    // The rule being held is that only a plain `ready` suppresses the offer.
+    // The opposite default would mean a state added on the server quietly
+    // stopping setup from offering anything to someone with no agent at all.
     const state = asked({ claude: "not-configured" as never })
     expect(recommendAgent(state, INSTALLABLE)).toEqual({
       kind: "install",

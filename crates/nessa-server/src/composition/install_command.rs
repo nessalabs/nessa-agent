@@ -101,9 +101,12 @@ fn pinned(agent: &AgentName, platform: &ReleasePlatform) -> Result<PinnedRelease
 /// failed install is exactly who needs to be told which of the two they have.
 fn explain(failure: &InstallFailure) -> String {
     match failure {
-        InstallFailure::UnsupportedPlatform(platform) => {
-            format!("{failure}; nessa has no tested build for {platform}")
-        }
+        // The platform is already in `{failure}`, so this adds what the person
+        // does about it rather than saying the same thing twice.
+        InstallFailure::UnsupportedPlatform(_) => format!(
+            "{failure}; nothing was installed, and nothing will be until nessa \
+             ships a tested build for this platform"
+        ),
         InstallFailure::Download(SourceFailure::Refused(status)) => {
             format!("{failure}; the pinned release may have been withdrawn ({status})")
         }
