@@ -250,3 +250,70 @@ test(
     assert.deepEqual(JSON.parse(readFileSync(path, "utf8")).agent, theirs)
   },
 )
+
+/**
+ * Two runs configuring at once. The window the earlier `interrupt` test could
+ * not reach is the one after the final read: both runs decide to write, and the
+ * second rename replaces the first — atomic, and still a lost update. The lock
+ * is what makes the second stand down instead.
+ */
+test(
+  "a second run standing on the same file leaves it to the first",
+  unixOnly,
+  async () => {
+    const { publish } = await import("./dev-agent-config.mjs")
+    const data = temporaryRoot()
+    mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+    const path = join(data, "dev/config.json")
+    writeFileSync(path, JSON.stringify({}), { mode: 0o600 })
+
+    const mine = { node: "/usr/bin/node", acpEntry: "/mine/index.js" }
+    const theirs = { node: "/usr/bin/node", acpEntry: "/theirs/index.js" }
+    let second
+
+    // The other run happens while this one holds the lock, which is exactly the
+    // interleaving that used to lose a write.
+    const first = publish({
+      configPath: path,
+      agent: mine,
+      acpEntry: mine.acpEntry,
+      node: mine.node,
+      interrupt: () => {
+        second = publish({
+          configPath: path,
+          agent: theirs,
+          acpEntry: theirs.acpEntry,
+          node: theirs.node,
+        })
+      },
+    })
+
+    assert.equal(first, true, "the run holding the lock writes")
+    assert.equal(second, false, "the run that could not take it stands down")
+    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")).agent, mine)
+  },
+)
+
+/** A run killed before releasing must not block the next one for ever. */
+test("a lock whose owner is gone is taken rather than obeyed", unixOnly, async () => {
+  const { publish } = await import("./dev-agent-config.mjs")
+  const data = temporaryRoot()
+  mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+  const path = join(data, "dev/config.json")
+  writeFileSync(path, JSON.stringify({}), { mode: 0o600 })
+  // A pid that cannot be running: process 0 is not a user process, and the
+  // holder file is what a killed run leaves behind.
+  writeFileSync(`${path}.lock`, "2147483647 2026-01-01T00:00:00.000Z\n", { mode: 0o600 })
+
+  const agent = { node: "/usr/bin/node", acpEntry: "/mine/index.js" }
+  const wrote = publish({
+    configPath: path,
+    agent,
+    acpEntry: agent.acpEntry,
+    node: agent.node,
+  })
+
+  assert.equal(wrote, true)
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")).agent, agent)
+  assert.equal(existsSync(`${path}.lock`), false, "the lock is released")
+})

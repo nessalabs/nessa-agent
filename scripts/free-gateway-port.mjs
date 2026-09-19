@@ -109,20 +109,50 @@ function launchdLabel(pid) {
 }
 
 /**
- * A nessa-server this checkout started: the binary we build, running from or
- * named by this tree. A gateway staged under Application Support and launched
- * by launchd is not ours even when it is the same build.
+ * A nessa-server this checkout started: a gateway whose working directory is
+ * this tree. A gateway staged under Application Support and launched by launchd
+ * is not ours even when it is the same build.
+ *
+ * The working directory, and not the command line. A command was treated as
+ * evidence of ownership if it contained this root anywhere in it, and that is
+ * not what it means:
+ *
+ *   - `/work/nessa-agent-other/target/debug/nessa server` contains
+ *     `/work/nessa-agent` as a substring, so a sibling checkout's gateway read
+ *     as ours and was sent SIGTERM.
+ *   - Worktrees symlink `target/` into the main checkout, so a worktree's
+ *     gateway genuinely *is* this checkout's binary — the same path, a
+ *     different owner. No amount of path-boundary care fixes that one.
+ *
+ * `just start` runs the server with this tree as its working directory, so a
+ * leftover of ours has it; anything else is somebody else's and is reported
+ * rather than killed.
  */
 function isOurDevServer({ pid, command }) {
   if (!/\bnessa\b.*\bserver\b/.test(command) && !/nessa-server/.test(command))
     return false
+  return belongsToThisCheckout(pid, command)
+}
+
+/**
+ * Whether a process belongs to this checkout.
+ *
+ * The working directory is the evidence, because a command line is not: a
+ * sibling checkout at `/work/nessa-agent-other` contains `/work/nessa-agent` as
+ * a substring, and worktrees symlink `target/` into the main checkout so a
+ * worktree's process genuinely runs this checkout's binary.
+ *
+ * Windows has no cwd to read here (`lsof` is not there), so it falls back to a
+ * path-boundary check on the command — which rules out the sibling-prefix case
+ * and cannot rule out a shared binary. That is weaker, and it is said out loud
+ * rather than left to look the same as the Unix answer.
+ */
+function belongsToThisCheckout(pid, command) {
   const cwd = processCwd(pid)
-  return (
-    command.includes(root) ||
-    cwd === root ||
-    cwd.startsWith(`${root}/`) ||
-    cwd.startsWith(`${root}\\`)
-  )
+  if (cwd)
+    return cwd === root || cwd.startsWith(`${root}/`) || cwd.startsWith(`${root}\\`)
+  if (process.platform !== "win32") return false
+  return command.includes(`${root}\\`) || command.includes(`${root}/`)
 }
 
 function killPid(pid, signal) {

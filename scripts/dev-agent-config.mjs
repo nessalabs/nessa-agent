@@ -311,7 +311,97 @@ function main() {
  * `interrupt` exists for the test that proves it: it runs between the read and
  * the write, which is the window a concurrent writer lives in.
  */
+/**
+ * Hold the right to write this configuration, or find out who has it.
+ *
+ * Re-reading before the rename narrows the window between deciding and writing;
+ * it does not close it. Two runs can both read, both decide to write, and the
+ * second rename silently replaces the first — atomic, and still a lost update.
+ * So the read, the decision and the rename happen while holding this.
+ *
+ * `wx` is the whole mechanism: creating the file is the acquisition, and it
+ * either succeeds or it does not. What is written into it is only for the
+ * message the loser prints.
+ *
+ * Honest about the limit: this coordinates writers that take the lock. An
+ * editor saving `config.json` underneath us takes no lock and is still a race —
+ * a narrower one, between the read inside the lock and the rename, and not one
+ * a file rename can settle.
+ *
+ * @returns {{ release: () => void } | { held: string }}
+ */
+function lockFor(configPath) {
+  const lock = `${configPath}.lock`
+  const mine = `${process.pid} ${new Date().toISOString()}\n`
+  for (const attempt of [1, 2]) {
+    try {
+      writeFileSync(lock, mine, { mode: 0o600, flag: "wx" })
+      return {
+        release: () => {
+          try {
+            unlinkSync(lock)
+          } catch {
+            // Already gone: nothing to release.
+          }
+        },
+      }
+    } catch (error) {
+      if (error.code !== "EEXIST")
+        return { held: `could not lock ${lock}: ${error.message}` }
+      const holder = readHolder(lock)
+      if (attempt === 1 && holder.stale) {
+        // A run killed before it could release. Its pid is gone, so nobody is
+        // writing; take it rather than making somebody delete a file by hand.
+        try {
+          unlinkSync(lock)
+          continue
+        } catch {
+          // Someone else got there first; fall through and stand down.
+        }
+      }
+      return { held: holder.description }
+    }
+  }
+  return { held: `could not lock ${lock}` }
+}
+
+/** Who holds a lock, and whether they are still running. */
+function readHolder(lock) {
+  let text = ""
+  try {
+    text = readFileSync(lock, "utf8")
+  } catch {
+    return { stale: true, description: "a lock that vanished as it was read" }
+  }
+  const pid = Number(text.trim().split(/\s+/)[0])
+  if (!Number.isInteger(pid) || pid <= 0)
+    return { stale: true, description: `a lock naming no process (${text.trim()})` }
+  try {
+    process.kill(pid, 0)
+    return { stale: false, description: `pid ${pid}, which is still running` }
+  } catch (error) {
+    // EPERM means it exists and is somebody else's, which is not stale.
+    return error.code === "EPERM"
+      ? { stale: false, description: `pid ${pid}` }
+      : { stale: true, description: `pid ${pid}, which is gone` }
+  }
+}
+
 export function publish({ configPath, agent, acpEntry, node, mcpBinary, interrupt }) {
+  const lock = lockFor(configPath)
+  if ("held" in lock) {
+    say(`→ another run is configuring ${configPath} (${lock.held}); leaving it to them`)
+    return false
+  }
+  try {
+    return underLock({ configPath, agent, acpEntry, node, mcpBinary, interrupt })
+  } finally {
+    lock.release()
+  }
+}
+
+/** The read, the decision and the write, with the right to do them held. */
+function underLock({ configPath, agent, acpEntry, node, mcpBinary, interrupt }) {
   interrupt?.()
   const existing = readExisting(configPath)
   // Somebody answered the question while this was working. Theirs stands —
