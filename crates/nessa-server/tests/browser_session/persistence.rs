@@ -323,6 +323,255 @@ async fn abandoned_replacement_restores_the_exact_prior_state_removed_by_insert(
 }
 
 #[tokio::test]
+async fn abandoned_replacement_is_reclaimed_after_its_prior_expires() {
+    // A login that outlives the remainder of the prior's idle window: the prior
+    // is no longer restorable when cleanup runs, which must not keep the
+    // undisclosed replacement alive.
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("expired-prior.jsonl");
+    let prior_id = "6".repeat(64);
+    let replacement_id = "7".repeat(64);
+    let store = PersistentSessions::open(&path).unwrap();
+    store
+        .insert(prior_id.clone(), session(None).await, None, 100)
+        .await
+        .unwrap();
+    let replaced_at = 100 + IDLE_SECONDS - 1;
+    let replaced = store
+        .insert(
+            replacement_id.clone(),
+            BrowserSession::new(
+                credential_id(),
+                "https://127.0.0.1:1443".into(),
+                replaced_at,
+            )
+            .unwrap(),
+            Some(prior_id.clone()),
+            replaced_at,
+        )
+        .await
+        .unwrap()
+        .expect("active prior was replaced");
+
+    store
+        .abandon_login(
+            replacement_id.clone(),
+            Some(replaced.clone()),
+            100 + IDLE_SECONDS,
+        )
+        .await
+        .unwrap();
+
+    assert!(store.get(replacement_id.clone()).await.unwrap().is_none());
+    assert!(store.get(prior_id.clone()).await.unwrap().is_none());
+    drop(store);
+
+    let store = PersistentSessions::open(&path).unwrap();
+    assert!(store.get(replacement_id).await.unwrap().is_none());
+    assert!(store.get(prior_id).await.unwrap().is_none());
+    drop(store);
+    let records = std::fs::read_to_string(path).unwrap();
+    let record: StoredRecord = serde_json::from_str(records.lines().last().unwrap()).unwrap();
+    assert_eq!(record.changes.len(), 1);
+    assert_eq!(record.changes[0].reason, Reason::AbandonedLogin);
+    assert!(record.changes[0].initiator.is_none());
+}
+
+#[tokio::test]
+async fn abandoned_replacement_restores_a_prior_active_for_one_more_second() {
+    // The moment before the case above: still restorable, so it is restored.
+    let directory = tempfile::tempdir().unwrap();
+    let store =
+        PersistentSessions::open(&directory.path().join("just-active-prior.jsonl")).unwrap();
+    let prior_id = "8".repeat(64);
+    let replacement_id = "9".repeat(64);
+    store
+        .insert(prior_id.clone(), session(None).await, None, 100)
+        .await
+        .unwrap();
+    let replaced_at = 100 + IDLE_SECONDS - 1;
+    let replaced = store
+        .insert(
+            replacement_id.clone(),
+            BrowserSession::new(
+                credential_id(),
+                "https://127.0.0.1:1443".into(),
+                replaced_at,
+            )
+            .unwrap(),
+            Some(prior_id.clone()),
+            replaced_at,
+        )
+        .await
+        .unwrap()
+        .expect("active prior was replaced");
+
+    store
+        .abandon_login(replacement_id.clone(), Some(replaced.clone()), replaced_at)
+        .await
+        .unwrap();
+
+    assert!(store.get(replacement_id).await.unwrap().is_none());
+    assert_eq!(store.get(prior_id).await.unwrap(), Some(replaced.1));
+}
+
+#[tokio::test]
+async fn abandoned_replacement_leaves_a_prior_id_a_later_login_now_owns() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = PersistentSessions::open(&directory.path().join("competing-prior.jsonl")).unwrap();
+    let prior_id = "a".repeat(64);
+    let replacement_id = "b".repeat(64);
+    store
+        .insert(prior_id.clone(), session(None).await, None, 100)
+        .await
+        .unwrap();
+    let replaced = store
+        .insert(
+            replacement_id.clone(),
+            BrowserSession::new(credential_id(), "https://127.0.0.1:1443".into(), 101).unwrap(),
+            Some(prior_id.clone()),
+            101,
+        )
+        .await
+        .unwrap()
+        .expect("active prior was replaced");
+    // The freed ID is taken again before the abandoned login is reclaimed.
+    let competing =
+        BrowserSession::new(credential_id(), "https://127.0.0.1:1443".into(), 102).unwrap();
+    store
+        .insert(prior_id.clone(), competing.clone(), None, 102)
+        .await
+        .unwrap();
+
+    store
+        .abandon_login(replacement_id.clone(), Some(replaced), 103)
+        .await
+        .unwrap();
+
+    assert!(store.get(replacement_id).await.unwrap().is_none());
+    assert_eq!(store.get(prior_id).await.unwrap(), Some(competing));
+}
+
+#[tokio::test]
+async fn abandoned_replacement_must_still_restore_a_prior_that_can_be_restored() {
+    // The caller's own check refuses a cleanup that does not name the prior it
+    // replaced, before any record is built.
+    let directory = tempfile::tempdir().unwrap();
+    let store = PersistentSessions::open(&directory.path().join("omitted-caller.jsonl")).unwrap();
+    let prior_id = "c".repeat(64);
+    let replacement_id = "d".repeat(64);
+    store
+        .insert(prior_id.clone(), session(None).await, None, 100)
+        .await
+        .unwrap();
+    store
+        .insert(
+            replacement_id.clone(),
+            BrowserSession::new(credential_id(), "https://127.0.0.1:1443".into(), 101).unwrap(),
+            Some(prior_id.clone()),
+            101,
+        )
+        .await
+        .unwrap()
+        .expect("active prior was replaced");
+
+    assert_eq!(
+        store.abandon_login(replacement_id.clone(), None, 101).await,
+        Err(AccessError::IdentityMismatch)
+    );
+    assert!(store.get(replacement_id).await.unwrap().is_some());
+    assert!(store.get(prior_id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn replay_rejects_dropping_a_prior_that_was_still_restorable() {
+    // The same omission written straight into the journal, which is the only way
+    // to reach the replay rule itself: the caller check above never gets there.
+    // A prior that was active at the record's own instant must be restored by it.
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("dropped-restorable-prior.jsonl");
+    let store = PersistentSessions::open(&path).unwrap();
+    let prior_id = "4".repeat(64);
+    let replacement_id = "5".repeat(64);
+    store
+        .insert(prior_id.clone(), session(None).await, None, 100)
+        .await
+        .unwrap();
+    let replaced = store
+        .insert(
+            replacement_id.clone(),
+            BrowserSession::new(credential_id(), "https://127.0.0.1:1443".into(), 101).unwrap(),
+            Some(prior_id),
+            101,
+        )
+        .await
+        .unwrap();
+    store
+        .abandon_login(replacement_id, replaced, 101)
+        .await
+        .unwrap();
+    drop(store);
+
+    let contents = std::fs::read_to_string(&path).unwrap();
+    let mut records: Vec<serde_json::Value> = contents
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let changes = records.last_mut().unwrap()["changes"]
+        .as_array_mut()
+        .unwrap();
+    changes.retain(|change| change["reason"] != "RestoredAfterAbandonedLogin");
+    let corrupted = records
+        .into_iter()
+        .map(|record| serde_json::to_string(&record).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(&path, corrupted).unwrap();
+
+    assert!(PersistentSessions::open(&path).is_err());
+}
+
+#[tokio::test]
+async fn replay_accepts_dropping_a_prior_that_had_expired_by_the_record() {
+    // The positive half of the same rule, also reached only through replay: the
+    // record that legitimately omits an expired prior must still reopen.
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("dropped-expired-prior.jsonl");
+    let store = PersistentSessions::open(&path).unwrap();
+    let prior_id = "6".repeat(64);
+    let replacement_id = "7".repeat(64);
+    store
+        .insert(prior_id.clone(), session(None).await, None, 100)
+        .await
+        .unwrap();
+    let replaced_at = 100 + IDLE_SECONDS - 1;
+    let replaced = store
+        .insert(
+            replacement_id.clone(),
+            BrowserSession::new(
+                credential_id(),
+                "https://127.0.0.1:1443".into(),
+                replaced_at,
+            )
+            .unwrap(),
+            Some(prior_id.clone()),
+            replaced_at,
+        )
+        .await
+        .unwrap();
+    store
+        .abandon_login(replacement_id.clone(), replaced, 100 + IDLE_SECONDS)
+        .await
+        .unwrap();
+    drop(store);
+
+    let store = PersistentSessions::open(&path).unwrap();
+    assert!(store.get(replacement_id).await.unwrap().is_none());
+    assert!(store.get(prior_id).await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn abandoned_replacement_rejects_a_fabricated_same_origin_prior() {
     let directory = tempfile::tempdir().unwrap();
     let store = PersistentSessions::open(&directory.path().join("fabricated-prior.jsonl")).unwrap();

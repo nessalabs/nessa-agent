@@ -4,7 +4,7 @@ import type { NessaClientConfig } from "./client-config.js"
 import { NessaConnectionClosedError } from "./connection-closed-error.js"
 import { isRetryableConnectionError } from "./connect-retry.js"
 
-/** Client lifecycle snapshot. Narrow on status: connected permits RPCs, reconnecting exposes the attempt and last transport error, and closed exposes the final error. Recovery never replays RPCs. */
+/** Client lifecycle snapshot. Narrow on status: connected permits RPCs, reconnecting exposes the attempt and the error that began recovery, and closed exposes the final error. Recovery never replays RPCs. */
 export type ConnectionState =
   | { status: "connected" }
   | { status: "reconnecting"; attempt: number; error: NessaConnectionClosedError }
@@ -114,21 +114,48 @@ export class ManagedSession {
     }
   }
 
-  private adopt(session: ConnectedSession): void {
+  /**
+   * Take ownership of `session` and move its subscriptions across.
+   *
+   * A replacement can already be closed when it arrives. Reported to a running
+   * recovery (`recovering`), that is one spent attempt of its budget and the
+   * loop decides what happens next; the termination is returned rather than
+   * acted on here. Outside recovery there is no such loop, so the usual
+   * disconnect path starts one.
+   */
+  private adopt(
+    session: ConnectedSession,
+    recovering = false,
+  ): NessaConnectionClosedError | undefined {
     if (this.lifetime.signal.aborted) {
       session.wire.close()
-      return
+      return undefined
     }
     this.current = session
     for (const subscription of this.events)
       subscription.off = session.wire.onEvent(subscription.event, subscription.handler)
-    const disconnected = (error: NessaConnectionClosedError) => {
-      if (this.current !== session) return
+    const release = () => {
       this.current = undefined
       for (const subscription of this.events) {
         subscription.off?.()
         subscription.off = undefined
       }
+    }
+    // A transport is free to report an existing termination the moment a close
+    // handler is registered. `SessionTransport` does not forbid it, and a
+    // handler that ran during registration would start recovery from inside
+    // adoption — the nested loop with its own budget that this exists to stop.
+    // Until adoption finishes, a close is remembered rather than acted on, and
+    // the check below is the single place that decides what it meant.
+    let adopted = false
+    let during: NessaConnectionClosedError | undefined
+    const disconnected = (error: NessaConnectionClosedError) => {
+      if (this.current !== session) return
+      if (!adopted) {
+        during ??= error
+        return
+      }
+      release()
       if (
         session.profile === "product" &&
         error.retryable &&
@@ -138,10 +165,22 @@ export class ManagedSession {
       } else this.finish(error)
     }
     session.wire.onClose(disconnected)
-    if (session.wire.termination) {
-      // A close between handshake completion and adoption must never look connected.
-      disconnected(session.wire.termination)
-    } else this.publish({ status: "connected" })
+    adopted = true
+    const termination = session.wire.termination ?? during
+    if (!termination) {
+      this.publish({ status: "connected" })
+      return undefined
+    }
+    // A close between handshake completion and adoption must never look connected.
+    if (!recovering) {
+      disconnected(termination)
+      return undefined
+    }
+    if (this.current === session) release()
+    // Adoption took this transport; refusing it means letting it go, the way
+    // `finish` does for the one it was holding.
+    session.wire.close()
+    return termination
   }
 
   private async recover(cause: NessaConnectionClosedError): Promise<void> {
@@ -167,8 +206,13 @@ export class ManagedSession {
         )
         if (this.lifetime.signal.aborted) return
         const session = await this.connect(this.lifetime.signal)
-        this.adopt(session)
-        return
+        // A replacement that never became connected does not end recovery, and
+        // does not get a fresh budget either: it is this attempt's outcome.
+        const termination = this.adopt(session, true)
+        if (!termination) return
+        if (this.lifetime.signal.aborted) return
+        last = termination
+        if (!isRetryableConnectionError(last)) break
       } catch (error) {
         if (this.lifetime.signal.aborted) return
         last = error instanceof Error ? error : new Error("Reconnection failed")

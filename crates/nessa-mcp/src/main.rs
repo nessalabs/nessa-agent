@@ -51,6 +51,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         audit,
     ));
     let result = mcp::serve(service, workspace, uuid::Uuid::new_v4().to_string()).await;
+    // Serving and the supervisor's own sweep are separate facts, and a command
+    // that stopped badly often fails both. Whichever is returned, the other is
+    // not dropped on the way past.
+    if let Err(error) = &result {
+        tracing::error!(%error, "MCP serving ended with an unreported outcome");
+    }
     let cleanup = supervisor.shutdown().await?;
     if !cleanup.scopes.iter().all(|scope| scope.all_verified()) {
         return Err("Shepherd could not verify process cleanup".into());
