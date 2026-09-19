@@ -15,6 +15,7 @@ import {
   type UpdateNotice,
   type UpdateTab,
 } from "../application/update-surface"
+import { attachThenAsk } from "../application/update-subscription"
 
 /** What the panel needs from an update: two views and three gestures. */
 export interface PanelUpdate {
@@ -53,36 +54,43 @@ export function useUpdate(): PanelUpdate {
   // gesture as far as the download is concerned.
   const [selected, setSelected] = React.useState(false)
 
-  React.useEffect(() => {
-    let stale = false
-    const subscriptions = [
-      onUpdateAvailable((release) => {
-        if (!stale) report({ kind: "announced", release })
+  // Whether the host's events can reach this panel yet. Nothing that depends
+  // on hearing back is offered before they can: an install refused straight
+  // away would otherwise be refused into a void, leaving a tab that says it is
+  // downloading with nothing left to tell it otherwise.
+  const [listening, setListening] = React.useState(false)
+
+  React.useEffect(
+    () =>
+      attachThenAsk({
+        // Every listener, and not resolved until each is really attached.
+        attach: (live) =>
+          Promise.all([
+            onUpdateAvailable((release) => {
+              if (live()) report({ kind: "announced", release })
+            }),
+            onUpdateProgress(({ downloaded, total }) => {
+              if (live()) report({ kind: "progress", downloaded, total })
+            }),
+            onUpdateFailed((reason) => {
+              if (!live()) return
+              // The sentence on screen is the panel's; the host's own reason is
+              // technical and belongs with the diagnostics, where a bug report
+              // can find it. It is already on the host's stderr too.
+              console.warn("[nessa] the update was not installed", reason)
+              report({ kind: "failed" })
+            }),
+          ]),
+        // The host holds what it announced, so this finds an update from before
+        // the listeners existed; anything later reaches one of them.
+        ask: async (live) => {
+          const release = await availableUpdate()
+          if (live() && release) report({ kind: "announced", release })
+        },
+        ready: () => setListening(true),
       }),
-      onUpdateProgress(({ downloaded, total }) => {
-        if (!stale) report({ kind: "progress", downloaded, total })
-      }),
-      onUpdateFailed((reason) => {
-        if (stale) return
-        // The sentence on screen is the panel's; the host's own reason is
-        // technical and belongs with the diagnostics, where a bug report can
-        // find it. It is already on the host's stderr too.
-        console.warn("[nessa] the update was not installed", reason)
-        report({ kind: "failed" })
-      }),
-    ]
-    // Asked after the subscriptions are in flight, so a check answering in
-    // between is not lost between the two.
-    void availableUpdate().then((release) => {
-      if (!stale && release) report({ kind: "announced", release })
-    })
-    return () => {
-      stale = true
-      for (const subscription of subscriptions) {
-        void subscription.then((unlisten) => unlisten())
-      }
-    }
-  }, [])
+    [],
+  )
 
   const tab = updateTab(state)
   return {
@@ -92,9 +100,14 @@ export function useUpdate(): PanelUpdate {
     // selection got there.
     viewing: selected && tab !== null,
     install: () => {
+      // A refusal comes back as an event, so an install started before the
+      // failure listener exists can be refused with nobody to hear it — and
+      // the tab it opened would go on saying it was downloading, with no way
+      // out. The control is not offered until the events can arrive.
+      if (!listening) return
       report({ kind: "install" })
       setSelected(true)
-      // A refusal comes back as an event, so nothing is awaited here.
+      // The refusal is an event, so nothing is awaited here.
       void installUpdate()
     },
     dismiss: () => report({ kind: "dismiss" }),

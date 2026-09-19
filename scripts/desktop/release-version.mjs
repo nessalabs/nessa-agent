@@ -73,6 +73,19 @@ export function taggedVersion(tag) {
   return matched ? matched[1] : undefined
 }
 
+/**
+ * Whether a version names a pre-release — `0.2.0-rc.1` does, `0.2.0` does not.
+ *
+ * GitHub keeps this apart from the tag's spelling: a release is a pre-release
+ * because it is flagged one, not because its name has a suffix. A draft created
+ * without the flag becomes an ordinary release when published, which puts a
+ * release candidate in front of every installed app — the updater reads the
+ * newest non-prerelease, and an unflagged rc is exactly that.
+ */
+export function isPrerelease(version) {
+  return /-/.test(version ?? "")
+}
+
 /** Whether the tag and every file that names a version say the same thing.
  *
  * Typed rather than boolean: `Disagreed` carries what each source actually
@@ -142,6 +155,15 @@ function main() {
     console.error(agreementReport(agreement))
     process.exit(1)
   }
-  // Data, not a diagnostic: the workflow reads this as the release version.
-  process.stdout.write(`${agreement.version}\n`)
+  // Data, not a diagnostic: the workflow reads one of these per call. The
+  // channel is asked for here rather than derived from the version in shell,
+  // so what counts as a pre-release is decided in one place and tested.
+  const wanted = option(process.argv.slice(2), "print", "version")
+  if (wanted === "version") process.stdout.write(`${agreement.version}\n`)
+  else if (wanted === "prerelease")
+    process.stdout.write(`${isPrerelease(agreement.version)}\n`)
+  else {
+    console.error(`--print takes "version" or "prerelease", not ${wanted}`)
+    process.exit(1)
+  }
 }
