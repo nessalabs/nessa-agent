@@ -10,8 +10,8 @@ use crate::agent_install::application::{
     ArchiveSource, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
-    AgentName, ArchiveDigest, ArchivePath, ArchiveUrl, PinnedRelease, ReleasePlatform,
-    ReleaseVersion,
+    AgentName, ArchiveDigest, ArchivePath, ArchiveUrl, HostPlatform, Libc, PinnedRelease,
+    ReleasePlatform, ReleaseRequirements, ReleaseVersion,
 };
 
 /// The digest of an archive no test ever produces, used wherever a test needs a
@@ -28,11 +28,23 @@ pub(crate) fn agent() -> AgentName {
     AgentName::parse("opencode").expect("test agent name is plain")
 }
 
-/// A release pinned for the platform the test says it is running on.
+/// A release pinned for the platform the test says it is running on, asking
+/// nothing of the machine beyond that.
 pub(crate) fn release(version: &str, digest: &str, platform: &ReleasePlatform) -> PinnedRelease {
+    release_needing(version, digest, platform, ReleaseRequirements::default())
+}
+
+/// The same, for a build that needs a particular C library or processor.
+pub(crate) fn release_needing(
+    version: &str,
+    digest: &str,
+    platform: &ReleasePlatform,
+    requirements: ReleaseRequirements,
+) -> PinnedRelease {
     PinnedRelease::new(
         ReleaseVersion::parse(version).expect("test version is usable"),
         platform.clone(),
+        requirements,
         ArchiveUrl::parse("https://example.invalid/runtime.tgz").expect("test url is fetchable"),
         ArchiveDigest::parse(digest).expect("test digest is usable"),
         ArchivePath::parse("package/bin/opencode").expect("test path is contained"),
@@ -43,6 +55,16 @@ pub(crate) fn release(version: &str, digest: &str, platform: &ReleasePlatform) -
 /// on the machine running the suite.
 pub(crate) fn platform() -> ReleasePlatform {
     ReleasePlatform::new("macos", "aarch64").expect("test platform is well formed")
+}
+
+/// The machine these tests pretend to be: [`platform`], with nothing optional.
+pub(crate) fn host() -> HostPlatform {
+    host_of(&platform(), None, false)
+}
+
+/// A machine described in full, for the tests that are about the choosing.
+pub(crate) fn host_of(platform: &ReleasePlatform, libc: Option<Libc>, avx2: bool) -> HostPlatform {
+    HostPlatform::new(platform.clone(), libc, avx2)
 }
 
 /// What the fake source was asked to do, and what it did.

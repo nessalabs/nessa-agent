@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use crate::agent_install::application::{
     InstallAgentRuntime, InstallFailure, InstalledRuntime, SourceFailure, StoreFailure,
 };
-use crate::agent_install::domain::{AgentName, PinnedRelease, ReleasePlatform};
+use crate::agent_install::domain::{AgentName, HostPlatform, PinnedRelease};
 use crate::agent_install::infrastructure::{
     host_platform, releases_for, HttpsArchives, ManagedRuntimes,
 };
@@ -48,15 +48,15 @@ pub(super) async fn execute(agent: &AgentName) -> Result<(), RunError> {
 
 /// The install itself, with every effect it needs constructed here.
 fn install(agent: &AgentName, root: &Path) -> Result<InstalledRuntime, RunError> {
-    let platform = host_platform();
-    let release = pinned(agent, &platform)?;
+    let host = host_platform();
+    let release = pinned(agent, &host)?;
     let source = HttpsArchives::new().map_err(|error| RunError::Agent(error.to_string()))?;
     let store = ManagedRuntimes::new(root);
     let installed = InstallAgentRuntime {
         source: &source,
         store: &store,
     }
-    .execute(agent, &release, &platform)
+    .execute(agent, &release, &host)
     .map_err(|failure| RunError::Agent(explain(&failure)))?;
     tracing::info!(
         agent = agent.as_str(),
@@ -75,21 +75,34 @@ fn install(agent: &AgentName, root: &Path) -> Result<InstalledRuntime, RunError>
 /// download went wrong. An agent Nessa *does* install but not for this
 /// platform is the opposite message: the agent is right, the machine is not one
 /// there is a tested build for.
-fn pinned(agent: &AgentName, platform: &ReleasePlatform) -> Result<PinnedRelease, RunError> {
+fn pinned(agent: &AgentName, host: &HostPlatform) -> Result<PinnedRelease, RunError> {
     let releases = releases_for(agent).map_err(|error| RunError::Agent(error.to_string()))?;
     if releases.is_empty() {
         return Err(RunError::Agent(format!(
             "{agent} is not an agent nessa installs"
         )));
     }
+    preferred(releases, host)
+        .ok_or_else(|| RunError::Agent(format!("nessa has no tested {agent} release for {host}")))
+}
+
+/// The best of `releases` for this machine, if any of them runs on it at all.
+///
+/// Its own function, taking the releases rather than reading them, because the
+/// answer has to be the same whatever order the pin file happens to list them
+/// in — and a test that asks this through the compiled-in file cannot tell a
+/// preference from the first entry that matched.
+fn preferred(releases: Vec<PinnedRelease>, host: &HostPlatform) -> Option<PinnedRelease> {
     releases
         .into_iter()
-        .find(|release| release.runs_on(platform))
-        .ok_or_else(|| {
-            RunError::Agent(format!(
-                "nessa has no tested {agent} release for {platform}"
-            ))
-        })
+        .filter(|release| release.runs_on(host))
+        // Several pinned archives can run here at once: the vendor publishes a
+        // build that needs AVX2 and one that does not, and a machine with AVX2
+        // runs either. Take the more demanding one, which is the vendor's own
+        // default build — the undemanding one exists for machines that cannot
+        // take it, and installing it everywhere would give up what it is there
+        // to preserve.
+        .max_by_key(|release| release.requirements().avx2())
 }
 
 /// Say what went wrong, and whether it is worth trying again.

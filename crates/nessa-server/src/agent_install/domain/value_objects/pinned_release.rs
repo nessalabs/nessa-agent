@@ -3,6 +3,7 @@ use std::fmt;
 use url::Url;
 
 use super::device_names::names_a_device;
+use super::host_platform::{HostPlatform, ReleaseRequirements};
 
 /// What a pinned release can be wrong about, at the moment it is described.
 ///
@@ -21,6 +22,10 @@ pub enum PinRejected {
     /// An operating system or architecture token that is empty or not a plain
     /// lowercase identifier.
     Platform(String),
+    /// A C library the pin names that this build has no notion of. Left as a
+    /// refusal rather than treated as "no requirement", because a pin naming
+    /// one Nessa cannot check is a pin whose build might not start.
+    Libc(String),
     /// Not sixty-four lowercase hexadecimal characters.
     Digest(String),
     /// Not a URL at all, or not one an archive may be fetched from: anything
@@ -45,6 +50,9 @@ impl fmt::Display for PinRejected {
                 f,
                 "release platform token is not a plain lowercase identifier: {value:?}"
             ),
+            Self::Libc(value) => {
+                write!(f, "release names a c library nessa cannot check: {value:?}")
+            }
             Self::Digest(value) => write!(
                 f,
                 "archive digest is not sixty-four lowercase hex characters: {value:?}"
@@ -357,6 +365,7 @@ impl std::error::Error for ArchiveRejected {}
 pub struct PinnedRelease {
     version: ReleaseVersion,
     platform: ReleasePlatform,
+    requirements: ReleaseRequirements,
     archive_url: ArchiveUrl,
     archive_digest: ArchiveDigest,
     executable: ArchivePath,
@@ -372,6 +381,7 @@ impl PinnedRelease {
     pub fn new(
         version: ReleaseVersion,
         platform: ReleasePlatform,
+        requirements: ReleaseRequirements,
         archive_url: ArchiveUrl,
         archive_digest: ArchiveDigest,
         executable: ArchivePath,
@@ -379,6 +389,7 @@ impl PinnedRelease {
         Self {
             version,
             platform,
+            requirements,
             archive_url,
             archive_digest,
             executable,
@@ -393,6 +404,14 @@ impl PinnedRelease {
         &self.platform
     }
 
+    pub fn requirements(&self) -> &ReleaseRequirements {
+        &self.requirements
+    }
+
+    pub fn archive_digest(&self) -> &ArchiveDigest {
+        &self.archive_digest
+    }
+
     pub fn archive_url(&self) -> &ArchiveUrl {
         &self.archive_url
     }
@@ -401,9 +420,15 @@ impl PinnedRelease {
         &self.executable
     }
 
-    /// Whether this release is the one to install on `platform`.
-    pub fn runs_on(&self, platform: &ReleasePlatform) -> bool {
-        &self.platform == platform
+    /// Whether this release will run on `host`.
+    ///
+    /// Two questions, not one. The platform has to be the same, and the machine
+    /// has to provide what the build needs — which for one platform can differ
+    /// from one pinned archive to the next. Answering only the first is how a
+    /// machine is handed a binary that matches its operating system and
+    /// architecture and still cannot start.
+    pub fn runs_on(&self, host: &HostPlatform) -> bool {
+        &self.platform == host.platform() && host.satisfies(&self.requirements)
     }
 
     /// Accept or reject what actually arrived.

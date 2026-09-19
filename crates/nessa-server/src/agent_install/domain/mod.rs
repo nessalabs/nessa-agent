@@ -13,6 +13,7 @@
 //! Deciding *where* a runtime goes and putting it there is infrastructure.
 pub mod value_objects;
 pub use value_objects::{
-    AgentName, ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveUrl, NotAnAgentName,
-    PinRejected, PinnedRelease, ReleasePlatform, ReleaseVersion,
+    AgentName, ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveUrl, HostPlatform, Libc,
+    NotAnAgentName, PinRejected, PinnedRelease, ReleasePlatform, ReleaseRequirements,
+    ReleaseVersion,
 };

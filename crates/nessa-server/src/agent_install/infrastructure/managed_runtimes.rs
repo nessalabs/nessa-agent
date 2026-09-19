@@ -35,24 +35,83 @@ const UNPACK_CHUNK: usize = 64 * 1024;
 /// archive. The version in particular is the *pinned* one: asking a downloaded
 /// binary what version it is would be asking the thing we are trying to verify.
 ///
-/// `executable` is a file name, not a path. A record holding an absolute path
-/// would be a second, independent claim about where runtimes live, free to
-/// disagree with the store that wrote it and still name a real file — so the
-/// only thing kept is the one part the store cannot work out for itself, and
-/// the rest is recomputed from the root and the version every time.
+/// It names the artifact rather than the version, because a version does not
+/// identify a binary. One Opencode version is published as nine archives — two
+/// operating systems, two architectures, glibc and musl, with and without
+/// AVX2 — and every one of them unpacks a file called `opencode`. A record
+/// carrying only the version and that name would answer "already installed" to
+/// a pin asking for a different one of the nine, and hand back a binary this
+/// machine may not even be able to start. The digest is what tells them apart,
+/// and it is the same digest the download was accepted against, so a record
+/// that matches is a record about bytes Nessa verified.
+///
+/// Every field is compared against the pin before the record is believed, and
+/// none of it is used to build a path. A record holding somewhere to launch
+/// from would be a second, independent claim about where runtimes live, free to
+/// disagree with the store that wrote it and still name a real file.
 #[derive(Debug, Serialize, Deserialize)]
 struct InstallationRecord {
     version: String,
+    /// The operating system and architecture, as [`ReleasePlatform`] writes
+    /// them.
+    platform: String,
+    /// The C library the installed build needs, absent where the platform has
+    /// only one.
+    #[serde(default)]
+    libc: Option<String>,
+    /// Whether the installed build needs AVX2.
+    #[serde(default)]
+    requires_avx2: bool,
+    /// The archive digest this runtime was accepted against.
+    digest: String,
+    /// The entry inside the archive, exactly as the pin names it.
     executable: String,
+}
+
+impl InstallationRecord {
+    /// What this store would write for `release`.
+    fn of(release: &PinnedRelease) -> Self {
+        Self {
+            version: release.version().as_str().to_owned(),
+            platform: release.platform().to_string(),
+            libc: release.requirements().libc().map(|l| l.as_str().to_owned()),
+            requires_avx2: release.requirements().avx2(),
+            digest: release.archive_digest().as_str().to_owned(),
+            executable: release.executable().as_str().to_owned(),
+        }
+    }
+
+    /// Whether this record describes exactly the artifact `release` pins.
+    ///
+    /// Compared field by field rather than on the digest alone. The digest is
+    /// the identity and would be enough on its own, but a record agreeing on it
+    /// and disagreeing about anything else was not written by this store for
+    /// this pin, and "close enough" is how a machine ends up launching a
+    /// binary built for a different one.
+    fn describes(&self, release: &PinnedRelease) -> bool {
+        *self == Self::of(release)
+    }
+}
+
+impl PartialEq for InstallationRecord {
+    fn eq(&self, other: &Self) -> bool {
+        self.version == other.version
+            && self.platform == other.platform
+            && self.libc == other.libc
+            && self.requires_avx2 == other.requires_avx2
+            && self.digest == other.digest
+            && self.executable == other.executable
+    }
 }
 
 /// The runtimes Nessa installed, under one directory it owns.
 ///
 /// ```text
-/// <root>/<agent>/installed.json            what is installed, written last
-/// <root>/<agent>/versions/<version>/<name> the executable itself
-/// <root>/<agent>/.nessa-<hex>.download     a download in progress, unnamed on unix
-/// <root>/<agent>/.nessa-<hex>.tmp          a record or executable being written
+/// <root>/<agent>/installed.json                     what is installed, written last
+/// <root>/<agent>/install.lock                       held while one install publishes
+/// <root>/<agent>/versions/<version>/<digest>/<name> the executable itself
+/// <root>/<agent>/.nessa-<hex>.download              a download in progress, unnamed on unix
+/// <root>/<agent>/.nessa-<hex>.tmp                   a record or executable being written
 /// ```
 ///
 /// Versions sit under `versions/` so that nothing the store names for itself
@@ -60,11 +119,17 @@ struct InstallationRecord {
 /// and one directory for both would make which of them won a question about
 /// the order things happened in.
 ///
-/// A runtime is unpacked under its version rather than over the previous one,
-/// so a pin that moves does not half-overwrite a binary that something may
-/// still be running. `installed.json` is written only once the executable is in
-/// place *and* on the disk, which is what makes a crashed install read as
-/// "nothing installed" rather than as a runtime that is not there.
+/// Under the version is the archive's digest, because a version does not name a
+/// binary. One version is published as an archive per platform, per C library
+/// and per processor baseline, and all of them unpack a file of the same name.
+/// Keyed by version alone they would overwrite one another, and a machine that
+/// had installed one would be told it already had another.
+///
+/// A runtime is unpacked beside the previous one rather than over it, so a pin
+/// that moves does not half-overwrite a binary that something may still be
+/// running. `installed.json` is written only once the executable is in place
+/// *and* on the disk, which is what makes a crashed install read as "nothing
+/// installed" rather than as a runtime that is not there.
 ///
 /// Every directory here is created private to this user, and every file this
 /// type publishes is written to a temporary name, synced, and renamed into
@@ -99,14 +164,81 @@ impl ManagedRuntimes {
     /// admits, and a pin naming one would have `publish` and `record` fighting
     /// over a single path. Kept apart by the layout rather than by a rule the
     /// domain would have to know about this directory to write.
+    fn versions_root(&self, agent: &AgentName) -> PathBuf {
+        self.agent_root(agent).join("versions")
+    }
+
     fn version_root(&self, agent: &AgentName, version: &ReleaseVersion) -> PathBuf {
-        self.agent_root(agent)
-            .join("versions")
-            .join(version.as_str())
+        self.versions_root(agent).join(version.as_str())
+    }
+
+    /// Where one *artifact* of a version lives.
+    ///
+    /// Named by the archive digest, which is the only thing that tells nine
+    /// archives of one version apart, and which this store already holds
+    /// because it is what the download was accepted against. Sixty-four
+    /// lowercase hex characters, so it is a directory name everywhere.
+    fn artifact_root(&self, agent: &AgentName, release: &PinnedRelease) -> PathBuf {
+        self.version_root(agent, release.version())
+            .join(release.archive_digest().as_str())
+    }
+
+    /// Every directory this install creates, innermost first.
+    ///
+    /// Written out rather than walked with `parent()` so that the chain the
+    /// store makes durable is the chain the store made, and stops at its own
+    /// root rather than at whatever is above it.
+    fn created_directories(&self, agent: &AgentName, release: &PinnedRelease) -> [PathBuf; 5] {
+        [
+            self.artifact_root(agent, release),
+            self.version_root(agent, release.version()),
+            self.versions_root(agent),
+            self.agent_root(agent),
+            self.root.clone(),
+        ]
     }
 
     fn record_path(&self, agent: &AgentName) -> PathBuf {
         self.agent_root(agent).join("installed.json")
+    }
+
+    fn lock_path(&self, agent: &AgentName) -> PathBuf {
+        self.agent_root(agent).join("install.lock")
+    }
+
+    /// Hold the sole right to publish one agent's runtimes.
+    ///
+    /// Publication is not a single rename. It creates directories, unpacks a
+    /// hundred megabytes into one of them, renames the executable into place,
+    /// makes that durable and only then writes the record — and it undoes the
+    /// executable if any of that fails. Two of those sequences overlapping is
+    /// how one install's clean-up removes another's finished runtime: both
+    /// write the same path, and the loser's rollback cannot tell the winner's
+    /// file from its own. Held across the whole sequence, including the
+    /// rollback, that rollback can only ever remove what this call wrote.
+    ///
+    /// Taken on a file rather than in memory because the two installs need not
+    /// be in one process: Nessa can be running while somebody installs from a
+    /// second copy, and a mutex would exclude nothing between them. The lock is
+    /// advisory, which is enough here — everything that publishes goes through
+    /// this method — and it is released when the handle closes, including when
+    /// the process holding it dies, so a killed install leaves nothing for the
+    /// next one to break on.
+    ///
+    /// Blocking on purpose. The other install is unpacking a file this one
+    /// would otherwise unpack again; waiting for it is the outcome the caller
+    /// wants, and the recheck immediately after is what turns that wait into a
+    /// result rather than a second download.
+    fn hold(&self, agent: &AgentName) -> Result<File, StoreFailure> {
+        let directory = self.agent_root(agent);
+        private_directory(&directory)?;
+        let path = self.lock_path(agent);
+        // `OpenOrCreate`, so the first install to run creates it and every
+        // later one takes the same file. It stays behind afterwards, which is
+        // what lets it be the same file next time; it holds no bytes.
+        let lock = open(&path, OpenMode::OpenOrCreate).map_err(|error| at(&path, error))?;
+        lock.lock().map_err(|error| at(&path, error))?;
+        Ok(lock)
     }
 
     /// Note what is now installed, once it really is.
@@ -117,10 +249,7 @@ impl ManagedRuntimes {
     /// afterwards so the rename itself survives, which also makes durable the
     /// version directory created a moment earlier.
     fn record(&self, agent: &AgentName, release: &PinnedRelease) -> Result<(), StoreFailure> {
-        let record = InstallationRecord {
-            version: release.version().as_str().to_owned(),
-            executable: release.executable().file_name().to_owned(),
-        };
+        let record = InstallationRecord::of(release);
         let directory = self.agent_root(agent);
         let mut staging = PrivateTempFile::new_in(&directory).map_err(unwritable)?;
         serde_json::to_writer_pretty(staging.as_file_mut(), &record)
@@ -137,14 +266,29 @@ impl ManagedRuntimes {
     /// Its own step so that everything which can fail after the rename sits in
     /// one place the caller can guard. Adding a step here rather than to
     /// `publish` directly is what keeps it inside that guard.
+    ///
+    /// `durable` is how a directory is forced to the disk. It is a parameter
+    /// rather than a call to [`sync_directory`] written inline because the
+    /// order this walks in is the whole of what this method decides, and on a
+    /// real filesystem that order leaves no trace: a directory whose entry was
+    /// never synced still reads back exactly the same. Passed in, the walk has
+    /// somewhere to be observed from, and `publish` supplies the real one.
     fn settle(
         &self,
         agent: &AgentName,
         release: &PinnedRelease,
-        directory: &Path,
+        durable: impl Fn(&Path) -> io::Result<()>,
     ) -> Result<(), StoreFailure> {
-        // The rename survives a crash only once the directory holding it does.
-        sync_directory(directory).map_err(unwritable)?;
+        // A rename survives a crash only once the directory holding it does —
+        // and that directory only once the one holding *it* does. Every level
+        // from the executable's own directory up to this store's root can have
+        // been created by this install, and syncing the innermost alone leaves
+        // a crash able to come back to a machine with no version directory at
+        // all and a record insisting there is one. Outward, so each level is
+        // durable before the entry naming it is claimed to be.
+        for directory in self.created_directories(agent, release) {
+            durable(&directory).map_err(unwritable)?;
+        }
         self.record(agent, release)
     }
 
@@ -155,7 +299,7 @@ impl ManagedRuntimes {
     /// second one about the clean-up would replace the cause with its
     /// consequence. What cannot be removed is logged, so that a directory
     /// holding an unrecorded runtime is at least explainable.
-    fn withdraw(&self, executable: &Path) {
+    fn withdraw(&self, agent: &AgentName, release: &PinnedRelease, executable: &Path) {
         if let Err(error) = fs::remove_file(executable) {
             if error.kind() != io::ErrorKind::NotFound {
                 // `warn`, not `debug`: the shipped default keeps `info` and
@@ -169,15 +313,28 @@ impl ManagedRuntimes {
                 );
             }
         }
-        if let Some(directory) = executable.parent() {
-            self.sweep(directory);
-        }
+        self.sweep_artifact(agent, release);
     }
 
-    /// Remove a version directory this install made and then had no use for.
+    /// Remove the directories this install made and then had no use for.
+    ///
+    /// Both of them: the artifact directory holds this artifact alone, and the
+    /// version directory holds nothing but artifact directories of that
+    /// version, so an install that produced neither has left an empty pair
+    /// behind. `versions/` and the agent's own directory are not swept — they
+    /// are the store's furniture rather than this install's leavings, and the
+    /// record and the lock live in the second one.
+    fn sweep_artifact(&self, agent: &AgentName, release: &PinnedRelease) {
+        self.sweep(&self.artifact_root(agent, release));
+        self.sweep(&self.version_root(agent, release.version()));
+    }
+
+    /// Remove one directory this install made, if it is empty.
     ///
     /// Only when it is empty, which `remove_dir` decides by failing otherwise —
-    /// and empty is exactly the case where it holds nothing anybody wants.
+    /// and empty is exactly the case where it holds nothing anybody wants. That
+    /// is also what keeps a sibling safe: another artifact of the same version
+    /// leaves the version directory populated, so it stays.
     /// Silent, because a directory that will not go costs one inode and saying
     /// so would bury the failure that actually matters.
     fn sweep(&self, directory: &Path) {
@@ -276,6 +433,91 @@ impl ManagedRuntimes {
         }
         Ok(false)
     }
+    /// Publish a runtime, forcing directories to the disk with `durable`.
+    ///
+    /// The whole of [`RuntimeStore::publish`], which supplies the real
+    /// primitive. It is a parameter for the reason [`Self::settle`] gives —
+    /// the walk it decides leaves no trace on a real filesystem — and keeping
+    /// it threaded this far means the guarded region, rollback included, has
+    /// somewhere to be observed from. A failure to settle is otherwise only
+    /// reachable on a disk that has run out part-way through an install.
+    fn publish_durably(
+        &self,
+        agent: &AgentName,
+        release: &PinnedRelease,
+        staged: &mut StagedArchive,
+        durable: impl Fn(&Path) -> io::Result<()>,
+    ) -> Result<PathBuf, StoreFailure> {
+        // Held from here to the end of this method, the rollback included.
+        // Everything below assumes that whatever is at `destination` when it
+        // looks is either nothing or this call's own work, and that assumption
+        // is true only while nobody else is publishing this agent.
+        let _lock = self.hold(agent)?;
+        // Asked again now that this call is the only one publishing. The
+        // caller asked before downloading, and between that answer and this
+        // line another install may have finished the very same artifact — in
+        // which case it is already there, verified against the same digest,
+        // and unpacking over it would mean replacing a file something may be
+        // running with an identical one. Handing back what is installed also
+        // keeps the rollback below honest: after this point, a file at
+        // `destination` can only have been put there by this call.
+        if let Some(installed) = self.installed(agent, release)? {
+            return Ok(installed);
+        }
+        let directory = self.artifact_root(agent, release);
+        private_directory(&directory)?;
+        let destination = directory.join(release.executable().file_name());
+        let unpacked = self.unpack(
+            release,
+            staged,
+            &destination,
+            &directory,
+            MAXIMUM_EXECUTABLE_BYTES,
+        );
+        // Every way of not getting an executable ends the same: the version
+        // directory was made a moment ago in the expectation of one, and
+        // sweeping it is the whole of the clean-up, because nothing was
+        // written. Deliberately not `withdraw`: this call put no file at that
+        // path, and removing whatever is there would mean a pin that is wrong
+        // about its own contents deleting a runtime somebody was using.
+        match unpacked {
+            Err(failure) => {
+                self.sweep_artifact(agent, release);
+                return Err(failure);
+            }
+            Ok(false) => {
+                self.sweep_artifact(agent, release);
+                return Err(StoreFailure::MissingExecutable(
+                    release.executable().as_str().to_owned(),
+                ));
+            }
+            Ok(true) => {}
+        }
+        // Everything from the rename onwards is guarded together, because from
+        // that moment an executable exists and a failure would otherwise leave
+        // it behind.
+        //
+        // The record is written last, since it is what makes the install true:
+        // `installed` answers from it, so writing it before the executable
+        // exists would claim an install that does not. That ordering leaves a
+        // window, and it is not only the record that can fail in it — making
+        // the directory durable can too. Returning either failure on its own
+        // would tell somebody nothing was installed while a hundred megabytes
+        // of runtime sat in a directory no record names, which nothing would
+        // ever look at again — on a disk that, in the likeliest cause of this
+        // failure, is the thing that ran out. So the executable is taken back
+        // out, and the message is true when it is read.
+        if let Err(failure) = self.settle(agent, release, durable) {
+            // Unconditional, and safe to be: the lock has been held since
+            // before the recheck, which found nothing installed, so the file
+            // at `destination` is the one this call renamed there and no other
+            // install can have finished in between. Taking it back out is
+            // undoing this call's own work, not losing somebody else's.
+            self.withdraw(agent, release, &destination);
+            return Err(failure);
+        }
+        Ok(destination)
+    }
 }
 
 impl RuntimeStore for ManagedRuntimes {
@@ -302,15 +544,20 @@ impl RuntimeStore for ManagedRuntimes {
         record.read_to_end(&mut encoded).map_err(unreadable)?;
         let record: InstallationRecord = serde_json::from_slice(&encoded)
             .map_err(|error| StoreFailure::Unreadable(error.to_string()))?;
-        // Everything below that does not match is answered with "not
-        // installed", never with a failure: a record this store did not write,
-        // or one something has since edited, describes nothing that can be
-        // launched, and the pinned release is known and can simply be
-        // installed over it.
-        let Ok(version) = ReleaseVersion::parse(&record.version) else {
-            return Ok(None);
-        };
-        if &version != release.version() || record.executable != release.executable().file_name() {
+        // Anything that does not describe exactly this artifact is answered
+        // with "not installed", never with a failure: a record this store did
+        // not write, one something has since edited, and one about a different
+        // artifact all describe nothing that can be launched here, and the
+        // pinned release is known and can simply be installed over it.
+        //
+        // Every field is compared, the digest included. A record agreeing only
+        // on the version and the file's name is the case this exists for: one
+        // version of Opencode ships as nine archives, one per platform, C
+        // library and processor baseline, each unpacking a file called
+        // `opencode`. Matching on those two would hand back whichever of the
+        // nine happened to be installed — quite possibly one this machine
+        // cannot execute at all — and report it as the tested runtime.
+        if !record.describes(release) {
             return Ok(None);
         }
         // The path is recomputed from the release rather than read back out of
@@ -320,7 +567,7 @@ impl RuntimeStore for ManagedRuntimes {
         // since been deleted — by a disk cleaner, or by someone tidying up —
         // makes it stale, and an empty one is a runtime that cannot start.
         let executable = self
-            .version_root(agent, release.version())
+            .artifact_root(agent, release)
             .join(release.executable().file_name());
         // `symlink_metadata`, not `metadata`: the second follows a symbolic
         // link and reports on whatever it points at, so a link planted at this
@@ -394,67 +641,7 @@ impl RuntimeStore for ManagedRuntimes {
         release: &PinnedRelease,
         staged: &mut StagedArchive,
     ) -> Result<PathBuf, StoreFailure> {
-        let directory = self.version_root(agent, release.version());
-        private_directory(&directory)?;
-        let destination = directory.join(release.executable().file_name());
-        let unpacked = self.unpack(
-            release,
-            staged,
-            &destination,
-            &directory,
-            MAXIMUM_EXECUTABLE_BYTES,
-        );
-        // Every way of not getting an executable ends the same: the version
-        // directory was made a moment ago in the expectation of one, and
-        // sweeping it is the whole of the clean-up, because nothing was
-        // written. Deliberately not `withdraw`: this call put no file at that
-        // path, and removing whatever is there would mean a pin that is wrong
-        // about its own contents deleting a runtime somebody was using.
-        match unpacked {
-            Err(failure) => {
-                self.sweep(&directory);
-                return Err(failure);
-            }
-            Ok(false) => {
-                self.sweep(&directory);
-                return Err(StoreFailure::MissingExecutable(
-                    release.executable().as_str().to_owned(),
-                ));
-            }
-            Ok(true) => {}
-        }
-        // Everything from the rename onwards is guarded together, because from
-        // that moment an executable exists and a failure would otherwise leave
-        // it behind.
-        //
-        // The record is written last, since it is what makes the install true:
-        // `installed` answers from it, so writing it before the executable
-        // exists would claim an install that does not. That ordering leaves a
-        // window, and it is not only the record that can fail in it — making
-        // the directory durable can too. Returning either failure on its own
-        // would tell somebody nothing was installed while a hundred megabytes
-        // of runtime sat in a directory no record names, which nothing would
-        // ever look at again — on a disk that, in the likeliest cause of this
-        // failure, is the thing that ran out. So the executable is taken back
-        // out, and the message is true when it is read.
-        if let Err(failure) = self.settle(agent, release, &directory) {
-            // Unconditional, deliberately. Two installs of the same release can
-            // run at once, since nothing here excludes them, and both rename
-            // onto this path — so a failure here could in principle be taking
-            // away a file another process just finished. There is no way to
-            // tell that apart from a record left over from an earlier install
-            // whose executable went missing, because the two records say the
-            // same thing; a guard that skipped the withdraw would skip it in
-            // both cases, and then this call would report a failure while
-            // leaving a live, recorded install behind. Between reporting
-            // something untrue and losing a race, the race is the better
-            // outcome: the loser's record names a file that is gone, which
-            // `installed` reads as nothing installed, and the next run puts it
-            // back.
-            self.withdraw(&destination);
-            return Err(failure);
-        }
-        Ok(destination)
+        self.publish_durably(agent, release, staged, sync_directory)
     }
 
     fn discard(&self, staged: StagedArchive) {

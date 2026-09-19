@@ -5,8 +5,8 @@ use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde::Deserialize;
 
 use crate::agent_install::domain::{
-    AgentName, ArchiveDigest, ArchivePath, ArchiveUrl, PinRejected, PinnedRelease, ReleasePlatform,
-    ReleaseVersion,
+    AgentName, ArchiveDigest, ArchivePath, ArchiveUrl, HostPlatform, Libc, PinRejected,
+    PinnedRelease, ReleasePlatform, ReleaseRequirements, ReleaseVersion,
 };
 
 /// The releases Nessa has tested, compiled into the server.
@@ -23,6 +23,17 @@ const PINS: &str = include_str!("../../../data/agent-releases.json");
 struct ReleaseDocument {
     operating_system: String,
     architecture: String,
+    /// Absent where the platform has only one, which is every platform but
+    /// Linux. Absent on Linux would mean a build that runs against either,
+    /// which none of the ones Nessa pins are.
+    #[serde(default)]
+    libc: Option<String>,
+    /// Absent reads as false, which is the safe direction: a build wrongly
+    /// marked as not needing AVX2 runs everywhere and only gives up speed,
+    /// where the other mistake is an illegal instruction on a machine that
+    /// was told its runtime was ready.
+    #[serde(default)]
+    requires_avx2: bool,
     version: String,
     archive_url: String,
     archive_digest: String,
@@ -84,11 +95,13 @@ pub enum PinFileError {
     Malformed(String),
     /// A release in the document is not a valid pin.
     Invalid { agent: String, reason: PinRejected },
-    /// One agent has two releases for the same platform, so which one is
-    /// installed would depend on the order they happen to be written in.
+    /// One agent has two releases a single machine could not tell apart, so
+    /// which one is installed would depend on the order they happen to be
+    /// written in.
     PlatformPinnedTwice {
         agent: String,
         platform: ReleasePlatform,
+        requirements: ReleaseRequirements,
     },
 }
 
@@ -99,8 +112,12 @@ impl fmt::Display for PinFileError {
             Self::Invalid { agent, reason } => {
                 write!(f, "the pinned release for {agent} is invalid: {reason}")
             }
-            Self::PlatformPinnedTwice { agent, platform } => {
-                write!(f, "{agent} is pinned twice for {platform}")
+            Self::PlatformPinnedTwice {
+                agent,
+                platform,
+                requirements,
+            } => {
+                write!(f, "{agent} is pinned twice for {platform} ({requirements})")
             }
         }
     }
@@ -108,15 +125,66 @@ impl fmt::Display for PinFileError {
 
 impl std::error::Error for PinFileError {}
 
-/// The platform this build of Nessa is for.
+/// This machine, in the terms a release states its needs in.
 ///
-/// Read from the compiler's own target rather than from the running system,
-/// because the question is which binary this process can launch: a build for
-/// one architecture running under emulation on another must install the runtime
-/// that matches the build, not the silicon.
-pub fn host_platform() -> ReleasePlatform {
-    ReleasePlatform::new(std::env::consts::OS, std::env::consts::ARCH)
-        .expect("the compiler's own target tokens are plain lowercase identifiers")
+/// The whole boundary between "what is true of the computer this is running on"
+/// and everything that decides what to install. Nothing below this reads the
+/// machine, so every case a release can be chosen for — musl, a processor
+/// without AVX2, a platform nothing is pinned for — is reachable in a test by
+/// building a [`HostPlatform`] rather than by owning that machine.
+///
+/// The operating system and architecture come from the compiler's own target
+/// rather than from the running system, because the question is which binary
+/// this process can launch: a build for one architecture running under
+/// emulation on another must install the runtime that matches the build, not
+/// the silicon. The other two answers are read from this process and from the
+/// processor, for the reasons on each.
+pub fn host_platform() -> HostPlatform {
+    HostPlatform::new(
+        ReleasePlatform::new(std::env::consts::OS, std::env::consts::ARCH)
+            .expect("the compiler's own target tokens are plain lowercase identifiers"),
+        host_libc(),
+        host_has_avx2(),
+    )
+}
+
+/// Which C library this machine is known to have.
+///
+/// Taken from what *this* binary was linked against, which is the one fact
+/// available that cannot be wrong: a glibc build could not have reached this
+/// line on a machine without glibc, and neither could a musl build without
+/// musl. Looking for a loader on disk would answer a different question —
+/// which libraries are installed — and would have to guess between them on a
+/// machine carrying both.
+///
+/// `None` on a target built against neither, which is not a machine Nessa
+/// ships for. A release that names a library is then refused rather than
+/// installed on a guess.
+fn host_libc() -> Option<Libc> {
+    if cfg!(target_env = "musl") {
+        Some(Libc::Musl)
+    } else if cfg!(target_env = "gnu") {
+        Some(Libc::Gnu)
+    } else {
+        None
+    }
+}
+
+/// Whether this processor supports AVX2.
+///
+/// Asked of the processor at runtime rather than of the compiler's target,
+/// because this is the one question where the silicon is the subject: a build
+/// targeting x86-64 says nothing about which optional instruction sets the
+/// machine running it implements.
+fn host_has_avx2() -> bool {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        std::arch::is_x86_feature_detected!("avx2")
+    }
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    {
+        false
+    }
 }
 
 /// Every tested release for `agent`, in the order the pin file lists them.
@@ -149,14 +217,19 @@ fn releases_in(document: &str, agent: &AgentName) -> Result<Vec<PinnedRelease>, 
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    // Compared on the platform *and* what the build needs, because those two
+    // together are what a machine is matched against. Two Linux x86-64 archives
+    // are an ordinary pin when one wants musl and the other glibc, and a
+    // mistake when they want the same thing.
     for (index, release) in releases.iter().enumerate() {
-        if releases[..index]
-            .iter()
-            .any(|earlier| earlier.runs_on(release.platform()))
-        {
+        if releases[..index].iter().any(|earlier| {
+            earlier.platform() == release.platform()
+                && earlier.requirements() == release.requirements()
+        }) {
             return Err(PinFileError::PlatformPinnedTwice {
                 agent: agent.to_string(),
                 platform: release.platform().clone(),
+                requirements: *release.requirements(),
             });
         }
     }
@@ -170,9 +243,11 @@ fn releases_in(document: &str, agent: &AgentName) -> Result<Vec<PinnedRelease>, 
 /// archive, a plain-http URL — is a build that fails a test rather than a
 /// download that installs something unexpected.
 fn release(entry: &ReleaseDocument) -> Result<PinnedRelease, PinRejected> {
+    let libc = entry.libc.as_deref().map(Libc::parse).transpose()?;
     Ok(PinnedRelease::new(
         ReleaseVersion::parse(&entry.version)?,
         ReleasePlatform::new(&entry.operating_system, &entry.architecture)?,
+        ReleaseRequirements::new(libc, entry.requires_avx2),
         ArchiveUrl::parse(&entry.archive_url)?,
         ArchiveDigest::parse(&entry.archive_digest)?,
         ArchivePath::parse(&entry.executable)?,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent_install::domain::{Libc, ReleasePlatform, ReleaseRequirements};
 use std::path::Path;
 
 use crate::agent_install::application::{InstalledRuntime, StoreFailure};
@@ -18,7 +19,8 @@ fn digest(byte: char) -> ArchiveDigest {
 fn rejection() -> ArchiveRejected {
     PinnedRelease::new(
         ReleaseVersion::parse("1.0.0").expect("usable version"),
-        host_platform(),
+        host_platform().platform().clone(),
+        ReleaseRequirements::default(),
         ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url"),
         digest('a'),
         ArchivePath::parse("package/bin/opencode").expect("contained path"),
@@ -89,7 +91,11 @@ fn an_agent_with_no_build_for_this_machine_is_told_so() {
     // The opposite message: the agent is one Nessa installs, this machine is
     // just not one there is a tested build for. Telling that person Opencode
     // "is not an agent nessa installs" would be false.
-    let elsewhere = ReleasePlatform::new("plan9", "sparc64").expect("usable platform");
+    let elsewhere = HostPlatform::new(
+        ReleasePlatform::new("plan9", "sparc64").expect("usable platform"),
+        None,
+        false,
+    );
     let failure = pinned(&opencode(), &elsewhere).expect_err("plan9 is not a pinned platform");
     let message = failure.to_string();
     assert!(
@@ -187,9 +193,11 @@ fn a_failure_says_that_nothing_was_installed() {
     // Somebody whose install failed needs to know whether they have half a
     // runtime on the machine.
     for failure in [
-        InstallFailure::UnsupportedPlatform(
+        InstallFailure::UnsupportedPlatform(HostPlatform::new(
             ReleasePlatform::new("windows", "x86_64").expect("usable platform"),
-        ),
+            Some(Libc::Gnu),
+            false,
+        )),
         InstallFailure::Download(SourceFailure::Unreachable("offline".into())),
         InstallFailure::Rejected(rejection()),
         InstallFailure::Store(StoreFailure::Unwritable("no room".into())),
@@ -240,4 +248,173 @@ fn an_install_that_downloaded_nothing_says_so() {
     };
 
     assert_eq!(report(&opencode(), &installed)["downloaded"], false);
+}
+
+/// One machine, for the tests about which build gets chosen for it.
+fn machine(
+    operating_system: &str,
+    architecture: &str,
+    libc: Option<Libc>,
+    avx2: bool,
+) -> HostPlatform {
+    HostPlatform::new(
+        ReleasePlatform::new(operating_system, architecture).expect("usable platform"),
+        libc,
+        avx2,
+    )
+}
+
+#[test]
+fn a_machine_is_only_ever_offered_a_build_it_can_run() {
+    // The whole matrix, against the compiled-in pin file: two C libraries on
+    // Linux, and a processor with and without AVX2 on each. Both of the wrong
+    // choices here are a binary that does not start — a glibc build dies in the
+    // loader on a musl-only machine, and an AVX2 build dies on an illegal
+    // instruction — after Nessa has told somebody their runtime is ready.
+    for (operating_system, architecture, libc, avx2) in [
+        ("linux", "x86_64", Some(Libc::Gnu), true),
+        ("linux", "x86_64", Some(Libc::Gnu), false),
+        ("linux", "x86_64", Some(Libc::Musl), true),
+        ("linux", "x86_64", Some(Libc::Musl), false),
+        ("linux", "aarch64", Some(Libc::Gnu), false),
+        ("linux", "aarch64", Some(Libc::Musl), false),
+        ("macos", "x86_64", None, true),
+        ("macos", "x86_64", None, false),
+        ("macos", "aarch64", None, false),
+    ] {
+        let host = machine(operating_system, architecture, libc, avx2);
+        let chosen = pinned(&opencode(), &host).expect("every supported machine has a build");
+
+        assert!(
+            chosen.runs_on(&host),
+            "{host} was offered a build it cannot run"
+        );
+    }
+}
+
+#[test]
+fn a_processor_with_avx2_gets_the_build_that_uses_it() {
+    // Both builds run on such a machine, so this is a preference rather than a
+    // filter — and the demanding one is the vendor's own default. The baseline
+    // build exists for machines that cannot take it, and installing it
+    // everywhere would give up exactly what it is there to preserve.
+    let with = machine("linux", "x86_64", Some(Libc::Gnu), true);
+    let without = machine("linux", "x86_64", Some(Libc::Gnu), false);
+
+    let fast = pinned(&opencode(), &with).expect("a build for a machine with avx2");
+    let baseline = pinned(&opencode(), &without).expect("a build for a machine without it");
+
+    assert!(
+        fast.requirements().avx2(),
+        "the faster build was passed over"
+    );
+    assert!(
+        !baseline.requirements().avx2(),
+        "a processor without avx2 was offered a build that needs it"
+    );
+    assert_ne!(fast.archive_digest(), baseline.archive_digest());
+}
+
+#[test]
+fn the_two_c_libraries_get_two_different_builds() {
+    let gnu = pinned(
+        &opencode(),
+        &machine("linux", "x86_64", Some(Libc::Gnu), true),
+    )
+    .expect("a glibc build");
+    let musl = pinned(
+        &opencode(),
+        &machine("linux", "x86_64", Some(Libc::Musl), true),
+    )
+    .expect("a musl build");
+
+    assert_eq!(gnu.requirements().libc(), Some(Libc::Gnu));
+    assert_eq!(musl.requirements().libc(), Some(Libc::Musl));
+    assert_ne!(gnu.archive_digest(), musl.archive_digest());
+}
+
+#[test]
+fn a_machine_with_no_known_c_library_is_told_so_rather_than_guessed_at() {
+    // Every Linux build names a library, so a target linked against neither is
+    // refused before anything is downloaded. The alternative is a hundred
+    // megabytes fetched and a loader error.
+    let host = machine("linux", "x86_64", None, true);
+
+    let failure = pinned(&opencode(), &host).expect_err("no build is known to run here");
+
+    let message = failure.to_string();
+    assert!(
+        message.contains("no tested opencode release") && message.contains("linux"),
+        "unhelpful message: {message}"
+    );
+}
+
+#[test]
+fn the_more_demanding_build_is_preferred_whichever_order_it_is_listed_in() {
+    // A machine with AVX2 runs both builds, so this is a preference rather than
+    // a filter — and a preference is only a preference if it survives the list
+    // being the other way round. Asked of both orders, because the pin file's
+    // own order already happens to put the demanding build first, and a
+    // "preference" that is really "the first entry that matched" would pass
+    // against it and fail on the next regenerated file.
+    let host = machine("linux", "x86_64", Some(Libc::Gnu), true);
+    let fast = build(Some(Libc::Gnu), true, 'a');
+    let baseline = build(Some(Libc::Gnu), false, 'b');
+
+    for (named, releases) in [
+        (
+            "the demanding build first",
+            vec![fast.clone(), baseline.clone()],
+        ),
+        (
+            "the baseline build first",
+            vec![baseline.clone(), fast.clone()],
+        ),
+    ] {
+        let chosen = preferred(releases, &host).expect("both builds run here");
+        assert_eq!(
+            chosen.archive_digest(),
+            fast.archive_digest(),
+            "{named}: the faster build was passed over"
+        );
+    }
+}
+
+#[test]
+fn a_machine_that_cannot_take_the_demanding_build_gets_the_other_one() {
+    let host = machine("linux", "x86_64", Some(Libc::Gnu), false);
+    let fast = build(Some(Libc::Gnu), true, 'a');
+    let baseline = build(Some(Libc::Gnu), false, 'b');
+
+    let chosen = preferred(vec![fast, baseline.clone()], &host).expect("one build runs here");
+
+    assert_eq!(chosen.archive_digest(), baseline.archive_digest());
+}
+
+#[test]
+fn a_machine_no_build_runs_on_is_offered_none() {
+    let host = machine("linux", "x86_64", Some(Libc::Musl), true);
+
+    assert_eq!(
+        preferred(
+            vec![
+                build(Some(Libc::Gnu), true, 'a'),
+                build(Some(Libc::Gnu), false, 'b')
+            ],
+            &host
+        ),
+        None
+    );
+}
+
+/// One Linux x86-64 build, told apart from its siblings by its digest.
+fn build(libc: Option<Libc>, avx2: bool, digest_byte: char) -> PinnedRelease {
+    PinnedRelease::new(
+        ReleaseVersion::parse("1.18.31").expect("usable version"),
+        ReleasePlatform::new("linux", "x86_64").expect("usable platform"),
+        ReleaseRequirements::new(libc, avx2),
+        ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url"),
+        digest(digest_byte),
+        ArchivePath::parse("package/bin/opencode").expect("contained path"),
+    )
 }

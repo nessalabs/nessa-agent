@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use super::ports::{ArchiveSource, RuntimeStore, SourceFailure, StagedArchive, StoreFailure};
 use crate::agent_install::domain::{
-    AgentName, ArchiveRejected, PinnedRelease, ReleasePlatform, ReleaseVersion,
+    AgentName, ArchiveRejected, HostPlatform, PinnedRelease, ReleaseVersion,
 };
 
 /// An agent runtime that is on this machine and ready to launch.
@@ -30,8 +30,10 @@ pub struct InstalledRuntime {
 /// reason to stop rather than to offer a retry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstallFailure {
-    /// No release is pinned for the platform this process is running on.
-    UnsupportedPlatform(ReleasePlatform),
+    /// The release offered is not one this machine can run. Carries the
+    /// machine rather than the release, because that is the part the person
+    /// reading it has and can act on.
+    UnsupportedPlatform(HostPlatform),
     /// The archive could not be fetched.
     Download(SourceFailure),
     /// What arrived was not the archive that was pinned. Nothing is installed.
@@ -43,8 +45,8 @@ pub enum InstallFailure {
 impl fmt::Display for InstallFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnsupportedPlatform(platform) => {
-                write!(f, "no tested release for {platform}")
+            Self::UnsupportedPlatform(host) => {
+                write!(f, "no tested release for {host}")
             }
             Self::Download(failure) => failure.fmt(f),
             Self::Rejected(rejection) => rejection.fmt(f),
@@ -91,10 +93,10 @@ impl InstallAgentRuntime<'_> {
         &self,
         agent: &AgentName,
         release: &PinnedRelease,
-        platform: &ReleasePlatform,
+        host: &HostPlatform,
     ) -> Result<InstalledRuntime, InstallFailure> {
-        if !release.runs_on(platform) {
-            return Err(InstallFailure::UnsupportedPlatform(platform.clone()));
+        if !release.runs_on(host) {
+            return Err(InstallFailure::UnsupportedPlatform(host.clone()));
         }
         if let Some(runtime) = self.already_installed(agent, release)? {
             return Ok(runtime);

@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent_install::domain::Libc;
 
 fn digest(byte: char) -> ArchiveDigest {
     ArchiveDigest::parse(&std::iter::repeat_n(byte, 64).collect::<String>())
@@ -13,6 +14,7 @@ fn release(digest: ArchiveDigest) -> PinnedRelease {
     PinnedRelease::new(
         ReleaseVersion::parse("1.0.0").expect("usable version"),
         ReleasePlatform::new("macos", "aarch64").expect("usable platform"),
+        ReleaseRequirements::default(),
         url(),
         digest,
         ArchivePath::parse("package/bin/opencode").expect("contained path"),
@@ -207,11 +209,47 @@ fn a_rejection_names_both_digests() {
     assert!(message.contains(digest('b').as_str()));
 }
 
+/// A machine, for the tests about where a release will run.
+fn machine(operating_system: &str, architecture: &str) -> HostPlatform {
+    HostPlatform::new(
+        ReleasePlatform::new(operating_system, architecture).expect("usable platform"),
+        Some(Libc::Gnu),
+        true,
+    )
+}
+
 #[test]
 fn a_release_runs_only_on_the_platform_it_names() {
     let release = release(digest('a'));
 
-    assert!(release.runs_on(&ReleasePlatform::new("macos", "aarch64").expect("usable platform")));
-    assert!(!release.runs_on(&ReleasePlatform::new("macos", "x86_64").expect("usable platform")));
-    assert!(!release.runs_on(&ReleasePlatform::new("linux", "aarch64").expect("usable platform")));
+    assert!(release.runs_on(&machine("macos", "aarch64")));
+    assert!(!release.runs_on(&machine("macos", "x86_64")));
+    assert!(!release.runs_on(&machine("linux", "aarch64")));
+}
+
+#[test]
+fn a_release_also_runs_only_where_what_it_needs_is_there() {
+    // The platform is not the whole of it. Two builds can name one platform and
+    // differ only in what they ask of the machine, and the one whose needs are
+    // not met is the one that does not start.
+    let release = PinnedRelease::new(
+        ReleaseVersion::parse("1.0.0").expect("usable version"),
+        ReleasePlatform::new("linux", "x86_64").expect("usable platform"),
+        ReleaseRequirements::new(Some(Libc::Musl), true),
+        url(),
+        digest('a'),
+        ArchivePath::parse("package/bin/opencode").expect("contained path"),
+    );
+    let linux = |libc, avx2| {
+        HostPlatform::new(
+            ReleasePlatform::new("linux", "x86_64").expect("usable platform"),
+            libc,
+            avx2,
+        )
+    };
+
+    assert!(release.runs_on(&linux(Some(Libc::Musl), true)));
+    assert!(!release.runs_on(&linux(Some(Libc::Musl), false)));
+    assert!(!release.runs_on(&linux(Some(Libc::Gnu), true)));
+    assert!(!release.runs_on(&linux(None, true)));
 }

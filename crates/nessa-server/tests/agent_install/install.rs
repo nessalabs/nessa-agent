@@ -1,6 +1,7 @@
 use super::*;
+use crate::agent_install::domain::{Libc, ReleasePlatform};
 use crate::agent_install_test_support::{
-    agent, platform, release, FakeSource, FakeStore, OTHER_DIGEST, PINNED_DIGEST,
+    agent, host, host_of, platform, release, FakeSource, FakeStore, OTHER_DIGEST, PINNED_DIGEST,
 };
 
 #[test]
@@ -9,6 +10,7 @@ fn a_matching_archive_is_published() {
     let source = FakeSource::serving(b"archive bytes");
     let store = FakeStore::empty(root.path());
     let platform = platform();
+    let host = host();
 
     let installed = InstallAgentRuntime {
         source: &source,
@@ -17,7 +19,7 @@ fn a_matching_archive_is_published() {
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
-        &platform,
+        &host,
     )
     .expect("a matching archive installs");
 
@@ -35,6 +37,7 @@ fn a_mismatched_archive_is_never_unpacked() {
     let source = FakeSource::serving(b"someone else's bytes");
     let store = FakeStore::empty(root.path()).hashing(OTHER_DIGEST);
     let platform = platform();
+    let host = host();
 
     let failure = InstallAgentRuntime {
         source: &source,
@@ -43,7 +46,7 @@ fn a_mismatched_archive_is_never_unpacked() {
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
-        &platform,
+        &host,
     )
     .expect_err("a mismatched archive is refused");
 
@@ -68,6 +71,7 @@ fn a_rejected_archive_is_discarded() {
     let source = FakeSource::serving(b"someone else's bytes");
     let store = FakeStore::empty(root.path()).hashing(OTHER_DIGEST);
     let platform = platform();
+    let host = host();
 
     let _ = InstallAgentRuntime {
         source: &source,
@@ -76,7 +80,7 @@ fn a_rejected_archive_is_discarded() {
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
-        &platform,
+        &host,
     );
 
     assert_eq!(store.discarded().len(), 1, "the archive is discarded");
@@ -88,6 +92,7 @@ fn a_successful_install_discards_its_archive_too() {
     let source = FakeSource::serving(b"archive bytes");
     let store = FakeStore::empty(root.path());
     let platform = platform();
+    let host = host();
 
     InstallAgentRuntime {
         source: &source,
@@ -96,7 +101,7 @@ fn a_successful_install_discards_its_archive_too() {
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
-        &platform,
+        &host,
     )
     .expect("a matching archive installs");
 
@@ -109,6 +114,7 @@ fn installing_what_is_already_installed_downloads_nothing() {
     let source = FakeSource::serving(b"archive bytes");
     let store = FakeStore::holding(root.path());
     let platform = platform();
+    let host = host();
 
     let installed = InstallAgentRuntime {
         source: &source,
@@ -117,7 +123,7 @@ fn installing_what_is_already_installed_downloads_nothing() {
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
-        &platform,
+        &host,
     )
     .expect("an installed runtime is reported as installed");
 
@@ -138,6 +144,7 @@ fn a_release_the_store_does_not_hold_is_downloaded() {
     let source = FakeSource::serving(b"archive bytes");
     let store = FakeStore::empty(root.path());
     let platform = platform();
+    let host = host();
 
     let installed = InstallAgentRuntime {
         source: &source,
@@ -146,7 +153,7 @@ fn a_release_the_store_does_not_hold_is_downloaded() {
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
-        &platform,
+        &host,
     )
     .expect("a newly pinned version installs over an older one");
 
@@ -164,6 +171,7 @@ fn what_is_measured_is_what_is_unpacked() {
     let source = FakeSource::serving(b"archive bytes");
     let store = FakeStore::empty(root.path());
     let platform = platform();
+    let host = host();
 
     InstallAgentRuntime {
         source: &source,
@@ -172,7 +180,7 @@ fn what_is_measured_is_what_is_unpacked() {
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
-        &platform,
+        &host,
     )
     .expect("a matching archive installs");
 
@@ -189,6 +197,7 @@ fn a_store_that_cannot_stage_a_download_fails_before_fetching() {
     let unwritable = StoreFailure::Unwritable("no room".into());
     let store = FakeStore::empty(root.path()).failing_to_stage(unwritable.clone());
     let platform = platform();
+    let host = host();
 
     let failure = InstallAgentRuntime {
         source: &source,
@@ -197,7 +206,7 @@ fn a_store_that_cannot_stage_a_download_fails_before_fetching() {
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
-        &platform,
+        &host,
     )
     .expect_err("a store with nowhere to stage fails the install");
 
@@ -214,7 +223,11 @@ fn a_release_for_another_platform_is_refused_before_anything_is_fetched() {
     let root = tempfile::tempdir().expect("temporary root");
     let source = FakeSource::serving(b"archive bytes");
     let store = FakeStore::empty(root.path());
-    let elsewhere = ReleasePlatform::new("linux", "x86_64").expect("usable platform");
+    let elsewhere = host_of(
+        &ReleasePlatform::new("linux", "x86_64").expect("usable platform"),
+        Some(Libc::Gnu),
+        true,
+    );
 
     let failure = InstallAgentRuntime {
         source: &source,
@@ -237,6 +250,7 @@ fn a_download_failure_is_reported_as_one() {
     let source = FakeSource::failing(SourceFailure::Refused(404));
     let store = FakeStore::empty(root.path());
     let platform = platform();
+    let host = host();
 
     let failure = InstallAgentRuntime {
         source: &source,
@@ -245,7 +259,7 @@ fn a_download_failure_is_reported_as_one() {
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
-        &platform,
+        &host,
     )
     .expect_err("a refused download fails the install");
 
@@ -266,6 +280,7 @@ fn an_archive_without_the_pinned_executable_fails_as_a_store_problem() {
     let missing = StoreFailure::MissingExecutable("package/bin/opencode".into());
     let store = FakeStore::empty(root.path()).failing_to_publish(missing.clone());
     let platform = platform();
+    let host = host();
 
     let failure = InstallAgentRuntime {
         source: &source,
@@ -274,7 +289,7 @@ fn an_archive_without_the_pinned_executable_fails_as_a_store_problem() {
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
-        &platform,
+        &host,
     )
     .expect_err("an archive missing its executable fails the install");
 
@@ -291,6 +306,7 @@ fn a_store_that_cannot_say_what_is_installed_does_not_download() {
     let unreadable = StoreFailure::Unreadable("runtime directory".into());
     let store = FakeStore::empty(root.path()).failing_to_read(unreadable.clone());
     let platform = platform();
+    let host = host();
 
     let failure = InstallAgentRuntime {
         source: &source,
@@ -299,7 +315,7 @@ fn a_store_that_cannot_say_what_is_installed_does_not_download() {
     .execute(
         &agent(),
         &release("1.18.31", PINNED_DIGEST, &platform),
-        &platform,
+        &host,
     )
     .expect_err("an unreadable store fails the install");
 
@@ -313,13 +329,14 @@ fn the_pinned_url_is_what_gets_fetched() {
     let source = FakeSource::serving(b"archive bytes");
     let store = FakeStore::empty(root.path());
     let platform = platform();
+    let host = host();
     let release = release("1.18.31", PINNED_DIGEST, &platform);
 
     InstallAgentRuntime {
         source: &source,
         store: &store,
     }
-    .execute(&agent(), &release, &platform)
+    .execute(&agent(), &release, &host)
     .expect("a matching archive installs");
 
     assert_eq!(

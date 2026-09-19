@@ -32,15 +32,92 @@ import { Readable } from "node:stream"
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 const registry = "https://registry.npmjs.org"
 
-// The platforms Nessa will install Opencode on, named the way Rust names them
-// so that the server can match on its own target without a translation table.
-// Opencode publishes one npm package per platform, each holding a single
-// native binary.
+// Every build Nessa will install Opencode from, named the way Rust names the
+// operating system and architecture so that the server can match on its own
+// target without a translation table.
+//
+// There is one npm package per build, not per platform, and the difference
+// matters: Opencode publishes nine of them for four platforms, because a build
+// is also fixed to a C library and to a processor baseline, and every one of
+// them holds a binary called `opencode`. Choosing by operating system and
+// architecture alone picks one of up to four at random from the machine's point
+// of view, and two of those four do not start at all — a glibc build on a
+// musl-only machine dies in the loader, and an AVX2 build on a processor
+// without it dies on an illegal instruction.
+//
+// `libc` is null where the platform has only one, which is every platform here
+// but Linux. `requiresAvx2` follows Opencode's own naming: the plain x64 build
+// is compiled for a processor with AVX2 and the `-baseline` one is the build
+// for everything else, so the pair is a preference on a machine that has AVX2
+// and the baseline is the only choice on a machine that does not.
+//
+// Windows is deliberately absent. Opencode publishes builds for it, but nothing
+// in Nessa launches an agent runtime on Windows yet, and pinning a platform
+// that is never installed would be claiming a test that never ran.
 const PLATFORMS = [
-  { operatingSystem: "macos", architecture: "aarch64", package: "opencode-darwin-arm64" },
-  { operatingSystem: "macos", architecture: "x86_64", package: "opencode-darwin-x64" },
-  { operatingSystem: "linux", architecture: "aarch64", package: "opencode-linux-arm64" },
-  { operatingSystem: "linux", architecture: "x86_64", package: "opencode-linux-x64" },
+  {
+    operatingSystem: "macos",
+    architecture: "aarch64",
+    libc: null,
+    requiresAvx2: false,
+    package: "opencode-darwin-arm64",
+  },
+  {
+    operatingSystem: "macos",
+    architecture: "x86_64",
+    libc: null,
+    requiresAvx2: true,
+    package: "opencode-darwin-x64",
+  },
+  {
+    operatingSystem: "macos",
+    architecture: "x86_64",
+    libc: null,
+    requiresAvx2: false,
+    package: "opencode-darwin-x64-baseline",
+  },
+  {
+    operatingSystem: "linux",
+    architecture: "aarch64",
+    libc: "gnu",
+    requiresAvx2: false,
+    package: "opencode-linux-arm64",
+  },
+  {
+    operatingSystem: "linux",
+    architecture: "aarch64",
+    libc: "musl",
+    requiresAvx2: false,
+    package: "opencode-linux-arm64-musl",
+  },
+  {
+    operatingSystem: "linux",
+    architecture: "x86_64",
+    libc: "gnu",
+    requiresAvx2: true,
+    package: "opencode-linux-x64",
+  },
+  {
+    operatingSystem: "linux",
+    architecture: "x86_64",
+    libc: "gnu",
+    requiresAvx2: false,
+    package: "opencode-linux-x64-baseline",
+  },
+  {
+    operatingSystem: "linux",
+    architecture: "x86_64",
+    libc: "musl",
+    requiresAvx2: true,
+    package: "opencode-linux-x64-musl",
+  },
+  {
+    operatingSystem: "linux",
+    architecture: "x86_64",
+    libc: "musl",
+    requiresAvx2: false,
+    package: "opencode-linux-x64-baseline-musl",
+  },
 ]
 
 // Where the executable sits inside every one of those packages. Asserted below
@@ -208,6 +285,12 @@ async function pin() {
     releases.push({
       operatingSystem: platform.operatingSystem,
       architecture: platform.architecture,
+      // Written out even when there is nothing to require, because this file is
+      // read by people reviewing a pin: an entry that simply omits them leaves
+      // "this build runs anywhere on its platform" and "whoever generated this
+      // forgot" looking identical.
+      libc: platform.libc,
+      requiresAvx2: platform.requiresAvx2,
       version,
       archiveUrl: archive,
       archiveDigest: digest,
@@ -223,7 +306,7 @@ async function pin() {
     agents: { opencode: releases },
   }
   writeFileSync(destination, `${JSON.stringify(document, null, 2)}\n`)
-  process.stderr.write(`pinned opencode ${version} for ${releases.length} platforms\n`)
+  process.stderr.write(`pinned opencode ${version} across ${releases.length} builds\n`)
 }
 
 const invoked = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href

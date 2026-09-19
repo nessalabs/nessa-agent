@@ -5,6 +5,8 @@
       {
         "operatingSystem": "macos",
         "architecture": "aarch64",
+        "libc": null,
+        "requiresAvx2": false,
         "version": "1.18.31",
         "archiveUrl": "https://registry.npmjs.org/opencode-darwin-arm64/-/opencode-darwin-arm64-1.18.31.tgz",
         "archiveDigest": "e1fa9a06765f0b3419b65f05ddfd457977c4ea07ab9c143192a4392fab57d671",
@@ -13,14 +15,28 @@
       {
         "operatingSystem": "macos",
         "architecture": "x86_64",
+        "libc": null,
+        "requiresAvx2": true,
         "version": "1.18.31",
         "archiveUrl": "https://registry.npmjs.org/opencode-darwin-x64/-/opencode-darwin-x64-1.18.31.tgz",
         "archiveDigest": "dfcf4aa1207f1f47a6ff6620fe19a07ac6b204e8c27786f337ac8b38344494ea",
         "executable": "package/bin/opencode"
       },
       {
+        "operatingSystem": "macos",
+        "architecture": "x86_64",
+        "libc": null,
+        "requiresAvx2": false,
+        "version": "1.18.31",
+        "archiveUrl": "https://registry.npmjs.org/opencode-darwin-x64-baseline/-/opencode-darwin-x64-baseline-1.18.31.tgz",
+        "archiveDigest": "0fa95283998ce7abe33409d5373a50fb8a71c82b390b0505eaadeaea59b3176f",
+        "executable": "package/bin/opencode"
+      },
+      {
         "operatingSystem": "linux",
         "architecture": "aarch64",
+        "libc": "gnu",
+        "requiresAvx2": false,
         "version": "1.18.31",
         "archiveUrl": "https://registry.npmjs.org/opencode-linux-arm64/-/opencode-linux-arm64-1.18.31.tgz",
         "archiveDigest": "9f30fc9882c2782b7ce5714db5263993f6bcb310c8c590192baa7cfd9b7465d0",
@@ -28,10 +44,52 @@
       },
       {
         "operatingSystem": "linux",
+        "architecture": "aarch64",
+        "libc": "musl",
+        "requiresAvx2": false,
+        "version": "1.18.31",
+        "archiveUrl": "https://registry.npmjs.org/opencode-linux-arm64-musl/-/opencode-linux-arm64-musl-1.18.31.tgz",
+        "archiveDigest": "61b65117b4976f973fea215a861f120d622de2c0be5a5b2c391c80ce45145c10",
+        "executable": "package/bin/opencode"
+      },
+      {
+        "operatingSystem": "linux",
         "architecture": "x86_64",
+        "libc": "gnu",
+        "requiresAvx2": true,
         "version": "1.18.31",
         "archiveUrl": "https://registry.npmjs.org/opencode-linux-x64/-/opencode-linux-x64-1.18.31.tgz",
         "archiveDigest": "6d89da252a8b030d923e728396dc34465cf6095101b78222b0ee337b68140dea",
+        "executable": "package/bin/opencode"
+      },
+      {
+        "operatingSystem": "linux",
+        "architecture": "x86_64",
+        "libc": "gnu",
+        "requiresAvx2": false,
+        "version": "1.18.31",
+        "archiveUrl": "https://registry.npmjs.org/opencode-linux-x64-baseline/-/opencode-linux-x64-baseline-1.18.31.tgz",
+        "archiveDigest": "edf79108dbd1d6e7714ad282d5931a2f39bb81d7f1c9dc13a994ffa90435095e",
+        "executable": "package/bin/opencode"
+      },
+      {
+        "operatingSystem": "linux",
+        "architecture": "x86_64",
+        "libc": "musl",
+        "requiresAvx2": true,
+        "version": "1.18.31",
+        "archiveUrl": "https://registry.npmjs.org/opencode-linux-x64-musl/-/opencode-linux-x64-musl-1.18.31.tgz",
+        "archiveDigest": "ff1ef5183e2c60ed3279d18db6df9b2205889aa3194bded76168b419177a5046",
+        "executable": "package/bin/opencode"
+      },
+      {
+        "operatingSystem": "linux",
+        "architecture": "x86_64",
+        "libc": "musl",
+        "requiresAvx2": false,
+        "version": "1.18.31",
+        "archiveUrl": "https://registry.npmjs.org/opencode-linux-x64-baseline-musl/-/opencode-linux-x64-baseline-musl-1.18.31.tgz",
+        "archiveDigest": "81d027c74a89906fcc0f244144ae5b554da8e7c2281dd5fe7490a0b3384f2531",
         "executable": "package/bin/opencode"
       }
     ]
