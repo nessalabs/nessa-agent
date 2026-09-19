@@ -133,15 +133,57 @@ describe("taking the install", () => {
     expect(updateTab(after)?.progress).toMatchObject({ percent: 100 })
   })
 
-  it("cannot be closed while it is running", () => {
+  /**
+   * Closing a running download hides it; it cannot stop it, because the host
+   * has neither a cancel nor a timeout. Refusing the close instead left a tab
+   * reading "Downloading the update" for the rest of the launch whenever a
+   * download stalled — a gateway that accepts the connection and then answers
+   * nothing produces no bytes, no error and no end.
+   */
+  it("closes while running, and the install carries on without it", () => {
     const running = panel({ kind: "announced", release: published }, { kind: "install" })
-
     expect(running.stage).toBe("downloading")
-    expect(updateTab(running)?.closeable).toBe(false)
-    // And asking anyway changes nothing: the download cannot be stopped.
-    expect(updateTab(afterUpdate(running, { kind: "closed" }))?.progress.kind).toBe(
-      "downloading",
+    expect(updateTab(running)?.closeable).toBe(true)
+
+    const hidden = afterUpdate(running, { kind: "closed" })
+
+    expect(hidden.stage).toBe("installing")
+    expect(updateTab(hidden)).toBeNull()
+    // Not a dismissal: the version was not turned down, it is being installed.
+    expect(hidden.dismissed).toEqual([])
+    expect(hidden.release).not.toBeNull()
+  })
+
+  /** The answer is still owed to whoever asked for the install. */
+  it("brings the tab back when a download it stopped watching fails", () => {
+    const hidden = panel(
+      { kind: "announced", release: published },
+      { kind: "install" },
+      { kind: "progress", downloaded: 400, total: 1_000 },
+      { kind: "closed" },
     )
+    expect(hidden.stage).toBe("installing")
+
+    const failed = afterUpdate(hidden, { kind: "failed" })
+
+    expect(failed.stage).toBe("failed")
+    expect(updateTab(failed)?.progress.kind).toBe("failed")
+    // And closing it now is the turning-down the closed tab was not.
+    const gone = afterUpdate(failed, { kind: "closed" })
+    expect(updateTab(gone)).toBeNull()
+    expect(gone.dismissed).toEqual([published.version])
+  })
+
+  /** A hidden download still counts, so a later failure is not a blank one. */
+  it("keeps counting bytes while nobody is watching", () => {
+    const hidden = panel(
+      { kind: "announced", release: published },
+      { kind: "install" },
+      { kind: "closed" },
+      { kind: "progress", downloaded: 700, total: 1_000 },
+    )
+
+    expect(hidden.downloaded).toBe(700)
   })
 })
 

@@ -146,10 +146,11 @@ export function App({
   })
   const closeActiveTab = React.useEffectEvent(() => {
     closePaste()
-    // The update tab cannot be closed while its download runs, and when it can
-    // be, closing it is the same answer as dismissing the notice was.
+    // The update tab closes like any other. What that means depends on what it
+    // was doing — a running download is hidden rather than stopped, a finished
+    // one is turned down — and `afterUpdate` owns that, not this.
     if (update.viewing) {
-      if (update.tab?.closeable) update.close()
+      update.close()
       return
     }
     chat.closeConversation(chat.active.id)
