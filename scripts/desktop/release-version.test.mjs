@@ -5,16 +5,15 @@ import {
   agreementReport,
   cargoVersion,
   declaredVersions,
-  packageVersion,
+  jsonVersion,
   taggedVersion,
-  tauriConfigVersion,
   versionAgreement,
 } from "./release-version.mjs"
 
 test("each file's version is read from the place that file declares it", () => {
-  assert.equal(packageVersion(`{"name":"nessa-app","version":"0.1.0"}`), "0.1.0")
-  assert.equal(packageVersion(`{"name":"nessa-app"}`), undefined)
-  assert.equal(tauriConfigVersion(`{"productName":"Nessa","version":"0.2.1"}`), "0.2.1")
+  assert.equal(jsonVersion(`{"name":"nessa-app","version":"0.1.0"}`), "0.1.0")
+  assert.equal(jsonVersion(`{"name":"nessa-app"}`), undefined)
+  assert.equal(jsonVersion(`{"productName":"Nessa","version":"0.2.1"}`), "0.2.1")
   assert.equal(
     cargoVersion('[package]\nname = "nessa-app"\nversion = "0.1.0" # shipped\n'),
     "0.1.0",

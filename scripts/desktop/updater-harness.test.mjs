@@ -8,11 +8,11 @@ import {
   CHECK_ONLY_SIGNATURE,
   checkOnlyManifest,
   defaultArtifacts,
-  option,
   releaseManifest,
-  requestedPath,
   updaterTarget,
 } from "./updater-manifest.mjs"
+import { option } from "./cli.mjs"
+import { requestedPath } from "./request-target.mjs"
 
 const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"))
 

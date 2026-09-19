@@ -123,38 +123,3 @@ export function defaultArtifacts(platform, version) {
     throw new Error(`No updater artifact is bundled for platform ${platform}`)
   return artifacts.map((artifact) => `target/release/bundle/${artifact}`)
 }
-
-/** Read one `--name value` or `--name=value` argument. */
-export function option(args, name, fallback) {
-  const index = args.indexOf(`--${name}`)
-  if (index >= 0) {
-    const value = args[index + 1]
-    if (!value || value.startsWith("--")) throw new Error(`--${name} requires a value`)
-    return value
-  }
-  const equals = args.find((argument) => argument.startsWith(`--${name}=`))
-  return equals ? equals.slice(name.length + 3) : fallback
-}
-
-/**
- * The path a request meant, or undefined when it cannot be read.
- *
- * Both steps of reading a request target throw, and neither is caught in a
- * Node request handler — an exception there ends the process. `new URL` throws
- * on a target that is not one (`//[`), and `decodeURIComponent` throws on a
- * malformed escape (`/%ZZ`). A stray request of either shape would end the
- * harness in the middle of a run somebody is watching, so the two live behind
- * this one door and a target that cannot be read is simply not a request for
- * anything served: it falls through to the same 404 as any unknown path.
- *
- * @param {string | undefined} target the raw request target
- * @param {string} origin what a path-only target is resolved against
- * @returns {string | undefined} the decoded pathname
- */
-export function requestedPath(target, origin) {
-  try {
-    return decodeURIComponent(new URL(target ?? "", origin).pathname)
-  } catch {
-    return undefined
-  }
-}

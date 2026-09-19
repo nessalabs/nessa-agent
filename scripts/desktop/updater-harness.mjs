@@ -129,13 +129,13 @@ import {
 } from "node:fs"
 import { createServer } from "node:http"
 import { basename, resolve } from "node:path"
+import { option } from "./cli.mjs"
+import { requestedPath } from "./request-target.mjs"
 import {
   CHECK_ONLY_ARTIFACT,
   checkOnlyManifest,
   defaultArtifacts,
-  option,
   releaseManifest,
-  requestedPath,
   updaterTarget,
 } from "./updater-manifest.mjs"
 

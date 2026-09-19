@@ -12,6 +12,12 @@ describe("frontend environment", () => {
     expect(loadEnvironment({}).gatewayBaseUrl).toBe("http://127.0.0.1:7420")
   })
 
+  it("points a packaged dev-stage build at the dev port, not the product one", () => {
+    expect(loadEnvironment({ VITE_NESSA_STAGE: "dev" }).gatewayBaseUrl).toBe(
+      "http://127.0.0.1:7421",
+    )
+  })
+
   it("sends a development build at its own origin, where the proxy is", () => {
     expect(loadEnvironment({}, true).gatewayBaseUrl).toBe("")
   })

@@ -48,8 +48,15 @@ export function ConversationNotification({
       retryLabel={
         notice.retry?.kind === "refresh" ? "Refresh conversation" : "Retry message"
       }
+      // Unreachable, not absent. Whether the gateway is up and whether a
+      // control is already in flight both change while the notice is on
+      // screen, and withdrawing `onRetry` for either would unmount the control
+      // — out from under anybody whose focus is on it, which then lands on the
+      // notice's own text and paints a focus ring around it. The notice keeps
+      // offering the action and lets the component disable it in place.
+      retryPending={!gatewayAvailable || Boolean(conversation.controlPending)}
       onRetry={
-        notice.retry && gatewayAvailable && !conversation.controlPending
+        notice.retry
           ? () => {
               if (notice.retry?.kind === "submission") {
                 void dispatch(

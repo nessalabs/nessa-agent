@@ -69,14 +69,61 @@ implementation per OS, injected by `current()` — and in
 
 ```bash
 pnpm install
-just server   # terminal 1 — nessa server on ws://127.0.0.1:7420
-just dev      # terminal 2 — panel; connects with stage=dev
+just start    # one terminal — server on ws://127.0.0.1:7421, then the panel
 ```
 
-Before the first server run, initialize its private local credentials:
-`cargo run -p nessa-server -- auth init --local --owner-token-file "$HOME/nessa-owner.token"`.
-This requires no signup. See [local authentication](docs/adr/done/0010-local-authentication.md)
-for scoped clients, environment isolation, and owner recovery.
+**Dev and an installed Nessa run side by side.** A packaged install keeps
+`127.0.0.1:7420` through a launchd background service that deliberately outlives
+the app — quitting Nessa does not stop it, and killing its listener only makes
+launchd start it again. So the dev stage listens on its own port, 7421. The one
+stage → port table is
+[protocol/defaults/gateway-ports.json](protocol/defaults/gateway-ports.json);
+`nessa-server`, the desktop host, the frontend and the Vite proxy all read it,
+and `NESSA_PORT` still overrides it for a single run. If something else is
+holding the dev port, `just start` names the owner instead of killing it.
+
+That is the whole setup from a clone. `just start` (and `just server` on its
+own) runs `nessa server --provision-local`, which creates the dev namespace's
+owner credential at `$HOME/.nessa/owner.token` and the panel's own credential at
+`$HOME/.nessa/dev/auth/surfaces/nessa-panel.token` when they are absent. It never
+replaces credentials that already exist, so restarting the server does not
+invalidate a token you are using. No signup, no account.
+
+**Credentials are not enough to chat, so the same loop also names an agent.**
+A packaged install gets one from its bundle; a checkout has to say where its own
+pieces are, and the server is deliberately not allowed to go looking for
+`crates/`. So `just server` first runs
+[scripts/dev-agent-config.mjs](scripts/dev-agent-config.mjs), which writes an
+`agent` block into `$HOME/.nessa/dev/config.json` pointing at this checkout's
+Claude ACP harness, `crates/nessa-sdk/data/models.json`, the Node running the
+dev loop, a workspace at `$HOME/.nessa/dev/workspaces/default`, and
+`target/debug/nessa-mcp` when it has been built. An `agent` block that is
+already there is never touched, merged, or repaired — the only thing a later run
+does with someone's own configuration is say so when its executables have gone
+missing.
+
+The harness itself is not vendored. On a fresh clone the script says so and the
+gateway still starts; install it once with:
+
+```bash
+(cd crates/nessa-sdk/harnesses/claude-acp && npm ci --omit=dev)
+```
+
+Nothing here ever blocks the dev loop: anything missing is printed with the
+command that fixes it, and the gateway starts without an agent rather than not
+at all. `docs/guides/gateway-chat.md` documents the same file for a server you
+configure by hand.
+
+Use two terminals instead if you prefer (`just server`, then `just dev`). A
+server you run yourself — `nessa server` without `--provision-local` — provisions
+nothing; use the offline `nessa auth` commands and choose your own token paths.
+See [local authentication](docs/guides/local-auth.md) for that, and
+[the ADR](docs/adr/done/0010-local-authentication.md) for scoped clients,
+environment isolation, and owner recovery.
+
+If the panel says no chat credential has been provisioned, the local server is
+not the one that started it: run `just server` in that same namespace
+(`NESSA_DATA_DIR`, `NESSA_STAGE`, `NESSA_INSTANCE` must match).
 
 [`just`](https://just.systems) is the entry ([justfile](justfile)). `just`
 lists recipes. `just server` runs the WebSocket control plane. `just dev` is

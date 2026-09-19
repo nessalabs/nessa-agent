@@ -38,7 +38,8 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { bundleArchitecture } from "./bundle-architecture.mjs"
-import { option, releaseManifest, updaterTarget } from "./updater-manifest.mjs"
+import { option } from "./cli.mjs"
+import { releaseManifest, updaterTarget } from "./updater-manifest.mjs"
 
 /** The architectures a release builds, in the order a manifest lists them. */
 export const RELEASE_TARGETS = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
@@ -283,6 +284,17 @@ function manifest(root, args, config) {
       } catch {
         return []
       }
+      // The signature is checked; so is the thing it signs being here at all.
+      // A manifest naming a URL for an asset that was never uploaded publishes
+      // cleanly and fails on a person's machine as a download error — invisible
+      // from here afterwards, which is the reason this step checks rather than
+      // trusting that staging already did.
+      const artifact = updaterAssetName(config.productName, config.version, target)
+      if (!existsSync(resolve(directory, artifact)))
+        throw new Error(
+          `${artifact} is not in the release assets, but ${name} is. ` +
+            `Publishing this manifest would offer an update that cannot be downloaded.`,
+        )
       return [[releaseTarget(target), signatureBlock(text, name)]]
     }),
   )
@@ -293,7 +305,11 @@ function manifest(root, args, config) {
     repository,
     targets,
     signatures,
-    notes: option(args, "notes", `${config.productName} ${config.version}`),
+    // Empty unless a release says something. The default was the product name
+    // and version, which the update tab already shows on its own line — it read
+    // as a release whose notes were its own title. The panel has a written
+    // sentence for the empty case; this is what makes that the state that ships.
+    notes: option(args, "notes", ""),
     published: new Date().toISOString(),
   })
   const written = resolve(directory, "latest.json")

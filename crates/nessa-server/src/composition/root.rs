@@ -1,4 +1,4 @@
-use crate::cli::entrypoint::{parse, Command, HELP};
+use crate::cli::entrypoint::{parse, Command, LocalProvisioning, HELP};
 #[cfg(target_os = "macos")]
 use crate::desktop_runtime::{
     application::{restore_retirement, retire},
@@ -23,7 +23,7 @@ impl CompositionRoot {
                 std::io::stdout().write_all(HELP.as_bytes())?;
                 Ok(())
             }
-            Command::Server => Self::serve().await,
+            Command::Server(provisioning) => Self::serve(provisioning).await,
             Command::Desktop(directory) => Self::serve_desktop(&directory).await,
             Command::Offline(mut args) => {
                 if args.get(1).is_some_and(|v| v == "init")
@@ -53,18 +53,23 @@ impl CompositionRoot {
         }
     }
 
-    pub async fn serve() -> Result<(), RunError> {
-        Self::serve_runtime(None).await
+    pub async fn serve(provisioning: LocalProvisioning) -> Result<(), RunError> {
+        Self::serve_runtime(None, provisioning).await
     }
 
+    /// The packaged app owns its private namespace and has no operator to run the
+    /// offline commands, so it always provisions what is missing.
     async fn serve_desktop(bundle: &std::path::Path) -> Result<(), RunError> {
-        Self::serve_runtime(Some(bundle)).await
+        Self::serve_runtime(Some(bundle), LocalProvisioning::Automatic).await
     }
 
-    async fn serve_runtime(bundle: Option<&std::path::Path>) -> Result<(), RunError> {
+    async fn serve_runtime(
+        bundle: Option<&std::path::Path>,
+        provisioning: LocalProvisioning,
+    ) -> Result<(), RunError> {
         let config = Environment::from_system()?;
-        if bundle.is_some() {
-            super::desktop::prepare(&config)?;
+        if provisioning == LocalProvisioning::Automatic {
+            super::provisioning::ensure_local_credentials(&config)?;
         }
         let dependencies = runtime_dependencies(&config);
         let product =

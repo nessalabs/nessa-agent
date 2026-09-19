@@ -28,7 +28,7 @@ function permissionSelection(
 const REFUSALS: Record<string, string> = {
   conversations_not_configured: "This gateway is not set up to run conversations.",
   agent_not_configured:
-    "This gateway is not set up for the agent this conversation asked for.",
+    'This gateway is not set up for the agent this conversation asked for: its config.json names no runtime under that name. Add one under "agents.runtimes" and restart the gateway — from a Nessa checkout, `just server` writes one.',
   agent_unsupported:
     "This conversation runs on an agent this version of Nessa cannot open.",
 }

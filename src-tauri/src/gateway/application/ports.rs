@@ -8,6 +8,10 @@ pub struct ReconciledGateway {
     runtime_instance: String,
     service_generation: String,
     process_id: u32,
+    /// Loopback port this service answers on, decided by its stage. Carried so
+    /// a later health probe asks the socket that was registered rather than
+    /// re-deriving one that could disagree.
+    port: u16,
 }
 // The identity itself is portable evidence carried by the `GatewayHost`
 // contract on every target. Reading its parts is what one native adapter does,
@@ -20,6 +24,7 @@ impl ReconciledGateway {
         runtime_instance: String,
         service_generation: String,
         process_id: u32,
+        port: u16,
     ) -> Self {
         Self {
             service,
@@ -27,6 +32,7 @@ impl ReconciledGateway {
             runtime_instance,
             service_generation,
             process_id,
+            port,
         }
     }
     pub fn service(&self) -> &str {
@@ -43,6 +49,9 @@ impl ReconciledGateway {
     }
     pub fn process_id(&self) -> u32 {
         self.process_id
+    }
+    pub fn port(&self) -> u16 {
+        self.port
     }
 }
 

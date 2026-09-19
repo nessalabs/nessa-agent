@@ -429,6 +429,20 @@ it.each([
     expect(error.message).toContain(said)
   },
 )
+
+it("names the remedy for a gateway missing the agent, not just the symptom", () => {
+  // A person told only that the agent is not set up has nowhere to go. This is
+  // the one refusal with an answer short enough to state, so it states it.
+  const error = new NessaConversationMutationError(
+    conversationId,
+    "identity",
+    undefined,
+    new NessaRpcError("agent_not_configured", "agent_not_configured"),
+    async () => undefined,
+  )
+  expect(error.message).toContain("agents.runtimes")
+  expect(error.message).toContain("just server")
+})
 it("reports invalid requests as known pre-admission rejections", async () => {
   const request = vi
     .fn()

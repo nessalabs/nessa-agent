@@ -7,7 +7,7 @@
 //!
 //! Global summon lives in `shortcuts.json` (ADR 0004), not here.
 
-mod storage;
+pub(crate) mod storage;
 
 use std::{
     io,

@@ -1,5 +1,39 @@
 # Use local authentication
 
+## Develop on this machine
+
+For a developer running the desktop app, there is one command:
+
+```sh
+just start
+```
+
+`just start` and `just server` run `nessa server --provision-local`. Before
+binding the port, that creates what the local namespace is missing: the
+credential registry and an owner credential at `<root>/owner.token` if there is
+no registry, and the panel's own credential at
+`auth/surfaces/nessa-panel.token` if that file is absent. Both checks are
+guards. An existing registry is never re-initialized and an existing surface
+credential is never rotated, so restarting the server cannot invalidate a token
+in use. If either step fails, the server reports which step and why, and exits
+without serving.
+
+Credentials make the gateway reachable; they do not give it an agent. So the
+same two recipes first run `node scripts/dev-agent-config.mjs`, which writes the
+`agent` section of `$HOME/.nessa/dev/config.json` from this checkout — the
+server is not allowed to know what a git checkout is, so the checkout is what
+says where its Claude ACP harness, model catalog, Node and `nessa-mcp` build
+are. It is a guard in exactly the same sense: an `agent` section that already
+exists is left untouched, and a `config.json` that does not parse is reported
+rather than replaced. Anything it cannot resolve — most often a clone where
+`(cd crates/nessa-sdk/harnesses/claude-acp && npm ci --omit=dev)` has not been
+run yet — is printed with the command that fixes it, and the gateway still
+starts, answering `agent_not_configured` for chat. See
+[gateway chat](gateway-chat.md) for the section's fields.
+
+Everything below is the deliberate path, and the only path for a server you
+operate: plain `nessa server` provisions nothing.
+
 ## Create owner access
 
 Build with Rust 1.89 or newer, then initialize once:
@@ -7,7 +41,7 @@ Build with Rust 1.89 or newer, then initialize once:
 ```sh
 cargo build -p nessa-server
 target/debug/nessa auth init --local
-pnpm server:run
+target/debug/nessa server
 ```
 
 The executable is `nessa`; the Rust package remains `nessa-server`. Install it on
@@ -73,7 +107,7 @@ to restrict initial chat access. Client metadata never grants permissions.
 First list credentials to obtain your organization and gateway IDs:
 
 ```sh
-pnpm auth:cli list --url ws://127.0.0.1:7420 --credential-file "$HOME/nessa-owner.token"
+pnpm auth:cli list --url ws://127.0.0.1:7421 --credential-file "$HOME/nessa-owner.token"
 ```
 
 Save this request as an absolute-path JSON file. Replace `ORG_ID`, `GATEWAY_ID`,
@@ -103,7 +137,7 @@ it does not grant authority.
 ```
 
 ```sh
-pnpm auth:cli issue --url ws://127.0.0.1:7420 --credential-file "$HOME/nessa-owner.token" --input /absolute/issue.json --out /absolute/terminal.token
+pnpm auth:cli issue --url ws://127.0.0.1:7421 --credential-file "$HOME/nessa-owner.token" --input /absolute/issue.json --out /absolute/terminal.token
 ```
 
 The output path must be new. The CLI writes the secret privately and prints its
@@ -119,7 +153,7 @@ while reusing its request ID fails.
 ## Revoke a token
 
 ```sh
-pnpm auth:cli revoke CREDENTIAL_ID --url ws://127.0.0.1:7420 --credential-file "$HOME/nessa-owner.token"
+pnpm auth:cli revoke CREDENTIAL_ID --url ws://127.0.0.1:7421 --credential-file "$HOME/nessa-owner.token"
 ```
 
 Revocation persists across restarts. Attached idle clients close on their next
@@ -132,7 +166,7 @@ Stop the server, then use a new token path:
 
 ```sh
 target/debug/nessa auth recover-owner --local --owner-token-file "$HOME/nessa-owner-next.token"
-pnpm server:run
+target/debug/nessa server
 ```
 
 Recovery keeps the same gateway and organization and revokes previous
@@ -197,7 +231,9 @@ capacity or change a conflicting command deliberately rather than blindly retryi
 ## Configure limits without rebuilding
 
 Create `config.json` beside the namespace's `auth` directory. For default local
-development this is `$HOME/.nessa/dev/config.json`. For an explicit instance it is
+development this is `$HOME/.nessa/dev/config.json` — the same file the dev loop
+writes an `agent` section into; `registry` and `session` are never written there
+and are yours alone. For an explicit instance it is
 `<root>/<stage>/instances/<instance>/config.json`; omit the `prod` stage segment.
 Create this file with the same private permissions as credential files: current OS
 user ownership, a single link, and mode `0600` on Unix or a private DACL on Windows.
@@ -351,7 +387,7 @@ pnpm exec vite --host 127.0.0.1 --port 1443
 ```
 
 Open `https://127.0.0.1:1443`. The certificate must cover `127.0.0.1`. Vite forwards
-`/browser` HTTP and WebSocket requests to the local gateway on port 7420; set
+`/browser` HTTP and WebSocket requests to the dev gateway on port 7421; set
 `NESSA_BROWSER_GATEWAY_URL` to target a different test gateway. The browser uses
 HTTPS/WSS on this URL, or HTTP/WS for loopback development; the proxy's upstream
 hop is local loopback HTTP. Native

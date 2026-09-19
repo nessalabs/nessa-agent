@@ -24,45 +24,56 @@ release-bundle := if os() == "macos" { "dmg" } else if os() == "windows" { "nsis
 default:
     @just --list
 
-# Local gateway (stage=dev, 127.0.0.1:7420; run nessa auth init --local first).
+# Local gateway (stage=dev, 127.0.0.1:7421). Creates the dev owner and chat
+# credentials on first run; existing ones are never replaced. An installed Nessa
+# keeps :7420 through its background service, so both can run at once.
 server:
     pnpm server:run
 
-# Desktop app + local nessa server (always restarts :7420 so code changes load).
+# Desktop app + local nessa server (always restarts the dev port so code changes
+# load). It restarts a dev server this checkout started and nothing else — see
+# scripts/free-gateway-port.mjs for why a launchd service is not ours to kill.
 [unix]
 start:
     #!/usr/bin/env bash
     set -euo pipefail
     set -m
+    # The stage the server will actually read, not an assumption of `dev`: it
+    # takes `NESSA_STAGE` from this same environment, and `NESSA_PORT` ahead of
+    # the stage's own. Naming `dev` here freed one socket and then waited for
+    # health on another whenever the caller had selected anything else.
+    stage="$(node -e 'import("./scripts/gateway-port.mjs").then(m => process.stdout.write(m.selectedStage()))')"
+    port="$(node scripts/gateway-port.mjs)"
     server_pid=""
+    app_pid=""
+    # The app goes first, then the gateway it talks to: the other order leaves a
+    # window up with its server pulled out from under it, which is the state this
+    # cleanup exists to prevent.
+    #
+    # How a job and its subtree are stopped is one rule, shared with
+    # `scripts/run-dev-app.sh`, which is inside this same process tree.
+    source scripts/stop-job.sh
+    # Runs twice on a signal — once for the signal, once for the EXIT it causes —
+    # so each pid is forgotten as it is stopped. Otherwise the second pass
+    # announces stopping things that are already gone, and a pid that has since
+    # been reused would be signalled for nothing to do with us.
     cleanup() {
-      if [[ -n "${server_pid}" ]]; then
-        echo "→ stopping nessa-server (pid ${server_pid})"
-        kill -TERM -"${server_pid}" 2>/dev/null || kill -TERM "${server_pid}" 2>/dev/null || true
-        wait "${server_pid}" 2>/dev/null || true
-      fi
+      local app="${app_pid}" server="${server_pid}"
+      app_pid=""
+      server_pid=""
+      stop_job "the app" "${app}"
+      stop_job "nessa-server" "${server}"
     }
     trap cleanup EXIT INT TERM
 
-    if curl -sf --connect-timeout 0.3 "http://127.0.0.1:7420/health" >/dev/null; then
-      echo "→ stopping existing nessa-server on :7420"
-      if command -v lsof >/dev/null 2>&1; then
-        lsof -tiTCP:7420 -sTCP:LISTEN | xargs kill -TERM 2>/dev/null || true
-      fi
-      for _ in $(seq 1 20); do
-        if ! curl -sf --connect-timeout 0.3 "http://127.0.0.1:7420/health" >/dev/null; then
-          break
-        fi
-        sleep 0.25
-      done
-    fi
+    node scripts/free-gateway-port.mjs "${stage}"
 
     echo "→ starting nessa-server"
     pnpm server:run &
     server_pid=$!
     ready=0
     for _ in $(seq 1 120); do
-      if curl -sf --connect-timeout 0.3 "http://127.0.0.1:7420/health" >/dev/null; then
+      if curl -sf --connect-timeout 0.3 "http://127.0.0.1:${port}/health" >/dev/null; then
         ready=1
         break
       fi
@@ -75,12 +86,19 @@ start:
       sleep 0.5
     done
     if [[ "${ready}" -ne 1 ]]; then
-      echo "→ nessa-server did not become healthy on :7420"
+      echo "→ nessa-server did not become healthy on :${port}"
       exit 1
     fi
-    echo "→ nessa-server ready on :7420"
+    echo "→ nessa-server ready on :${port} (stage ${stage})"
 
-    just dev
+    # Started as a job rather than run in the foreground, so its process group is
+    # known and `cleanup` can take the whole subtree down. `wait` keeps this
+    # recipe blocking until the app exits, exactly as the foreground call did,
+    # and the trap fires either way round: quitting the app stops the gateway,
+    # and stopping this run stops the app.
+    just dev &
+    app_pid=$!
+    wait "${app_pid}"
 
 # UI in a browser only; window controls no-op.
 web:
@@ -104,10 +122,15 @@ dev:
       export WEBKIT_DISABLE_DMABUF_RENDERER=1
       export WEBKIT_DISABLE_COMPOSITING_MODE=1
     fi
-    exec pnpm app
+    exec bash scripts/run-dev-app.sh
 
 # Desktop app in dev mode (`tauri dev`).
 [macos]
+dev:
+    bash scripts/run-dev-app.sh
+
+# Desktop app in dev mode (`tauri dev`). cmd has no traps, so the app is not
+# taken down with this command the way it is on Unix; quit it from the tray.
 [windows]
 dev:
     pnpm app

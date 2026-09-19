@@ -112,36 +112,42 @@ for (const file of walk(src)) {
     }
   }
 
-  const inConversationRules =
-    path.startsWith("src/conversation/model/") ||
-    path.startsWith("src/conversation/application/")
+  // Every vertical, not a list of them. These rules used to name `conversation`
+  // and `session`, so a feature that grew a `model/` or `application/` later —
+  // `panel/` did — got no rules at all and its first React import passed. The
+  // layer a file is in is what decides what it may import, whichever feature it
+  // belongs to.
+  const vertical = /^src\/([^/]+)\/(model|application)\//.exec(path)
+  const feature = vertical?.[1]
+  const layer = vertical?.[2]
+  const inLayerRules = Boolean(vertical) && !path.endsWith(".test.ts")
 
-  if (path.startsWith("src/conversation/model/") && !path.endsWith(".test.ts")) {
+  if (inLayerRules && layer === "model") {
     if (
       imports.some((item) => /(?:^|\/)(?:application|adapters|ui)(?:\/|$)/.test(item))
     ) {
-      fail(file, "conversation model imports nothing outward")
+      fail(file, `${feature} model imports nothing outward`)
     }
   }
 
-  if (path.startsWith("src/conversation/application/") && !path.endsWith(".test.ts")) {
+  if (inLayerRules && layer === "application") {
     if (imports.some((item) => /(?:^|\/)adapters(?:\/|$)/.test(item))) {
-      fail(file, "conversation use cases import the model and ports, not adapters")
+      fail(file, `${feature} use cases import the model and ports, not adapters`)
     }
     if (imports.some((item) => /(?:^|\/)ui(?:\/|$)/.test(item))) {
-      fail(file, "conversation use cases must not import the UI")
+      fail(file, `${feature} use cases must not import the UI`)
     }
   }
 
-  if (inConversationRules && !path.endsWith(".test.ts")) {
+  if (inLayerRules) {
     if (/from\s+["']react["']/.test(text) || /from\s+["']react\//.test(text)) {
-      fail(file, "conversation model/use cases must not import React")
+      fail(file, `${feature} model/use cases must not import React`)
     }
     if (/@tauri-apps/.test(text)) {
-      fail(file, "conversation model/use cases must not import the host")
+      fail(file, `${feature} model/use cases must not import the host`)
     }
     if (/redux/i.test(text)) {
-      fail(file, "conversation model/use cases must not import the store")
+      fail(file, `${feature} model/use cases must not import the store`)
     }
   }
 

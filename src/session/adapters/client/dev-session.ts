@@ -6,6 +6,7 @@ import {
   type Stage,
 } from "@nessa/client"
 
+import { gatewayPort } from "../../../env/gateway-ports"
 import { host } from "../../../host"
 
 export type EstablishedDevSession = {
@@ -38,10 +39,13 @@ export async function connectDevSession(
   deps: ConnectDevSessionDeps = {},
 ): Promise<EstablishedDevSession> {
   const connect = deps.connect ?? NessaClient.connect.bind(NessaClient)
+  const stage = deps.stage ?? "dev"
   const client = await connect({
     profile: "product",
-    stage: deps.stage ?? "dev",
-    url: deps.browserUrl ?? "ws://127.0.0.1:7420/session",
+    stage,
+    // Without a proxied browser URL this talks to the gateway directly, so it
+    // asks the one table where this stage listens.
+    url: deps.browserUrl ?? `ws://127.0.0.1:${gatewayPort(stage)}/session`,
     ...(deps.browserUrl ? { auth: { browserCookie: true as const } } : {}),
     credentialSource: deps.credentialSource,
     role: "surface",
