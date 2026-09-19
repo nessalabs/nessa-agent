@@ -5,6 +5,27 @@ on:
     branches: [main]
   workflow_dispatch:
 jobs:
+  # A workflow that will not start reports a failure with no jobs in it: nothing
+  # to open, no log, no annotation. That is how a `secrets` reference in a step's
+  # `if` sat in the release workflow unnoticed — the only runs it could have
+  # broken were tag pushes, and the branch pushes that did fail looked like
+  # noise. This is the gate that reads the files before GitHub has to.
+  #
+  # Pinned, and installed from the release archive rather than an action, so the
+  # version doing the checking is the version named here.
+  workflows:
+    name: Workflow files are valid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install actionlint
+        env:
+          VERSION: 1.7.7
+        run: |
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/actionlint_${VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin actionlint
+      - run: actionlint
+
   gateway-contract:
     runs-on: ubuntu-latest
     steps:
