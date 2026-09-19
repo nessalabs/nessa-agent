@@ -582,6 +582,14 @@ struct Reported {
     percent: Option<u64>,
     /// The byte count it carried.
     bytes: u64,
+    /// Whether anything has been said at all.
+    ///
+    /// Its own field rather than `bytes == 0`, which is a different question: a
+    /// first chunk that carries no bytes is still a report, and inferring it
+    /// from the count meant every chunk after one counted as the first until
+    /// some bytes finally arrived — a throttle that stopped throttling exactly
+    /// when the download was at its least eventful.
+    said: bool,
 }
 
 /// How much of an unmeasured download has to arrive before it is worth saying
@@ -605,7 +613,7 @@ fn worth_reporting(received: u64, total: Option<u64>, reported: Reported) -> Opt
         .filter(|total| *total > 0)
         .map(|total| (received.min(total).saturating_mul(100)) / total);
 
-    let first = reported.bytes == 0;
+    let first = !reported.said;
     let moved = match percent {
         Some(percent) => reported.percent != Some(percent),
         None => received.saturating_sub(reported.bytes) >= UNMEASURED_STEP,
@@ -615,6 +623,7 @@ fn worth_reporting(received: u64, total: Option<u64>, reported: Reported) -> Opt
         true => Some(Reported {
             percent,
             bytes: received,
+            said: true,
         }),
         false => None,
     }
@@ -1105,16 +1114,41 @@ mod tests {
             worth_reporting(1, Some(10_000_000), Reported::default()),
             Some(Reported {
                 percent: Some(0),
-                bytes: 1
+                bytes: 1,
+                said: true
             })
         );
         assert_eq!(
             worth_reporting(1, None, Reported::default()),
             Some(Reported {
                 percent: None,
-                bytes: 1
+                bytes: 1,
+                said: true
             })
         );
+    }
+
+    /// A chunk that carries no bytes is still a report, so the next one is not
+    /// the first.
+    ///
+    /// Inferring "have we said anything" from `bytes == 0` meant a zero-byte
+    /// first chunk left the count at zero, every chunk after it counted as the
+    /// first, and the throttle emitted on every single one — until some bytes
+    /// finally arrived, which is exactly when a stalling download is at its
+    /// least worth reporting.
+    #[test]
+    fn a_report_that_carried_no_bytes_still_counts_as_having_been_made() {
+        let said_nothing_yet = Reported::default();
+
+        let after_empty_chunk =
+            worth_reporting(0, Some(1_000), said_nothing_yet).expect("the first chunk reports");
+        assert_eq!(after_empty_chunk.bytes, 0);
+        assert!(after_empty_chunk.said);
+
+        // The next chunk in the same percent has nothing to add, and before
+        // this said so only when bytes happened to have arrived.
+        assert_eq!(worth_reporting(1, Some(1_000), after_empty_chunk), None);
+        assert_eq!(worth_reporting(2, Some(1_000), after_empty_chunk), None);
     }
 
     #[test]
@@ -1122,6 +1156,7 @@ mod tests {
         let at_one_percent = Reported {
             percent: Some(1),
             bytes: 100_000,
+            said: true,
         };
 
         // Still the same percent: thousands of chunks land inside one position
@@ -1138,7 +1173,8 @@ mod tests {
             worth_reporting(200_000, Some(10_000_000), at_one_percent),
             Some(Reported {
                 percent: Some(2),
-                bytes: 200_000
+                bytes: 200_000,
+                said: true
             })
         );
     }
@@ -1152,12 +1188,14 @@ mod tests {
                 Some(1_000),
                 Reported {
                     percent: Some(99),
-                    bytes: 990
+                    bytes: 990,
+                    said: true
                 }
             ),
             Some(Reported {
                 percent: Some(100),
-                bytes: 1_100
+                bytes: 1_100,
+                said: true
             })
         );
     }
@@ -1169,6 +1207,7 @@ mod tests {
         let started = Reported {
             percent: None,
             bytes: UNMEASURED_STEP,
+            said: true,
         };
 
         assert_eq!(worth_reporting(UNMEASURED_STEP + 1, None, started), None);
@@ -1176,7 +1215,8 @@ mod tests {
             worth_reporting(UNMEASURED_STEP * 2, None, started),
             Some(Reported {
                 percent: None,
-                bytes: UNMEASURED_STEP * 2
+                bytes: UNMEASURED_STEP * 2,
+                said: true
             })
         );
     }
@@ -1191,12 +1231,14 @@ mod tests {
                 Some(0),
                 Reported {
                     percent: None,
-                    bytes: 1
+                    bytes: 1,
+                    said: true
                 }
             ),
             Some(Reported {
                 percent: None,
-                bytes: UNMEASURED_STEP + 1
+                bytes: UNMEASURED_STEP + 1,
+                said: true
             })
         );
     }

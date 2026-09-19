@@ -7,7 +7,6 @@ import {
 } from "../../host"
 import { AgentBloom } from "./agent-bloom"
 import { Onboarding, SETUP_HEADING_ID } from "./onboarding"
-import { revealOnFirstRender } from "./reveal-on-first-render"
 import { SetupChrome } from "./setup-chrome"
 import { useIntroSound } from "./use-intro-sound"
 import { useOnboarding } from "./use-onboarding"
@@ -141,9 +140,13 @@ export function SetupGate({
   // A hidden macOS window is not drawn at all, so its webview is served no
   // animation frames: a reveal scheduled on one waits for a paint that is
   // waiting for the reveal, and setup stayed hidden for the whole session while
-  // its page ran and played the opening sound. `revealOnFirstRender` is where
-  // that rule is written down and tested.
-  React.useEffect(() => revealOnFirstRender(() => void revealSetupWindow()), [])
+  // its page ran and played the opening sound.
+  //
+  // The body is a block so the effect returns nothing: an expression body would
+  // hand React the promise as a cleanup function.
+  React.useEffect(() => {
+    void revealSetupWindow()
+  }, [])
 
   // Handing over to the panel. Showing it, writing setup off for good, and
   // closing this window are one host call, because the order between them has

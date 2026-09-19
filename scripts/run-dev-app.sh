@@ -19,11 +19,15 @@
 set -euo pipefail
 set -m
 
+# The same rule `just start` uses, and it calls this script, so the two must not
+# drift.
+source "$(dirname "${BASH_SOURCE[0]}")/stop-job.sh"
+
 app_pid=""
 cleanup() {
-  [[ -n "${app_pid}" ]] || return 0
-  kill -TERM -"${app_pid}" 2>/dev/null || kill -TERM "${app_pid}" 2>/dev/null || true
-  wait "${app_pid}" 2>/dev/null || true
+  local app="${app_pid}"
+  app_pid=""
+  stop_job "" "${app}"
 }
 trap cleanup EXIT INT TERM
 

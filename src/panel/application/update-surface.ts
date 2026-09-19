@@ -119,12 +119,7 @@ export function afterUpdate(state: UpdateState, event: UpdateEvent): UpdateState
     }
     case "dismiss": {
       if (state.stage !== "noticed" || state.release === null) return state
-      return {
-        ...state,
-        release: null,
-        dismissed: [...state.dismissed, state.release.version],
-        stage: "quiet",
-      }
+      return turnedDown(state, state.release.version)
     }
     case "progress": {
       // Recorded while the tab is closed too: reopening is not possible, but a
@@ -150,17 +145,28 @@ export function afterUpdate(state: UpdateState, event: UpdateEvent): UpdateState
       // `dismissed` and a failure can still bring the tab back.
       if (state.stage === "downloading") return { ...state, stage: "installing" }
       // A finished one: closing it is the same answer as dismissing the notice
-      // was — not this version, not this launch.
+      // was — not this version, not this launch — and is that same answer in
+      // code, rather than the same four lines written again.
       if (state.stage !== "failed") return state
-      return {
-        ...state,
-        release: null,
-        dismissed: [...state.dismissed, state.release.version],
-        stage: "quiet",
-      }
+      return turnedDown(state, state.release.version)
     }
-    default:
-      return state
+  }
+  // No default: the switch is exhaustive over UpdateEvent, so a new kind is a
+  // compiler error here rather than a silently ignored event.
+}
+
+/**
+ * Not this version, not this launch.
+ *
+ * The one answer behind two gestures — dismissing the notice and closing a
+ * failed tab — which said so in a comment while being written out twice.
+ */
+function turnedDown(state: UpdateState, version: string): UpdateState {
+  return {
+    ...state,
+    release: null,
+    dismissed: [...state.dismissed, version],
+    stage: "quiet",
   }
 }
 

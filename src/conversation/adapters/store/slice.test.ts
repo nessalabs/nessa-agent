@@ -121,6 +121,14 @@ describe("gateway conversation projection", () => {
     const empty = await store.dispatch(sendDraft({ content: textContent("   ") }))
     expect(sendDraft.rejected.match(empty)).toBe(true)
     expect(empty.payload).toEqual({ kind: "empty-draft" })
+
+    // Including the one that is only reachable by racing a close against a
+    // submit: a conversation that is not there took nothing.
+    const gone = await store.dispatch(
+      sendDraft({ content: textContent("hello"), id: "not-a-conversation" }),
+    )
+    expect(sendDraft.rejected.match(gone)).toBe(true)
+    expect(gone.payload).toEqual({ kind: "no-such-conversation" })
   })
 
   it("sends through injected effects, retaining server and submission identities", async () => {

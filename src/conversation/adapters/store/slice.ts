@@ -36,7 +36,11 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
     const tabs = getState().conversation
     const id = input.id ?? tabs.activeId
     const current = tabs.conversations.find((item) => item.id === id)
-    if (!current) return
+    // The last way this could decline a draft and look like it had taken one:
+    // the conversation closing in the same tick as a submit. Refused with a
+    // reason like every other decline, so "was this draft taken" has one answer
+    // and not two — the composer's full-pane editor rests on it.
+    if (!current) return rejectWithValue({ kind: "no-such-conversation" })
     if (hasFileAttachments(input.content) || hasFileAttachments(current.draft)) {
       dispatch(
         showError({

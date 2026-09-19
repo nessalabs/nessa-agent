@@ -64,14 +64,23 @@ export function declaredModules(source) {
     const attributes = attributesAbove(lines, index)
     found.push({
       name: match[1],
-      gate: MACOS_GATE.test(attributes)
-        ? MACOS_ONLY
-        : TEST_GATE.test(attributes)
-          ? TEST_ONLY
-          : EVERY_PLATFORM,
+      gate: gateFrom(attributes),
     })
   })
   return found
+}
+
+/**
+ * What a run of attributes says a thing is compiled for.
+ *
+ * One place, because the next gate worth reading — a Linux-only adapter is the
+ * obvious one — has to be added here rather than found in two chains that must
+ * agree.
+ */
+function gateFrom(attributes) {
+  if (MACOS_GATE.test(attributes)) return MACOS_ONLY
+  if (TEST_GATE.test(attributes)) return TEST_ONLY
+  return EVERY_PLATFORM
 }
 
 /** Where a module's file sits, given the file that declares it. */
@@ -130,11 +139,7 @@ export function topLevelItems(source, fileGate = EVERY_PLATFORM) {
       const match = ITEM_DECLARATION.exec(line)
       if (match) {
         const attributes = attributesAbove(lines, index)
-        const own = MACOS_GATE.test(attributes)
-          ? MACOS_ONLY
-          : TEST_GATE.test(attributes)
-            ? TEST_ONLY
-            : EVERY_PLATFORM
+        const own = gateFrom(attributes)
         open = {
           kind: match[1],
           name: match[2],
@@ -181,7 +186,17 @@ function gateOfLine(items, fileGate, index) {
  * @param {string[]} spared names that are referenced by something other than
  *   this crate's own source — `main`, and anything an attribute wires up.
  */
-export function unreachableOffMacos(sources, root, spared = ["main"]) {
+/**
+ * Names nothing in this crate calls, and which are reached anyway.
+ *
+ * `main` is the entry point. Anything else added here is a claim that a macro
+ * or an attribute reaches it, which is the one thing reading source cannot see
+ * — so it is a constant with a reason beside it rather than a parameter no
+ * caller passes and a failure message that tells the reader to edit a default.
+ */
+const REACHED_FROM_OUTSIDE = ["main"]
+
+export function unreachableOffMacos(sources, root, spared = REACHED_FROM_OUTSIDE) {
   const gates = fileGates(sources, root)
   const parsed = new Map()
   for (const [path, source] of sources) {

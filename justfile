@@ -50,19 +50,9 @@ start:
     # window up with its server pulled out from under it, which is the state this
     # cleanup exists to prevent.
     #
-    # Each is signalled as a process group. `set -m` above puts every job in one
-    # of its own, so a plain `kill "${pid}"` reaches the recipe's own `just` and
-    # not the tauri/vite/app subtree beneath it — which is how an app came to
-    # outlive the run that started it. The bare-pid fallback is for a job that
-    # was not made a group leader after all; signalling a group we do not lead
-    # is not a thing to guess at.
-    stop() {
-      local what="$1" pid="$2"
-      [[ -n "${pid}" ]] || return 0
-      echo "→ stopping ${what} (pid ${pid})"
-      kill -TERM -"${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null || true
-      wait "${pid}" 2>/dev/null || true
-    }
+    # How a job and its subtree are stopped is one rule, shared with
+    # `scripts/run-dev-app.sh`, which is inside this same process tree.
+    source scripts/stop-job.sh
     # Runs twice on a signal — once for the signal, once for the EXIT it causes —
     # so each pid is forgotten as it is stopped. Otherwise the second pass
     # announces stopping things that are already gone, and a pid that has since
@@ -71,8 +61,8 @@ start:
       local app="${app_pid}" server="${server_pid}"
       app_pid=""
       server_pid=""
-      stop "the app" "${app}"
-      stop "nessa-server" "${server}"
+      stop_job "the app" "${app}"
+      stop_job "nessa-server" "${server}"
     }
     trap cleanup EXIT INT TERM
 

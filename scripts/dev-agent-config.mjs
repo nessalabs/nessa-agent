@@ -53,6 +53,11 @@ const MINIMUM_NODE_MAJOR = 20
 
 const HARNESS = "crates/nessa-sdk/harnesses/claude-acp"
 const ACP_ENTRY = `${HARNESS}/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js`
+/** The checked-in model catalog, named once: the block points at it and the
+ * check below looks for it, and a move that updated only one of those would
+ * write a config naming a file that is not there. */
+const CATALOG = "crates/nessa-sdk/data/models.json"
+
 const INSTALL_HARNESS = `(cd ${HARNESS} && npm ci --omit=dev)`
 
 function say(message) {
@@ -77,9 +82,10 @@ function skip(reason, remedy) {
  */
 export function namespaceRoot(env = process.env, home = homedir()) {
   const stage = env.NESSA_STAGE ?? "dev"
-  // An empty NESSA_INSTANCE is set, not absent, and the server rejects it as a
-  // segment rather than quietly serving the stage's shared namespace.
-  const instance = env.NESSA_INSTANCE === undefined ? undefined : env.NESSA_INSTANCE
+  const instance = env.NESSA_INSTANCE
+  // An empty NESSA_INSTANCE is set, not absent: it reaches this check and is
+  // refused as a segment, rather than quietly serving the stage's shared
+  // namespace. That is this loop's doing, which is why it is said here.
   for (const segment of [stage, ...(instance === undefined ? [] : [instance])]) {
     if (!/^[A-Za-z0-9_-]+$/.test(segment))
       throw new Error(
@@ -111,7 +117,7 @@ export function namespaceRoot(env = process.env, home = homedir()) {
  */
 export function agentBlock({ checkout, namespace, node, mcpBinary }) {
   return {
-    catalog: join(checkout, "crates/nessa-sdk/data/models.json"),
+    catalog: join(checkout, CATALOG),
     node,
     acpEntry: join(checkout, ACP_ENTRY),
     workspace: join(namespace, "workspaces/default"),
@@ -273,7 +279,7 @@ function main() {
       `run: ${INSTALL_HARNESS}`,
       "then start the dev loop again",
     ])
-  const catalog = join(checkout, "crates/nessa-sdk/data/models.json")
+  const catalog = join(checkout, CATALOG)
   if (!existsSync(catalog))
     skip(
       `the model catalog is missing: ${catalog}`,
