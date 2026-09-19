@@ -1,0 +1,139 @@
+name: Every Rust file syntax and ownership probes
+on:
+  push:
+    branches: [audit/file-verification-4c39449]
+    paths: [.github/workflows/file-verification-rust-syntax.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  rust-files:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 4c3944962a24721f305d0d66b34df6f024970cf4
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Parse all Rust files, including files outside compiled module trees
+        shell: python
+        run: |
+          import json, os, pathlib, subprocess
+          output = pathlib.Path(os.environ['RUNNER_TEMP']) / 'rust-file-evidence'
+          output.mkdir()
+          helper = pathlib.Path(os.environ['RUNNER_TEMP']) / 'rust-file-parser'
+          (helper / 'src').mkdir(parents=True)
+          (helper / 'Cargo.toml').write_text('''[package]
+          name = "nessa-audit-file-parser"
+          version = "0.0.0"
+          edition = "2021"
+          [dependencies]
+          syn = { version = "2", features = ["full", "visit"] }
+          serde_json = "1"
+          quote = "1"
+          proc-macro2 = { version = "1", features = ["span-locations"] }
+          [workspace]
+          ''')
+          (helper / 'src/main.rs').write_text(r'''
+          use quote::ToTokens;
+          use std::{fs, path::Path, process::Command};
+          use syn::{spanned::Spanned, visit::{self, Visit}, Item};
+          struct Inspect { functions: Vec<serde_json::Value>, imports: Vec<serde_json::Value>, unsafe_blocks: usize }
+          impl<'ast> Visit<'ast> for Inspect {
+              fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+                  self.functions.push(serde_json::json!({"name": item.sig.ident.to_string(), "line": item.span().start().line, "public": matches!(item.vis, syn::Visibility::Public(_)), "has_doc_attribute": item.attrs.iter().any(|a| a.path().is_ident("doc")), "attributes": item.attrs.iter().map(|a| a.to_token_stream().to_string()).collect::<Vec<_>>()}));
+                  visit::visit_item_fn(self, item);
+              }
+              fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+                  self.functions.push(serde_json::json!({"name": item.sig.ident.to_string(), "line": item.span().start().line, "public": matches!(item.vis, syn::Visibility::Public(_)), "has_doc_attribute": item.attrs.iter().any(|a| a.path().is_ident("doc")), "signature": item.sig.to_token_stream().to_string()}));
+                  visit::visit_impl_item_fn(self, item);
+              }
+              fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+                  self.imports.push(serde_json::json!({"line": item.span().start().line, "tree": item.tree.to_token_stream().to_string()}));
+                  visit::visit_item_use(self, item);
+              }
+              fn visit_expr_unsafe(&mut self, item: &'ast syn::ExprUnsafe) {
+                  self.unsafe_blocks += 1;
+                  visit::visit_expr_unsafe(self, item);
+              }
+          }
+          fn main() -> Result<(), Box<dyn std::error::Error>> {
+              let output = std::env::args().nth(1).ok_or("output path missing")?;
+              let tracked = Command::new("git").args(["ls-files", "-z"]).output()?;
+              if !tracked.status.success() { return Err("git enumeration failed".into()); }
+              let mut files = Vec::new();
+              for raw in tracked.stdout.split(|byte| *byte == 0).filter(|bytes| !bytes.is_empty()) {
+                  let path = std::str::from_utf8(raw)?;
+                  if !path.ends_with(".rs") { continue; }
+                  let source = fs::read_to_string(path)?;
+                  match syn::parse_file(&source) {
+                      Ok(file) => {
+                          let mut inspect = Inspect { functions: Vec::new(), imports: Vec::new(), unsafe_blocks: 0 };
+                          inspect.visit_file(&file);
+                          let definitions = if Path::new(path).file_name().is_some_and(|n| n == "mod.rs") {
+                              file.items.iter().filter(|item| !matches!(item, Item::Use(_) | Item::Mod(_) | Item::ExternCrate(_))).map(|item| serde_json::json!({"line": item.span().start().line, "definition": item.to_token_stream().to_string().chars().take(200).collect::<String>()})).collect::<Vec<_>>()
+                          } else { Vec::new() };
+                          files.push(serde_json::json!({"path": path, "syntax": "pass", "functions": inspect.functions, "imports": inspect.imports, "unsafe_blocks": inspect.unsafe_blocks, "mod_file_definition_candidates": definitions}));
+                      }
+                      Err(error) => files.push(serde_json::json!({"path": path, "syntax": "fail", "error": error.to_string(), "line": error.span().start().line})),
+                  }
+              }
+              let failures = files.iter().filter(|f| f["syntax"] != "pass").count();
+              fs::write(output, serde_json::to_vec_pretty(&serde_json::json!({"meaning": "Rust syntax and declaration inventory, not typechecking or behavioral proof", "count": files.len(), "failures": failures, "files": files}))?)?;
+              println!("Parsed all tracked Rust files; syntax failures: {failures}");
+              if failures > 0 { std::process::exit(1); }
+              Ok(())
+          }
+          ''')
+          result = subprocess.run(['cargo', 'run', '--manifest-path', str(helper / 'Cargo.toml'), '--', str(output / 'rust-files.json')], timeout=700)
+          if (helper / 'Cargo.lock').exists():
+              (output / 'parser-Cargo.lock').write_bytes((helper / 'Cargo.lock').read_bytes())
+          (output / 'parser-Cargo.toml').write_bytes((helper / 'Cargo.toml').read_bytes())
+          (output / 'parser-main.rs').write_bytes((helper / 'src/main.rs').read_bytes())
+          (output / 'parser-exit.json').write_text(json.dumps({'exit_code': result.returncode}))
+          raise SystemExit(result.returncode)
+      - name: Prove owned identifier capacity using the actual domain module
+        if: always()
+        shell: python
+        run: |
+          import json, os, pathlib, subprocess
+          output = pathlib.Path(os.environ['RUNNER_TEMP']) / 'rust-file-evidence'
+          output.mkdir(exist_ok=True)
+          identifiers = pathlib.Path('crates/nessa-auth/src/domain/identifiers.rs').resolve()
+          error = identifiers.with_name('error.rs')
+          with identifiers.open('a') as source:
+              source.write('''
+          #[cfg(test)]
+          mod audit_retained_capacity {
+              use super::PrincipalId;
+              #[test]
+              fn audit_short_identifier_compacts_owned_spare_capacity() {
+                  let mut text = String::with_capacity(1_048_576);
+                  text.push_str("owner");
+                  let identifier = PrincipalId::new(text).unwrap();
+                  assert!(identifier.0.capacity() <= 256, "retained capacity is {} for {} text bytes", identifier.0.capacity(), identifier.as_str().len());
+              }
+          }
+          ''')
+          wrapper = output / 'auth-probe.rs'
+          wrapper.write_text(f'#[path = "{error}"]\nmod error;\npub use error::DomainError;\n#[path = "{identifiers}"]\nmod identifiers;\n')
+          (output / 'capacity-probe.patch').write_bytes(subprocess.check_output(['git', 'diff', '--', str(identifiers)]))
+          binary = output / 'auth-probe'
+          with (output / 'capacity-compile.log').open('w') as log:
+              compiled = subprocess.run(['rustc', '--edition=2021', '--test', str(wrapper), '-o', str(binary)], stdout=log, stderr=subprocess.STDOUT, timeout=90)
+          status = 'not_run'
+          if compiled.returncode == 0:
+              with (output / 'capacity-probe.log').open('w') as log:
+                  status = subprocess.run([str(binary), '--nocapture'], stdout=log, stderr=subprocess.STDOUT, timeout=30).returncode
+          (output / 'capacity-results.json').write_text(json.dumps({'compile_exit': compiled.returncode, 'test_exit': status, 'assertion': 'correct behavior; small identifier must not retain oversized allocation'}, indent=2))
+          binary.unlink(missing_ok=True)
+          if compiled.returncode != 0 or status != 0:
+              raise SystemExit(1)
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nessa-rust-file-verification-4c39449
+          path: ${{ runner.temp }}/rust-file-evidence/
+          if-no-files-found: error
+          retention-days: 7
