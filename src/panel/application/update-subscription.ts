@@ -22,37 +22,70 @@ export type Unlisten = () => void
  * listening.
  */
 export function attachThenAsk({
-  attach,
+  listeners,
   ask,
   ready,
+  failed,
 }: {
-  /** Every listener, resolved once they are all really attached. */
-  attach: (live: () => boolean) => Promise<Unlisten[]>
-  /** The one question, asked only once `attach` has resolved. */
+  /**
+   * One per listener, each resolving when *that* listener is attached.
+   *
+   * A list rather than one `Promise.all`, because the difference matters twice.
+   * `Promise.all` hands back nothing when any of them rejects — including the
+   * handles for the ones that succeeded, which are then attached with nobody
+   * holding their `unlisten` and are never taken down. And a listener is live
+   * the moment its own promise resolves, not when the last one does, so the
+   * host can announce an update through one while another is still pending.
+   */
+  listeners: ((live: () => boolean) => Promise<Unlisten>)[]
+  /** The one question, asked only once every listener is attached. */
   ask: (live: () => boolean) => Promise<void>
-  /** Runs when the host can be heard from, before the question. */
+  /**
+   * Runs when every listener is attached and before the question — so whatever
+   * must not happen until the host can be *heard from* can wait for it.
+   */
   ready?: () => void
+  /**
+   * Runs when attaching or asking threw. Nothing here can recover — the host is
+   * unreachable for the life of this component — so what is owed is a
+   * diagnostic rather than a retry.
+   */
+  failed?: (reason: unknown) => void
 }): Unlisten {
   let cancelled = false
-  let attached: Unlisten[] = []
+  const attached: Unlisten[] = []
   const live = () => !cancelled
 
+  /** Take down everything held, once. */
+  const release = () => {
+    for (const unlisten of attached.splice(0)) unlisten()
+  }
+
   void (async () => {
-    const listeners = await attach(live)
-    // Cancelled while attaching: these exist now and nobody wants them, so
-    // they come down here. The cleanup below has already run and found nothing.
-    if (cancelled) {
-      for (const unlisten of listeners) unlisten()
-      return
+    try {
+      await Promise.all(
+        listeners.map(async (attach) => {
+          const unlisten = await attach(live)
+          // Held the moment it exists. Cancelled in the meantime, it is taken
+          // down here rather than left running with its handle discarded.
+          if (cancelled) unlisten()
+          else attached.push(unlisten)
+        }),
+      )
+      if (cancelled) return
+      ready?.()
+      await ask(live)
+    } catch (reason) {
+      failed?.(reason)
+      // One listener failing does not leave the others attached: they would go
+      // on firing into a panel that was never told it was listening.
+      cancelled = true
+      release()
     }
-    attached = listeners
-    ready?.()
-    await ask(live)
   })()
 
   return () => {
     cancelled = true
-    for (const unlisten of attached) unlisten()
-    attached = []
+    release()
   }
 }

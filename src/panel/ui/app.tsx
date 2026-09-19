@@ -42,6 +42,7 @@ import { useSurface, type Surface } from "../adapters/surface"
 import { useTabShortcuts } from "../adapters/use-tab-shortcuts"
 import { useUpdate } from "../adapters/use-update"
 import { UPDATE_TAB_ID } from "../application/update-surface"
+import { tabAfter, tabAt } from "../application/tab-navigation"
 import { UpdateTab } from "./update-tab"
 import { useComposer } from "./use-composer"
 import { useFileAttachments } from "./use-file-attachments"
@@ -152,8 +153,40 @@ export function App({
     }
     chat.closeConversation(chat.active.id)
   })
+  /**
+   * The strip as a person sees it, which is what the keyboard moves through.
+   *
+   * The update tab is in it, so navigating `chat.conversations` alone stepped
+   * over the update and started from a conversation that was not what was
+   * selected — next from the last conversation went back to the first rather
+   * than to the update, and a numbered shortcut aimed at the update's position
+   * found nothing there.
+   */
+  const stripIds = React.useMemo(
+    () => [
+      ...chat.conversations.map((item) => item.id),
+      ...(update.tab ? [UPDATE_TAB_ID] : []),
+    ],
+    [chat.conversations, update.tab],
+  )
+  const selectedId = update.viewing ? UPDATE_TAB_ID : chat.active.id
+
+  /** Show whichever tab the strip named, update or conversation. */
+  const showTab = React.useEffectEvent((id: string | undefined) => {
+    if (id === undefined) return
+    closePaste()
+    if (id === UPDATE_TAB_ID) {
+      update.setViewing(true)
+      return
+    }
+    leaveUpdateTab()
+    chat.setActive(id)
+  })
+
   const activateTab = React.useEffectEvent(
     (target: { index?: number; conversationId?: string }) => {
+      // A command naming a conversation means that conversation, wherever it
+      // sits; only the positional form counts tabs.
       if (target.conversationId) {
         const open = chat.conversations.some((item) => item.id === target.conversationId)
         if (open) {
@@ -164,18 +197,12 @@ export function App({
         }
       }
       if (typeof target.index !== "number") return
-      const next = chat.conversations[target.index]
-      if (!next) return
-      closePaste()
-      leaveUpdateTab()
-      chat.setActive(next.id)
+      showTab(tabAt(stripIds, target.index))
     },
   )
-  const moveActiveTab = React.useEffectEvent((direction: -1 | 1) => {
-    closePaste()
-    leaveUpdateTab()
-    chat.moveActive(direction)
-  })
+  const moveActiveTab = React.useEffectEvent((direction: -1 | 1) =>
+    showTab(tabAfter(stripIds, selectedId, direction)),
+  )
   useHostPanel(surface, toggleSurface, composerRef)
   useTabShortcuts({ openTab, closeActiveTab, moveActiveTab, activateTab })
   useFlushOnTurn(

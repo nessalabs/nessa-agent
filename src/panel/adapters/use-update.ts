@@ -60,18 +60,41 @@ export function useUpdate(): PanelUpdate {
   // downloading with nothing left to tell it otherwise.
   const [listening, setListening] = React.useState(false)
 
+  /**
+   * Asking the host to install, and hearing about it going wrong.
+   *
+   * The refusal arrives as an event, so the invoke resolving proves only that
+   * the request was delivered. Its *rejection* is a different failure — the
+   * command never ran, so no event will ever follow — and would otherwise
+   * leave the tab saying it was downloading with nothing to correct it.
+   */
+  const start = React.useCallback(() => {
+    void installUpdate().catch((reason) => {
+      console.error("[nessa] the update could not be started", reason)
+      report({ kind: "failed" })
+    })
+  }, [])
+
+  // An install asked for before the host could be heard from. Not dropped and
+  // not sent: held until the listeners are attached, so its refusal has
+  // somewhere to arrive.
+  const waiting = React.useRef(false)
+
   React.useEffect(
     () =>
       attachThenAsk({
-        // Every listener, and not resolved until each is really attached.
-        attach: (live) =>
-          Promise.all([
+        // One per listener, so each is held the moment it exists and a failure
+        // in any of them does not strand the others.
+        listeners: [
+          (live) =>
             onUpdateAvailable((release) => {
               if (live()) report({ kind: "announced", release })
             }),
+          (live) =>
             onUpdateProgress(({ downloaded, total }) => {
               if (live()) report({ kind: "progress", downloaded, total })
             }),
+          (live) =>
             onUpdateFailed((reason) => {
               if (!live()) return
               // The sentence on screen is the panel's; the host's own reason is
@@ -80,16 +103,29 @@ export function useUpdate(): PanelUpdate {
               console.warn("[nessa] the update was not installed", reason)
               report({ kind: "failed" })
             }),
-          ]),
+        ],
         // The host holds what it announced, so this finds an update from before
         // the listeners existed; anything later reaches one of them.
         ask: async (live) => {
           const release = await availableUpdate()
           if (live() && release) report({ kind: "announced", release })
         },
-        ready: () => setListening(true),
+        ready: () => {
+          setListening(true)
+          if (!waiting.current) return
+          waiting.current = false
+          start()
+        },
+        failed: (reason) => {
+          console.error("[nessa] the panel cannot hear the host about updates", reason)
+          // An install that was waiting for listeners that will never attach
+          // has to be told, or the tab waits with it.
+          if (!waiting.current) return
+          waiting.current = false
+          report({ kind: "failed" })
+        },
       }),
-    [],
+    [start],
   )
 
   const tab = updateTab(state)
@@ -100,15 +136,19 @@ export function useUpdate(): PanelUpdate {
     // selection got there.
     viewing: selected && tab !== null,
     install: () => {
-      // A refusal comes back as an event, so an install started before the
-      // failure listener exists can be refused with nobody to hear it — and
-      // the tab it opened would go on saying it was downloading, with no way
-      // out. The control is not offered until the events can arrive.
-      if (!listening) return
       report({ kind: "install" })
       setSelected(true)
-      // The refusal is an event, so nothing is awaited here.
-      void installUpdate()
+      // A refusal comes back as an event, so an install started before the
+      // failure listener is attached can be refused with nobody to hear it,
+      // leaving a tab that says it is downloading and nothing to correct it.
+      // The announcement can arrive through one listener while another is
+      // still pending, so this is reachable. The click is held rather than
+      // dropped: `ready` starts it a moment later.
+      if (!listening) {
+        waiting.current = true
+        return
+      }
+      start()
     },
     dismiss: () => report({ kind: "dismiss" }),
     close: () => {
