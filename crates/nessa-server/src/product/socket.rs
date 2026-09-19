@@ -52,7 +52,7 @@ pub async fn handle_socket<S>(mut socket: S, state: ProductRouteState)
 where
     S: Stream<Item = Result<Message, axum::Error>> + Sink<Message> + Unpin,
 {
-    let deadline = Instant::now() + state.settings.handshake_timeout;
+    let deadline = Instant::now() + state.settings.handshake_timeout();
     let nonce = Uuid::new_v4().to_string();
     // Wire timestamps use seconds. Round up from millisecond wall time so the
     // advertisement never truncates the authentication window. Only the shared
@@ -60,7 +60,7 @@ where
     let challenge_expires_at = state
         .clock
         .unix_milliseconds()
-        .saturating_add(state.settings.handshake_timeout.as_millis() as u64)
+        .saturating_add(state.settings.handshake_timeout().as_millis() as u64)
         .div_ceil(1000);
     let challenge = SessionChallenge {
         min_version: PRODUCT_VERSION,
@@ -73,7 +73,7 @@ where
         Err(_) => return,
     };
     let authenticated = timeout_at(deadline, async {
-        send(state.settings.write_timeout, &mut socket, challenge)
+        send(state.settings.write_timeout(), &mut socket, challenge)
             .await
             .map_err(|_| (String::new(), "temporarily_unavailable"))?;
         receive_authentication(&mut socket, &state, &nonce, deadline).await
@@ -83,8 +83,13 @@ where
         Ok(Ok(value)) => value,
         Ok(Err((request_id, code))) => {
             if code != "handshake_timeout" {
-                let _ =
-                    send_error(state.settings.write_timeout, &mut socket, &request_id, code).await;
+                let _ = send_error(
+                    state.settings.write_timeout(),
+                    &mut socket,
+                    &request_id,
+                    code,
+                )
+                .await;
             }
             let reason = match code {
                 "protocol_incompatible" => SessionCloseReason::ProtocolIncompatible,
@@ -92,12 +97,12 @@ where
                 "handshake_timeout" => SessionCloseReason::HandshakeTimeout,
                 _ => SessionCloseReason::AuthenticationFailed,
             };
-            close_session(state.settings.write_timeout, &mut socket, reason).await;
+            close_session(state.settings.write_timeout(), &mut socket, reason).await;
             return;
         }
         Err(_) => {
             close_session(
-                state.settings.write_timeout,
+                state.settings.write_timeout(),
                 &mut socket,
                 SessionCloseReason::HandshakeTimeout,
             )
@@ -110,7 +115,7 @@ where
         Ok(current) => current,
         Err(error) => {
             close_session(
-                state.settings.write_timeout,
+                state.settings.write_timeout(),
                 &mut socket,
                 close_reason(error),
             )
@@ -123,7 +128,7 @@ where
         Ok(frame) => OutgoingMessage::Response(frame),
         Err(_) => return,
     };
-    if send(state.settings.write_timeout, &mut socket, response)
+    if send(state.settings.write_timeout(), &mut socket, response)
         .await
         .is_err()
     {
@@ -263,7 +268,7 @@ async fn run_authenticated<S>(
 ) where
     S: Stream<Item = Result<Message, axum::Error>> + Sink<Message> + Unpin,
 {
-    let mut current_state = interval(state.settings.current_state_interval);
+    let mut current_state = interval(state.settings.current_state_interval());
     current_state.set_missed_tick_behavior(MissedTickBehavior::Delay);
     current_state.tick().await;
     let expiry = async {
@@ -287,15 +292,15 @@ async fn run_authenticated<S>(
         tokio::select! {
             Some(response) = requests.next(), if !requests.is_empty() => {
                 let Ok(response) = response else { break };
-                if send(state.settings.write_timeout, &mut socket, response).await.is_err() { break; }
+                if send(state.settings.write_timeout(), &mut socket, response).await.is_err() { break; }
             }
             _ = &mut expiry => {
-                close_session(state.settings.write_timeout, &mut socket, SessionCloseReason::CredentialExpired).await;
+                close_session(state.settings.write_timeout(), &mut socket, SessionCloseReason::CredentialExpired).await;
                 break;
             }
             _ = current_state.tick() => {
                 if let Some(error) = current_session_error(&state, &session).await {
-                    close_session(state.settings.write_timeout, &mut socket, close_reason(error)).await;
+                    close_session(state.settings.write_timeout(), &mut socket, close_reason(error)).await;
                     break;
                 }
             }
@@ -311,15 +316,15 @@ async fn run_authenticated<S>(
                     Err(_) => {
                         let Some(response) = correlatable_invalid_request(&text) else { continue };
                         if let Some(error) = current_session_error(&state, &session).await {
-                            close_session(state.settings.write_timeout, &mut socket, close_reason(error)).await;
+                            close_session(state.settings.write_timeout(), &mut socket, close_reason(error)).await;
                             break;
                         }
-                        if send(state.settings.write_timeout, &mut socket, response).await.is_err() { break; }
+                        if send(state.settings.write_timeout(), &mut socket, response).await.is_err() { break; }
                         continue;
                     },
                 };
                 if let Some(error) = current_session_error(&state, &session).await {
-                    close_session(state.settings.write_timeout, &mut socket, close_reason(error)).await;
+                    close_session(state.settings.write_timeout(), &mut socket, close_reason(error)).await;
                     break;
                 }
                 // Admission authorizes one operation against committed state.
@@ -327,7 +332,7 @@ async fn run_authenticated<S>(
                 // and idle liveness check observe the new revision.
                 let control = matches!(frame.method.as_str(), "conversation.close" | "conversation.answer" | "conversation.cancel" | "conversation.remove" | "conversation.reorder");
                 if requests.len() >= if control { 20 } else { 16 } {
-                    if send_error(state.settings.write_timeout, &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
+                    if send_error(state.settings.write_timeout(), &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
                     continue;
                 }
                 // Detached commands retain a shared permit through completion,
@@ -335,7 +340,7 @@ async fn run_authenticated<S>(
                 // Controls have separate capacity from reads and provider opens.
                 let capacity = if control { &state.controls } else { &state.requests };
                 let Ok(permit) = capacity.clone().try_acquire_owned() else {
-                    if send_error(state.settings.write_timeout, &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
+                    if send_error(state.settings.write_timeout(), &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
                     continue;
                 };
                 let request_state = state.clone();
@@ -651,7 +656,7 @@ async fn current_identity(
     session: &AuthenticatedSession,
 ) -> Result<(AuthenticatedSession, AccessSnapshot), AccessError> {
     timeout(
-        state.settings.handshake_timeout,
+        state.settings.handshake_timeout(),
         current_identity_inner(state, session),
     )
     .await
@@ -1400,7 +1405,9 @@ mod tests {
         let (mut state, _) = fixture(MembershipRole::Member);
         let clock = Arc::new(MillisecondClock(AtomicU64::new(100_999)));
         state.clock = clock.clone();
-        state.settings.handshake_timeout = Duration::from_secs(1);
+        state.settings = state
+            .settings
+            .with_deadlines(Some(Duration::from_secs(1)), None);
         let (socket, mut peer) = test_socket(None);
         let task = tokio::spawn(handle_socket(socket, state));
         let Message::Text(challenge) = peer.message().await else {
@@ -1433,7 +1440,9 @@ mod tests {
         // decoding rejects the frame while both are still visible, so nothing
         // downstream has to guess which one the sender meant.
         let (mut state, _) = fixture(MembershipRole::Member);
-        state.settings.handshake_timeout = Duration::from_secs(1);
+        state.settings = state
+            .settings
+            .with_deadlines(Some(Duration::from_secs(1)), None);
         let (socket, mut peer) = test_socket(None);
         let task = tokio::spawn(handle_socket(socket, state));
         let Message::Text(challenge) = peer.message().await else {
@@ -1544,7 +1553,9 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn elapsed_handshake_closes_with_retryable_timeout() {
         let (mut state, _) = fixture(MembershipRole::Member);
-        state.settings.handshake_timeout = Duration::from_secs(1);
+        state.settings = state
+            .settings
+            .with_deadlines(Some(Duration::from_secs(1)), None);
         let (socket, mut peer) = test_socket(None);
         let task = tokio::spawn(handle_socket(socket, state));
         assert!(matches!(peer.message().await, Message::Text(_)));
@@ -1562,8 +1573,9 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn challenge_write_consumes_the_same_handshake_budget() {
         let (mut state, _) = fixture(MembershipRole::Member);
-        state.settings.handshake_timeout = Duration::from_secs(1);
-        state.settings.write_timeout = Duration::from_secs(5);
+        state.settings = state
+            .settings
+            .with_deadlines(Some(Duration::from_secs(1)), Some(Duration::from_secs(5)));
         let (release, gate) = tokio::sync::oneshot::channel();
         let (socket, mut peer) = test_socket(Some(gate));
         let task = tokio::spawn(handle_socket(socket, state));
