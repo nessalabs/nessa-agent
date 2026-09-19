@@ -116,6 +116,8 @@ export function App({
   // conversation tabs — are the panel's own chrome.
   const update = useUpdate()
   const {
+    expanded,
+    changeExpanded,
     composerRef,
     setComposerRef,
     viewedPaste,
@@ -133,22 +135,34 @@ export function App({
     focusComposer,
     pasteAttachment,
   })
-  // Every shortcut that names a conversation is also a way out of the update
-  // tab: the tab strip is one strip, and a shortcut that selected a
-  // conversation while leaving the update on screen would be selecting nothing.
-  const leaveUpdateTab = React.useEffectEvent(() => update.setViewing(false))
-  const openTab = React.useEffectEvent(() => {
+  /**
+   * Show a conversation, whatever made it the one to show.
+   *
+   * Selecting a conversation is also leaving the update tab and closing the
+   * pasted-text viewer: the strip is one strip, and a selection that left the
+   * update on screen would be selecting nothing. That used to be three calls
+   * remembered at each of eight places — a shortcut, a click, the tab menu, a
+   * new tab — and the ninth way to select a conversation would have forgotten
+   * one. This is the one door; `show` is only which conversation.
+   */
+  const showConversation = React.useEffectEvent((show: () => void) => {
     closePaste()
-    leaveUpdateTab()
-    chat.openConversation()
-    focusComposer()
+    update.setViewing(false)
+    show()
   })
+  const openTab = React.useEffectEvent(() =>
+    showConversation(() => {
+      chat.openConversation()
+      focusComposer()
+    }),
+  )
   const closeActiveTab = React.useEffectEvent(() => {
     closePaste()
-    // The update tab cannot be closed while its download runs, and when it can
-    // be, closing it is the same answer as dismissing the notice was.
+    // The update tab closes like any other. What that means depends on what it
+    // was doing — a running download is hidden rather than stopped, a finished
+    // one is turned down — and `afterUpdate` owns that, not this.
     if (update.viewing) {
-      if (update.tab?.closeable) update.close()
+      update.close()
       return
     }
     chat.closeConversation(chat.active.id)
@@ -174,27 +188,22 @@ export function App({
   /** Show whichever tab the strip named, update or conversation. */
   const showTab = React.useEffectEvent((id: string | undefined) => {
     if (id === undefined) return
-    closePaste()
     if (id === UPDATE_TAB_ID) {
+      closePaste()
       update.setViewing(true)
       return
     }
-    leaveUpdateTab()
-    chat.setActive(id)
+    showConversation(() => chat.setActive(id))
   })
 
   const activateTab = React.useEffectEvent(
     (target: { index?: number; conversationId?: string }) => {
       // A command naming a conversation means that conversation, wherever it
-      // sits; only the positional form counts tabs.
-      if (target.conversationId) {
-        const open = chat.conversations.some((item) => item.id === target.conversationId)
-        if (open) {
-          closePaste()
-          leaveUpdateTab()
-          chat.setActive(target.conversationId)
-          return
-        }
+      // sits; only the positional forms count tabs.
+      const named = target.conversationId
+      if (named && chat.conversations.some((item) => item.id === named)) {
+        showConversation(() => chat.setActive(named))
+        return
       }
       if (typeof target.index !== "number") return
       showTab(tabAt(stripIds, target.index))
@@ -329,11 +338,12 @@ export function App({
                 ) : (
                   <ConversationTabMenu
                     key={tab.id}
-                    onDetails={() => {
-                      update.setViewing(false)
-                      chat.setActive(tab.id)
-                      setTabDetails({ id: tab.id, rename: false })
-                    }}
+                    onDetails={() =>
+                      showConversation(() => {
+                        chat.setActive(tab.id)
+                        setTabDetails({ id: tab.id, rename: false })
+                      })
+                    }
                     onRename={() => setTabDetails({ id: tab.id, rename: true })}
                   >
                     {node}
@@ -344,13 +354,12 @@ export function App({
               tabs={tabs}
               value={update.viewing ? UPDATE_TAB_ID : chat.active.id}
               onValueChange={(id) => {
-                closePaste()
                 if (id === UPDATE_TAB_ID) {
+                  closePaste()
                   update.setViewing(true)
                   return
                 }
-                update.setViewing(false)
-                chat.setActive(id)
+                showConversation(() => chat.setActive(id))
               }}
               onClose={(id) => {
                 closePaste()
@@ -360,12 +369,7 @@ export function App({
                 }
                 chat.closeConversation(id)
               }}
-              onNew={() => {
-                closePaste()
-                update.setViewing(false)
-                chat.openConversation()
-                focusComposer()
-              }}
+              onNew={() => openTab()}
               newTabLabel="New conversation"
             />
           </div>
@@ -504,7 +508,11 @@ export function App({
             <PillComposer
               key={chat.active.id}
               expandable={viewedPaste === null && attachments.viewed === null}
-
+              // Controlled, so the pane survives a submit this panel turned
+              // away — an attachment still reading, an empty draft — and closes
+              // only once a message has actually gone. See `useComposer`.
+              expanded={expanded}
+              onExpandedChange={changeExpanded}
               generating={false}
               onSubmit={submit}
             >

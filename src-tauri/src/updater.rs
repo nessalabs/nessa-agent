@@ -41,6 +41,17 @@
 //! current, refused — drives the real flow in [`tests`]. The arrows point at
 //! the two implementations of each: the real one, and the one the tests use.
 //!
+//! What the ports do not buy, stated plainly because the standard asks for it
+//! and because a seam is easy to mistake for coverage. The adapters themselves
+//! are unverified: `PluginReleases` turning the plugin's three answers into
+//! `Checked`; `PanelOutcome` reading [`Announced`] and the order it manages
+//! before it emits; `PluginInstall` and what the plugin does with a half-written
+//! install; `RestartsTheApp`, which ends the process. `retain`'s rule is tested
+//! through [`claim`] and [`refill`], but its `manage`-or-refill branch on a real
+//! `AppHandle` is not. Nothing here has been exercised against a real release
+//! endpoint or a real restart; `scripts/desktop/updater-harness.mjs` is how that
+//! is done by hand, and it says what it cannot reach either.
+//!
 //! `Checked` is what one check found and `Offer` is what the panel is told
 //! about it; [`offer`] is the whole of the rule connecting them, kept pure so
 //! the "say nothing" cases are decided in one readable place. What the panel
@@ -469,6 +480,28 @@ fn retain(app: &AppHandle, update: Update) {
     app.manage(PendingUpdate(Mutex::new(Some(update))));
 }
 
+/// Takes what is in the slot, leaving it empty.
+///
+/// The whole of the single-flight rule: whoever gets the update installs it,
+/// and a second request finds nothing and starts nothing. Written out rather
+/// than inlined so the rule is a function a test can call — asserting it
+/// against a `Mutex<Option<_>>` a test built itself proves that `take` empties
+/// an `Option`, which was never in doubt.
+fn claim<T>(slot: &Mutex<Option<T>>) -> Option<T> {
+    slot.lock().ok().and_then(|mut held| held.take())
+}
+
+/// Puts one back where the next request will find it.
+///
+/// In place, because `manage` keeps the first value of a type and drops later
+/// ones — an update put back through `manage` after a failed install would be
+/// silently thrown away, and the retry would find nothing.
+fn refill<T>(slot: &Mutex<Option<T>>, value: T) {
+    if let Ok(mut held) = slot.lock() {
+        *held = Some(value);
+    }
+}
+
 /// Which release source this build asks. The updater's own adapter factory,
 /// called from composition.
 ///
@@ -499,26 +532,6 @@ pub fn release_source(app: &AppHandle) -> Arc<dyn ReleaseSource> {
     Arc::new(PluginReleases(app.clone()))
 }
 
-/// Takes what is in the slot, leaving it empty.
-///
-/// The whole of the single-flight rule: whoever gets the update installs it,
-/// and a second request finds nothing and starts nothing. Written out rather
-/// than inlined so the rule is a function a test can call.
-fn claim<T>(slot: &Mutex<Option<T>>) -> Option<T> {
-    slot.lock().ok().and_then(|mut held| held.take())
-}
-
-/// Puts one back where the next request will find it.
-///
-/// In place, because `manage` keeps the first value of a type and drops later
-/// ones — an update put back through `manage` after a failed install would be
-/// silently thrown away, and the retry would find nothing.
-fn refill<T>(slot: &Mutex<Option<T>>, value: T) {
-    if let Ok(mut held) = slot.lock() {
-        *held = Some(value);
-    }
-}
-
 /// Asks the release endpoint once, off the startup path.
 ///
 /// Called from `main`'s `setup`. It returns immediately: the request itself
@@ -535,11 +548,14 @@ pub fn check_in_background(app: &AppHandle, source: Arc<dyn ReleaseSource>) {
 
 /// One check, from the source's answer through to the panel.
 ///
-/// Everything outside the process is on one of the two ports, so this is the
-/// whole of what a check does and all of it is exercised in [`tests`].
+/// Every *decision* a check makes is here and is exercised in [`tests`], which
+/// is what the ports buy. It is not the whole of what a check does: see the
+/// module header for what the real adapters do that nothing here sees.
 async fn run_check(source: &dyn ReleaseSource, outcome: &impl CheckOutcome) {
-    // Read before the check, not after: a source that finds an update retains
-    // it, and what it retains is the same thing this asks about.
+    // Asked before the check only because nothing makes it matter after: a
+    // check cannot announce anything, so this reads the same either way. What
+    // it reads is whether an update has been announced this launch, which is a
+    // different slot from the one a source retains an update in.
     let offering = outcome.offering();
     let checked = source.check().await;
 
@@ -669,6 +685,14 @@ struct Reported {
     percent: Option<u64>,
     /// The byte count it carried.
     bytes: u64,
+    /// Whether anything has been said at all.
+    ///
+    /// Its own field rather than `bytes == 0`, which is a different question: a
+    /// first chunk that carries no bytes is still a report, and inferring it
+    /// from the count meant every chunk after one counted as the first until
+    /// some bytes finally arrived — a throttle that stopped throttling exactly
+    /// when the download was at its least eventful.
+    said: bool,
 }
 
 /// How much of an unmeasured download has to arrive before it is worth saying
@@ -692,7 +716,7 @@ fn worth_reporting(received: u64, total: Option<u64>, reported: Reported) -> Opt
         .filter(|total| *total > 0)
         .map(|total| (received.min(total).saturating_mul(100)) / total);
 
-    let first = reported.bytes == 0;
+    let first = !reported.said;
     let moved = match percent {
         Some(percent) => reported.percent != Some(percent),
         None => received.saturating_sub(reported.bytes) >= UNMEASURED_STEP,
@@ -702,18 +726,12 @@ fn worth_reporting(received: u64, total: Option<u64>, reported: Reported) -> Opt
         true => Some(Reported {
             percent,
             bytes: received,
+            said: true,
         }),
         false => None,
     }
 }
 
-/// Downloads and installs the announced update, then comes back up on it.
-///
-/// Called by the panel's update tab, which is on screen because somebody put it
-/// there. That is what makes this the one path here that reports its failure to
-/// the screen rather than to stderr alone: the tab turns it into a plain
-/// statement and offers the retry this leaves possible, because the update goes
-/// back in its slot.
 /// Everything an install request decides before a byte is downloaded.
 ///
 /// The whole admission sequence, and its order, which is the part worth being
@@ -772,6 +790,13 @@ impl NotInstalling {
     }
 }
 
+/// Downloads and installs the announced update, then comes back up on it.
+///
+/// Called by the panel's update tab, which is on screen because somebody put it
+/// there. That is what makes this the one path here that reports its failure to
+/// the screen rather than to stderr alone: the tab turns it into a plain
+/// statement and offers the retry this leaves possible, because the update goes
+/// back in its slot.
 #[tauri::command]
 pub fn install_update(app: AppHandle) {
     // Only the outside things are gathered here; what they mean is
@@ -829,7 +854,13 @@ pub fn install_update(app: AppHandle) {
 /// diagnostics, where a bug report can find it.
 fn refuse(app: &AppHandle, reason: &str) {
     eprintln!("[nessa] could not install the update: {reason}");
-    let _ = app.emit_to(panel::MAIN_WINDOW, host::UPDATE_FAILED, reason);
+    // The one emit worth naming when it fails. A lost progress event costs a
+    // position of a bar and the next chunk redraws it; a lost refusal leaves a
+    // tab saying it is downloading with nothing ever arriving to correct it,
+    // and somebody asked for this install.
+    if let Err(error) = app.emit_to(panel::MAIN_WINDOW, host::UPDATE_FAILED, reason) {
+        eprintln!("[nessa] and the panel was not told: {error}");
+    }
 }
 
 /// The real installer: the plugin's own download-and-install, reporting what it
@@ -1037,29 +1068,40 @@ mod tests {
         assert_eq!(refused.as_deref(), Some("signature did not verify"));
     }
 
-    /// The slot is what makes a second click a no-op, so it is asserted on the
-    /// same `Mutex<Option<_>>` the host keeps the update in — with a stand-in
-    /// for the release, which a test cannot fabricate.
+    /// The slot is what makes a second request a no-op. Asserted through the
+    /// functions the install path actually calls — with a stand-in for the
+    /// release, which a test cannot fabricate — rather than against a mutex the
+    /// test built, which would only prove that `take` empties an `Option`.
     #[test]
-    fn a_second_click_while_installing_starts_nothing() {
+    fn a_second_request_while_installing_claims_nothing() {
         let pending = Mutex::new(Some("the release"));
 
-        let first = pending.lock().unwrap().take();
-        let second = pending.lock().unwrap().take();
-
-        assert_eq!(first, Some("the release"));
-        assert_eq!(second, None, "the download is not started twice");
+        assert_eq!(claim(&pending), Some("the release"));
+        assert_eq!(claim(&pending), None, "the download is not started twice");
     }
 
-    /// And a failure puts it back, so the next click finds it.
+    /// And a failure puts it back, so the retry finds the release that was
+    /// found rather than nothing.
     #[test]
     fn a_retry_after_a_failure_finds_the_same_release() {
         let pending = Mutex::new(Some("the release"));
 
-        let taken = pending.lock().unwrap().take();
-        *pending.lock().unwrap() = taken;
+        let taken = claim(&pending).expect("the first request takes it");
+        refill(&pending, taken);
 
-        assert_eq!(pending.lock().unwrap().take(), Some("the release"));
+        assert_eq!(claim(&pending), Some("the release"));
+    }
+
+    /// Refilling replaces what is there rather than being ignored — the bug
+    /// `retain` exists to avoid, where `manage` keeps the first value and drops
+    /// every later one, so an update found after a failure vanishes.
+    #[test]
+    fn refilling_an_occupied_slot_replaces_what_is_in_it() {
+        let pending = Mutex::new(Some("the old release"));
+
+        refill(&pending, "the new release");
+
+        assert_eq!(claim(&pending), Some("the new release"));
     }
 
     fn check(found: Checked) -> RecordedOutcome {
@@ -1414,16 +1456,41 @@ mod tests {
             worth_reporting(1, Some(10_000_000), Reported::default()),
             Some(Reported {
                 percent: Some(0),
-                bytes: 1
+                bytes: 1,
+                said: true
             })
         );
         assert_eq!(
             worth_reporting(1, None, Reported::default()),
             Some(Reported {
                 percent: None,
-                bytes: 1
+                bytes: 1,
+                said: true
             })
         );
+    }
+
+    /// A chunk that carries no bytes is still a report, so the next one is not
+    /// the first.
+    ///
+    /// Inferring "have we said anything" from `bytes == 0` meant a zero-byte
+    /// first chunk left the count at zero, every chunk after it counted as the
+    /// first, and the throttle emitted on every single one — until some bytes
+    /// finally arrived, which is exactly when a stalling download is at its
+    /// least worth reporting.
+    #[test]
+    fn a_report_that_carried_no_bytes_still_counts_as_having_been_made() {
+        let said_nothing_yet = Reported::default();
+
+        let after_empty_chunk =
+            worth_reporting(0, Some(1_000), said_nothing_yet).expect("the first chunk reports");
+        assert_eq!(after_empty_chunk.bytes, 0);
+        assert!(after_empty_chunk.said);
+
+        // The next chunk in the same percent has nothing to add, and before
+        // this said so only when bytes happened to have arrived.
+        assert_eq!(worth_reporting(1, Some(1_000), after_empty_chunk), None);
+        assert_eq!(worth_reporting(2, Some(1_000), after_empty_chunk), None);
     }
 
     #[test]
@@ -1431,6 +1498,7 @@ mod tests {
         let at_one_percent = Reported {
             percent: Some(1),
             bytes: 100_000,
+            said: true,
         };
 
         // Still the same percent: thousands of chunks land inside one position
@@ -1447,7 +1515,8 @@ mod tests {
             worth_reporting(200_000, Some(10_000_000), at_one_percent),
             Some(Reported {
                 percent: Some(2),
-                bytes: 200_000
+                bytes: 200_000,
+                said: true
             })
         );
     }
@@ -1461,12 +1530,14 @@ mod tests {
                 Some(1_000),
                 Reported {
                     percent: Some(99),
-                    bytes: 990
+                    bytes: 990,
+                    said: true
                 }
             ),
             Some(Reported {
                 percent: Some(100),
-                bytes: 1_100
+                bytes: 1_100,
+                said: true
             })
         );
     }
@@ -1478,6 +1549,7 @@ mod tests {
         let started = Reported {
             percent: None,
             bytes: UNMEASURED_STEP,
+            said: true,
         };
 
         assert_eq!(worth_reporting(UNMEASURED_STEP + 1, None, started), None);
@@ -1485,7 +1557,8 @@ mod tests {
             worth_reporting(UNMEASURED_STEP * 2, None, started),
             Some(Reported {
                 percent: None,
-                bytes: UNMEASURED_STEP * 2
+                bytes: UNMEASURED_STEP * 2,
+                said: true
             })
         );
     }
@@ -1500,12 +1573,14 @@ mod tests {
                 Some(0),
                 Reported {
                     percent: None,
-                    bytes: 1
+                    bytes: 1,
+                    said: true
                 }
             ),
             Some(Reported {
                 percent: None,
-                bytes: UNMEASURED_STEP + 1
+                bytes: UNMEASURED_STEP + 1,
+                said: true
             })
         );
     }

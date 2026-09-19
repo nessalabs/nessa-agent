@@ -26,16 +26,17 @@
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
-import { option } from "./updater-manifest.mjs"
+import { option } from "./cli.mjs"
 
-/** The version in `package.json`, or `undefined` if it does not declare one. */
-export function packageVersion(text) {
-  const version = JSON.parse(text).version
-  return typeof version === "string" ? version : undefined
-}
-
-/** The version in `tauri.conf.json`: the one the running app reports. */
-export function tauriConfigVersion(text) {
+/**
+ * The `version` a JSON file declares, or `undefined` if it does not declare one.
+ *
+ * One function, where there were two with identical bodies and different names.
+ * Which file is being read — `package.json`, `tauri.conf.json` — is `sources`'
+ * business below, and the distinction the two names promised lived only in
+ * their doc comments.
+ */
+export function jsonVersion(text) {
   const version = JSON.parse(text).version
   return typeof version === "string" ? version : undefined
 }
@@ -129,7 +130,7 @@ export function declaredVersions(root, read = readFileSync) {
   return [
     {
       name: "package.json",
-      version: packageVersion(read(resolve(root, "package.json"), "utf8")),
+      version: jsonVersion(read(resolve(root, "package.json"), "utf8")),
     },
     {
       name: "src-tauri/Cargo.toml",
@@ -137,9 +138,7 @@ export function declaredVersions(root, read = readFileSync) {
     },
     {
       name: "src-tauri/tauri.conf.json",
-      version: tauriConfigVersion(
-        read(resolve(root, "src-tauri/tauri.conf.json"), "utf8"),
-      ),
+      version: jsonVersion(read(resolve(root, "src-tauri/tauri.conf.json"), "utf8")),
     },
   ]
 }

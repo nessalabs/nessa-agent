@@ -374,7 +374,7 @@ export async function finishSetupWindow(completed: boolean): Promise<SetupHandof
  *
  * Rendered, not painted. A hidden window is never drawn, so its page cannot
  * wait for a frame to arrive before asking for this — see
- * `onboarding/ui/reveal-on-first-render.ts`, which is where that waiting stopped.
+ * `onboarding/ui/setup-gate.tsx`, whose effect asks directly rather than waiting.
  */
 export async function revealSetupWindow() {
   if (!inTauri) return

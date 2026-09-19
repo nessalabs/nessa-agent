@@ -1,36 +1,11 @@
 //! Desktop composition: relocatable application resources plus private user data.
+//!
+//! The credentials this app needs are created by
+//! [`super::provisioning::ensure_local_credentials`], which the developer loop
+//! asks for by the same name; nothing here provisions separately.
 use super::{agent::AgentConfig, runtime_config::RuntimeConfig};
-use crate::{core::RunError, desktop_runtime::domain::RunningRuntime, env::Environment};
+use crate::{core::RunError, desktop_runtime::domain::RunningRuntime};
 use std::path::Path;
-
-pub(super) fn prepare(config: &Environment) -> Result<(), RunError> {
-    let auth = config
-        .auth_directory
-        .as_ref()
-        .ok_or_else(|| failure("missing data directory"))?;
-    let root = auth
-        .parent()
-        .ok_or_else(|| failure("invalid data directory"))?;
-    nessa_local_storage::create_directory(root).map_err(failure)?;
-    if !auth.join("credentials.v1.json").exists() {
-        super::auth_command::execute(&[
-            "auth".into(),
-            "init".into(),
-            "--owner-token-file".into(),
-            root.join("owner.token").to_string_lossy().into_owned(),
-        ])?;
-    }
-    // Never rotate an existing surface credential on app startup.
-    if !auth.join("surfaces/nessa-panel.token").exists() {
-        super::auth_command::execute(&[
-            "auth".into(),
-            "provision-surface".into(),
-            "--surface-id".into(),
-            "nessa-panel".into(),
-        ])?;
-    }
-    Ok(())
-}
 
 pub(super) fn configure(
     settings: &mut RuntimeConfig,

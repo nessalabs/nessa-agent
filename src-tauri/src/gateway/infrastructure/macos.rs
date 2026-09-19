@@ -35,7 +35,7 @@ impl GatewayHost for Launchd {
     }
     fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError> {
         let status = service_status(gateway.service()).map_err(GatewayError::Stop)?;
-        let running = health();
+        let running = health(gateway.port());
         if !matches_reconciled_gateway(gateway, &status, running.as_ref()) {
             return Err(GatewayError::Stop(
                 "Gateway runtime identity changed; no agent stop request was sent".into(),
@@ -95,6 +95,11 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
     if !base.is_absolute() {
         return Err("NESSA_DATA_DIR must be absolute".into());
     }
+    // One table decides where a stage listens. A packaged build registers the
+    // `prod` service and keeps 7420; a stage with no entry gets no service at
+    // all rather than silently taking the product's socket.
+    let port = crate::stage_port::stage_port(stage)
+        .ok_or_else(|| format!("No gateway port is defined for stage {stage}"))?;
     let data = prepare_data_directory(&base, stage, instance.as_deref())?;
     let log = data.join("logs/gateway.log");
     let label = format!(
@@ -134,7 +139,7 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
         ("HOME", home.to_string_lossy().into_owned()),
         ("NESSA_STAGE", stage.into()),
         ("NESSA_HOST", "127.0.0.1".into()),
-        ("NESSA_PORT", "7420".into()),
+        ("NESSA_PORT", port.to_string()),
         ("PATH", executable_path),
         ("NESSA_RUNTIME_FINGERPRINT", fingerprint.clone()),
     ] {
@@ -169,7 +174,7 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
         Some(data) => read_retirement_evidence(data)?,
         None => None,
     };
-    let running = if loaded { health() } else { None };
+    let running = if loaded { health(port) } else { None };
     let pending = match (&running, installed_data.as_deref()) {
         (Some(Health::Managed(runtime)), Some(data)) => read_pending_retirement(data, runtime)?,
         _ => None,
@@ -185,7 +190,7 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
         Value::String(generation.clone());
     let running_fenced = matches!(&running, Some(Health::Managed(runtime)) if fence.as_ref().is_some_and(|fence| fence.matches(&runtime.fingerprint, &runtime.generation)) || pending.as_ref().is_some_and(|pending| pending.matches(&runtime.fingerprint, &runtime.generation)));
     let listener = if matches!(running, Some(Health::Legacy)) {
-        legacy_listener_pid()
+        legacy_listener_pid(port)
     } else {
         None
     };
@@ -200,7 +205,7 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
         loaded && !running_fenced && service_matches(&path, &definition),
         running,
         (&fingerprint, &generation),
-        TcpStream::connect_timeout(&address(), Duration::from_millis(200)).is_ok(),
+        TcpStream::connect_timeout(&address(port), Duration::from_millis(200)).is_ok(),
         listener,
     );
     match state {
@@ -212,6 +217,7 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
                 running.instance,
                 running.generation,
                 running.pid,
+                port,
             ));
         }
         ServiceState::ManagedStale(running) => {
@@ -242,9 +248,9 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
             clear_install_attempt(&lock_directory)?;
         }
         ServiceState::ForeignPort => {
-            return Err(
-                "Port 7420 is occupied by an unmanaged process; no service was stopped".into(),
-            )
+            return Err(format!(
+                "Port {port} is occupied by an unmanaged process; no service was stopped"
+            ))
         }
         ServiceState::UnavailableLoadedService => {
             if !incomplete_install_retry(
@@ -312,7 +318,7 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
             || service_status(&service).map(|status| status.loaded),
             || clear_install_attempt(&lock_directory),
         )?;
-        let running = wait_fingerprint(&service, (&fingerprint, &generation))?;
+        let running = wait_fingerprint(&service, (&fingerprint, &generation), port)?;
         clear_install_attempt(&lock_directory)?;
         Ok(running)
     })();
@@ -323,6 +329,7 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
         running.instance,
         running.generation,
         running.pid,
+        port,
     ))
 }
 fn prepare_data_directory(
@@ -396,8 +403,9 @@ fn read_definition(path: &Path) -> Result<Value, String> {
     }
     serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())
 }
-fn address() -> SocketAddr {
-    ([127, 0, 0, 1], 7420).into()
+/// Where a gateway on `port` answers. Loopback only; the service never binds wider.
+fn address(port: u16) -> SocketAddr {
+    ([127, 0, 0, 1], port).into()
 }
 fn incomplete_install_retry(
     loaded_pid: Option<u32>,
@@ -454,6 +462,7 @@ mod tests {
             "550e8400-e29b-41d4-a716-446655440000".into(),
             "b".repeat(64),
             42,
+            7420,
         );
         let status = ServiceStatus {
             loaded: true,

@@ -12,7 +12,7 @@ pub(crate) trait Storage: Send + Sync {
     fn write(&self, path: &Path, bytes: &[u8]) -> io::Result<()>;
 }
 
-pub(super) struct FileStorage;
+pub(crate) struct FileStorage;
 impl Storage for FileStorage {
     fn read(&self, path: &Path) -> io::Result<String> {
         let file = nessa_local_storage::open(path, nessa_local_storage::OpenMode::ReadNonblocking)?;

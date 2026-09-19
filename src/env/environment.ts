@@ -1,6 +1,8 @@
+import { gatewayOrigin, type Stage } from "./gateway-ports"
+
 export type EnvSource = Readonly<Record<string, string | undefined>>
 export type Environment = {
-  readonly stage: "dev" | "ci" | "alpha" | "prod"
+  readonly stage: Stage
   /**
    * Where the local gateway answers, as an origin with no trailing slash.
    *
@@ -17,12 +19,15 @@ export type Environment = {
       }
 }
 
-/** Where a packaged build looks for the gateway when nothing says otherwise. */
-const LOCAL_GATEWAY_URL = "http://127.0.0.1:7420"
-
-function gatewayBaseUrl(source: EnvSource, developmentBuild: boolean): string {
+function gatewayBaseUrl(
+  source: EnvSource,
+  developmentBuild: boolean,
+  stage: Stage,
+): string {
   const configured = source.VITE_NESSA_GATEWAY_URL
-  if (configured === undefined) return developmentBuild ? "" : LOCAL_GATEWAY_URL
+  // A packaged build has no proxy, so it names the port its own stage listens
+  // on — prod's 7420 for a shipped app, and the dev port for a dev stage.
+  if (configured === undefined) return developmentBuild ? "" : gatewayOrigin(stage)
   if (configured === "") return ""
   let url: URL
   try {
@@ -45,7 +50,7 @@ export function loadEnvironment(
   if (stage !== "dev" && stage !== "ci" && stage !== "alpha" && stage !== "prod") {
     throw new Error("VITE_NESSA_STAGE must be dev, ci, alpha, or prod")
   }
-  const gateway = gatewayBaseUrl(source, developmentBuild)
+  const gateway = gatewayBaseUrl(source, developmentBuild, stage)
   const backend = source.VITE_NESSA_CONVERSATION_BACKEND ?? "local"
   const scenario = source.VITE_NESSA_CONVERSATION_SCENARIO
   if (backend === "local") {

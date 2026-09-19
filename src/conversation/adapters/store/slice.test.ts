@@ -93,6 +93,44 @@ describe("gateway conversation projection", () => {
     expect(parseConversationTabSnapshot([])).toBeNull()
   })
 
+  /**
+   * The contract the composer's full-pane editor rests on: a draft this store
+   * turned away rejects *with a reason*, and one it took does not. Only a
+   * failure after the message was admitted throws without one, because by then
+   * the draft has gone and the transcript owns it.
+   *
+   * Without this, a composer can only know that it called `submit`, which is
+   * the same call whether the draft left or is still sitting in the editor.
+   */
+  it("says whether a draft was taken, so a caller need not guess", async () => {
+    const store = makeStore(createDependencies({ conversation: scenarioEffects("echo") }))
+
+    const taken = await store.dispatch(sendDraft({ content: textContent("hello") }))
+    expect(sendDraft.rejected.match(taken)).toBe(false)
+
+    // Over the 8 KiB this gateway accepts. The draft is kept and the person is
+    // told; nothing left the composer.
+    const tooLarge = await store.dispatch(
+      sendDraft({ content: textContent("x".repeat(8193)) }),
+    )
+    expect(sendDraft.rejected.match(tooLarge)).toBe(true)
+    expect(tooLarge.payload).toEqual({ kind: "message-too-large" })
+
+    // And a draft with nothing in it is refused the same way, rather than
+    // fulfilling as though it had been sent.
+    const empty = await store.dispatch(sendDraft({ content: textContent("   ") }))
+    expect(sendDraft.rejected.match(empty)).toBe(true)
+    expect(empty.payload).toEqual({ kind: "empty-draft" })
+
+    // Including the one that is only reachable by racing a close against a
+    // submit: a conversation that is not there took nothing.
+    const gone = await store.dispatch(
+      sendDraft({ content: textContent("hello"), id: "not-a-conversation" }),
+    )
+    expect(sendDraft.rejected.match(gone)).toBe(true)
+    expect(gone.payload).toEqual({ kind: "no-such-conversation" })
+  })
+
   it("sends through injected effects, retaining server and submission identities", async () => {
     const effects = scenarioEffects("echo")
     const send = vi.fn(effects.send)

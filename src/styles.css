@@ -243,6 +243,15 @@ body {
   contain: none;
 }
 
+/* The pill draws its own outline in the design system (`border-border` on
+   pill-composer), which is what the browser path renders. The panel draws the
+   capsule on the row instead (see the `layout` compositor rules below), so the
+   edge has to be dropped in both places. Over the panel's translucent surface
+   it read as a hard rectangle around a shape meant to float. Transparent
+   rather than `none`, so the 1px box stays and nothing reflows. */
+.nessa-composer [data-slot="pill-composer"] {
+  border-color: transparent;
+}
 /* The update tab stands in for the transcript, and the composer goes with it.
    Stated rather than left to the preflight rule, because this element has
    layout rules of its own above. */
@@ -516,7 +525,7 @@ body {
 .nessa-panel[data-compositor="layout"] [data-slot="pill-composer-row"] {
   padding: 6px;
   background-color: var(--card);
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 999px;
   color: var(--card-foreground);
 }
@@ -527,7 +536,7 @@ body {
   position: relative;
   padding: 6px;
   background-color: var(--card);
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 999px;
 }
 

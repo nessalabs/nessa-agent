@@ -35,7 +35,7 @@ export class NessaConversationMutationError<T> extends Error {
   ) {
     super(
       cause instanceof NessaRpcError && cause.code === "agent_not_configured"
-        ? "The gateway has no agent configured. Configure Claude ACP before sending messages."
+        ? 'The gateway started without an agent: its config.json has no "agent" section, so there is no Claude ACP runtime to send to. Configure one and restart the gateway — from a Nessa checkout, `just server` writes one.'
         : "Conversation command failed",
       { cause },
     )

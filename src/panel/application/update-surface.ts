@@ -43,8 +43,17 @@ export interface UpdateState {
   release: Release | null
   /** Versions dismissed during this launch, which are never offered again. */
   dismissed: readonly string[]
-  /** Which of the two surfaces, if either, the update is on. */
-  stage: "quiet" | "noticed" | "downloading" | "failed"
+  /**
+   * Which of the two surfaces, if either, the update is on.
+   *
+   * `installing` is a download that is still running with its tab closed. The
+   * host has no cancel and no timeout, so closing the tab cannot stop the
+   * download — but it must be possible anyway, or a download that stalls leaves
+   * a tab that says "Downloading the update" for the rest of the launch with no
+   * way to be rid of it. The release is kept rather than forgotten, because the
+   * person asked for this install and is still owed its answer.
+   */
+  stage: "quiet" | "noticed" | "downloading" | "installing" | "failed"
   /** Bytes received so far, while downloading. */
   downloaded: number
   /** Bytes the server declared, or `null` when it declared none. */
@@ -110,37 +119,54 @@ export function afterUpdate(state: UpdateState, event: UpdateEvent): UpdateState
     }
     case "dismiss": {
       if (state.stage !== "noticed" || state.release === null) return state
-      return {
-        ...state,
-        release: null,
-        dismissed: [...state.dismissed, state.release.version],
-        stage: "quiet",
-      }
+      return turnedDown(state, state.release.version)
     }
     case "progress": {
-      if (state.stage !== "downloading") return state
+      // Recorded while the tab is closed too: reopening is not possible, but a
+      // failure that follows should not report a download that never moved.
+      if (state.stage !== "downloading" && state.stage !== "installing") return state
       return { ...state, downloaded: event.downloaded, total: event.total }
     }
     case "failed": {
       // A refusal can arrive before a single byte does — there may be no
       // release behind the offer at all — so this is reachable from the notice
-      // as well as from a download in flight.
+      // as well as from a download in flight. It is reachable from `installing`
+      // too, and that is the point of keeping the release: somebody who closed
+      // the tab on a running download still gets told it did not happen, and
+      // the tab comes back carrying the retry.
       if (state.release === null) return state
       return { ...state, stage: "failed" }
     }
     case "closed": {
-      // Only a failed tab can be closed, and closing it is the same answer as
-      // dismissing the notice was: not this version, not this launch.
-      if (state.stage !== "failed" || state.release === null) return state
-      return {
-        ...state,
-        release: null,
-        dismissed: [...state.dismissed, state.release.version],
-        stage: "quiet",
-      }
+      if (state.release === null) return state
+      // A download still running: the tab goes and the install carries on,
+      // because nothing here can stop it. Not a dismissal — the version was
+      // not turned down, it is being installed — so it is not added to
+      // `dismissed` and a failure can still bring the tab back.
+      if (state.stage === "downloading") return { ...state, stage: "installing" }
+      // A finished one: closing it is the same answer as dismissing the notice
+      // was — not this version, not this launch — and is that same answer in
+      // code, rather than the same four lines written again.
+      if (state.stage !== "failed") return state
+      return turnedDown(state, state.release.version)
     }
-    default:
-      return state
+  }
+  // No default: the switch is exhaustive over UpdateEvent, so a new kind is a
+  // compiler error here rather than a silently ignored event.
+}
+
+/**
+ * Not this version, not this launch.
+ *
+ * The one answer behind two gestures — dismissing the notice and closing a
+ * failed tab — which said so in a comment while being written out twice.
+ */
+function turnedDown(state: UpdateState, version: string): UpdateState {
+  return {
+    ...state,
+    release: null,
+    dismissed: [...state.dismissed, version],
+    stage: "quiet",
   }
 }
 
@@ -268,7 +294,11 @@ export function updateTab(state: UpdateState): UpdateTab | null {
     headline: updateHeadline(progress),
     notes: releaseNotes(state.release.notes),
     progress,
-    closeable: state.stage === "failed",
+    // Always. A tab that cannot be closed while it is working is a tab that
+    // cannot be closed at all when the work never finishes, and the host has
+    // neither a timeout nor a cancel. Closing a running download hides it
+    // rather than stopping it — see `installing`.
+    closeable: true,
   }
 }
 
