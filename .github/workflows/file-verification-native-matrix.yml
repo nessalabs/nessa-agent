@@ -1,0 +1,62 @@
+name: Pinned combined native workspace verification
+on:
+  push:
+    branches: [audit/file-verification-4c39449]
+    paths: [.github/workflows/file-verification-native-matrix.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  workspace:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 4c3944962a24721f305d0d66b34df6f024970cf4
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Verify every workspace target under one feature resolution
+        shell: python
+        run: |
+          import json, os, pathlib, subprocess, time
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'workspace-evidence'
+          root.mkdir()
+          commands = [
+              ['rustc', '--version'], ['cargo', '--version'],
+              ['cargo', 'fmt', '--all', '--', '--check'],
+              ['cargo', 'clippy', '--locked', '--workspace', '--all-targets', '--', '-D', 'warnings'],
+              ['cargo', 'test', '--locked', '--workspace', '--all-targets', '--no-fail-fast'],
+          ]
+          results = []
+          for index, command in enumerate(commands):
+              print('RUN:', command, flush=True)
+              started = time.monotonic()
+              with (root / f'{index:02d}.log').open('w', encoding='utf-8') as log:
+                  try:
+                      result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=1600)
+                      status = result.returncode
+                  except subprocess.TimeoutExpired:
+                      status = 'timeout'
+              results.append({'command': command, 'exit_code': status, 'seconds': round(time.monotonic()-started, 2)})
+              (root / 'results.json').write_text(json.dumps(results, indent=2), encoding='utf-8')
+              print('RESULT:', status, flush=True)
+          (root / 'scope.json').write_text(json.dumps({'source': subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode().strip(), 'platform': os.environ['RUNNER_OS'], 'note': 'Compiled tests and Clippy; not a live desktop/compositor or live provider acceptance test.'}, indent=2))
+          if any(result['exit_code'] != 0 for result in results):
+              raise SystemExit(1)
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nessa-workspace-${{ runner.os }}-4c39449
+          path: ${{ runner.temp }}/workspace-evidence/
+          if-no-files-found: error
+          retention-days: 7
