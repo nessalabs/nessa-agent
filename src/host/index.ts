@@ -20,6 +20,7 @@ export {
   finishSetupWindow,
   hasNativeHost,
   installUpdate,
+  type ChosenAgent,
   loadChosenAgent,
   loadAssignedSurfaceCredential,
   flushCompositor,

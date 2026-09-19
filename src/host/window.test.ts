@@ -148,21 +148,26 @@ describe("handing setup over to the panel", () => {
     })
   })
 
-  it("reads back the agent setup chose, and settles for the default without one", async () => {
+  it("reads back the agent setup chose, and says so when nobody chose one", async () => {
     const { loadChosenAgent } = await import("./window")
     invoke.mockResolvedValue("codex")
-    await expect(loadChosenAgent()).resolves.toBe("codex")
+    await expect(loadChosenAgent()).resolves.toEqual({
+      outcome: "chosen",
+      agent: "codex",
+    })
     expect(invoke).toHaveBeenCalledWith("chosen_agent")
     invoke.mockResolvedValue(null)
-    await expect(loadChosenAgent()).resolves.toBeUndefined()
+    await expect(loadChosenAgent()).resolves.toEqual({ outcome: "none" })
   })
 
-  it("does not take the panel down over an unreadable choice", async () => {
-    // The conversation starts on the gateway's own default instead, which is a
-    // worse answer and not a broken panel.
+  it("keeps a host it could not ask apart from a host with nothing to say", async () => {
+    // Both leave this conversation on the gateway's own default, which is a
+    // worse answer and not a broken panel. They are still different answers: a
+    // host that failed once may answer the next time it is asked, and reporting
+    // that as "nobody chose" is what let a caller remember it as one.
     const { loadChosenAgent } = await import("./window")
     invoke.mockRejectedValue(new Error("no settings file"))
-    await expect(loadChosenAgent()).resolves.toBeUndefined()
+    await expect(loadChosenAgent()).resolves.toEqual({ outcome: "unavailable" })
   })
 
   it("says the panel did not come up rather than closing over nothing", async () => {

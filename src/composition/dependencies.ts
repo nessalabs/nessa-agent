@@ -29,15 +29,24 @@ export function createDependencies(
   // runs, so re-asking would be one host round trip per new conversation for an
   // answer that cannot have moved.
   //
-  // What is never kept is a failure. Every conversation is created through this,
-  // so a remembered rejection is not one lost answer, it is a panel that can no
-  // longer start, send, close or answer a permission until it is restarted.
+  // What is never kept is a failure, in either of the two shapes it takes. A
+  // remembered rejection would be a panel that can no longer start, send, close
+  // or answer a permission until it is restarted. A remembered "the host could
+  // not be asked" is quieter and lasts just as long: it reads as "nobody chose",
+  // so one unlucky round trip during startup sends every conversation for the
+  // rest of the panel's life to the gateway's default — and the agent the user
+  // picked is never asked for again, however well the host recovers.
   let chosen: Promise<string | undefined> | undefined
   const chosenAgent = () =>
-    (chosen ??= loadChosenAgent().catch((cause: unknown) => {
-      chosen = undefined
-      throw cause
-    }))
+    (chosen ??= loadChosenAgent()
+      .then((answer) => {
+        if (answer.outcome === "unavailable") chosen = undefined
+        return answer.outcome === "chosen" ? answer.agent : undefined
+      })
+      .catch((cause: unknown) => {
+        chosen = undefined
+        throw cause
+      }))
   return {
     session,
     attachments: createAttachmentResources(),

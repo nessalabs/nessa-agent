@@ -390,28 +390,48 @@ export async function revealSetupWindow() {
 }
 
 /**
+ * What the host has to say about the agent first-run setup chose.
+ *
+ * `"unavailable"` is kept apart from `"none"` on purpose. Both leave this
+ * conversation on the gateway's own default, but only one of them is an answer:
+ * a host that could not be asked may answer perfectly well a moment later, and
+ * treating that as "nobody chose" is how a saved choice gets dropped for good.
+ */
+export type ChosenAgent =
+  /** Setup recorded this agent, and every conversation should run on it. */
+  | { outcome: "chosen"; agent: string }
+  /** Nobody has chosen: a first run still in progress, a setup that was left,
+   *  or a browser with no host to ask. */
+  | { outcome: "none" }
+  /** The host could not be asked. Not an answer, and not one to remember. */
+  | { outcome: "unavailable" }
+
+/**
  * The agent first-run setup chose, as the host recorded it.
  *
  * Read rather than remembered: setup runs in its own window, which is gone by
- * the time the panel needs the answer. Undefined where nobody has chosen — a
- * first run still in progress, a setup that was left, or a browser with no host
- * to ask — and the gateway then starts conversations on its own default rather
- * than being told an agent nobody picked.
+ * the time the panel needs the answer.
+ *
+ * Never rejects. A host that cannot be read is survivable — the conversation
+ * starts on the gateway's default, which is a worse answer and not a broken
+ * panel — but it is reported as the failure it is, because a caller that
+ * remembers answers must not remember this one.
  */
-export async function loadChosenAgent(): Promise<string | undefined> {
-  if (!inTauri) return undefined
+export async function loadChosenAgent(): Promise<ChosenAgent> {
+  if (!inTauri) return { outcome: "none" }
   try {
     // The import is inside the try with the call it makes. Loading the host
     // module is a fetch like any other and can fail on its own; left outside,
     // that failure would come back as a rejection from a function whose whole
     // contract is that it answers.
     const { invoke } = await import("@tauri-apps/api/core")
-    return (await invoke<string | null>("chosen_agent")) ?? undefined
+    const agent = await invoke<string | null>("chosen_agent")
+    return agent === null || agent === undefined
+      ? { outcome: "none" }
+      : { outcome: "chosen", agent }
   } catch (cause) {
-    // Survivable: the conversation starts on the gateway's default instead of
-    // on the recorded choice, which is a worse answer and not a broken panel.
     console.warn("[nessa] could not read the agent setup chose", cause)
-    return undefined
+    return { outcome: "unavailable" }
   }
 }
 
