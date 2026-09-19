@@ -542,8 +542,22 @@ impl RuntimeStore for ManagedRuntimes {
         };
         let mut encoded = Vec::new();
         record.read_to_end(&mut encoded).map_err(unreadable)?;
-        let record: InstallationRecord = serde_json::from_slice(&encoded)
-            .map_err(|error| StoreFailure::Unreadable(error.to_string()))?;
+        // A file that will not decode into a record is not this machine
+        // declining to answer — it is a file this store did not write, and it
+        // describes no installation. Reported as one would be a dead end: the
+        // pinned release is known and could simply be installed, but every
+        // attempt would fail on the same unreadable note, with nothing a person
+        // could do about it short of finding the file and deleting it. The
+        // record is written to a temporary name and renamed, so it is never
+        // half-written; anything that does not decode was written by something
+        // else, or by a Nessa that recorded a different shape.
+        //
+        // Failing to *open* it stays a failure, above: that is the disk, and a
+        // machine that cannot read its own record must not be told it has
+        // nothing installed and sent to download over a runtime that is there.
+        let Ok(record) = serde_json::from_slice::<InstallationRecord>(&encoded) else {
+            return Ok(None);
+        };
         // Anything that does not describe exactly this artifact is answered
         // with "not installed", never with a failure: a record this store did
         // not write, one something has since edited, and one about a different

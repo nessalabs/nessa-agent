@@ -368,7 +368,12 @@ fn a_record_cannot_name_a_launch_path_of_its_own() {
 }
 
 #[test]
-fn a_record_that_cannot_be_read_is_not_an_installation() {
+fn a_record_this_store_did_not_write_is_not_an_installation() {
+    // Which is a different thing from a record this machine cannot read: that
+    // one is the disk declining to answer and is reported as a failure, which
+    // `a_record_that_is_a_symbolic_link_is_not_read_through` covers. What is
+    // *in* the file only ever answers the question asked of it, and an answer
+    // of "nothing" leaves a person with an install they can simply run again.
     let root = tempfile::tempdir().expect("temporary root");
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
@@ -380,23 +385,28 @@ fn a_record_that_cannot_be_read_is_not_an_installation() {
     .expect("the executable is unpacked");
     let record = root.path().join("opencode").join("installed.json");
 
-    write(&record, b"{ this is not json");
-    assert!(
-        matches!(
-            store.installed(&agent(), &release),
-            Err(StoreFailure::Unreadable(_))
+    // A file that does not decode into a record describes no installation, and
+    // saying so is the only answer a person can act on: reporting a failure
+    // would be a dead end, since every attempt would fail on the same note and
+    // the only way out would be finding the file and deleting it. The record is
+    // written to a temporary name and renamed, so it is never half-written —
+    // anything that does not decode was written by something else, or by a
+    // Nessa that recorded a different shape.
+    for (named, contents) in [
+        ("a file that is not json", br#"{ this is not json"#.to_vec()),
+        (
+            "a record from a nessa that wrote a different shape",
+            br#"{"version":"1.18.31","executable":"opencode"}"#.to_vec(),
         ),
-        "a record that will not parse is this machine declining to answer"
-    );
-
-    write(&record, br#"{"version":"1.18.31"}"#);
-    assert!(
-        matches!(
+        ("an empty file", Vec::new()),
+    ] {
+        write(&record, &contents);
+        assert_eq!(
             store.installed(&agent(), &release),
-            Err(StoreFailure::Unreadable(_))
-        ),
-        "a record missing the fields this store writes is not a record it wrote"
-    );
+            Ok(None),
+            "{named} was reported as this machine declining to answer"
+        );
+    }
 
     write(
         &record,
