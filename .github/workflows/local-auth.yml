@@ -113,6 +113,17 @@ jobs:
       - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings
       - run: node scripts/check-sdk-docs.mjs
       - run: node scripts/check-mcp.mjs
+      # The desktop host's tests are not macOS-only, and one of them asserted
+      # the opposite of what it said on Linux for want of ever running there:
+      # `Path` treats a backslash as an ordinary character, so a Windows-shaped
+      # fixture had no `target` component in it at all. check-desktop.mjs skips
+      # when WebKitGTK is absent, so without this the skip stays permanent.
+      - name: Install the desktop host's Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev
       - run: node scripts/check-desktop.mjs
       - name: Install SDK domain coverage tools
         if: runner.os == 'Linux'
