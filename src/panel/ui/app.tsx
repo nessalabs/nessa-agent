@@ -134,16 +134,27 @@ export function App({
     focusComposer,
     pasteAttachment,
   })
-  // Every shortcut that names a conversation is also a way out of the update
-  // tab: the tab strip is one strip, and a shortcut that selected a
-  // conversation while leaving the update on screen would be selecting nothing.
-  const leaveUpdateTab = React.useEffectEvent(() => update.setViewing(false))
-  const openTab = React.useEffectEvent(() => {
+  /**
+   * Show a conversation, whatever made it the one to show.
+   *
+   * Selecting a conversation is also leaving the update tab and closing the
+   * pasted-text viewer: the strip is one strip, and a selection that left the
+   * update on screen would be selecting nothing. That used to be three calls
+   * remembered at each of eight places — a shortcut, a click, the tab menu, a
+   * new tab — and the ninth way to select a conversation would have forgotten
+   * one. This is the one door; `show` is only which conversation.
+   */
+  const showConversation = React.useEffectEvent((show: () => void) => {
     closePaste()
-    leaveUpdateTab()
-    chat.openConversation()
-    focusComposer()
+    update.setViewing(false)
+    show()
   })
+  const openTab = React.useEffectEvent(() =>
+    showConversation(() => {
+      chat.openConversation()
+      focusComposer()
+    }),
+  )
   const closeActiveTab = React.useEffectEvent(() => {
     closePaste()
     // The update tab closes like any other. What that means depends on what it
@@ -157,28 +168,20 @@ export function App({
   })
   const activateTab = React.useEffectEvent(
     (target: { index?: number; conversationId?: string }) => {
-      if (target.conversationId) {
-        const open = chat.conversations.some((item) => item.id === target.conversationId)
-        if (open) {
-          closePaste()
-          leaveUpdateTab()
-          chat.setActive(target.conversationId)
-          return
-        }
+      const named = target.conversationId
+      if (named && chat.conversations.some((item) => item.id === named)) {
+        showConversation(() => chat.setActive(named))
+        return
       }
       if (typeof target.index !== "number") return
       const next = chat.conversations[target.index]
       if (!next) return
-      closePaste()
-      leaveUpdateTab()
-      chat.setActive(next.id)
+      showConversation(() => chat.setActive(next.id))
     },
   )
-  const moveActiveTab = React.useEffectEvent((direction: -1 | 1) => {
-    closePaste()
-    leaveUpdateTab()
-    chat.moveActive(direction)
-  })
+  const moveActiveTab = React.useEffectEvent((direction: -1 | 1) =>
+    showConversation(() => chat.moveActive(direction)),
+  )
   useHostPanel(surface, toggleSurface, composerRef)
   useTabShortcuts({ openTab, closeActiveTab, moveActiveTab, activateTab })
   useFlushOnTurn(
@@ -305,11 +308,12 @@ export function App({
                 ) : (
                   <ConversationTabMenu
                     key={tab.id}
-                    onDetails={() => {
-                      update.setViewing(false)
-                      chat.setActive(tab.id)
-                      setTabDetails({ id: tab.id, rename: false })
-                    }}
+                    onDetails={() =>
+                      showConversation(() => {
+                        chat.setActive(tab.id)
+                        setTabDetails({ id: tab.id, rename: false })
+                      })
+                    }
                     onRename={() => setTabDetails({ id: tab.id, rename: true })}
                   >
                     {node}
@@ -320,13 +324,12 @@ export function App({
               tabs={tabs}
               value={update.viewing ? UPDATE_TAB_ID : chat.active.id}
               onValueChange={(id) => {
-                closePaste()
                 if (id === UPDATE_TAB_ID) {
+                  closePaste()
                   update.setViewing(true)
                   return
                 }
-                update.setViewing(false)
-                chat.setActive(id)
+                showConversation(() => chat.setActive(id))
               }}
               onClose={(id) => {
                 closePaste()
@@ -336,12 +339,7 @@ export function App({
                 }
                 chat.closeConversation(id)
               }}
-              onNew={() => {
-                closePaste()
-                update.setViewing(false)
-                chat.openConversation()
-                focusComposer()
-              }}
+              onNew={() => openTab()}
               newTabLabel="New conversation"
             />
           </div>

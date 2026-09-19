@@ -38,7 +38,8 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { bundleArchitecture } from "./bundle-architecture.mjs"
-import { option, releaseManifest, updaterTarget } from "./updater-manifest.mjs"
+import { option } from "./cli.mjs"
+import { releaseManifest, updaterTarget } from "./updater-manifest.mjs"
 
 /** The architectures a release builds, in the order a manifest lists them. */
 export const RELEASE_TARGETS = ["aarch64-apple-darwin", "x86_64-apple-darwin"]

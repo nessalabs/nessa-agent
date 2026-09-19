@@ -26,7 +26,7 @@
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
-import { option } from "./updater-manifest.mjs"
+import { option } from "./cli.mjs"
 
 /** The version in `package.json`, or `undefined` if it does not declare one. */
 export function packageVersion(text) {
