@@ -400,10 +400,8 @@ impl LocalCredentialStore {
         let mut next = current.clone();
         if administrative_allowed {
             for entry in &mut next.credentials {
-                if entry.metadata.principal_id == request.principal.id
-                    && entry.metadata.revoked_at.is_none()
-                {
-                    entry.metadata.revoked_at = Some(request.issued_at);
+                if entry.metadata.principal_id == request.principal.id {
+                    supersede(&mut entry.metadata, request.issued_at);
                 }
             }
         }
@@ -576,9 +574,8 @@ impl LocalCredentialStore {
                     .grants
                     .iter()
                     .any(|grant| grant.action == "credential.manage")
-                && entry.metadata.revoked_at.is_none()
             {
-                entry.metadata.revoked_at = Some(issued_at.max(entry.metadata.issued_at));
+                supersede(&mut entry.metadata, issued_at);
             }
         }
         next.credentials.push(StoredCredential {
@@ -959,6 +956,28 @@ fn parse_token(bytes: &[u8]) -> Result<(String, Vec<u8>), AccessError> {
         return Err(AccessError::InvalidCredential);
     }
     Ok((id, secret))
+}
+
+/// Record an automatic revocation under the domain's rule for one.
+///
+/// [`Credential::revoke`] keeps the first recorded revocation and refuses one
+/// that predates issuance, and a stored credential that disagrees is rejected by
+/// this registry's own validation on the way to disk.
+///
+/// The recorded instant is therefore the *later* of the request and the
+/// superseded credential's own issuance, and is not an observed event time: a
+/// caller-supplied `issued_at` behind an existing credential supersedes it at
+/// that credential's issuance rather than failing the whole operation as corrupt.
+/// This is deliberately not what the explicit revoke path does — an admin naming
+/// a time before issuance is told so, because there the time is the request. An
+/// automatic supersession has no such caller to correct.
+///
+/// What is *not* recorded is which of the two automatic causes this was, or who
+/// it followed from; see the credential transition-audit work for that.
+fn supersede(metadata: &mut CredentialMetadataDto, at: u64) {
+    if metadata.revoked_at.is_none() {
+        metadata.revoked_at = Some(at.max(metadata.issued_at));
+    }
 }
 
 fn validate_metadata(metadata: &CredentialMetadataDto) -> Result<(), LocalStoreError> {
@@ -1564,6 +1583,91 @@ mod tests {
             Err(AccessError::InvalidCredential)
         );
         assert!(ready(store.verify(&recovered.evidence, &audience)).is_ok());
+    }
+
+    #[test]
+    fn reprovisioning_behind_an_existing_issuance_still_revokes_it() {
+        // `issued_at` is supplied by the caller, so a replacement can carry a
+        // timestamp behind the credential it supersedes. Recording a revocation
+        // before its own issuance is what the domain refuses, and this registry
+        // validates every stored credential on the way to disk — so the whole
+        // reprovisioning used to fail as corrupt instead of revoking anything.
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("auth/credentials.v1.json");
+        let store = open_store(&path).unwrap();
+        store.bootstrap(bootstrap()).unwrap();
+        let first = store
+            .provision_surface(
+                "panel",
+                "panel-1".into(),
+                "panel-token-1".into(),
+                vec!["server.read".into()],
+                300,
+                None,
+            )
+            .unwrap();
+        let IssueCredentialOutcome::Issued { evidence, .. } = first else {
+            panic!("a new surface credential was expected")
+        };
+
+        let replacement = store
+            .provision_surface(
+                "panel",
+                "panel-2".into(),
+                "panel-token-2".into(),
+                vec!["server.read".into()],
+                200,
+                None,
+            )
+            .expect("reprovisioning must not fail because of the earlier timestamp");
+        let IssueCredentialOutcome::Issued {
+            evidence: replacement_evidence,
+            ..
+        } = replacement
+        else {
+            panic!("a new surface credential was expected")
+        };
+
+        let audience = AudienceId::new("gateway-1").unwrap();
+        assert_eq!(
+            ready(store.verify(&evidence, &audience)),
+            Err(AccessError::InvalidCredential)
+        );
+        assert!(ready(store.verify(&replacement_evidence, &audience)).is_ok());
+        drop(store);
+
+        // The revocation is never recorded before the credential it ends, so the
+        // registry it wrote is one that can be read back.
+        let registry: Registry = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let superseded = registry
+            .credentials
+            .iter()
+            .find(|entry| entry.metadata.id == "panel-token-1")
+            .expect("the superseded credential is retained");
+        assert_eq!(superseded.metadata.revoked_at, Some(300));
+        assert!(open_store(&path).is_ok());
+
+        // A third provisioning does not move the revocation already recorded:
+        // the first one is when the credential stopped being usable.
+        let store = open_store(&path).unwrap();
+        store
+            .provision_surface(
+                "panel",
+                "panel-3".into(),
+                "panel-token-3".into(),
+                vec!["server.read".into()],
+                900,
+                None,
+            )
+            .unwrap();
+        drop(store);
+        let registry: Registry = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let superseded = registry
+            .credentials
+            .iter()
+            .find(|entry| entry.metadata.id == "panel-token-1")
+            .expect("the superseded credential is retained");
+        assert_eq!(superseded.metadata.revoked_at, Some(300));
     }
 
     #[test]

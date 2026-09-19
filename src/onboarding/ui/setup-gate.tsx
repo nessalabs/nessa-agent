@@ -1,17 +1,12 @@
 import * as React from "react"
-import {
-  closeSetupWindow,
-  finishSetupWindow,
-  revealSetupWindow,
-  type SetupHandoff,
-} from "../../host"
 import { AgentBloom } from "./agent-bloom"
 import { Onboarding, SETUP_HEADING_ID } from "./onboarding"
 import { SetupChrome } from "./setup-chrome"
 import { useIntroSound } from "./use-intro-sound"
 import { useOnboarding } from "./use-onboarding"
+import { useSetupHandoff } from "./use-setup-handoff"
 import type { AgentReadinessSource } from "../application/ports"
-import { setupRecovery, type SetupRecovery } from "../application/setup-recovery"
+import type { SetupRecovery } from "../application/setup-recovery"
 import { isOnboardingCompleted } from "../model/onboarding"
 
 /** The buttons on the handoff-failure screen, which are the whole point of it:
@@ -125,78 +120,14 @@ export function SetupGate({
   children?: React.ReactNode
 }) {
   const onboarding = useOnboarding(agents)
-  const [handedOver, setHandedOver] = React.useState(false)
-  const [handoff, setHandoff] = React.useState<SetupHandoff>()
-  const [closeFailed, setCloseFailed] = React.useState(false)
-  const recoveryDialog = React.useRef<HTMLDivElement>(null)
-
   useIntroSound(onboarding.active)
-
-  // The window is created hidden and shown from here, after this has rendered
-  // — so the first thing on screen is the opening rather than an empty window
-  // waiting for its first frame.
-  //
-  // Directly, in the effect, and deliberately not from `requestAnimationFrame`.
-  // A hidden macOS window is not drawn at all, so its webview is served no
-  // animation frames: a reveal scheduled on one waits for a paint that is
-  // waiting for the reveal, and setup stayed hidden for the whole session while
-  // its page ran and played the opening sound.
-  //
-  // The body is a block so the effect returns nothing: an expression body would
-  // hand React the promise as a cleanup function.
-  React.useEffect(() => {
-    void revealSetupWindow()
-  }, [])
-
-  // Handing over to the panel. Showing it, writing setup off for good, and
-  // closing this window are one host call, because the order between them has
-  // to survive this window — see `finishSetupWindow` and `panel::finish_setup`.
-  // This sequenced them itself until a completion write issued after an awaited
-  // close started losing to the teardown it had just asked for.
-  //
-  // What travels is the one fact the host cannot know: whether setup was
-  // finished or left. Leaving stays free to change its mind, so only a finish
-  // is written off; the host will not record it unless the panel came up first.
-  const completed = isOnboardingCompleted(onboarding.state)
-  React.useEffect(() => {
-    if (onboarding.active || handedOver) return
-    setHandedOver(true)
-    void finishSetupWindow(completed)
-      .then(setHandoff)
-      .catch((cause: unknown) => setHandoff({ outcome: "panel-unavailable", cause }))
-  }, [onboarding.active, handedOver, completed])
-
-  // What the window has to show for the handoff it got, if anything. Kept by
-  // the handoff rather than recomputed every render, so a failed close — which
-  // changes the note under the buttons — does not take the focus back off the
-  // button somebody just pressed.
-  const recovery = React.useMemo(() => setupRecovery(handoff), [handoff])
-
-  // An alert dialog nobody is inside is one a screen reader reads past, and
-  // setup's own controls have gone with the step that had them: there is
-  // nothing for the caret to fall back to but this.
-  React.useEffect(() => {
-    if (recovery) recoveryDialog.current?.focus()
-  }, [recovery])
-
-  // Asking for the handoff again is putting the gate back where it was before
-  // the first attempt: the effect above is what performs it, and it runs again
-  // because this is the flag it waits on.
-  const retryHandoff = React.useCallback(() => {
-    setCloseFailed(false)
-    setHandoff(undefined)
-    setHandedOver(false)
-  }, [])
-
-  // Closing without the panel. Every way this can fail is a value rather than a
-  // rejection, so the screen can say what happened and keep its buttons; a
-  // browser has no window of its own to close, which is not a failure and is
-  // also not something this screen can be reached in.
-  const closeWindow = React.useCallback(() => {
-    void closeSetupWindow().then((closed) => {
-      setCloseFailed(closed.outcome !== "closed")
-    })
-  }, [])
+  // What the end of setup does to this window, and what it leaves on screen.
+  // Kept out here so everything below is a function of what it reports, and
+  // after the sound so the effect order is the one this surface always had.
+  const handoff = useSetupHandoff(
+    onboarding.active,
+    isOnboardingCompleted(onboarding.state),
+  )
 
   if (!onboarding.active) {
     // A surface that becomes the panel in place does so now.
@@ -204,14 +135,14 @@ export function SetupGate({
     // The window is closing. The one thing it must not do is go quiet over a
     // handoff that left something behind — a panel that never came up, or this
     // window still standing over one that did. Either way it says which.
-    if (recovery) {
+    if (handoff.recovery) {
       return (
         <HandoffFailed
-          ref={recoveryDialog}
-          recovery={recovery}
-          onRetry={retryHandoff}
-          onClose={closeWindow}
-          closeFailed={closeFailed}
+          ref={handoff.dialog}
+          recovery={handoff.recovery}
+          onRetry={handoff.retry}
+          onClose={handoff.close}
+          closeFailed={handoff.closeFailed}
         />
       )
     }

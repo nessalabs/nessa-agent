@@ -309,7 +309,12 @@ fn published_notes(body: Option<&str>) -> Option<String> {
 /// the check answers from it instead of asking the endpoint. It is the inner
 /// loop for the decision, the notice, and the install: no server, no artifact,
 /// no signing key. Nothing it produces can be installed, and it says so.
-#[cfg(debug_assertions)]
+///
+/// Only a debug build ever *reads* it — everything that does is behind
+/// `cfg(debug_assertions)` — but the name is compiled into every build, because
+/// `begin_install` names it in the refusal it is tested for and that function
+/// is not gated. Gating the constant made release builds fail to compile, which
+/// nothing noticed until a release was actually built.
 const SIMULATED_UPDATE: &str = "NESSA_FAKE_UPDATE";
 
 /// What [`SIMULATED_UPDATE`] asked a debug build to do.

@@ -93,15 +93,22 @@ jobs:
             echo "Expected vMAJOR.MINOR.PATCH, optionally with a pre-release suffix."
             exit 1
           fi
-          sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" \
-            --jq '.object.sha' 2>/dev/null || true)"
-          if [ -z "$sha" ]; then
+          object="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" \
+            --jq '.object.type + " " + .object.sha' 2>/dev/null || true)"
+          if [ -z "$object" ]; then
             echo "No tag refs/tags/${TAG} in this repository."
             echo "Tag the commit you mean to release first; a branch of that name is not a tag."
             exit 1
           fi
-          # An annotated tag's ref points at the tag object, not the commit.
-          sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${sha}" --jq '.sha')"
+          kind="${object%% *}"
+          sha="${object##* }"
+          # An annotated tag's ref points at the tag object, not the commit, and
+          # only `git/tags` dereferences one: `repos/.../commits/<tag object>`
+          # answers 422, which is how the first attempt at v0.1.0 died. A
+          # lightweight tag's ref already names the commit and is left alone.
+          if [ "$kind" = tag ]; then
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${sha}" --jq '.object.sha')"
+          fi
           printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
           printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
           echo "refs/tags/${TAG} is ${sha}"
