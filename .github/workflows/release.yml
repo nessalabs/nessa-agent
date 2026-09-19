@@ -61,19 +61,41 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
+      sha: ${{ steps.resolve.outputs.sha }}
       version: ${{ steps.agree.outputs.version }}
+      prerelease: ${{ steps.agree.outputs.prerelease }}
     steps:
       - id: resolve
         # Through the environment, never interpolated into the script: the
         # dispatch input is whatever the person typed.
+        #
+        # Resolved to the commit the *tag* points at, once, and every job below
+        # builds that commit. `actions/checkout` takes an unqualified name and
+        # looks for a branch before a tag, so a branch called `v0.1.0` would be
+        # what got built — and comparing versions cannot notice, because both
+        # commits can declare the same one. The tag must also already exist:
+        # `gh release create` will otherwise make one from the default branch
+        # at publication, which is a release of code nobody tagged.
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" \
+            --jq '.object.sha' 2>/dev/null || true)"
+          if [ -z "$sha" ]; then
+            echo "No tag refs/tags/${TAG} in this repository."
+            echo "Tag the commit you mean to release first; a branch of that name is not a tag."
+            exit 1
+          fi
+          # An annotated tag's ref points at the tag object, not the commit.
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${sha}" --jq '.sha')"
           printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
+          printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+          echo "refs/tags/${TAG} is ${sha}"
       - uses: actions/checkout@v4
         with:
-          ref: ${{ steps.resolve.outputs.tag }}
+          ref: ${{ steps.resolve.outputs.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -83,7 +105,9 @@ jobs:
         run: |
           set -euo pipefail
           version="$(node scripts/desktop/release-version.mjs --tag "$TAG")"
+          prerelease="$(node scripts/desktop/release-version.mjs --tag "$TAG" --print prerelease)"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'prerelease=%s\n' "$prerelease" >> "$GITHUB_OUTPUT"
 
   # The one failure with no remedy: if the public key in tauri.conf.json is not
   # the other half of the key this workflow signs with, every build it ever
@@ -103,7 +127,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ needs.version.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v4
         with:
@@ -147,7 +171,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ needs.version.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -191,7 +215,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ needs.version.outputs.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -225,6 +249,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.version.outputs.tag }}
           VERSION: ${{ needs.version.outputs.version }}
+          # Empty unless this is a pre-release, so `${PRERELEASE:+--prerelease}`
+          # adds the flag only when it belongs.
+          PRERELEASE: ${{ needs.version.outputs.prerelease == 'true' && 'true' || '' }}
         run: |
           set -euo pipefail
           cat > release-notes.md <<'END'
@@ -244,11 +271,21 @@ jobs:
           state="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || echo absent)"
           case "$state" in
             absent)
-              gh release create "$TAG" --draft --title "Nessa $VERSION" \
+              # `--verify-tag` because `gh release create` will otherwise make
+              # the tag itself, from the default branch, for a release named
+              # after a tag that was never pushed. `--prerelease` because
+              # GitHub keeps the channel apart from the name: an rc published
+              # without it is an ordinary release, and the updater serves the
+              # newest of those to every installed app.
+              gh release create "$TAG" --draft --verify-tag \
+                ${PRERELEASE:+--prerelease} --title "Nessa $VERSION" \
                 --notes-file release-notes.md release-assets/*
               ;;
             true)
               echo "A draft for $TAG exists; replacing its assets."
+              # A draft from an earlier run may predate the channel being set,
+              # so it is stated again rather than assumed to have carried.
+              gh release edit "$TAG" --prerelease="${PRERELEASE:-false}"
               gh release upload "$TAG" release-assets/* --clobber
               ;;
             *)

@@ -96,3 +96,31 @@ test("a release is staged as a draft, never published by the workflow", () => {
   assert.doesNotMatch(workflow, /--draft=false|gh release edit .*--draft/)
   assert.match(workflow, /not notarized/i)
 })
+
+test("a release builds the commit its tag names, not a branch of the same name", () => {
+  // `actions/checkout` takes an unqualified ref and looks for a branch before a
+  // tag, so a branch called `v0.1.0` would be what got built. Comparing declared
+  // versions cannot catch it: both commits can say the same version. The tag is
+  // resolved to a commit once, and every job builds that commit.
+  const workflow = readFileSync(".github/workflows/release.yml", "utf8")
+  assert.match(workflow, /git\/ref\/tags\//)
+  assert.doesNotMatch(
+    workflow,
+    /ref: \$\{\{ (needs\.version\.outputs\.tag|steps\.resolve\.outputs\.tag) \}\}/,
+    "a job is still checking out a name rather than the resolved commit",
+  )
+  for (const match of workflow.matchAll(/ref: \$\{\{ ([^}]+) \}\}/g))
+    assert.match(match[1], /\.sha\b/, `checkout of ${match[1].trim()} is not a commit`)
+})
+
+test("publication requires the tag to exist and states the channel", () => {
+  // `gh release create` creates a missing tag from the default branch, which
+  // would publish code nobody tagged; `--verify-tag` refuses instead. And
+  // GitHub keeps pre-release apart from the tag's spelling, so an rc published
+  // without the flag is an ordinary release — the one the updater serves.
+  const workflow = readFileSync(".github/workflows/release.yml", "utf8")
+  assert.match(workflow, /gh release create "\$TAG" --draft --verify-tag/)
+  assert.match(workflow, /\$\{PRERELEASE:\+--prerelease\}/)
+  // A draft from a run before the channel was set is corrected rather than left.
+  assert.match(workflow, /gh release edit "\$TAG" --prerelease=/)
+})
