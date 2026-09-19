@@ -45,6 +45,26 @@ function temporaryRoot() {
   return mkdtempSync(join(tmpdir(), "nessa-dev-agent-"))
 }
 
+/**
+ * Run `body` with what the script prints collected into `into`.
+ *
+ * The script writes to stdout directly rather than through an injected sink,
+ * because printing is all it does with these lines; a test that wants to read
+ * one takes it from where a person would.
+ */
+function withStdout(into, body) {
+  const write = process.stdout.write.bind(process.stdout)
+  process.stdout.write = (chunk) => {
+    into.push(String(chunk))
+    return true
+  }
+  try {
+    return body()
+  } finally {
+    process.stdout.write = write
+  }
+}
+
 test("the namespace matches the server's stage and instance layout", unixOnly, () => {
   assert.equal(
     namespaceRoot({ NESSA_DATA_DIR: "/data", NESSA_STAGE: "dev" }),
@@ -294,26 +314,104 @@ test(
   },
 )
 
-/** A run killed before releasing must not block the next one for ever. */
-test("a lock whose owner is gone is taken rather than obeyed", unixOnly, async () => {
+/**
+ * A lock left by a killed run is reported, not taken.
+ *
+ * Taking it is the race the lock exists to prevent: between reading the dead
+ * pid and unlinking the file, that file can become a live run's lock, and two
+ * runs then write the same configuration. So the file is left where it is and
+ * the person is told the command that clears it.
+ */
+test("a lock whose owner is gone is reported, not taken", unixOnly, async () => {
   const { publish } = await import("./dev-agent-config.mjs")
   const data = temporaryRoot()
   mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
   const path = join(data, "dev/config.json")
   writeFileSync(path, JSON.stringify({}), { mode: 0o600 })
-  // A pid that cannot be running: process 0 is not a user process, and the
-  // holder file is what a killed run leaves behind.
-  writeFileSync(`${path}.lock`, "2147483647 2026-01-01T00:00:00.000Z\n", { mode: 0o600 })
+  // A pid that cannot be running, which is what a killed run leaves behind.
+  const holder = "2147483647 stale-token 2026-01-01T00:00:00.000Z\n"
+  writeFileSync(`${path}.lock`, holder, { mode: 0o600 })
 
   const agent = { node: "/usr/bin/node", acpEntry: "/mine/index.js" }
+  const said = []
+  const wrote = withStdout(said, () =>
+    publish({
+      configPath: path,
+      agent,
+      acpEntry: agent.acpEntry,
+      node: agent.node,
+    }),
+  )
+
+  assert.equal(wrote, false, "the run stands down")
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {}, "nothing is written")
+  assert.equal(
+    readFileSync(`${path}.lock`, "utf8"),
+    holder,
+    "the lock it did not take is left exactly as it was",
+  )
+  assert.match(said.join("\n"), /rm .*config\.json\.lock/, "says how to clear it")
+})
+
+/**
+ * Two runs meeting the same stale lock is what made stealing unsafe: both read
+ * the dead pid, both delete it, and both then believe they hold the lock. The
+ * regression is that neither of them writes.
+ */
+test("two runs finding the same stale lock do not both write", unixOnly, async () => {
+  const { publish } = await import("./dev-agent-config.mjs")
+  const data = temporaryRoot()
+  mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+  const path = join(data, "dev/config.json")
+  writeFileSync(path, JSON.stringify({}), { mode: 0o600 })
+  const holder = "2147483647 stale-token 2026-01-01T00:00:00.000Z\n"
+  writeFileSync(`${path}.lock`, holder, { mode: 0o600 })
+
+  const attempt = (entry) =>
+    publish({
+      configPath: path,
+      agent: { node: "/usr/bin/node", acpEntry: entry },
+      acpEntry: entry,
+      node: "/usr/bin/node",
+    })
+
+  const said = []
+  const [first, second] = withStdout(said, () => [
+    attempt("/mine/index.js"),
+    attempt("/theirs/index.js"),
+  ])
+
+  assert.equal(first, false, "neither takes a lock it cannot own")
+  assert.equal(second, false)
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {}, "neither writes")
+  assert.equal(readFileSync(`${path}.lock`, "utf8"), holder, "the lock is left alone")
+})
+
+/** A lock cleared by hand and retaken belongs to whoever has it now. */
+test("releasing does not remove somebody else's lock", unixOnly, async () => {
+  const { publish } = await import("./dev-agent-config.mjs")
+  const data = temporaryRoot()
+  mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+  const path = join(data, "dev/config.json")
+  writeFileSync(path, JSON.stringify({}), { mode: 0o600 })
+
+  const agent = { node: "/usr/bin/node", acpEntry: "/mine/index.js" }
+  const theirs = `${process.pid + 1} their-token 2026-01-01T00:00:00.000Z\n`
+
   const wrote = publish({
     configPath: path,
     agent,
     acpEntry: agent.acpEntry,
     node: agent.node,
+    // Somebody clears the lock by hand and another run takes it, while this run
+    // is between acquiring and writing.
+    interrupt: () => writeFileSync(`${path}.lock`, theirs, { mode: 0o600 }),
   })
 
   assert.equal(wrote, true)
-  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")).agent, agent)
-  assert.equal(existsSync(`${path}.lock`), false, "the lock is released")
+  assert.equal(
+    readFileSync(`${path}.lock`, "utf8"),
+    theirs,
+    "the other run is still holding its lock",
+  )
 })

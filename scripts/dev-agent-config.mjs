@@ -320,10 +320,19 @@ function main() {
  * So the read, the decision and the rename happen while holding this.
  *
  * `wx` is the whole mechanism: creating the file is the acquisition, and it
- * either succeeds or it does not. What is written into it is only for the
- * message the loser prints.
+ * either succeeds or it does not. What is written into it is a token — the pid
+ * for a person reading it, and a uuid so the file can be recognised as *this*
+ * run's rather than merely as one written by some run with this pid.
  *
- * Honest about the limit: this coordinates writers that take the lock. An
+ * A lock left behind by a killed run is reported, never taken. Taking it cannot
+ * be done safely with the operations available here: between reading a pid and
+ * unlinking the file, that file can become a live run's lock, and deleting it
+ * would hand the same configuration to two writers at once — the exact thing
+ * the lock exists to prevent. `rm` is the wrong tool for "delete this only if
+ * it still says 2147483647". So a stale lock is a sentence with the command
+ * that clears it, said to the person who can tell that nothing is running.
+ *
+ * Honest about the other limit: this coordinates writers that take the lock. An
  * editor saving `config.json` underneath us takes no lock and is still a race —
  * a narrower one, between the read inside the lock and the rename, and not one
  * a file rename can settle.
@@ -332,65 +341,61 @@ function main() {
  */
 function lockFor(configPath) {
   const lock = `${configPath}.lock`
-  const mine = `${process.pid} ${new Date().toISOString()}\n`
-  for (const attempt of [1, 2]) {
-    try {
-      writeFileSync(lock, mine, { mode: 0o600, flag: "wx" })
-      return {
-        release: () => {
-          try {
-            unlinkSync(lock)
-          } catch {
-            // Already gone: nothing to release.
-          }
-        },
-      }
-    } catch (error) {
-      if (error.code !== "EEXIST")
-        return { held: `could not lock ${lock}: ${error.message}` }
-      const holder = readHolder(lock)
-      if (attempt === 1 && holder.stale) {
-        // A run killed before it could release. Its pid is gone, so nobody is
-        // writing; take it rather than making somebody delete a file by hand.
-        try {
-          unlinkSync(lock)
-          continue
-        } catch {
-          // Someone else got there first; fall through and stand down.
-        }
-      }
-      return { held: holder.description }
-    }
+  const token = `${process.pid} ${randomUUID()} ${new Date().toISOString()}\n`
+  try {
+    writeFileSync(lock, token, { mode: 0o600, flag: "wx" })
+  } catch (error) {
+    if (error.code !== "EEXIST")
+      return { held: `could not lock ${lock}: ${error.message}` }
+    return { held: readHolder(lock).description }
   }
-  return { held: `could not lock ${lock}` }
+  return {
+    // Released only while it is still this run's own lock. If somebody cleared
+    // it by hand and another run took it, the file at this path is theirs, and
+    // unlinking it would leave them holding nothing.
+    release: () => {
+      try {
+        if (readFileSync(lock, "utf8") === token) unlinkSync(lock)
+      } catch {
+        // Already gone, or unreadable: nothing this run may remove.
+      }
+    },
+  }
 }
 
-/** Who holds a lock, and whether they are still running. */
+/**
+ * Who holds a lock, and what to do about it.
+ *
+ * A live holder is somebody to leave alone. A holder that is gone is a wedged
+ * lock, and the description carries the command that clears it, because this
+ * run will not clear it itself — see [`lockFor`].
+ */
 function readHolder(lock) {
+  const clear = `nothing is writing it, run: rm ${lock}`
   let text = ""
   try {
     text = readFileSync(lock, "utf8")
   } catch {
-    return { stale: true, description: "a lock that vanished as it was read" }
+    return { description: "a lock that vanished as it was read; try again" }
   }
   const pid = Number(text.trim().split(/\s+/)[0])
   if (!Number.isInteger(pid) || pid <= 0)
-    return { stale: true, description: `a lock naming no process (${text.trim()})` }
+    return { description: `a lock naming no process (${text.trim()}); if ${clear}` }
   try {
     process.kill(pid, 0)
-    return { stale: false, description: `pid ${pid}, which is still running` }
+    return { description: `pid ${pid}, which is still running` }
   } catch (error) {
     // EPERM means it exists and is somebody else's, which is not stale.
     return error.code === "EPERM"
-      ? { stale: false, description: `pid ${pid}` }
-      : { stale: true, description: `pid ${pid}, which is gone` }
+      ? { description: `pid ${pid}` }
+      : { description: `pid ${pid}, which is gone — if ${clear}` }
   }
 }
 
 export function publish({ configPath, agent, acpEntry, node, mcpBinary, interrupt }) {
   const lock = lockFor(configPath)
   if ("held" in lock) {
-    say(`→ another run is configuring ${configPath} (${lock.held}); leaving it to them`)
+    say(`→ not configuring ${configPath}: its lock is held by ${lock.held}`)
     return false
   }
   try {
