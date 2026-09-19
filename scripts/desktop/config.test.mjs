@@ -39,6 +39,23 @@ test("packaged desktop content policy permits required local capabilities", () =
   assert.equal(config.app.security.devCsp, null)
 })
 
+test("the updater checks published releases against a public key only", () => {
+  const updater = config.plugins.updater
+  assert.deepEqual(updater.endpoints, [
+    "https://github.com/nessalabs/nessa-agent/releases/latest/download/latest.json",
+  ])
+  // Without this the bundler produces no update artifacts at all, and the
+  // endpoint above would describe releases nothing can install.
+  assert.equal(config.bundle.createUpdaterArtifacts, true)
+
+  // The signing key's other half lives outside the repository. A secret key
+  // pasted in here would verify signatures just as happily, so the guard is on
+  // what the configured key actually says it is.
+  const key = Buffer.from(updater.pubkey, "base64").toString("utf8")
+  assert.match(key, /^untrusted comment: minisign public key: [0-9A-F]+\n/)
+  assert.doesNotMatch(key, /secret key/i)
+})
+
 test("native bundle verification selects Intel, Apple Silicon, and universal images", () => {
   assert.equal(bundleArchitecture(undefined, "x64"), "x64")
   assert.equal(bundleArchitecture(undefined, "arm64"), "aarch64")

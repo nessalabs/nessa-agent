@@ -1,0 +1,1096 @@
+//! Whether a newer Nessa has been published, and installing it if one has.
+//!
+//! The check is deliberately quiet. It runs once, in the background, after the
+//! app is up, and its only way of reaching anybody is one extra item in the
+//! tray menu. There is no dialog, no prompt, no toast: nothing here takes the
+//! screen, so nothing here can land on top of first-run setup, which does.
+//!
+//! A check that does not complete is a normal outcome, not a fault. The machine
+//! may be offline, the release endpoint may be down, a proxy may be in the way.
+//! In every one of those cases the tray stays exactly as it was and the failure
+//! goes to stderr with the app's other diagnostics — the person is running an
+//! app that works, and an update they have not heard of is not news.
+//!
+//! ```text
+//!   check_in_background ──spawn──▶ run_check
+//!                                   │      │
+//!                     ReleaseSource ◀┘      └▶ CheckOutcome
+//!                    │      │       │              │        │
+//!       PluginReleases  Simulated  fake      TrayOutcome   recorder
+//!                    │      │                      │
+//!        PendingUpdate  SimulatedUpdate ─▶ install_and_restart ◀── click
+//! ```
+//!
+//! Both sides of a check are ports. The answer comes off the network and the
+//! item goes onto a menu that needs a window server, so neither could be
+//! reached from a test; behind traits, every outcome of a check — found,
+//! current, refused — drives the real flow in [`tests`]. The arrows point at
+//! the two implementations of each: the real one, and the one the tests use.
+//!
+//! `Checked` is what one check found and `Offer` is what the tray does about
+//! it; [`offer`] is the whole of the rule connecting them, kept pure so the
+//! "say nothing" cases are decided in one readable place.
+//!
+//! `Simulated` is the third source and is compiled only into a debug build: it
+//! answers "yes, `9.9.9`" from `NESSA_FAKE_UPDATE` without a network, so the
+//! decision, the tray item, and the click can be watched in `pnpm app` with
+//! nothing published. It cannot install anything and the click says so. The
+//! *other* way to watch this locally — the real plugin, real HTTP, real
+//! manifest parse, against a server on this machine — needs no code here at
+//! all: it is a `--config` endpoint merge, `scripts/desktop/updater-harness.mjs
+//! --check-only`, and `docs/codebase-structure.md` has both recipes.
+
+#[cfg(debug_assertions)]
+use std::env;
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use tauri::{AppHandle, Manager};
+use tauri_plugin_updater::{Update, UpdaterExt};
+
+use crate::tray;
+
+/// What one check found.
+///
+/// The plugin's `Result<Option<Update>, Error>` is reduced to this at the
+/// boundary so the decision below branches on named outcomes rather than on an
+/// error's text. [`Checked::Failed`] carries the failure only to log it; no
+/// decision reads that string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Checked {
+    /// A published release is newer than the running build.
+    Newer {
+        /// The published version, as the release manifest announced it.
+        version: String,
+    },
+    /// The running build is the latest published one.
+    Current,
+    /// The check did not complete: offline, no endpoint, an unreadable
+    /// manifest, a signature that did not verify.
+    Failed(String),
+}
+
+/// Whether the tray was already offering an update when a check started.
+///
+/// Asked as a fact, not acted on by whoever answers: an update found by an
+/// earlier check is still in the menu and still installable, so a later check
+/// finding the same release has nothing to add.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Offering {
+    /// The menu is the one the app started with.
+    Nothing,
+    /// An earlier check already put an update in the menu.
+    AnUpdate,
+}
+
+/// What the tray does about a finished check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Offer {
+    /// Grow the menu by an item offering to install this version and restart.
+    Install {
+        /// The version the item names.
+        version: String,
+    },
+    /// Change nothing. Whoever is using the app sees no sign a check happened.
+    Nothing,
+}
+
+/// The one rule: an update the person can actually install, and is not already
+/// being offered one of, is the only thing worth saying. Being current says
+/// nothing, and a check that failed says nothing either — there is no useful
+/// action behind "we could not ask".
+pub fn offer(checked: &Checked, offering: Offering) -> Offer {
+    match (checked, offering) {
+        (Checked::Newer { version }, Offering::Nothing) => Offer::Install {
+            version: version.clone(),
+        },
+        (Checked::Newer { .. }, Offering::AnUpdate)
+        | (Checked::Current | Checked::Failed(_), _) => Offer::Nothing,
+    }
+}
+
+/// Where the question "is there a newer Nessa?" is asked.
+///
+/// The answer comes off the network, which is why this is a port: the real
+/// implementation goes through the updater plugin, and a test substitutes one
+/// that answers at once — including with the answers hardest to arrange for
+/// real, such as an endpoint that refused.
+///
+/// It answers with [`Checked`] rather than the plugin's `Update`, which a test
+/// cannot fabricate. Keeping the update off the port is also the honest
+/// ownership: the release the tray item installs is the one the real source
+/// found and kept, and no decision here ever reads it.
+trait ReleaseSource {
+    /// Asks once. A source that finds an update also retains it, so that the
+    /// item offered below and the update a click installs are the same one.
+    fn check(&self) -> impl Future<Output = Checked> + Send;
+}
+
+/// What a finished check is allowed to do: one tray item, one diagnostic line.
+///
+/// A port for the same reason as the source — the menu needs a window server
+/// and the diagnostics are the process's stderr — and it reports the one fact
+/// the rule needs rather than deciding anything with it.
+trait CheckOutcome {
+    /// Whether an update is in the menu already.
+    fn offering(&self) -> Offering;
+
+    /// Adds the item offering to install this version and restart.
+    fn offer_update(&self, version: &str);
+
+    /// Says, in the diagnostics only, that the check did not complete.
+    fn report_failure(&self, reason: &str);
+}
+
+/// Fetching an update's bytes and putting them in place.
+///
+/// A port for the same reason as the source: it reaches the network and then
+/// the installed application on disk. It says nothing about which update —
+/// the real one carries its own, and the ordering below never reads it — so
+/// the plugin's `Update`, which a test cannot fabricate, stays off the port.
+trait Installer {
+    /// Downloads and installs, answering with why not rather than an error
+    /// type the caller would have to understand.
+    fn install(&self) -> impl Future<Output = Result<(), String>> + Send;
+}
+
+/// Coming back up on the version just installed.
+///
+/// Separate from [`Installer`] because it is a separate outside thing — the
+/// process ends here — and because "did it restart" is the one fact worth
+/// asserting about a successful install.
+trait Restarter {
+    /// Never returns on the real host.
+    fn restart(&self);
+}
+
+/// What an install does after the bytes are in place, and what a failed one
+/// leaves behind.
+///
+/// Pure, and generic over the two ports, so the whole rule is exercised
+/// without a release, a network, or a process that ends: a success restarts
+/// exactly once and keeps nothing, and a failure restarts not at all and hands
+/// the update back for the next click to retry.
+async fn carry_out<I: Installer, R: Restarter, K: FnOnce()>(
+    installer: I,
+    restarter: &R,
+    keep_for_retry: K,
+) {
+    match installer.install().await {
+        Ok(()) => restarter.restart(),
+        Err(reason) => {
+            eprintln!("[nessa] could not install the update: {reason}");
+            keep_for_retry();
+        }
+    }
+}
+
+/// How long a download may take before it is a failure rather than a download.
+///
+/// Generous: a release is tens of megabytes and somebody may be on a train. It
+/// is a bound on a hang, not a service level — what it rules out is waiting for
+/// ever on a connection that is open and silent.
+const DOWNLOAD_BUDGET: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// The real source: the release endpoint, through the updater plugin.
+struct PluginReleases(AppHandle);
+
+impl ReleaseSource for PluginReleases {
+    fn check(&self) -> impl Future<Output = Checked> + Send {
+        let app = self.0.clone();
+        async move {
+            let found = match app.updater() {
+                Ok(updater) => updater.check().await,
+                // A misconfigured or unbuildable updater is the same kind of
+                // news as an unreachable endpoint: there is no update to offer
+                // either way.
+                Err(error) => Err(error),
+            };
+
+            match found {
+                Ok(Some(mut update)) => {
+                    let version = update.version.clone();
+                    // The plugin builds the returned `Update` with `timeout:
+                    // None` whatever the check was given, and its HTTP client
+                    // has no read or total deadline of its own. A server that
+                    // sends a few bytes and then holds the connection open
+                    // leaves the download pending for the life of the app —
+                    // with the release already taken out of the slot, so every
+                    // later request is ignored as "already installing" and the
+                    // tab never moves. Bounded here, where the update is first
+                    // held, so a stall becomes an ordinary failure that
+                    // restores the release and can be retried.
+                    update.timeout = Some(DOWNLOAD_BUDGET);
+                    retain(&app, update);
+                    Checked::Newer { version }
+                }
+                Ok(None) => Checked::Current,
+                Err(error) => Checked::Failed(error.to_string()),
+            }
+        }
+    }
+}
+
+/// The variable a debug build reads to pretend a release was published.
+///
+/// Set it to the version to announce — `NESSA_FAKE_UPDATE=9.9.9 pnpm app` — and
+/// the check answers from it instead of asking the endpoint. It is the inner
+/// loop for the decision, the tray item, and the click: no server, no artifact,
+/// no signing key. Nothing it produces can be installed, and it says so.
+#[cfg(debug_assertions)]
+const SIMULATED_UPDATE: &str = "NESSA_FAKE_UPDATE";
+
+/// What [`SIMULATED_UPDATE`] asked a debug build to do.
+///
+/// Decided here, away from the environment and the app handle, so the two ways
+/// of getting the real endpoint back — not setting the variable, and setting it
+/// to something that is not a version — are one readable rule with a test each.
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Simulated {
+    /// Announce this version. The release endpoint is not asked at all.
+    Announce(String),
+    /// A value was set that is not a version. The real endpoint answers, and
+    /// the caller says on stderr that the value was ignored — a silent
+    /// fall-through would read as "the simulation is broken".
+    Ignored(String),
+    /// Nothing was asked for: an ordinary debug run.
+    Off,
+}
+
+/// The one rule for the variable: a `major.minor.patch` of digits is a version
+/// to announce, anything else set is a typo worth reporting, and unset is a
+/// normal run. Deliberately stricter than "non-empty" — the string goes
+/// straight into the tray item's text, and "Update to banana" is not honest
+/// about what a real check would ever produce.
+#[cfg(debug_assertions)]
+fn simulated(requested: Option<&str>) -> Simulated {
+    let Some(requested) = requested else {
+        return Simulated::Off;
+    };
+    let version = requested.trim();
+    if version.is_empty() {
+        return Simulated::Off;
+    }
+
+    let parts: Vec<&str> = version.split('.').collect();
+    let numbered = parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+
+    match numbered {
+        true => Simulated::Announce(version.to_string()),
+        false => Simulated::Ignored(version.to_string()),
+    }
+}
+
+/// A source that answers from [`SIMULATED_UPDATE`] without a network.
+///
+/// Separate from the `FakeReleases` the tests use, and not the same thing: that
+/// one replays any [`Checked`] a test hands it, including failures, and retains
+/// nothing because no click ever follows it. This one exists to drive a running
+/// app, so it does what the real source does — answer, and record what a later
+/// click will find — and what it records is that there is nothing to install.
+/// Widening the test double's `cfg` would put a test fixture in the dev binary
+/// and still leave that second job undone.
+#[cfg(debug_assertions)]
+struct SimulatedReleases {
+    app: AppHandle,
+    version: String,
+}
+
+#[cfg(debug_assertions)]
+impl ReleaseSource for SimulatedReleases {
+    fn check(&self) -> impl Future<Output = Checked> + Send {
+        let app = self.app.clone();
+        let version = self.version.clone();
+        async move {
+            // The real source retains the update a click installs; this retains
+            // the fact that no such update exists, which is what makes the
+            // click able to say so instead of doing nothing.
+            app.manage(SimulatedUpdate(version.clone()));
+            eprintln!(
+                "[nessa] {SIMULATED_UPDATE}={version}: offering a simulated update. \
+                 The release endpoint was not asked and nothing was downloaded."
+            );
+            Checked::Newer { version }
+        }
+    }
+}
+
+/// Managed when a simulated update is offered, so the click can be honest.
+#[cfg(debug_assertions)]
+struct SimulatedUpdate(String);
+
+/// The real outcome: the tray menu, and the app's stderr diagnostics.
+struct TrayOutcome(AppHandle);
+
+impl CheckOutcome for TrayOutcome {
+    fn offering(&self) -> Offering {
+        // The state exists from the moment a check found something, and the
+        // menu item is added in the same breath. Its *slot* is emptied by a
+        // click that starts an install, so emptiness would be the wrong
+        // question here: the item is still in the menu while that runs.
+        match self.0.try_state::<PendingUpdate>() {
+            Some(_) => Offering::AnUpdate,
+            None => Offering::Nothing,
+        }
+    }
+
+    fn offer_update(&self, version: &str) {
+        tray::offer_update(&self.0, version);
+    }
+
+    fn report_failure(&self, reason: &str) {
+        // Survivable, and on purpose: this is the offline case as much as it is
+        // the broken-endpoint case, and neither is the person's problem.
+        eprintln!("[nessa] could not check for an update: {reason}");
+    }
+}
+
+/// The update the tray item is offering, held until somebody clicks it.
+///
+/// Managed only once an update has actually been found, so the item and the
+/// update it installs arrive together. The slot is emptied by the click that
+/// starts the install, which is also what stops a second click from starting a
+/// second download of the same release; a failed install puts it back.
+struct PendingUpdate(Mutex<Option<Update>>);
+
+/// Puts a found update where a later click will find it.
+///
+/// `manage` keeps the first value of a type and drops later ones, so the slot
+/// is filled in place when it already exists — otherwise an update found after
+/// an install failed would be silently thrown away.
+fn retain(app: &AppHandle, update: Update) {
+    if let Some(pending) = app.try_state::<PendingUpdate>() {
+        refill(&pending.0, update);
+        return;
+    }
+    app.manage(PendingUpdate(Mutex::new(Some(update))));
+}
+
+/// Takes what is in the slot, leaving it empty.
+///
+/// The whole of the single-flight rule: whoever gets the update installs it,
+/// and a second request finds nothing and starts nothing. Written out rather
+/// than inlined so the rule is a function a test can call.
+fn claim<T>(slot: &Mutex<Option<T>>) -> Option<T> {
+    slot.lock().ok().and_then(|mut held| held.take())
+}
+
+/// Puts one back where the next request will find it.
+///
+/// In place, because `manage` keeps the first value of a type and drops later
+/// ones — an update put back through `manage` after a failed install would be
+/// silently thrown away, and the retry would find nothing.
+fn refill<T>(slot: &Mutex<Option<T>>, value: T) {
+    if let Ok(mut held) = slot.lock() {
+        *held = Some(value);
+    }
+}
+
+/// Asks the release endpoint once, off the startup path.
+///
+/// Called from `main`'s `setup` after the tray exists, because the tray menu is
+/// where the answer goes. It returns immediately: the request itself happens on
+/// the async runtime, so a slow or hanging endpoint delays nothing on screen —
+/// not the panel, and not first-run setup.
+pub fn check_in_background(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let outcome = TrayOutcome(app.clone());
+
+        // Debug builds only, and gone rather than disabled in a release build:
+        // a shipped app that can be told an update exists is a shipped app an
+        // attacker can tell that to. The same shape as `tray.rs`'s setup item.
+        #[cfg(debug_assertions)]
+        match simulated(env::var(SIMULATED_UPDATE).ok().as_deref()) {
+            Simulated::Announce(version) => {
+                let simulated = SimulatedReleases {
+                    app: app.clone(),
+                    version,
+                };
+                run_check(&simulated, &outcome).await;
+                return;
+            }
+            Simulated::Ignored(value) => eprintln!(
+                "[nessa] ignoring {SIMULATED_UPDATE}={value}: not a version like 9.9.9. \
+                 Checking the real release endpoint instead."
+            ),
+            Simulated::Off => {}
+        }
+
+        run_check(&PluginReleases(app), &outcome).await;
+    });
+}
+
+/// One check, from the source's answer through to the tray.
+///
+/// Everything outside the process is on one of the two ports, so this is the
+/// whole of what a check does and all of it is exercised in [`tests`].
+async fn run_check(source: &impl ReleaseSource, outcome: &impl CheckOutcome) {
+    // Read before the check, not after: a source that finds an update retains
+    // it, and what it retains is the same thing this asks about.
+    let offering = outcome.offering();
+    let checked = source.check().await;
+
+    if let Checked::Failed(reason) = &checked {
+        outcome.report_failure(reason);
+    }
+
+    if let Offer::Install { version } = offer(&checked, offering) {
+        outcome.offer_update(&version);
+    }
+}
+
+/// Downloads and installs the offered update, then comes back up on it.
+///
+/// Called by the tray item. Failures are reported and survivable: the app keeps
+/// running on the version it has, and the item stays in the menu to be tried
+/// again.
+/// Whether an executable is one an installer may replace.
+///
+/// The plugin does not install *an application*; it replaces the directory the
+/// running executable sits in. On macOS it climbs out to the `.app` when that
+/// directory is a bundle's `Contents/MacOS`, and otherwise takes the parent as
+/// it finds it — which for `target/debug/nessa-app` is `target/debug`. Its
+/// install then renames that directory away, deletes it, and moves the
+/// downloaded app into its place, cleaning up the backup on success. A
+/// developer who clicked install on a real release would lose their whole build
+/// directory, and every sibling artefact in it.
+///
+/// A debug build still asks the real endpoint — that is deliberate, because
+/// checking is how the check gets exercised — so the guard belongs at the
+/// install, not on the check, and not on the simulation flag, which only ever
+/// described offers this build made up.
+#[derive(Debug, PartialEq, Eq)]
+enum Replaceable {
+    /// Inside an installed application. The installer replaces the application.
+    Bundle,
+    /// Not inside one. The installer would replace whatever directory this is.
+    Loose,
+}
+
+/// Cargo's own layout, which is what a `just dev` binary runs from.
+fn under_cargo_target(executable: &Path) -> bool {
+    let mut components = executable.components().peekable();
+    while let Some(component) = components.next() {
+        if component.as_os_str() != "target" {
+            continue;
+        }
+        if components
+            .peek()
+            .is_some_and(|next| matches!(next.as_os_str().to_str(), Some("debug" | "release")))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether an install may go ahead, given what the operating system said this
+/// process is running from.
+///
+/// Takes the answer rather than asking the question, so every branch is
+/// reachable from a test: a location that may be replaced, one that may not,
+/// and an operating system that would not say. The asking itself is one line at
+/// the call site and cannot fail in a way this does not describe.
+///
+/// A refusal carries the sentence somebody reads, because each has a different
+/// thing to tell them: a build tree is a mistake to correct, and a query that
+/// failed is a machine that cannot be reasoned about from here.
+fn admits_install(executable: std::io::Result<PathBuf>) -> Result<(), String> {
+    match executable.map(|path| replaceable(&path)) {
+        Ok(Replaceable::Bundle) => Ok(()),
+        Ok(Replaceable::Loose) => Err(
+            "this build is not an installed one. The updater replaces the directory the \
+             running executable is in, which here is the build directory — so nothing was \
+             downloaded. Install a packaged build, or exercise the download with \
+             scripts/desktop/updater-harness.mjs."
+                .to_string(),
+        ),
+        Err(error) => Err(format!("cannot tell what is running ({error})")),
+    }
+}
+
+fn replaceable(executable: &Path) -> Replaceable {
+    if under_cargo_target(executable) {
+        return Replaceable::Loose;
+    }
+    // macOS is what this ships, and there an installed app is the only place
+    // the plugin will climb out of. Elsewhere the cargo check above is the
+    // whole of what can be said without shipping there first.
+    if cfg!(target_os = "macos") {
+        let bundled = executable
+            .parent()
+            .is_some_and(|parent| parent.ends_with("Contents/MacOS"));
+        return match bundled {
+            true => Replaceable::Bundle,
+            false => Replaceable::Loose,
+        };
+    }
+    Replaceable::Bundle
+}
+
+/// Everything an install request decides before a byte is downloaded.
+///
+/// The whole admission sequence, and its order, which is the part worth being
+/// sure of: a simulated offer has nothing behind it, a build that is not
+/// installed must not be installed over, and only then may the update leave the
+/// slot. Getting that order wrong — claiming first and refusing after — would
+/// take the release out of the slot and drop it, and the next request would
+/// find nothing to retry.
+///
+/// Generic over what is held, and taking the executable's location rather than
+/// asking for it, so every branch is reachable: the plugin's `Update` cannot be
+/// fabricated by a test and neither can an `AppHandle`, but a `&str` in a
+/// `Mutex` exercises the same code.
+fn begin_install<T>(
+    simulated: Option<String>,
+    executable: std::io::Result<PathBuf>,
+    slot: Option<&Mutex<Option<T>>>,
+) -> Result<T, String> {
+    if let Some(version) = simulated {
+        return Err(format!(
+            "the offer of {version} came from {SIMULATED_UPDATE}: there is no release to \
+             install. Nothing was downloaded and the app is not restarting. Use the local \
+             endpoint recipe to exercise a real download."
+        ));
+    }
+    admits_install(executable)?;
+    let slot = slot.ok_or("there is no update to install")?;
+    // Already installing. The download is not started twice, and the request
+    // that is running owns what came out of the slot.
+    claim(slot).ok_or_else(|| "that update is already being installed".to_string())
+}
+
+pub fn install_and_restart(app: &AppHandle) {
+    // Only the outside things are gathered here; what they mean is
+    // `begin_install`, which is where the order and every refusal are tested.
+    #[cfg(debug_assertions)]
+    let simulated = app
+        .try_state::<SimulatedUpdate>()
+        .map(|state| state.0.clone());
+    #[cfg(not(debug_assertions))]
+    let simulated: Option<String> = None;
+
+    let pending = app.try_state::<PendingUpdate>();
+    let update = match begin_install(
+        simulated,
+        std::env::current_exe(),
+        pending.as_ref().map(|state| &state.0),
+    ) {
+        Ok(update) => update,
+        Err(reason) => {
+            eprintln!("[nessa] not installing: {reason}");
+            return;
+        }
+    };
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // What goes back in the slot on failure is the release this click took
+        // out of it, so a retry installs what was found rather than something
+        // looked up again.
+        let restarter = RestartsTheApp(app.clone());
+        let retained = app.clone();
+        let for_retry = update.clone();
+        let update = PluginInstall(update);
+        carry_out(&update, &restarter, || retain(&retained, for_retry)).await;
+    });
+}
+
+/// The real installer: the plugin's own download-and-install.
+///
+/// Progress is not reported yet — the tray item has nowhere to put it — so the
+/// callbacks are empty rather than absent, which is what the plugin takes.
+struct PluginInstall(Update);
+
+impl Installer for &PluginInstall {
+    fn install(&self) -> impl Future<Output = Result<(), String>> + Send {
+        let update = self.0.clone();
+        async move {
+            update
+                .download_and_install(|_, _| {}, || {})
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }
+}
+
+/// The real restart. macOS and Linux install in place and leave the old binary
+/// running, so this is what picks up the new one; Windows hands over to an
+/// installer that ends this process itself and never reaches here.
+struct RestartsTheApp(AppHandle);
+
+impl Restarter for RestartsTheApp {
+    fn restart(&self) {
+        self.0.restart();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    /// A release endpoint that has already made up its mind.
+    ///
+    /// Answers with whatever the test handed it, which is the point: "the
+    /// machine is offline" and "the manifest did not verify" are one line here
+    /// and a published release or an unplugged cable otherwise.
+    struct FakeReleases(Checked);
+
+    impl ReleaseSource for FakeReleases {
+        fn check(&self) -> impl Future<Output = Checked> + Send {
+            let checked = self.0.clone();
+            async move { checked }
+        }
+    }
+
+    /// A tray that writes down what it was asked to do instead of doing it.
+    ///
+    /// It also answers [`CheckOutcome::offering`] from what it has already been
+    /// asked to offer, exactly as the real one answers from the update a check
+    /// retained — so a second check meets the state the first one left.
+    #[derive(Default)]
+    struct RecordedOutcome {
+        offered: Mutex<Vec<String>>,
+        failures: Mutex<Vec<String>>,
+    }
+
+    impl RecordedOutcome {
+        fn offered(&self) -> Vec<String> {
+            self.offered.lock().expect("offers").clone()
+        }
+
+        fn failures(&self) -> Vec<String> {
+            self.failures.lock().expect("failures").clone()
+        }
+    }
+
+    impl CheckOutcome for RecordedOutcome {
+        fn offering(&self) -> Offering {
+            match self.offered.lock().expect("offers").is_empty() {
+                true => Offering::Nothing,
+                false => Offering::AnUpdate,
+            }
+        }
+
+        fn offer_update(&self, version: &str) {
+            self.offered
+                .lock()
+                .expect("offers")
+                .push(version.to_string());
+        }
+
+        fn report_failure(&self, reason: &str) {
+            self.failures
+                .lock()
+                .expect("failures")
+                .push(reason.to_string());
+        }
+    }
+
+    /// An installer that has already decided, and counts how often it was asked.
+    struct FakeInstall {
+        outcome: Result<(), String>,
+        attempts: Cell<usize>,
+    }
+
+    impl FakeInstall {
+        fn that(outcome: Result<(), String>) -> Self {
+            Self {
+                outcome,
+                attempts: Cell::new(0),
+            }
+        }
+    }
+
+    impl Installer for &FakeInstall {
+        fn install(&self) -> impl Future<Output = Result<(), String>> + Send {
+            self.attempts.set(self.attempts.get() + 1);
+            let outcome = self.outcome.clone();
+            async move { outcome }
+        }
+    }
+
+    /// A restart that counts instead of ending the process.
+    #[derive(Default)]
+    struct CountedRestarts(Cell<usize>);
+
+    impl Restarter for CountedRestarts {
+        fn restart(&self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    /// One install, carried out. Answers what happened without a release, a
+    /// network, or a process that ends.
+    fn install(outcome: Result<(), String>) -> (usize, usize, bool) {
+        let installer = FakeInstall::that(outcome);
+        let restarter = CountedRestarts::default();
+        let kept = Cell::new(false);
+        tauri::async_runtime::block_on(carry_out(&installer, &restarter, || kept.set(true)));
+        (installer.attempts.get(), restarter.0.get(), kept.get())
+    }
+
+    #[test]
+    fn a_finished_install_comes_back_up_once_and_keeps_nothing() {
+        let (attempts, restarts, kept) = install(Ok(()));
+
+        assert_eq!(attempts, 1);
+        assert_eq!(restarts, 1, "the new version is what runs after this");
+        assert!(!kept, "there is nothing left to retry");
+    }
+
+    #[test]
+    fn a_failed_install_does_not_restart_and_leaves_the_update_to_retry() {
+        // The version on disk is the one still running: restarting would come
+        // back up on a half-written install, and dropping the update would take
+        // the offer away with it.
+        let (attempts, restarts, kept) = install(Err("signature did not verify".to_string()));
+
+        assert_eq!(attempts, 1);
+        assert_eq!(restarts, 0);
+        assert!(kept, "the click that failed can be made again");
+    }
+
+    /// The slot is what makes a second click a no-op, so it is asserted on the
+    /// same `Mutex<Option<_>>` the host keeps the update in — with a stand-in
+    /// for the release, which a test cannot fabricate.
+    #[test]
+    fn a_second_click_while_installing_starts_nothing() {
+        let pending = Mutex::new(Some("the release"));
+
+        let first = pending.lock().unwrap().take();
+        let second = pending.lock().unwrap().take();
+
+        assert_eq!(first, Some("the release"));
+        assert_eq!(second, None, "the download is not started twice");
+    }
+
+    /// And a failure puts it back, so the next click finds it.
+    #[test]
+    fn a_retry_after_a_failure_finds_the_same_release() {
+        let pending = Mutex::new(Some("the release"));
+
+        let taken = pending.lock().unwrap().take();
+        *pending.lock().unwrap() = taken;
+
+        assert_eq!(pending.lock().unwrap().take(), Some("the release"));
+    }
+
+    fn check(found: Checked) -> RecordedOutcome {
+        let outcome = RecordedOutcome::default();
+        tauri::async_runtime::block_on(run_check(&FakeReleases(found), &outcome));
+        outcome
+    }
+
+    #[test]
+    fn a_newer_release_is_offered_by_version() {
+        assert_eq!(
+            offer(
+                &Checked::Newer {
+                    version: "0.2.0".to_string()
+                },
+                Offering::Nothing
+            ),
+            Offer::Install {
+                version: "0.2.0".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn the_latest_build_says_nothing() {
+        assert_eq!(offer(&Checked::Current, Offering::Nothing), Offer::Nothing);
+    }
+
+    #[test]
+    fn a_check_that_did_not_complete_says_nothing() {
+        // The offline case. A failed check is not an error to report on
+        // screen — the tray must look identical to a check that found nothing.
+        assert_eq!(
+            offer(
+                &Checked::Failed(
+                    "error sending request for url (https://github.com/...)".to_string()
+                ),
+                Offering::Nothing
+            ),
+            Offer::Nothing
+        );
+        assert_eq!(
+            offer(
+                &Checked::Failed("Updater does not have any endpoints set.".to_string()),
+                Offering::Nothing
+            ),
+            Offer::Nothing
+        );
+    }
+
+    /// The install the plugin would perform is "replace the directory this
+    /// executable is in", so where it is in decides whether that is an
+    /// application or somebody's build tree.
+    #[test]
+    fn a_build_directory_is_never_something_to_install_over() {
+        // The exact path `just dev` runs, and what the plugin would have taken
+        // as its destination: `target/debug`, renamed away and deleted.
+        //
+        // Written with this platform's separators. A Windows literal here read
+        // as one component everywhere else — no `target` in it — so off Windows
+        // this asserted nothing about cargo layouts, and on Linux it asserted
+        // the opposite of what it says. `check-desktop.mjs` skips these tests on
+        // Linux, so nothing would have said so.
+        for loose in [
+            ["/Users/dev/nessa-agent", "target", "debug", "nessa-app"],
+            ["/Users/dev/nessa-agent", "target", "release", "nessa-app"],
+        ] {
+            let path: PathBuf = loose.iter().collect();
+            assert_eq!(
+                replaceable(&path),
+                Replaceable::Loose,
+                "{} would have been installed over",
+                path.display(),
+            );
+        }
+    }
+
+    /// The same layout as Windows spells it, where the separators are real.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_build_directory_is_never_something_to_install_over() {
+        let path = Path::new(r"C:\dev\nessa-agent\target\debug\nessa-app.exe");
+
+        assert_eq!(replaceable(path), Replaceable::Loose);
+    }
+
+    /// A held release, as the host keeps one.
+    fn holding(release: &'static str) -> Mutex<Option<&'static str>> {
+        Mutex::new(Some(release))
+    }
+
+    /// An installed application, where an install is allowed to proceed.
+    fn installed() -> std::io::Result<PathBuf> {
+        Ok(PathBuf::from(
+            "/Applications/Nessa.app/Contents/MacOS/nessa-app",
+        ))
+    }
+
+    /// The whole admission sequence, on the one platform whose bundle rule it
+    /// asks about.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_install_from_an_installed_app_takes_the_release_once() {
+        let slot = holding("the release");
+
+        assert_eq!(
+            begin_install(None, installed(), Some(&slot)),
+            Ok("the release")
+        );
+        // The second request finds nothing, which is what stops two downloads.
+        assert!(begin_install(None, installed(), Some(&slot)).is_err());
+    }
+
+    /// And the order: every refusal happens *before* the release leaves the
+    /// slot, so a refused request leaves something for the next one to retry.
+    /// Claiming first and refusing after would drop the release on the floor.
+    #[test]
+    fn a_refused_install_leaves_the_release_where_it_was() {
+        let build_tree: PathBuf = ["/Users/dev/nessa-agent", "target", "debug", "nessa-app"]
+            .iter()
+            .collect();
+
+        for (simulated, executable) in [
+            (Some("9.9.9".to_string()), installed()),
+            (None, Ok(build_tree)),
+            (
+                None,
+                Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            ),
+        ] {
+            let slot = holding("the release");
+
+            assert!(begin_install(simulated, executable, Some(&slot)).is_err());
+            assert_eq!(
+                claim(&slot),
+                Some("the release"),
+                "a refusal took the release out of the slot and dropped it",
+            );
+        }
+    }
+
+    /// A simulated offer is refused before anything else is even looked at:
+    /// there is no release behind it to take.
+    #[test]
+    fn a_simulated_offer_is_refused_and_says_where_it_came_from() {
+        let slot = holding("the release");
+
+        let refused = begin_install(Some("9.9.9".to_string()), installed(), Some(&slot))
+            .expect_err("a simulated offer has nothing to install");
+
+        assert!(refused.contains(SIMULATED_UPDATE), "{refused}");
+        assert!(refused.contains("9.9.9"), "{refused}");
+    }
+
+    /// Nothing was ever found, so there is no slot at all.
+    #[test]
+    fn an_install_with_nothing_found_says_so() {
+        let refused = begin_install(None, installed(), None::<&Mutex<Option<&str>>>)
+            .expect_err("there is nothing to install");
+
+        assert!(refused.contains("no update to install"), "{refused}");
+    }
+
+    /// Every way the install can be turned away before anything is taken out of
+    /// the slot, including the one a machine cannot be arranged to produce.
+    #[test]
+    fn an_install_is_admitted_only_from_somewhere_it_may_replace() {
+        let installed = PathBuf::from("/Applications/Nessa.app/Contents/MacOS/nessa-app");
+        let build_tree: PathBuf = ["/Users/dev/nessa-agent", "target", "debug", "nessa-app"]
+            .iter()
+            .collect();
+
+        // Only meaningful where an installed application is what a bundle is.
+        if cfg!(target_os = "macos") {
+            assert_eq!(admits_install(Ok(installed)), Ok(()));
+        }
+
+        let refused = admits_install(Ok(build_tree)).expect_err("a build tree is refused");
+        assert!(refused.contains("not an installed one"), "{refused}");
+        assert!(refused.contains("nothing was downloaded"), "{refused}");
+
+        // The operating system declining to answer is its own refusal, and says
+        // something different: there is nothing here to correct.
+        let unknown = admits_install(Err(std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied,
+        )))
+        .expect_err("an unanswerable question is refused");
+        assert!(unknown.contains("cannot tell what is running"), "{unknown}");
+        assert!(!unknown.contains("not an installed one"), "{unknown}");
+    }
+
+    /// And an installed application still installs, or the guard has taken the
+    /// feature away rather than made it safe.
+    #[test]
+    fn an_installed_application_is_still_installable() {
+        let installed = Path::new("/Applications/Nessa.app/Contents/MacOS/nessa-app");
+
+        assert_eq!(replaceable(installed), Replaceable::Bundle);
+    }
+
+    /// `target` on its own is a directory name like any other; it is `target`
+    /// followed by a profile that means cargo.
+    #[test]
+    fn a_directory_merely_called_target_is_not_a_build_tree() {
+        assert!(!under_cargo_target(Path::new("/Applications/target/Nessa")));
+        assert!(!under_cargo_target(Path::new("/Users/dev/target")));
+        assert!(under_cargo_target(Path::new("/Users/dev/target/debug/app")));
+    }
+
+    #[test]
+    fn a_found_release_reaches_the_tray_once() {
+        let outcome = check(Checked::Newer {
+            version: "0.3.1".to_string(),
+        });
+
+        assert_eq!(outcome.offered(), vec!["0.3.1".to_string()]);
+        assert!(outcome.failures().is_empty());
+    }
+
+    #[test]
+    fn a_current_build_leaves_the_tray_alone() {
+        let outcome = check(Checked::Current);
+
+        assert!(outcome.offered().is_empty());
+        assert!(outcome.failures().is_empty());
+    }
+
+    #[test]
+    fn a_refused_check_offers_nothing_and_is_still_reported() {
+        // Silent on screen, not silent in the diagnostics: an endpoint that is
+        // never reachable would otherwise look exactly like being up to date.
+        let outcome = check(Checked::Failed("connection refused".to_string()));
+
+        assert!(outcome.offered().is_empty());
+        assert_eq!(outcome.failures(), vec!["connection refused".to_string()]);
+    }
+
+    /// The rule for `NESSA_FAKE_UPDATE`, in the build that is allowed to have
+    /// one. There is no release counterpart to these: in a release build
+    /// [`simulated`] and `SimulatedReleases` are not compiled at all, so a test
+    /// calling them there would not compile either — `cargo clippy -p nessa-app
+    /// --all-targets --release -- -D warnings` is what proves the release arm
+    /// builds clean without them, and a release binary has nothing to consult.
+    #[cfg(debug_assertions)]
+    mod simulation {
+        use super::*;
+
+        #[test]
+        fn a_version_is_announced_without_asking_the_endpoint() {
+            assert_eq!(
+                simulated(Some("9.9.9")),
+                Simulated::Announce("9.9.9".to_string())
+            );
+            // Shells and `.env` files hand over the surrounding spaces too.
+            assert_eq!(
+                simulated(Some("  0.2.0  ")),
+                Simulated::Announce("0.2.0".to_string())
+            );
+        }
+
+        #[test]
+        fn an_unset_or_empty_variable_is_an_ordinary_run() {
+            assert_eq!(simulated(None), Simulated::Off);
+            assert_eq!(simulated(Some("")), Simulated::Off);
+            assert_eq!(simulated(Some("   ")), Simulated::Off);
+        }
+
+        #[test]
+        fn a_value_that_is_not_a_version_falls_through_to_the_real_source() {
+            // Reported rather than obeyed: the value becomes the tray item's
+            // own text, and an item reading "Update to banana" claims something
+            // no real check could ever have found.
+            for garbage in ["banana", "9.9", "9.9.9.9", "v9.9.9", "9.9.x", "9..9"] {
+                assert_eq!(
+                    simulated(Some(garbage)),
+                    Simulated::Ignored(garbage.to_string()),
+                    "{garbage} should not be announced as a version"
+                );
+            }
+        }
+
+        #[test]
+        fn an_announced_version_drives_the_same_offer_the_real_source_would() {
+            // The simulation's whole claim is that it reaches the tray by the
+            // ordinary path, so the decision is checked with the announced
+            // version rather than trusted.
+            let Simulated::Announce(version) = simulated(Some("9.9.9")) else {
+                panic!("9.9.9 is a version");
+            };
+            let outcome = check(Checked::Newer {
+                version: version.clone(),
+            });
+
+            assert_eq!(outcome.offered(), vec![version]);
+            assert!(outcome.failures().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_second_check_does_not_stack_a_second_item() {
+        let outcome = RecordedOutcome::default();
+        let found = FakeReleases(Checked::Newer {
+            version: "0.3.1".to_string(),
+        });
+
+        tauri::async_runtime::block_on(async {
+            run_check(&found, &outcome).await;
+            run_check(&found, &outcome).await;
+        });
+
+        assert_eq!(outcome.offered(), vec!["0.3.1".to_string()]);
+    }
+}
