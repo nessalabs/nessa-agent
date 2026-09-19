@@ -54,7 +54,7 @@ async fn browser_upgrade(
 ) -> Response {
     let session = match (&state.browser_sessions, browser::cookie(&headers)) {
         (Some(store), Some(id)) => match tokio::time::timeout(
-            state.settings.handshake_timeout,
+            state.settings.handshake_timeout(),
             crate::browser_session::application::ReadBrowserSession {
                 store: store.as_ref(),
             }
