@@ -54,11 +54,18 @@ export function useUpdate(): PanelUpdate {
   // gesture as far as the download is concerned.
   const [selected, setSelected] = React.useState(false)
 
-  // Whether the host's events can reach this panel yet. Nothing that depends
-  // on hearing back is offered before they can: an install refused straight
-  // away would otherwise be refused into a void, leaving a tab that says it is
-  // downloading with nothing left to tell it otherwise.
-  const [listening, setListening] = React.useState(false)
+  /**
+   * Whether the host's events can reach this panel.
+   *
+   * Three states and not a flag, because the third is real and differs from the
+   * first: `attaching` is a moment that ends, and `failed` is a launch that
+   * will never hear from the host again — the effect runs once. A click while
+   * attaching can wait; a click after failure has nothing to wait for, and
+   * queuing it left a tab saying it was downloading for ever.
+   */
+  const [listening, setListening] = React.useState<"attaching" | "ready" | "failed">(
+    "attaching",
+  )
 
   /**
    * Asking the host to install, and hearing about it going wrong.
@@ -79,6 +86,10 @@ export function useUpdate(): PanelUpdate {
   // not sent: held until the listeners are attached, so its refusal has
   // somewhere to arrive.
   const waiting = React.useRef(false)
+  // Whether the listeners ever attached, which is what tells a failed snapshot
+  // apart from a failed attachment. A ref because `failed` may run before the
+  // state it would otherwise read has been committed.
+  const attached = React.useRef(false)
 
   React.useEffect(
     () =>
@@ -111,13 +122,19 @@ export function useUpdate(): PanelUpdate {
           if (live() && release) report({ kind: "announced", release })
         },
         ready: () => {
-          setListening(true)
+          attached.current = true
+          setListening("ready")
           if (!waiting.current) return
           waiting.current = false
           start()
         },
         failed: (reason) => {
           console.error("[nessa] the panel cannot hear the host about updates", reason)
+          // Only attaching decides this. A failed snapshot leaves the listeners
+          // attached and working, so the panel can still hear an update
+          // announced from here on and an install can still be refused to it.
+          if (attached.current) return
+          setListening("failed")
           // An install that was waiting for listeners that will never attach
           // has to be told, or the tab waits with it.
           if (!waiting.current) return
@@ -142,10 +159,17 @@ export function useUpdate(): PanelUpdate {
       // failure listener is attached can be refused with nobody to hear it,
       // leaving a tab that says it is downloading and nothing to correct it.
       // The announcement can arrive through one listener while another is
-      // still pending, so this is reachable. The click is held rather than
-      // dropped: `ready` starts it a moment later.
-      if (!listening) {
+      // still pending, so this is reachable.
+      if (listening === "attaching") {
+        // Held, not dropped: `ready` starts it a moment later.
         waiting.current = true
+        return
+      }
+      if (listening === "failed") {
+        // Nothing to wait for. The effect runs once, so no later attachment is
+        // coming, and a retry queued behind one would wait for ever — which is
+        // the tab saying it is downloading with no way out. Said now instead.
+        report({ kind: "failed" })
         return
       }
       start()
