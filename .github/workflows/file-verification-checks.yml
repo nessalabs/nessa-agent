@@ -1,0 +1,200 @@
+name: Pinned repository verification checks
+on:
+  push:
+    branches: [audit/file-verification-4c39449]
+    paths: [.github/workflows/file-verification-checks.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 4c3944962a24721f305d0d66b34df6f024970cf4
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check unmodified backend and collect every command outcome
+        shell: python
+        run: |
+          import json, os, pathlib, subprocess, time
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'backend-evidence'
+          root.mkdir()
+          commands = [
+              ['rustc', '--version'], ['cargo', '--version'],
+              ['cargo', 'fmt', '--all', '--', '--check'],
+              ['node', 'scripts/check-architecture.mjs'],
+              ['cargo', 'test', '--locked', '-p', 'nessa-local-storage', '-p', 'nessa-auth', '-p', 'nessa-server', '-p', 'nessa-sdk', '-p', 'nessa-mcp'],
+              ['cargo', 'clippy', '--locked', '-p', 'nessa-local-storage', '-p', 'nessa-auth', '-p', 'nessa-server', '-p', 'nessa-sdk', '-p', 'nessa-mcp', '--all-targets', '--', '-D', 'warnings'],
+              ['node', 'scripts/check-sdk-docs.mjs'],
+          ]
+          results = []
+          for index, command in enumerate(commands):
+              print('RUN:', command, flush=True)
+              started = time.monotonic()
+              with (root / f'{index:02d}.log').open('w') as log:
+                  try:
+                      result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=1000)
+                      status = result.returncode
+                  except subprocess.TimeoutExpired:
+                      status = 'timeout'
+              results.append({'command': command, 'exit_code': status, 'seconds': round(time.monotonic()-started, 2)})
+              (root / 'results.json').write_text(json.dumps(results, indent=2))
+              print('RESULT:', status, flush=True)
+          if any(result['exit_code'] != 0 for result in results):
+              raise SystemExit(1)
+      - name: Test the abandoned-login expiry boundary with real storage code
+        if: always()
+        shell: python
+        run: |
+          import json, os, pathlib, subprocess
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'backend-evidence'
+          root.mkdir(exist_ok=True)
+          path = pathlib.Path('crates/nessa-server/tests/browser_session/persistence.rs')
+          with path.open('a') as source:
+              source.write('''
+          #[tokio::test]
+          async fn audit_expired_prior_does_not_prevent_abandoned_login_removal() {
+              let dir = tempfile::tempdir().unwrap();
+              let path = dir.path().join("audit-expired-prior.jsonl");
+              let store = PersistentSessions::open(&path).unwrap();
+              let prior_id = "a".repeat(64);
+              let new_id = "b".repeat(64);
+              store.insert(prior_id.clone(), session(None).await, None, 100).await.unwrap();
+              let before_expiry = 100 + IDLE_SECONDS - 1;
+              let replacement = BrowserSession::new(credential_id(), "https://127.0.0.1:1443".into(), before_expiry).unwrap();
+              let prior = store.insert(new_id.clone(), replacement, Some(prior_id.clone()), before_expiry).await.unwrap();
+              let outcome = store.abandon_login(new_id.clone(), prior, before_expiry + 1).await;
+              assert_eq!(outcome, Ok(()), "expired prior must not prevent reclaiming undisclosed new login");
+              assert!(store.get(new_id.clone()).await.unwrap().is_none());
+              assert!(store.get(prior_id.clone()).await.unwrap().is_none());
+              drop(store);
+              let reopened = PersistentSessions::open(&path).unwrap();
+              assert!(reopened.get(new_id).await.unwrap().is_none());
+              assert!(reopened.get(prior_id).await.unwrap().is_none());
+          }
+          ''')
+          patch = subprocess.check_output(['git', 'diff', '--', str(path)])
+          (root / 'abandoned-login-probe.patch').write_bytes(patch)
+          command = ['cargo', 'test', '--locked', '-p', 'nessa-server', 'audit_expired_prior_does_not_prevent_abandoned_login_removal', '--', '--nocapture']
+          with (root / 'abandoned-login-probe.log').open('w') as log:
+              try:
+                  result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=1000)
+                  status = result.returncode
+              except subprocess.TimeoutExpired:
+                  status = 'timeout'
+          (root / 'abandoned-login-probe.json').write_text(json.dumps({'command': command, 'exit_code': status, 'assertion': 'correct behavior', 'note': 'A compilation failure is NOT a reproduced assertion failure.'}, indent=2))
+          print('Expiry-boundary probe exit:', status)
+          if status != 0:
+              raise SystemExit(1)
+      - name: Preserve backend evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nessa-backend-verification-4c39449
+          path: ${{ runner.temp }}/backend-evidence/
+          if-no-files-found: error
+          retention-days: 7
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 4c3944962a24721f305d0d66b34df6f024970cf4
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: dtolnay/rust-toolchain@stable
+      - run: corepack enable
+      - name: Check source-linked frontend and all tracked Node test files
+        shell: python
+        run: |
+          import json, os, pathlib, subprocess, time
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'frontend-evidence'
+          root.mkdir()
+          node_tests = sorted(str(p) for p in pathlib.Path('scripts').rglob('*.test.mjs'))
+          commands = [
+              ['node', '--version'], ['pnpm', '--version'],
+              ['pnpm', 'install', '--frozen-lockfile'],
+              ['pnpm', 'frontend:check'],
+              ['node', '--test', *node_tests],
+          ]
+          results = []
+          for index, command in enumerate(commands):
+              print('RUN:', command, flush=True)
+              started = time.monotonic()
+              with (root / f'{index:02d}.log').open('w') as log:
+                  try:
+                      result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=1000)
+                      status = result.returncode
+                  except subprocess.TimeoutExpired:
+                      status = 'timeout'
+              results.append({'command': command, 'exit_code': status, 'seconds': round(time.monotonic()-started, 2)})
+              (root / 'results.json').write_text(json.dumps(results, indent=2))
+              print('RESULT:', status, flush=True)
+          if any(result['exit_code'] != 0 for result in results):
+              raise SystemExit(1)
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nessa-frontend-verification-4c39449
+          path: ${{ runner.temp }}/frontend-evidence/
+          if-no-files-found: error
+          retention-days: 7
+  linux-native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 4c3944962a24721f305d0d66b34df6f024970cf4
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - name: Install the native dependencies documented in justfile
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf fakeroot xvfb
+      - name: Exercise Linux desktop code instead of taking the scripted skip
+        shell: python
+        run: |
+          import json, os, pathlib, subprocess, time
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'linux-native-evidence'
+          root.mkdir()
+          commands = [
+              ['pkg-config', '--modversion', 'webkit2gtk-4.1', 'gtk+-3.0'],
+              ['cargo', 'clippy', '--locked', '-p', 'nessa-app', '--all-targets', '--', '-D', 'warnings'],
+              ['xvfb-run', '-a', 'cargo', 'test', '--locked', '-p', 'nessa-app'],
+          ]
+          results = []
+          for index, command in enumerate(commands):
+              print('RUN:', command, flush=True)
+              started = time.monotonic()
+              with (root / f'{index:02d}.log').open('w') as log:
+                  try:
+                      result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=1000)
+                      status = result.returncode
+                  except subprocess.TimeoutExpired:
+                      status = 'timeout'
+              results.append({'command': command, 'exit_code': status, 'seconds': round(time.monotonic()-started, 2)})
+              (root / 'results.json').write_text(json.dumps(results, indent=2))
+              print('RESULT:', status, flush=True)
+          if any(result['exit_code'] != 0 for result in results):
+              raise SystemExit(1)
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nessa-linux-native-verification-4c39449
+          path: ${{ runner.temp }}/linux-native-evidence/
+          if-no-files-found: warn
+          retention-days: 7
