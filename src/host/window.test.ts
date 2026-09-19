@@ -122,11 +122,16 @@ describe("handing setup over to the panel", () => {
   it("hands the host the one fact it does not have, and carries on", async () => {
     const { finishSetupWindow } = await import("./window")
     invoke.mockResolvedValue(landed)
-    await expect(finishSetupWindow(true)).resolves.toEqual({ outcome: "handed-over" })
+    await expect(finishSetupWindow(true, "codex")).resolves.toEqual({
+      outcome: "handed-over",
+    })
     // One call, not three. Showing the panel, writing setup off and closing this
     // window are ordered on the host, in the process that outlives this window.
     expect(invoke).toHaveBeenCalledTimes(1)
-    expect(invoke).toHaveBeenCalledWith("finish_setup", { completed: true })
+    expect(invoke).toHaveBeenCalledWith("finish_setup", {
+      completed: true,
+      agent: "codex",
+    })
     // Nothing closes the window from here any more.
     expect(close).not.toHaveBeenCalled()
   })
@@ -135,8 +140,29 @@ describe("handing setup over to the panel", () => {
     const { finishSetupWindow } = await import("./window")
     invoke.mockResolvedValue(landed)
     await expect(finishSetupWindow(false)).resolves.toEqual({ outcome: "handed-over" })
-    // Leaving stays free to change its mind: the host records nothing for it.
-    expect(invoke).toHaveBeenCalledWith("finish_setup", { completed: false })
+    // Leaving stays free to change its mind: the host records nothing for it,
+    // and there is no choice to carry.
+    expect(invoke).toHaveBeenCalledWith("finish_setup", {
+      completed: false,
+      agent: null,
+    })
+  })
+
+  it("reads back the agent setup chose, and settles for the default without one", async () => {
+    const { loadChosenAgent } = await import("./window")
+    invoke.mockResolvedValue("codex")
+    await expect(loadChosenAgent()).resolves.toBe("codex")
+    expect(invoke).toHaveBeenCalledWith("chosen_agent")
+    invoke.mockResolvedValue(null)
+    await expect(loadChosenAgent()).resolves.toBeUndefined()
+  })
+
+  it("does not take the panel down over an unreadable choice", async () => {
+    // The conversation starts on the gateway's own default instead, which is a
+    // worse answer and not a broken panel.
+    const { loadChosenAgent } = await import("./window")
+    invoke.mockRejectedValue(new Error("no settings file"))
+    await expect(loadChosenAgent()).resolves.toBeUndefined()
   })
 
   it("says the panel did not come up rather than closing over nothing", async () => {

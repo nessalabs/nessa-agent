@@ -1,10 +1,18 @@
 //! Credential-free restoration identity for exact context-selecting launch inputs.
+//!
+//! Every ACP profile launches a process the same way, so the inputs that select
+//! a restorable context are the same inputs for all of them. The provider name
+//! is not hashed here: [`ProviderIdentity`] already carries it beside this
+//! fingerprint, so two profiles with byte-identical configuration still hold
+//! distinct identities.
+//!
+//! [`ProviderIdentity`]: crate::application::agent_execution::providers::ProviderIdentity
+use super::AcpConfig;
 use crate::domain::agent_execution::{
     permissions::{PermissionEffect, PermissionScopeView},
     prompts::SystemPrompt,
 };
 use crate::domain::common::value_objects::TokenLimits;
-use crate::infrastructure::acp::sessions::AcpConfig;
 use sha2::{Digest, Sha256};
 
 // Length prefixes and explicit collection lengths keep ordered fields unambiguous.
@@ -13,7 +21,7 @@ fn field(hash: &mut Sha256, bytes: &[u8]) {
     hash.update(bytes);
 }
 
-pub(super) fn fingerprint(
+pub(crate) fn fingerprint(
     config: &AcpConfig,
     limits: TokenLimits,
     prompt: Option<&SystemPrompt>,

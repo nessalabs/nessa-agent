@@ -33,17 +33,22 @@ pub struct Settings {
 
 /// What first-run setup has settled.
 ///
-/// Only whether it finished: that is the one fact a launch acts on. The agent
-/// setup chose is deliberately not kept here — nothing on either side of the
-/// boundary reads it back yet, and a written key nobody reads is a promise the
-/// build cannot keep. It becomes another field on this struct on the day
-/// something honours it.
+/// Two facts, and both are read back. Setup runs in a window of its own that is
+/// gone before the panel needs either, so what it decided is kept here rather
+/// than handed over.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Onboarding {
     /// Whether first-run setup has been completed. A launch with this true
     /// opens straight into the panel instead of the setup window.
     pub completed: bool,
+    /// The agent setup chose, by the name the gateway knows it by. Absent where
+    /// nobody has chosen one, and a conversation then starts on whichever agent
+    /// the gateway is configured to default to — never on a guess made here.
+    /// Kept as written rather than parsed: which agents exist is the gateway's
+    /// to say, and a desktop that validated the name would have to be rebuilt
+    /// to learn a new one.
+    pub agent: Option<String>,
 }
 
 /// The panel's geometry, in logical pixels. It opens in the lower right of the
@@ -280,6 +285,40 @@ mod tests {
         // A settings file written before first-run setup was persisted has no
         // such key, and says the same thing a first launch does: not done.
         assert!(!settings.onboarding.completed);
+        // Nor does it name an agent, which is why the gateway's own default is
+        // what a conversation starts on rather than a guess made here.
+        assert_eq!(settings.onboarding.agent, None);
+    }
+
+    #[test]
+    fn the_agent_setup_chose_survives_a_reload() {
+        // Setup runs in a window that is gone by the time the panel asks, so
+        // this is the whole of how the choice reaches it.
+        let path = PathBuf::from("settings.json");
+        let store = FakeStorage::default();
+        let mut settings = load_from(&path, &store);
+        settings.onboarding = Onboarding {
+            completed: true,
+            agent: Some("codex".into()),
+        };
+        write(&path, &settings, &store).unwrap();
+
+        assert_eq!(
+            load_from(&path, &store).onboarding.agent.as_deref(),
+            Some("codex")
+        );
+        let written = store.files.lock().unwrap().get(&path).unwrap().clone();
+        let raw = String::from_utf8(written).unwrap();
+        assert!(raw.contains(r#""agent": "codex""#), "{raw}");
+    }
+
+    #[test]
+    fn an_agent_name_this_build_does_not_know_is_kept_as_written() {
+        // Which agents exist is the gateway's to say. A desktop that rejected
+        // an unfamiliar name would have to be rebuilt to learn a new one, and
+        // would meanwhile throw away a choice somebody actually made.
+        let settings = parse(r#"{ "onboarding": { "agent": "gemini" } }"#).unwrap();
+        assert_eq!(settings.onboarding.agent.as_deref(), Some("gemini"));
     }
 
     #[test]

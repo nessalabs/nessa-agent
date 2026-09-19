@@ -1,4 +1,5 @@
 //! Durable ownership must preserve the original caller and reject corrupt metadata.
+use crate::agents::domain::AgentId;
 use crate::conversation::{
     application::{ConversationError, ConversationRepository},
     domain::{Conversation, ConversationId},
@@ -21,6 +22,7 @@ async fn ownership_is_create_once_and_corrupt_records_fail_closed() {
         "panel".into(),
         "create-original".into(),
         123,
+        AgentId::Claude,
     )
     .unwrap();
     let created = repository.create(original.clone()).await.unwrap();
@@ -36,6 +38,7 @@ async fn ownership_is_create_once_and_corrupt_records_fail_closed() {
         "other".into(),
         "overwrite".into(),
         456,
+        AgentId::Claude,
     )
     .unwrap();
     let existing = repository.create(impostor).await.unwrap();
@@ -71,6 +74,7 @@ async fn interrupted_creation_never_publishes_a_partial_record_or_poisons_its_id
         "panel".into(),
         "create-original".into(),
         123,
+        AgentId::Claude,
     )
     .unwrap();
 
@@ -110,4 +114,75 @@ async fn interrupted_creation_never_publishes_a_partial_record_or_poisons_its_id
     assert!(!leftover.exists());
     assert_eq!(repository.load(&id).await.unwrap(), Some(owner));
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn a_record_carries_the_agent_it_was_created_on() {
+    let root = std::env::temp_dir().join(format!("nessa-conversation-agent-{}", Uuid::new_v4()));
+    let repository = LocalConversationRepository::new(root.clone()).unwrap();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let record = Conversation::new(
+        id.clone(),
+        OrganizationId::new("org").unwrap(),
+        PrincipalId::new("alice").unwrap(),
+        "panel".into(),
+        "create".into(),
+        123,
+        AgentId::Codex,
+    )
+    .unwrap();
+    repository.create(record.clone()).await.unwrap();
+    drop(repository);
+    let repository = LocalConversationRepository::new(root.clone()).unwrap();
+    assert_eq!(repository.load(&id).await.unwrap(), Some(record));
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[tokio::test]
+async fn a_record_that_does_not_name_its_agent_is_unreadable_rather_than_assumed() {
+    // Records published while Claude was the only agent this server could start
+    // name no agent at all. Reading them as Claude's would be a reader for data
+    // written by an older build, which this repository forbids outright without
+    // an explicit decision to support compatibility. So it is refused, and the
+    // error names the field rather than guessing which agent wrote it.
+    let root = std::env::temp_dir().join(format!("nessa-conversation-legacy-{}", Uuid::new_v4()));
+    let repository = LocalConversationRepository::new(root.clone()).unwrap();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let mut file = storage::open(&root.join(format!("{id}.json")), OpenMode::CreateNew).unwrap();
+    file.write_all(
+        format!(
+            r#"{{"id":"{id}","organization":"org","owner":"alice","creator_surface":"panel","creation_action":"create","creation_requested_at_ms":123}}"#
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    drop(file);
+    assert!(matches!(
+        repository.load(&id).await,
+        Err(ConversationError::Metadata)
+    ));
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[tokio::test]
+async fn a_record_naming_an_agent_this_build_cannot_start_is_not_opened_on_another() {
+    let root = std::env::temp_dir().join(format!("nessa-conversation-unknown-{}", Uuid::new_v4()));
+    let repository = LocalConversationRepository::new(root.clone()).unwrap();
+    let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let mut file = storage::open(&root.join(format!("{id}.json")), OpenMode::CreateNew).unwrap();
+    file.write_all(
+        format!(
+            r#"{{"id":"{id}","organization":"org","owner":"alice","creator_surface":"panel","creation_action":"create","creation_requested_at_ms":123,"agent":"gemini"}}"#
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    drop(file);
+    // Its own failure, and never "storage is unavailable": the record was read
+    // without trouble and a retry cannot change the answer, so a caller told
+    // storage was down would go on asking a question this build cannot answer.
+    let failure = repository.load(&id).await;
+    assert!(matches!(failure, Err(ConversationError::AgentUnsupported)));
+    assert!(!matches!(failure, Err(ConversationError::Metadata)));
+    std::fs::remove_dir_all(root).ok();
 }

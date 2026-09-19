@@ -20,7 +20,10 @@ fn caller(action: &str) -> ConversationCaller {
 async fn reordered_view_matches_real_dispatch_and_stale_order_cannot_resubmit() {
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
-    service.create(id.clone(), caller("create")).await.unwrap();
+    service
+        .create(id.clone(), caller("create"), None)
+        .await
+        .unwrap();
     let (release, gate) = oneshot::channel();
     *provider.execution_gate.lock().unwrap() = Some(gate);
     service

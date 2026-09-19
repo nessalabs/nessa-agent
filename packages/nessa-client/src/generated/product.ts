@@ -337,6 +337,8 @@ export interface ConversationCreateParams {
   conversationId: string
   /** Stable action identifier retained for retries of one logical command. */
   requestId: string
+  /** Coding agent this conversation runs on for its whole life. Omitted takes the gateway's configured default. Ignored when the conversation already exists, which is reopened on the agent it was created with. */
+  agent?: string
 }
 /** Conversation ready for read and admission. */
 export interface ConversationCreateResult {

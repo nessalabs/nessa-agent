@@ -5,33 +5,66 @@
 //! only ever reached when the environment and the file have both said no, and
 //! no test here drives it there, because its answer belongs to the host.
 //!
-//! What makes a credentials file a sign-in is Claude's own, and is tested
-//! beside it in `claude.rs`. These tests are about the order the sources are
-//! asked in and what an unanswered source does to the whole answer.
+//! What makes a credentials file a sign-in is shared and tested in
+//! `credentials.rs`; where each agent keeps one is tested beside that agent.
+//! These tests are about the order the sources are asked in and what an
+//! unanswered source does to the whole answer.
 
 use super::*;
 use std::path::Path;
 use tempfile::TempDir;
 
 /// A probe told exactly what composition resolved and nothing more.
+///
+/// Built for one agent at a time: the probe answers per agent, and a test that
+/// filled in both would not say which agent's sources produced the answer.
+fn agent_probe(
+    agent: AgentId,
+    launch_files: Option<AgentLaunchFiles>,
+    credentials: Option<&Path>,
+    credential: Option<&str>,
+    keychain: Option<fn() -> Result<bool, ProbeFailure>>,
+) -> LocalAgentProbe {
+    LocalAgentProbe {
+        launch_files: launch_files
+            .into_iter()
+            .map(|files| (agent, files))
+            .collect(),
+        sign_in: HashMap::from([(
+            agent,
+            SignIn {
+                environment: credential.map(str::to_owned),
+                credentials: credentials.map(Path::to_path_buf),
+                keychain,
+            },
+        )]),
+    }
+}
+
+/// The Claude probe, which is the one with three sources to fall through.
 fn probe(
     launch_files: Option<AgentLaunchFiles>,
     config: Option<&Path>,
     credential: Option<&str>,
 ) -> LocalAgentProbe {
-    LocalAgentProbe {
-        claude_launch_files: launch_files,
-        environment_credential: credential.map(str::to_owned),
-        claude_config_directory: config.map(Path::to_path_buf),
-    }
+    agent_probe(
+        AgentId::Claude,
+        launch_files,
+        config
+            .map(|config| config.join(".credentials.json"))
+            .as_deref(),
+        credential,
+        Some(claude::keychain_sign_in),
+    )
 }
 
-/// The pair of paths composition would resolve for an agent rooted at `root`,
-/// whether or not anything has been written there yet.
+/// What composition would resolve for a harness rooted at `root`: an
+/// interpreter and the script handed to it, whether or not anything has been
+/// written there yet.
 fn launch_files(root: &Path) -> Option<AgentLaunchFiles> {
     Some(AgentLaunchFiles {
-        runtime: root.join("node"),
-        entry: root.join("acp-entry.js"),
+        command: root.join("node"),
+        paths: vec![root.join("acp-entry.js")],
     })
 }
 
@@ -42,12 +75,15 @@ fn install(root: &Path) {
 }
 
 #[test]
-fn a_machine_with_no_agent_configured_at_all_is_a_real_no() {
-    // Nothing to launch is an answer, not a failure to look: composition asked
-    // the configuration and the configuration said there is no agent.
+fn a_machine_with_no_agent_configured_at_all_is_asked_nothing_about_the_machine() {
+    // Whether this server is configured for an agent is its own question, and
+    // it is the one that gets asked. Answering "not installed" from here would
+    // be this adapter deciding what the domain decides — and deciding it wrong,
+    // since the agent may be sitting on the machine already.
+    assert!(!probe(None, None, None).configured(AgentId::Claude));
     assert_eq!(
         probe(None, None, None).installed(AgentId::Claude),
-        Ok(false)
+        Err(ProbeFailure::NothingToAsk)
     );
 }
 
@@ -85,6 +121,30 @@ fn a_configured_agent_missing_its_files_is_not_installed() {
     assert_eq!(
         probe(launch_files(root.path()), None, None).installed(AgentId::Claude),
         Ok(false)
+    );
+}
+
+#[test]
+fn an_agent_that_is_one_binary_is_installed_once_that_binary_is_there() {
+    // Not every agent is a script handed to an interpreter. One that speaks the
+    // protocol itself is launched as its own executable with a word of its own
+    // vocabulary after it — `acp`, here — and that word names nothing on this
+    // machine. Looking for it as a file would report every such agent missing.
+    let root = TempDir::new().unwrap();
+    let files = || {
+        Some(AgentLaunchFiles {
+            command: root.path().join("opencode"),
+            paths: vec![],
+        })
+    };
+    assert_eq!(
+        probe(files(), None, None).installed(AgentId::Claude),
+        Ok(false)
+    );
+    std::fs::write(root.path().join("opencode"), b"#!/bin/sh\n").unwrap();
+    assert_eq!(
+        probe(files(), None, None).installed(AgentId::Claude),
+        Ok(true)
     );
 }
 
@@ -143,10 +203,50 @@ mod when_the_path_cannot_be_read {
 
 #[test]
 fn nowhere_to_look_for_a_credentials_file_is_not_the_same_as_not_finding_one() {
-    // No CLAUDE_CONFIG_DIR and no home directory: the question was never asked.
+    // No CLAUDE_CONFIG_DIR and no home directory: the question was never asked,
+    // and with the keychain the only source left, a host without one has
+    // nothing to answer from.
     assert_eq!(
-        probe(None, None, None).claude_credentials_file(),
+        agent_probe(AgentId::Claude, None, None, None, None).authenticated(AgentId::Claude),
         Err(ProbeFailure::NothingToAsk)
+    );
+}
+
+#[test]
+fn an_agent_this_server_knows_nothing_about_is_a_question_it_cannot_answer() {
+    // Not a no: reporting "signed out" for an agent whose sources were never
+    // resolved would send someone to sign in to something already signed in.
+    let claude_only = agent_probe(AgentId::Claude, None, None, Some("key"), None);
+    assert_eq!(
+        claude_only.authenticated(AgentId::Codex),
+        Err(ProbeFailure::NothingToAsk)
+    );
+    // Installation answers the same way, for the same reason: nothing was
+    // resolved for this agent, so there is nothing here to have looked at.
+    assert_eq!(
+        claude_only.installed(AgentId::Codex),
+        Err(ProbeFailure::NothingToAsk)
+    );
+    assert!(!claude_only.configured(AgentId::Codex));
+}
+
+#[test]
+fn an_agent_with_no_keychain_is_answered_from_its_two_sources_alone() {
+    // Codex keeps a ChatGPT login in the same file as an API key, so there is
+    // no third source — and a source that does not exist for this agent is not
+    // one that failed to answer.
+    let config = TempDir::new().unwrap();
+    let credentials = config.path().join("auth.json");
+    assert_eq!(
+        agent_probe(AgentId::Codex, None, Some(&credentials), None, None)
+            .authenticated(AgentId::Codex),
+        Ok(false)
+    );
+    std::fs::write(&credentials, b"{\"tokens\":{\"id\":\"x\"}}").unwrap();
+    assert_eq!(
+        agent_probe(AgentId::Codex, None, Some(&credentials), None, None)
+            .authenticated(AgentId::Codex),
+        Ok(true)
     );
 }
 
@@ -158,10 +258,6 @@ fn a_credentials_file_settles_the_question_before_the_keychain_is_asked() {
         b"{\"token\":\"secret\"}",
     )
     .unwrap();
-    assert_eq!(
-        probe(None, Some(config.path()), None).claude_credentials_file(),
-        Ok(true)
-    );
     assert_eq!(
         probe(None, Some(config.path()), None).authenticated(AgentId::Claude),
         Ok(true)
@@ -200,4 +296,17 @@ mod without_a_keychain {
             Err(ProbeFailure::NothingToAsk)
         );
     }
+}
+
+#[test]
+fn an_agent_composition_resolved_nothing_for_is_one_with_nothing_to_launch() {
+    // Kept apart from "its files are missing": one is a fact about this build's
+    // configuration and the other about this machine, and only the second is
+    // fixed by installing anything.
+    let root = TempDir::new().unwrap();
+    install(root.path());
+    let configured = probe(launch_files(root.path()), None, None);
+    assert!(configured.configured(AgentId::Claude));
+    assert!(!configured.configured(AgentId::Codex));
+    assert!(!probe(None, None, None).configured(AgentId::Claude));
 }

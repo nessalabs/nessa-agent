@@ -1,10 +1,13 @@
 //! Local product dependency factory. Provider choices stay outside route handlers.
 use crate::{
-    agents::infrastructure::{AgentLaunchFiles, LocalAgentProbe},
+    agents::{
+        domain::AgentId,
+        infrastructure::{AgentLaunchFiles, LocalAgentProbe},
+    },
     app::ports::Clock as ServerClock,
     browser_session::adapters::PersistentSessions,
     conversation::{
-        application::{ConversationLimits, ConversationService},
+        application::{ConversationAgents, ConversationLimits, ConversationService},
         infrastructure::{DurableConversationCreationAudit, LocalConversationRepository},
     },
     core::RunError,
@@ -25,6 +28,7 @@ use nessa_auth::{
 };
 use nessa_sdk::infrastructure::session_storage::LocalFileStorage;
 use std::{
+    collections::HashMap,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -87,10 +91,28 @@ pub(super) fn product_state(
     // same place. Composition settles *which* paths those are and hands them
     // over; it does not settle whether they exist, because a user can install
     // the agent long after this runs and setup has a button that says so.
-    let agent_launch_files = settings.agent.as_ref().map(|agent| AgentLaunchFiles {
-        runtime: agent.node.clone(),
-        entry: agent.acp_entry.clone(),
-    });
+    // Every agent the configuration describes, not only the one a new
+    // conversation would start on: setup lists them all and a person deciding
+    // between them is entitled to the truth about each.
+    let agent_launch_files: HashMap<AgentId, AgentLaunchFiles> = settings
+        .agents
+        .as_ref()
+        .map(|agents| {
+            agents
+                .agents()
+                .into_iter()
+                .map(|(id, runtime)| {
+                    (
+                        id,
+                        AgentLaunchFiles {
+                            command: runtime.command.clone(),
+                            paths: runtime.paths(),
+                        },
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
     let admin = Arc::new(LocalAdmin {
         store: store.clone(),
@@ -114,7 +136,7 @@ pub(super) fn product_state(
         PersistentSessions::open(&directory.join("browser-sessions.jsonl")).map_err(setup_error)?,
     ));
     product.browser_http_allowed = config.browser_http_allowed();
-    if let Some(agent) = &settings.agent {
+    if let Some(agents) = &settings.agents {
         let root = directory
             .parent()
             .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
@@ -122,7 +144,8 @@ pub(super) fn product_state(
         nessa_local_storage::create_directory(&root)
             .map_err(|error| RunError::Agent(error.to_string()))?;
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-        let provider = super::agent::provider(agent, &root, clock.clone())?;
+        let selected = agents.selected()?;
+        let configured = super::agent::providers(agents, &root, clock.clone())?;
         let storage = Arc::new(
             LocalFileStorage::new(root.join("sessions"))
                 .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -136,16 +159,14 @@ pub(super) fn product_state(
                 .map_err(|error| RunError::Agent(error.to_string()))?,
         );
         let service = ConversationService::new(
-            provider,
+            ConversationAgents::new(configured, selected)
+                .map_err(|error| RunError::Agent(error.to_string()))?,
             storage,
             metadata,
             creation_audit,
             clock,
-            ConversationLimits {
-                reserved_output_tokens: agent.output_tokens,
-                ..ConversationLimits::default()
-            },
-            Some(agent.workspace.to_string_lossy().into_owned()),
+            ConversationLimits::default(),
+            Some(agents.workspace.to_string_lossy().into_owned()),
         )
         .map_err(|error| RunError::Agent(error.to_string()))?;
         product = product.with_conversations(Arc::new(service));

@@ -12,7 +12,10 @@ pub use ports::{
     ConversationCreationCause, ConversationCreationDisposition, ConversationFuture,
     ConversationOwnershipState, ConversationRepository,
 };
-pub use service::{ConversationCaller, ConversationLimits, ConversationService, SubmissionMode};
+pub use service::{
+    ConversationAgent, ConversationAgents, ConversationCaller, ConversationLimits,
+    ConversationService, SubmissionMode,
+};
 pub use view::{
     ConversationCapabilities, ConversationDisposition, ConversationMessage,
     ConversationMessageStatus, ConversationPending, ConversationPendingMode,

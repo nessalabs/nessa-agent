@@ -8,6 +8,7 @@ import { createSessionHandle } from "../session/adapters/client/handle"
 import { connectDevSession } from "../session/adapters/client/dev-session"
 import type { ConversationEffects } from "../conversation/application/ports"
 import { httpAgentReadiness } from "../onboarding/adapters/agents"
+import { loadChosenAgent } from "../host"
 import type { AgentReadinessSource } from "../onboarding/application/ports"
 
 /** Construct once per application. Overrides are explicit, never a service locator. */
@@ -23,6 +24,20 @@ export function createDependencies(
 ) {
   const config = options.environment ?? loadEnvironment({})
   const session = createSessionHandle()
+  // Asked once per application rather than once per conversation. The answer is
+  // written down before the panel exists and nothing changes it while the panel
+  // runs, so re-asking would be one host round trip per new conversation for an
+  // answer that cannot have moved.
+  //
+  // What is never kept is a failure. Every conversation is created through this,
+  // so a remembered rejection is not one lost answer, it is a panel that can no
+  // longer start, send, close or answer a permission until it is restarted.
+  let chosen: Promise<string | undefined> | undefined
+  const chosenAgent = () =>
+    (chosen ??= loadChosenAgent().catch((cause: unknown) => {
+      chosen = undefined
+      throw cause
+    }))
   return {
     session,
     attachments: createAttachmentResources(),
@@ -42,7 +57,7 @@ export function createDependencies(
       options.conversation ??
       (config.conversation.backend === "scenario"
         ? scenarioEffects(config.conversation.scenario)
-        : gatewayEffects(() => session.get())),
+        : gatewayEffects(() => session.get(), chosenAgent)),
   }
 }
 export type AppDependencies = ReturnType<typeof createDependencies>

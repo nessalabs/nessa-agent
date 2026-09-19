@@ -15,7 +15,7 @@ use crate::domain::effective_capabilities::value_objects::{
 };
 use crate::domain::model_metadata::entities::ModelMetadata;
 use crate::domain::model_metadata::value_objects::{Modalities, ModelFeatures, ModelProvider};
-use crate::infrastructure::acp::sessions::{binding as acp_binding, AcpConfig};
+use crate::infrastructure::acp::sessions::{binding as acp_binding, identity, AcpConfig};
 use crate::infrastructure::process::ProcessScope;
 use std::sync::Arc;
 use tokio::process::Command;
@@ -125,7 +125,7 @@ impl AgentProvider for ClaudeAcpProvider {
         ProviderIdentity::new(
             "claude-acp",
             self.capabilities.model().model_id(),
-            super::identity::fingerprint(
+            identity::fingerprint(
                 &self.config,
                 self.capabilities.limits(),
                 self.system_prompt.as_ref(),

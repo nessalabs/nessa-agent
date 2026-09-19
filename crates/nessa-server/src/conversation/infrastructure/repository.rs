@@ -1,3 +1,4 @@
+use crate::agents::domain::AgentId;
 use crate::conversation::{
     application::{
         ConversationCreation, ConversationCreationDisposition, ConversationError,
@@ -23,6 +24,15 @@ struct StoredConversation {
     creator_surface: String,
     creation_action: String,
     creation_requested_at_ms: u64,
+    /// The agent this conversation runs on. Every record states it.
+    ///
+    /// Not optional, and not defaulted to Claude for records written before
+    /// there was a second agent. That would be a reader for data written by an
+    /// older build, which "One current contract" forbids outright without an
+    /// explicit decision to support compatibility — and a decision that has not
+    /// been made is not one a comment can make on its behalf. A record written
+    /// before this change fails to parse, naming the field it is missing.
+    agent: String,
 }
 /// Private create-once files bind conversation IDs to owners before any provider opens.
 pub struct LocalConversationRepository {
@@ -71,6 +81,15 @@ fn read(root: &Path, id: &ConversationId) -> Result<Option<Conversation>, Conver
     if stored_id != *id {
         return Err(ConversationError::Metadata);
     }
+    // A record naming an agent this server has no adapter for is refused rather
+    // than reopened on some other agent: the conversation's transcript and
+    // restored session belong to the agent named, and the honest answer is that
+    // this build cannot open it.
+    //
+    // Refused as its own failure and not as unreadable metadata. The record
+    // parsed, storage is working, and a retry will not change the answer, which
+    // is what an "unavailable" would have promised.
+    let agent = AgentId::parse(&value.agent).ok_or(ConversationError::AgentUnsupported)?;
     Ok(Some(
         Conversation::new(
             stored_id,
@@ -79,6 +98,7 @@ fn read(root: &Path, id: &ConversationId) -> Result<Option<Conversation>, Conver
             value.creator_surface,
             value.creation_action,
             value.creation_requested_at_ms,
+            agent,
         )
         .map_err(|_| ConversationError::Metadata)?,
     ))
@@ -116,6 +136,7 @@ impl ConversationRepository for LocalConversationRepository {
                     creator_surface: conversation.creator_surface().into(),
                     creation_action: conversation.creation_action().into(),
                     creation_requested_at_ms: conversation.creation_requested_at_ms(),
+                    agent: conversation.agent().name().into(),
                 };
                 let bytes = serde_json::to_vec(&value).map_err(|_| ConversationError::Metadata)?;
                 if bytes.len() > 4096 {

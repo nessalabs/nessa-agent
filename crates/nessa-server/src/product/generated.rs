@@ -259,6 +259,8 @@ pub struct ConversationView {
 pub struct ConversationCreateParams {
     pub conversation_id: String,
     pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

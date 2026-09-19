@@ -172,12 +172,16 @@ pub struct SetupHandoff {
 /// alive, which is the point.
 ///
 /// `completed` is the surface's own account of how setup ended: finished, or
-/// left. Leaving stays free to change its mind, so only a finish is recorded.
+/// left. Leaving stays free to change its mind, so only a finish is recorded,
+/// and `agent` — the choice that finish was made on — is recorded with it. The
+/// panel reads it back (see [`chosen_agent`]), because it is a different window
+/// and nothing setup knows survives into it.
 #[tauri::command]
 pub fn finish_setup(
     app: AppHandle,
     deps: State<'_, HostDependencies>,
     completed: bool,
+    agent: Option<String>,
 ) -> Result<SetupHandoff, String> {
     let settings_store = deps.settings.clone();
     hand_over(
@@ -199,7 +203,7 @@ pub fn finish_setup(
         // The managed `Settings` snapshot is deliberately not updated in place:
         // nothing after startup reads this flag, and the launch that does reads
         // it off disk before anything is managed at all.
-        || record_completion(&*settings_store),
+        || record_completion(&*settings_store, agent.clone()),
         || match app.get_webview_window(SETUP_WINDOW) {
             // Closing it destroys it, which is what lets the panel back down to
             // its ordinary level (see the `Destroyed` handler in `main.rs`).
@@ -262,9 +266,15 @@ pub fn reveal_setup_window(window: WebviewWindow) {
 }
 
 /// The handoff's record step, as the caller reports it.
-fn record_completion(settings: &dyn SettingsStore) -> Result<(), String> {
-    set_onboarding(settings, Onboarding { completed: true })
-        .map_err(|error| format!("could not record that setup finished: {error}"))
+fn record_completion(settings: &dyn SettingsStore, agent: Option<String>) -> Result<(), String> {
+    set_onboarding(
+        settings,
+        Onboarding {
+            completed: true,
+            agent,
+        },
+    )
+    .map_err(|error| format!("could not record that setup finished: {error}"))
 }
 
 /// Writes the first-run flag to the settings file, leaving every other key as
@@ -283,6 +293,17 @@ fn set_onboarding(settings: &dyn SettingsStore, onboarding: Onboarding) -> io::R
     settings
         .update(&mut |chosen| chosen.onboarding = onboarding.clone())
         .map(|_| ())
+}
+
+/// The agent first-run setup chose, or nothing where nobody has chosen one.
+///
+/// Read through the store on every ask, the same place the launch reads
+/// completion from. Not from a startup snapshot: setup writes this choice after
+/// that snapshot is taken, so a panel shown by the very handoff that recorded
+/// the choice would be told there was none.
+#[tauri::command]
+pub fn chosen_agent(deps: State<'_, HostDependencies>) -> Option<String> {
+    deps.settings.load().onboarding.agent
 }
 
 /// Opens first-run setup again, from the beginning.
@@ -684,7 +705,7 @@ mod tests {
                 steps.took("show");
                 Ok(())
             },
-            || record_completion(&settings.store),
+            || record_completion(&settings.store, None),
             || {
                 steps.took("close");
                 Ok(())
@@ -700,6 +721,29 @@ mod tests {
         assert!(saved.stop_agents_on_quit);
     }
 
+    /// The agent setup was finished on is written with the completion, and a
+    /// finish nobody chose an agent for writes none.
+    ///
+    /// The choice is the whole reason a conversation starts on Codex rather
+    /// than Claude, and it is made in one window and read in another. Recorded
+    /// as `None` it is not a wrong agent, it is silently the gateway's default —
+    /// which looks exactly like the choice having been honoured.
+    #[test]
+    fn the_agent_setup_finished_on_is_recorded_with_the_completion() {
+        let settings = crate::settings::testing::in_memory();
+
+        record_completion(&settings.store, Some("codex".to_owned()))
+            .expect("an absent file takes the change");
+
+        let saved = settings.store.load();
+        assert!(saved.onboarding.completed);
+        assert_eq!(saved.onboarding.agent.as_deref(), Some("codex"));
+
+        let settings = crate::settings::testing::in_memory();
+        record_completion(&settings.store, None).expect("an absent file takes the change");
+        assert_eq!(settings.store.load().onboarding.agent, None);
+    }
+
     /// Leaving setup writes nothing at all, which is what keeps it free to
     /// change its mind — checked against the file this time, not a counter.
     #[test]
@@ -709,7 +753,7 @@ mod tests {
         hand_over(
             false,
             || Ok(()),
-            || record_completion(&settings.store),
+            || record_completion(&settings.store, None),
             || Ok(()),
         )
         .expect("the panel came up");
@@ -729,7 +773,7 @@ mod tests {
         let handoff = hand_over(
             true,
             || Ok(()),
-            || record_completion(&settings.store),
+            || record_completion(&settings.store, None),
             || Ok(()),
         )
         .expect("a file this build cannot read is not a reason to withhold the panel");
@@ -748,7 +792,7 @@ mod tests {
     #[test]
     fn clearing_the_first_run_flag_un_finishes_setup() {
         let settings = crate::settings::testing::in_memory();
-        record_completion(&settings.store).expect("an absent file takes the change");
+        record_completion(&settings.store, None).expect("an absent file takes the change");
         assert!(settings.store.load().onboarding.completed);
 
         set_onboarding(&settings.store, Onboarding::default()).expect("the file takes the change");

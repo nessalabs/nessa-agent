@@ -3,10 +3,12 @@
 //! ```text
 //! ACP tests -> shared fixture setup -> Python subprocess
 //!           -> sessions / executions / steering / permissions / audit / restoration
+//!           -> codex: the second profile, against a handler speaking its shapes
 //! ```
 //! Arrows show which test layer exercises each feature.
 
 mod audit;
+mod codex;
 mod configuration;
 mod executions;
 mod identity;

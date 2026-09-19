@@ -1,0 +1,7 @@
+{
+  "name": "nessa-codex-acp-harness",
+  "private": true,
+  "dependencies": {
+    "@agentclientprotocol/codex-acp": "1.12.0"
+  }
+}

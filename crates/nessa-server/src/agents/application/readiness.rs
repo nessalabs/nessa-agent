@@ -11,12 +11,19 @@ pub struct ReadAgentReadiness<'a> {
 }
 
 impl ReadAgentReadiness<'_> {
-    /// Ask the host both questions about one agent and let the domain rule.
+    /// Ask the host what it can about one agent and let the domain rule.
+    ///
+    /// An agent this server has nothing configured for is not asked about at
+    /// all. Asking anyway would put two "this machine could not answer" lines
+    /// in the log for every such agent on every check, about a machine that was
+    /// never the problem.
     pub fn execute(&self, agent: AgentId) -> Readiness {
-        Readiness::from_host(
-            answer(agent, "installed", self.probe.installed(agent)),
-            answer(agent, "authenticated", self.probe.authenticated(agent)),
-        )
+        Readiness::from_host(self.probe.configured(agent).then(|| {
+            (
+                answer(agent, "installed", self.probe.installed(agent)),
+                answer(agent, "authenticated", self.probe.authenticated(agent)),
+            )
+        }))
     }
 
     /// Every agent the server reports on, in listing order.

@@ -2,7 +2,7 @@
 /**
  * Give a dev gateway an agent, from the checkout that knows where its pieces are.
  *
- * `settings.agent` in the namespace's `config.json` is the only thing that makes
+ * `settings.agents` in the namespace's `config.json` is the only thing that makes
  * `nessa server` able to run a conversation. A packaged install gets one from
  * its bundle (`crates/nessa-server/src/composition/desktop.rs`), which a
  * checkout does not have — so a developer could connect and authenticate, then
@@ -18,14 +18,14 @@
  *
  * Guarantees, in the order they matter:
  *
- * - **An existing `agent` block is never touched.** Not merged, not repaired,
+ * - **An existing `agents` block is never touched.** Not merged, not repaired,
  *   not reordered. Someone who wrote one by hand owns it; all this does then is
- *   check that its two executables are still there and say so if they are not.
+ *   check that the files it names are still there and say so if they are not.
  * - **Never leaves a broken file.** `config.json` beside `auth/` fails the
  *   gateway at startup when it is malformed, so the merged document is parsed
  *   back before anything is renamed into place, and an existing file that does
  *   not parse is left exactly as it is.
- * - **Idempotent.** A second run finds the `agent` block and writes nothing.
+ * - **Idempotent.** A second run finds the `agents` block and writes nothing.
  * - **Degrades honestly.** Anything missing is reported with the command that
  *   fixes it, and the exit status stays 0 — a gateway with no agent is still a
  *   gateway worth starting, and blocking the dev loop would help nobody.
@@ -49,17 +49,43 @@ import { fileURLToPath } from "node:url"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
-/** The lowest Node major the Claude ACP harness is exercised on. The bundle ships 26. */
+/** The lowest Node major the ACP harnesses are exercised on. The bundle ships 26. */
 const MINIMUM_NODE_MAJOR = 20
 
-const HARNESS = "crates/nessa-sdk/harnesses/claude-acp"
-const ACP_ENTRY = `${HARNESS}/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js`
+/** Every agent this checkout can point a dev gateway at.
+ *
+ * Keyed by the name the gateway knows the agent by, which is the same key the
+ * `runtimes` map uses. An agent whose harness is not installed is left out
+ * rather than written as a path that is not there — the gateway refuses to
+ * start on one of those, and a missing Codex should not cost a working Claude.
+ */
+const AGENTS = {
+  claude: {
+    harness: "crates/nessa-sdk/harnesses/claude-acp",
+    entry:
+      "crates/nessa-sdk/harnesses/claude-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js",
+    model: "claude-sonnet-5",
+  },
+  codex: {
+    harness: "crates/nessa-sdk/harnesses/codex-acp",
+    entry:
+      "crates/nessa-sdk/harnesses/codex-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js",
+    model: "gpt-5.6-terra",
+  },
+}
+
+/** The agent a dev gateway runs on when the developer names none.
+ *
+ * Claude when it is installed, because that is what a checkout has always
+ * started on and what every conversation already on disk belongs to. */
+const PREFERRED = "claude"
 /** The checked-in model catalog, named once: the block points at it and the
  * check below looks for it, and a move that updated only one of those would
  * write a config naming a file that is not there. */
 const CATALOG = "crates/nessa-sdk/data/models.json"
 
-const INSTALL_HARNESS = `(cd ${HARNESS} && npm ci --omit=dev)`
+/** The command that installs one agent's harness. */
+const installHarness = (name) => `(cd ${AGENTS[name].harness} && npm ci --omit=dev)`
 
 function say(message) {
   process.stdout.write(`${message}\n`)
@@ -108,24 +134,49 @@ export function namespaceRoot(env = process.env, home = homedir()) {
 }
 
 /**
- * The agent block this checkout would write.
+ * Which agents this checkout can actually launch, by name.
+ *
+ * An agent is here only when its harness is on disk. A name written with a path
+ * that is not there fails the whole gateway at startup, not just that agent, so
+ * a Codex nobody installed would cost a developer their working Claude.
+ *
+ * @returns {string[]} installed agent names, in a stable order
+ */
+export function installedAgents(checkout, exists = existsSync) {
+  return Object.keys(AGENTS).filter((name) => exists(join(checkout, AGENTS[name].entry)))
+}
+
+/**
+ * The agents block this checkout would write.
  *
  * Every path is absolute and checked here rather than left to fail inside
- * provider construction, where the message is about "node and acpEntry" and not
- * about the thing a developer forgot to install.
+ * provider construction, where the message is about a command and its arguments
+ * and not about the thing a developer forgot to install.
  *
- * @returns {object} the `agent` value, ready to merge
+ * `selected` is stated whenever more than one agent is configured, because the
+ * gateway refuses to guess between them — and a developer who never chose would
+ * otherwise be told to answer a question they did not know they were asked.
+ *
+ * @returns {object} the `agents` value, ready to merge
  */
-export function agentBlock({ checkout, namespace, node, mcpBinary }) {
+export function agentsBlock({ checkout, namespace, node, mcpBinary, agents }) {
+  const workspace = join(namespace, "workspaces/default")
+  const runtimes = {}
+  for (const name of agents) {
+    runtimes[name] = {
+      command: node,
+      args: [join(checkout, AGENTS[name].entry)],
+      model: AGENTS[name].model,
+      toolsEnabled: true,
+      contextTokens: 100000,
+      outputTokens: 4096,
+    }
+  }
   return {
     catalog: join(checkout, CATALOG),
-    node,
-    acpEntry: join(checkout, ACP_ENTRY),
-    workspace: join(namespace, "workspaces/default"),
-    model: "claude-sonnet-5",
-    toolsEnabled: true,
-    contextTokens: 100000,
-    outputTokens: 4096,
+    workspace,
+    selected: agents.includes(PREFERRED) ? PREFERRED : agents[0],
+    runtimes,
     ...(mcpBinary
       ? {
           mcpServers: [
@@ -134,7 +185,7 @@ export function agentBlock({ checkout, namespace, node, mcpBinary }) {
               command: mcpBinary,
               args: [
                 "--workspace",
-                join(namespace, "workspaces/default"),
+                workspace,
                 "--audit-directory",
                 join(namespace, "process-audit"),
               ],
@@ -163,7 +214,7 @@ function chooseNode() {
   const major = Number.parseInt(process.versions.node.split(".")[0], 10)
   if (!Number.isInteger(major) || major < MINIMUM_NODE_MAJOR)
     skip(
-      `this script is running on Node ${process.versions.node}; the Claude ACP harness needs ${MINIMUM_NODE_MAJOR} or newer`,
+      `this script is running on Node ${process.versions.node}; the ACP harnesses need ${MINIMUM_NODE_MAJOR} or newer`,
       "install a supported Node and run the dev loop again",
     )
   if (!existsSync(path)) skip(`the running Node (${path}) is not a readable file`, "")
@@ -220,42 +271,55 @@ function readExisting(path) {
 /**
  * Whether a configuration already answers the agent question.
  *
- * The server reads `agent` as an `Option<AgentConfig>`, so an explicit `null`
- * is a valid configuration that means "no agent" — the gateway starts and says
+ * The server reads `agents` as an `Option<AgentsConfig>`, so an explicit `null`
+ * is a valid configuration that means "no agents" — the gateway starts and says
  * so when a message is sent. Absent is the only state this script fills in;
  * `null` is somebody's answer and is left alone, the same as a block they
  * wrote themselves.
  */
 export function agentIsSettled(existing) {
-  return existing.agent !== undefined
+  return existing.agents !== undefined
 }
 
-/** Warn about an agent someone else owns whose executables have gone missing. */
-function checkExisting(agent, path) {
-  if (agent === null) {
-    say(`→ ${path} sets "agent": null, which is a gateway with no agent`)
-    say('  it was left as it is; remove the "agent" line and rerun to have one written')
+/** Warn about agents someone else owns whose executables have gone missing. */
+function checkExisting(agents, path) {
+  if (agents === null) {
+    say(`→ ${path} sets "agents": null, which is a gateway with no agents`)
+    say('  it was left as it is; remove the "agents" line and rerun to have one written')
     return
   }
-  const missing = [agent.node, agent.acpEntry, agent.catalog].filter(
-    (value) => typeof value === "string" && !existsSync(value),
-  )
+  // Every absolute path the configuration would hand this machine. A relative
+  // argument is the agent's own vocabulary — a subcommand or a flag — and is
+  // nothing for this script to go looking for, the same rule the gateway uses.
+  const runtimes = agents.runtimes ?? {}
+  const missing = [agents.catalog]
+    .concat(
+      Object.values(runtimes).flatMap((runtime) => [
+        runtime?.command,
+        ...(Array.isArray(runtime?.args) ? runtime.args : []),
+      ]),
+    )
+    .filter(
+      (value) => typeof value === "string" && value.startsWith("/") && !existsSync(value),
+    )
   if (missing.length === 0) {
-    say(`→ dev agent already configured in ${path}; left as it is`)
+    const named = Object.keys(runtimes)
+    say(
+      `→ dev agents already configured in ${path} (${named.join(", ") || "none named"}); left as it is`,
+    )
     return
   }
-  say(`→ dev agent in ${path} points at files that are not there:`)
+  say(`→ dev agents in ${path} point at files that are not there:`)
   for (const value of missing) say(`    ${value}`)
-  say('  it was left untouched. Reinstall what moved, or remove the "agent" block')
-  say(
-    `  and run the dev loop again to have one written (${INSTALL_HARNESS} installs the harness)`,
-  )
+  say('  it was left untouched. Reinstall what moved, or remove the "agents" block')
+  say("  and run the dev loop again to have one written, after installing a harness:")
+  for (const name of Object.keys(AGENTS)) say(`    ${installHarness(name)}`)
 }
 
 function main() {
   if (process.platform === "win32")
     skip(
-      "Claude ACP needs Unix process supervision, so a Windows checkout has no agent to configure",
+      "ACP agents need Unix process supervision, so a Windows checkout has none to configure",
       "",
     )
   let namespace
@@ -269,15 +333,15 @@ function main() {
   // An early answer, so the work below is skipped entirely. `publish` asks
   // again at the end, because this one goes stale while that work happens.
   if (agentIsSettled(existing)) {
-    checkExisting(existing.agent, configPath)
+    checkExisting(existing.agents, configPath)
     return
   }
 
   const checkout = realpathSync(root)
-  const acpEntry = join(checkout, ACP_ENTRY)
-  if (!existsSync(acpEntry))
-    skip("the Claude ACP harness is not installed in this checkout", [
-      `run: ${INSTALL_HARNESS}`,
+  const agents = installedAgents(checkout)
+  if (agents.length === 0)
+    skip("no ACP harness is installed in this checkout", [
+      ...Object.keys(AGENTS).map((name) => `run: ${installHarness(name)}`),
       "then start the dev loop again",
     ])
   const catalog = join(checkout, CATALOG)
@@ -293,13 +357,13 @@ function main() {
   // The namespace and the agent's workspace must exist, with the private
   // permissions the gateway insists on for everything under this root.
   mkdirSync(join(namespace, "workspaces/default"), { recursive: true, mode: 0o700 })
-  const agent = agentBlock({ checkout, namespace, node, mcpBinary })
+  const block = agentsBlock({ checkout, namespace, node, mcpBinary, agents })
 
-  publish({ configPath, agent, acpEntry, node, mcpBinary })
+  publish({ configPath, agents: block, node, mcpBinary })
 }
 
 /**
- * Writes the agent into whatever the file says at this moment.
+ * Writes the agents into whatever the file says at this moment.
  *
  * The configuration is read again here rather than reused from the start of
  * the run. Everything between the two reads takes real time — locating a node,
@@ -392,36 +456,41 @@ function readHolder(lock) {
   }
 }
 
-export function publish({ configPath, agent, acpEntry, node, mcpBinary, interrupt }) {
+export function publish({ configPath, agents, node, mcpBinary, interrupt }) {
   const lock = lockFor(configPath)
   if ("held" in lock) {
     say(`→ not configuring ${configPath}: its lock is held by ${lock.held}`)
     return false
   }
   try {
-    return underLock({ configPath, agent, acpEntry, node, mcpBinary, interrupt })
+    return underLock({ configPath, agents, node, mcpBinary, interrupt })
   } finally {
     lock.release()
   }
 }
 
 /** The read, the decision and the write, with the right to do them held. */
-function underLock({ configPath, agent, acpEntry, node, mcpBinary, interrupt }) {
+function underLock({ configPath, agents, node, mcpBinary, interrupt }) {
   interrupt?.()
   const existing = readExisting(configPath)
   // Somebody answered the question while this was working. Theirs stands —
   // the same courtesy an agent block already in the file gets.
   if (agentIsSettled(existing)) {
-    checkExisting(existing.agent, configPath)
+    checkExisting(existing.agents, configPath)
     return false
   }
 
-  const merged = { ...existing, agent }
+  const merged = { ...existing, agents }
   const text = `${JSON.stringify(merged, null, 2)}\n`
   // Parse it back before it can become the file the gateway reads. A config.json
   // that does not parse is not a missing agent, it is a server that will not start.
   const round = JSON.parse(text)
-  if (round.agent.acpEntry !== acpEntry || round.agent.node !== node)
+  const survived = Object.entries(agents.runtimes).every(
+    ([name, runtime]) =>
+      round.agents.runtimes[name]?.command === node &&
+      round.agents.runtimes[name]?.args?.[0] === runtime.args[0],
+  )
+  if (!survived || round.agents.selected !== agents.selected)
     skip("the generated configuration did not survive a round trip", "please report this")
 
   // Random, not the pid. A run killed between the write and the rename leaves
@@ -445,14 +514,16 @@ function underLock({ configPath, agent, acpEntry, node, mcpBinary, interrupt }) 
     )
   }
 
-  say(`→ dev agent configured in ${configPath}`)
+  say(`→ dev agents configured in ${configPath}`)
   say(`    node       ${node}`)
-  say(`    acpEntry   ${acpEntry}`)
-  say(`    workspace  ${agent.workspace}`)
+  for (const [name, runtime] of Object.entries(agents.runtimes))
+    say(`    ${name.padEnd(10)} ${runtime.args[0]}`)
+  say(`    selected   ${agents.selected}`)
+  say(`    workspace  ${agents.workspace}`)
   say(
     mcpBinary
       ? `    nessa MCP  ${mcpBinary}`
-      : '    nessa MCP  not built; omitted (cargo build -p nessa-mcp, then delete the "agent" block and rerun)',
+      : '    nessa MCP  not built; omitted (cargo build -p nessa-mcp, then delete the "agents" block and rerun)',
   )
   return true
 }

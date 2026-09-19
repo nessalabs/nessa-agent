@@ -330,7 +330,8 @@ interface NativeSetupHandoff {
  *
  * `completed` is how setup ended: a finish, or somebody leaving. Only a finish
  * is written off for good, which is the host's rule to apply — this carries the
- * fact, not the decision.
+ * fact, not the decision. `agent` is what was chosen, recorded with it, because
+ * the panel is a different window and cannot be handed anything this one knows.
  *
  * Outside Tauri there is no second window, so this is a no-op and the caller
  * simply carries on rendering the panel in place.
@@ -339,12 +340,18 @@ interface NativeSetupHandoff {
  * from is gone before the answer gets back. Everything that had to happen has
  * happened by then.
  */
-export async function finishSetupWindow(completed: boolean): Promise<SetupHandoff> {
+export async function finishSetupWindow(
+  completed: boolean,
+  agent?: string,
+): Promise<SetupHandoff> {
   if (!inTauri) return { outcome: "no-native-host" }
   const { invoke } = await import("@tauri-apps/api/core")
   let handoff: NativeSetupHandoff
   try {
-    handoff = await invoke<NativeSetupHandoff>("finish_setup", { completed })
+    handoff = await invoke<NativeSetupHandoff>("finish_setup", {
+      completed,
+      agent: agent ?? null,
+    })
   } catch (cause) {
     // The one step that abandons the handoff. Nothing was written and this
     // window is still on screen, which is what the surface has to say.
@@ -380,6 +387,32 @@ export async function revealSetupWindow() {
   if (!inTauri) return
   const { invoke } = await import("@tauri-apps/api/core")
   await invoke("reveal_setup_window")
+}
+
+/**
+ * The agent first-run setup chose, as the host recorded it.
+ *
+ * Read rather than remembered: setup runs in its own window, which is gone by
+ * the time the panel needs the answer. Undefined where nobody has chosen — a
+ * first run still in progress, a setup that was left, or a browser with no host
+ * to ask — and the gateway then starts conversations on its own default rather
+ * than being told an agent nobody picked.
+ */
+export async function loadChosenAgent(): Promise<string | undefined> {
+  if (!inTauri) return undefined
+  try {
+    // The import is inside the try with the call it makes. Loading the host
+    // module is a fetch like any other and can fail on its own; left outside,
+    // that failure would come back as a rejection from a function whose whole
+    // contract is that it answers.
+    const { invoke } = await import("@tauri-apps/api/core")
+    return (await invoke<string | null>("chosen_agent")) ?? undefined
+  } catch (cause) {
+    // Survivable: the conversation starts on the gateway's default instead of
+    // on the recorded choice, which is a worse answer and not a broken panel.
+    console.warn("[nessa] could not read the agent setup chose", cause)
+    return undefined
+  }
 }
 
 /** Whether this page runs inside the trusted desktop host. */

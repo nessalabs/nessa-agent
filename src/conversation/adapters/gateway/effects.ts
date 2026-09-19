@@ -6,7 +6,15 @@ import {
 } from "../../application/ports"
 
 /** One application-scoped adapter; a disconnected transport never becomes a fake conversation. */
-export function gatewayEffects(client: () => NessaClient | null): ConversationEffects {
+export function gatewayEffects(
+  client: () => NessaClient | null,
+  /** The agent every conversation this panel creates runs on, as setup recorded
+   * it. Asked once and remembered with the creation it was asked for, because
+   * the answer comes from the host rather than from the conversation. Resolving
+   * to nothing leaves the choice to the gateway's own default, which is what a
+   * browser and a setup nobody finished both are. */
+  chosenAgent: () => Promise<string | undefined> = async () => undefined,
+): ConversationEffects {
   const creations = new Map<string, Promise<{ conversationId: string }>>()
   const reads = new Map<string, Promise<ConversationView>>()
   const api = () => {
@@ -22,8 +30,15 @@ export function gatewayEffects(client: () => NessaClient | null): ConversationEf
     create(conversationId) {
       const existing = creations.get(conversationId)
       if (existing) return existing
-      const request = api()
-        .create({ conversationId })
+      // The transport is checked before the agent is asked for, so a
+      // disconnected panel still fails as a disconnected panel rather than
+      // waiting on the host first. The handle that check produced is thrown
+      // away rather than held across the await: asking the host is a round
+      // trip, and a session that was retired inside it must not be the one
+      // this create is sent over.
+      api()
+      const request = chosenAgent()
+        .then((agent) => api().create({ conversationId, agent }))
         .catch((error) => {
           creations.delete(conversationId)
           throw error

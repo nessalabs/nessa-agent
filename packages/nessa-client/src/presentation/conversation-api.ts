@@ -33,6 +33,10 @@ export type ConversationSendOptions = ConversationActionOptions & {
 export type ConversationCreateOptions = ConversationActionOptions & {
   /** Stable conversation identity within the authenticated organization. */
   conversationId?: string
+  /** The coding agent this conversation runs on for the rest of its life.
+   * Omitted takes the gateway's own default. A conversation that already exists
+   * reopens on the agent it was created with, whatever is passed here. */
+  agent?: string
 }
 /** Message admission receipt with the client-owned action identity. */
 export type ConversationSubmission = ConversationReceipt & {
@@ -183,9 +187,13 @@ export function createConversationApi(
     create: (options = {}) => {
       const id = validConversationId(options.conversationId ?? newId())
       const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
+      const agent =
+        options.agent === undefined
+          ? {}
+          : { agent: boundedText(options.agent, "Agent", 32) }
       return mutate(
         ProductMethod.ConversationCreate,
-        { conversationId: id, requestId },
+        { conversationId: id, requestId, ...agent },
         (value) => conversationId(value, id),
       )
     },

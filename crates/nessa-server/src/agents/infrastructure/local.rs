@@ -1,21 +1,47 @@
+use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use crate::agents::application::{AgentProbe, ProbeFailure};
 use crate::agents::domain::AgentId;
-use crate::agents::infrastructure::claude;
+use crate::agents::infrastructure::{claude, codex, credentials};
 
-/// The two files this server would actually execute to run an agent.
+/// What this server would have to find on this machine to run an agent.
+///
+/// A command and the paths it is handed, rather than a runtime and an entry
+/// script: an agent run through a shared runtime has one of each, and an agent
+/// that is one self-contained executable taking its own subcommand has a
+/// command and nothing else. The narrower pair could not describe the second
+/// at all.
 ///
 /// Composition owns *which* paths these are — it is what reads the launch
 /// configuration — but not whether they are present, because that changes while
 /// the server runs. Plain paths rather than the composition type that produced
 /// them, so the dependency keeps pointing inward.
 pub struct AgentLaunchFiles {
-    /// The runtime binary the launcher invokes.
-    pub runtime: PathBuf,
-    /// The entry point script it is handed.
-    pub entry: PathBuf,
+    /// The executable the launcher invokes.
+    pub command: PathBuf,
+    /// Every path the launcher hands that executable. Empty for an agent whose
+    /// arguments name nothing on this machine.
+    pub paths: Vec<PathBuf>,
+}
+
+/// Where one agent's sign-in could be on this machine, resolved once.
+///
+/// Held as data rather than asked for on each call because none of it changes
+/// while the server runs: this process's environment is fixed at start, and so
+/// is where an agent keeps its file. Whether the file is *there* is asked every
+/// time, which is the part a person can change by signing in.
+struct SignIn {
+    /// A non-empty credential in this process's environment, which is what a
+    /// machine account signs in with. Held only to know that it is there.
+    environment: Option<String>,
+    /// The agent's own credentials file, when this host has somewhere to look.
+    credentials: Option<PathBuf>,
+    /// The login keychain, for an agent that keeps a sign-in there too. `None`
+    /// for an agent that does not: a source that does not exist for this agent
+    /// is not a source that failed to answer.
+    keychain: Option<fn() -> Result<bool, ProbeFailure>>,
 }
 
 /// The machine this server is running on.
@@ -24,44 +50,70 @@ pub struct AgentLaunchFiles {
 /// dependencies are chosen, and held as data. Nothing here reads a secret: the
 /// questions are whether a credential exists, never what it is.
 ///
-/// What is true of *Claude Code specifically* — the name of its keychain item,
-/// where it writes a credentials file, which variables sign it in, what makes
-/// one of those a real sign-in — belongs to `claude.rs`. This type owns the
-/// order those sources are asked in and what an unanswered source means, which
-/// would be the same for any agent.
+/// What is true of one agent specifically — the name of its keychain item,
+/// where it writes a credentials file, which variables sign it in — belongs to
+/// that agent's own module. This type owns the order those sources are asked in
+/// and what an unanswered source means, which is the same for any agent.
 pub struct LocalAgentProbe {
-    /// The files the agent this server would launch is made of, when one is
-    /// configured at all. Composition resolves the paths, because composition
-    /// is what owns the launch configuration; whether they are there is asked
-    /// on every call, because a user can install the agent while the server is
-    /// already running and expects the next answer to say so.
-    claude_launch_files: Option<AgentLaunchFiles>,
-    /// A non-empty credential in the environment, which is what a machine
-    /// account signs in with. Held only to know that it is there.
-    environment_credential: Option<String>,
-    /// Where Claude Code would write a credentials file on this machine.
-    claude_config_directory: Option<PathBuf>,
+    /// What each configured agent is made of. Composition resolves the
+    /// paths, because composition is what owns the launch configuration;
+    /// whether they are there is asked on every call, because a user can
+    /// install an agent while the server is already running and expects the
+    /// next answer to say so. An agent absent from this map is one this server
+    /// has nothing to launch for.
+    launch_files: HashMap<AgentId, AgentLaunchFiles>,
+    /// Where each agent's sign-in could be.
+    sign_in: HashMap<AgentId, SignIn>,
 }
 
 impl LocalAgentProbe {
     /// Read this host's environment once, in composition.
     ///
-    /// Where the agent lives is not guessed from the filesystem around the
+    /// Where each agent lives is not guessed from the filesystem around the
     /// running executable: that only ever matched the bundled desktop layout,
     /// and said nothing at all about a server started from a plain runtime
-    /// config. Composition resolves the agent configuration that would really
-    /// be launched and hands in its paths as `claude_launch_files`. Their
-    /// existence is not resolved here — see [`Self::claude_installed`].
-    ///
-    /// Claude Code accepts a sign-in from three places, so three are resolved:
-    /// a credential in the environment, a credentials file under
-    /// `CLAUDE_CONFIG_DIR` (or `~/.claude`), and the login keychain on macOS.
-    pub fn from_environment(claude_launch_files: Option<AgentLaunchFiles>) -> Self {
+    /// config. Composition resolves the agent configurations that would really
+    /// be launched and hands in their paths. Their existence is not resolved
+    /// here — see [`Self::installed`].
+    pub fn from_environment(launch_files: HashMap<AgentId, AgentLaunchFiles>) -> Self {
         Self {
-            claude_launch_files,
-            environment_credential: claude::environment_credential(),
-            claude_config_directory: claude::config_directory(),
+            launch_files,
+            sign_in: HashMap::from([
+                (
+                    AgentId::Claude,
+                    SignIn {
+                        environment: claude::environment_credential(),
+                        credentials: claude::credentials_path(),
+                        keychain: Some(claude::keychain_sign_in),
+                    },
+                ),
+                (
+                    AgentId::Codex,
+                    SignIn {
+                        environment: codex::environment_credential(),
+                        credentials: codex::credentials_path(),
+                        keychain: None,
+                    },
+                ),
+            ]),
         }
+    }
+
+    /// Ask this agent's credentials file, wherever its vendor puts it. Nowhere
+    /// to look is a question that was never asked, not a sign-in ruled out.
+    fn credentials_file(sign_in: &SignIn) -> Result<bool, ProbeFailure> {
+        let path = sign_in
+            .credentials
+            .as_deref()
+            .ok_or(ProbeFailure::NothingToAsk)?;
+        credentials::credentials_file(path)
+    }
+}
+
+impl AgentProbe for LocalAgentProbe {
+    /// Whether composition resolved a launch for this agent.
+    fn configured(&self, agent: AgentId) -> bool {
+        self.launch_files.contains_key(&agent)
     }
 
     /// Whether the agent this server would launch is really on this machine.
@@ -74,60 +126,53 @@ impl LocalAgentProbe {
     /// are two metadata stats, and the caller already runs this on a blocking
     /// thread (see `entrypoint/http.rs`), so paying them per call is safe.
     ///
-    /// No agent configured is a real no: the question was asked of the
-    /// configuration, and the answer is that there is nothing to launch.
-    fn claude_installed(&self) -> Result<bool, ProbeFailure> {
-        let Some(files) = &self.claude_launch_files else {
-            return Ok(false);
+    /// An agent with nothing to launch is not answered here. Whether this
+    /// server is configured for it is [`Self::configured`]'s question and is
+    /// asked first, so this is not reached for one — and if a second caller ever
+    /// does reach it, it reports that it has nothing to go on rather than a no.
+    /// `Ok(false)` would become "not installed", which is an instruction to
+    /// install what may already be on the machine, and that is a policy the
+    /// domain decides and this adapter must not.
+    fn installed(&self, agent: AgentId) -> Result<bool, ProbeFailure> {
+        let Some(files) = self.launch_files.get(&agent) else {
+            return Err(ProbeFailure::NothingToAsk);
         };
-        for path in [&files.runtime, &files.entry] {
-            if !is_file(path)? {
+        if !is_file(&files.command)? {
+            return Ok(false);
+        }
+        // A path this server would hand the command has to be there for the
+        // launch to work, but it is not required to be a regular file: an agent
+        // given a directory to work in is given a directory.
+        for path in &files.paths {
+            if !exists(path)? {
                 return Ok(false);
             }
         }
         Ok(true)
     }
 
-    /// Whether anything on this machine is signed in to Claude.
+    /// Whether anything on this machine is signed in to the agent.
     ///
     /// A yes from any one source ends the search. A source that could not
     /// answer leaves the whole answer undetermined rather than no: a credential
-    /// this probe was unable to look for is not a credential it ruled out.
-    fn claude_authenticated(&self) -> Result<bool, ProbeFailure> {
-        if self.environment_credential.is_some() {
+    /// this probe was unable to look for is not a credential it ruled out. An
+    /// agent this server knows nothing about has no sources at all, which is
+    /// the same kind of unanswered question as a directory it cannot read.
+    fn authenticated(&self, agent: AgentId) -> Result<bool, ProbeFailure> {
+        let sign_in = self.sign_in.get(&agent).ok_or(ProbeFailure::NothingToAsk)?;
+        if sign_in.environment.is_some() {
             return Ok(true);
         }
         let mut unanswered = None;
-        if holds(&mut unanswered, self.claude_credentials_file())
-            || holds(&mut unanswered, claude::keychain_sign_in())
-        {
+        if holds(&mut unanswered, Self::credentials_file(sign_in)) {
             return Ok(true);
         }
+        if let Some(keychain) = sign_in.keychain {
+            if holds(&mut unanswered, keychain()) {
+                return Ok(true);
+            }
+        }
         unanswered.map_or(Ok(false), Err)
-    }
-
-    /// Ask Claude's own credentials file, wherever this host puts it. Nowhere to
-    /// look is a question that was never asked, not a sign-in ruled out.
-    fn claude_credentials_file(&self) -> Result<bool, ProbeFailure> {
-        let directory = self
-            .claude_config_directory
-            .as_deref()
-            .ok_or(ProbeFailure::NothingToAsk)?;
-        claude::credentials_file(directory)
-    }
-}
-
-impl AgentProbe for LocalAgentProbe {
-    fn installed(&self, agent: AgentId) -> Result<bool, ProbeFailure> {
-        match agent {
-            AgentId::Claude => self.claude_installed(),
-        }
-    }
-
-    fn authenticated(&self, agent: AgentId) -> Result<bool, ProbeFailure> {
-        match agent {
-            AgentId::Claude => self.claude_authenticated(),
-        }
     }
 }
 
@@ -136,13 +181,25 @@ impl AgentProbe for LocalAgentProbe {
 /// Deliberately not [`Path::is_file`]: that collapses every error into `false`,
 /// so a directory this server is not allowed to look inside reads exactly like
 /// a missing agent. This module keeps "no" and "could not tell" apart
-/// everywhere else — the same distinction `claude.rs` makes about a credentials
-/// file — and setup acts on the difference, offering an install to someone
-/// whose agent is merely unreadable. Only a genuine not-found is a no; anything
-/// else leaves the answer undetermined.
+/// everywhere else — the same distinction `credentials.rs` makes about a
+/// credentials file — and setup acts on the difference, offering an install to
+/// someone whose agent is merely unreadable. Only a genuine not-found is a no;
+/// anything else leaves the answer undetermined.
 fn is_file(path: &Path) -> Result<bool, ProbeFailure> {
     match path.metadata() {
         Ok(metadata) => Ok(metadata.is_file()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(ProbeFailure::Unanswered),
+    }
+}
+
+/// Whether there is anything at all at `path`, right now.
+///
+/// The same three-way answer as [`is_file`], and for the same reason: only a
+/// genuine not-found is a no.
+fn exists(path: &Path) -> Result<bool, ProbeFailure> {
+    match path.metadata() {
+        Ok(_) => Ok(true),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
         Err(_) => Err(ProbeFailure::Unanswered),
     }

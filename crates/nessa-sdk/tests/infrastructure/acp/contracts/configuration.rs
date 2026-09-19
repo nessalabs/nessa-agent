@@ -629,3 +629,35 @@ fn mcp_launch_configuration_rejects_ambiguous_names_and_disabled_tools() {
     config.tools_enabled = false;
     assert!(build(config).is_err());
 }
+
+#[tokio::test]
+async fn a_permission_mode_reported_while_it_is_still_being_set_is_not_the_settled_one() {
+    // This profile's one configuration request is the permission mode, so
+    // between `session/new` and its response the mode is whatever the harness
+    // launched with — and a provider reporting that is describing the session it
+    // still has, not refusing the one this binding asked for.
+    //
+    // What must not move is the settled state. `wrong-mode` covers that: a final
+    // response that does not read back `default` fails the session, and nothing
+    // is published as ready before it. This pair is the whole of the guarantee —
+    // tolerated while in flight, required once applied.
+    let _slot = process_test_slot().await;
+    let (root, binding) = test_acp_binding("startup-update-mode-option", 16);
+    let opened = binding.open(None).await.unwrap();
+    assert_eq!(
+        opened
+            .session
+            .execute(prompt("after the startup notification"))
+            .await
+            .into_result()
+            .unwrap(),
+        ExecutionOutcome::Completed
+    );
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
+}

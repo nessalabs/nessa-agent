@@ -12,6 +12,7 @@ use super::{
     state::ProductRouteState,
 };
 use crate::{
+    agents::domain::AgentId,
     conversation::{
         application::{ConversationCaller, ConversationError, SubmissionMode},
         domain::ConversationId,
@@ -28,8 +29,12 @@ pub(super) async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
+    // This build runs no conversations at all, which is not the same fact as a
+    // caller naming an agent this one is not configured for. Sharing a code
+    // between them made the panel tell someone with a working Claude that the
+    // gateway has no agent configured.
     let Some(service) = state.conversations.as_ref() else {
-        return failure(&frame.id, "agent_not_configured");
+        return failure(&frame.id, "conversations_not_configured");
     };
     macro_rules! params {
         ($kind:ty) => {
@@ -56,6 +61,7 @@ pub(super) async fn dispatch(
                     .create(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id),
+                        agent_id(params.agent.as_deref())?,
                     )
                     .await?;
                 Ok(success(
@@ -212,6 +218,8 @@ fn error_code(error: &ConversationError) -> &'static str {
     match error {
         ConversationError::InvalidInput => "invalid_request",
         ConversationError::NotFound => "conversation_not_found",
+        ConversationError::AgentNotConfigured => "agent_not_configured",
+        ConversationError::AgentUnsupported => "agent_unsupported",
         ConversationError::Capacity => "conversation_capacity",
         ConversationError::Unavailable
         | ConversationError::Retirement(_)
@@ -241,6 +249,17 @@ fn error_code(error: &ConversationError) -> &'static str {
 
 fn conversation_id(value: &str) -> Result<ConversationId, ConversationError> {
     ConversationId::new(value).map_err(|_| ConversationError::InvalidInput)
+}
+
+/// The agent a creation names, if it names one.
+///
+/// A name no adapter exists for is refused here rather than carried inward: the
+/// service's "this server is not configured for that agent" is a fact about the
+/// installation, and a misspelling is not that.
+fn agent_id(value: Option<&str>) -> Result<Option<AgentId>, ConversationError> {
+    value
+        .map(|name| AgentId::parse(name).ok_or(ConversationError::InvalidInput))
+        .transpose()
 }
 
 #[cfg(test)]

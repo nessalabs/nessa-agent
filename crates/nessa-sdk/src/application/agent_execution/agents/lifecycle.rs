@@ -250,9 +250,12 @@ impl SessionLifecycle {
         control: bool,
     ) -> Result<WorkPermit, AgentError> {
         let mut state = self.state.lock().expect("session lifecycle");
-        if !matches!(state.work_status, WorkStatus::Open)
-            && !(matches!(phase, WorkPhase::Waiting) && Self::accepts_waiting(&state))
-        {
+        // Stated as what is accepted and then negated once, rather than as two
+        // negations joined: an open session takes work, and a closing one still
+        // takes the waiting kind for as long as it accepts it.
+        let accepted = matches!(state.work_status, WorkStatus::Open)
+            || (matches!(phase, WorkPhase::Waiting) && Self::accepts_waiting(&state));
+        if !accepted {
             if let Some(error) = state
                 .cleanup
                 .as_ref()

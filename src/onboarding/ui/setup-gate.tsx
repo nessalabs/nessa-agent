@@ -158,13 +158,18 @@ export function SetupGate({
   // finished or left. Leaving stays free to change its mind, so only a finish
   // is written off; the host will not record it unless the panel came up first.
   const completed = isOnboardingCompleted(onboarding.state)
+  // The agent travels with the finish, and only with a finish: a choice made on
+  // the way out of setup is not a decision, and `completeOnboarding` is what
+  // keeps it. The panel reads it back from the host, because this window is
+  // gone by the time it asks.
+  const chosen = completed ? onboarding.state.agent : undefined
   React.useEffect(() => {
     if (onboarding.active || handedOver) return
     setHandedOver(true)
-    void finishSetupWindow(completed)
+    void finishSetupWindow(completed, chosen)
       .then(setHandoff)
       .catch((cause: unknown) => setHandoff({ outcome: "panel-unavailable", cause }))
-  }, [onboarding.active, handedOver, completed])
+  }, [onboarding.active, handedOver, completed, chosen])
 
   // What the window has to show for the handoff it got, if anything. Kept by
   // the handoff rather than recomputed every render, so a failed close — which

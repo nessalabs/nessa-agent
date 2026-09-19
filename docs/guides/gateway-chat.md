@@ -9,7 +9,7 @@ cannot impersonate another surface or principal.
 
 ```text
 Panel Send -> NessaClient.conversation.send -> authorized gateway command
-  -> shared ConversationService -> Agent.enqueue -> Claude ACP process
+  -> shared ConversationService -> Agent.enqueue -> this conversation's ACP process
   <- bounded conversation.read view <- live SDK observations + saved history
 ```
 
@@ -35,27 +35,77 @@ From a checkout, `just server` writes this section for you
 an existing one alone; everything below is the deliberate path, and the contract
 that script writes to.
 
-Add `agent` to the private namespace `config.json` (beside `auth/`):
+Add `agents` to the private namespace `config.json` (beside `auth/`). What every
+agent on this machine shares is stated once; what differs between them — how the
+agent is started, the model, the budgets, whether its own tools are on — goes
+under that agent's name in `runtimes`:
 
 ```json
 {
-  "agent": {
+  "agents": {
     "catalog": "/absolute/path/to/models.json",
-    "node": "/absolute/path/to/node",
-    "acpEntry": "/absolute/path/to/claude-acp/dist/index.js",
     "workspace": "/absolute/path/to/your/project",
-    "model": "exact-model-id-from-catalog",
-    "toolsEnabled": true,
     "mcpServers": [{
       "name": "nessa",
       "command": "/absolute/path/to/nessa-agent/target/debug/nessa-mcp",
       "args": ["--workspace", "/absolute/path/to/your/project", "--audit-directory", "/absolute/path/to/private/process-audit"]
     }],
-    "contextTokens": 100000,
-    "outputTokens": 4096
+    "selected": "claude",
+    "runtimes": {
+      "claude": {
+        "command": "/absolute/path/to/node",
+        "args": ["/absolute/path/to/claude-acp/dist/index.js"],
+        "model": "exact-anthropic-model-id-from-catalog",
+        "toolsEnabled": true,
+        "contextTokens": 100000,
+        "outputTokens": 4096
+      },
+      "codex": {
+        "command": "/absolute/path/to/node",
+        "args": ["/absolute/path/to/codex-acp/dist/index.js"],
+        "model": "exact-openai-model-id-from-catalog",
+        "toolsEnabled": true,
+        "contextTokens": 100000,
+        "outputTokens": 4096
+      }
+    }
   }
 }
 ```
+
+An agent is started by a command and the arguments handed to it, rather than by a
+shared Node and a per-agent entry script. A harness that runs under Node is
+`"command": ".../node"` with its entry script in `args`; an agent that speaks ACP
+itself is its own executable with its own subcommand, such as
+`"command": "/usr/local/bin/opencode", "args": ["acp"]`. Only the arguments that
+are absolute paths are looked for on this machine — anything else is the agent's
+own vocabulary and is passed through untouched.
+
+This replaces the earlier `agent` key with its `node`, `acpEntry` and per-agent
+sections, and there is no compatibility shim: a `config.json` written against the
+old shape fails startup naming the key it no longer knows, rather than starting
+with settings silently ignored. Rewrite it as above.
+
+Configure only the agents you have. An agent absent from here is one this server
+cannot start; setup reports it as not set up here rather than as not installed,
+because installing it would change nothing — it may already be on the machine.
+`selected` names the agent a conversation is created on when the caller does not
+name one; it may be left out when only one agent is configured, and is required
+once more than one is — guessing which of two the operator meant is a coin toss
+with somebody's next conversation on it. A name under `runtimes` that Nessa has
+no adapter for fails startup by name, rather than being skipped.
+
+A conversation records the agent it was created on and is reopened on that same
+agent for the rest of its life, so changing `selected` moves new conversations
+only. Records written before this server knew a second agent name no agent and
+are read as Claude's. Each agent's model must come from its own vendor's entries
+in the catalog: Codex is signed in to OpenAI and cannot reach an Anthropic model,
+and the mismatch is reported at startup rather than by a provider refusing every
+prompt. `toolsEnabled` is asked of each agent separately and has to be stated:
+Codex has no text-only mode and refuses to start without its own tools, so
+neither turning them off for Claude nor leaving the field out should be able to
+take the whole server down over an agent you were not configuring. Omitting it
+fails to parse, naming the field.
 
 The installed desktop supplies an agent automatically. Its unattached workspace is
 `~/.nessa/workspaces/default`; its directories are created below the private Nessa
@@ -66,13 +116,19 @@ only after the user explicitly attaches or configures that folder. Because macOS
 protects folders such as Documents, configuring one of those paths can produce a
 system access prompt.
 
-Use the SDK's [Claude ACP harness setup](../../crates/nessa-sdk/README.md)
-for the pinned process. Provider credentials stay in the server environment or
-Claude's configured credential directory. Requests cannot supply executables,
-workspaces, environment variables or tokens. Missing agent configuration keeps
-authentication/health available and returns `agent_not_configured` for chat.
-Invalid supplied configuration fails startup. Claude process supervision currently
-requires Unix; there is no production test-provider fallback.
+Use the SDK's [harness setup](../../crates/nessa-sdk/README.md) for the pinned
+processes. Provider credentials stay in the server environment or in each agent's
+own configured credential directory, and neither agent is handed the other's.
+Requests cannot supply executables, workspaces, environment variables or tokens.
+A gateway with no conversation service at all keeps authentication/health
+available and returns `conversations_not_configured` for chat. A request naming
+an agent this server has no configuration for returns `agent_not_configured`.
+They are separate codes because they are separate situations, and only the
+second is about the agent that was asked for. A conversation already on disk that names an agent this
+build has no adapter for returns `agent_unsupported` — its own code, not a
+storage failure, because storage is fine and retrying cannot change the answer. Invalid supplied configuration fails startup. Process
+supervision currently requires Unix; there is no production test-provider
+fallback.
 
 Build `cargo build -p nessa-server -p nessa-mcp` before starting the gateway.
 `toolsEnabled: true` exposes Claude's native tool preset, including WebSearch and
@@ -263,11 +319,11 @@ or unsupported sharing actions. Rename does not change gateway conversation IDs.
 ## Installed macOS runtime
 
 The DMG contains `Nessa.app` with the gateway, `nessa-mcp` (including Shepherd),
-an official Node runtime, the locked Claude ACP harness and its dependencies,
+an official Node runtime, one locked ACP harness per agent with its dependencies,
 and the model catalog under `Contents/Resources/runtime`. Install the app in
 Applications before launching it. No repository checkout, Cargo, npm, or Homebrew
-Node is needed at runtime. Claude credentials remain in the user's local Claude
-configuration; credentials and chat history are never shipped inside the app.
+Node is needed at runtime. Each agent's credentials remain in that agent's own
+local configuration; credentials and chat history are never shipped inside the app.
 
 Before changing any service, the desktop stages its bundled runtime under
 `~/Library/Application Support/Nessa/gateway-runtimes/<service-label>/<fingerprint>/`.
