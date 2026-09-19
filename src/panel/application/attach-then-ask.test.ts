@@ -160,9 +160,16 @@ describe("attachThenAsk", () => {
     const second = vi.fn()
     const failed = vi.fn()
     const ready = vi.fn()
+    let live: (() => boolean) | undefined
 
     const cancel = attachThenAsk({
-      listeners: [() => Promise.resolve(first), () => Promise.resolve(second)],
+      listeners: [
+        (alive) => {
+          live = alive
+          return Promise.resolve(first)
+        },
+        () => Promise.resolve(second),
+      ],
       ask: () => Promise.reject(new Error("available_update failed")),
       ready,
       failed,
@@ -173,6 +180,11 @@ describe("attachThenAsk", () => {
     expect(failed).toHaveBeenCalledOnce()
     expect(first).not.toHaveBeenCalled()
     expect(second).not.toHaveBeenCalled()
+    // Still held is half of it. The other half is that an event arriving now
+    // is still delivered: `live` is what every listener asks before reporting,
+    // and a subscription that answers "no" is one that has stopped working
+    // without having been taken down.
+    expect(live?.()).toBe(true)
 
     // And they are still ours to take down when the panel goes away.
     cancel()
