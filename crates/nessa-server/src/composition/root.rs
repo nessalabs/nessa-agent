@@ -50,6 +50,7 @@ impl CompositionRoot {
                 ttl_seconds,
             } => super::cli::online(true, credential_file, ttl_seconds),
             Command::Doctor { credential_file } => super::cli::online(false, credential_file, None),
+            Command::InstallAgent { agent } => super::install_command::execute(&agent).await,
         }
     }
 

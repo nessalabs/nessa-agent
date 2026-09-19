@@ -1,4 +1,5 @@
 //! Nessa gateway with mandatory credential authentication and per-operation authorization.
+pub mod agent_install;
 pub mod agents;
 pub mod app;
 pub mod browser_session;
@@ -14,6 +15,10 @@ pub mod protocol;
 pub mod server;
 
 pub use core::run;
+
+#[cfg(test)]
+#[path = "../tests/agent_install/support.rs"]
+pub(crate) mod agent_install_test_support;
 
 #[cfg(test)]
 #[path = "../tests/agents/support.rs"]

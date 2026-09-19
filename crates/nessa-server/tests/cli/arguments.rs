@@ -1,3 +1,4 @@
+use crate::agent_install::domain::AgentName;
 use crate::cli::entrypoint::{parse, Command, LocalProvisioning};
 fn args(words: &[&str]) -> Vec<String> {
     words.iter().map(|s| (*s).into()).collect()
@@ -65,4 +66,48 @@ fn token_ttl_is_explicit_bounded_and_exclusive_with_no_expiry() {
     ] {
         assert!(parse(&args(&words)).is_err());
     }
+}
+
+#[test]
+fn install_agent_names_one_agent() {
+    assert_eq!(
+        parse(&args(&["install-agent", "opencode"])),
+        Ok(Command::InstallAgent {
+            agent: AgentName::parse("opencode").expect("a plain agent name")
+        })
+    );
+}
+
+#[test]
+fn install_agent_refuses_a_name_that_could_be_a_path() {
+    // The name goes on to be a directory under Nessa's data root. Refusing it
+    // here means a mistyped command never reaches the filesystem at all.
+    for hostile in ["..", "../escape", "/etc", "a/b", "Opencode", ""] {
+        assert!(
+            parse(&args(&["install-agent", hostile])).is_err(),
+            "install-agent {hostile:?} should be refused"
+        );
+    }
+}
+
+#[test]
+fn install_agent_wants_exactly_one_agent() {
+    // Named rather than answered with the whole help text: somebody who typed
+    // the command already knows it exists and needs the one thing they left out.
+    for words in [
+        vec!["install-agent"],
+        vec!["install-agent", "opencode", "codex"],
+    ] {
+        let refusal = parse(&args(&words)).expect_err("{words:?} names no single agent");
+        assert!(
+            refusal.contains("one agent name"),
+            "unhelpful message for {words:?}: {refusal}"
+        );
+    }
+}
+
+#[test]
+fn the_help_text_mentions_installing_an_agent() {
+    // The command exists to be discovered by someone reading `nessa --help`.
+    assert!(crate::cli::entrypoint::HELP.contains("install-agent"));
 }

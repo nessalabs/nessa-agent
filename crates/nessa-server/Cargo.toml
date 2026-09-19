@@ -27,6 +27,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tungstenite = "0.29"
 uuid = { version = "1", features = ["v4"] }
 getrandom = "0.3"
+# Installing an agent's own runtime: fetch an archive, hash it, unpack one file.
+# `reqwest` is blocking here on purpose — see `agent_install::infrastructure`.
+# Response compression is deliberately absent: the archive's digest is taken
+# over the bytes on the wire, so a transport that silently decompressed them
+# would hash something the pin was never measured against.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "http2"] }
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
+# Parsing a pinned archive URL, rather than matching on its spelling.
+url = "2"
 
 [dev-dependencies]
 tempfile = "3"

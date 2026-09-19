@@ -108,6 +108,7 @@ jobs:
       - run: node --test scripts/product-protocol/rust-types.test.mjs
       - run: cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk -- --check
       - run: node --test scripts/architecture/*.test.mjs
+      - run: node --test scripts/agents/*.test.mjs
       - run: node scripts/check-architecture.mjs
       - run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk
       - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings
