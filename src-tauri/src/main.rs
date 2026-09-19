@@ -11,6 +11,7 @@ mod shortcut;
 mod shortcuts;
 mod surface_credential;
 mod tray;
+mod updater;
 
 use gateway::application::Gateway;
 use std::sync::Mutex;
@@ -35,6 +36,14 @@ fn main() {
             shortcuts::apply_shortcuts,
         ])
         .setup(|app| {
+            // Registered here rather than in the builder chain because there is
+            // nothing to update on a phone: an installed iOS or Android app is
+            // replaced by its store, not by itself. This is the plugin's own
+            // documented placement for that reason.
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+
             app.manage(surface_credential::SurfaceCredential::from_environment());
             if !cfg!(debug_assertions) {
                 let runtime = app.path().resource_dir()?.join("runtime");
@@ -90,6 +99,18 @@ fn main() {
             if !settings.onboarding.completed {
                 panel::open_setup_window(app.handle());
             }
+
+            // Last, and on purpose. The check needs the tray to already exist,
+            // because the tray menu is the only place its answer can go; and it
+            // must not delay anything above it, so it is spawned rather than
+            // awaited and every window on screen is already placed before it
+            // starts. It is safe next to first-run setup for the same reason it
+            // is quiet in general: finding an update adds a menu item and
+            // nothing else — no window, no focus change, no prompt — so setup
+            // keeps the screen it took whether the check succeeds, finds
+            // nothing, or fails.
+            #[cfg(desktop)]
+            updater::check_in_background(app.handle());
 
             // The panel reads these on every show, to re-fit the frame.
             app.manage(settings);

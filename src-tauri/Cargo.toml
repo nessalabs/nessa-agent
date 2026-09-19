@@ -26,9 +26,11 @@ libc = "0.2"
 # samples the behind-window content through a path that does not map 1:1, which
 # smears it down the panel as a stretched gradient.
 # Desktop-only: the panel is summoned by an accelerator that has to work while
-# another app is frontmost.
+# another app is frontmost, and an update is something only a desktop build of
+# Nessa installs over itself.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-updater = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 window-vibrancy = "0.6"
@@ -47,6 +49,17 @@ block2 = "0.6"
 # back after reparenting — GtkFixed would otherwise paint the panel opaque.
 gtk = "0.18"
 webkit2gtk = "2.0"
+
+# Test-only, and it must stay that way: nothing in the shipped binary verifies a
+# signature itself. `tests/updater_key_pairing.rs` asks whether the public key in
+# `tauri.conf.json` is the other half of the release signing key, and it has to
+# ask using the plugin's own verifier to mean anything — this is the same crate
+# `tauri-plugin-updater` already resolves to. `base64` is here for the same
+# reason: the configured key and Tauri's signatures are both base64-wrapped, and
+# a hand-rolled decoder beside a cryptographic check is not worth the risk.
+[dev-dependencies]
+minisign-verify = "0.2"
+base64 = "0.22"
 
 [features]
 # Used for production builds or when a dev server is not specified. Do not remove.
