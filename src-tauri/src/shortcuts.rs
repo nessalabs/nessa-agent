@@ -3,14 +3,17 @@
 //! Seeded from `protocol/defaults/shortcuts.v1.json` when absent. The shell loads
 //! this host-owned cache independently of the authenticated gateway session.
 
-use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
 use crate::composition::HostDependencies;
+// The same port the settings file reads and writes through: one adapter for
+// "replace one path durably", and one substitute that can refuse.
+use crate::settings::storage::{self, Storage};
 
 const DEFAULTS_JSON: &str = include_str!("../../protocol/defaults/shortcuts.v1.json");
 
@@ -63,6 +66,7 @@ pub trait ShortcutStore: Send + Sync {
 /// with no config root — the bundled defaults are all it can have.
 pub struct ShortcutsFile {
     path: Option<PathBuf>,
+    storage: Arc<dyn Storage>,
 }
 
 impl ShortcutsFile {
@@ -70,6 +74,7 @@ impl ShortcutsFile {
     pub fn at(config_root: Option<PathBuf>) -> Self {
         Self {
             path: config_root.map(|root| root.join("shortcuts.json")),
+            storage: Arc::new(storage::FileStorage),
         }
     }
 }
@@ -77,41 +82,59 @@ impl ShortcutsFile {
 impl ShortcutStore for ShortcutsFile {
     fn load(&self) -> ShortcutsDocument {
         match &self.path {
-            Some(path) => load_from(path),
+            Some(path) => load_from(&*self.storage, path),
             None => defaults(),
         }
     }
 
     fn save(&self, document: &ShortcutsDocument) {
         if let Some(path) = &self.path {
-            write(path, document);
+            write(&*self.storage, path, document);
         }
     }
 }
 
 /// Load the cache, seeding from bundled defaults when the file is missing.
-fn load_from(path: &Path) -> ShortcutsDocument {
-    match fs::read_to_string(path) {
+///
+/// Three different answers, and which one is given matters enough to be worth
+/// testing: absent means seed and write, unreadable or malformed means run on
+/// defaults and leave the file alone, and a version this build does not know
+/// means the same — a file written by a newer Nessa is not this one's to
+/// replace. It reaches the disk through the same [`Storage`] port `settings.rs`
+/// uses, so a test can make each of those happen without a filesystem.
+fn load_from(storage: &dyn Storage, path: &Path) -> ShortcutsDocument {
+    match storage.read(path) {
         Ok(raw) => match serde_json::from_str::<ShortcutsDocument>(&raw) {
             Ok(doc) if doc.version == 1 => doc,
-            Ok(_) => {
+            Ok(doc) => {
+                // Left as it is, deliberately. Overwriting it would throw away
+                // shortcuts a newer build wrote, on the strength of this build
+                // not understanding them — which is the same reason `settings.rs`
+                // refuses to replace a file it could not parse.
                 eprintln!(
-                    "[nessa] {} has unsupported shortcuts version; using defaults",
-                    path.display()
+                    "[nessa] {} is shortcuts version {}, which this build does not read; \
+                     using defaults and leaving the file alone",
+                    path.display(),
+                    doc.version
                 );
-                let doc = defaults();
-                write(path, &doc);
-                doc
+                defaults()
             }
             Err(error) => {
                 eprintln!("[nessa] {} is not valid shortcuts: {error}", path.display());
                 defaults()
             }
         },
-        Err(_) => {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let doc = defaults();
-            write(path, &doc);
+            write(storage, path, &doc);
             doc
+        }
+        Err(error) => {
+            // Refused, or unreadable for any other reason. The shortcuts still
+            // register from defaults; what must not happen is writing over a
+            // file that is there and simply would not open.
+            eprintln!("[nessa] could not read {}: {error}", path.display());
+            defaults()
         }
     }
 }
@@ -123,16 +146,10 @@ fn load_from(path: &Path) -> ShortcutsDocument {
 /// faster — so this returns nothing. It does not follow that it may be silent:
 /// a cache that never writes means shortcuts a person edits are back to the
 /// defaults on every launch, and that is a bug somebody has to be able to find.
-fn write(path: &Path, doc: &ShortcutsDocument) {
-    if let Some(parent) = path.parent() {
-        if let Err(error) = fs::create_dir_all(parent) {
-            eprintln!("[nessa] could not make {}: {error}", parent.display());
-            return;
-        }
-    }
+fn write(storage: &dyn Storage, path: &Path, doc: &ShortcutsDocument) {
     match serde_json::to_string_pretty(doc) {
         Ok(raw) => {
-            if let Err(error) = fs::write(path, format!("{raw}\n")) {
+            if let Err(error) = storage.write(path, format!("{raw}\n").as_bytes()) {
                 eprintln!(
                     "[nessa] could not cache shortcuts in {}: {error}",
                     path.display()
@@ -277,5 +294,98 @@ mod tests {
 
         assert_eq!(accept(&store, &doc).expect("version 1 is spoken"), None);
         assert!(store.saved().is_some());
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use crate::settings::storage::MemoryStorage;
+
+    fn cache() -> (MemoryStorage, PathBuf) {
+        (
+            MemoryStorage::default(),
+            PathBuf::from("/config/shortcuts.json"),
+        )
+    }
+
+    /// Absent is the only case that writes: a fresh machine gets the bundled
+    /// defaults cached so the next launch does not rebuild them.
+    #[test]
+    fn a_missing_cache_is_seeded_and_written() {
+        let (storage, path) = cache();
+
+        let loaded = load_from(&storage, &path);
+
+        assert_eq!(loaded.version, 1);
+        assert!(
+            storage.get(&path).is_some(),
+            "the defaults were not cached for the next launch"
+        );
+    }
+
+    /// A file written by a newer build is not this one's to replace. Defaults
+    /// register, and what is on disk stays exactly as it was — the same rule
+    /// `settings.rs` keeps for a file it cannot parse.
+    #[test]
+    fn a_version_this_build_does_not_read_is_left_alone() {
+        let (storage, path) = cache();
+        let newer = br#"{"version":2,"shortcuts":[]}"#.to_vec();
+        storage.put(&path, &newer);
+
+        let loaded = load_from(&storage, &path);
+
+        assert_eq!(loaded.version, 1, "this build runs on what it understands");
+        assert_eq!(
+            storage.get(&path),
+            Some(newer),
+            "a newer build's shortcuts were overwritten"
+        );
+    }
+
+    /// The same for bytes that are not shortcuts at all.
+    #[test]
+    fn a_malformed_cache_is_left_alone() {
+        let (storage, path) = cache();
+        let rubbish = b"{ not json".to_vec();
+        storage.put(&path, &rubbish);
+
+        let loaded = load_from(&storage, &path);
+
+        assert_eq!(loaded.version, 1);
+        assert_eq!(storage.get(&path), Some(rubbish));
+    }
+
+    /// A file that is there and will not open is not an absent one: writing
+    /// over it would replace shortcuts that may be perfectly good, on the
+    /// strength of a permissions problem.
+    #[test]
+    fn a_refused_read_does_not_become_a_write() {
+        let (storage, path) = cache();
+        let existing = br#"{"version":1,"shortcuts":[]}"#.to_vec();
+        storage.put(&path, &existing);
+        *storage.read_error.lock().unwrap() = Some(io::ErrorKind::PermissionDenied);
+
+        let loaded = load_from(&storage, &path);
+
+        assert_eq!(loaded.version, 1, "the shortcuts still register");
+        assert_eq!(
+            storage.get(&path),
+            Some(existing),
+            "a refused read overwrote the file it could not open"
+        );
+    }
+
+    /// And a write that fails is survivable: the shortcuts are registered with
+    /// the system either way, and the cache only makes the next launch faster.
+    #[test]
+    fn a_refused_write_is_survivable() {
+        let (storage, path) = cache();
+        *storage.write_error.lock().unwrap() = Some(io::ErrorKind::PermissionDenied);
+
+        let loaded = load_from(&storage, &path);
+
+        assert_eq!(loaded.version, 1);
+        assert_eq!(storage.get(&path), None, "nothing reached the disk");
     }
 }
