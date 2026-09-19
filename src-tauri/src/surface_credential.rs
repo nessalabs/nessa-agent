@@ -452,12 +452,25 @@ mod tests {
     /// `prod` is the namespace root itself and every other stage is a directory
     /// under it — that is what puts a dev credential beside a packaged one
     /// rather than on top of it.
+    /// An absolute path on the platform running the test.
+    ///
+    /// `/data` is absolute on Unix and is not on Windows, where a path needs a
+    /// drive — and `credential_location` is right to refuse a base that is not
+    /// absolute, so a test that hardcoded `/data` asserted the refusal there
+    /// rather than the nesting it meant to.
+    fn absolute(path: &str) -> PathBuf {
+        match cfg!(windows) {
+            true => PathBuf::from(format!("C:\\{path}")),
+            false => PathBuf::from(format!("/{path}")),
+        }
+    }
+
     #[test]
     fn a_stage_that_is_not_prod_nests_and_prod_does_not() {
-        let base = || Some(PathBuf::from("/data"));
+        let base = || Some(absolute("data"));
 
         let (root, relative) = credential_location(base(), "prod", None);
-        assert_eq!(root, Some(PathBuf::from("/data")));
+        assert_eq!(root, Some(absolute("data")));
         assert_eq!(relative, PathBuf::from("auth/surfaces/nessa-panel.token"));
 
         let (_, relative) = credential_location(base(), "dev", None);
@@ -480,11 +493,11 @@ mod tests {
     fn a_namespace_that_could_climb_out_is_refused_outright() {
         for (base, stage, instance) in [
             (Some(PathBuf::from("relative/path")), "dev", None),
-            (Some(PathBuf::from("/data")), "..", None),
-            (Some(PathBuf::from("/data")), "", None),
-            (Some(PathBuf::from("/data")), "one/two", None),
-            (Some(PathBuf::from("/data")), "dev", Some("..")),
-            (Some(PathBuf::from("/data")), "dev", Some("one two")),
+            (Some(absolute("data")), "..", None),
+            (Some(absolute("data")), "", None),
+            (Some(absolute("data")), "one/two", None),
+            (Some(absolute("data")), "dev", Some("..")),
+            (Some(absolute("data")), "dev", Some("one two")),
             (None, "dev", None),
         ] {
             let (root, _) = credential_location(base, stage, instance);
