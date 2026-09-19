@@ -63,8 +63,8 @@ mod tests {
     /// accepted here.
     #[test]
     fn every_stage_the_table_names_is_one_the_server_accepts() {
-        let table: serde_json::Value = serde_json::from_str(PORTS_JSON)
-            .expect("bundled gateway-ports.json must parse");
+        let table: serde_json::Value =
+            serde_json::from_str(PORTS_JSON).expect("bundled gateway-ports.json must parse");
         let stages = table["stages"]
             .as_object()
             .expect("the table lists its stages as an object");
