@@ -20,11 +20,21 @@ import { dirname, resolve } from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 
-import { gatewayPort } from "./gateway-port.mjs"
+import { gatewayPort, selectedStage } from "./gateway-port.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
-const stage = process.argv[2] ?? "dev"
-const port = gatewayPort(stage)
+// The same resolution the server and the health probe use. Freeing the stage's
+// table port while the server was told `NESSA_PORT` kills whatever is on the
+// table port — another checkout's gateway, say — and leaves the port actually
+// wanted still held. This script's own advice is to "set NESSA_PORT for this
+// run", which only works if this script reads it.
+const stage = process.argv[2] ?? selectedStage()
+const override = (process.env.NESSA_PORT ?? "").trim()
+const port = override === "" ? gatewayPort(stage) : Number(override)
+if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+  console.error(`NESSA_PORT is not a port: ${override}`)
+  process.exit(1)
+}
 
 function run(command, args) {
   return spawnSync(command, args, { encoding: "utf8" })

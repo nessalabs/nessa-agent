@@ -6,7 +6,7 @@ import { defineConfig, searchForWorkspaceRoot } from "vite"
 import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 
-import { gatewayOrigin, type Stage } from "./src/env/gateway-ports"
+import { gatewayOrigin, parseStage } from "./src/env/gateway-ports"
 
 /**
  * Nessa UI is consumed as source, not as its published bundle.
@@ -44,8 +44,18 @@ const host = process.env.TAURI_DEV_HOST
 // installed Nessa holds. One table decides that port: see src/env/gateway-ports.
 // Proxying `dev` regardless would send the browser to a socket nothing is on
 // as soon as the gateway beside it was started as anything else.
-const stage = (process.env.NESSA_STAGE ?? "dev").trim().toLowerCase() as Stage
-const gatewayTarget = process.env.NESSA_BROWSER_GATEWAY_URL ?? gatewayOrigin(stage)
+// Parsed, not cast. `as Stage` asserted a shape TypeScript could not check, so
+// any string at all reached `gatewayOrigin` and a stage the server rejects
+// resolved to a port here.
+const stage = parseStage(process.env.NESSA_STAGE)
+// `NESSA_PORT` as well as the stage, because the server reads both and this
+// proxy is the browser's only way to it: overriding the port started a gateway
+// on one socket and left every request going to the other, which answers as a
+// gateway that is simply not there.
+const override = (process.env.NESSA_PORT ?? "").trim()
+const gatewayTarget =
+  process.env.NESSA_BROWSER_GATEWAY_URL ??
+  (override === "" ? gatewayOrigin(stage) : `http://127.0.0.1:${Number(override)}`)
 const tlsCert = process.env.NESSA_BROWSER_TLS_CERT
 const tlsKey = process.env.NESSA_BROWSER_TLS_KEY
 if (Boolean(tlsCert) !== Boolean(tlsKey))

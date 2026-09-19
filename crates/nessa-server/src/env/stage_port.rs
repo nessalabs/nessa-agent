@@ -51,6 +51,32 @@ mod tests {
         }
     }
 
+    /// And the other direction, which nothing checked: a stage in the table
+    /// that this server would refuse.
+    ///
+    /// Everything else reads the table — the Tauri host's launchd registration,
+    /// the Vite proxy, the `just` recipes — and each resolves a port for any key
+    /// it finds there. A key this server cannot parse is therefore a port that
+    /// is freed, probed and proxied for a gateway that will never start on it,
+    /// which is three failures wearing different hats. The table is where a
+    /// stage is added, so the table is what has to stay inside what is
+    /// accepted here.
+    #[test]
+    fn every_stage_the_table_names_is_one_the_server_accepts() {
+        let table: serde_json::Value = serde_json::from_str(PORTS_JSON)
+            .expect("bundled gateway-ports.json must parse");
+        let stages = table["stages"]
+            .as_object()
+            .expect("the table lists its stages as an object");
+        assert!(!stages.is_empty(), "a table with no stages proves nothing");
+        for named in stages.keys() {
+            assert!(
+                Stage::parse(named).is_ok(),
+                "gateway-ports.json names the stage {named}, which Stage::parse refuses",
+            );
+        }
+    }
+
     #[test]
     fn dev_listens_beside_the_product_port_rather_than_on_it() {
         assert_eq!(stage_port(Stage::Prod), 7420);

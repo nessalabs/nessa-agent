@@ -34,6 +34,8 @@ export function useComposer(
   // the one thing worth keeping the pane open for.
   const [expanded, setExpanded] = React.useState(false)
 
+  // Whether a submit is waiting for its draft to leave. See `submit`.
+  const awaitingDraft = React.useRef(false)
   // A fresh conversation gets a fresh composer — the pane does not follow
   // somebody into a tab they did not open it in.
   React.useEffect(() => setExpanded(false), [chat.active.id])
@@ -48,12 +50,30 @@ export function useComposer(
     // Calling `submit` proves nothing: the gateway may be away, the text may be
     // over the size the gateway takes, and in both the draft is still here and
     // still needs somewhere to be read. So the composer's own offer to collapse
-    // is declined for every submit (see `takesExpansion`) and this closes it
-    // once the message is actually gone.
+    // is declined for every submit (see `takesExpansion`), and the effect below
+    // closes it when the draft is actually gone.
+    //
+    // Watched rather than awaited. `submit` settles when the gateway has been
+    // created, written to and read back, while the draft leaves the composer at
+    // the moment the submission starts — so awaiting it held the pane open,
+    // empty, for a whole round trip, and for good against a gateway that
+    // accepts the connection and then answers nothing.
+    awaitingDraft.current = true
     void chat.submit(fromEditor(content)).then((taken) => {
-      if (taken) setExpanded(false)
+      // Turned away: the draft is still here, so nothing is waiting for it to
+      // go. Left set, the next unrelated emptying of the draft would close a
+      // pane nobody asked to close.
+      if (!taken) awaitingDraft.current = false
     })
   }
+
+  // The draft emptying is the submission having started — the one fact that
+  // says the message left this composer.
+  React.useEffect(() => {
+    if (!awaitingDraft.current || chat.active.draft.length > 0) return
+    awaitingDraft.current = false
+    setExpanded(false)
+  }, [chat.active.draft])
 
   /** Every expansion change the composer proposes, minus the ones we decline. */
   function changeExpanded(next: boolean, reason: PillComposerExpansionReason) {

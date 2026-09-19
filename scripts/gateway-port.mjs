@@ -39,9 +39,19 @@ export function gatewayPort(stage) {
 export function selectedStage(env = process.env) {
   // An empty variable is how a shell spells unset — `NESSA_STAGE= just start` —
   // and is the dev stage like an absent one.
-  const stage = (env.NESSA_STAGE ?? "").trim().toLowerCase() || "dev"
-  if (!(stage in table.stages)) throw new Error(`No gateway port for stage ${stage}`)
-  return stage
+  const named = (env.NESSA_STAGE ?? "").trim()
+  if (named === "") return "dev"
+  // Matched exactly, because `Stage::parse` in the server matches exactly. A
+  // rule more forgiving than the server's is worse than a stricter one: it
+  // reads `Dev` as dev and frees and probes 7421, while the server refuses to
+  // start at all and the host's launchd registration finds no port for `Dev`.
+  // One value, three different failures, and none of them says what is wrong.
+  if (!(named in table.stages))
+    throw new Error(
+      `NESSA_STAGE=${named} is not a stage. ` +
+        `The server accepts exactly: ${Object.keys(table.stages).join(", ")}.`,
+    )
+  return named
 }
 
 /**

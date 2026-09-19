@@ -1,8 +1,36 @@
 import table from "../../protocol/defaults/gateway-ports.json"
 
-export type Stage = "dev" | "ci" | "alpha" | "prod"
+/**
+ * The stages there are, taken from the table rather than written out again.
+ *
+ * Hand-maintained, this union drifted from the table it describes and from the
+ * server's own `Stage::parse` — and a `value as Stage` cast let an unchecked
+ * string past all three. Derived, adding a stage to the table is what adds it
+ * here, and `parseStage` is the only way in.
+ */
+export type Stage = keyof typeof table.stages
 
 const stages: Readonly<Record<string, number>> = table.stages
+
+/**
+ * The stage a value names, or a refusal.
+ *
+ * Matched exactly, because the server's `Stage::parse` matches exactly: a rule
+ * more forgiving here reads `Dev` as dev, resolves a port, and hands it to a
+ * server that refuses to start on a stage it does not recognise. Surrounding
+ * whitespace is a shell artefact and is not a different stage; an empty value
+ * is how a shell spells unset and is the dev stage, like an absent one.
+ */
+export function parseStage(value: string | undefined): Stage {
+  const named = (value ?? "").trim()
+  if (named === "") return "dev"
+  if (!(named in stages))
+    throw new Error(
+      `NESSA_STAGE=${named} is not a stage. ` +
+        `The server accepts exactly: ${Object.keys(stages).join(", ")}.`,
+    )
+  return named as Stage
+}
 
 /**
  * Loopback port the gateway listens on for `stage` when `NESSA_PORT` says

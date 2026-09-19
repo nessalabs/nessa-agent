@@ -293,7 +293,11 @@ function manifest(root, args, config) {
     repository,
     targets,
     signatures,
-    notes: option(args, "notes", `${config.productName} ${config.version}`),
+    // Empty unless a release says something. The default was the product name
+    // and version, which the update tab already shows on its own line — it read
+    // as a release whose notes were its own title. The panel has a written
+    // sentence for the empty case; this is what makes that the state that ships.
+    notes: option(args, "notes", ""),
     published: new Date().toISOString(),
   })
   const written = resolve(directory, "latest.json")

@@ -87,6 +87,53 @@ describe("attachThenAsk", () => {
     expect(unlisten).toHaveBeenCalledOnce()
   })
 
+  /**
+   * One `listen()` that rejects used to take everything with it: the promise
+   * went unhandled, `ready` never ran, the question was never asked, and the
+   * panel spent the rest of the launch unable to hear about an update — with
+   * no diagnostic anywhere.
+   */
+  it("reports a listener that could not be attached, rather than going quiet", async () => {
+    const failed = vi.fn()
+    const asked = vi.fn(() => Promise.resolve())
+    const ready = vi.fn()
+
+    attachThenAsk({
+      attach: () => Promise.reject(new Error("listen() failed")),
+      ask: asked,
+      ready,
+      failed,
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(failed).toHaveBeenCalledOnce()
+    expect((failed.mock.calls[0]![0] as Error).message).toBe("listen() failed")
+    expect(ready).not.toHaveBeenCalled()
+    expect(asked).not.toHaveBeenCalled()
+  })
+
+  /** The same for the question, which reaches the host too. */
+  it("reports a snapshot that could not be taken", async () => {
+    const failed = vi.fn()
+    const ready = vi.fn()
+
+    attachThenAsk({
+      attach: () => Promise.resolve([]),
+      ask: () => Promise.reject(new Error("available_update failed")),
+      ready,
+      failed,
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // The listeners did attach, so the panel can still be told about an update
+    // announced from here on; only the catch-up question was lost.
+    expect(ready).toHaveBeenCalledOnce()
+    expect(failed).toHaveBeenCalledOnce()
+  })
+
   /** Both sides agree on whether anyone is still listening. */
   it("tells attach and ask alike when nobody is listening any more", async () => {
     let fromAttach: (() => boolean) | undefined

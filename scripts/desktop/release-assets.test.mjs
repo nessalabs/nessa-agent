@@ -230,3 +230,23 @@ test("published names follow the shipped product and version", () => {
   )
   assert.equal(config.bundle.createUpdaterArtifacts, true)
 })
+
+/**
+ * Four comments across the host and the panel are written around the manifest
+ * publishing no notes — the panel even has a written sentence for that case and
+ * calls it "the one that ships first". A default here quietly made that state
+ * unreachable, and nothing said so: the claim lived in comments in other files.
+ * This is that claim, where it can fail.
+ */
+test("the manifest publishes no notes unless a release says something", () => {
+  const source = readFileSync("scripts/desktop/release-assets.mjs", "utf8")
+  assert.match(source, /notes: option\(args, "notes", ""\)/)
+
+  const workflow = readFileSync(".github/workflows/release.yml", "utf8")
+  const manifestStep = workflow.slice(workflow.indexOf("release-assets.mjs manifest"))
+  assert.doesNotMatch(
+    manifestStep.slice(0, 400),
+    /--notes\b/,
+    "the workflow now passes notes; the panel's empty-notes case is no longer what ships",
+  )
+})

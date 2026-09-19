@@ -501,8 +501,10 @@ pub fn check_in_background(app: &AppHandle, source: Arc<dyn ReleaseSource>) {
 /// Everything outside the process is on one of the two ports, so this is the
 /// whole of what a check does and all of it is exercised in [`tests`].
 async fn run_check(source: &dyn ReleaseSource, outcome: &impl CheckOutcome) {
-    // Read before the check, not after: a source that finds an update retains
-    // it, and what it retains is the same thing this asks about.
+    // Asked before the check only because nothing makes it matter after: a
+    // check cannot announce anything, so this reads the same either way. What
+    // it reads is whether an update has been announced this launch, which is a
+    // different slot from the one a source retains an update in.
     let offering = outcome.offering();
     let checked = source.check().await;
 

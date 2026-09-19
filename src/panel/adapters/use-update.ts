@@ -54,12 +54,6 @@ export function useUpdate(): PanelUpdate {
   // gesture as far as the download is concerned.
   const [selected, setSelected] = React.useState(false)
 
-  // Whether the host's events can reach this panel yet. Nothing that depends
-  // on hearing back is offered before they can: an install refused straight
-  // away would otherwise be refused into a void, leaving a tab that says it is
-  // downloading with nothing left to tell it otherwise.
-  const [listening, setListening] = React.useState(false)
-
   React.useEffect(
     () =>
       attachThenAsk({
@@ -87,7 +81,12 @@ export function useUpdate(): PanelUpdate {
           const release = await availableUpdate()
           if (live() && release) report({ kind: "announced", release })
         },
-        ready: () => setListening(true),
+        // Nothing here can recover — the host cannot be listened to for the
+        // life of this panel — but it must not be silent about it. Without
+        // this the panel simply never hears about an update, and looks
+        // identical to a launch where there was none.
+        failed: (reason) =>
+          console.error("[nessa] the panel cannot hear the host about updates", reason),
       }),
     [],
   )
@@ -100,15 +99,16 @@ export function useUpdate(): PanelUpdate {
     // selection got there.
     viewing: selected && tab !== null,
     install: () => {
-      // A refusal comes back as an event, so an install started before the
-      // failure listener exists can be refused with nobody to hear it — and
-      // the tab it opened would go on saying it was downloading, with no way
-      // out. The control is not offered until the events can arrive.
-      if (!listening) return
       report({ kind: "install" })
       setSelected(true)
-      // The refusal is an event, so nothing is awaited here.
-      void installUpdate()
+      // A refusal comes back as an event, so the answer is not awaited here.
+      // The rejection is still caught: an invoke that fails outright sends no
+      // event, and dropping it would leave the tab saying it was downloading
+      // with nothing ever arriving to correct it.
+      void installUpdate().catch((reason) => {
+        console.error("[nessa] the update could not be started", reason)
+        report({ kind: "failed" })
+      })
     },
     dismiss: () => report({ kind: "dismiss" }),
     close: () => {

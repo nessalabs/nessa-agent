@@ -116,12 +116,30 @@ fn load_from(path: &Path) -> ShortcutsDocument {
     }
 }
 
+/// Writes the cache, and says so when it could not.
+///
+/// The caller has nothing to do about a failure — the shortcuts are registered
+/// with the system either way, and the cache is only how the next launch starts
+/// faster — so this returns nothing. It does not follow that it may be silent:
+/// a cache that never writes means shortcuts a person edits are back to the
+/// defaults on every launch, and that is a bug somebody has to be able to find.
 fn write(path: &Path, doc: &ShortcutsDocument) {
     if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
+        if let Err(error) = fs::create_dir_all(parent) {
+            eprintln!("[nessa] could not make {}: {error}", parent.display());
+            return;
+        }
     }
-    if let Ok(raw) = serde_json::to_string_pretty(doc) {
-        let _ = fs::write(path, format!("{raw}\n"));
+    match serde_json::to_string_pretty(doc) {
+        Ok(raw) => {
+            if let Err(error) = fs::write(path, format!("{raw}\n")) {
+                eprintln!(
+                    "[nessa] could not cache shortcuts in {}: {error}",
+                    path.display()
+                );
+            }
+        }
+        Err(error) => eprintln!("[nessa] could not serialise the shortcuts: {error}"),
     }
 }
 

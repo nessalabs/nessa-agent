@@ -29,6 +29,8 @@ test("packaged desktop content policy permits required local capabilities", () =
       "http://ipc.localhost",
       "ws://127.0.0.1:7420",
       "http://127.0.0.1:7420",
+      "ws://127.0.0.1:7421",
+      "http://127.0.0.1:7421",
       "https:",
     ],
     "object-src": ["'none'"],
@@ -196,4 +198,30 @@ test("runtime preparation is capability-scoped to macOS packaging", async () => 
     { managedGateway: true },
   )
   assert.equal(loaded, true)
+})
+
+/**
+ * The CSP is a string in a JSON file and the ports are a table in another; only
+ * a test can hold the two together. A packaged build names the port its own
+ * stage listens on, so a stage whose port the policy does not allow produces a
+ * bundle where every gateway request is blocked — visible as "gateway
+ * unavailable" and a console violation, and only in a packaged build, because
+ * `devCsp` is null and neither `tauri dev` nor `pnpm web` enforces this.
+ */
+test("the content policy reaches every port a stage can listen on", () => {
+  const table = JSON.parse(readFileSync("protocol/defaults/gateway-ports.json", "utf8"))
+  const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"))
+  const connect = config.app.security.csp
+    .split(";")
+    .map((directive) => directive.trim())
+    .find((directive) => directive.startsWith("connect-src"))
+
+  for (const [stage, port] of Object.entries(table.stages)) {
+    for (const scheme of ["ws", "http"]) {
+      assert.ok(
+        connect.includes(`${scheme}://127.0.0.1:${port}`),
+        `connect-src does not allow ${scheme}://127.0.0.1:${port}, the ${stage} stage's port`,
+      )
+    }
+  }
 })
