@@ -463,9 +463,7 @@ struct PendingUpdate(Mutex<Option<Update>>);
 /// an install failed would be silently thrown away.
 fn retain(app: &AppHandle, update: Update) {
     if let Some(pending) = app.try_state::<PendingUpdate>() {
-        if let Ok(mut slot) = pending.0.lock() {
-            *slot = Some(update);
-        }
+        refill(&pending.0, update);
         return;
     }
     app.manage(PendingUpdate(Mutex::new(Some(update))));
@@ -499,6 +497,26 @@ pub fn release_source(app: &AppHandle) -> Arc<dyn ReleaseSource> {
     }
 
     Arc::new(PluginReleases(app.clone()))
+}
+
+/// Takes what is in the slot, leaving it empty.
+///
+/// The whole of the single-flight rule: whoever gets the update installs it,
+/// and a second request finds nothing and starts nothing. Written out rather
+/// than inlined so the rule is a function a test can call.
+fn claim<T>(slot: &Mutex<Option<T>>) -> Option<T> {
+    slot.lock().ok().and_then(|mut held| held.take())
+}
+
+/// Puts one back where the next request will find it.
+///
+/// In place, because `manage` keeps the first value of a type and drops later
+/// ones — an update put back through `manage` after a failed install would be
+/// silently thrown away, and the retry would find nothing.
+fn refill<T>(slot: &Mutex<Option<T>>, value: T) {
+    if let Ok(mut held) = slot.lock() {
+        *held = Some(value);
+    }
 }
 
 /// Asks the release endpoint once, off the startup path.
@@ -696,52 +714,91 @@ fn worth_reporting(received: u64, total: Option<u64>, reported: Reported) -> Opt
 /// the screen rather than to stderr alone: the tab turns it into a plain
 /// statement and offers the retry this leaves possible, because the update goes
 /// back in its slot.
+/// Everything an install request decides before a byte is downloaded.
+///
+/// The whole admission sequence, and its order, which is the part worth being
+/// sure of: a simulated offer has nothing behind it, a build that is not
+/// installed must not be installed over, and only then may the update leave the
+/// slot. Getting that order wrong — claiming first and refusing after — would
+/// take the release out of the slot and drop it, and the next request would
+/// find nothing to retry.
+///
+/// Generic over what is held, and taking the executable's location rather than
+/// asking for it, so every branch is reachable: the plugin's `Update` cannot be
+/// fabricated by a test and neither can an `AppHandle`, but a `&str` in a
+/// `Mutex` exercises the same code.
+fn begin_install<T>(
+    simulated: Option<String>,
+    executable: std::io::Result<PathBuf>,
+    slot: Option<&Mutex<Option<T>>>,
+) -> Result<T, NotInstalling> {
+    if let Some(version) = simulated {
+        return Err(NotInstalling::Tell(format!(
+            "the offer of {version} came from {SIMULATED_UPDATE}: there is no release to \
+             install. Nothing was downloaded and the app is not restarting. Use the local \
+             endpoint recipe to exercise a real download."
+        )));
+    }
+    admits_install(executable).map_err(NotInstalling::Tell)?;
+    let slot =
+        slot.ok_or_else(|| NotInstalling::Tell("there is no update to install".to_string()))?;
+    claim(slot).ok_or(NotInstalling::AlreadyRunning)
+}
+
+/// Why an install request did not start one.
+///
+/// Two kinds, because they are owed different things. Most refusals are a
+/// statement somebody needs: they pressed a control and nothing happened, and
+/// the tab has to say why. A second request while the first is downloading is
+/// not one of those — the tab is already showing that download's progress, and
+/// drawing a failure over it would be telling them something untrue about an
+/// install that is going perfectly well.
+#[derive(Debug, PartialEq, Eq)]
+enum NotInstalling {
+    /// Say this, on screen.
+    Tell(String),
+    /// Say nothing: a download is already running and is already on screen.
+    AlreadyRunning,
+}
+
+#[cfg(test)]
+impl NotInstalling {
+    /// The sentence a refusal carries, for a test that asserts what it says.
+    fn told(&self) -> &str {
+        match self {
+            Self::Tell(reason) => reason,
+            Self::AlreadyRunning => "",
+        }
+    }
+}
+
 #[tauri::command]
 pub fn install_update(app: AppHandle) {
-    // A simulated offer has no release behind it, so there is nothing here to
-    // download, install, or restart onto — and the tab must say that rather
-    // than sit at nought per cent for ever. It travels the same way a refused
-    // download does. Nothing is faked: no progress, no restart.
+    // Only the outside things are gathered here; what they mean is
+    // `begin_install`, which is where the order and every refusal are tested.
     #[cfg(debug_assertions)]
-    if let Some(simulated) = app.try_state::<SimulatedUpdate>() {
-        refuse(
-            &app,
-            &format!(
-                "the offer of {} came from {SIMULATED_UPDATE}: there is no release to install. \
-                 Nothing was downloaded and the app is not restarting. Use the local endpoint \
-                 recipe to exercise a real download.",
-                simulated.0
-            ),
-        );
-        return;
-    }
+    let simulated = app
+        .try_state::<SimulatedUpdate>()
+        .map(|state| state.0.clone());
+    #[cfg(not(debug_assertions))]
+    let simulated: Option<String> = None;
 
-    // Before anything is taken out of the slot: an install from a build that is
-    // not installed would replace the directory it is running from.
-    // The asking is here and the deciding is in `admits_install`, so the
-    // refusals are exercised by tests rather than only by running on a machine
-    // that happens to be arranged the right way.
-    //
-    // Reported through `refuse`, like every other way this can decline: the tab
-    // is on screen because somebody pressed install, and it must not sit at
-    // nought per cent for ever waiting for a download that was never going to
-    // start.
-    if let Err(reason) = admits_install(std::env::current_exe()) {
-        refuse(&app, &reason);
-        return;
-    }
-
-    let Some(pending) = app.try_state::<PendingUpdate>() else {
-        // Nothing was ever found, so nothing can be installed. The tab is only
-        // reachable from an announcement, so this is a page asking for
-        // something this launch never offered.
-        refuse(&app, "there is no update to install");
-        return;
-    };
-    let Some(update) = pending.0.lock().ok().and_then(|mut slot| slot.take()) else {
-        // Already installing. The download is not started twice, and the tab is
-        // already showing the first one's progress.
-        return;
+    let pending = app.try_state::<PendingUpdate>();
+    let update = match begin_install(
+        simulated,
+        std::env::current_exe(),
+        pending.as_ref().map(|state| &state.0),
+    ) {
+        Ok(update) => update,
+        // Said on screen, because the tab is there and somebody pressed the
+        // control that opened it.
+        Err(NotInstalling::Tell(reason)) => {
+            refuse(&app, &reason);
+            return;
+        }
+        // Not said: the tab is already showing the first request's progress,
+        // and a failure drawn over a running download would be a lie.
+        Err(NotInstalling::AlreadyRunning) => return,
     };
 
     let app = app.clone();
@@ -1089,6 +1146,103 @@ mod tests {
         let path = Path::new(r"C:\dev\nessa-agent\target\debug\nessa-app.exe");
 
         assert_eq!(replaceable(path), Replaceable::Loose);
+    }
+
+    /// A held release, as the host keeps one.
+    fn holding(release: &'static str) -> Mutex<Option<&'static str>> {
+        Mutex::new(Some(release))
+    }
+
+    /// An installed application, where an install is allowed to proceed.
+    fn installed() -> std::io::Result<PathBuf> {
+        Ok(PathBuf::from(
+            "/Applications/Nessa.app/Contents/MacOS/nessa-app",
+        ))
+    }
+
+    /// The whole admission sequence, on the one platform whose bundle rule it
+    /// asks about.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_install_from_an_installed_app_takes_the_release_once() {
+        let slot = holding("the release");
+
+        assert_eq!(
+            begin_install(None, installed(), Some(&slot)),
+            Ok("the release")
+        );
+        // The second request finds nothing, which is what stops two downloads.
+        assert!(begin_install(None, installed(), Some(&slot)).is_err());
+    }
+
+    /// And the order: every refusal happens *before* the release leaves the
+    /// slot, so a refused request leaves something for the next one to retry.
+    /// Claiming first and refusing after would drop the release on the floor.
+    #[test]
+    fn a_refused_install_leaves_the_release_where_it_was() {
+        let build_tree: PathBuf = ["/Users/dev/nessa-agent", "target", "debug", "nessa-app"]
+            .iter()
+            .collect();
+
+        for (simulated, executable) in [
+            (Some("9.9.9".to_string()), installed()),
+            (None, Ok(build_tree)),
+            (
+                None,
+                Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+            ),
+        ] {
+            let slot = holding("the release");
+
+            assert!(begin_install(simulated, executable, Some(&slot)).is_err());
+            assert_eq!(
+                claim(&slot),
+                Some("the release"),
+                "a refusal took the release out of the slot and dropped it",
+            );
+        }
+    }
+
+    /// A second request while the first is downloading says nothing.
+    ///
+    /// The tab is already showing that download's progress, so a refusal drawn
+    /// over it would tell somebody their install had failed while it was going
+    /// perfectly well. Every other refusal is a sentence they need; this one is
+    /// silence, and the difference is in the type rather than in a comment.
+    #[test]
+    fn a_second_request_is_silent_rather_than_a_failure_on_screen() {
+        let slot = holding("the release");
+        begin_install(None, installed(), Some(&slot)).expect("the first request takes it");
+
+        let refused =
+            begin_install(None, installed(), Some(&slot)).expect_err("the second finds nothing");
+
+        assert_eq!(refused, NotInstalling::AlreadyRunning);
+    }
+
+    /// A simulated offer is refused before anything else is even looked at:
+    /// there is no release behind it to take.
+    #[test]
+    fn a_simulated_offer_is_refused_and_says_where_it_came_from() {
+        let slot = holding("the release");
+
+        let refused = begin_install(Some("9.9.9".to_string()), installed(), Some(&slot))
+            .expect_err("a simulated offer has nothing to install");
+
+        assert!(refused.told().contains(SIMULATED_UPDATE), "{refused:?}");
+        assert!(refused.told().contains("9.9.9"), "{refused:?}");
+    }
+
+    /// Nothing was ever found, so there is no slot at all.
+    #[test]
+    fn an_install_with_nothing_found_says_so() {
+        let refused = begin_install(None, installed(), None::<&Mutex<Option<&str>>>)
+            .expect_err("there is nothing to install");
+
+        assert!(
+            refused.told().contains("no update to install"),
+            "{refused:?}"
+        );
     }
 
     /// Every way the install can be turned away before anything is taken out of
