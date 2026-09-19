@@ -2,30 +2,27 @@ use std::path::PathBuf;
 
 use crate::agent_install::domain::AgentName;
 
-pub const HELP: &str = "\
-Nessa
+pub const HELP: &str = "Nessa\n\n  nessa server [--provision-local]\n  nessa auth init --local [--owner-token-file PATH]\n  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]\n  nessa doctor [--local] [--credential-file PATH]\n  nessa install-agent NAME\n  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]\n  nessa auth recover-owner --local --owner-token-file PATH\n\ninstall-agent downloads the release of an agent's own runtime that Nessa has\ntested, verifies it against a compiled-in digest, and reports what it installed\nas JSON on stdout. Installing one already present downloads nothing.\n\nLocal is the current backend. Cloud auth is not implemented.\n`server --provision-local` creates the owner and panel credentials of the selected\nnamespace when they are absent, then serves; it never replaces existing ones.\nWithout it, `nessa server` only serves what the offline auth commands provisioned.\nNESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.\nToken defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.\n";
 
-  nessa server
-  nessa auth init --local [--owner-token-file PATH]
-  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]
-  nessa doctor [--local] [--credential-file PATH]
-  nessa install-agent NAME
-  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]
-  nessa auth recover-owner --local --owner-token-file PATH
-
-install-agent downloads the release of an agent's own runtime that Nessa has
-tested, verifies it against a compiled-in digest, and reports what it installed
-as JSON on stdout. Installing one already present downloads nothing.
-
-Local is the current backend. Cloud auth is not implemented.
-NESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.
-Token defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.
-";
+/// Whether a serving process may create the local credentials it needs.
+///
+/// Creating them mints an owner credential and writes it to disk, which is a
+/// decision an operator makes, not a side effect of starting a server. A
+/// developer's local loop and the packaged desktop app ask for it explicitly;
+/// a plain `nessa server` never does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalProvisioning {
+    /// Serve only what the offline `auth` commands already provisioned.
+    Manual,
+    /// Create the owner and panel credentials when absent, then serve. Existing
+    /// credentials are never rotated or replaced.
+    Automatic,
+}
 
 #[derive(Debug, PartialEq)]
 pub enum Command {
     Help,
-    Server,
+    Server(LocalProvisioning),
     Desktop(PathBuf),
     Offline(Vec<String>),
     Token {
@@ -53,7 +50,10 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
         return Err("Cloud authentication is not implemented yet; use --local".into());
     }
     if args == ["server"] {
-        return Ok(Command::Server);
+        return Ok(Command::Server(LocalProvisioning::Manual));
+    }
+    if args == ["server", "--provision-local"] {
+        return Ok(Command::Server(LocalProvisioning::Automatic));
     }
     if let [install, rest @ ..] = args {
         if install == "install-agent" {

@@ -2,6 +2,7 @@ use super::config::{self, default, key};
 use super::error::EnvironmentError;
 use super::source::EnvSource;
 use super::stage::Stage;
+use super::stage_port::stage_port;
 
 /// Fully parsed runtime configuration for this process.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,9 +36,11 @@ impl Environment {
         }
         validate_bind_host(stage, &bind_host, source)?;
 
+        // An explicit NESSA_PORT always wins; otherwise the stage decides, so a
+        // dev server and an installed product gateway do not want one port.
         let port = match read_optional(source, key::PORT)? {
             Some(value) => parse_port(key::PORT, &value)?,
-            None => default::PORT,
+            None => stage_port(stage),
         };
 
         let uptime_backend = super::UptimeBackend::parse(
@@ -168,8 +171,25 @@ mod tests {
         let config = Environment::load(&MockEnv::new()).expect("defaults");
         assert_eq!(config.stage, Stage::Dev);
         assert_eq!(config.bind_host, "127.0.0.1");
-        assert_eq!(config.port, 7420);
+        assert_eq!(config.port, 7421);
         assert_eq!(config.version, VERSION);
+    }
+
+    #[test]
+    fn stage_chooses_the_port_and_prod_keeps_the_product_one() {
+        for (stage, expected) in [("dev", 7421), ("ci", 7420), ("alpha", 7420), ("prod", 7420)] {
+            let config = Environment::load(&MockEnv::new().set(STAGE, stage)).expect("stage");
+            assert_eq!(config.port, expected, "stage {stage}");
+        }
+    }
+
+    #[test]
+    fn explicit_port_overrides_the_stage_default() {
+        for stage in ["dev", "prod"] {
+            let config = Environment::load(&MockEnv::new().set(STAGE, stage).set(PORT, "9999"))
+                .expect("explicit port");
+            assert_eq!(config.port, 9999, "stage {stage}");
+        }
     }
 
     #[test]
@@ -219,6 +239,6 @@ mod tests {
     #[test]
     fn formats_ipv6_loopback_listen_addr() {
         let config = Environment::load(&MockEnv::new().set(HOST, "::1")).expect("ipv6");
-        assert_eq!(config.listen_addr(), "[::1]:7420");
+        assert_eq!(config.listen_addr(), "[::1]:7421");
     }
 }

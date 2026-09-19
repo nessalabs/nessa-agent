@@ -267,8 +267,15 @@ export function useOnboarding(
       // this callback cannot know. The surface that learns it makes that call
       // (see `recordsSetupCompletion`).
     }, [practising]),
-    // Leaving is not an accomplishment and does not announce itself.
-    dismiss: React.useCallback(() => setState(dismissOnboarding), []),
+    // Leaving part-way is not an accomplishment and does not announce itself.
+    // Leaving from the last step is a different act: the lesson is the final
+    // thing setup has to say, so closing it there ends setup exactly as the way
+    // on does, and it is heard to end. The two controls differ in what they
+    // record, not in what they finish.
+    dismiss: React.useCallback(() => {
+      if (practising) playCue("celebrate")
+      setState(dismissOnboarding)
+    }, [practising]),
     recheck,
     checking,
   }

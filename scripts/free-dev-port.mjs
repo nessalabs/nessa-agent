@@ -69,18 +69,33 @@ function processCwd(pid) {
 }
 
 /**
- * A leftover from this checkout: node running vite (or the pnpm wrapper) with
- * our tree on the argv or as cwd. Cursor Agents port-forwards are not ours.
+ * A leftover from this checkout: node running vite (or the pnpm wrapper) from
+ * our tree. Cursor Agents port-forwards are not ours.
  */
 function isNessaVite({ pid, command }) {
-  const cwd = processCwd(pid)
-  const underRoot =
-    command.includes(root) ||
-    cwd === root ||
-    cwd.startsWith(`${root}/`) ||
-    cwd.startsWith(`${root}\\`)
-  if (!underRoot) return false
+  if (!belongsToThisCheckout(pid, command)) return false
   return /\bvite\b/.test(command) || /node_modules[/\\]\.bin[/\\]vite/.test(command)
+}
+
+/**
+ * Whether a process belongs to this checkout.
+ *
+ * The working directory is the evidence, because a command line is not: a
+ * sibling checkout at `/work/nessa-agent-other` contains `/work/nessa-agent` as
+ * a substring, and worktrees symlink `target/` into the main checkout so a
+ * worktree's process genuinely runs this checkout's binary.
+ *
+ * Windows has no cwd to read here (`lsof` is not there), so it falls back to a
+ * path-boundary check on the command — which rules out the sibling-prefix case
+ * and cannot rule out a shared binary. That is weaker, and it is said out loud
+ * rather than left to look the same as the Unix answer.
+ */
+function belongsToThisCheckout(pid, command) {
+  const cwd = processCwd(pid)
+  if (cwd)
+    return cwd === root || cwd.startsWith(`${root}/`) || cwd.startsWith(`${root}\\`)
+  if (process.platform !== "win32") return false
+  return command.includes(`${root}\\`) || command.includes(`${root}/`)
 }
 
 function killPid(pid) {

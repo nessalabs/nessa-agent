@@ -4,6 +4,10 @@
 //! runtime behavior. Serving requires the local auth registry in every stage;
 //! Tests inject config via `MockEnv` instead of mutating the real environment.
 //!
+//! The listen port comes from the stage unless `NESSA_PORT` names one; the
+//! stage → port table lives in `protocol/defaults/gateway-ports.json` and is
+//! read by [`stage_port`].
+//!
 //! ```text
 //! NESSA_STAGE / NESSA_HOST / NESSA_PORT
 //!        │
@@ -19,6 +23,7 @@ mod environment;
 mod error;
 mod source;
 mod stage;
+mod stage_port;
 
 pub use config::key::{HOST, PORT, STAGE};
 pub use config::VERSION;
@@ -26,6 +31,7 @@ pub use environment::Environment;
 pub use error::EnvironmentError;
 pub use source::MockEnv;
 pub use stage::Stage;
+pub use stage_port::stage_port;
 
 mod backend;
 pub use backend::UptimeBackend;

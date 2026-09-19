@@ -11,7 +11,7 @@ HTTP `/health` reports process liveness only.
 | [product/v1.json](product/v1.json) | Session, credential, and termination payloads |
 | [manifest.json](manifest.json) | Shared health method schema |
 | [schemas/v1/](schemas/v1/) | Shared payloads, frames, and shortcut documents |
-| [defaults/](defaults/) | Bundled shortcut defaults |
+| [defaults/](defaults/) | Bundled shortcut defaults, and the stage → gateway port table |
 | [fixtures/v1/](fixtures/v1/) | Validated shared wire examples |
 
 ```sh

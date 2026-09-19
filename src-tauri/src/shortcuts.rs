@@ -3,13 +3,17 @@
 //! Seeded from `protocol/defaults/shortcuts.v1.json` when absent. The shell loads
 //! this host-owned cache independently of the authenticated gateway session.
 
-use std::fs;
-use std::sync::Mutex;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
-use crate::local_data;
+use crate::composition::HostDependencies;
+// The same port the settings file reads and writes through: one adapter for
+// "replace one path durably", and one substitute that can refuse.
+use crate::settings::storage::{self, Storage};
 
 const DEFAULTS_JSON: &str = include_str!("../../protocol/defaults/shortcuts.v1.json");
 
@@ -35,51 +39,124 @@ pub struct ShortcutBinding {
 /// Currently registered global summon accelerator (for unregister on refresh).
 pub struct SummonRegistration(pub Mutex<Option<String>>);
 
-fn path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    local_data::config_root(app).map(|root| root.join("shortcuts.json"))
-}
-
 fn defaults() -> ShortcutsDocument {
     serde_json::from_str(DEFAULTS_JSON).expect("bundled shortcuts.v1.json must parse")
 }
 
-/// Load the cache, seeding from bundled defaults when the file is missing.
-pub fn load(app: &AppHandle) -> ShortcutsDocument {
-    let Some(path) = path(app) else {
-        return defaults();
-    };
+/// Where the host-owned shortcut cache is kept.
+///
+/// The host's own port: a document in, a document out. The real implementation
+/// is [`ShortcutsFile`], built once in composition; a test substitutes one that
+/// keeps the document in memory, which is what lets [`accept`] — the rule for a
+/// document the shell hands back — be exercised without a disk.
+pub trait ShortcutStore: Send + Sync {
+    /// The current cache, seeded from the bundled defaults when it is missing
+    /// or unusable.
+    fn load(&self) -> ShortcutsDocument;
 
-    match fs::read_to_string(&path) {
+    /// Replaces the cache. A refused write costs the next launch its customised
+    /// bindings and nothing else, so there is no failure for a caller to act on.
+    fn save(&self, document: &ShortcutsDocument);
+}
+
+/// `shortcuts.json` under the stage-scoped config root ([`crate::local_data`]).
+///
+/// The path is resolved once, in composition: it comes from the process
+/// environment, which does not change while the app runs. `None` is a launch
+/// with no config root — the bundled defaults are all it can have.
+pub struct ShortcutsFile {
+    path: Option<PathBuf>,
+    storage: Arc<dyn Storage>,
+}
+
+impl ShortcutsFile {
+    /// The real file, under the config root composition resolved.
+    pub fn at(config_root: Option<PathBuf>) -> Self {
+        Self {
+            path: config_root.map(|root| root.join("shortcuts.json")),
+            storage: Arc::new(storage::FileStorage),
+        }
+    }
+}
+
+impl ShortcutStore for ShortcutsFile {
+    fn load(&self) -> ShortcutsDocument {
+        match &self.path {
+            Some(path) => load_from(&*self.storage, path),
+            None => defaults(),
+        }
+    }
+
+    fn save(&self, document: &ShortcutsDocument) {
+        if let Some(path) = &self.path {
+            write(&*self.storage, path, document);
+        }
+    }
+}
+
+/// Load the cache, seeding from bundled defaults when the file is missing.
+///
+/// Three different answers, and which one is given matters enough to be worth
+/// testing: absent means seed and write, unreadable or malformed means run on
+/// defaults and leave the file alone, and a version this build does not know
+/// means the same — a file written by a newer Nessa is not this one's to
+/// replace. It reaches the disk through the same [`Storage`] port `settings.rs`
+/// uses, so a test can make each of those happen without a filesystem.
+fn load_from(storage: &dyn Storage, path: &Path) -> ShortcutsDocument {
+    match storage.read(path) {
         Ok(raw) => match serde_json::from_str::<ShortcutsDocument>(&raw) {
             Ok(doc) if doc.version == 1 => doc,
-            Ok(_) => {
+            Ok(doc) => {
+                // Left as it is, deliberately. Overwriting it would throw away
+                // shortcuts a newer build wrote, on the strength of this build
+                // not understanding them — which is the same reason `settings.rs`
+                // refuses to replace a file it could not parse.
                 eprintln!(
-                    "[nessa] {} has unsupported shortcuts version; using defaults",
-                    path.display()
+                    "[nessa] {} is shortcuts version {}, which this build does not read; \
+                     using defaults and leaving the file alone",
+                    path.display(),
+                    doc.version
                 );
-                let doc = defaults();
-                write(&path, &doc);
-                doc
+                defaults()
             }
             Err(error) => {
                 eprintln!("[nessa] {} is not valid shortcuts: {error}", path.display());
                 defaults()
             }
         },
-        Err(_) => {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let doc = defaults();
-            write(&path, &doc);
+            write(storage, path, &doc);
             doc
+        }
+        Err(error) => {
+            // Refused, or unreadable for any other reason. The shortcuts still
+            // register from defaults; what must not happen is writing over a
+            // file that is there and simply would not open.
+            eprintln!("[nessa] could not read {}: {error}", path.display());
+            defaults()
         }
     }
 }
 
-fn write(path: &std::path::Path, doc: &ShortcutsDocument) {
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    if let Ok(raw) = serde_json::to_string_pretty(doc) {
-        let _ = fs::write(path, format!("{raw}\n"));
+/// Writes the cache, and says so when it could not.
+///
+/// The caller has nothing to do about a failure — the shortcuts are registered
+/// with the system either way, and the cache is only how the next launch starts
+/// faster — so this returns nothing. It does not follow that it may be silent:
+/// a cache that never writes means shortcuts a person edits are back to the
+/// defaults on every launch, and that is a bug somebody has to be able to find.
+fn write(storage: &dyn Storage, path: &Path, doc: &ShortcutsDocument) {
+    match serde_json::to_string_pretty(doc) {
+        Ok(raw) => {
+            if let Err(error) = storage.write(path, format!("{raw}\n").as_bytes()) {
+                eprintln!(
+                    "[nessa] could not cache shortcuts in {}: {error}",
+                    path.display()
+                );
+            }
+        }
+        Err(error) => eprintln!("[nessa] could not serialise the shortcuts: {error}"),
     }
 }
 
@@ -94,40 +171,221 @@ pub fn summon_accelerator(doc: &ShortcutsDocument) -> Option<&str> {
     })
 }
 
-/// Persist a shortcut document and re-register the summon shortcut.
-#[tauri::command]
-pub fn apply_shortcuts(
-    app: AppHandle,
-    registration: State<'_, SummonRegistration>,
-    document: ShortcutsDocument,
-) -> Result<(), String> {
+/// What applying a document does apart from the window server: refuse a version
+/// this build does not speak, otherwise persist it and answer with the global
+/// summon it wants registered.
+///
+/// Split from [`apply_shortcuts`] because the refusal is the whole rule and the
+/// registration is the only part that needs a running app. A refused document
+/// must not reach the store, which is a thing a test can hold.
+fn accept(
+    store: &dyn ShortcutStore,
+    document: &ShortcutsDocument,
+) -> Result<Option<String>, String> {
     if document.version != 1 {
         return Err(format!(
             "unsupported shortcuts version {}",
             document.version
         ));
     }
-    if let Some(path) = path(&app) {
-        write(&path, &document);
-    }
-    crate::shortcut::reregister_summon(&app, &registration, summon_accelerator(&document));
+    store.save(document);
+    Ok(summon_accelerator(document).map(str::to_string))
+}
+
+/// Persist a shortcut document and re-register the summon shortcut.
+#[tauri::command]
+pub fn apply_shortcuts(
+    app: AppHandle,
+    deps: State<'_, HostDependencies>,
+    registration: State<'_, SummonRegistration>,
+    document: ShortcutsDocument,
+) -> Result<(), String> {
+    let accelerator = accept(&*deps.shortcuts, &document)?;
+    crate::shortcut::reregister_summon(&app, &registration, accelerator.as_deref());
     Ok(())
 }
 
 /// Current on-disk (or seeded) document for shell hydration.
 #[tauri::command]
-pub fn load_shortcuts(app: AppHandle) -> ShortcutsDocument {
-    load(&app)
+pub fn load_shortcuts(deps: State<'_, HostDependencies>) -> ShortcutsDocument {
+    deps.shortcuts.load()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// The cache, in memory. It also records what it was asked to save, which
+    /// is how a refused document is shown never to have reached the file.
+    #[derive(Default)]
+    struct MemoryShortcuts(Mutex<Option<ShortcutsDocument>>);
+
+    impl ShortcutStore for MemoryShortcuts {
+        fn load(&self) -> ShortcutsDocument {
+            self.0.lock().unwrap().clone().unwrap_or_else(defaults)
+        }
+
+        fn save(&self, document: &ShortcutsDocument) {
+            *self.0.lock().unwrap() = Some(document.clone());
+        }
+    }
+
+    impl MemoryShortcuts {
+        fn saved(&self) -> Option<ShortcutsDocument> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    fn document(version: i64, keys: &str) -> ShortcutsDocument {
+        ShortcutsDocument {
+            version,
+            bindings: vec![ShortcutBinding {
+                keys: keys.to_string(),
+                action: "panel.summon".to_string(),
+                args: None,
+                scope: "global".to_string(),
+                surface: "panel".to_string(),
+            }],
+        }
+    }
+
     #[test]
     fn bundled_defaults_include_summon() {
         let doc = defaults();
         assert_eq!(doc.version, 1);
         assert_eq!(summon_accelerator(&doc), Some("CmdOrCtrl+Shift+D"));
+    }
+
+    #[test]
+    fn an_accepted_document_is_saved_and_names_the_summon_to_register() {
+        let store = MemoryShortcuts::default();
+
+        let accelerator = accept(&store, &document(1, "Alt+Space")).expect("version 1 is spoken");
+
+        assert_eq!(accelerator.as_deref(), Some("Alt+Space"));
+        assert_eq!(
+            store.saved().map(|doc| doc.bindings[0].keys.clone()),
+            Some("Alt+Space".to_string())
+        );
+    }
+
+    /// The refusal has to happen before the write: a document this build cannot
+    /// read back is not something to leave on disk for the next launch.
+    #[test]
+    fn a_version_this_build_does_not_speak_is_refused_and_never_saved() {
+        let store = MemoryShortcuts::default();
+
+        let refused = accept(&store, &document(2, "Alt+Space"));
+
+        assert_eq!(
+            refused.err().as_deref(),
+            Some("unsupported shortcuts version 2")
+        );
+        assert!(store.saved().is_none());
+    }
+
+    /// A document with nothing global to summon with is still a document: it is
+    /// saved, and the previous accelerator is dropped rather than kept.
+    #[test]
+    fn a_document_with_no_global_summon_is_saved_with_nothing_to_register() {
+        let store = MemoryShortcuts::default();
+        let mut doc = document(1, "Alt+Space");
+        doc.bindings[0].scope = "panel".to_string();
+
+        assert_eq!(accept(&store, &doc).expect("version 1 is spoken"), None);
+        assert!(store.saved().is_some());
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use crate::settings::storage::MemoryStorage;
+
+    fn cache() -> (MemoryStorage, PathBuf) {
+        (
+            MemoryStorage::default(),
+            PathBuf::from("/config/shortcuts.json"),
+        )
+    }
+
+    /// Absent is the only case that writes: a fresh machine gets the bundled
+    /// defaults cached so the next launch does not rebuild them.
+    #[test]
+    fn a_missing_cache_is_seeded_and_written() {
+        let (storage, path) = cache();
+
+        let loaded = load_from(&storage, &path);
+
+        assert_eq!(loaded.version, 1);
+        assert!(
+            storage.get(&path).is_some(),
+            "the defaults were not cached for the next launch"
+        );
+    }
+
+    /// A file written by a newer build is not this one's to replace. Defaults
+    /// register, and what is on disk stays exactly as it was — the same rule
+    /// `settings.rs` keeps for a file it cannot parse.
+    #[test]
+    fn a_version_this_build_does_not_read_is_left_alone() {
+        let (storage, path) = cache();
+        let newer = br#"{"version":2,"shortcuts":[]}"#.to_vec();
+        storage.put(&path, &newer);
+
+        let loaded = load_from(&storage, &path);
+
+        assert_eq!(loaded.version, 1, "this build runs on what it understands");
+        assert_eq!(
+            storage.get(&path),
+            Some(newer),
+            "a newer build's shortcuts were overwritten"
+        );
+    }
+
+    /// The same for bytes that are not shortcuts at all.
+    #[test]
+    fn a_malformed_cache_is_left_alone() {
+        let (storage, path) = cache();
+        let rubbish = b"{ not json".to_vec();
+        storage.put(&path, &rubbish);
+
+        let loaded = load_from(&storage, &path);
+
+        assert_eq!(loaded.version, 1);
+        assert_eq!(storage.get(&path), Some(rubbish));
+    }
+
+    /// A file that is there and will not open is not an absent one: writing
+    /// over it would replace shortcuts that may be perfectly good, on the
+    /// strength of a permissions problem.
+    #[test]
+    fn a_refused_read_does_not_become_a_write() {
+        let (storage, path) = cache();
+        let existing = br#"{"version":1,"shortcuts":[]}"#.to_vec();
+        storage.put(&path, &existing);
+        *storage.read_error.lock().unwrap() = Some(io::ErrorKind::PermissionDenied);
+
+        let loaded = load_from(&storage, &path);
+
+        assert_eq!(loaded.version, 1, "the shortcuts still register");
+        assert_eq!(
+            storage.get(&path),
+            Some(existing),
+            "a refused read overwrote the file it could not open"
+        );
+    }
+
+    /// And a write that fails is survivable: the shortcuts are registered with
+    /// the system either way, and the cache only makes the next launch faster.
+    #[test]
+    fn a_refused_write_is_survivable() {
+        let (storage, path) = cache();
+        *storage.write_error.lock().unwrap() = Some(io::ErrorKind::PermissionDenied);
+
+        let loaded = load_from(&storage, &path);
+
+        assert_eq!(loaded.version, 1);
+        assert_eq!(storage.get(&path), None, "nothing reached the disk");
     }
 }

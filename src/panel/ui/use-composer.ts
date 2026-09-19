@@ -5,6 +5,8 @@ import type {
   ChatComposerEditorHandle,
 } from "@nessa-ui/react/chat-composer-editor"
 import { fromEditor, pastedTextLabel, type useConversation } from "../../conversation"
+import type { PillComposerExpansionReason } from "@nessa-ui/react/pill-composer"
+import { takesExpansion } from "../application/composer-expansion"
 
 /** Own editor lifecycle and pasted-viewer state; App only composes the surfaces. */
 export function useComposer(
@@ -26,12 +28,56 @@ export function useComposer(
     (text: string) => setViewedPaste({ conversationId: chat.active.id, text }),
     [chat.active.id],
   )
+  // Whether the full-pane editor is open. Owned here rather than left to the
+  // composer because only this side knows whether a submit actually sent
+  // anything: the rules below turn some away, and a draft that never left is
+  // the one thing worth keeping the pane open for.
+  const [expanded, setExpanded] = React.useState(false)
+
+  // Whether a submit is waiting for its draft to leave. See `submit`.
+  const awaitingDraft = React.useRef(false)
+  // A fresh conversation gets a fresh composer — the pane does not follow
+  // somebody into a tab they did not open it in.
+  React.useEffect(() => setExpanded(false), [chat.active.id])
+
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const content = composerRef.current?.getContent()
     if (isAttachmentPending(chat.active.id)) return
     if (chat.active.draft.some((part) => part.type === "file")) return
-    if (content) chat.submit(fromEditor(content))
+    if (!content) return
+    // The pane closes on the draft having gone, not on this handler having run.
+    // Calling `submit` proves nothing: the gateway may be away, the text may be
+    // over the size the gateway takes, and in both the draft is still here and
+    // still needs somewhere to be read. So the composer's own offer to collapse
+    // is declined for every submit (see `takesExpansion`), and the effect below
+    // closes it when the draft is actually gone.
+    //
+    // Watched rather than awaited. `submit` settles when the gateway has been
+    // created, written to and read back, while the draft leaves the composer at
+    // the moment the submission starts — so awaiting it held the pane open,
+    // empty, for a whole round trip, and for good against a gateway that
+    // accepts the connection and then answers nothing.
+    awaitingDraft.current = true
+    void chat.submit(fromEditor(content)).then((taken) => {
+      // Turned away: the draft is still here, so nothing is waiting for it to
+      // go. Left set, the next unrelated emptying of the draft would close a
+      // pane nobody asked to close.
+      if (!taken) awaitingDraft.current = false
+    })
+  }
+
+  // The draft emptying is the submission having started — the one fact that
+  // says the message left this composer.
+  React.useEffect(() => {
+    if (!awaitingDraft.current || chat.active.draft.length > 0) return
+    awaitingDraft.current = false
+    setExpanded(false)
+  }, [chat.active.draft])
+
+  /** Every expansion change the composer proposes, minus the ones we decline. */
+  function changeExpanded(next: boolean, reason: PillComposerExpansionReason) {
+    if (takesExpansion(next, reason)) setExpanded(next)
   }
   function changeContent(content: ChatComposerContent) {
     chat.setDraft([
@@ -51,6 +97,8 @@ export function useComposer(
     })
   }
   return {
+    expanded,
+    changeExpanded,
     composerRef,
     setComposerRef,
     viewedPaste,

@@ -30,15 +30,33 @@ export function updaterTarget(platform, arch) {
 /** The release manifest, in the shape the plugin's `RemoteRelease` reads.
  *
  * `version`, `notes` and `pub_date` describe the release; `platforms.<target>`
- * is what this machine downloads and the signature it is checked against.
+ * is what a machine downloads and the signature it is checked against.
  * `pub_date` must be RFC 3339 or the plugin rejects the whole manifest while
- * parsing it, before it ever looks at the platform. */
-export function releaseManifest({ version, notes, target, signature, url, published }) {
+ * parsing it, before it ever looks at the platform.
+ *
+ * `platforms` is a map because one published manifest answers every machine
+ * that asks: a real release builds Apple Silicon and Intel on separate runners
+ * and puts both keys in one file. The local harness serves one. Same builder,
+ * so there is exactly one place that knows this shape. */
+export function releaseManifest({ version, notes, platforms, published }) {
+  const targets = Object.keys(platforms)
+  if (targets.length === 0)
+    throw new Error("A release manifest with no platforms applies to nothing")
+  for (const target of targets) {
+    const { signature, url } = platforms[target]
+    if (!signature) throw new Error(`No signature for ${target}`)
+    if (!url) throw new Error(`No artifact URL for ${target}`)
+  }
   return {
     version,
     notes,
     pub_date: published,
-    platforms: { [target]: { signature, url } },
+    platforms: Object.fromEntries(
+      targets.map((target) => [
+        target,
+        { signature: platforms[target].signature, url: platforms[target].url },
+      ]),
+    ),
   }
 }
 
@@ -69,9 +87,12 @@ export function checkOnlyManifest({ version, notes, target, origin, published })
   return releaseManifest({
     version,
     notes,
-    target,
-    signature: CHECK_ONLY_SIGNATURE,
-    url: `${origin}/${CHECK_ONLY_ARTIFACT}`,
+    platforms: {
+      [target]: {
+        signature: CHECK_ONLY_SIGNATURE,
+        url: `${origin}/${CHECK_ONLY_ARTIFACT}`,
+      },
+    },
     published,
   })
 }
@@ -101,39 +122,4 @@ export function defaultArtifacts(platform, version) {
   if (!artifacts)
     throw new Error(`No updater artifact is bundled for platform ${platform}`)
   return artifacts.map((artifact) => `target/release/bundle/${artifact}`)
-}
-
-/** Read one `--name value` or `--name=value` argument. */
-export function option(args, name, fallback) {
-  const index = args.indexOf(`--${name}`)
-  if (index >= 0) {
-    const value = args[index + 1]
-    if (!value || value.startsWith("--")) throw new Error(`--${name} requires a value`)
-    return value
-  }
-  const equals = args.find((argument) => argument.startsWith(`--${name}=`))
-  return equals ? equals.slice(name.length + 3) : fallback
-}
-
-/**
- * The path a request meant, or undefined when it cannot be read.
- *
- * Both steps of reading a request target throw, and neither is caught in a
- * Node request handler — an exception there ends the process. `new URL` throws
- * on a target that is not one (`//[`), and `decodeURIComponent` throws on a
- * malformed escape (`/%ZZ`). A stray request of either shape would end the
- * harness in the middle of a run somebody is watching, so the two live behind
- * this one door and a target that cannot be read is simply not a request for
- * anything served: it falls through to the same 404 as any unknown path.
- *
- * @param {string | undefined} target the raw request target
- * @param {string} origin what a path-only target is resolved against
- * @returns {string | undefined} the decoded pathname
- */
-export function requestedPath(target, origin) {
-  try {
-    return decodeURIComponent(new URL(target ?? "", origin).pathname)
-  } catch {
-    return undefined
-  }
 }

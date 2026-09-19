@@ -33,14 +33,19 @@ opinion rather than the product's.
 
 | File | Owns |
 | --- | --- |
-| `main.rs` | The composition root. Builds the app, wires the tray, shortcut, and window. It never mentions macOS or Linux: OS behaviour is injected through `platform::current()`. |
+| `main.rs` | The entry point. Assembles `HostDependencies` in `setup`, wires the tray, shortcut, and window, and hands the bundle on. It never mentions macOS or Linux: OS behaviour is injected through `platform::current()`. |
+| `composition.rs` | The composition root: the one place the host's outside things are constructed — settings, shortcuts, the surface credential, the gateway, the release source — and the bundle every command and menu is given. Nothing below it reaches back for a dependency. |
+| `updater.rs` | Whether a newer Nessa is published and installing it. `ReleaseSource`, `CheckOutcome`, `Installer` and `Restarter` are its ports; the decisions are pure and tested, and the module header states which adapters are not. |
+| `surface_credential.rs` | The bundled panel's token: where it lives for a stage, and `CredentialRefusal` for why there is not one. Only the bundled window may ask. |
+| `local_data.rs` | The stage-scoped data root this process reads, mirroring the server's own path rules. |
+| `stage_port.rs` | The loopback port the gateway registers for a stage, from `protocol/defaults/gateway-ports.json`. macOS-only, like the registration that reads it. |
 | `gateway/application/`, `gateway/infrastructure/` | Retryable background-service reconciliation and native launchd adapters, injected from `main.rs`. The adapter verifies the running runtime fingerprint and owns acknowledged update replacement; gateway lifetime remains independent of the desktop. |
 | `host.rs` | The host/shell seam: event names and the `PanelSize` payload. The frontend lists the same names in `src/host/window.ts`; a test fails if they drift. |
 | `panel.rs` | The panel frame: opening size, lower-right placement, show/hide. The tray and the shortcut request a toggle; they do not fit the frame. |
 | `tray.rs` | The menu bar extra (macOS) or StatusNotifierItem (Linux), and the surface-toggle request. Creating it is survivable: a desktop with no tray still launches. |
 | `shortcut.rs` | Registers / re-registers the global `panel.summon` accelerator from the shortcuts cache. |
 | `shortcuts.rs` | Stage-scoped `shortcuts.json` cache: seed from bundled protocol defaults. |
-| `settings.rs` | The on-disk settings shape (panel geometry) and its defaults. Summon is not here — see `shortcuts.rs`. |
+| `settings.rs`, `settings/storage.rs` | The on-disk settings shape (panel geometry) and its defaults, over a `Storage` port that `shortcuts.rs` reads through too. Summon is not here — see `shortcuts.rs`. |
 | `platform/` | The OS host. `Host` is the contract; `current()` injects one implementation for the compiled target. Commands `set_frosted` and `panel_size` live here too. |
 | `platform/macos/` | Accessory app, `NSVisualEffectView` frost, WKWebView pin, AppKit live-resize notifications. The panel stays open when focus moves to another app and joins all desktop Spaces, with fullscreen auxiliary behavior enabled. |
 | `platform/linux/` | WebKit DMA-BUF prep, GtkFixed pin, CSS frost (no-op natively), allocate-based live resize, shown on the taskbar at launch. |
@@ -314,7 +319,11 @@ through its application ports. See the [MCP server](../crates/nessa-mcp/README.m
 
 ## CLI surface
 
-The `nessa` executable runs the gateway with `nessa server`. Online `auth token`
+The `nessa` executable runs the gateway with `nessa server`. That command serves
+only what was already provisioned; `nessa server --provision-local` additionally
+creates the namespace's owner and panel credentials when they are absent, which
+is what the desktop app and the `just start` / `just server` developer loop ask
+for. Provisioning is a guard, never a rotation. Online `auth token`
 and `doctor` commands use the existing authenticated product protocol as the CLI
 surface; they do not access the server registry. Offline `auth init --local`
 bootstraps first access, and local recovery/provisioning retain their exclusive

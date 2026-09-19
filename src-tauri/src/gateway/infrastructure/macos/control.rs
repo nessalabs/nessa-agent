@@ -136,9 +136,9 @@ fn parse_pid(text: &str) -> Option<u32> {
     }
     text.parse::<u32>().ok().filter(|pid| *pid > 0)
 }
-pub(super) fn legacy_listener_pid() -> Option<u32> {
+pub(super) fn legacy_listener_pid(port: u16) -> Option<u32> {
     let output = Command::new("/usr/sbin/lsof")
-        .args(["-nP", "-iTCP:7420", "-sTCP:LISTEN", "-t"])
+        .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-t"])
         .output()
         .ok()?;
     if !output.status.success() {
@@ -554,9 +554,9 @@ pub(super) fn retire(
         std::thread::sleep(Duration::from_millis(100));
     }
 }
-pub(super) fn health() -> Option<Health> {
+pub(super) fn health(port: u16) -> Option<Health> {
     let mut stream =
-        TcpStream::connect_timeout(&super::address(), Duration::from_millis(200)).ok()?;
+        TcpStream::connect_timeout(&super::address(port), Duration::from_millis(200)).ok()?;
     stream
         .set_read_timeout(Some(Duration::from_millis(300)))
         .ok()?;
@@ -632,10 +632,11 @@ fn parse_health(bytes: &[u8]) -> Option<Health> {
 pub(super) fn wait_fingerprint(
     service: &str,
     expected: (&str, &str),
+    port: u16,
 ) -> Result<ManagedRuntime, String> {
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
-        if let Some(Health::Managed(runtime)) = health() {
+        if let Some(Health::Managed(runtime)) = health(port) {
             let status = service_status(service)?;
             if status.loaded
                 && status.pid == Some(runtime.pid)

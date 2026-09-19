@@ -135,9 +135,17 @@ export function SetupGate({
   // The window is created hidden and shown from here, after this has rendered
   // — so the first thing on screen is the opening rather than an empty window
   // waiting for its first frame.
+  //
+  // Directly, in the effect, and deliberately not from `requestAnimationFrame`.
+  // A hidden macOS window is not drawn at all, so its webview is served no
+  // animation frames: a reveal scheduled on one waits for a paint that is
+  // waiting for the reveal, and setup stayed hidden for the whole session while
+  // its page ran and played the opening sound.
+  //
+  // The body is a block so the effect returns nothing: an expression body would
+  // hand React the promise as a cleanup function.
   React.useEffect(() => {
-    const shown = requestAnimationFrame(() => void revealSetupWindow())
-    return () => cancelAnimationFrame(shown)
+    void revealSetupWindow()
   }, [])
 
   // Handing over to the panel. Showing it, writing setup off for good, and

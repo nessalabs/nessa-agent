@@ -13,9 +13,11 @@ pub mod key {
 }
 
 /// Fallback values when a var is unset.
+///
+/// The port is not here: it depends on the stage, and its one table lives in
+/// `protocol/defaults/gateway-ports.json` behind [`super::stage_port`].
 pub mod default {
     pub const HOST: &str = "127.0.0.1";
-    pub const PORT: u16 = 7420;
 }
 
 /// Crate version from `Cargo.toml`. Sole `env!` usage in this crate.
