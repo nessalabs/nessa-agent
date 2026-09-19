@@ -1,0 +1,88 @@
+name: Pinned adversarial boundaries and persistence measurements
+on:
+  push:
+    branches: [audit/file-verification-4c39449]
+    paths: [.github/workflows/file-verification-boundaries.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  boundaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 4c3944962a24721f305d0d66b34df6f024970cf4
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Add test-only probes and collect independent outcomes
+        shell: python
+        run: |
+          import json, os, pathlib, subprocess, time
+          output = pathlib.Path(os.environ['RUNNER_TEMP']) / 'boundary-evidence'
+          output.mkdir()
+          probe = pathlib.Path('crates/nessa-server/tests/audit_raw_boundaries.rs')
+          probe.write_text(r'''
+          use nessa_server::{product::SessionSettings, protocol::RequestFrame};
+          use std::time::Duration;
+
+          #[test]
+          fn ordinary_parameters_remain_accepted() {
+              let raw = r#"{"type":"req","id":"1","method":"session.authenticate","params":{"credential":"valid"}}"#;
+              assert!(serde_json::from_str::<RequestFrame>(raw).is_ok());
+          }
+
+          #[test]
+          fn duplicated_credential_keys_are_rejected_in_both_orders_and_when_equal() {
+              for (first, second) in [("first", "second"), ("second", "first"), ("equal", "equal")] {
+                  let raw = format!(r#"{{"type":"req","id":"1","method":"session.authenticate","params":{{"credential":"{first}","credential":"{second}"}}}}"#);
+                  let result = serde_json::from_str::<RequestFrame>(&raw);
+                  assert!(result.is_err(), "duplicate evidence was collapsed before typed validation: {result:?}");
+              }
+          }
+
+          #[test]
+          fn nested_grant_policy_duplicates_are_rejected() {
+              let raw = r#"{"type":"req","id":"2","method":"credential.issue","params":{"grants":[{"action":"server.read","action":"conversation.write","resource":{"organizationId":"personal","id":"gateway"}}]}}"#;
+              let result = serde_json::from_str::<RequestFrame>(raw);
+              assert!(result.is_err(), "nested policy ambiguity reached a decoded frame: {result:?}");
+          }
+
+          #[tokio::test]
+          async fn public_session_settings_allow_a_zero_period_to_reach_the_timer() {
+              let settings = SessionSettings { current_state_interval: Duration::ZERO, ..SessionSettings::default() };
+              let outcome = std::panic::catch_unwind(|| tokio::time::interval(settings.current_state_interval));
+              assert!(outcome.is_err(), "this probe records existing invalid-public-configuration behavior");
+              let valid = SessionSettings::default();
+              assert!(std::panic::catch_unwind(|| tokio::time::interval(valid.current_state_interval)).is_ok());
+          }
+          ''')
+          (output / probe.name).write_bytes(probe.read_bytes())
+          commands = [
+              ['rustc', '--version'],
+              ['cargo', 'test', '--locked', '-p', 'nessa-server', '--test', 'audit_raw_boundaries', '--', '--nocapture'],
+              ['cargo', 'test', '--locked', '-p', 'nessa-sdk', 'infrastructure::session_storage::benchmark::', '--', '--ignored', '--nocapture', '--test-threads=1'],
+          ]
+          results = []
+          for index, command in enumerate(commands):
+              started = time.monotonic()
+              with (output / f'{index:02d}.log').open('w') as log:
+                  try:
+                      completed = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=1200)
+                      status = completed.returncode
+                  except subprocess.TimeoutExpired:
+                      status = 'timeout'
+              results.append({'command': command, 'exit_code': status, 'seconds': round(time.monotonic()-started, 2)})
+              (output / 'results.json').write_text(json.dumps(results, indent=2))
+              print(command, status, flush=True)
+          (output / 'scope.json').write_text(json.dumps({'source': subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode().strip(), 'production_changed': False, 'meaning': 'Raw frame parsing probes are not proof of privilege escalation. The zero-period probe asserts observed invalid behavior. Benchmark numbers describe this runner, not production latency guarantees.'}, indent=2))
+          if any(result['exit_code'] != 0 for result in results):
+              raise SystemExit(1)
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nessa-boundaries-verification-4c39449
+          path: ${{ runner.temp }}/boundary-evidence/
+          if-no-files-found: error
+          retention-days: 7
