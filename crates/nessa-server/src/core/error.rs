@@ -5,6 +5,7 @@
 //!
 //! Re-exported at `crate::core::RunError`.
 
+use crate::conversation::application::ConversationError;
 use crate::env::EnvironmentError;
 use std::fmt;
 use std::io::{self, ErrorKind};
@@ -22,6 +23,11 @@ pub enum RunError {
         source: io::Error,
     },
     Serve(io::Error),
+    /// Conversations did not confirm cleanup and audit delivery on the way down.
+    /// The HTTP server itself finished; this is what shutdown could not prove.
+    /// `None` means shutdown never reported at all — unknown, which is its own
+    /// fact and not the same as a reported failure.
+    Shutdown(Option<ConversationError>),
 }
 
 impl fmt::Display for RunError {
@@ -38,6 +44,12 @@ impl fmt::Display for RunError {
                 _ => write!(f, "failed to bind {addr}: {source}"),
             },
             Self::Serve(source) => write!(f, "server stopped: {source}"),
+            Self::Shutdown(Some(error)) => {
+                write!(f, "shutdown did not confirm all cleanup: {error}")
+            }
+            Self::Shutdown(None) => {
+                write!(f, "shutdown never reported whether cleanup completed")
+            }
         }
     }
 }
@@ -49,6 +61,7 @@ impl std::error::Error for RunError {
             Self::Authentication(_) | Self::Agent(_) => None,
             Self::Bind { source, .. } => Some(source),
             Self::Serve(source) => Some(source),
+            Self::Shutdown(error) => error.as_ref().map(|error| error as _),
         }
     }
 }
@@ -74,6 +87,19 @@ impl std::process::Termination for RunError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_unconfirmed_shutdown_says_which_kind_it_was() {
+        let reported = RunError::Shutdown(Some(ConversationError::Audit));
+        assert!(reported.to_string().contains("did not confirm all cleanup"));
+        // The typed failure is the source, so a caller can match on it.
+        assert!(std::error::Error::source(&reported).is_some());
+
+        let silent = RunError::Shutdown(None);
+        assert!(silent.to_string().contains("never reported"));
+        // Nothing was reported, so there is nothing to be the source.
+        assert!(std::error::Error::source(&silent).is_none());
+    }
+
     use super::*;
     use crate::env::{EnvironmentError, HOST};
 

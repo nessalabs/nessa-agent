@@ -37,7 +37,9 @@ class Transport implements SessionTransport {
     this.listeners.clear()
     this.events.clear()
   }
+  closed = false
   close() {
+    this.closed = true
     this.drop(1000)
   }
 }
@@ -306,6 +308,191 @@ describe("persistent session", () => {
         '{"code":"credential_revoked","retryable":true}',
       ).retryable,
     ).toBe(false)
+  })
+
+  it("spends the recovery budget on replacements that arrive already closed", async () => {
+    const bounded = new NessaClientConfig({
+      reconnect: {
+        jitter: false,
+        maxAttempts: 3,
+        initialDelayMs: 250,
+        maxDelayMs: 2_000,
+      },
+    })
+    const first = connected(),
+      clock = timing()
+    const replacements: ReturnType<typeof connected>[] = []
+    const connect = vi.fn(async () => {
+      const next = connected()
+      // Closed between the handshake and adoption: never a connected session.
+      next.wire.drop(1006)
+      replacements.push(next)
+      return next
+    })
+    const client = new ManagedSession(first, bounded, connect, clock)
+    const attempts: number[] = []
+    const closed = vi.fn()
+    client.onState((state) => {
+      if (state.status === "reconnecting") attempts.push(state.attempt)
+    })
+    client.onClose(closed)
+    // A live subscription, so the handoff onto each dead replacement and back
+    // off it again is actually exercised rather than assumed.
+    const event = vi.fn()
+    client.onEvent("sample", event)
+
+    first.wire.drop()
+    await flush()
+
+    expect(connect).toHaveBeenCalledTimes(3)
+    expect(attempts).toEqual([1, 2, 3])
+    expect(clock.wait.mock.calls.map(([ms]) => ms)).toEqual([250, 500, 1000])
+    expect(client.state.status).toBe("closed")
+    expect(closed).toHaveBeenCalledTimes(1)
+    // Each replacement took the subscription and gave it back. Counting handlers
+    // rather than event names: the name stays registered with an empty set.
+    expect(replacements).toHaveLength(3)
+    const handlers = replacements.flatMap((next) =>
+      [...next.wire.events.values()].map((listeners) => listeners.size),
+    )
+    expect(handlers).not.toHaveLength(0)
+    expect(handlers.every((count) => count === 0)).toBe(true)
+    // Released, so an emission on a refused replacement reaches nobody.
+    for (const next of replacements) {
+      for (const listeners of next.wire.events.values()) {
+        for (const handler of listeners) handler("late")
+      }
+    }
+    expect(event).not.toHaveBeenCalled()
+    // And each refused transport was let go rather than left open. Checking the
+    // close, not the termination: the stub sets that before adoption ever sees it.
+    expect(replacements.every((next) => next.wire.closed)).toBe(true)
+  })
+
+  // A control rather than a regression: this held before the budget fix too.
+  // It is here so the fix cannot buy a bounded budget by making every closed
+  // replacement retryable.
+  it("ends recovery when a replacement arrives closed for a terminal reason", async () => {
+    const first = connected(),
+      clock = timing()
+    const connect = vi.fn(async () => {
+      const next = connected()
+      next.wire.drop(4002, '{"code":"credential_revoked","retryable":false}')
+      return next
+    })
+    const client = new ManagedSession(first, config, connect, clock)
+    const closed = vi.fn()
+    const attempts: number[] = []
+    client.onState((state) => {
+      if (state.status === "reconnecting") attempts.push(state.attempt)
+    })
+    client.onClose(closed)
+
+    first.wire.drop()
+    await flush()
+
+    // One attempt spent, then stopped: a terminal replacement ends recovery
+    // rather than using up the remaining budget.
+    expect(connect).toHaveBeenCalledTimes(1)
+    expect(attempts).toEqual([1])
+    expect(client.state.status).toBe("closed")
+    expect(closed).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps one budget when a transport reports its close on registration", async () => {
+    // `SessionTransport` does not say a close handler cannot run during
+    // registration, and one that does would otherwise start recovery from
+    // inside adoption — a second loop with a budget of its own.
+    class Replaying extends Transport {
+      onClose(handler: (error: NessaConnectionClosedError) => void) {
+        const off = super.onClose(handler)
+        if (this.termination) handler(this.termination)
+        return off
+      }
+    }
+    const bounded = new NessaClientConfig({
+      reconnect: {
+        jitter: false,
+        maxAttempts: 2,
+        initialDelayMs: 250,
+        maxDelayMs: 2_000,
+      },
+    })
+    const first = connected(),
+      clock = timing()
+    const replacements: ReturnType<typeof connected>[] = []
+    const connect = vi.fn(async () => {
+      const next = connected(new Replaying())
+      next.wire.drop(1006)
+      replacements.push(next)
+      return next
+    })
+    const client = new ManagedSession(first, bounded, connect, clock)
+    const attempts: number[] = []
+    const closed = vi.fn()
+    client.onState((state) => {
+      if (state.status === "reconnecting") attempts.push(state.attempt)
+    })
+    client.onClose(closed)
+    // A live subscription, so the handoff onto each replacement and back off it
+    // again is exercised rather than assumed.
+    const event = vi.fn()
+    client.onEvent("sample", event)
+
+    first.wire.drop()
+    await flush()
+
+    expect(connect).toHaveBeenCalledTimes(2)
+    expect(attempts).toEqual([1, 2])
+    expect(clock.wait.mock.calls.map(([ms]) => ms)).toEqual([250, 500])
+    expect(closed).toHaveBeenCalledTimes(1)
+    expect(client.state.status).toBe("closed")
+    // No replacement kept an event subscription. Counting handlers, and
+    // refusing an empty set, because an unsubscribed name stays in the map.
+    expect(replacements).toHaveLength(2)
+    const handlers = replacements.flatMap((next) =>
+      [...next.wire.events.values()].map((listeners) => listeners.size),
+    )
+    expect(handlers).not.toHaveLength(0)
+    expect(handlers.every((count) => count === 0)).toBe(true)
+    expect(event).not.toHaveBeenCalled()
+    // Adoption took each transport and gave it back: a refused replacement is
+    // closed rather than left open, the way `finish` closes the live one.
+    expect(replacements.every((next) => next.wire.closed)).toBe(true)
+  })
+
+  it("adopts a live replacement after one that arrived already closed", async () => {
+    const first = connected(),
+      live = connected()
+    const connect = vi.fn(async () => {
+      if (connect.mock.calls.length === 1) {
+        const stale = connected()
+        stale.wire.drop(1006)
+        return stale
+      }
+      return live
+    })
+    const clock = timing()
+    const client = new ManagedSession(first, config, connect, clock)
+    const event = vi.fn()
+    const attempts: number[] = []
+    client.onState((state) => {
+      if (state.status === "reconnecting") attempts.push(state.attempt)
+    })
+    client.onEvent("sample", event)
+
+    first.wire.drop()
+    await flush()
+
+    expect(connect).toHaveBeenCalledTimes(2)
+    // The second attempt is the second attempt. A nested recovery would report
+    // [1, 1] here and back off from the start again, which is the whole defect.
+    expect(attempts).toEqual([1, 2])
+    expect(clock.wait.mock.calls.map(([ms]) => ms)).toEqual([250, 500])
+    expect(client.state.status).toBe("connected")
+    live.wire.events.get("sample")?.forEach((handler) => handler(7))
+    expect(event).toHaveBeenCalledWith(7)
+    client.close()
   })
 
   it("survives 500 independently substituted sessions with repeated interruptions", async () => {

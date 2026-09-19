@@ -329,8 +329,34 @@ impl State {
                             })
                             .flatten()
                     });
+                    // Provenance and restoration eligibility are separate questions.
+                    //
+                    // Eligibility is judged against the record's own instant, as
+                    // `IdleExpired` and `Renewed` already are. A journal is only
+                    // as truthful about time as whoever could write it, and that
+                    // is not a trust this rule introduces: a forged `Renewed`
+                    // can already extend a session indefinitely. Bounding a
+                    // record's instant against a clock would answer all three at
+                    // once, and belongs with them rather than here.
+                    // The record must name the prior this login actually replaced,
+                    // but a prior that is not restorable at this record's instant
+                    // — outside its own active window, or whose ID a later
+                    // transition already owns — is legitimately left where it is.
+                    // Reclaiming the abandoned login must not depend on being
+                    // able to resurrect what it replaced.
+                    let remembered = self.login_replacements.get(&change.id);
+                    let provenance = match (remembered, &restored) {
+                        (Some(Some(prior)), Some(restored)) => prior == restored,
+                        (Some(remembered), None) => {
+                            remembered.as_ref().is_none_or(|(prior_id, prior)| {
+                                !prior.is_active_at(record.at)
+                                    || self.sessions.contains_key(prior_id)
+                            })
+                        }
+                        _ => false,
+                    };
                     change.initiator.is_none()
-                        && self.login_replacements.get(&change.id) == Some(&restored)
+                        && provenance
                         && ((restored.is_none() && record.changes.len() == 1)
                             || (restored.is_some() && record.changes.len() == 2))
                         && restored
