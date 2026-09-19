@@ -177,6 +177,23 @@ jobs:
       # only means something for a real identity. Adding the secret later needs
       # no change here.
       APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      # Signing, and then notarizing, both dormant until the secrets exist.
+      #
+      # The CLI imports APPLE_CERTIFICATE into a temporary keychain it makes and
+      # throws away, so nothing here touches a runner's login keychain, and it
+      # infers the identity from the certificate when one is not named. With the
+      # App Store Connect key present it also submits the bundle to Apple and
+      # staples the ticket, which is why there is no separate notarytool step:
+      # one tool, one place where a failure to sign or staple stops the build.
+      #
+      # A key rather than an Apple ID and app-specific password: the key is
+      # scoped to this purpose, is revocable on its own, and is not a password
+      # for the account itself.
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_API_KEY_PATH: ${{ github.workspace }}/.apple-api-key.p8
     steps:
       - uses: actions/checkout@v4
         with:
@@ -201,8 +218,21 @@ jobs:
       # archives into the .app.tar.gz an update installs, and `dmg`, which is
       # what a person downloads. It also keeps .deb/NSIS out of a release they
       # would be unrunnable in.
+      # The key has to be a file for `APPLE_API_KEY_PATH`, and a secret is a
+      # string. Written here and removed after the build, whatever the build
+      # did — a private key left on a runner outlives the job's usefulness.
+      # Skipped entirely when the secret is absent, which is what keeps the
+      # unsigned path working unchanged.
+      - name: Place the App Store Connect key
+        if: ${{ secrets.APPLE_API_KEY != '' }}
+        env:
+          KEY: ${{ secrets.APPLE_API_KEY }}
+        run: printf '%s' "$KEY" > "${{ github.workspace }}/.apple-api-key.p8"
       - name: Build, sign and verify the bundle
         run: pnpm app:build --target ${{ matrix.target }} --bundles app,dmg
+      - name: Remove the App Store Connect key
+        if: always()
+        run: rm -f "${{ github.workspace }}/.apple-api-key.p8"
       # Both runners' bundlers write the identical name Nessa.app.tar.gz. A
       # release has one flat asset namespace, so they are renamed to the names
       # the manifest will point at before they leave the runner.
