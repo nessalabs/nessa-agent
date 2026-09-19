@@ -7,8 +7,8 @@ use crate::browser_session::{
 #[cfg(test)]
 use crate::conversation_test_support as conversation_support;
 use crate::protocol::{
-    health_check_message, EventFrame, OutgoingMessage, RequestFrame, ResponseFrame,
-    MAX_PAYLOAD_BYTES,
+    health_check_message, unique_envelope, EventFrame, OutgoingMessage, RequestFrame,
+    ResponseFrame, MAX_PAYLOAD_BYTES,
 };
 use axum::extract::ws::{CloseFrame, Message};
 use futures_util::{stream::FuturesUnordered, Sink, SinkExt, Stream, StreamExt};
@@ -151,8 +151,7 @@ where
     if text.len() > MAX_PAYLOAD_BYTES as usize {
         return Err((String::new(), "unauthorized"));
     }
-    let frame: RequestFrame =
-        serde_json::from_str(&text).map_err(|_| (String::new(), "unauthorized"))?;
+    let frame = RequestFrame::decode(&text).map_err(|_| (String::new(), "unauthorized"))?;
     if frame.kind != "req"
         || frame.id.is_empty()
         || frame.id.len() > 256
@@ -307,7 +306,7 @@ async fn run_authenticated<S>(
                     continue;
                 };
                 if text.len() > MAX_PAYLOAD_BYTES as usize { break; }
-                let frame: RequestFrame = match serde_json::from_str(&text) {
+                let frame: RequestFrame = match RequestFrame::decode(&text) {
                     Ok(frame) => frame,
                     Err(_) => {
                         let Some(response) = correlatable_invalid_request(&text) else { continue };
@@ -591,8 +590,13 @@ fn action_for_method(method: &str) -> Option<&'static str> {
     }
 }
 
+// Which request to blame for a frame that did not decode. A nested duplicate
+// still leaves one unambiguous `id`, so that frame is answered; a frame that
+// named `id` twice has no single request to answer, and the server does not pick
+// one. That frame gets no reply, as any other uncorrelatable text does, and the
+// client's own request timeout settles it.
 fn correlatable_invalid_request(text: &str) -> Option<OutgoingMessage> {
-    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let value = unique_envelope(text).ok()?;
     let object = value.as_object()?;
     if object.get("type")?.as_str()? != "req" {
         return None;
@@ -1420,6 +1424,120 @@ mod tests {
             )))
             .unwrap();
         assert_success(peer.message().await, "auth");
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn repeated_credential_key_never_reaches_authentication() {
+        // Two credentials on the wire are not one agreed credential. Frame
+        // decoding rejects the frame while both are still visible, so nothing
+        // downstream has to guess which one the sender meant.
+        let (mut state, _) = fixture(MembershipRole::Member);
+        state.settings.handshake_timeout = Duration::from_secs(1);
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(handle_socket(socket, state));
+        let Message::Text(challenge) = peer.message().await else {
+            panic!("challenge expected")
+        };
+        let challenge: serde_json::Value = serde_json::from_str(&challenge).unwrap();
+        let nonce = challenge["payload"]["nonce"].as_str().unwrap();
+        peer.input
+            .send(Ok(Message::Text(
+                format!(
+                    r#"{{"type":"req","id":"auth","method":"session.authenticate","params":{{"minVersion":1,"maxVersion":1,"nonce":"{nonce}","credential":"wrong","credential":"secret","client":{{"id":"test"}}}}}}"#
+                )
+                .into(),
+            )))
+            .unwrap();
+        let mut message = peer.message().await;
+        if matches!(message, Message::Text(_)) {
+            message = peer.message().await;
+        }
+        let Message::Close(Some(close)) = message else {
+            panic!("close expected")
+        };
+        assert_eq!(close.code, 4001);
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn repeated_nested_grant_key_is_rejected_before_administration() {
+        // Collapsed, this frame asks for a supported grant and reaches the
+        // credential store; the unsupported action it also carried would never
+        // be seen again. An administration that answers "unavailable" for every
+        // call it receives is how this test tells the two apart.
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_admin(Arc::new(RejectingAdmin(CredentialAdminError::Unavailable)));
+        let session = authenticate(&state).await;
+        for grant in [
+            r#"{"action":"admin.write","action":"server.read","resource":{"organizationId":"organization","id":"gateway-resource"}}"#,
+            r#"{"action":"server.read","action":"admin.write","resource":{"organizationId":"organization","id":"gateway-resource"}}"#,
+            r#"{"action":"server.read","action":"server.read","resource":{"organizationId":"organization","id":"gateway-resource"}}"#,
+        ] {
+            let (socket, mut peer) = test_socket(None);
+            let task = tokio::spawn(run_authenticated(socket, state.clone(), session.clone()));
+            peer.input
+                .send(Ok(Message::Text(
+                    format!(
+                        r#"{{"type":"req","id":"issue","method":"credential.issue","params":{{"requestId":"issue","principal":{{"id":"reader","kind":"integration"}},"membership":{{"id":"reader","principalId":"reader","organizationId":"organization","role":"member","state":"active"}},"grants":[{grant}]}}}}"#
+                    )
+                    .into(),
+                )))
+                .unwrap();
+            let Message::Text(text) = peer.message().await else {
+                panic!("response expected")
+            };
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["id"], "issue");
+            assert_eq!(value["ok"], false);
+            assert_eq!(value["error"]["code"], "invalid_request");
+            task.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_frame_naming_its_request_twice_is_answered_to_neither() {
+        // A nested duplicate still has one `id`, so it gets a correlated error.
+        // A duplicated `id` does not, and the server will not choose one.
+        let (state, _) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        peer.input
+            .send(Ok(Message::Text(
+                r#"{"type":"req","id":"first","id":"second","method":"server.health","params":{}}"#
+                    .into(),
+            )))
+            .unwrap();
+        // The next frame is well formed, so its reply is the one that arrives.
+        peer.request("after");
+        let Message::Text(text) = peer.message().await else {
+            panic!("response expected")
+        };
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["id"], "after");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_issue_frame_still_reaches_administration() {
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_admin(Arc::new(RejectingAdmin(CredentialAdminError::Unavailable)));
+        let session = authenticate(&state).await;
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        peer.input
+            .send(Ok(Message::Text(
+                json!({"type":"req","id":"issue","method":"credential.issue","params":issue_params()})
+                    .to_string()
+                    .into(),
+            )))
+            .unwrap();
+        let Message::Text(text) = peer.message().await else {
+            panic!("response expected")
+        };
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["error"]["code"], "credential_store_unavailable");
         task.abort();
     }
 
