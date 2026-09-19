@@ -60,6 +60,7 @@
 #[cfg(debug_assertions)]
 use std::env;
 use std::future::Future;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
@@ -230,6 +231,13 @@ async fn carry_out<I: Installer, R: Restarter, F: FnOnce(&str)>(
     }
 }
 
+/// How long a download may take before it is a failure rather than a download.
+///
+/// Generous: a release is tens of megabytes and somebody may be on a train. It
+/// is a bound on a hang, not a service level — what it rules out is waiting for
+/// ever on a connection that is open and silent.
+const DOWNLOAD_BUDGET: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
 /// The real source: the release endpoint, through the updater plugin.
 struct PluginReleases(AppHandle);
 
@@ -246,12 +254,23 @@ impl ReleaseSource for PluginReleases {
             };
 
             match found {
-                Ok(Some(update)) => {
+                Ok(Some(mut update)) => {
                     let release = Release {
                         from: update.current_version.clone(),
                         version: update.version.clone(),
                         notes: published_notes(update.body.as_deref()),
                     };
+                    // The plugin builds the returned `Update` with `timeout:
+                    // None` whatever the check was given, and its HTTP client
+                    // has no read or total deadline of its own. A server that
+                    // sends a few bytes and then holds the connection open
+                    // leaves the download pending for the life of the app —
+                    // with the release already taken out of the slot, so every
+                    // later request is ignored as "already installing" and the
+                    // tab never moves. Bounded here, where the update is first
+                    // held, so a stall becomes an ordinary failure that
+                    // restores the release and can be retried.
+                    update.timeout = Some(DOWNLOAD_BUDGET);
                     retain(&app, update);
                     Checked::Newer(release)
                 }
@@ -517,6 +536,65 @@ async fn run_check(source: &dyn ReleaseSource, outcome: &impl CheckOutcome) {
 
 /// The release the panel should be showing, for a page that has just mounted.
 ///
+/// Whether an executable is one an installer may replace.
+///
+/// The plugin does not install *an application*; it replaces the directory the
+/// running executable sits in. On macOS it climbs out to the `.app` when that
+/// directory is a bundle's `Contents/MacOS`, and otherwise takes the parent as
+/// it finds it — which for `target/debug/nessa-app` is `target/debug`. Its
+/// install then renames that directory away, deletes it, and moves the
+/// downloaded app into its place, cleaning up the backup on success. A
+/// developer who clicked install on a real release would lose their whole build
+/// directory, and every sibling artefact in it.
+///
+/// A debug build still asks the real endpoint — that is deliberate, because
+/// checking is how the check gets exercised — so the guard belongs at the
+/// install, not on the check, and not on the simulation flag, which only ever
+/// described offers this build made up.
+#[derive(Debug, PartialEq, Eq)]
+enum Replaceable {
+    /// Inside an installed application. The installer replaces the application.
+    Bundle,
+    /// Not inside one. The installer would replace whatever directory this is.
+    Loose,
+}
+
+/// Cargo's own layout, which is what a `just dev` binary runs from.
+fn under_cargo_target(executable: &Path) -> bool {
+    let mut components = executable.components().peekable();
+    while let Some(component) = components.next() {
+        if component.as_os_str() != "target" {
+            continue;
+        }
+        if components
+            .peek()
+            .is_some_and(|next| matches!(next.as_os_str().to_str(), Some("debug" | "release")))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn replaceable(executable: &Path) -> Replaceable {
+    if under_cargo_target(executable) {
+        return Replaceable::Loose;
+    }
+    // macOS is what this ships, and there an installed app is the only place
+    // the plugin will climb out of. Elsewhere the cargo check above is the
+    // whole of what can be said without shipping there first.
+    if cfg!(target_os = "macos") {
+        let bundled = executable
+            .parent()
+            .is_some_and(|parent| parent.ends_with("Contents/MacOS"));
+        return match bundled {
+            true => Replaceable::Bundle,
+            false => Replaceable::Loose,
+        };
+    }
+    Replaceable::Bundle
+}
+
 /// The check can finish before the panel's page exists — and on a launch where
 /// the panel is never opened, long before it does — so the event alone would
 /// lose the announcement. The page asks this once on mount and gets the same
@@ -611,6 +689,29 @@ pub fn install_update(app: AppHandle) {
             ),
         );
         return;
+    }
+
+    // Before anything is taken out of the slot: an install from a build that is
+    // not installed would replace the directory it is running from.
+    // Through `refuse`, like every other way this can decline: the tab is on
+    // screen because somebody pressed install, and it must not sit at nought
+    // per cent for ever waiting for a download that was never going to start.
+    match std::env::current_exe().map(|executable| replaceable(&executable)) {
+        Ok(Replaceable::Bundle) => {}
+        Ok(Replaceable::Loose) => {
+            refuse(
+                &app,
+                "this build is not an installed one. The updater replaces the directory the \
+                 running executable is in, which here is the build directory — so nothing was \
+                 downloaded. Install a packaged build, or exercise the download with \
+                 scripts/desktop/updater-harness.mjs.",
+            );
+            return;
+        }
+        Err(error) => {
+            refuse(&app, &format!("cannot tell what is running ({error})"));
+            return;
+        }
     }
 
     let Some(pending) = app.try_state::<PendingUpdate>() else {
@@ -935,6 +1036,44 @@ mod tests {
             ),
             Offer::Nothing
         );
+    }
+
+    /// The install the plugin would perform is "replace the directory this
+    /// executable is in", so where it is in decides whether that is an
+    /// application or somebody's build tree.
+    #[test]
+    fn a_build_directory_is_never_something_to_install_over() {
+        // The exact path `just dev` runs, and what the plugin would have taken
+        // as its destination: `target/debug`, renamed away and deleted.
+        for loose in [
+            "/Users/dev/nessa-agent/target/debug/nessa-app",
+            "/Users/dev/nessa-agent/target/release/nessa-app",
+            "C:\\dev\\nessa-agent\\target\\debug\\nessa-app.exe",
+        ] {
+            assert_eq!(
+                replaceable(Path::new(loose)),
+                Replaceable::Loose,
+                "{loose} would have been installed over",
+            );
+        }
+    }
+
+    /// And an installed application still installs, or the guard has taken the
+    /// feature away rather than made it safe.
+    #[test]
+    fn an_installed_application_is_still_installable() {
+        let installed = Path::new("/Applications/Nessa.app/Contents/MacOS/nessa-app");
+
+        assert_eq!(replaceable(installed), Replaceable::Bundle);
+    }
+
+    /// `target` on its own is a directory name like any other; it is `target`
+    /// followed by a profile that means cargo.
+    #[test]
+    fn a_directory_merely_called_target_is_not_a_build_tree() {
+        assert!(!under_cargo_target(Path::new("/Applications/target/Nessa")));
+        assert!(!under_cargo_target(Path::new("/Users/dev/target")));
+        assert!(under_cargo_target(Path::new("/Users/dev/target/debug/app")));
     }
 
     #[test]

@@ -234,7 +234,7 @@ fn pairing(configured_pubkey: &str, payload: &[u8], signing: &Signing) -> Pairin
         }
     };
 
-    let key = match decode_block(configured_pubkey)
+    let key = match decode_as_the_runtime_does(configured_pubkey)
         .as_deref()
         .map(PublicKey::decode)
     {
@@ -246,7 +246,10 @@ fn pairing(configured_pubkey: &str, payload: &[u8], signing: &Signing) -> Pairin
         }
         None => return Pairing::Mismatched("the configured pubkey is not base64".to_string()),
     };
-    let signature = match decode_block(signature).as_deref().map(Signature::decode) {
+    let signature = match decode_signature_file(signature)
+        .as_deref()
+        .map(Signature::decode)
+    {
         Some(Ok(signature)) => signature,
         Some(Err(error)) => {
             return Pairing::Mismatched(format!(
@@ -266,9 +269,26 @@ fn pairing(configured_pubkey: &str, payload: &[u8], signing: &Signing) -> Pairin
 }
 
 /// Decodes one base64 block, tolerating the trailing newline a file may carry.
-fn decode_block(encoded: &str) -> Option<String> {
-    let decoded = STANDARD.decode(encoded.trim()).ok()?;
+/// Exactly what the runtime does: `STANDARD.decode`, on the bytes as given.
+///
+/// Not trimmed. `verify_signature` in the plugin decodes the configured
+/// `pubkey` without trimming, so a key with a trailing newline — which is what
+/// a file read produces, and what a copy-paste often carries — fails there
+/// while a tolerant decoder here calls the pair good. That is the one thing
+/// this gate exists to make impossible: a pass that the shipped updater does
+/// not agree with.
+fn decode_as_the_runtime_does(encoded: &str) -> Option<String> {
+    let decoded = STANDARD.decode(encoded).ok()?;
     String::from_utf8(decoded).ok()
+}
+
+/// What a signature *file* holds, which is a different thing.
+///
+/// `tauri signer sign` writes a trailing newline, and the manifest field is the
+/// file's contents. Trimming belongs here, at the boundary that reads a file,
+/// and not in the decoder the configured key goes through.
+fn decode_signature_file(encoded: &str) -> Option<String> {
+    decode_as_the_runtime_does(encoded.trim())
 }
 
 /// An environment variable that is present and not empty.
@@ -454,4 +474,36 @@ fn a_public_key_that_is_not_one_is_a_mismatch_not_a_skip() {
             "{configured} must not verify"
         );
     }
+}
+
+/// A key the shipped updater would refuse must not pass here.
+///
+/// The gate's whole purpose is that a green run means the runtime agrees. A
+/// decoder more forgiving than `verify_signature` breaks exactly that: the
+/// trailing newline a file read leaves on a key would sail through the gate and
+/// fail on every machine that ever checked for an update.
+#[test]
+fn a_configured_key_the_runtime_cannot_read_is_a_mismatch_here_too() {
+    let signed = FixedSigning(Signing::Signed(OTHER_SIGNATURE.to_string())).sign();
+
+    for trailing in ["\n", " ", "\r\n", "\t"] {
+        let padded = format!("{OTHER_PUBKEY}{trailing}");
+        assert!(
+            matches!(pairing(&padded, FIXTURE, &signed), Pairing::Mismatched(_)),
+            "a key with {trailing:?} after it passed the gate; the runtime would refuse it",
+        );
+    }
+
+    // And the key itself, unpadded, is still good — otherwise the assertion
+    // above would pass for the wrong reason.
+    assert_eq!(pairing(OTHER_PUBKEY, FIXTURE, &signed), Pairing::Paired);
+}
+
+/// A signature file's trailing newline is not the same thing: `tauri signer
+/// sign` writes one, and the field is the file's contents.
+#[test]
+fn a_signature_file_may_end_in_a_newline() {
+    let signed = FixedSigning(Signing::Signed(format!("{OTHER_SIGNATURE}\n"))).sign();
+
+    assert_eq!(pairing(OTHER_PUBKEY, FIXTURE, &signed), Pairing::Paired);
 }
