@@ -192,9 +192,14 @@ impl ReleaseSigner for FixedSigning {
 /// Whether the configured public key and the signing key are two halves of one
 /// keypair.
 ///
-/// [`Pairing::Unverified`] is separate from [`Pairing::Mismatched`] on purpose:
-/// one means nobody asked the question, the other means the answer was no. A
-/// single boolean would let the first quietly stand in for a yes.
+/// The three ways of not being [`Pairing::Paired`] are kept apart on purpose,
+/// because only one of them is survivable. [`Pairing::Mismatched`] means the
+/// answer was no. [`Pairing::Unverified`] means nobody asked, because there was
+/// no key here to ask with — the ordinary state of a contributor's machine.
+/// [`Pairing::Unusable`] means somebody did ask, with a key they named, and the
+/// signer failed: a wrong path, an unavailable command, a bad password. That is
+/// a broken signing setup, not an absent one, and letting it share a variant
+/// with "nobody asked" is how a release goes out on an unchecked key.
 #[derive(Debug, PartialEq, Eq)]
 enum Pairing {
     /// The configured key verified a signature by the signing key.
@@ -202,8 +207,12 @@ enum Pairing {
     /// The signature exists and the configured key rejects it. Every shipped
     /// build would reject every release the same way.
     Mismatched(String),
-    /// The question was not asked. Never evidence of anything.
+    /// The question was not asked, because nothing here could ask it. Never
+    /// evidence of anything.
     Unverified(String),
+    /// A signing key was named and did not produce a signature. The question
+    /// was asked and the machinery for answering it is broken.
+    Unusable(String),
 }
 
 /// The rule, in the plugin's own terms.
@@ -219,7 +228,7 @@ fn pairing(configured_pubkey: &str, payload: &[u8], signing: &Signing) -> Pairin
             return Pairing::Unverified(format!("no release private key to sign with: {why}"))
         }
         Signing::Refused(why) => {
-            return Pairing::Unverified(format!(
+            return Pairing::Unusable(format!(
                 "the release key did not produce a signature: {why}"
             ))
         }
@@ -311,6 +320,15 @@ fn the_shipped_public_key_verifies_a_signature_from_the_release_private_key() {
              Shipping this build would make every update it ever sees fail to verify, with no\n\
              way to repair it except a manual reinstall. Fix the key before releasing.\n"
         ),
+        Pairing::Unusable(why) => panic!(
+            "\n\
+             UPDATER SIGNING KEY NAMED BUT UNUSABLE\n\
+             {why}\n\
+             A key was configured, so somebody meant this to be checked, and the check could\n\
+             not run: a wrong path, a signer that is not there, a password that does not\n\
+             open the key. This is a failure and not a skip — passing here would report a\n\
+             broken signing setup as a verified one.\n"
+        ),
         Pairing::Unverified(why) => {
             assert!(
                 optional_var(REQUIRE_PAIRING).is_none(),
@@ -376,15 +394,47 @@ fn signing_other_bytes_is_a_mismatch() {
 
 #[test]
 fn an_unreachable_key_is_never_a_pass() {
-    // Both ways the question can go unasked. Neither may produce `Paired`:
-    // that is the whole difference between a skip and a green release gate.
+    // Whatever went wrong, the one thing it may never be is `Paired`: that is
+    // the whole difference between a skip and a green release gate.
     for signing in [
         Signing::Absent("no key on this machine".to_string()),
         Signing::Refused("`tauri signer sign` failed: bad password".to_string()),
     ] {
-        assert!(matches!(
+        assert_ne!(
             pairing(&configured_pubkey(), FIXTURE, &signing),
-            Pairing::Unverified(_)
+            Pairing::Paired
+        );
+    }
+}
+
+#[test]
+fn no_key_here_is_a_skip_and_a_key_that_will_not_sign_is_a_failure() {
+    // A contributor with no release key is the ordinary case, and the question
+    // simply goes unasked.
+    assert!(matches!(
+        pairing(
+            &configured_pubkey(),
+            FIXTURE,
+            &Signing::Absent("no key on this machine".to_string())
+        ),
+        Pairing::Unverified(_)
+    ));
+
+    // A key that was named and did not sign is somebody having meant to check,
+    // with the machinery broken under them. Sharing "nobody asked" with this
+    // is how a wrong path or a bad password reads as a verified release.
+    for why in [
+        "`tauri signer sign` failed: bad password",
+        "no such file or directory: /nowhere/release.key",
+        "failed to run `pnpm`: command not found",
+    ] {
+        assert!(matches!(
+            pairing(
+                &configured_pubkey(),
+                FIXTURE,
+                &Signing::Refused(why.to_string())
+            ),
+            Pairing::Unusable(_)
         ));
     }
 }
