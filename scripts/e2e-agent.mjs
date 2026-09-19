@@ -19,6 +19,7 @@ import {
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { randomUUID } from "node:crypto"
+import { PROMPT, verdict } from "./e2e-verdict.mjs"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..")
 const port = Number(process.env.E2E_PORT ?? 7430)
@@ -74,6 +75,16 @@ const env = {
 }
 
 const step = (name, detail) => console.log(`[${name}] ${detail}`)
+
+/**
+ * How many one-second reads the answer gets before the run is a failure.
+ *
+ * Running out is a failure and not a quiet ending: a gateway that admits the
+ * request and never produces an answer is exactly the outage this script exists
+ * to catch, and an exit status of zero for it would make every future run
+ * meaningless.
+ */
+const POLLS = Number(process.env.E2E_POLLS ?? 60)
 
 const init = spawnSync(
   "cargo",
@@ -136,25 +147,31 @@ try {
   const view = await client.conversation.read(id)
   step("runtime", JSON.stringify(view.runtime ?? null))
 
-  const sent = await client.conversation.send(id, "Reply with exactly the word: pong")
+  const sent = await client.conversation.send(id, PROMPT)
   step("send", `admitted: ${JSON.stringify(sent)}`)
 
   let last = null
-  for (let i = 0; i < 60; i += 1) {
+  let answered = false
+  for (let i = 0; i < POLLS; i += 1) {
     await sleep(1000)
-    const v = await client.conversation.read(id)
-    last = v
-    const assistant = v.messages.filter((m) => m.role !== "user")
-    if (assistant.length) {
-      step("RESPONSE", JSON.stringify(assistant, null, 2))
+    last = await client.conversation.read(id)
+    const answer = verdict(last)
+    // A turn that ended badly ends the run here, rather than being polled past
+    // until the deadline reports the wrong reason for the wrong thing.
+    if (answer.state === "failed") throw new Error(answer.detail)
+    if (answer.state === "answered") {
+      step("RESPONSE", JSON.stringify(answer.reply))
+      answered = true
       break
     }
     if (i % 10 === 9)
-      step(
-        "poll",
-        `${i + 1}s: ${v.messages.length} messages, ${v.pending.length} pending`,
-      )
+      step("poll", `${i + 1}s: ${answer.detail}, ${last.pending.length} pending`)
   }
+  if (!answered)
+    throw new Error(
+      `no completed answer within ${POLLS}s; last turn: ` +
+        JSON.stringify(last?.messages.map((message) => message.status) ?? null),
+    )
   step("final-view", JSON.stringify(last, null, 2).slice(0, 4000))
   client.close()
 } catch (error) {
