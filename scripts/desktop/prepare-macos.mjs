@@ -12,6 +12,11 @@ import { resolve, join } from "node:path"
 import { createHash } from "node:crypto"
 import { runtimeFingerprint } from "./runtime-fingerprint.mjs"
 import { materializeBinLinks } from "./materialize-bin-links.mjs"
+import {
+  RUNTIME_EXECUTABLES,
+  runtimeEntitlements,
+  signingArguments,
+} from "./runtime-signing.mjs"
 const root = resolve(import.meta.dirname, "../..")
 if (process.platform !== "darwin")
   throw new Error("Bundled gateway packaging currently supports macOS")
@@ -77,9 +82,28 @@ execFileSync("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], {
 })
 materializeBinLinks(join(harness, "node_modules"))
 cpSync(join(root, "crates/nessa-sdk/data/models.json"), join(out, "models.json"))
-// Ad-hoc sign nested executables for local distribution. Release signing remains Tauri's responsibility.
-for (const name of ["node", "nessa", "nessa-mcp"])
-  execFileSync("codesign", ["--force", "--sign", "-", join(out, name)])
+// Sign the nested executables. Not Tauri's responsibility, whatever the comment
+// that used to be here said: the bundler signs the app and `Contents/MacOS`,
+// and treats a resource as a file, so these ship with whatever signature they
+// are given at this point. Ad-hoc is fine for a build that stays on this
+// machine and is what Apple rejected v0.1.0 for — see runtime-signing.mjs.
+const identity = process.env.APPLE_SIGNING_IDENTITY?.trim() || undefined
+for (const name of RUNTIME_EXECUTABLES) {
+  const plist = runtimeEntitlements(name)
+  execFileSync(
+    "codesign",
+    signingArguments(join(out, name), {
+      identity,
+      entitlements: plist ? join(root, "src-tauri", plist) : undefined,
+    }),
+    { stdio: "inherit" },
+  )
+}
+process.stdout.write(
+  identity
+    ? `→ runtime executables signed with ${identity}, hardened and timestamped\n`
+    : "→ runtime executables signed ad-hoc; this bundle cannot be notarized\n",
+)
 const fingerprint = runtimeFingerprint(out)
 writeFileSync(
   join(out, "manifest.json"),
