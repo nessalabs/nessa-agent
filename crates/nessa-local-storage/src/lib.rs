@@ -167,6 +167,8 @@ impl Drop for PrivateTempFile {
 mod tests {
     use super::*;
     use std::io::{Read, Write};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     #[test]
     fn private_creation_reopen_replace_and_hardlink_rejection() {
         let root = tempfile::tempdir().unwrap();
@@ -274,8 +276,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn existing_shared_directories_are_rejected_without_permission_repair() {
-        use std::os::unix::fs::PermissionsExt;
-
         let root = tempfile::tempdir().unwrap();
         for mode in [0o755, 0o750] {
             let directory = root.path().join(format!("shared-{mode:o}"));

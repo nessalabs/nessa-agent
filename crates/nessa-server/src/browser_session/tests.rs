@@ -578,7 +578,7 @@ async fn wait_for_removal(store: &GatedStore, reason: RemovalReason) {
 #[tokio::test]
 async fn timed_out_login_is_reclaimed_after_the_committed_insert_finishes() {
     let (mut state, _) = fixture(MembershipRole::Admin);
-    state.settings.handshake_timeout = std::time::Duration::from_millis(1);
+    state.settings = state.settings.with_deadlines(Some(std::time::Duration::from_millis(1)), None);
     let store = Arc::new(GatedStore::new(GatedMutation::Insert));
     set_browser_sessions(&mut state, store.clone());
     let login = tokio::spawn(entrypoint::login(
@@ -598,7 +598,7 @@ async fn timed_out_login_is_reclaimed_after_the_committed_insert_finishes() {
 #[tokio::test]
 async fn timed_out_replacement_login_atomically_restores_the_prior_cookie() {
     let (mut state, _) = fixture(MembershipRole::Admin);
-    state.settings.handshake_timeout = std::time::Duration::from_millis(1);
+    state.settings = state.settings.with_deadlines(Some(std::time::Duration::from_millis(1)), None);
     let store = Arc::new(GatedStore::new(GatedMutation::Insert));
     let prior_id = "6".repeat(64);
     let prior = BrowserSession::new(
@@ -628,7 +628,7 @@ async fn timed_out_replacement_login_atomically_restores_the_prior_cookie() {
     assert!(store.inner.get(replacement).await.unwrap().is_none());
     assert!(store.inner.get(prior_id).await.unwrap().is_some());
     let mut state = state;
-    state.settings.handshake_timeout = std::time::Duration::from_secs(1);
+    state.settings = state.settings.with_deadlines(Some(std::time::Duration::from_secs(1)), None);
     assert_eq!(
         entrypoint::check(State(state), with_cookie(&prior_cookie))
             .await
@@ -651,7 +651,7 @@ async fn timed_out_logout_finishes_the_exact_signout_transition() {
     let cookie = login.headers()[header::SET_COOKIE].to_str().unwrap().to_owned();
     let id = entrypoint::cookie(&with_cookie(&cookie)).unwrap().to_owned();
     let mut timed = state;
-    timed.settings.handshake_timeout = std::time::Duration::from_millis(1);
+    timed.settings = timed.settings.with_deadlines(Some(std::time::Duration::from_millis(1)), None);
     let logout = tokio::spawn(entrypoint::logout(State(timed), with_cookie(&cookie)));
     store.committed.notified().await;
     assert_eq!(logout.await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -695,7 +695,7 @@ async fn timed_out_check_finishes_the_exact_renewal_transition() {
         .await
         .unwrap();
     set_browser_sessions(&mut state, store.clone());
-    state.settings.handshake_timeout = std::time::Duration::from_millis(1);
+    state.settings = state.settings.with_deadlines(Some(std::time::Duration::from_millis(1)), None);
     authority.now.store(3_700, Ordering::SeqCst);
     let cookie = format!("__Host-nessa-session={id}");
     let check = tokio::spawn(entrypoint::check(State(state), with_cookie(&cookie)));
@@ -806,7 +806,9 @@ async fn check_returns_service_unavailable_when_admission_or_deadline_is_exhaust
     );
     drop(permits);
     let mut stalled = state.clone();
-    stalled.settings.handshake_timeout = std::time::Duration::from_millis(10);
+    stalled.settings = stalled
+        .settings
+        .with_deadlines(Some(std::time::Duration::from_millis(10)), None);
     stalled.browser_sessions = Some(Arc::new(PendingStore));
     let stalled_check = tokio::spawn(entrypoint::check(
         State(stalled.clone()),
@@ -837,7 +839,7 @@ async fn check_returns_service_unavailable_when_admission_or_deadline_is_exhaust
         StatusCode::SERVICE_UNAVAILABLE
     );
     let mut elapsed = state;
-    elapsed.settings.handshake_timeout = std::time::Duration::ZERO;
+    elapsed.settings = elapsed.settings.with_deadlines(Some(std::time::Duration::ZERO), None);
     elapsed.access = Arc::new(PendingAccess);
     assert_eq!(
         entrypoint::check(State(elapsed), with_cookie(cookie))

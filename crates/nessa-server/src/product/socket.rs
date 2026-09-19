@@ -7,8 +7,8 @@ use crate::browser_session::{
 #[cfg(test)]
 use crate::conversation_test_support as conversation_support;
 use crate::protocol::{
-    health_check_message, EventFrame, OutgoingMessage, RequestFrame, ResponseFrame,
-    MAX_PAYLOAD_BYTES,
+    health_check_message, unique_envelope, EventFrame, OutgoingMessage, RequestFrame,
+    ResponseFrame, MAX_PAYLOAD_BYTES,
 };
 use axum::extract::ws::{CloseFrame, Message};
 use futures_util::{stream::FuturesUnordered, Sink, SinkExt, Stream, StreamExt};
@@ -52,7 +52,7 @@ pub async fn handle_socket<S>(mut socket: S, state: ProductRouteState)
 where
     S: Stream<Item = Result<Message, axum::Error>> + Sink<Message> + Unpin,
 {
-    let deadline = Instant::now() + state.settings.handshake_timeout;
+    let deadline = Instant::now() + state.settings.handshake_timeout();
     let nonce = Uuid::new_v4().to_string();
     // Wire timestamps use seconds. Round up from millisecond wall time so the
     // advertisement never truncates the authentication window. Only the shared
@@ -60,7 +60,7 @@ where
     let challenge_expires_at = state
         .clock
         .unix_milliseconds()
-        .saturating_add(state.settings.handshake_timeout.as_millis() as u64)
+        .saturating_add(state.settings.handshake_timeout().as_millis() as u64)
         .div_ceil(1000);
     let challenge = SessionChallenge {
         min_version: PRODUCT_VERSION,
@@ -73,7 +73,7 @@ where
         Err(_) => return,
     };
     let authenticated = timeout_at(deadline, async {
-        send(state.settings.write_timeout, &mut socket, challenge)
+        send(state.settings.write_timeout(), &mut socket, challenge)
             .await
             .map_err(|_| (String::new(), "temporarily_unavailable"))?;
         receive_authentication(&mut socket, &state, &nonce, deadline).await
@@ -83,8 +83,13 @@ where
         Ok(Ok(value)) => value,
         Ok(Err((request_id, code))) => {
             if code != "handshake_timeout" {
-                let _ =
-                    send_error(state.settings.write_timeout, &mut socket, &request_id, code).await;
+                let _ = send_error(
+                    state.settings.write_timeout(),
+                    &mut socket,
+                    &request_id,
+                    code,
+                )
+                .await;
             }
             let reason = match code {
                 "protocol_incompatible" => SessionCloseReason::ProtocolIncompatible,
@@ -92,12 +97,12 @@ where
                 "handshake_timeout" => SessionCloseReason::HandshakeTimeout,
                 _ => SessionCloseReason::AuthenticationFailed,
             };
-            close_session(state.settings.write_timeout, &mut socket, reason).await;
+            close_session(state.settings.write_timeout(), &mut socket, reason).await;
             return;
         }
         Err(_) => {
             close_session(
-                state.settings.write_timeout,
+                state.settings.write_timeout(),
                 &mut socket,
                 SessionCloseReason::HandshakeTimeout,
             )
@@ -110,7 +115,7 @@ where
         Ok(current) => current,
         Err(error) => {
             close_session(
-                state.settings.write_timeout,
+                state.settings.write_timeout(),
                 &mut socket,
                 close_reason(error),
             )
@@ -123,7 +128,7 @@ where
         Ok(frame) => OutgoingMessage::Response(frame),
         Err(_) => return,
     };
-    if send(state.settings.write_timeout, &mut socket, response)
+    if send(state.settings.write_timeout(), &mut socket, response)
         .await
         .is_err()
     {
@@ -151,8 +156,7 @@ where
     if text.len() > MAX_PAYLOAD_BYTES as usize {
         return Err((String::new(), "unauthorized"));
     }
-    let frame: RequestFrame =
-        serde_json::from_str(&text).map_err(|_| (String::new(), "unauthorized"))?;
+    let frame = RequestFrame::decode(&text).map_err(|_| (String::new(), "unauthorized"))?;
     if frame.kind != "req"
         || frame.id.is_empty()
         || frame.id.len() > 256
@@ -264,7 +268,7 @@ async fn run_authenticated<S>(
 ) where
     S: Stream<Item = Result<Message, axum::Error>> + Sink<Message> + Unpin,
 {
-    let mut current_state = interval(state.settings.current_state_interval);
+    let mut current_state = interval(state.settings.current_state_interval());
     current_state.set_missed_tick_behavior(MissedTickBehavior::Delay);
     current_state.tick().await;
     let expiry = async {
@@ -288,15 +292,15 @@ async fn run_authenticated<S>(
         tokio::select! {
             Some(response) = requests.next(), if !requests.is_empty() => {
                 let Ok(response) = response else { break };
-                if send(state.settings.write_timeout, &mut socket, response).await.is_err() { break; }
+                if send(state.settings.write_timeout(), &mut socket, response).await.is_err() { break; }
             }
             _ = &mut expiry => {
-                close_session(state.settings.write_timeout, &mut socket, SessionCloseReason::CredentialExpired).await;
+                close_session(state.settings.write_timeout(), &mut socket, SessionCloseReason::CredentialExpired).await;
                 break;
             }
             _ = current_state.tick() => {
                 if let Some(error) = current_session_error(&state, &session).await {
-                    close_session(state.settings.write_timeout, &mut socket, close_reason(error)).await;
+                    close_session(state.settings.write_timeout(), &mut socket, close_reason(error)).await;
                     break;
                 }
             }
@@ -307,20 +311,20 @@ async fn run_authenticated<S>(
                     continue;
                 };
                 if text.len() > MAX_PAYLOAD_BYTES as usize { break; }
-                let frame: RequestFrame = match serde_json::from_str(&text) {
+                let frame: RequestFrame = match RequestFrame::decode(&text) {
                     Ok(frame) => frame,
                     Err(_) => {
                         let Some(response) = correlatable_invalid_request(&text) else { continue };
                         if let Some(error) = current_session_error(&state, &session).await {
-                            close_session(state.settings.write_timeout, &mut socket, close_reason(error)).await;
+                            close_session(state.settings.write_timeout(), &mut socket, close_reason(error)).await;
                             break;
                         }
-                        if send(state.settings.write_timeout, &mut socket, response).await.is_err() { break; }
+                        if send(state.settings.write_timeout(), &mut socket, response).await.is_err() { break; }
                         continue;
                     },
                 };
                 if let Some(error) = current_session_error(&state, &session).await {
-                    close_session(state.settings.write_timeout, &mut socket, close_reason(error)).await;
+                    close_session(state.settings.write_timeout(), &mut socket, close_reason(error)).await;
                     break;
                 }
                 // Admission authorizes one operation against committed state.
@@ -328,7 +332,7 @@ async fn run_authenticated<S>(
                 // and idle liveness check observe the new revision.
                 let control = matches!(frame.method.as_str(), "conversation.close" | "conversation.answer" | "conversation.cancel" | "conversation.remove" | "conversation.reorder");
                 if requests.len() >= if control { 20 } else { 16 } {
-                    if send_error(state.settings.write_timeout, &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
+                    if send_error(state.settings.write_timeout(), &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
                     continue;
                 }
                 // Detached commands retain a shared permit through completion,
@@ -336,7 +340,7 @@ async fn run_authenticated<S>(
                 // Controls have separate capacity from reads and provider opens.
                 let capacity = if control { &state.controls } else { &state.requests };
                 let Ok(permit) = capacity.clone().try_acquire_owned() else {
-                    if send_error(state.settings.write_timeout, &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
+                    if send_error(state.settings.write_timeout(), &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
                     continue;
                 };
                 let request_state = state.clone();
@@ -591,8 +595,13 @@ fn action_for_method(method: &str) -> Option<&'static str> {
     }
 }
 
+// Which request to blame for a frame that did not decode. A nested duplicate
+// still leaves one unambiguous `id`, so that frame is answered; a frame that
+// named `id` twice has no single request to answer, and the server does not pick
+// one. That frame gets no reply, as any other uncorrelatable text does, and the
+// client's own request timeout settles it.
 fn correlatable_invalid_request(text: &str) -> Option<OutgoingMessage> {
-    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let value = unique_envelope(text).ok()?;
     let object = value.as_object()?;
     if object.get("type")?.as_str()? != "req" {
         return None;
@@ -647,7 +656,7 @@ async fn current_identity(
     session: &AuthenticatedSession,
 ) -> Result<(AuthenticatedSession, AccessSnapshot), AccessError> {
     timeout(
-        state.settings.handshake_timeout,
+        state.settings.handshake_timeout(),
         current_identity_inner(state, session),
     )
     .await
@@ -1396,7 +1405,9 @@ mod tests {
         let (mut state, _) = fixture(MembershipRole::Member);
         let clock = Arc::new(MillisecondClock(AtomicU64::new(100_999)));
         state.clock = clock.clone();
-        state.settings.handshake_timeout = Duration::from_secs(1);
+        state.settings = state
+            .settings
+            .with_deadlines(Some(Duration::from_secs(1)), None);
         let (socket, mut peer) = test_socket(None);
         let task = tokio::spawn(handle_socket(socket, state));
         let Message::Text(challenge) = peer.message().await else {
@@ -1424,9 +1435,127 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn repeated_credential_key_never_reaches_authentication() {
+        // Two credentials on the wire are not one agreed credential. Frame
+        // decoding rejects the frame while both are still visible, so nothing
+        // downstream has to guess which one the sender meant.
+        let (mut state, _) = fixture(MembershipRole::Member);
+        state.settings = state
+            .settings
+            .with_deadlines(Some(Duration::from_secs(1)), None);
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(handle_socket(socket, state));
+        let Message::Text(challenge) = peer.message().await else {
+            panic!("challenge expected")
+        };
+        let challenge: serde_json::Value = serde_json::from_str(&challenge).unwrap();
+        let nonce = challenge["payload"]["nonce"].as_str().unwrap();
+        peer.input
+            .send(Ok(Message::Text(
+                format!(
+                    r#"{{"type":"req","id":"auth","method":"session.authenticate","params":{{"minVersion":1,"maxVersion":1,"nonce":"{nonce}","credential":"wrong","credential":"secret","client":{{"id":"test"}}}}}}"#
+                )
+                .into(),
+            )))
+            .unwrap();
+        let mut message = peer.message().await;
+        if matches!(message, Message::Text(_)) {
+            message = peer.message().await;
+        }
+        let Message::Close(Some(close)) = message else {
+            panic!("close expected")
+        };
+        assert_eq!(close.code, 4001);
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn repeated_nested_grant_key_is_rejected_before_administration() {
+        // Collapsed, this frame asks for a supported grant and reaches the
+        // credential store; the unsupported action it also carried would never
+        // be seen again. An administration that answers "unavailable" for every
+        // call it receives is how this test tells the two apart.
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_admin(Arc::new(RejectingAdmin(CredentialAdminError::Unavailable)));
+        let session = authenticate(&state).await;
+        for grant in [
+            r#"{"action":"admin.write","action":"server.read","resource":{"organizationId":"organization","id":"gateway-resource"}}"#,
+            r#"{"action":"server.read","action":"admin.write","resource":{"organizationId":"organization","id":"gateway-resource"}}"#,
+            r#"{"action":"server.read","action":"server.read","resource":{"organizationId":"organization","id":"gateway-resource"}}"#,
+        ] {
+            let (socket, mut peer) = test_socket(None);
+            let task = tokio::spawn(run_authenticated(socket, state.clone(), session.clone()));
+            peer.input
+                .send(Ok(Message::Text(
+                    format!(
+                        r#"{{"type":"req","id":"issue","method":"credential.issue","params":{{"requestId":"issue","principal":{{"id":"reader","kind":"integration"}},"membership":{{"id":"reader","principalId":"reader","organizationId":"organization","role":"member","state":"active"}},"grants":[{grant}]}}}}"#
+                    )
+                    .into(),
+                )))
+                .unwrap();
+            let Message::Text(text) = peer.message().await else {
+                panic!("response expected")
+            };
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(value["id"], "issue");
+            assert_eq!(value["ok"], false);
+            assert_eq!(value["error"]["code"], "invalid_request");
+            task.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_frame_naming_its_request_twice_is_answered_to_neither() {
+        // A nested duplicate still has one `id`, so it gets a correlated error.
+        // A duplicated `id` does not, and the server will not choose one.
+        let (state, _) = fixture(MembershipRole::Member);
+        let session = authenticate(&state).await;
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        peer.input
+            .send(Ok(Message::Text(
+                r#"{"type":"req","id":"first","id":"second","method":"server.health","params":{}}"#
+                    .into(),
+            )))
+            .unwrap();
+        // The next frame is well formed, so its reply is the one that arrives.
+        peer.request("after");
+        let Message::Text(text) = peer.message().await else {
+            panic!("response expected")
+        };
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["id"], "after");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_issue_frame_still_reaches_administration() {
+        let (state, _) = fixture(MembershipRole::Admin);
+        let state = state.with_admin(Arc::new(RejectingAdmin(CredentialAdminError::Unavailable)));
+        let session = authenticate(&state).await;
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(run_authenticated(socket, state, session));
+        peer.input
+            .send(Ok(Message::Text(
+                json!({"type":"req","id":"issue","method":"credential.issue","params":issue_params()})
+                    .to_string()
+                    .into(),
+            )))
+            .unwrap();
+        let Message::Text(text) = peer.message().await else {
+            panic!("response expected")
+        };
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["error"]["code"], "credential_store_unavailable");
+        task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn elapsed_handshake_closes_with_retryable_timeout() {
         let (mut state, _) = fixture(MembershipRole::Member);
-        state.settings.handshake_timeout = Duration::from_secs(1);
+        state.settings = state
+            .settings
+            .with_deadlines(Some(Duration::from_secs(1)), None);
         let (socket, mut peer) = test_socket(None);
         let task = tokio::spawn(handle_socket(socket, state));
         assert!(matches!(peer.message().await, Message::Text(_)));
@@ -1444,8 +1573,9 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn challenge_write_consumes_the_same_handshake_budget() {
         let (mut state, _) = fixture(MembershipRole::Member);
-        state.settings.handshake_timeout = Duration::from_secs(1);
-        state.settings.write_timeout = Duration::from_secs(5);
+        state.settings = state
+            .settings
+            .with_deadlines(Some(Duration::from_secs(1)), Some(Duration::from_secs(5)));
         let (release, gate) = tokio::sync::oneshot::channel();
         let (socket, mut peer) = test_socket(Some(gate));
         let task = tokio::spawn(handle_socket(socket, state));
