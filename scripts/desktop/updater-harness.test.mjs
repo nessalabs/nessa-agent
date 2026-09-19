@@ -1,5 +1,7 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
+import { createServer } from "node:http"
+import { connect } from "node:net"
 import test from "node:test"
 import {
   CHECK_ONLY_ARTIFACT,
@@ -97,7 +99,11 @@ test("the harness looks for artifacts the release build is configured to produce
   assert.deepEqual(defaultArtifacts("darwin", config.version), [
     "target/release/bundle/macos/Nessa.app.tar.gz",
   ])
+  // Both shapes the bundler can write: `createUpdaterArtifacts: true` leaves
+  // the AppImage alone, `"v1Compatible"` also archives it, and the plugin
+  // installs either. Discovery must not depend on which one a build chose.
   assert.deepEqual(defaultArtifacts("linux", "0.1.0"), [
+    "target/release/bundle/appimage/Nessa_0.1.0_amd64.AppImage",
     "target/release/bundle/appimage/Nessa_0.1.0_amd64.AppImage.tar.gz",
   ])
   assert.deepEqual(defaultArtifacts("win32", "0.1.0"), [
@@ -126,11 +132,83 @@ test("local redirection stays a build-time merge and never enters the shipped co
   assert.doesNotMatch(harness, /writeFileSync\([^)]*tauri\.conf\.json/)
 })
 
-test("a path the harness cannot decode is a 404, not the end of the run", () => {
-  assert.equal(requestedPath("/nessa.app.tar.gz"), "/nessa.app.tar.gz")
-  assert.equal(requestedPath("/nessa%20one.app.tar.gz"), "/nessa one.app.tar.gz")
-  // `decodeURIComponent` throws on these. Nothing catches inside the request
-  // handler, so before this they took the harness down mid-validation.
-  for (const malformed of ["/%ZZ", "/%", "/%E0%A4%A"])
-    assert.equal(requestedPath(malformed), undefined)
+/**
+ * The plugin's `validate_endpoints` returns `InsecureTransportProtocol` for a
+ * non-https endpoint in a release build, and only warns in a debug one. The
+ * harness serves over http, so the release path it prints needs that
+ * permission — and a check-only run, which is a debug build, would never have
+ * shown its absence.
+ */
+test("the generated config permits the loopback endpoint, and the product does not", () => {
+  const harness = readFileSync("scripts/desktop/updater-harness.mjs", "utf8")
+  assert.match(harness, /dangerousInsecureTransportProtocol: true/)
+  // Granted where it is generated, beside the endpoint it is granted for.
+  assert.match(
+    harness,
+    /const localEndpoint = \{[\s\S]*?dangerousInsecureTransportProtocol: true[\s\S]*?\}/,
+  )
+  // And nowhere near what ships.
+  assert.equal(config.plugins.updater.dangerousInsecureTransportProtocol, undefined)
+  assert.ok(
+    config.plugins.updater.endpoints.every((endpoint) => endpoint.startsWith("https://")),
+  )
+})
+
+const ORIGIN = "http://127.0.0.1:7777"
+
+test("a request target the harness cannot read is not a path it serves", () => {
+  assert.equal(requestedPath("/nessa.app.tar.gz", ORIGIN), "/nessa.app.tar.gz")
+  assert.equal(requestedPath("/nessa%20one.app.tar.gz", ORIGIN), "/nessa one.app.tar.gz")
+  // Two different throws, neither caught in a Node request handler: `new URL`
+  // on a target that is not one, `decodeURIComponent` on a bad escape. Both
+  // took the harness down mid-validation before they went behind one door.
+  for (const malformed of ["//[", "http://a b/", "/%ZZ", "/%", "/%E0%A4%A"])
+    assert.equal(requestedPath(malformed, ORIGIN), undefined)
+})
+
+/**
+ * The end state, not a proxy for it: the malformed request is answered *and*
+ * the harness is still there to answer the next one. Driven through a real
+ * server, because what broke was the request callback, not the parser.
+ */
+test("a malformed request is answered and the harness serves the next one", async () => {
+  const manifest = Buffer.from(`{"version":"9.9.9"}\n`)
+  const server = createServer((request, response) => {
+    const asked = requestedPath(request.url, `http://127.0.0.1`)
+    if (asked !== "/latest.json") {
+      response.writeHead(404).end()
+      return
+    }
+    response.writeHead(200, { "content-type": "application/json" })
+    response.end(manifest)
+  })
+  await new Promise((ready) => server.listen(0, "127.0.0.1", ready))
+  const origin = `http://127.0.0.1:${server.address().port}`
+
+  /** Raw, so a target `fetch` would refuse to send still reaches the server. */
+  const send = (target) =>
+    new Promise((settled, failed) => {
+      const socket = connect(server.address().port, "127.0.0.1", () => {
+        socket.write(`GET ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n`)
+      })
+      let seen = ""
+      socket.on("data", (chunk) => {
+        seen += chunk
+        if (seen.includes("\r\n")) {
+          socket.destroy()
+          settled(seen.split("\r\n")[0])
+        }
+      })
+      socket.on("error", failed)
+    })
+
+  try {
+    for (const malformed of ["//[", "/%ZZ"])
+      assert.match(await send(malformed), /404/, `${malformed} is answered`)
+    const good = await fetch(`${origin}/latest.json`)
+    assert.equal(good.status, 200)
+    assert.equal((await good.json()).version, "9.9.9")
+  } finally {
+    await new Promise((closed) => server.close(closed))
+  }
 })

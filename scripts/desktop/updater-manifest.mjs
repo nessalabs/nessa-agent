@@ -78,13 +78,24 @@ export function checkOnlyManifest({ version, notes, target, origin, published })
 
 /** Where `createUpdaterArtifacts` leaves the thing an update installs.
  *
- * One per platform, because the plugin installs a different kind of thing on
- * each: an archived app bundle on macOS, an archived AppImage on Linux, the
- * NSIS installer on Windows. */
+ * Per platform, because the plugin installs a different kind of thing on each:
+ * an archived app bundle on macOS, an AppImage on Linux, the NSIS installer on
+ * Windows. Candidates, not a name — the caller serves the first that exists.
+ *
+ * Linux has two, and which one a build wrote depends on `createUpdaterArtifacts`:
+ * `true` leaves the AppImage as it is, and `"v1Compatible"` also archives it.
+ * The plugin installs either — it extracts the AppImage when the bytes are gzip
+ * and writes them straight out when they are not — so the harness looks for
+ * both rather than deciding which setting the build was made under. This
+ * repository ships macOS only, so neither is exercised by a release here.
+ */
 export function defaultArtifacts(platform, version) {
   const artifacts = {
     darwin: ["macos/Nessa.app.tar.gz"],
-    linux: [`appimage/Nessa_${version}_amd64.AppImage.tar.gz`],
+    linux: [
+      `appimage/Nessa_${version}_amd64.AppImage`,
+      `appimage/Nessa_${version}_amd64.AppImage.tar.gz`,
+    ],
     win32: [`nsis/Nessa_${version}_x64-setup.exe`],
   }[platform]
   if (!artifacts)
@@ -107,16 +118,21 @@ export function option(args, name, fallback) {
 /**
  * The path a request meant, or undefined when it cannot be read.
  *
- * A malformed percent escape — `/%ZZ` — is not a request for anything the
- * harness serves, so it answers 404 along with every other unknown path. It
- * lives here, decoded once and away from the request handler, because
- * `decodeURIComponent` throws on such a path and nothing catches it there: a
- * stray request would end the harness in the middle of a run somebody is
- * watching.
+ * Both steps of reading a request target throw, and neither is caught in a
+ * Node request handler — an exception there ends the process. `new URL` throws
+ * on a target that is not one (`//[`), and `decodeURIComponent` throws on a
+ * malformed escape (`/%ZZ`). A stray request of either shape would end the
+ * harness in the middle of a run somebody is watching, so the two live behind
+ * this one door and a target that cannot be read is simply not a request for
+ * anything served: it falls through to the same 404 as any unknown path.
+ *
+ * @param {string | undefined} target the raw request target
+ * @param {string} origin what a path-only target is resolved against
+ * @returns {string | undefined} the decoded pathname
  */
-export function requestedPath(path) {
+export function requestedPath(target, origin) {
   try {
-    return decodeURIComponent(path)
+    return decodeURIComponent(new URL(target ?? "", origin).pathname)
   } catch {
     return undefined
   }

@@ -256,26 +256,40 @@ const { name, copy, url, manifest } = checkOnly
 const manifestBody = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`)
 writeFileSync(resolve(served, "latest.json"), manifestBody)
 
+// The harness serves over http on the loopback interface, and the plugin
+// refuses a non-https endpoint in a release build — `validate_endpoints`
+// returns `InsecureTransportProtocol` there, where a debug build only prints a
+// warning. So the generated configuration says it means it. It is generated,
+// never written to `tauri.conf.json`: the shipped product stays https-only and
+// has no such permission in it, which is the same reason the endpoint itself
+// is a `--config` merge rather than an edit.
+const localEndpoint = {
+  endpoints: [`${origin}/latest.json`],
+  dangerousInsecureTransportProtocol: true,
+}
 const endpointConfig = JSON.stringify({
   version: buildVersion,
-  plugins: { updater: { endpoints: [`${origin}/latest.json`] } },
+  plugins: { updater: localEndpoint },
 })
 const devConfig = JSON.stringify({
-  plugins: { updater: { endpoints: [`${origin}/latest.json`] } },
+  plugins: { updater: localEndpoint },
 })
 
 const server = createServer((request, response) => {
   // Two paths, matched exactly. A harness that serves a directory is a file
   // server pointed at a build tree, which is more than this needs to be.
-  const path = new URL(request.url, origin).pathname
-  const asked = requestedPath(path)
+  //
+  // Read through `requestedPath`, which is the only thing here allowed to look
+  // at a request target: both halves of interpreting one throw, and a throw in
+  // this callback ends the harness rather than the request.
+  const asked = requestedPath(request.url, origin)
   const body =
-    path === "/latest.json"
+    asked === "/latest.json"
       ? { bytes: manifestBody, type: "application/json" }
       : copy && asked === `/${name}`
         ? { bytes: readFileSync(copy), type: "application/octet-stream" }
         : undefined
-  console.log(`  ${request.method} ${path} -> ${body ? 200 : 404}`)
+  console.log(`  ${request.method} ${asked ?? request.url} -> ${body ? 200 : 404}`)
   if (!body) {
     // The one 404 worth explaining: a click on the offered item in check-only
     // mode. It is the mode working as described, not a fault to chase.
