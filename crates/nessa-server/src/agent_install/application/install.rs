@@ -13,12 +13,18 @@ pub struct InstalledRuntime {
     pub version: ReleaseVersion,
     /// The executable to launch.
     pub executable: PathBuf,
-    /// Whether this call is what put it there.
+    /// Whether this call fetched the archive.
     ///
     /// Reported rather than inferred from timing, because it is the difference
     /// between "downloaded a hundred megabytes" and "looked at a directory",
     /// and a surface that says "Installed Opencode" for the second is lying to
     /// someone who just watched it take no time at all.
+    ///
+    /// The archive is fetched before the store excludes other installs, so a
+    /// call that downloaded and then found the artifact already published by
+    /// another install reports `true`: it did the waiting, whoever did the
+    /// unpacking. Which of the two put the file there is not a distinction
+    /// anybody watching can see, and not one worth reporting.
     pub downloaded: bool,
 }
 
