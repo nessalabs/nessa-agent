@@ -147,22 +147,37 @@ describe("attachThenAsk", () => {
     expect(unlisten).toHaveBeenCalledOnce()
   })
 
-  it("reports a snapshot that could not be taken", async () => {
+  /**
+   * A failed snapshot is not a failed subscription, and the listeners have to
+   * survive it. Sharing one `catch` took them all down after `ready` had
+   * already been announced — so the panel believed it was listening and was
+   * not, and an install started on the strength of that had its refusal reach
+   * nobody. Asserting the unlisten calls, because asserting that `failed` ran
+   * is what missed this.
+   */
+  it("keeps the listeners when only the snapshot fails", async () => {
+    const first = vi.fn()
+    const second = vi.fn()
     const failed = vi.fn()
     const ready = vi.fn()
 
-    attachThenAsk({
-      listeners: [() => Promise.resolve(vi.fn())],
+    const cancel = attachThenAsk({
+      listeners: [() => Promise.resolve(first), () => Promise.resolve(second)],
       ask: () => Promise.reject(new Error("available_update failed")),
       ready,
       failed,
     })
     await settled()
 
-    // The listeners did attach, so an update announced from here on still
-    // arrives; only the catch-up question was lost.
     expect(ready).toHaveBeenCalledOnce()
     expect(failed).toHaveBeenCalledOnce()
+    expect(first).not.toHaveBeenCalled()
+    expect(second).not.toHaveBeenCalled()
+
+    // And they are still ours to take down when the panel goes away.
+    cancel()
+    expect(first).toHaveBeenCalledOnce()
+    expect(second).toHaveBeenCalledOnce()
   })
 
   /** Both sides agree on whether anyone is still listening. */

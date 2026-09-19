@@ -62,6 +62,7 @@ export function attachThenAsk({
   }
 
   void (async () => {
+    // Attaching and asking fail differently, so they are caught differently.
     try {
       await Promise.all(
         listeners.map(async (attach) => {
@@ -72,15 +73,29 @@ export function attachThenAsk({
           else attached.push(unlisten)
         }),
       )
-      if (cancelled) return
-      ready?.()
-      await ask(live)
     } catch (reason) {
+      // Nothing can be heard from the host, so the listeners that did attach
+      // are no use: they would fire into a panel that was never told it was
+      // listening, and the ones that did not attach never will.
       failed?.(reason)
-      // One listener failing does not leave the others attached: they would go
-      // on firing into a panel that was never told it was listening.
       cancelled = true
       release()
+      return
+    }
+    if (cancelled) return
+
+    ready?.()
+
+    try {
+      await ask(live)
+    } catch (reason) {
+      // A different failure entirely, and the listeners must survive it. They
+      // are attached and working; only the catch-up question was lost, so what
+      // the host says from here on still arrives. Tearing them down here left a
+      // panel that believed it was listening and was not — including an install
+      // already started on the strength of `ready`, whose refusal then reached
+      // nobody.
+      failed?.(reason)
     }
   })()
 
