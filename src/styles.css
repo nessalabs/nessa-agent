@@ -243,6 +243,266 @@ body {
   contain: none;
 }
 
+/* The update tab stands in for the transcript, and the composer goes with it.
+   Stated rather than left to the preflight rule, because this element has
+   layout rules of its own above. */
+.nessa-composer[hidden] {
+  display: none;
+}
+
+/*
+ * The update tab: where the update is going, what the release said about it,
+ * and how far the download has got.
+ *
+ * It stands in for the transcript while it is the selected tab, so it takes the
+ * transcript's room and scrolls the same way. Text is selectable here for the
+ * same reason it is in a transcript — the version numbers are the first thing
+ * anybody reporting a problem is asked for.
+ *
+ * The tab is the room; the card below is the content. `auto` block margins
+ * centre that card rather than `justify-content`, because this box scrolls:
+ * centred flex content that outgrows its scroller has its top cut off and made
+ * unreachable, and auto margins simply collapse to nothing once the card is
+ * taller than the room.
+ */
+.nessa-update-tab {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 16px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/*
+ * The card the update is written on.
+ *
+ * The panel has a surface mode that is a 30% tint of `--background` over
+ * whatever is behind the window, and over a light desktop `--foreground` is a
+ * near-white on near-white — the screenshot that prompted this had everything
+ * but the one `--muted-foreground` line disappear. The answer is the one the
+ * rest of the panel already uses rather than a quieter colour: everything that
+ * must stay readable through that surface stands on its own opaque `--card` —
+ * the notice above the composer, the detail sheet, the composer row, the active
+ * tab pill. Muting the text instead would have cost the headline, which is the
+ * line the tab exists to show.
+ *
+ * Deliberately unpositioned and unpromoted: a `relative` card with a background
+ * and a radius is exactly what WebKitGTK fills with opaque white from the panel
+ * origin (see the composer above).
+ */
+.nessa-update-pane {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  /* Centred in the tab, and out of the way when the notes are long. */
+  margin-block: auto;
+  /* A floor, so a release with no notes is the same object as one with three
+     rather than a strip. The foot falls to the bottom of whichever it is. */
+  min-height: 176px;
+  padding: 16px 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  color: var(--card-foreground);
+}
+
+/* The download's own state, at the foot of the card: the bar and its line, or
+   the refusal and the way back in. Always in the same place, so the four things
+   this tab can say do not each rearrange it. */
+.nessa-update-foot {
+  margin-top: auto;
+  padding-top: 16px;
+}
+
+/* The tab's own glyph, where a conversation has its agent's avatar. A plain
+   mark: the update is not an agent and should not be given a face. */
+.nessa-update-tab-dot {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--nessa-chat-rim-4);
+}
+
+.nessa-update-versions {
+  margin: 0;
+  font-family: var(--nessa-font-mono);
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+
+.nessa-update-headline {
+  margin: 8px 0 0;
+  font-size: 15px;
+  font-weight: 550;
+  letter-spacing: -0.01em;
+}
+
+/* What the release calls itself, under the line that says what is happening.
+   Quieter than the headline on purpose: somebody watching this tab is watching
+   the download, and the release's own title is the context around it. */
+.nessa-update-release-title {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+}
+
+.nessa-update-notes {
+  display: grid;
+  gap: 9px;
+  margin: 13px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nessa-update-notes li {
+  position: relative;
+  padding-left: 16px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+}
+
+.nessa-update-notes li::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 8px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--nessa-chat-rim-3);
+}
+
+/* Drawn, not omitted. Nothing fills the manifest's notes field yet, so this is
+   the state that ships first and a gap where the notes go reads as a bug. */
+.nessa-update-empty {
+  margin: 13px 0 0;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+}
+
+.nessa-update-track {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--card-foreground) 9%, transparent);
+}
+
+.nessa-update-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--nessa-chat-rim-1),
+    var(--nessa-chat-rim-2),
+    var(--nessa-chat-rim-3),
+    var(--nessa-chat-rim-4)
+  );
+  background-size: 220% 100%;
+  animation: nessa-update-drift 2.6s linear infinite;
+  transition: width var(--nessa-motion-duration-normal)
+    var(--nessa-motion-easing-standard);
+}
+
+@keyframes nessa-update-drift {
+  to {
+    background-position: -220% 0;
+  }
+}
+
+/* No declared length, so there is no position to draw. A short band travelling
+   the track says "working" without claiming a fraction nobody has. */
+.nessa-update-fill[data-unmeasured] {
+  width: 38%;
+  animation:
+    nessa-update-drift 2.6s linear infinite,
+    nessa-update-sweep 1.6s var(--nessa-motion-easing-standard) infinite alternate;
+}
+
+@keyframes nessa-update-sweep {
+  from {
+    margin-left: 0;
+  }
+  to {
+    margin-left: 62%;
+  }
+}
+
+.nessa-update-progress-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 9px 0 0;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+
+.nessa-update-percent {
+  font-family: var(--nessa-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A refused download. The bar is gone rather than stopped: a bar that has
+   halted is a bar somebody keeps watching. */
+.nessa-update-refused {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.nessa-update-refused p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--card-foreground);
+}
+
+.nessa-update-retry {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--card-foreground);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color var(--nessa-motion-duration-fast)
+    var(--nessa-motion-easing-standard);
+}
+
+.nessa-update-retry:hover {
+  background: var(--accent);
+}
+
+.nessa-update-retry:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /*
+   * The bar keeps its position and loses its travel. A measured download still
+   * says where it is — that is the information, not the movement — and an
+   * unmeasured one is left as a short static band rather than a full one,
+   * which would read as finished.
+   */
+  .nessa-update-fill {
+    animation: none;
+    transition: none;
+  }
+
+  .nessa-update-fill[data-unmeasured] {
+    animation: none;
+    margin-left: 0;
+  }
+}
+
 /*
  * Unwrap the form so `relative` + `bg-card` + radius cannot allocate a
  * layer at the panel origin. The row is the capsule. Submit still reaches
@@ -423,11 +683,17 @@ body {
   position: static;
   align-self: flex-end;
 }
-.nessa-panel[data-compositor="layout"]:has([data-slot="pill-composer"][data-expanded])
+/* `:not([hidden])` throughout: the composer is hidden while the update tab is
+   up, and an expanded composer left behind must not then claim the room the
+   update tab is drawn in — or un-hide itself by raising its own display. */
+.nessa-panel[data-compositor="layout"]:has(
+    .nessa-composer:not([hidden]) [data-slot="pill-composer"][data-expanded]
+  )
   .nessa-transcript-region {
   display: none;
 }
-.nessa-panel[data-compositor="layout"] .nessa-composer:has([data-expanded]) {
+.nessa-panel[data-compositor="layout"]
+  .nessa-composer:not([hidden]):has([data-expanded]) {
   display: flex;
   flex: 1;
   min-height: 0;
@@ -444,8 +710,10 @@ body {
 
 /* Expanded composer covers these controls; hide them from pointer and keyboard
    access until the built-in Minimize/Escape action restores the compact form. */
-.nessa-panel:has([data-slot="pill-composer"][data-expanded]) .nessa-transcript-region,
-.nessa-panel:has([data-slot="pill-composer"][data-expanded]) .nessa-chrome {
+.nessa-panel:has(.nessa-composer:not([hidden]) [data-slot="pill-composer"][data-expanded])
+  .nessa-transcript-region,
+.nessa-panel:has(.nessa-composer:not([hidden]) [data-slot="pill-composer"][data-expanded])
+  .nessa-chrome {
   visibility: hidden;
 }
 

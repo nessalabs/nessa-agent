@@ -14,9 +14,13 @@ use tauri::WebviewWindow;
 /// Cover the screen the window is on, above the menu bar — without showing it.
 ///
 /// The window is still hidden when this runs: setup is revealed by its own page
-/// once it has a frame to show, so ordering it in here would put an unpainted
+/// once that page has rendered, so ordering it in here would put an unpainted
 /// window on screen and steal the frontmost app's focus at launch. [`reveal`]
 /// is the half that does that, from the reveal path only.
+///
+/// Rendered rather than painted, and the difference is the whole reason the
+/// page can ask at all: a window left hidden here is never drawn, so nothing in
+/// it can wait for a frame first.
 pub fn place(window: &WebviewWindow) {
     let handle = match window.ns_window() {
         Ok(handle) => handle,

@@ -33,9 +33,12 @@ test("the served manifest carries every field the plugin's release reader requir
   const manifest = releaseManifest({
     version: "0.1.0",
     notes: "local",
-    target: "darwin-aarch64",
-    signature: "c2lnbmF0dXJl",
-    url: "http://localhost:7430/Nessa.app.tar.gz",
+    platforms: {
+      "darwin-aarch64": {
+        signature: "c2lnbmF0dXJl",
+        url: "http://localhost:7430/Nessa.app.tar.gz",
+      },
+    },
     published: "2026-09-17T12:00:00.000Z",
   })
   assert.deepEqual(manifest, {
@@ -52,6 +55,51 @@ test("the served manifest carries every field the plugin's release reader requir
   // `pub_date` is parsed as RFC 3339 before the platform is looked at, so a
   // non-conforming date rejects the whole manifest rather than one platform.
   assert.equal(new Date(manifest.pub_date).toISOString(), manifest.pub_date)
+})
+
+test("one manifest carries every architecture a release publishes", () => {
+  // The two macOS architectures are built on different runners and converge
+  // here: `releases/latest/download/latest.json` is a single file, and an
+  // architecture missing from it is an architecture that can never update.
+  const manifest = releaseManifest({
+    version: "0.1.0",
+    notes: "release",
+    platforms: {
+      "darwin-aarch64": { signature: "YQ==", url: "https://example.invalid/a" },
+      "darwin-x86_64": { signature: "Yg==", url: "https://example.invalid/b" },
+    },
+    published: "2026-09-17T12:00:00.000Z",
+  })
+  assert.deepEqual(Object.keys(manifest.platforms), ["darwin-aarch64", "darwin-x86_64"])
+  assert.equal(manifest.platforms["darwin-x86_64"].url, "https://example.invalid/b")
+})
+
+test("a manifest that would apply to nothing, or verify nothing, is refused", () => {
+  const release = { version: "0.1.0", notes: "", published: "2026-09-17T12:00:00.000Z" }
+  // An empty map parses fine and reports "no update available" on every
+  // machine, which is the failure this whole module exists to make loud.
+  assert.throws(
+    () => releaseManifest({ ...release, platforms: {} }),
+    /applies to nothing/,
+  )
+  assert.throws(
+    () =>
+      releaseManifest({
+        ...release,
+        platforms: {
+          "darwin-aarch64": { signature: "", url: "https://example.invalid/a" },
+        },
+      }),
+    /No signature for darwin-aarch64/,
+  )
+  assert.throws(
+    () =>
+      releaseManifest({
+        ...release,
+        platforms: { "darwin-aarch64": { signature: "YQ==", url: "" } },
+      }),
+    /No artifact URL for darwin-aarch64/,
+  )
 })
 
 test("a check-only manifest is complete enough to check and honest about the rest", () => {

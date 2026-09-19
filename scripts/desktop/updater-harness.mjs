@@ -45,38 +45,41 @@
  * ## What success looks like
  *
  * The older app starts and looks completely ordinary — the check is quiet by
- * design, and nothing takes the screen. Within a second or two of launch a new
- * item appears at the top of the tray menu naming the served version ("Update
- * to 0.1.0"). Click it. The app downloads the artifact, verifies the signature,
- * installs over itself, and restarts; the tray item is gone and the app that
- * comes back is the new version. This terminal logs exactly two requests: one
- * for `/latest.json` at launch, one for the artifact on the click.
+ * design, and nothing takes the screen. Open the panel: within a second or two
+ * of launch a notice sits above the composer reading "Update available" with
+ * the served version under it, and two icon controls. Take the install one. The
+ * notice goes, an update tab opens on the download, and the app downloads the
+ * artifact, verifies the signature, installs over itself, and restarts; the app
+ * that comes back is the new version. This terminal logs exactly two requests:
+ * one for `/latest.json` at launch, one for the artifact on the install.
  *
  * ## What each failure means
  *
  * The three things being tested fail in three distinguishable ways.
  *
- * - **Endpoint unreachable — no tray item, and no requests logged here.** The
+ * - **Endpoint unreachable — no notice, and no requests logged here.** The
  *   check never got an answer. The build did not take the `--config` merge, or
  *   it is pointed at a different port, or this server is not running. The app's
  *   stderr says `could not check for an update:` and names the reason.
  *
- * - **Manifest unreadable or inapplicable — no tray item, but `/latest.json`
+ * - **Manifest unreadable or inapplicable — no notice, but `/latest.json`
  *   *was* requested.** The manifest arrived and produced no update: a version
  *   that is not newer than the running build's (it must be built at the lower
  *   version this prints), a `pub_date` that is not RFC 3339, or a `platforms`
  *   key that is not this machine's target triple. Signing is not involved; the
  *   stderr line distinguishes a parse failure from a target that was not found.
  *
- * - **Signature rejected — the item appears, the click fails with `could not
- *   install the update: signature ...`, and the artifact *was* requested.**
+ * - **Signature rejected — the notice appears, the update tab says the
+ *   download did not finish, the app's stderr says `could not install the
+ *   update: signature ...`, and the artifact *was* requested.**
  *   This is the unrecoverable failure, caught before release: the public key in
  *   `tauri.conf.json` does not verify what the private key signed, or the bytes
  *   served are not the bytes that were signed. Run the key-pair gate:
  *   `cargo test -p nessa-app --test updater_key_pairing`.
  *
- *   If the click fails and the artifact was *not* requested, the download never
- *   started and the `url` in the manifest is wrong — not the signature.
+ *   If the tab reports a refusal and the artifact was *not* requested, the
+ *   download never started and the `url` in the manifest is wrong — not the
+ *   signature.
  *
  * ## Check-only mode, for a dev run
  *
@@ -92,15 +95,16 @@
  *
  * The plugin does the whole of its check for real — fetches over HTTP, parses
  * the manifest, reads `pub_date`, looks up this machine's target key, compares
- * versions — and the tray grows the item. It stops exactly there. The announced
- * URL 404s, so a click fails at the download; signature verification is never
+ * versions — and the notice appears in the panel. It stops exactly there. The
+ * announced URL 404s, so the update tab ends in a refusal and a retry;
+ * signature verification is never
  * reached, and the manifest's `signature` field is an honest sentence saying so
  * rather than anything that could be mistaken for a signature. Install and
  * restart are untested in this mode. It is not an end-to-end pass and the
  * banner it prints says so.
  *
  * Neither this nor the full harness is the fastest loop. Nothing here needs a
- * server to exercise the *decision*, the tray item, and the click: a debug
+ * server to exercise the *decision*, the notice, and the install: a debug
  * build reads `NESSA_FAKE_UPDATE=9.9.9` and answers from it with no network at
  * all (`src-tauri/src/updater.rs`). That path installs nothing and says so.
  *
@@ -108,8 +112,10 @@
  *
  * Only that the plugin accepts what *this* machine signs and serves. It does
  * not prove the release workflow signs with the same key — that is the
- * key-pair gate, run with the workflow's own secret — and it does not exercise
- * GitHub's release hosting, its redirects, or its TLS.
+ * key-pair gate, which `.github/workflows/release.yml` runs with the workflow's
+ * own secret and `NESSA_REQUIRE_UPDATER_KEY_PAIRING=1` before it builds
+ * anything — and it does not exercise GitHub's release hosting, its redirects,
+ * or its TLS.
  */
 
 import { spawnSync } from "node:child_process"
@@ -242,9 +248,7 @@ function withTheBuiltArtifact() {
     manifest: releaseManifest({
       version,
       notes,
-      target,
-      signature: sign(root, copy),
-      url,
+      platforms: { [target]: { signature: sign(root, copy), url } },
       published,
     }),
   }
@@ -322,16 +326,17 @@ server.listen(port, "127.0.0.1", () => {
         `  pnpm tauri dev --config '${devConfig}'`,
         ``,
         `The running app reports itself as ${config.version}, so ${version} reads as newer and the`,
-        `tray grows an "Update to ${version}" item.`,
+        `panel's notice reads "Update available", with ${version} under it.`,
         ``,
         `What this mode tests, for real, through the actual tauri-plugin-updater:`,
         `  - the endpoint is fetched over HTTP by the plugin, not by anything in this repo`,
         `  - the manifest is parsed by the plugin, including its RFC 3339 pub_date`,
         `  - the ${target} key is looked up and the versions are compared by the plugin`,
-        `  - the offer reaches the tray through the app's own check`,
+        `  - the announcement reaches the panel through the app's own check`,
         ``,
         `What this mode does NOT test, at all:`,
-        `  - the download: the announced URL 404s here, on purpose`,
+        `  - the download: the announced URL 404s here, on purpose, so the tab`,
+        `    ends in its refused state — which is itself worth seeing once`,
         `  - signature verification: never reached, and the manifest's signature field is a`,
         `    sentence, not a signature`,
         `  - install, restart, and coming back up on the new version`,
@@ -352,7 +357,7 @@ server.listen(port, "127.0.0.1", () => {
         `  pnpm app:build --config '${endpointConfig}'`,
         ``,
         `Install and launch what that produces. It reports itself as ${buildVersion}, so the`,
-        `manifest above reads as newer and the tray grows an "Update to ${version}" item.`,
+        `manifest above reads as newer and the panel's notice offers ${version}.`,
         `Requests arrive below; Ctrl-C when you are done.`,
         ``,
       ]

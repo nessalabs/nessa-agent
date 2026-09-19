@@ -15,6 +15,9 @@ const HOST_EVENTS = {
   panelSized: "nessa://panel-sized",
   resizeStarted: "nessa://resize-started",
   resizeEnded: "nessa://resize-ended",
+  updateAvailable: "nessa://update-available",
+  updateProgress: "nessa://update-progress",
+  updateFailed: "nessa://update-failed",
 } as const
 
 /**
@@ -163,6 +166,77 @@ export async function startResizeFromLeftEdge() {
   await getCurrentWindow().startResizeDragging("West")
 }
 
+/**
+ * A published release newer than the running build. Matches `updater::Release`.
+ *
+ * `notes` is what the release manifest published, or `null` when it published
+ * none — which is what ships first, since nothing fills that field yet.
+ */
+export interface Release {
+  from: string
+  version: string
+  notes: string | null
+}
+
+/** How far the download has got. Matches `updater::Downloaded`. */
+export interface Downloaded {
+  downloaded: number
+  /** What the server declared, or `null` when it declared nothing. */
+  total: number | null
+}
+
+/**
+ * The release the host has already found, for a panel that has just mounted.
+ *
+ * The check runs once at launch and can finish before this page exists — or
+ * long before, on a launch where the panel is never opened — so the event alone
+ * would lose it. The host keeps the announcement and answers this with it.
+ */
+export async function availableUpdate(): Promise<Release | null> {
+  if (!inTauri) return null
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<Release | null>("available_update")
+}
+
+/** Subscribes to a check finding a newer release. */
+export async function onUpdateAvailable(handler: (release: Release) => void) {
+  if (!inTauri) return () => undefined
+  const { listen } = await import("@tauri-apps/api/event")
+  return listen<Release>(HOST_EVENTS.updateAvailable, ({ payload }) => handler(payload))
+}
+
+/** Subscribes to the progress of the download this panel asked for. */
+export async function onUpdateProgress(handler: (progress: Downloaded) => void) {
+  if (!inTauri) return () => undefined
+  const { listen } = await import("@tauri-apps/api/event")
+  return listen<Downloaded>(HOST_EVENTS.updateProgress, ({ payload }) => handler(payload))
+}
+
+/**
+ * Subscribes to that download being refused, with the host's reason.
+ *
+ * The one update failure that reaches the screen: a check nobody asked for
+ * stays quiet, but an install somebody asked for owes them an answer.
+ */
+export async function onUpdateFailed(handler: (reason: string) => void) {
+  if (!inTauri) return () => undefined
+  const { listen } = await import("@tauri-apps/api/event")
+  return listen<string>(HOST_EVENTS.updateFailed, ({ payload }) => handler(payload))
+}
+
+/**
+ * Downloads the announced update and restarts onto it.
+ *
+ * The host owns all of it — the endpoint, the signature, the install — so this
+ * only asks. Progress and refusal come back as events; success comes back as
+ * the app restarting.
+ */
+export async function installUpdate(): Promise<void> {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("install_update")
+}
+
 export { inTauri }
 
 /**
@@ -291,12 +365,16 @@ export async function finishSetupWindow(completed: boolean): Promise<SetupHandof
 }
 
 /**
- * Show the setup window, once its page has a frame to show.
+ * Show the setup window, once its page has rendered.
  *
  * It is created hidden: a window is on screen the moment it exists, and a
  * webview has painted nothing the moment it is created, so a window visible
  * from the start shows whatever the window server has for it until the first
  * frame lands — a flash at exactly the point the opening begins from darkness.
+ *
+ * Rendered, not painted. A hidden window is never drawn, so its page cannot
+ * wait for a frame to arrive before asking for this — see
+ * `onboarding/ui/reveal-on-first-render.ts`, which is where that waiting stopped.
  */
 export async function revealSetupWindow() {
   if (!inTauri) return

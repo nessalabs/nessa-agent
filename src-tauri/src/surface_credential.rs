@@ -1,7 +1,20 @@
 //! Native storage for the bundled chat surface. Renderer input never selects a file.
+use crate::composition::HostDependencies;
 use crate::gateway::application::Gateway;
+use crate::panel;
 use std::{io::Read, path::PathBuf};
-use tauri::Manager;
+use tauri::State;
+
+/// Where the bundled surface's token comes from.
+///
+/// The host's own port: a stage in, a token or a reason out, and no path or
+/// file handle visible to a caller. The real implementation reads the
+/// stage-scoped credential file; a test substitutes one that answers at once,
+/// including with the refusals a real keyring failure is hardest to arrange.
+pub trait SurfaceCredentials: Send + Sync {
+    /// The token for `stage`, or why there is not one to hand over.
+    fn read(&self, stage: &str) -> Result<String, String>;
+}
 
 pub struct SurfaceCredential {
     root: Option<PathBuf>,
@@ -10,8 +23,12 @@ pub struct SurfaceCredential {
 }
 
 impl SurfaceCredential {
-    pub fn from_environment() -> Self {
-        let stage = crate::local_data::process_stage();
+    /// The credential file this process's environment points at.
+    ///
+    /// `stage` is passed in rather than read here: composition resolves the
+    /// stage once and the gateway is registered under the same one, and two
+    /// independent reads of `NESSA_STAGE` are two things that could disagree.
+    pub fn from_environment(stage: String) -> Self {
         let segment = |value: &str| {
             !value.is_empty()
                 && value
@@ -45,7 +62,9 @@ impl SurfaceCredential {
             stage,
         }
     }
+}
 
+impl SurfaceCredentials for SurfaceCredential {
     fn read(&self, stage: &str) -> Result<String, String> {
         if stage != self.stage {
             return Err("Desktop and gateway stages must match".into());
@@ -81,28 +100,189 @@ impl SurfaceCredential {
     }
 }
 
-#[tauri::command]
-pub async fn load_surface_credential(
-    window: tauri::WebviewWindow,
-    storage: tauri::State<'_, SurfaceCredential>,
-    stage: String,
+/// The order a credential load goes in, with its two outside things supplied.
+///
+/// Split from [`load_surface_credential`] so the rules survive without a window
+/// server: only the bundled panel may ask; a packaged build waits for the
+/// gateway to reconcile before handing anything over, and a build without one
+/// does not wait at all; and the refusal for the wrong window happens before
+/// either of those, so a stray webview cannot make the app register a service.
+async fn load_for(
+    label: &str,
+    gateway: Option<&Gateway>,
+    credential: &dyn SurfaceCredentials,
+    stage: &str,
 ) -> Result<String, String> {
-    if window.label() != "main" {
+    if label != panel::MAIN_WINDOW {
         return Err("Only the bundled chat surface can load this credential".into());
     }
-    if let Some(gateway) = window.app_handle().try_state::<Gateway>() {
+    if let Some(gateway) = gateway {
         gateway
             .wait_ready()
             .await
             .map_err(|error| error.to_string())?;
     }
-    storage.read(&stage)
+    credential.read(stage)
+}
+
+#[tauri::command]
+pub async fn load_surface_credential(
+    window: tauri::WebviewWindow,
+    deps: State<'_, HostDependencies>,
+    stage: String,
+) -> Result<String, String> {
+    let gateway = deps.gateway.clone();
+    let credential = deps.credential.clone();
+    load_for(window.label(), gateway.as_deref(), &*credential, &stage).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, io::Write};
+    use crate::gateway::application::{GatewayError, GatewayHost, ReconciledGateway};
+    use std::{fs, io::Write, path::Path, sync::Arc, sync::Mutex};
+
+    /// A credential source that has already made up its mind, and writes down
+    /// whether it was asked at all.
+    struct FakeCredentials(Result<String, String>, Mutex<u32>);
+
+    impl FakeCredentials {
+        fn holding(token: &str) -> Self {
+            Self(Ok(token.to_string()), Mutex::new(0))
+        }
+
+        fn refusing(reason: &str) -> Self {
+            Self(Err(reason.to_string()), Mutex::new(0))
+        }
+
+        fn reads(&self) -> u32 {
+            *self.1.lock().unwrap()
+        }
+    }
+
+    impl SurfaceCredentials for FakeCredentials {
+        fn read(&self, _stage: &str) -> Result<String, String> {
+            *self.1.lock().unwrap() += 1;
+            self.0.clone()
+        }
+    }
+
+    /// A background service host that registers, or refuses to, without launchd.
+    struct FakeHost {
+        registration: Result<ReconciledGateway, GatewayError>,
+        registrations: Mutex<u32>,
+    }
+
+    impl GatewayHost for FakeHost {
+        fn register(&self, _: &Path, _: &str) -> Result<ReconciledGateway, GatewayError> {
+            *self.registrations.lock().unwrap() += 1;
+            self.registration.clone()
+        }
+
+        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
+            Ok(())
+        }
+    }
+
+    fn gateway(registration: Result<ReconciledGateway, GatewayError>) -> (Gateway, Arc<FakeHost>) {
+        let host = Arc::new(FakeHost {
+            registration,
+            registrations: Mutex::new(0),
+        });
+        (
+            Gateway::bootstrap(host.clone(), "/runtime".into(), "ci".into()),
+            host,
+        )
+    }
+
+    fn reconciled() -> ReconciledGateway {
+        ReconciledGateway::new(
+            "com.nessa.gateway".into(),
+            "fingerprint".into(),
+            "instance".into(),
+            "generation".into(),
+            42,
+        )
+    }
+
+    fn load(
+        label: &str,
+        gateway: Option<&Gateway>,
+        credential: &dyn SurfaceCredentials,
+    ) -> Result<String, String> {
+        tauri::async_runtime::block_on(load_for(label, gateway, credential, "ci"))
+    }
+
+    /// The whole of the ordering: the window is checked first, then the gateway
+    /// is waited for, and only then is anything read.
+    #[test]
+    fn the_bundled_panel_waits_for_the_gateway_and_gets_its_token() {
+        let credential = FakeCredentials::holding("fixture-only");
+        let (gateway, host) = gateway(Ok(reconciled()));
+
+        assert_eq!(
+            load(panel::MAIN_WINDOW, Some(&gateway), &credential).unwrap(),
+            "fixture-only"
+        );
+        assert_eq!(*host.registrations.lock().unwrap(), 1);
+        assert_eq!(credential.reads(), 1);
+    }
+
+    /// The refusal that matters most: any other window is turned away before
+    /// the gateway is touched, so a stray webview cannot make a packaged build
+    /// register a background service, let alone read a token.
+    #[test]
+    fn another_window_is_refused_before_the_gateway_is_asked_for_anything() {
+        let credential = FakeCredentials::holding("fixture-only");
+        let (gateway, host) = gateway(Ok(reconciled()));
+
+        assert_eq!(
+            load(panel::SETUP_WINDOW, Some(&gateway), &credential).err(),
+            Some("Only the bundled chat surface can load this credential".to_string())
+        );
+        assert_eq!(*host.registrations.lock().unwrap(), 0);
+        assert_eq!(credential.reads(), 0);
+    }
+
+    /// A gateway that will not reconcile is reported as itself, and nothing is
+    /// read: handing a token to a surface with no gateway behind it would only
+    /// move the failure somewhere less legible.
+    #[test]
+    fn a_gateway_that_will_not_reconcile_stops_the_load() {
+        let credential = FakeCredentials::holding("fixture-only");
+        let (gateway, _host) = gateway(Err(GatewayError::Registration("not installed".into())));
+
+        assert_eq!(
+            load(panel::MAIN_WINDOW, Some(&gateway), &credential).err(),
+            Some("not installed".to_string())
+        );
+        assert_eq!(credential.reads(), 0);
+    }
+
+    /// A dev build has no gateway to wait for, and the credential is still the
+    /// panel's to load.
+    #[test]
+    fn a_build_without_a_gateway_does_not_wait_for_one() {
+        let credential = FakeCredentials::holding("fixture-only");
+
+        assert_eq!(
+            load(panel::MAIN_WINDOW, None, &credential).unwrap(),
+            "fixture-only"
+        );
+    }
+
+    /// The credential's own refusal reaches the surface unchanged: it is the
+    /// only thing that can tell somebody to run local auth setup.
+    #[test]
+    fn a_missing_credential_is_reported_as_the_source_put_it() {
+        let credential =
+            FakeCredentials::refusing("Chat credential missing or unsafe; run local auth setup");
+
+        assert_eq!(
+            load(panel::MAIN_WINDOW, None, &credential).err(),
+            Some("Chat credential missing or unsafe; run local auth setup".to_string())
+        );
+    }
 
     fn temporary_directory(name: &str) -> PathBuf {
         let unique = std::time::SystemTime::now()

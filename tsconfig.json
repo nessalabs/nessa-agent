@@ -34,6 +34,9 @@
       "@/lib/*": [
         "./node_modules/@nessa-ui/react/src/lib/*"
       ],
+      "@/provider/*": [
+        "./node_modules/@nessa-ui/react/src/provider/*"
+      ],
       "react": [
         "./node_modules/@types/react"
       ],

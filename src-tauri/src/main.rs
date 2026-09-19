@@ -1,6 +1,7 @@
 // The release build is a menu bar app with no console window on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod composition;
 mod gateway;
 mod host;
 mod local_data;
@@ -13,7 +14,9 @@ mod surface_credential;
 mod tray;
 mod updater;
 
+use composition::HostDependencies;
 use gateway::application::Gateway;
+use settings::SettingsStore;
 use std::sync::Mutex;
 
 use tauri::{Manager, WindowEvent};
@@ -34,6 +37,8 @@ fn main() {
             surface_credential::load_surface_credential,
             shortcuts::load_shortcuts,
             shortcuts::apply_shortcuts,
+            updater::available_update,
+            updater::install_update,
         ])
         .setup(|app| {
             // Registered here rather than in the builder chain because there is
@@ -44,21 +49,21 @@ fn main() {
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
 
-            app.manage(surface_credential::SurfaceCredential::from_environment());
-            if !cfg!(debug_assertions) {
-                let runtime = app.path().resource_dir()?.join("runtime");
-                app.manage(Gateway::bootstrap(
-                    gateway::infrastructure::current(),
-                    runtime,
-                    local_data::process_stage(),
-                ));
-            }
+            // The composition root. Every outside thing the host talks to is
+            // built here, once, and handed down from here: the settings file,
+            // the shortcut cache, the surface credential, the background
+            // service, and the release endpoint. Managed as one value so the
+            // commands below can declare `State<HostDependencies>` and be given
+            // it, and kept here so the rest of `setup` can pass it by hand.
+            let deps = HostDependencies::assemble(app.handle())?;
+            app.manage(deps.clone());
+
             platform::current().configure_app(app.handle());
 
             // A missing tray is survivable. On Linux especially, GNOME without
             // an app-indicator extension has no tray at all; the panel then
             // has to be reachable from the taskbar.
-            let tray_present = match tray::create(app.handle()) {
+            let tray_present = match tray::create(app.handle(), &deps) {
                 Ok(()) => true,
                 Err(error) => {
                     eprintln!("[nessa] could not create the tray: {error}");
@@ -70,8 +75,8 @@ fn main() {
             };
             app.manage(tray::Present(tray_present));
 
-            let settings = settings::load(app.handle());
-            let shortcut_doc = shortcuts::load(app.handle());
+            let settings = deps.settings.load();
+            let shortcut_doc = deps.shortcuts.load();
             let summon = shortcuts::SummonRegistration(Mutex::new(None));
             shortcut::reregister_summon(
                 app.handle(),
@@ -100,17 +105,18 @@ fn main() {
                 panel::open_setup_window(app.handle());
             }
 
-            // Last, and on purpose. The check needs the tray to already exist,
-            // because the tray menu is the only place its answer can go; and it
-            // must not delay anything above it, so it is spawned rather than
-            // awaited and every window on screen is already placed before it
-            // starts. It is safe next to first-run setup for the same reason it
-            // is quiet in general: finding an update adds a menu item and
-            // nothing else — no window, no focus change, no prompt — so setup
-            // keeps the screen it took whether the check succeeds, finds
-            // nothing, or fails.
+            // Last, and on purpose. It must not delay anything above it, so it
+            // is spawned rather than awaited and every window on screen is
+            // already placed before it starts. It is safe next to first-run
+            // setup for the same reason it is quiet in general: finding an
+            // update puts a notice inside the panel and nothing else — no
+            // window, no focus change, no prompt — and setup is a different
+            // window, so setup keeps the screen it took whether the check
+            // succeeds, finds nothing, or fails. A panel that is closed, or
+            // whose page has not loaded yet, is not a missed announcement
+            // either: the host keeps it and the panel asks on mount.
             #[cfg(desktop)]
-            updater::check_in_background(app.handle());
+            updater::check_in_background(app.handle(), deps.releases.clone());
 
             // The panel reads these on every show, to re-fit the frame.
             app.manage(settings);
@@ -157,13 +163,156 @@ fn main() {
         .expect("error while building Nessa")
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
-                if let Some(gateway) = app.try_state::<Gateway>() {
-                    if settings::load(app).stop_agents_on_quit {
-                        if let Err(error) = gateway.stop_agents() {
-                            eprintln!("[nessa] could not request agent shutdown: {error}");
-                        }
-                    }
+                // One resolution, at the entry point. The decision itself takes
+                // what it needs as parameters and lives below.
+                if let Some(deps) = composition::resolve(app) {
+                    stop_agents_if_asked(&*deps.settings, deps.gateway.as_deref());
                 }
             }
         });
+}
+
+/// The quit policy, on the way out.
+///
+/// Agents keep running after the desktop quits unless the settings file says
+/// otherwise, and there is nothing to ask when this build has no registered
+/// gateway — a development build, which never had one. The gateway is checked
+/// first, so a launch with no service does not read the file to decide nothing.
+///
+/// A refused stop is survivable and reported: the app is already leaving, and
+/// launchd owns the gateway's lifetime either way.
+fn stop_agents_if_asked(settings: &dyn SettingsStore, gateway: Option<&Gateway>) {
+    let Some(gateway) = gateway else {
+        return;
+    };
+    if !settings.load().stop_agents_on_quit {
+        return;
+    }
+    if let Err(error) = gateway.stop_agents() {
+        eprintln!("[nessa] could not request agent shutdown: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gateway::application::{GatewayError, GatewayHost, ReconciledGateway};
+    use settings::testing::in_memory;
+    use std::path::Path;
+    use std::sync::Arc;
+
+    /// A background service host that records what it was asked to do, without
+    /// launchd or a staged runtime anywhere near it.
+    #[derive(Default)]
+    struct FakeHost {
+        calls: Mutex<Vec<&'static str>>,
+        stop: Mutex<Option<GatewayError>>,
+    }
+
+    impl GatewayHost for FakeHost {
+        fn register(&self, _: &Path, _: &str) -> Result<ReconciledGateway, GatewayError> {
+            self.calls.lock().unwrap().push("register");
+            Ok(ReconciledGateway::new(
+                "com.nessa.gateway".into(),
+                "fingerprint".into(),
+                "instance".into(),
+                "generation".into(),
+                7,
+            ))
+        }
+
+        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
+            self.calls.lock().unwrap().push("stop");
+            match self.stop.lock().unwrap().clone() {
+                Some(error) => Err(error),
+                None => Ok(()),
+            }
+        }
+    }
+
+    impl FakeHost {
+        fn calls(&self) -> Vec<&'static str> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    /// A gateway that has already reconciled, so a stop has somewhere to go.
+    fn reconciled_gateway(host: Arc<FakeHost>) -> Gateway {
+        let gateway = Gateway::bootstrap(host, "/runtime".into(), "ci".into());
+        tauri::async_runtime::block_on(gateway.wait_ready()).expect("the fake host registers");
+        gateway
+    }
+
+    #[test]
+    fn agents_are_asked_to_stop_only_when_the_settings_file_says_so() {
+        let host = Arc::new(FakeHost::default());
+        let gateway = reconciled_gateway(host.clone());
+        let settings = in_memory();
+
+        // The default is to leave background agents running.
+        stop_agents_if_asked(&settings.store, Some(&gateway));
+        assert_eq!(host.calls(), ["register"]);
+
+        settings
+            .store
+            .update(&mut |chosen| chosen.stop_agents_on_quit = true)
+            .expect("an absent file takes the change");
+        stop_agents_if_asked(&settings.store, Some(&gateway));
+        assert_eq!(host.calls(), ["register", "stop"]);
+    }
+
+    /// A development build has no registered service, and the file is not even
+    /// read to decide that: there is nothing the answer could change.
+    #[test]
+    fn a_build_without_a_gateway_asks_nothing_and_reads_nothing() {
+        let settings = in_memory();
+        settings
+            .store
+            .update(&mut |chosen| chosen.stop_agents_on_quit = true)
+            .expect("an absent file takes the change");
+        // Any read from here on fails, which would turn into the defaults and
+        // hide a file that was consulted when it should not have been.
+        *settings.storage.read_error.lock().unwrap() = Some(std::io::ErrorKind::PermissionDenied);
+
+        stop_agents_if_asked(&settings.store, None);
+
+        assert_eq!(
+            *settings.storage.read_error.lock().unwrap(),
+            Some(std::io::ErrorKind::PermissionDenied),
+            "the settings file was read on a launch with no gateway to stop"
+        );
+    }
+
+    /// The app is already leaving. A refused stop is reported and nothing else:
+    /// launchd owns the gateway's lifetime either way.
+    #[test]
+    fn a_refused_stop_does_not_hold_up_the_exit() {
+        let host = Arc::new(FakeHost::default());
+        *host.stop.lock().unwrap() = Some(GatewayError::Stop("delivery failed".into()));
+        let gateway = reconciled_gateway(host.clone());
+        let settings = in_memory();
+        settings
+            .store
+            .update(&mut |chosen| chosen.stop_agents_on_quit = true)
+            .expect("an absent file takes the change");
+
+        stop_agents_if_asked(&settings.store, Some(&gateway));
+
+        assert_eq!(host.calls(), ["register", "stop"]);
+    }
+
+    /// A settings file this build cannot parse must not read as "stop the
+    /// agents": the defaults a failed load falls back to say to leave them
+    /// running, which is the survivable answer on the way out.
+    #[test]
+    fn an_unreadable_settings_file_leaves_agents_running() {
+        let host = Arc::new(FakeHost::default());
+        let gateway = reconciled_gateway(host.clone());
+        let settings = in_memory();
+        settings.storage.put(&settings.path, b"{");
+
+        stop_agents_if_asked(&settings.store, Some(&gateway));
+
+        assert_eq!(host.calls(), ["register"]);
+    }
 }
