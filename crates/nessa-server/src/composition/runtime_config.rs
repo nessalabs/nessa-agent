@@ -63,22 +63,14 @@ impl RuntimeConfig {
     }
 
     pub fn session(&self) -> Result<SessionSettings, RunError> {
-        let duration = |value| {
-            // Check before constructing Tokio timers; reject zero and overflowing deadlines.
-            let value = Duration::from_millis(value);
-            if value.is_zero() || std::time::Instant::now().checked_add(value).is_none() {
-                Err(invalid(
-                    "session deadlines must be positive and representable",
-                ))
-            } else {
-                Ok(value)
-            }
-        };
-        Ok(SessionSettings {
-            handshake_timeout: duration(self.session.handshake_timeout_ms)?,
-            write_timeout: duration(self.session.write_timeout_ms)?,
-            current_state_interval: duration(self.session.current_state_interval_ms)?,
-        })
+        // The settings type owns what a usable deadline is, so a configuration
+        // file and an embedding caller are rejected by the same rule.
+        SessionSettings::new(
+            Duration::from_millis(self.session.handshake_timeout_ms),
+            Duration::from_millis(self.session.write_timeout_ms),
+            Duration::from_millis(self.session.current_state_interval_ms),
+        )
+        .map_err(invalid)
     }
 }
 fn invalid(error: impl std::fmt::Display) -> RunError {
@@ -88,6 +80,7 @@ fn invalid(error: impl std::fmt::Display) -> RunError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::product::InvalidSessionSettings;
     #[test]
     fn config_loading_accepts_only_private_regular_files() {
         use std::io::Write;
@@ -106,7 +99,7 @@ mod tests {
                 .unwrap()
                 .session()
                 .unwrap()
-                .handshake_timeout,
+                .handshake_timeout(),
             Duration::from_secs(1)
         );
         std::fs::hard_link(&path, directory.join("alias.json")).unwrap();
@@ -135,11 +128,11 @@ mod tests {
         assert_eq!(a.registry.max_registry_bytes, 8388608);
         assert_eq!(a.registry.max_receipts, 2000);
         assert_eq!(
-            a.session().unwrap().write_timeout,
+            a.session().unwrap().write_timeout(),
             Duration::from_millis(75)
         );
         assert_eq!(b.registry.max_credentials, 1000);
-        assert_eq!(b.session().unwrap().write_timeout, Duration::from_secs(5));
+        assert_eq!(b.session().unwrap().write_timeout(), Duration::from_secs(5));
     }
     #[test]
     fn invalid_settings_are_never_silently_defaulted() {
@@ -154,5 +147,28 @@ mod tests {
         ] {
             assert!(RuntimeConfig::parse(bytes).is_err());
         }
+    }
+    #[test]
+    fn a_zero_polling_interval_is_rejected_by_both_entry_paths() {
+        // The file path and a caller constructing settings directly now fail on
+        // the same rule, rather than one of them reaching `tokio::time::interval`.
+        assert!(RuntimeConfig::parse(br#"{"session":{"currentStateIntervalMs":0}}"#).is_err());
+        assert_eq!(
+            SessionSettings::new(
+                Duration::from_secs(10),
+                Duration::from_secs(5),
+                Duration::ZERO,
+            )
+            .unwrap_err(),
+            InvalidSessionSettings::CurrentStateInterval
+        );
+        assert_eq!(
+            RuntimeConfig::parse(br#"{"session":{"currentStateIntervalMs":250}}"#)
+                .unwrap()
+                .session()
+                .unwrap()
+                .current_state_interval(),
+            Duration::from_millis(250)
+        );
     }
 }

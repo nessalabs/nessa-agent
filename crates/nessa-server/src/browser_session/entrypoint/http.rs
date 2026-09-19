@@ -14,11 +14,10 @@ use nessa_auth::application::{
     session::{AuthenticateSession, ResumeSession},
 };
 use serde::Deserialize;
+use std::fmt::Write;
 use tokio::sync::oneshot;
 
 pub(crate) fn encode_session_id(bytes: [u8; 32]) -> String {
-    use std::fmt::Write;
-
     let mut id = String::with_capacity(64);
     for byte in bytes {
         write!(&mut id, "{byte:02x}").expect("writing to a String cannot fail");
@@ -194,7 +193,7 @@ pub async fn login(
             }
         }
     });
-    let result = operation_result(state.settings.handshake_timeout, result).await;
+    let result = operation_result(state.settings.handshake_timeout(), result).await;
     let lifetime = match result {
         Ok(lifetime) => lifetime,
         Err(AccessError::Unavailable) => return response(StatusCode::SERVICE_UNAVAILABLE, None),
@@ -284,7 +283,7 @@ pub async fn check(State(state): State<ProductRouteState>, headers: HeaderMap) -
         .await;
         let _ = reply.send(outcome);
     });
-    let result = operation_result(state.settings.handshake_timeout, result).await;
+    let result = operation_result(state.settings.handshake_timeout(), result).await;
     match result {
         Ok(Some(renewed)) => {
             let now = state.clock.unix_seconds();
@@ -365,7 +364,7 @@ pub async fn logout(State(state): State<ProductRouteState>, headers: HeaderMap) 
         .await;
         let _ = reply.send(outcome);
     });
-    if operation_result(state.settings.handshake_timeout, removal)
+    if operation_result(state.settings.handshake_timeout(), removal)
         .await
         .is_err()
     {
