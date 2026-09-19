@@ -142,6 +142,49 @@ trait CheckOutcome {
     fn report_failure(&self, reason: &str);
 }
 
+/// Fetching an update's bytes and putting them in place.
+///
+/// A port for the same reason as the source: it reaches the network and then
+/// the installed application on disk. It says nothing about which update —
+/// the real one carries its own, and the ordering below never reads it — so
+/// the plugin's `Update`, which a test cannot fabricate, stays off the port.
+trait Installer {
+    /// Downloads and installs, answering with why not rather than an error
+    /// type the caller would have to understand.
+    fn install(&self) -> impl Future<Output = Result<(), String>> + Send;
+}
+
+/// Coming back up on the version just installed.
+///
+/// Separate from [`Installer`] because it is a separate outside thing — the
+/// process ends here — and because "did it restart" is the one fact worth
+/// asserting about a successful install.
+trait Restarter {
+    /// Never returns on the real host.
+    fn restart(&self);
+}
+
+/// What an install does after the bytes are in place, and what a failed one
+/// leaves behind.
+///
+/// Pure, and generic over the two ports, so the whole rule is exercised
+/// without a release, a network, or a process that ends: a success restarts
+/// exactly once and keeps nothing, and a failure restarts not at all and hands
+/// the update back for the next click to retry.
+async fn carry_out<I: Installer, R: Restarter, K: FnOnce()>(
+    installer: I,
+    restarter: &R,
+    keep_for_retry: K,
+) {
+    match installer.install().await {
+        Ok(()) => restarter.restart(),
+        Err(reason) => {
+            eprintln!("[nessa] could not install the update: {reason}");
+            keep_for_retry();
+        }
+    }
+}
+
 /// The real source: the release endpoint, through the updater plugin.
 struct PluginReleases(AppHandle);
 
@@ -396,26 +439,50 @@ pub fn install_and_restart(app: &AppHandle) {
 
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        match update.download_and_install(|_, _| {}, || {}).await {
-            // macOS and Linux install in place and leave the old binary
-            // running; Windows hands over to an installer that exits this
-            // process itself, so the restart below is never reached there.
-            Ok(()) => app.restart(),
-            Err(error) => {
-                eprintln!("[nessa] could not install the update: {error}");
-                if let Some(pending) = app.try_state::<PendingUpdate>() {
-                    if let Ok(mut slot) = pending.0.lock() {
-                        *slot = Some(update);
-                    }
-                }
-            }
-        }
+        // What goes back in the slot on failure is the release this click took
+        // out of it, so a retry installs what was found rather than something
+        // looked up again.
+        let restarter = RestartsTheApp(app.clone());
+        let retained = app.clone();
+        let for_retry = update.clone();
+        let update = PluginInstall(update);
+        carry_out(&update, &restarter, || retain(&retained, for_retry)).await;
     });
+}
+
+/// The real installer: the plugin's own download-and-install.
+///
+/// Progress is not reported yet — the tray item has nowhere to put it — so the
+/// callbacks are empty rather than absent, which is what the plugin takes.
+struct PluginInstall(Update);
+
+impl Installer for &PluginInstall {
+    fn install(&self) -> impl Future<Output = Result<(), String>> + Send {
+        let update = self.0.clone();
+        async move {
+            update
+                .download_and_install(|_, _| {}, || {})
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }
+}
+
+/// The real restart. macOS and Linux install in place and leave the old binary
+/// running, so this is what picks up the new one; Windows hands over to an
+/// installer that ends this process itself and never reaches here.
+struct RestartsTheApp(AppHandle);
+
+impl Restarter for RestartsTheApp {
+    fn restart(&self) {
+        self.0.restart();
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     /// A release endpoint that has already made up its mind.
     ///
@@ -473,6 +540,95 @@ mod tests {
                 .expect("failures")
                 .push(reason.to_string());
         }
+    }
+
+    /// An installer that has already decided, and counts how often it was asked.
+    struct FakeInstall {
+        outcome: Result<(), String>,
+        attempts: Cell<usize>,
+    }
+
+    impl FakeInstall {
+        fn that(outcome: Result<(), String>) -> Self {
+            Self {
+                outcome,
+                attempts: Cell::new(0),
+            }
+        }
+    }
+
+    impl Installer for &FakeInstall {
+        fn install(&self) -> impl Future<Output = Result<(), String>> + Send {
+            self.attempts.set(self.attempts.get() + 1);
+            let outcome = self.outcome.clone();
+            async move { outcome }
+        }
+    }
+
+    /// A restart that counts instead of ending the process.
+    #[derive(Default)]
+    struct CountedRestarts(Cell<usize>);
+
+    impl Restarter for CountedRestarts {
+        fn restart(&self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    /// One install, carried out. Answers what happened without a release, a
+    /// network, or a process that ends.
+    fn install(outcome: Result<(), String>) -> (usize, usize, bool) {
+        let installer = FakeInstall::that(outcome);
+        let restarter = CountedRestarts::default();
+        let kept = Cell::new(false);
+        tauri::async_runtime::block_on(carry_out(&installer, &restarter, || kept.set(true)));
+        (installer.attempts.get(), restarter.0.get(), kept.get())
+    }
+
+    #[test]
+    fn a_finished_install_comes_back_up_once_and_keeps_nothing() {
+        let (attempts, restarts, kept) = install(Ok(()));
+
+        assert_eq!(attempts, 1);
+        assert_eq!(restarts, 1, "the new version is what runs after this");
+        assert!(!kept, "there is nothing left to retry");
+    }
+
+    #[test]
+    fn a_failed_install_does_not_restart_and_leaves_the_update_to_retry() {
+        // The version on disk is the one still running: restarting would come
+        // back up on a half-written install, and dropping the update would take
+        // the offer away with it.
+        let (attempts, restarts, kept) = install(Err("signature did not verify".to_string()));
+
+        assert_eq!(attempts, 1);
+        assert_eq!(restarts, 0);
+        assert!(kept, "the click that failed can be made again");
+    }
+
+    /// The slot is what makes a second click a no-op, so it is asserted on the
+    /// same `Mutex<Option<_>>` the host keeps the update in — with a stand-in
+    /// for the release, which a test cannot fabricate.
+    #[test]
+    fn a_second_click_while_installing_starts_nothing() {
+        let pending = Mutex::new(Some("the release"));
+
+        let first = pending.lock().unwrap().take();
+        let second = pending.lock().unwrap().take();
+
+        assert_eq!(first, Some("the release"));
+        assert_eq!(second, None, "the download is not started twice");
+    }
+
+    /// And a failure puts it back, so the next click finds it.
+    #[test]
+    fn a_retry_after_a_failure_finds_the_same_release() {
+        let pending = Mutex::new(Some("the release"));
+
+        let taken = pending.lock().unwrap().take();
+        *pending.lock().unwrap() = taken;
+
+        assert_eq!(pending.lock().unwrap().take(), Some("the release"));
     }
 
     fn check(found: Checked) -> RecordedOutcome {
