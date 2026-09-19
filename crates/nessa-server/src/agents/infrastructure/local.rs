@@ -26,6 +26,13 @@ pub struct AgentLaunchFiles {
     pub paths: Vec<PathBuf>,
 }
 
+/// How one agent answers for its own account store.
+///
+/// Given whatever launch this server resolved for that agent, because an agent
+/// that answers for itself has to be asked as the copy of it that would really
+/// run. What an absent launch means is the source's own to say.
+type VendorStore = fn(Option<&AgentLaunchFiles>) -> Result<bool, ProbeFailure>;
+
 /// Where one agent's sign-in could be on this machine, resolved once.
 ///
 /// Held as data rather than asked for on each call because none of it changes
@@ -38,10 +45,15 @@ struct SignIn {
     environment: Option<String>,
     /// The agent's own credentials file, when this host has somewhere to look.
     credentials: Option<PathBuf>,
-    /// The login keychain, for an agent that keeps a sign-in there too. `None`
-    /// for an agent that does not: a source that does not exist for this agent
-    /// is not a source that failed to answer.
-    keychain: Option<fn() -> Result<bool, ProbeFailure>>,
+    /// The agent's own account store, asked the agent's own way — a keychain
+    /// item for one agent, the agent's own command-line status for another.
+    /// `None` for an agent that keeps its sign-in nowhere but the two sources
+    /// above: a source that does not exist for this agent is not a source that
+    /// failed to answer.
+    ///
+    /// A keychain item is there to be read whether or not anything would be
+    /// started; an agent that answers by running has nothing to ask.
+    vendor_store: Option<VendorStore>,
 }
 
 /// The machine this server is running on.
@@ -84,7 +96,7 @@ impl LocalAgentProbe {
                     SignIn {
                         environment: claude::environment_credential(),
                         credentials: claude::credentials_path(),
-                        keychain: Some(claude::keychain_sign_in),
+                        vendor_store: Some(|_| claude::keychain_sign_in()),
                     },
                 ),
                 (
@@ -92,7 +104,7 @@ impl LocalAgentProbe {
                     SignIn {
                         environment: codex::environment_credential(),
                         credentials: codex::credentials_path(),
-                        keychain: None,
+                        vendor_store: Some(codex_sign_in),
                     },
                 ),
             ]),
@@ -167,13 +179,35 @@ impl AgentProbe for LocalAgentProbe {
         if holds(&mut unanswered, Self::credentials_file(sign_in)) {
             return Ok(true);
         }
-        if let Some(keychain) = sign_in.keychain {
-            if holds(&mut unanswered, keychain()) {
+        if let Some(store) = sign_in.vendor_store {
+            if holds(&mut unanswered, store(self.launch_files.get(&agent))) {
                 return Ok(true);
             }
         }
         unanswered.map_or(Ok(false), Err)
     }
+}
+
+/// Ask the Codex this server would launch whether it is signed in.
+///
+/// Its launch is a command and the adapter entry handed to it, which is exactly
+/// what [`codex::sign_in_status`] needs; a launch shaped any other way is one
+/// this function has nothing to ask, which is an unasked question rather than a
+/// no.
+fn codex_sign_in(files: Option<&AgentLaunchFiles>) -> Result<bool, ProbeFailure> {
+    let files = files.ok_or(ProbeFailure::NothingToAsk)?;
+    let [entry] = files.paths.as_slice() else {
+        return Err(ProbeFailure::NothingToAsk);
+    };
+    // Codex reports "nothing is signed in" and its launcher reports "I could
+    // not start" with the same exit status, so an adapter that is not on this
+    // machine would come back as a signed-out account. Establish that there is
+    // something here to run before running it, and leave the question unasked
+    // when there is not.
+    if !is_file(entry)? {
+        return Err(ProbeFailure::NothingToAsk);
+    }
+    codex::sign_in_status(&files.command, entry)
 }
 
 /// Whether there is really a file at `path`, right now.

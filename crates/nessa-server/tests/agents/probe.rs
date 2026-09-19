@@ -23,7 +23,7 @@ fn agent_probe(
     launch_files: Option<AgentLaunchFiles>,
     credentials: Option<&Path>,
     credential: Option<&str>,
-    keychain: Option<fn() -> Result<bool, ProbeFailure>>,
+    vendor_store: Option<VendorStore>,
 ) -> LocalAgentProbe {
     LocalAgentProbe {
         launch_files: launch_files
@@ -35,7 +35,7 @@ fn agent_probe(
             SignIn {
                 environment: credential.map(str::to_owned),
                 credentials: credentials.map(Path::to_path_buf),
-                keychain,
+                vendor_store,
             },
         )]),
     }
@@ -54,8 +54,15 @@ fn probe(
             .map(|config| config.join(".credentials.json"))
             .as_deref(),
         credential,
-        Some(claude::keychain_sign_in),
+        Some(|_| claude::keychain_sign_in()),
     )
+}
+
+/// A vendor store that answers `Ok(true)`, standing in for a sign-in kept where
+/// only the agent itself can read it. The real stores are the host's to answer
+/// and are never driven here.
+fn signed_in(_: Option<&AgentLaunchFiles>) -> Result<bool, ProbeFailure> {
+    Ok(true)
 }
 
 /// What composition would resolve for a harness rooted at `root`: an
@@ -231,23 +238,88 @@ fn an_agent_this_server_knows_nothing_about_is_a_question_it_cannot_answer() {
 }
 
 #[test]
-fn an_agent_with_no_keychain_is_answered_from_its_two_sources_alone() {
-    // Codex keeps a ChatGPT login in the same file as an API key, so there is
-    // no third source — and a source that does not exist for this agent is not
-    // one that failed to answer.
+fn a_sign_in_kept_where_only_the_agent_can_read_it_is_still_a_sign_in() {
+    // Codex keeps its login wherever `cli_auth_credentials_store` says to, and
+    // `keyring` leaves no `auth.json` behind at all. Answering from the file
+    // alone reported a valid login as a signed-out machine, and told someone
+    // who was already signed in to go and sign in again.
     let config = TempDir::new().unwrap();
     let credentials = config.path().join("auth.json");
+    let root = TempDir::new().unwrap();
     assert_eq!(
-        agent_probe(AgentId::Codex, None, Some(&credentials), None, None)
-            .authenticated(AgentId::Codex),
-        Ok(false)
+        agent_probe(
+            AgentId::Codex,
+            launch_files(root.path()),
+            Some(&credentials),
+            None,
+            Some(signed_in),
+        )
+        .authenticated(AgentId::Codex),
+        Ok(true),
+        "no file, no environment credential, and a store that says yes"
     );
+    // The file still settles it on its own, without the agent being started.
     std::fs::write(&credentials, b"{\"tokens\":{\"id\":\"x\"}}").unwrap();
     assert_eq!(
         agent_probe(AgentId::Codex, None, Some(&credentials), None, None)
             .authenticated(AgentId::Codex),
         Ok(true)
     );
+}
+
+#[test]
+fn an_agent_with_no_launch_configured_has_no_copy_of_itself_to_ask() {
+    // The store is asked by starting the agent, so an agent this server has no
+    // launch for leaves that question unasked — never answered no, which would
+    // be a signed-out machine claimed on the strength of a missing file.
+    let config = TempDir::new().unwrap();
+    assert_eq!(
+        agent_probe(
+            AgentId::Codex,
+            None,
+            Some(&config.path().join("auth.json")),
+            None,
+            Some(codex_sign_in),
+        )
+        .authenticated(AgentId::Codex),
+        Err(ProbeFailure::NothingToAsk)
+    );
+    // Nothing was started to find that out: the answer comes from there being
+    // no launch to start, which is why this test can name the real source.
+    assert_eq!(codex_sign_in(None), Err(ProbeFailure::NothingToAsk));
+}
+
+#[test]
+fn the_probe_this_server_really_builds_asks_codex_about_its_own_store() {
+    // Every test above hands the sources in, which says nothing about the ones
+    // composition resolves — and Codex reaching a release with no third source
+    // is precisely the bug: a login kept in the keyring reported as no login.
+    //
+    // Nothing is launched and no credential is read to check it. Building the
+    // probe resolves paths from this process's environment and stats nothing;
+    // the store is then asked about a launch that does not exist, which it
+    // answers without starting anything.
+    let probe = LocalAgentProbe::from_environment(HashMap::new());
+    let store = probe
+        .sign_in
+        .get(&AgentId::Codex)
+        .and_then(|sign_in| sign_in.vendor_store)
+        .expect("Codex keeps a sign-in its own file cannot account for");
+    let root = TempDir::new().unwrap();
+    let files = launch_files(root.path()).unwrap();
+    assert_eq!(store(Some(&files)), Err(ProbeFailure::NothingToAsk));
+}
+
+#[test]
+fn an_adapter_that_is_not_there_is_never_read_as_a_signed_out_account() {
+    // Codex answers "nothing is signed in" with exit status 1, and its launcher
+    // answers "I could not start" with the same one. Running it anyway would
+    // turn a missing adapter into an instruction to sign in to an account that
+    // was never the problem — so the launch is established first, and a launch
+    // that is not there leaves the question unasked.
+    let root = TempDir::new().unwrap();
+    let files = launch_files(root.path()).unwrap();
+    assert_eq!(codex_sign_in(Some(&files)), Err(ProbeFailure::NothingToAsk));
 }
 
 #[test]
