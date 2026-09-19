@@ -33,29 +33,31 @@ export function useComposer(
   // anything: the rules below turn some away, and a draft that never left is
   // the one thing worth keeping the pane open for.
   const [expanded, setExpanded] = React.useState(false)
-  // Whether the last submit sent anything. Read only when the composer says a
-  // submit is why it wants to collapse, so it needs no clearing: every other
-  // reason is taken whatever this holds. See `takesExpansion`.
-  const sent = React.useRef(false)
+
   // A fresh conversation gets a fresh composer — the pane does not follow
   // somebody into a tab they did not open it in.
   React.useEffect(() => setExpanded(false), [chat.active.id])
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    sent.current = false
     const content = composerRef.current?.getContent()
     if (isAttachmentPending(chat.active.id)) return
     if (chat.active.draft.some((part) => part.type === "file")) return
-    if (content) {
-      chat.submit(fromEditor(content))
-      sent.current = true
-    }
+    if (!content) return
+    // The pane closes on the draft having gone, not on this handler having run.
+    // Calling `submit` proves nothing: the gateway may be away, the text may be
+    // over the size the gateway takes, and in both the draft is still here and
+    // still needs somewhere to be read. So the composer's own offer to collapse
+    // is declined for every submit (see `takesExpansion`) and this closes it
+    // once the message is actually gone.
+    void chat.submit(fromEditor(content)).then((taken) => {
+      if (taken) setExpanded(false)
+    })
   }
 
   /** Every expansion change the composer proposes, minus the ones we decline. */
   function changeExpanded(next: boolean, reason: PillComposerExpansionReason) {
-    if (takesExpansion(next, reason, sent.current)) setExpanded(next)
+    if (takesExpansion(next, reason)) setExpanded(next)
   }
   function changeContent(content: ChatComposerContent) {
     chat.setDraft([

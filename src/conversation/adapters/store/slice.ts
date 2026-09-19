@@ -48,7 +48,12 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
       return rejectWithValue({ kind: "preview-only-files" })
     }
     const text = contentText(input.content)
-    if (!text.trim()) return
+    // Refused rather than silently fulfilled, so every way this can decline a
+    // draft looks the same from outside: a rejection carrying a reason. A
+    // caller that has to know whether the draft left — the composer deciding
+    // whether its full-pane editor is finished with — cannot tell "nothing to
+    // send" from "sent" otherwise.
+    if (!text.trim()) return rejectWithValue({ kind: "empty-draft" })
     if (new TextEncoder().encode(text).length > 8192) {
       dispatch(
         showError({

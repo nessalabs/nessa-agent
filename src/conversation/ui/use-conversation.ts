@@ -55,15 +55,29 @@ export function useConversation() {
     gatewayAvailable,
     moveActive: (direction: -1 | 1) => dispatch(moveActive(direction)),
     setActive: (id: string) => dispatch(setActive(id)),
-    submit: (content: MessageContent) => {
-      if (!gatewayAvailable) return
-      void dispatch(
+    /**
+     * Sends the draft, and says whether it was taken.
+     *
+     * Taken means the draft left the composer — the submission started and the
+     * transcript now owns the message. It is not a claim about delivery: a
+     * gateway that fails afterwards leaves a message that was sent and did not
+     * arrive, which is the transcript's to show, not the composer's.
+     *
+     * Every local refusal rejects with a reason, and only a failure after
+     * admission throws, so the two are told apart by whether a payload came
+     * back rather than by the store being read a second time.
+     */
+    submit: async (content: MessageContent): Promise<boolean> => {
+      if (!gatewayAvailable) return false
+      const finished = await dispatch(
         sendDraft({
           content,
           id: active.id,
           steering: deliveryMode === "steer" && active.phase !== "idle",
         }),
       )
+      if (!sendDraft.rejected.match(finished)) return true
+      return finished.payload === undefined
     },
     openConversation: () => {
       dispatch(openConversation())

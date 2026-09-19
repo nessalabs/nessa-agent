@@ -38,7 +38,12 @@ start:
     #!/usr/bin/env bash
     set -euo pipefail
     set -m
-    port="$(node scripts/gateway-port.mjs dev)"
+    # The stage the server will actually read, not an assumption of `dev`: it
+    # takes `NESSA_STAGE` from this same environment, and `NESSA_PORT` ahead of
+    # the stage's own. Naming `dev` here freed one socket and then waited for
+    # health on another whenever the caller had selected anything else.
+    stage="$(node -e 'import("./scripts/gateway-port.mjs").then(m => process.stdout.write(m.selectedStage()))')"
+    port="$(node scripts/gateway-port.mjs)"
     server_pid=""
     app_pid=""
     # The app goes first, then the gateway it talks to: the other order leaves a
@@ -71,7 +76,7 @@ start:
     }
     trap cleanup EXIT INT TERM
 
-    node scripts/free-gateway-port.mjs dev
+    node scripts/free-gateway-port.mjs "${stage}"
 
     echo "→ starting nessa-server"
     pnpm server:run &
@@ -94,7 +99,7 @@ start:
       echo "→ nessa-server did not become healthy on :${port}"
       exit 1
     fi
-    echo "→ nessa-server ready on :${port}"
+    echo "→ nessa-server ready on :${port} (stage ${stage})"
 
     # Started as a job rather than run in the foreground, so its process group is
     # known and `cleanup` can take the whole subtree down. `wait` keeps this

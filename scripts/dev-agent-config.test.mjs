@@ -181,3 +181,72 @@ test(
     assert.equal(existsSync(join(data, "dev/config.json")), false)
   },
 )
+
+test("a config that says agent is null is an answer, not a gap to fill", unixOnly, () => {
+  // The server reads `agent` as an Option, so null is a gateway with no agent
+  // — a configuration that starts. Before, it reached `agent.node` and took
+  // `pnpm server:run` down with it, because the two are chained with `&&`.
+  const data = temporaryRoot()
+  mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+  const path = join(data, "dev/config.json")
+  writeFileSync(path, `{"agent": null}`, { mode: 0o600 })
+
+  const output = run(data)
+
+  assert.match(output, /"agent": null/)
+  assert.match(output, /left as it is/)
+  assert.equal(readFileSync(path, "utf8"), `{"agent": null}`)
+})
+
+/**
+ * The window between reading the configuration and writing it back is real:
+ * locating a node, asking cargo about the MCP binary, making the workspace.
+ * Another writer in that window — a second checkout's dev loop, an editor
+ * saving settings — must not have their work renamed away by this one.
+ */
+test(
+  "a writer during the run keeps their settings, and their agent",
+  unixOnly,
+  async (t) => {
+    const { publish } = await import("./dev-agent-config.mjs")
+    const data = temporaryRoot()
+    mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+    const path = join(data, "dev/config.json")
+    const agent = { node: "/usr/bin/node", acpEntry: "/checkout/dist/index.js" }
+
+    // A setting written after this run read the file, and before it writes.
+    writeFileSync(path, JSON.stringify({ session: { writeTimeoutMs: 75 } }), {
+      mode: 0o600,
+    })
+    const wrote = publish({
+      configPath: path,
+      agent,
+      acpEntry: agent.acpEntry,
+      node: agent.node,
+      interrupt: () =>
+        writeFileSync(path, JSON.stringify({ session: { writeTimeoutMs: 321 } }), {
+          mode: 0o600,
+        }),
+    })
+
+    assert.equal(wrote, true)
+    const saved = JSON.parse(readFileSync(path, "utf8"))
+    assert.equal(saved.session.writeTimeoutMs, 321, "the newer setting survives")
+    assert.deepEqual(saved.agent, agent)
+
+    // And an agent that arrived in that window is theirs, not this run's.
+    writeFileSync(path, JSON.stringify({}), { mode: 0o600 })
+    const theirs = { node: "/their/node", acpEntry: "/their/entry.js" }
+    const second = publish({
+      configPath: path,
+      agent,
+      acpEntry: agent.acpEntry,
+      node: agent.node,
+      interrupt: () =>
+        writeFileSync(path, JSON.stringify({ agent: theirs }), { mode: 0o600 }),
+    })
+
+    assert.equal(second, false, "nothing was written over them")
+    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")).agent, theirs)
+  },
+)

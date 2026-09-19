@@ -6,7 +6,7 @@ import { defineConfig, searchForWorkspaceRoot } from "vite"
 import react from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
 
-import { gatewayOrigin } from "./src/env/gateway-ports"
+import { gatewayOrigin, type Stage } from "./src/env/gateway-ports"
 
 /**
  * Nessa UI is consumed as source, not as its published bundle.
@@ -39,9 +39,13 @@ try {
 // Tauri drives this dev server, so the port is fixed and the Rust sources are
 // left to cargo's own watcher.
 const host = process.env.TAURI_DEV_HOST
-// This dev server fronts a dev-stage gateway, which listens beside the port an
+// This dev server fronts the gateway of whichever stage this environment
+// selects — `dev` when it says nothing, which listens beside the port an
 // installed Nessa holds. One table decides that port: see src/env/gateway-ports.
-const gatewayTarget = process.env.NESSA_BROWSER_GATEWAY_URL ?? gatewayOrigin("dev")
+// Proxying `dev` regardless would send the browser to a socket nothing is on
+// as soon as the gateway beside it was started as anything else.
+const stage = (process.env.NESSA_STAGE ?? "dev").trim().toLowerCase() as Stage
+const gatewayTarget = process.env.NESSA_BROWSER_GATEWAY_URL ?? gatewayOrigin(stage)
 const tlsCert = process.env.NESSA_BROWSER_TLS_CERT
 const tlsKey = process.env.NESSA_BROWSER_TLS_KEY
 if (Boolean(tlsCert) !== Boolean(tlsKey))

@@ -210,8 +210,26 @@ function readExisting(path) {
   return parsed
 }
 
+/**
+ * Whether a configuration already answers the agent question.
+ *
+ * The server reads `agent` as an `Option<AgentConfig>`, so an explicit `null`
+ * is a valid configuration that means "no agent" — the gateway starts and says
+ * so when a message is sent. Absent is the only state this script fills in;
+ * `null` is somebody's answer and is left alone, the same as a block they
+ * wrote themselves.
+ */
+export function agentIsSettled(existing) {
+  return existing.agent !== undefined
+}
+
 /** Warn about an agent someone else owns whose executables have gone missing. */
 function checkExisting(agent, path) {
+  if (agent === null) {
+    say(`→ ${path} sets "agent": null, which is a gateway with no agent`)
+    say('  it was left as it is; remove the "agent" line and rerun to have one written')
+    return
+  }
   const missing = [agent.node, agent.acpEntry, agent.catalog].filter(
     (value) => typeof value === "string" && !existsSync(value),
   )
@@ -241,7 +259,9 @@ function main() {
   }
   const configPath = join(namespace, "config.json")
   const existing = readExisting(configPath)
-  if (existing.agent !== undefined) {
+  // An early answer, so the work below is skipped entirely. `publish` asks
+  // again at the end, because this one goes stale while that work happens.
+  if (agentIsSettled(existing)) {
     checkExisting(existing.agent, configPath)
     return
   }
@@ -267,6 +287,32 @@ function main() {
   // permissions the gateway insists on for everything under this root.
   mkdirSync(join(namespace, "workspaces/default"), { recursive: true, mode: 0o700 })
   const agent = agentBlock({ checkout, namespace, node, mcpBinary })
+
+  publish({ configPath, agent, acpEntry, node, mcpBinary })
+}
+
+/**
+ * Writes the agent into whatever the file says at this moment.
+ *
+ * The configuration is read again here rather than reused from the start of
+ * the run. Everything between the two reads takes real time — locating a node,
+ * asking cargo about the MCP binary, making the workspace — and another writer
+ * in that window is an ordinary thing: a second checkout's dev loop, an editor
+ * saving settings, the gateway itself. Renaming a file built on the older read
+ * over theirs is atomic and still loses what they wrote.
+ *
+ * `interrupt` exists for the test that proves it: it runs between the read and
+ * the write, which is the window a concurrent writer lives in.
+ */
+export function publish({ configPath, agent, acpEntry, node, mcpBinary, interrupt }) {
+  interrupt?.()
+  const existing = readExisting(configPath)
+  // Somebody answered the question while this was working. Theirs stands —
+  // the same courtesy an agent block already in the file gets.
+  if (agentIsSettled(existing)) {
+    checkExisting(existing.agent, configPath)
+    return false
+  }
 
   const merged = { ...existing, agent }
   const text = `${JSON.stringify(merged, null, 2)}\n`
@@ -302,6 +348,7 @@ function main() {
       ? `    nessa MCP  ${mcpBinary}`
       : '    nessa MCP  not built; omitted (cargo build -p nessa-mcp, then delete the "agent" block and rerun)',
   )
+  return true
 }
 
 // Both sides are resolved before comparison: Node resolves `import.meta.url`

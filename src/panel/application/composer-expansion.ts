@@ -3,25 +3,22 @@ import type { PillComposerExpansionReason } from "@nessa-ui/react/pill-composer"
 /**
  * Whether the panel takes an expansion change the composer proposes.
  *
- * The composer offers a full-pane editor and asks to close it on every submit,
- * because sending is normally the end of writing. The panel does not always
- * send: an attachment still being read, a draft that is only files, an empty
- * editor — each turns a submit away, and the message the person wrote is still
- * sitting there. Collapsing then would take the pane out from under a draft
- * that never left, which is the one case where the pane is still earning its
- * place.
+ * The composer offers to close its full-pane editor on every submit, because
+ * sending is normally the end of writing. Submitting is not sending: the
+ * gateway may be away, the draft may be files only or larger than the gateway
+ * accepts, and in each the message is still in the editor and still needs
+ * somewhere to be read. The composer cannot know which happened — the call it
+ * makes to send is the same call either way — so the offer is declined for
+ * every submit and the panel closes the pane itself once the draft has
+ * actually gone (see `useComposer`).
  *
- * Only a close asked for by a submit is weighed against whether that submit
- * sent anything. Minimize, Escape, and the composer withdrawing expansion
- * altogether say so in the reason and are always taken, so the ways out of the
- * pane keep working.
+ * Every other reason is the person leaving the pane, or the composer having to
+ * take it away, and is always taken. Declining those would strand somebody
+ * inside an editor whose exits had stopped working.
  */
-
-/** True when the change should be applied. */
 export function takesExpansion(
   next: boolean,
   reason: PillComposerExpansionReason,
-  sent: boolean,
 ): boolean {
-  return next || reason !== "submit" || sent
+  return next || reason !== "submit"
 }
