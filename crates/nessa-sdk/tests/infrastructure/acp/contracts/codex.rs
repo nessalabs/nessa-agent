@@ -95,18 +95,27 @@ async fn a_shell_command_arrives_with_its_output_and_without_its_terminal_pointe
     };
     assert_eq!(started.title().as_deref(), Some("npm test"));
     assert_eq!(started.content().as_deref(), None);
-    let ExecutionUpdate::Tool(streamed) = next(&mut opened).await else {
-        panic!("expected streamed output");
-    };
-    assert_eq!(
-        streamed.content().as_deref(),
-        Some(&vec![ToolContent::text(String::from("2 passed\n"))][..])
-    );
+    // Each frame replaces the tool's content rather than adding to it, so every
+    // frame has to carry the whole transcript so far. Carrying the delta alone
+    // put one chunk of a command's output on screen and dropped the rest.
+    for expected in ["compiling\n", "compiling\n2 passed\n"] {
+        let ExecutionUpdate::Tool(streamed) = next(&mut opened).await else {
+            panic!("expected streamed output");
+        };
+        assert_eq!(
+            streamed.content().as_deref(),
+            Some(&vec![ToolContent::text(String::from(expected))][..])
+        );
+    }
     let ExecutionUpdate::Tool(completed) = next(&mut opened).await else {
         panic!("expected the completion");
     };
-    // The completion repeats the whole output. It has already been carried.
-    assert_eq!(completed.content().as_deref(), None);
+    // The completion repeats the whole output, and replaces the accumulated
+    // snapshot with it — the same text, shown once.
+    assert_eq!(
+        completed.content().as_deref(),
+        Some(&vec![ToolContent::text(String::from("compiling\n2 passed\n"))][..])
+    );
     assert_eq!(running.await.unwrap().unwrap(), ExecutionOutcome::Completed);
 }
 

@@ -119,10 +119,15 @@ for line in sys.stdin:
         pending = msg["id"]
         if mode == "terminal-command":
             update(command_tool_call())
-            update({"sessionUpdate": "tool_call_update", "toolCallId": "command-1",
-                    "_meta": {"terminal_output_delta": {"data": "2 passed\n", "terminal_id": "command-1"}}})
+            # Terminal output arrives as deltas, one frame per chunk, and the
+            # completion then repeats the whole of it. More than one chunk,
+            # because one chunk cannot show a later frame overwriting an
+            # earlier one.
+            for chunk in ("compiling\n", "2 passed\n"):
+                update({"sessionUpdate": "tool_call_update", "toolCallId": "command-1",
+                        "_meta": {"terminal_output_delta": {"data": chunk, "terminal_id": "command-1"}}})
             update({"sessionUpdate": "tool_call_update", "toolCallId": "command-1", "status": "completed",
-                    "rawOutput": {"formatted_output": "2 passed\n", "exit_code": 0},
+                    "rawOutput": {"formatted_output": "compiling\n2 passed\n", "exit_code": 0},
                     "_meta": {"terminal_exit": {"exit_code": 0, "signal": None, "terminal_id": "command-1"}}})
         elif mode == "file-change-permission":
             # A file change is asked for with an identifier, a kind and a status,

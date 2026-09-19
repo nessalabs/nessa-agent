@@ -1,7 +1,9 @@
 //! Codex's own tool frames reach the shared vocabulary without losing what they
 //! carried, and a permission request is never reviewed without naming its tool.
 use super::*;
-use crate::domain::agent_execution::tools::{FilePath, ToolContent, ToolKind};
+use crate::domain::agent_execution::tools::{
+    FilePath, ToolContent, ToolContentView, ToolKind, ToolObservation,
+};
 use serde_json::json;
 
 fn text(value: &str) -> ToolContent {
@@ -48,8 +50,9 @@ fn a_terminal_pointer_is_replaced_by_the_output_it_pointed_at() {
     .unwrap();
     assert_eq!(streamed.content().as_deref(), Some(&vec![text("ok\n")][..]));
 
-    // The completion repeats the whole output. It was already carried, so it is
-    // carried once, not twice.
+    // The completion repeats the whole output. Content is replaced rather than
+    // added to, so carrying Codex's own aggregate puts the output on screen
+    // once — not twice, and not only its last delta.
     let completed = tool_call(
         &json!({"sessionUpdate":"tool_call_update","toolCallId":"command-1","status":"completed",
                 "rawOutput":{"formatted_output":"ok\n","exit_code":0},
@@ -57,7 +60,92 @@ fn a_terminal_pointer_is_replaced_by_the_output_it_pointed_at() {
         &mut tools,
     )
     .unwrap();
-    assert_eq!(completed.content().as_deref(), None);
+    assert_eq!(
+        completed.content().as_deref(),
+        Some(&vec![text("ok\n")][..])
+    );
+}
+
+/// A command that prints more than once, through the observation these updates
+/// actually reach.
+///
+/// The mapper alone cannot show this: `ToolObservation::with_update` replaces an
+/// observation's content instead of appending to it, so a frame carrying one
+/// delta is a frame that discards every delta before it. Reading the mapper's
+/// return values one at a time hides that entirely — each one looks right.
+#[test]
+fn every_streamed_chunk_survives_the_observation_that_replaces_content() {
+    let mut tools = HashMap::new();
+    let mut observed = ToolObservation::default();
+    // The path a real update takes: the mapper's result applied to the
+    // observation the session keeps, not read on its own.
+    fn observe(
+        observed: ToolObservation,
+        frame: &Value,
+        tools: &mut HashMap<String, ObservedTool>,
+    ) -> ToolObservation {
+        observed.with_update(tool_call(frame, tools).unwrap())
+    }
+
+    observed = observe(observed, &terminal_command("command-3"), &mut tools);
+    for delta in ["compiling...\n", "running 2 tests\n", "2 tests passed\n"] {
+        observed = observe(
+            observed,
+            &json!({"sessionUpdate":"tool_call_update","toolCallId":"command-3",
+                    "_meta":{"terminal_output_delta":{"data":delta,"terminal_id":"command-3"}}}),
+            &mut tools,
+        );
+    }
+    // Everything printed so far, in the order it was printed, and once each.
+    assert_eq!(
+        observed.content().as_deref(),
+        Some(&vec![text("compiling...\nrunning 2 tests\n2 tests passed\n")][..])
+    );
+
+    // The completion's aggregate is the same transcript, so replacing the
+    // accumulated snapshot with it leaves the output unchanged rather than
+    // doubled.
+    observed = observe(
+        observed,
+        &json!({"sessionUpdate":"tool_call_update","toolCallId":"command-3","status":"completed",
+                "rawOutput":{"formatted_output":"compiling...\nrunning 2 tests\n2 tests passed\n",
+                             "exit_code":0}}),
+        &mut tools,
+    );
+    assert_eq!(
+        observed.content().as_deref(),
+        Some(&vec![text("compiling...\nrunning 2 tests\n2 tests passed\n")][..])
+    );
+}
+
+/// A command that never stops printing must not grow this adapter's memory
+/// without limit, and what it keeps must stay valid text.
+#[test]
+fn a_command_that_outruns_the_window_keeps_its_most_recent_output() {
+    let mut tools = HashMap::new();
+    tool_call(&terminal_command("command-4"), &mut tools).unwrap();
+    // Multi-byte, so a window that cut bytes rather than characters would panic
+    // or retain a fragment of one.
+    let chunk = "é".repeat(64 * 1024);
+    let mut last = None;
+    for _ in 0..40 {
+        last = Some(
+            tool_call(
+                &json!({"sessionUpdate":"tool_call_update","toolCallId":"command-4",
+                        "_meta":{"terminal_output_delta":{"data":chunk,"terminal_id":"command-4"}}}),
+                &mut tools,
+            )
+            .unwrap(),
+        );
+    }
+    let content = last.unwrap();
+    let ToolContentView::Text(kept) = content.content().as_deref().unwrap()[0].view() else {
+        panic!("streamed output is text")
+    };
+    assert!(kept.len() <= MAX_STREAMED_OUTPUT_BYTES, "{}", kept.len());
+    assert!(kept.len() > MAX_STREAMED_OUTPUT_BYTES - 4, "{}", kept.len());
+    // What survived is the end of what was printed, still whole characters.
+    assert!(kept.chars().all(|character| character == 'é'));
 }
 
 #[test]
@@ -74,14 +162,18 @@ fn output_a_tool_call_never_streamed_is_carried_from_its_completion() {
         completed.content().as_deref(),
         Some(&vec![text("only once\n")][..])
     );
-    // Having carried it, the same aggregate arriving again does not repeat it.
+    // The same aggregate arriving again replaces the content it already set, so
+    // the output stands once however many times Codex restates it.
     let repeated = tool_call(
         &json!({"sessionUpdate":"tool_call_update","toolCallId":"command-2",
                 "rawOutput":{"formatted_output":"only once\n","exit_code":0}}),
         &mut tools,
     )
     .unwrap();
-    assert_eq!(repeated.content().as_deref(), None);
+    assert_eq!(
+        repeated.content().as_deref(),
+        Some(&vec![text("only once\n")][..])
+    );
 }
 
 #[test]

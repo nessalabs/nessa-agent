@@ -18,6 +18,16 @@ const MAX_TOOLS: usize = 4096;
 /// the adapter spends.
 const MAX_NAME_BYTES: usize = 128;
 
+/// The most streamed command output one tool call accumulates.
+///
+/// Codex sends terminal output as deltas, so between frames the transcript
+/// exists nowhere but here — and [`MAX_TOOLS`] commands each printing without
+/// stopping would otherwise grow this map until the process died. When a command
+/// outruns the window the oldest bytes go, because what someone watching a
+/// command run is reading is its most recent output, and because the completion
+/// carries Codex's own aggregate and replaces this snapshot with it outright.
+const MAX_STREAMED_OUTPUT_BYTES: usize = 1024 * 1024;
+
 /// What one observed Codex tool call is known by.
 ///
 /// Codex names some of its tool calls (`exec_command`, `view_image`, an MCP
@@ -32,10 +42,41 @@ pub(in crate::infrastructure::codex_acp) struct ObservedTool {
     /// shared mapper. Later frames may restate it; a kind is display state the
     /// observation carries itself, so a change is not an identity change.
     kind: Option<String>,
-    /// Whether this tool call's output has already been carried as content.
-    /// Codex streams command output in `_meta` and then repeats the whole of it
-    /// in the completion's `rawOutput`; carrying both would duplicate it.
-    output_carried: bool,
+    /// The command output streamed for this tool call so far.
+    ///
+    /// Accumulated rather than forwarded a delta at a time because
+    /// [`ToolObservation::with_update`] replaces an observation's content
+    /// instead of appending to it: a frame carrying one delta would retain that
+    /// delta and lose every delta before it. Bounded by
+    /// [`MAX_STREAMED_OUTPUT_BYTES`], and cleared when the completion's own
+    /// aggregate arrives to take its place.
+    ///
+    /// [`ToolObservation::with_update`]: crate::domain::agent_execution::tools::ToolObservation::with_update
+    output: String,
+}
+
+/// The last `bytes` bytes of `text`, moved forward to the next character
+/// boundary so what comes back is text Codex sent rather than the tail of a
+/// character split down the middle.
+fn tail(text: &str, bytes: usize) -> &str {
+    if text.len() <= bytes {
+        return text;
+    }
+    let mut start = text.len() - bytes;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    &text[start..]
+}
+
+/// `output` with `delta` added, within [`MAX_STREAMED_OUTPUT_BYTES`].
+fn accumulate(mut output: String, delta: &str) -> String {
+    output.push_str(delta);
+    if output.len() > MAX_STREAMED_OUTPUT_BYTES {
+        let keep = tail(&output, MAX_STREAMED_OUTPUT_BYTES).len();
+        output.drain(..output.len() - keep);
+    }
+    output
 }
 
 /// Whether a provider name is small enough and plain enough to keep.
@@ -113,16 +154,23 @@ fn text_content(text: &str) -> Value {
 ///   here as text rather than left behind with the pointer.
 /// - **Resource links.** Carried as their URI, which is the whole of what the
 ///   link said.
-/// - **Command output.** Streamed in `_meta` and repeated whole in the
-///   completion's `rawOutput`. The stream is carried as it arrives; the repeat is
-///   carried only for a tool call that never streamed, so output is never shown
-///   twice and never dropped.
+/// - **Command output.** Streamed in `_meta` as deltas, and repeated whole in
+///   the completion's `rawOutput`. An observation's content is replaced by each
+///   update rather than added to, so what a delta frame carries is everything
+///   streamed so far and not the delta alone; the completion's aggregate then
+///   replaces that in turn. Output is shown once and never dropped.
 ///
 /// The frame is borrowed unchanged when none of that applies.
+///
+/// `streamed` is what this tool call has accumulated up to now. The second
+/// element of the result is what it should accumulate instead, or `None` when
+/// this frame carried no output — and it is deliberately returned rather than
+/// written, so a frame the shared mapper goes on to reject cannot leave the
+/// accumulator holding output no observation ever received.
 fn normalize<'a>(
     value: &'a Value,
-    output_carried: bool,
-) -> Result<(Cow<'a, Value>, bool), AgentError> {
+    streamed: &str,
+) -> Result<(Cow<'a, Value>, Option<String>), AgentError> {
     let existing = match value.get("content") {
         None | Some(Value::Null) => &[][..],
         Some(content) => content
@@ -156,20 +204,24 @@ fn normalize<'a>(
             _ => return Err(protocol("unsupported tool content type")),
         }
     }
-    let mut carried = output_carried;
-    if let Some(text) = streamed_output(value)? {
-        content.push(text_content(text));
-        carried = true;
+    let mut accumulated = None;
+    if let Some(delta) = streamed_output(value)? {
+        let whole = accumulate(streamed.to_owned(), delta);
+        content.push(text_content(&whole));
+        accumulated = Some(whole);
         rewritten = true;
-    } else if !carried {
-        if let Some(text) = optional_text(value, "rawOutput", "formatted_output")? {
-            content.push(text_content(text));
-            carried = true;
-            rewritten = true;
-        }
+    } else if let Some(text) = optional_text(value, "rawOutput", "formatted_output")? {
+        // Codex's own aggregate, which is the whole of what the command printed
+        // and supersedes everything streamed before it. Carried as it stands
+        // rather than truncated: an oversized tool payload is the execution
+        // controller's to refuse, out loud, and not this adapter's to silently
+        // cut down.
+        content.push(text_content(text));
+        accumulated = Some(String::new());
+        rewritten = true;
     }
     if !rewritten {
-        return Ok((Cow::Borrowed(value), carried));
+        return Ok((Cow::Borrowed(value), accumulated));
     }
     let mut frame = value.clone();
     let object = frame
@@ -183,7 +235,7 @@ fn normalize<'a>(
     } else {
         object.insert("content".into(), Value::Array(content));
     }
-    Ok((Cow::Owned(frame), carried))
+    Ok((Cow::Owned(frame), accumulated))
 }
 
 pub(in crate::infrastructure::codex_acp) fn tool_call(
@@ -191,8 +243,8 @@ pub(in crate::infrastructure::codex_acp) fn tool_call(
     tools: &mut HashMap<String, ObservedTool>,
 ) -> Result<ToolCallUpdate, AgentError> {
     let id = identifier(value, "toolCallId")?.to_owned();
-    let carried = tools.get(&id).is_some_and(|tool| tool.output_carried);
-    let (frame, carried) = normalize(value, carried)?;
+    let streamed = tools.get(&id).map_or("", |tool| tool.output.as_str());
+    let (frame, accumulated) = normalize(value, streamed)?;
     // Validate the complete representation before retaining provider identity.
     let update = acp_tool_call(frame.as_ref())?;
     let name = declared_name(value)?;
@@ -209,7 +261,9 @@ pub(in crate::infrastructure::codex_acp) fn tool_call(
             if tool.kind.is_none() {
                 tool.kind = kind.map(str::to_owned);
             }
-            tool.output_carried = carried;
+            if let Some(accumulated) = accumulated {
+                tool.output = accumulated;
+            }
         }
         None => {
             if tools.len() >= MAX_TOOLS {
@@ -220,7 +274,7 @@ pub(in crate::infrastructure::codex_acp) fn tool_call(
                 ObservedTool {
                     name: name.map(str::to_owned),
                     kind: kind.map(str::to_owned),
-                    output_carried: carried,
+                    output: accumulated.unwrap_or_default(),
                 },
             );
         }
