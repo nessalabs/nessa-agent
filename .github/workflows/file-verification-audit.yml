@@ -1,0 +1,139 @@
+name: Pinned file verification inventory
+on:
+  push:
+    branches: [audit/file-verification-4c39449]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: audit-file-verification-4c39449
+  cancel-in-progress: false
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the audited source, not the audit branch
+        uses: actions/checkout@v4
+        with:
+          ref: 4c3944962a24721f305d0d66b34df6f024970cf4
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Inventory every tracked entry without following symlinks
+        shell: python
+        env:
+          AUDITED_SHA: 4c3944962a24721f305d0d66b34df6f024970cf4
+        run: |
+          import collections, hashlib, json, os, pathlib, posixpath, re, subprocess
+          from urllib.parse import unquote, urlsplit
+
+          def git(*args):
+              return subprocess.check_output(["git", *args])
+
+          head = git("rev-parse", "HEAD").decode().strip()
+          assert head == os.environ["AUDITED_SHA"], "audited commit mismatch"
+          output = pathlib.Path(os.environ["RUNNER_TEMP"]) / "nessa-file-audit"
+          output.mkdir(exist_ok=True)
+          entries = []
+          for raw in git("ls-tree", "-rz", "--full-tree", "HEAD").split(b"\0"):
+              if not raw:
+                  continue
+              header, name = raw.split(b"\t", 1)
+              mode, kind, oid = header.decode("ascii").split()
+              entries.append({"path": name.decode("utf-8", "surrogateescape"),
+                              "mode": mode, "git_type": kind, "git_oid": oid})
+          tracked = {entry["path"] for entry in entries}
+          def target_exists(path):
+              return path in tracked or any(p.startswith(path.rstrip("/") + "/") for p in tracked)
+          instructions = sorted(path for path in tracked if path.rsplit("/", 1)[-1] == "AGENTS.md")
+          candidates = []
+          totals = collections.Counter()
+          extension_totals = collections.Counter()
+          batch = subprocess.Popen(["git", "cat-file", "--batch"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+          try:
+              for entry in entries:
+                  path = entry["path"]
+                  extension_totals[pathlib.PurePosixPath(path).suffix or "<none>"] += 1
+                  entry["instruction_files"] = [p for p in instructions if "/" not in p or path.startswith(p.rsplit("/", 1)[0] + "/")]
+                  entry["semantic_review"] = "not_reviewed"
+                  entry["runtime_verification"] = "not_assigned"
+                  if entry["git_type"] != "blob":
+                      entry["content_verification"] = "external_gitlink_not_fetched"
+                      totals["gitlinks"] += 1
+                      continue
+                  batch.stdin.write((entry["git_oid"] + "\n").encode("ascii"))
+                  batch.stdin.flush()
+                  oid, kind, size = batch.stdout.readline().decode("ascii").strip().split()
+                  data = batch.stdout.read(int(size))
+                  assert len(data) == int(size) and batch.stdout.read(1) == b"\n", "short blob read"
+                  computed = hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
+                  assert computed == oid == entry["git_oid"] and kind == "blob", "blob hash mismatch"
+                  entry.update(bytes=len(data), sha256=hashlib.sha256(data).hexdigest(), content_verification="git_blob_hash_verified")
+                  totals["bytes"] += len(data)
+                  totals["blobs_read"] += 1
+                  if entry["mode"] == "120000":
+                      target = data.decode("utf-8", "surrogateescape")
+                      normalized = posixpath.normpath(posixpath.join(posixpath.dirname(path), target))
+                      outside = target.startswith("/") or normalized == ".." or normalized.startswith("../")
+                      entry.update(kind="symlink", target=target, target_in_repository=not outside and target_exists(normalized))
+                      totals["symlinks"] += 1
+                      if outside or not target_exists(normalized):
+                          candidates.append({"path": path, "rule": "symlink-target-unavailable-in-tracked-snapshot", "target": target, "status": "needs_review"})
+                      continue
+                  try:
+                      text = data.decode("utf-8")
+                      if "\0" in text:
+                          raise ValueError("NUL bytes")
+                  except (UnicodeError, ValueError):
+                      entry["kind"] = "binary"
+                      totals["binary"] += 1
+                      continue
+                  entry.update(kind="text", lines=len(text.splitlines()))
+                  totals["text"] += 1
+                  if text.startswith("version https://git-lfs.github.com/spec/v1\n"):
+                      entry["content_verification"] = "lfs_pointer_only"
+                      candidates.append({"path": path, "rule": "lfs-object-not-fetched", "status": "needs_review"})
+                  if path.endswith(".rs") and "/domain/" in path:
+                      for line, value in enumerate(text.splitlines(), 1):
+                          if re.match(r"\s*(?:pub(?:\([^)]*\))?\s+)?use\s+", value) and re.search(r"\b(?:serde|serde_json|tauri|tokio|reqwest|axum|sqlx|rusqlite)\b|::(?:application|infrastructure|adapters)::|std::(?:fs|net)::", value):
+                              candidates.append({"path": path, "line": line, "rule": "domain-outward-import-candidate", "text": value.strip(), "status": "needs_review"})
+                  if path.endswith("/mod.rs"):
+                      for line, value in enumerate(text.splitlines(), 1):
+                          if re.match(r"^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:struct|enum|fn|trait|impl)\b", value):
+                              candidates.append({"path": path, "line": line, "rule": "mod-rs-definition-candidate", "text": value.strip(), "status": "needs_review"})
+                  if path.endswith(".md"):
+                      # Candidate detection only: examples, anchors and renderer
+                      # conventions require contextual review. No false pass.
+                      for match in re.finditer(r"\]\(([^\s)]+)(?:\s+[^)]*)?\)", text):
+                          target = unquote(match.group(1).strip("<>"))
+                          parsed = urlsplit(target)
+                          if parsed.scheme or parsed.netloc or not parsed.path or parsed.path.startswith("/"):
+                              continue
+                          normalized = posixpath.normpath(posixpath.join(posixpath.dirname(path), parsed.path))
+                          if not target_exists(normalized):
+                              candidates.append({"path": path, "line": text.count("\n", 0, match.start()) + 1, "rule": "relative-document-target-candidate", "target": target, "status": "needs_review"})
+          finally:
+              batch.stdin.close()
+              batch.wait(timeout=30)
+          assert batch.returncode == 0, "git cat-file failed"
+          manifest = {"audited_sha": head, "tree_sha": git("rev-parse", "HEAD^{tree}").decode().strip(),
+                      "tracked_entries": len(entries), "totals": dict(totals), "extensions": dict(extension_totals),
+                      "instructions": instructions, "files": entries,
+                      "meaning": "Every blob was read and hash-verified. Semantic and runtime verification are separate and are NOT implied."}
+          (output / "inventory.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=True) + "\n")
+          (output / "candidates.json").write_text(json.dumps(candidates, indent=2, ensure_ascii=True) + "\n")
+          with open(output / "source.tar.gz", "wb") as archive:
+              subprocess.run(["git", "archive", "--format=tar.gz", "HEAD"], stdout=archive, check=True)
+          checksums = []
+          for file in sorted(output.iterdir()):
+              checksums.append(hashlib.sha256(file.read_bytes()).hexdigest() + "  " + file.name)
+          (output / "SHA256SUMS").write_text("\n".join(checksums) + "\n")
+          print(json.dumps({"sha": head, "tracked_entries": len(entries), "totals": dict(totals),
+                            "instruction_files": instructions, "review_candidates": len(candidates)}, indent=2))
+      - name: Publish exact snapshot and complete inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: nessa-file-audit-4c39449
+          path: ${{ runner.temp }}/nessa-file-audit/
+          if-no-files-found: error
+          retention-days: 7
