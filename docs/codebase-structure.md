@@ -32,7 +32,7 @@ locations. Existing SDK layout changes are tracked in [the SDK organization task
 src/                      composition root (`main.tsx`, `store.ts`)
   conversation/           product vertical (model / use cases / gateway / UI)
   session/                wire session to nessa-server (@nessa/client)
-  panel/                  floating-window chrome (model / adapters / UI)
+  panel/                  floating-window chrome (model / application / adapters / UI)
   host/                   injected OS features + the window seam
 src-tauri/src/
   <context>/
@@ -63,8 +63,17 @@ These additional Nessa-specific invariants must stay true:
 
 1. `domain/` contains no `tauri`, `serde`-transport, async-runtime, or
    filesystem import.
-2. `main.rs` is the app composition root. OS-specific hosts are injected by
-   `platform::current()`; shared modules never construct a macOS or Linux host.
+2. `main.rs` is the app composition root, and `composition.rs` is what it
+   assembles: one `HostDependencies` holding the settings file, the shortcut
+   cache, the surface credential, the registered gateway, and the release
+   source. Resolution happens at entry points — `setup`, a command's
+   `State<HostDependencies>`, a handler that captured the bundle or resolves it
+   once at the top — and the logic below them takes explicit parameters. OS-specific
+   hosts are injected by `platform::current()`; shared modules never construct a
+   macOS or Linux host. Live objects (menu items, the summon registration slot,
+   the pending update, the announced release, the startup settings snapshot)
+   stay managed state: they
+   are not read from outside the process and have nothing to substitute.
 3. The panel frame is reapplied on every show. Nothing caches a frame across
    shows — that is the bug the design exists to prevent.
 4. Every host call goes through `src/host/window.ts` and no-ops outside Tauri.
@@ -256,6 +265,147 @@ rows from the shared Transcript; it does not parse provider wire formats.
 - `crates/nessa-server/src/composition/desktop.rs` bootstraps private local access and injects bundled provider paths.
 - `settings.stopAgentsOnQuit` controls agent cleanup on desktop exit; launchd owns gateway lifetime independently.
 - `settings.onboarding.completed` records that first-run setup finished. `src-tauri/src/main.rs` opens the setup window only when it is false. `panel::finish_setup` owns the whole handoff and its order — show the panel, record completion, close the setup window — in the process that outlives that window; a panel that will not show abandons the handoff and writes nothing, while a refused write is logged and the close still happens. `src/host/window.ts`'s `finishSetupWindow` is a single invoke of it, carrying only whether setup was finished or left (`isOnboardingCompleted`), and maps the reported steps onto the `SetupHandoff` outcomes. `src/onboarding/application/setup-recovery.ts` decides what the setup window shows when it is still there afterwards: a panel that never came up offers the handoff again, a panel that came up over a window that would not close offers only that window's close. The `Destroyed` handler in `main.rs` is a safety net for dismissal and crashes, not the handoff's cleanup path. The debug-only tray item clears the flag through `panel::restart_onboarding`.
+
+### Updating the app itself
+
+- `src-tauri/src/updater.rs` asks the release endpoint in `tauri.conf.json`
+  (`plugins.updater`) once per launch, spawned from the end of `main.rs`'s `setup`
+  so it cannot delay the panel or first-run setup. Its `offer` is the whole rule
+  and is pure: only a newer published version produces anything, while being
+  current and a check that did not complete both produce nothing at all. A failed
+  check is expected (an offline machine) and goes to stderr, never to the screen.
+- The panel is the only surface, and the tray has no update item at all. A found
+  release is kept in `updater::Announced` and sent to the panel window alone
+  (`host::UPDATE_AVAILABLE`); the panel also asks for it on mount through
+  `updater::available_update`, because the check can finish before that page has
+  listeners — or while the panel is closed, in which case the update simply waits
+  there. Both read the one value the host holds. No dialog, prompt, or window is
+  involved, and setup is a different window, which is what keeps the check safe
+  to run while setup owns the screen.
+- `src/panel/application/update-surface.ts` owns everything the panel decides:
+  the notice above the composer, the tab the install opens, the download's line,
+  and the dismissal. It is pure and tested beside itself. Dismissal is scoped to
+  a version and to a launch — it lives in the panel's own memory and is never
+  written down, so a newer version notices again and the same one does not until
+  the app restarts. `src/panel/adapters/use-update.ts` is the wiring: three host
+  subscriptions, the question on mount, and the invoke that starts the download.
+- The check, the download, and the install all run in the host process, so the
+  webview neither calls the updater nor reaches the endpoint: `install_update`
+  is an app command, so no capability grant and no `connect-src` entry exist for
+  it. `src-tauri/capabilities/` stays as it was.
+- Progress comes from the plugin's own chunk callback, throttled by
+  `updater::worth_reporting` to one event per whole percent — or, when the server
+  declares no length, one per 256 KiB — so a real artifact does not send
+  thousands of IPC messages at a bar with a hundred positions. A download the
+  server did not measure draws an unmeasured bar rather than a made-up
+  percentage.
+- A refused install is the one update failure that reaches the screen, because it
+  is the one somebody asked for: `host::UPDATE_FAILED` turns the tab's line into
+  a plain statement and a retry, and the update goes back in its slot so the
+  retry has something to download. A refused *check* stays on stderr.
+
+#### Watching the update flow locally
+
+Two recipes, and they stop in different places. Neither publishes anything and
+neither needs a release build.
+
+- **`NESSA_FAKE_UPDATE=<version> pnpm app` — the decision, with no network.**
+  A debug build reads the variable and answers the check from it instead of
+  asking the endpoint, so the panel's notice offers 9.9.9 within a second of
+  launch, with no server, no artifact, and no signing key. It is the inner loop
+  for `updater::offer`, the notice, the tab, and the dismissal.
+  `updater::simulated` is the whole rule: a `major.minor.patch` of digits is
+  announced, an unset or empty value is an ordinary run, and anything else is
+  reported on stderr and falls through to the real endpoint — the value becomes
+  the notice's own text, and "Update available / banana" claims something no real
+  check could have found.
+
+  Nothing is faked beyond the answer. There is no release behind the offer, so
+  taking the install downloads nothing, installs nothing, and restarts nothing;
+  it travels the same `UPDATE_FAILED` path a refused download does, so the tab
+  says so rather than sitting at nought per cent. Everything this path needs
+  — `SIMULATED_UPDATE`, `simulated`, `SimulatedReleases`, `SimulatedUpdate`, and
+  the two call sites — is `#[cfg(debug_assertions)]` and is not compiled into a
+  release build at all, the same shape as `tray.rs`'s `SHOW_SETUP_ITEM`. A
+  shipped app that can be told an update exists is one an attacker can tell that
+  to. The tests are gated the same way; `cargo clippy -p nessa-app --all-targets
+  --release -- -D warnings` is what proves the release arm still builds clean
+  with none of it present.
+
+  It does not touch the endpoint, the manifest, the download, the signature, or
+  the install. It is the panel and the decision, nothing else — including the
+  tab's refused state, which is the one part of a real download it can show.
+
+- **`--check-only` plus a `--config` merge on `dev` — the real plugin, a local
+  server.** This is the more valuable of the two, because the code doing the
+  work is `tauri-plugin-updater` itself rather than a substitute:
+
+      node scripts/desktop/updater-harness.mjs --check-only
+      pnpm tauri dev --config '{"plugins":{"updater":{"endpoints":["http://127.0.0.1:7430/latest.json"]}}}'
+
+  `--config` merges on `dev` exactly as it does on `build` (verified against the
+  CLI in this tree, `@tauri-apps/cli` 2.x), so this needs no new runtime switch
+  and adds nothing to the shipped config. Check-only mode serves a well-formed
+  manifest announcing `99.0.0` — above whatever `tauri.conf.json` says, so it
+  reads as newer without lowering the build — and no artifact at all, which is
+  what lets it skip the slow release build the full harness requires.
+
+  Real, through the plugin: the HTTP fetch, the manifest parse including its
+  RFC 3339 `pub_date`, the `{os}-{arch}` lookup, and the version comparison.
+  Not reached, on purpose: the announced URL 404s, so the update tab ends in its
+  refused state and signature verification never happens — the manifest's
+  `signature` field is a base64 sentence saying so. Install and restart are
+  untested here. The banner and the 404 log line both say this; a clean run is
+  not an end-to-end pass. For the download, the signature, the install, and the
+  restart, build a real artifact and run the harness without `--check-only`.
+
+#### Verifying the updater before a release exists
+
+Two layers, because the updater has one failure that cannot be repaired after
+shipping: if `plugins.updater.pubkey` is not the public half of the key releases
+are signed with, every shipped build rejects every update forever and the only
+remedy is a manual reinstall by every person who installed it. No later release
+can fix it, because no later release can be installed.
+
+- `src-tauri/tests/updater_key_pairing.rs` is the key-pair gate, and it is fast
+  and automatic. It signs a fixture with the release private key through
+  `pnpm tauri signer sign`, then verifies that signature against the pubkey read
+  out of `tauri.conf.json` — read, not copied, so the gate cannot drift from what
+  ships. It verifies through `minisign-verify`, a `[dev-dependencies]` entry and
+  the same crate `tauri-plugin-updater` resolves to at runtime, decoding the
+  base64 wrappers and allowing legacy signatures exactly as the plugin's
+  `verify_signature` does; a pass is the real verifier saying yes. Nothing about
+  it is compiled into the app. `scripts/desktop/config.test.mjs` still checks the
+  key's *shape*, which a well-formed key from the wrong pair passes.
+
+  A *mismatch* fails everywhere, unconditionally. The private key is absent from
+  an ordinary `cargo test`, and that prints a loud multi-line skip naming what
+  went unverified rather than a quiet pass. Wherever the key is present — above
+  all the release workflow, which holds it as `TAURI_SIGNING_PRIVATE_KEY` — set
+  `NESSA_REQUIRE_UPDATER_KEY_PAIRING=1` and the absence becomes a failure too, so
+  a release cannot be built on a runner where the secret silently went missing.
+  A release job must run this test with that variable set before it bundles.
+
+- `scripts/desktop/updater-harness.mjs` is the end-to-end harness, run on demand.
+  It takes an artifact `createUpdaterArtifacts` already produced (it does not
+  build one — that is slow and needs the whole bundled runtime), signs it, copies
+  it clear of the bundle directory, writes a `latest.json` in the plugin's own
+  shape, serves both from `node:http` on localhost, and prints the `pnpm
+  app:build --config` command that builds an older app pointed at it. Its header
+  says what a successful run looks like from the tray and separates the three
+  failures being tested: endpoint unreachable, manifest unreadable or
+  inapplicable, and signature rejected. `scripts/desktop/updater-manifest.mjs`
+  holds the parts worth testing without a key or a server — the `{os}-{arch}`
+  target key the plugin looks up, the manifest fields, the check-only manifest,
+  the artifact locations — and `updater-harness.test.mjs` covers them.
+
+  Redirection is a build-time `--config` merge and nothing else. The shipped
+  `tauri.conf.json` keeps the GitHub endpoint and gains no switch: a setting that
+  redirects the updater is a setting an attacker can redirect it with.
+
+  What neither layer covers: that the release workflow signs with the key the
+  gate was run against (run the gate *in* that workflow), and GitHub's release
+  hosting, redirects, and TLS, which only a published release exercises.
 
 The first update from a gateway that predates retirement acknowledgement uses a
 single explicit legacy bootout after its sole listening PID matches the exact

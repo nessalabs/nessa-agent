@@ -5,6 +5,32 @@ on:
     branches: [main]
   workflow_dispatch:
 jobs:
+  # A workflow that will not start reports a failure with no jobs in it: nothing
+  # to open, no log, no annotation. That is how a `secrets` reference in a step's
+  # `if` sat in the release workflow unnoticed — the only runs it could have
+  # broken were tag pushes, and the branch pushes that did fail looked like
+  # noise. This is the gate that reads the files before GitHub has to.
+  #
+  # Pinned, and installed from the release archive rather than an action, so the
+  # version doing the checking is the version named here.
+  #
+  # The version matters beyond reproducibility: actionlint carries its own list
+  # of GitHub-hosted runner labels, and 1.7.7 does not know macos-15-intel,
+  # which the release workflow builds on. A pin too old rejects a runner that
+  # exists, so this moves when a workflow names a newer one.
+  workflows:
+    name: Workflow files are valid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install actionlint
+        env:
+          VERSION: 1.7.12
+        run: |
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/actionlint_${VERSION}_linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin actionlint
+      - run: actionlint
+
   gateway-contract:
     runs-on: ubuntu-latest
     steps:
@@ -87,6 +113,17 @@ jobs:
       - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings
       - run: node scripts/check-sdk-docs.mjs
       - run: node scripts/check-mcp.mjs
+      # The desktop host's tests are not macOS-only, and one of them asserted
+      # the opposite of what it said on Linux for want of ever running there:
+      # `Path` treats a backslash as an ordinary character, so a Windows-shaped
+      # fixture had no `target` component in it at all. check-desktop.mjs skips
+      # when WebKitGTK is absent, so without this the skip stays permanent.
+      - name: Install the desktop host's Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev
       - run: node scripts/check-desktop.mjs
       - name: Install SDK domain coverage tools
         if: runner.os == 'Linux'

@@ -8,13 +8,14 @@ use std::io;
 
 use serde::Serialize;
 use tauri::{
-    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalSize, WebviewUrl,
+    AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder,
 };
 
+use crate::composition::HostDependencies;
 use crate::host;
 use crate::platform;
-use crate::settings::{self, Onboarding, Panel, Settings};
+use crate::settings::{Onboarding, Panel, Settings, SettingsStore};
 
 /// The panel itself. Named here because the window policies that single it out
 /// — close dismisses it rather than quitting — live in the host's event handler.
@@ -67,12 +68,12 @@ pub fn toggle(app: &AppHandle) -> Option<bool> {
 /// a panel.
 pub const SETUP_WINDOW: &str = "setup";
 
-/// The size setup opens at on hosts that do not place it themselves.
+/// The size setup opens at on hosts that do not cover the screen with it.
 ///
 /// `place_overlay` replaces this frame with the whole screen where the host can
-/// do that. Where it is an explicit no-op, this *is* the window somebody gets,
-/// so it has to be a window rather than whatever default the window system
-/// hands out for a size nobody asked for.
+/// do that. Where it cannot, this *is* the window somebody gets — centred by the
+/// same call — so it has to be a window rather than whatever default the window
+/// system hands out for a size nobody asked for.
 const SETUP_WIDTH: f64 = 960.0;
 const SETUP_HEIGHT: f64 = 640.0;
 
@@ -83,7 +84,20 @@ const SETUP_HEIGHT: f64 = 640.0;
 /// of one window are two things to keep in step with nothing comparing them.
 ///
 /// Built hidden: a window is on screen the moment it exists, and its page
-/// reveals it once it has a frame to show (`reveal_setup_window`).
+/// reveals it once it has rendered (`reveal_setup_window`).
+///
+/// A size, and deliberately no position: where the window goes is
+/// [`platform::Host::place_overlay`]'s alone, and asking the builder for one as
+/// well does not merely duplicate that — it overrides it, one turn of the event
+/// loop later. `.center()` is resolved into an explicit position at build time,
+/// and Tauri then re-applies that position through `setFrameTopLeftPoint`, which
+/// AppKit will not take off the main thread and which tao therefore *queues*
+/// (`set_frame_top_left_point_async`). `place_overlay` runs during `setup`,
+/// before the event loop turns at all, so the queued block landed afterwards and
+/// dragged the already screen-sized window's top left corner back to where a
+/// 960×640 window would have been centred — leaving setup 255pt in from the left
+/// and 175pt down from the top of a 1470×956 screen, with the menu bar and a
+/// strip of desktop undimmed beside it.
 fn build_setup_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     WebviewWindowBuilder::new(
         app,
@@ -92,7 +106,6 @@ fn build_setup_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     )
     .title("Welcome to Nessa")
     .inner_size(SETUP_WIDTH, SETUP_HEIGHT)
-    .center()
     .resizable(false)
     .transparent(true)
     .decorations(false)
@@ -166,9 +179,11 @@ pub struct SetupHandoff {
 #[tauri::command]
 pub fn finish_setup(
     app: AppHandle,
+    deps: State<'_, HostDependencies>,
     completed: bool,
     agent: Option<String>,
 ) -> Result<SetupHandoff, String> {
+    let settings_store = deps.settings.clone();
     hand_over(
         completed,
         || {
@@ -183,21 +198,12 @@ pub fn finish_setup(
             show(&window, &settings(&app))
                 .map_err(|error| format!("could not show the panel: {error}"))
         },
-        || {
-            // Written through the settings file, which is the one durable store
-            // the app has — the same load, change, save the tray's own toggle
-            // does. The managed `Settings` is deliberately not updated in place:
-            // nothing after startup reads this flag, and the launch that does
-            // reads it off disk before anything is managed at all.
-            set_onboarding(
-                &app,
-                Onboarding {
-                    completed: true,
-                    agent: agent.clone(),
-                },
-            )
-            .map_err(|error| format!("could not record that setup finished: {error}"))
-        },
+        // Written through the settings store, which is the one durable store
+        // the app has — the same load, change, save the tray's own toggle does.
+        // The managed `Settings` snapshot is deliberately not updated in place:
+        // nothing after startup reads this flag, and the launch that does reads
+        // it off disk before anything is managed at all.
+        || record_completion(&*settings_store, agent.clone()),
         || match app.get_webview_window(SETUP_WINDOW) {
             // Closing it destroys it, which is what lets the panel back down to
             // its ordinary level (see the `Destroyed` handler in `main.rs`).
@@ -241,41 +247,63 @@ fn hand_over(
     })
 }
 
-/// Put the setup window on screen, now that its page has something to show.
+/// Put the setup window on screen, now that its page has rendered.
 ///
 /// It is created hidden. A window is on screen the moment it exists, and a
 /// webview has not painted anything the moment it is created — so a window
 /// visible from the start shows whatever the window server has for it until
 /// the first frame arrives, which is a flash of nothing at the very point the
 /// opening is trying to begin from darkness.
+///
+/// The page asks for this on its first render and not one frame later: a hidden
+/// window is not drawn, so its webview is served no animation frames, and a
+/// reveal that waited for one waited for a paint this call is the precondition
+/// for. See `src/onboarding/ui/reveal-on-first-render.ts`.
 #[tauri::command]
 pub fn reveal_setup_window(window: WebviewWindow) {
     let _ = window.show();
     platform::current().reveal_overlay(&window);
 }
 
+/// The handoff's record step, as the caller reports it.
+fn record_completion(settings: &dyn SettingsStore, agent: Option<String>) -> Result<(), String> {
+    set_onboarding(
+        settings,
+        Onboarding {
+            completed: true,
+            agent,
+        },
+    )
+    .map_err(|error| format!("could not record that setup finished: {error}"))
+}
+
 /// Writes the first-run flag to the settings file, leaving every other key as
 /// the file has it.
 ///
-/// Through `settings::update` rather than a load-change-save of its own: the
-/// startup load answers an unreadable or malformed file with the defaults so a
-/// launch can carry on, and saving *that* back would replace the person's real
-/// panel geometry and quit policy with defaults — a silent loss, since the
-/// write succeeds. `update` refuses instead, and the refusal is reported.
-fn set_onboarding(app: &AppHandle, onboarding: Onboarding) -> io::Result<()> {
+/// Through [`SettingsStore::update`] rather than a load-change-save of its own:
+/// the startup load answers an unreadable or malformed file with the defaults so
+/// a launch can carry on, and saving *that* back would replace the person's real
+/// panel geometry and quit policy with defaults — a silent loss, since the write
+/// succeeds. `update` refuses instead, and the refusal is reported.
+///
+/// The store is a parameter rather than something looked up from the app: this
+/// is the decision, and the decision is what a test has to be able to hold.
+fn set_onboarding(settings: &dyn SettingsStore, onboarding: Onboarding) -> io::Result<()> {
     // The written value is the caller's to ignore: nothing here shows it back.
-    settings::update(app, |settings| settings.onboarding = onboarding).map(|_| ())
+    settings
+        .update(&mut |chosen| chosen.onboarding = onboarding.clone())
+        .map(|_| ())
 }
 
 /// The agent first-run setup chose, or nothing where nobody has chosen one.
 ///
-/// Read off disk on every ask, the same place the launch reads completion from.
-/// The managed `Settings` is a startup snapshot and setup writes this after it,
-/// so a panel shown by the very handoff that recorded the choice would
-/// otherwise be told there was none.
+/// Read through the store on every ask, the same place the launch reads
+/// completion from. Not from a startup snapshot: setup writes this choice after
+/// that snapshot is taken, so a panel shown by the very handoff that recorded
+/// the choice would be told there was none.
 #[tauri::command]
-pub fn chosen_agent(app: AppHandle) -> Option<String> {
-    settings::load(&app).onboarding.agent
+pub fn chosen_agent(deps: State<'_, HostDependencies>) -> Option<String> {
+    deps.settings.load().onboarding.agent
 }
 
 /// Opens first-run setup again, from the beginning.
@@ -295,11 +323,11 @@ pub fn chosen_agent(app: AppHandle) -> Option<String> {
 /// only way to see it a second time while working on it; it is not a feature
 /// anybody asked for, so it does not ship until it is one.
 #[cfg(debug_assertions)]
-pub fn restart_onboarding(app: &AppHandle) {
+pub fn restart_onboarding(app: &AppHandle, settings: &dyn SettingsStore) {
     // Clearing it is what makes this a restart rather than a preview. A file
     // that will not take the change costs the next launch's setup, not this
     // window, so it is reported and the window opens anyway.
-    if let Err(error) = set_onboarding(app, Onboarding::default()) {
+    if let Err(error) = set_onboarding(settings, Onboarding::default()) {
         eprintln!("[nessa] could not reopen setup for the next launch: {error}");
     }
 
@@ -657,6 +685,119 @@ mod tests {
         // a decision: leaving stays free to run setup again.
         assert_eq!(steps.order(), ["show", "close"]);
         assert!(handoff.record_error.is_none());
+    }
+
+    /// The handoff's record step, wired to a settings store rather than to a
+    /// closure a test wrote: the flag reaches the file, and every other key the
+    /// file has survives it. This needed a running app before.
+    #[test]
+    fn the_handoff_records_completion_through_the_settings_store() {
+        let settings = crate::settings::testing::in_memory();
+        settings.storage.put(
+            &settings.path,
+            br#"{"panel":{"width":640},"stopAgentsOnQuit":true}"#,
+        );
+        let steps = Steps::default();
+
+        let handoff = hand_over(
+            true,
+            || {
+                steps.took("show");
+                Ok(())
+            },
+            || record_completion(&settings.store, None),
+            || {
+                steps.took("close");
+                Ok(())
+            },
+        )
+        .expect("the panel came up");
+
+        assert_eq!(steps.order(), ["show", "close"]);
+        assert!(handoff.record_error.is_none());
+        let saved = settings.store.load();
+        assert!(saved.onboarding.completed);
+        assert_eq!(saved.panel.width, 640.0);
+        assert!(saved.stop_agents_on_quit);
+    }
+
+    /// The agent setup was finished on is written with the completion, and a
+    /// finish nobody chose an agent for writes none.
+    ///
+    /// The choice is the whole reason a conversation starts on Codex rather
+    /// than Claude, and it is made in one window and read in another. Recorded
+    /// as `None` it is not a wrong agent, it is silently the gateway's default —
+    /// which looks exactly like the choice having been honoured.
+    #[test]
+    fn the_agent_setup_finished_on_is_recorded_with_the_completion() {
+        let settings = crate::settings::testing::in_memory();
+
+        record_completion(&settings.store, Some("codex".to_owned()))
+            .expect("an absent file takes the change");
+
+        let saved = settings.store.load();
+        assert!(saved.onboarding.completed);
+        assert_eq!(saved.onboarding.agent.as_deref(), Some("codex"));
+
+        let settings = crate::settings::testing::in_memory();
+        record_completion(&settings.store, None).expect("an absent file takes the change");
+        assert_eq!(settings.store.load().onboarding.agent, None);
+    }
+
+    /// Leaving setup writes nothing at all, which is what keeps it free to
+    /// change its mind — checked against the file this time, not a counter.
+    #[test]
+    fn leaving_setup_writes_nothing_to_the_settings_file() {
+        let settings = crate::settings::testing::in_memory();
+
+        hand_over(
+            false,
+            || Ok(()),
+            || record_completion(&settings.store, None),
+            || Ok(()),
+        )
+        .expect("the panel came up");
+
+        assert_eq!(settings.storage.get(&settings.path), None);
+    }
+
+    /// The refusal the handoff is built to survive, produced by a real settings
+    /// store over a file this build cannot parse: the flag is refused, the
+    /// person's bytes are still on disk, and the panel is handed over anyway.
+    #[test]
+    fn a_settings_file_that_will_not_parse_refuses_the_flag_and_keeps_its_bytes() {
+        let settings = crate::settings::testing::in_memory();
+        let original = br#"{ "panel": { "width": 640 }, "#.to_vec();
+        settings.storage.put(&settings.path, &original);
+
+        let handoff = hand_over(
+            true,
+            || Ok(()),
+            || record_completion(&settings.store, None),
+            || Ok(()),
+        )
+        .expect("a file this build cannot read is not a reason to withhold the panel");
+
+        assert!(handoff.setup_closed);
+        assert!(handoff
+            .record_error
+            .as_deref()
+            .is_some_and(|error| error.starts_with("could not record that setup finished:")));
+        assert_eq!(settings.storage.get(&settings.path), Some(original));
+    }
+
+    /// Clearing the flag is what makes the debug-only tray item a restart
+    /// rather than a preview: the next launch opens setup again, because the
+    /// file no longer claims it is done.
+    #[test]
+    fn clearing_the_first_run_flag_un_finishes_setup() {
+        let settings = crate::settings::testing::in_memory();
+        record_completion(&settings.store, None).expect("an absent file takes the change");
+        assert!(settings.store.load().onboarding.completed);
+
+        set_onboarding(&settings.store, Onboarding::default()).expect("the file takes the change");
+
+        assert!(!settings.store.load().onboarding.completed);
     }
 
     #[test]

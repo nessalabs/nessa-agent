@@ -15,9 +15,11 @@ export {
   type KeyChord,
 } from "./accelerator"
 export {
+  availableUpdate,
   closeSetupWindow,
   finishSetupWindow,
   hasNativeHost,
+  installUpdate,
   loadChosenAgent,
   loadAssignedSurfaceCredential,
   flushCompositor,
@@ -25,6 +27,9 @@ export {
   onLiveResize,
   onSummoned,
   onToggleSurface,
+  onUpdateAvailable,
+  onUpdateFailed,
+  onUpdateProgress,
   onWindowResize,
   revealSetupWindow,
   setFrosted,
@@ -32,6 +37,8 @@ export {
   windowSize,
   windowSurface,
   loadShortcuts,
+  type Downloaded,
+  type Release,
   type SetupHandoff,
   type SetupWindowClose,
 } from "./window"

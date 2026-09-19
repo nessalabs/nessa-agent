@@ -41,12 +41,30 @@ states can have independent clocks, including deterministic test adapters.
 `AppState::from_environment` is the environment-driven composition entry point;
 `with_dependencies` is the explicit constructor used for adapter substitution.
 
-This server pattern complements Tauri's existing `platform::current()` host
-injection; it does not add a second host abstraction. Dependencies are scoped to
+This server pattern complements the desktop host's own composition root; it does
+not add a second host abstraction. Dependencies are scoped to
 one server/application, not a static process-wide registry. Rust ownership/Arc
 controls adapter lifetime. Future background adapters must expose explicit
 startup/shutdown owned by composition; dropping a pointer is not a substitute
 for draining writes or stopping workers.
+
+## Rust desktop host
+
+`src-tauri/src/composition.rs` holds `HostDependencies`: the settings store, the
+shortcut store, the surface credential, the registered gateway, and the release
+source, each a trait the host owns with a substitute in tests. `main`'s `setup`
+assembles it once, keeps it to hand the pieces down (`tray::create`,
+`updater::check_in_background`), and manages it so a `#[tauri::command]` can
+declare `State<'_, HostDependencies>` and be given it. `platform::current()`
+remains the compile-time injection for OS-shaped window behaviour.
+
+Resolution happens at entry points; logic takes explicit parameters. A handler
+the framework calls with only an `&AppHandle` either captured the bundle when it
+was built (the tray menu) or resolves it once at the top (the exit event) and
+passes what it found downwards. Nothing under an entry point calls `try_state`
+for a dependency. Managed state remains the right home for live objects — menu
+items, registration slots, the settings snapshot a launch was sized from — which
+are not outside things and have no substitute to write.
 
 ## Adding another backend
 

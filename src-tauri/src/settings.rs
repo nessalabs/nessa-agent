@@ -9,12 +9,13 @@
 
 mod storage;
 
-use std::io;
+use std::{
+    io,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
-
-use crate::local_data;
 
 /// `serde(default)` so a file written by an older build — or one a person has
 /// hand-edited down to a single key — still loads, with the missing keys
@@ -76,9 +77,98 @@ impl Default for Panel {
     }
 }
 
-/// `settings.json` under the stage-scoped config root ([`local_data`]).
-fn path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    local_data::config_root(app).map(|root| root.join("settings.json"))
+/// Where the desktop's settings are kept, as the rest of the host asks about
+/// them.
+///
+/// The host's own port, in the host's vocabulary: settings in, settings out,
+/// and no path, file, or serializer visible to a caller. The real
+/// implementation is [`SettingsFile`], built once in composition; a test
+/// substitutes one holding the file in memory, which is what lets the
+/// decisions that read and write settings — the first-run flag, the quit
+/// policy — be exercised without a disk or a running app.
+pub trait SettingsStore: Send + Sync {
+    /// The startup read: the defaults stand in for anything missing or
+    /// unreadable, because a launch that cannot read its settings still has to
+    /// open a panel. See [`load_from`].
+    fn load(&self) -> Settings;
+
+    /// Read, apply `change`, write the result back, and answer with what was
+    /// written. See [`update_in`] for what an unusable file does here.
+    ///
+    /// # Errors
+    ///
+    /// The typed read failure when the file is there but unusable, the write's
+    /// own failure when the replacement does not land, and `NotFound` when
+    /// there is no config root to write into.
+    fn update(&self, change: &mut dyn FnMut(&mut Settings)) -> io::Result<Settings>;
+}
+
+/// `settings.json` under the stage-scoped config root ([`crate::local_data`]).
+///
+/// The path is resolved once, in composition, rather than per call: it is
+/// derived from the process environment, which does not change while the app
+/// runs. `None` is a launch with no config root at all — there is nothing to
+/// read and nowhere to write, and the defaults are all it can have.
+pub struct SettingsFile {
+    path: Option<PathBuf>,
+    storage: Arc<dyn storage::Storage>,
+}
+
+impl SettingsFile {
+    /// The real file, under the config root composition resolved.
+    pub fn at(config_root: Option<PathBuf>) -> Self {
+        Self {
+            path: config_root.map(|root| root.join("settings.json")),
+            storage: Arc::new(storage::FileStorage),
+        }
+    }
+}
+
+impl SettingsStore for SettingsFile {
+    fn load(&self) -> Settings {
+        match &self.path {
+            Some(path) => load_from(path, &*self.storage),
+            None => Settings::default(),
+        }
+    }
+
+    fn update(&self, change: &mut dyn FnMut(&mut Settings)) -> io::Result<Settings> {
+        let path = self.path.as_ref().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "settings directory unavailable")
+        })?;
+        update_in(path, &*self.storage, change)
+    }
+}
+
+/// A [`SettingsFile`] whose file is a map in this process.
+///
+/// Built here, next to the rules it stands in for, so every module that makes a
+/// decision from settings substitutes the same one.
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+
+    pub(crate) struct InMemorySettings {
+        /// Hand this to whatever is under test.
+        pub(crate) store: SettingsFile,
+        /// The "disk", for seeding a file or reading back what landed.
+        pub(crate) storage: Arc<storage::MemoryStorage>,
+        /// The one path `store` reads and writes.
+        pub(crate) path: PathBuf,
+    }
+
+    pub(crate) fn in_memory() -> InMemorySettings {
+        let storage = Arc::new(storage::MemoryStorage::default());
+        let path = PathBuf::from("settings.json");
+        InMemorySettings {
+            store: SettingsFile {
+                path: Some(path.clone()),
+                storage: storage.clone(),
+            },
+            storage,
+            path,
+        }
+    }
 }
 
 /// What one read of the settings file found.
@@ -102,7 +192,7 @@ enum Found {
 
 /// The one read. Shared by the lenient [`load`] and the strict [`update`] so
 /// there is a single account of what the file says.
-fn read_from(path: &std::path::Path, store: &dyn storage::Storage) -> Found {
+fn read_from(path: &Path, store: &dyn storage::Storage) -> Found {
     match store.read(path) {
         Ok(raw) => match parse(&raw) {
             Ok(settings) => Found::Settings(settings),
@@ -126,17 +216,9 @@ fn read_from(path: &std::path::Path, store: &dyn storage::Storage) -> Found {
 ///
 /// This is the *startup* read, and carrying on with defaults is the right
 /// answer for it: a launch that cannot read its settings still has to open a
-/// panel. It is the wrong basis for changing the file, which is what [`update`]
-/// is for.
-pub fn load(app: &AppHandle) -> Settings {
-    let Some(path) = path(app) else {
-        return Settings::default();
-    };
-
-    load_from(&path, &storage::FileStorage)
-}
-
-fn load_from(path: &std::path::Path, store: &dyn storage::Storage) -> Settings {
+/// panel. It is the wrong basis for changing the file, which is what
+/// [`update_in`] is for.
+fn load_from(path: &Path, store: &dyn storage::Storage) -> Settings {
     match read_from(path, store) {
         Found::Settings(settings) => settings,
         Found::Absent => {
@@ -165,21 +247,8 @@ fn load_from(path: &std::path::Path, store: &dyn storage::Storage) -> Settings {
 /// Returns what was written, for a caller that has to show the new value —
 /// a menu item's tick, say — without reading the file a second time and
 /// risking a different answer than the one it just saved.
-///
-/// # Errors
-///
-/// The typed read failure (`InvalidData` for a malformed file, the underlying
-/// kind otherwise) when the file is unusable, the write's own failure when the
-/// replacement does not land, and `NotFound` when there is no config root to
-/// write into.
-pub fn update(app: &AppHandle, change: impl FnOnce(&mut Settings)) -> io::Result<Settings> {
-    let path = path(app)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "settings directory unavailable"))?;
-    update_in(&path, &storage::FileStorage, change)
-}
-
 fn update_in(
-    path: &std::path::Path,
+    path: &Path,
     store: &dyn storage::Storage,
     change: impl FnOnce(&mut Settings),
 ) -> io::Result<Settings> {
@@ -197,11 +266,7 @@ fn parse(raw: &str) -> Result<Settings, serde_json::Error> {
     serde_json::from_str(raw)
 }
 
-fn write(
-    path: &std::path::Path,
-    settings: &Settings,
-    store: &dyn storage::Storage,
-) -> io::Result<()> {
+fn write(path: &Path, settings: &Settings, store: &dyn storage::Storage) -> io::Result<()> {
     let raw = serde_json::to_string_pretty(settings).map_err(io::Error::other)?;
     store.write(path, format!("{raw}\n").as_bytes())
 }
@@ -209,37 +274,7 @@ fn write(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{collections::HashMap, path::PathBuf, sync::Mutex};
-
-    #[derive(Default)]
-    struct FakeStorage {
-        files: Mutex<HashMap<PathBuf, Vec<u8>>>,
-        read_error: Mutex<Option<io::ErrorKind>>,
-        write_error: Mutex<Option<io::ErrorKind>>,
-    }
-    impl storage::Storage for FakeStorage {
-        fn read(&self, path: &std::path::Path) -> io::Result<String> {
-            if let Some(kind) = self.read_error.lock().unwrap().take() {
-                return Err(io::Error::from(kind));
-            }
-            let files = self.files.lock().unwrap();
-            let bytes = files
-                .get(path)
-                .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
-            String::from_utf8(bytes.clone())
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
-        }
-        fn write(&self, path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
-            if let Some(kind) = self.write_error.lock().unwrap().take() {
-                return Err(io::Error::from(kind));
-            }
-            self.files
-                .lock()
-                .unwrap()
-                .insert(path.to_owned(), bytes.to_vec());
-            Ok(())
-        }
-    }
+    use storage::MemoryStorage as FakeStorage;
 
     #[test]
     fn missing_keys_take_their_defaults() {
@@ -503,6 +538,38 @@ mod tests {
         assert_eq!(
             *store.write_error.lock().unwrap(),
             Some(io::ErrorKind::Other)
+        );
+    }
+
+    /// The port over a file: what a caller gets is the same lenient load and
+    /// strict update the functions above describe, reached without a path.
+    #[test]
+    fn the_store_loads_and_updates_the_file_under_its_root() {
+        let settings = testing::in_memory();
+
+        assert!(!settings.store.load().stop_agents_on_quit);
+        let written = settings
+            .store
+            .update(&mut |chosen| chosen.stop_agents_on_quit = true)
+            .expect("an absent file takes the change");
+
+        assert!(written.stop_agents_on_quit);
+        assert!(settings.store.load().stop_agents_on_quit);
+    }
+
+    /// No config root is not an empty settings file: there is nothing to read
+    /// and nowhere to write, and a launch still has to open a panel.
+    #[test]
+    fn a_launch_with_no_config_root_gets_the_defaults_and_refuses_to_write() {
+        let store = SettingsFile::at(None);
+
+        assert_eq!(store.load().panel.width, Panel::default().width);
+        assert_eq!(
+            store
+                .update(&mut |chosen| chosen.onboarding.completed = true)
+                .expect_err("there is nowhere to write")
+                .kind(),
+            io::ErrorKind::NotFound
         );
     }
 }

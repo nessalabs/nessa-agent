@@ -1,0 +1,351 @@
+# Build, sign and stage a macOS release, then leave it as a draft for a person.
+#
+# Signing and notarization depend on the secrets being there. With APPLE_CERTIFICATE
+# and the App Store Connect key set, the CLI signs with a Developer ID identity,
+# submits the bundle to Apple and staples the ticket. With them absent it signs
+# ad-hoc (a "-" identity), and Gatekeeper then refuses the artifact on any machine
+# but the one that built it. Which of the two happened is not left to be guessed:
+# scripts/desktop/verify-bundle.mjs reads the built bundle and says so.
+#
+# Unproven until a tag is actually built. The secrets are set and the steps are
+# here, but no release has run through them yet, so the first one should be
+# treated as the test it is.
+#
+#   tag v* ──▶ version ──▶ updater-key ──┬─▶ build (macos-latest,    aarch64) ─┐
+#                                        └─▶ build (macos-15-intel, x86_64) ──┤
+#                                                                             ▼
+#                                                              release (draft)
+#                                                                latest.json
+#
+# Arrows are `needs`: nothing to the right starts until everything to its left
+# passed. The two builds converge because one `latest.json` has to describe both
+# architectures — `releases/latest/download/latest.json` is a single file, and an
+# architecture missing from it reports itself as up to date forever.
+#
+# macOS only. The bundled gateway that actually runs an agent is macOS-only
+# (src-tauri/src/gateway/infrastructure/unsupported.rs) and Linux packaging is
+# an open TODO (docs/todo/linux-desktop-packaging.md). The shipped config's
+# bundle.targets stays "all" — scripts/desktop/config.test.mjs asserts it, and
+# it is what a contributor's local build should keep doing. This workflow narrows
+# it per build instead, with --bundles app,dmg, so a release cannot publish a
+# .deb or an NSIS installer that launches and then cannot run anything.
+name: Release
+run-name: Release ${{ inputs.tag || github.ref_name }}
+on:
+  push:
+    tags: ["v*"]
+  # For rebuilding a tag whose release failed part way. The tag must already
+  # exist; this never creates one.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build, e.g. v0.1.0"
+        required: true
+        type: string
+
+# Least privilege by default. Only the job that writes the draft release asks
+# for more, and it is the only job holding a token that can.
+permissions:
+  contents: read
+
+# One release at a time, and never cancelled: a half-uploaded draft is worse
+# than a slow queue.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  # Cheap, first, and on its own. Three files name the version independently and
+  # only src-tauri/tauri.conf.json reaches the updater, so a tag that disagrees
+  # publishes a manifest that never matches what is installed — and nothing
+  # later in the release fails to make that visible.
+  version:
+    name: Versions agree with the tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      version: ${{ steps.agree.outputs.version }}
+      prerelease: ${{ steps.agree.outputs.prerelease }}
+    steps:
+      - id: resolve
+        # Through the environment, never interpolated into the script: the
+        # dispatch input is whatever the person typed.
+        #
+        # Resolved to the commit the *tag* points at, once, and every job below
+        # builds that commit. `actions/checkout` takes an unqualified name and
+        # looks for a branch before a tag, so a branch called `v0.1.0` would be
+        # what got built — and comparing versions cannot notice, because both
+        # commits can declare the same one. The tag must also already exist:
+        # `gh release create` will otherwise make one from the default branch
+        # at publication, which is a release of code nobody tagged.
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" \
+            --jq '.object.sha' 2>/dev/null || true)"
+          if [ -z "$sha" ]; then
+            echo "No tag refs/tags/${TAG} in this repository."
+            echo "Tag the commit you mean to release first; a branch of that name is not a tag."
+            exit 1
+          fi
+          # An annotated tag's ref points at the tag object, not the commit.
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${sha}" --jq '.sha')"
+          printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
+          printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+          echo "refs/tags/${TAG} is ${sha}"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - id: agree
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="$(node scripts/desktop/release-version.mjs --tag "$TAG")"
+          prerelease="$(node scripts/desktop/release-version.mjs --tag "$TAG" --print prerelease)"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'prerelease=%s\n' "$prerelease" >> "$GITHUB_OUTPUT"
+
+  # The one failure with no remedy: if the public key in tauri.conf.json is not
+  # the other half of the key this workflow signs with, every build it ever
+  # publishes rejects every future update, permanently, and the only way back is
+  # asking each person to reinstall by hand. So it runs before anything is
+  # built, on its own, with the real release secret — and with
+  # NESSA_REQUIRE_UPDATER_KEY_PAIRING set, because the test's default when no key
+  # is reachable is a loud skip, and a skip in a release would read as a pass.
+  updater-key:
+    name: Updater key pairing
+    needs: version
+    runs-on: macos-latest
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      NESSA_REQUIRE_UPDATER_KEY_PAIRING: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      # The gate signs with `pnpm exec tauri signer sign` — the same command a
+      # release signs with — so the Tauri CLI has to be installed here.
+      - run: pnpm install --frozen-lockfile
+      - run: cargo test -p nessa-app --test updater_key_pairing
+
+  build:
+    name: Build ${{ matrix.updater-target }}
+    needs: [version, updater-key]
+    strategy:
+      # Both architectures' failures are worth seeing in one run; neither ships
+      # without the other regardless, because the release job needs both.
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            updater-target: darwin-aarch64
+          # The Intel runner, not an Intel-emulating one. `macos-13` is retired;
+          # `macos-15-intel` is the current x86_64 image, and `macos-latest` is
+          # Apple Silicon. If either ever changes architecture underneath us the
+          # build fails at prepare-macos.mjs rather than mislabelling a bundle.
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            updater-target: darwin-x86_64
+    runs-on: ${{ matrix.runner }}
+    env:
+      # Produces the .app.tar.gz and its .sig alongside the bundle. Without it
+      # the bundle is built and signs nothing, and staging refuses it.
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # Every Apple secret is carried under a SECRET_ name that no tool reads,
+      # and promoted to the names the bundler reads by the step below — only
+      # when there is something to put in them.
+      #
+      # They cannot be mapped straight onto APPLE_CERTIFICATE and the rest. A
+      # job's `env:` has no way to write an unset variable, and a missing secret
+      # becomes an empty string; the bundler asks `var_os` whether the variable
+      # is set, so an empty APPLE_CERTIFICATE sends it to decode nothing and run
+      # `security import` on an empty file. The "dormant until the secrets
+      # exist" path would fail every build rather than sign ad-hoc.
+      #
+      # The CLI imports the certificate into a temporary keychain it makes and
+      # throws away, so nothing here touches a runner's login keychain, and it
+      # infers the identity from the certificate when one is not named. With the
+      # App Store Connect key present it also submits the bundle to Apple and
+      # staples the ticket, which is why there is no separate notarytool step:
+      # one tool, one place where a failure to sign or staple stops the build.
+      SECRET_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      SECRET_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      SECRET_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      # A key rather than an Apple ID and app-specific password: the key is
+      # scoped to this purpose, is revocable on its own, and is not a password
+      # for the account itself. The bundler wants its id in a variable and the
+      # key's own bytes in a file, which is what APPLE_API_KEY_FILE names.
+      SECRET_APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      SECRET_APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      SECRET_APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_FILE: ${{ github.workspace }}/.apple-api-key.p8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      # Decides signing and notarization, and is the only thing that writes the
+      # variables the bundler reads. A half-configured repository stops here,
+      # naming the secret that is missing, rather than twenty minutes later
+      # inside the bundler talking about a keychain.
+      #
+      # The key is written as a file because APPLE_API_KEY_PATH wants one, and
+      # removed after the build whatever the build did: a private key left on a
+      # runner outlives the job's usefulness.
+      - name: Choose what this build signs with
+        run: node scripts/desktop/apple-credentials.mjs
+      # --target is passed although it is always the runner's own architecture,
+      # and that is the point: scripts/desktop/prepare-macos.mjs refuses a triple
+      # that is not the host's, so if a runner image ever changes architecture
+      # under us this fails loudly instead of publishing a bundle labelled with
+      # the wrong one. It is also why there is no universal build — that script
+      # cannot produce one.
+      #
+      # --bundles app,dmg narrows the config's "all" to the two macOS outputs a
+      # release has any use for: `app`, which is what createUpdaterArtifacts
+      # archives into the .app.tar.gz an update installs, and `dmg`, which is
+      # what a person downloads. It also keeps .deb/NSIS out of a release they
+      # would be unrunnable in.
+      - name: Build, sign and verify the bundle
+        run: pnpm app:build --target ${{ matrix.target }} --bundles app,dmg
+      - name: Remove the App Store Connect key
+        if: always()
+        run: rm -f "$APPLE_API_KEY_FILE"
+      # Both runners' bundlers write the identical name Nessa.app.tar.gz. A
+      # release has one flat asset namespace, so they are renamed to the names
+      # the manifest will point at before they leave the runner.
+      - name: Stage the published assets
+        run: node scripts/desktop/release-assets.mjs stage --target ${{ matrix.target }} --into release-staging
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.updater-target }}
+          path: release-staging/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Draft release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # Both architectures land in one directory. `needs: build` already means
+      # neither is missing; the manifest step checks again anyway, because the
+      # thing it is preventing is invisible after the fact.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-darwin-*
+          path: release-assets
+          merge-multiple: true
+      - name: Write the updater manifest
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          node scripts/desktop/release-assets.mjs manifest \
+            --directory release-assets \
+            --tag "$TAG" \
+            --repository "$GITHUB_REPOSITORY"
+          cat release-assets/latest.json
+      # A draft, on purpose, and this is the decision to revisit first once
+      # notarization lands. `releases/latest/download/latest.json` — the endpoint
+      # every installed app polls — resolves only to a published, non-prerelease
+      # release, so while this is a draft the world sees nothing and a person can
+      # open the disk image before anyone else does. Publishing it is the
+      # deliberate act that offers the update; today it would offer a build
+      # Gatekeeper blocks, which is precisely why it is not automatic.
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+          # Empty unless this is a pre-release, so `${PRERELEASE:+--prerelease}`
+          # adds the flag only when it belongs.
+          PRERELEASE: ${{ needs.version.outputs.prerelease == 'true' && 'true' || '' }}
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<'END'
+          Nessa for macOS, Apple Silicon and Intel.
+
+          **These artifacts are not notarized.** macOS Gatekeeper will refuse to
+          open them on a machine that did not build them until notarization is in
+          place. Do not publish this draft to people who cannot work around that.
+
+          `latest.json` is the updater manifest. It only reaches installed apps
+          once this release is published and is the newest non-prerelease.
+          END
+          # A re-run of a tag whose release failed part way should replace the
+          # draft's assets. A release that is already *published* must not be
+          # touched: overwriting its latest.json would hand every installed app
+          # a different update under a version it has already been offered.
+          state="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || echo absent)"
+          case "$state" in
+            absent)
+              # `--verify-tag` because `gh release create` will otherwise make
+              # the tag itself, from the default branch, for a release named
+              # after a tag that was never pushed. `--prerelease` because
+              # GitHub keeps the channel apart from the name: an rc published
+              # without it is an ordinary release, and the updater serves the
+              # newest of those to every installed app.
+              gh release create "$TAG" --draft --verify-tag \
+                ${PRERELEASE:+--prerelease} --title "Nessa $VERSION" \
+                --notes-file release-notes.md release-assets/*
+              ;;
+            true)
+              echo "A draft for $TAG exists; replacing its assets."
+              # A draft from an earlier run may predate the channel being set,
+              # so it is stated again rather than assumed to have carried.
+              gh release edit "$TAG" --prerelease="${PRERELEASE:-false}"
+              gh release upload "$TAG" release-assets/* --clobber
+              ;;
+            *)
+              echo "$TAG is already published. Refusing to replace the assets of a"
+              echo "live release: its latest.json is what installed apps are reading."
+              echo "Tag a new version instead."
+              exit 1
+              ;;
+          esac
+      - name: Say what is left to do by hand
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          {
+            echo "### Draft release $TAG is staged"
+            echo
+            echo "Assets, including \`latest.json\`, are attached to a **draft**."
+            echo "Nothing is offered to any installed app until the draft is published."
+            echo
+            echo "Before publishing:"
+            echo "- The artifacts are **not notarized** — Gatekeeper blocks them elsewhere."
+            echo "- Open the disk image on a clean machine and check the app launches."
+            echo "- Check an agent actually runs, not only that the window appears."
+          } >> "$GITHUB_STEP_SUMMARY"
