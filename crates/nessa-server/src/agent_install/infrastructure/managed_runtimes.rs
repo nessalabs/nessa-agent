@@ -18,6 +18,12 @@ use crate::agent_install::domain::{AgentName, ArchiveDigest, PinnedRelease, Rele
 /// means something other than chance.
 const NAME_ATTEMPTS: u8 = 10;
 
+/// How many times taking the publication lock will retry after finding that
+/// the file it locked is no longer the one at that path. Each turn means
+/// something outside Nessa replaced the lock file at exactly the wrong moment,
+/// so more than a couple is not a race being lost.
+const LOCK_ATTEMPTS: u8 = 5;
+
 /// The most an unpacked executable may be.
 ///
 /// The digest fixes the *compressed* size of an archive and says nothing about
@@ -33,7 +39,8 @@ const UNPACK_CHUNK: usize = 64 * 1024;
 ///
 /// Nessa's own note about what it put there, not anything read out of the
 /// archive. The version in particular is the *pinned* one: asking a downloaded
-/// binary what version it is would be asking the thing we are trying to verify.
+/// binary what version it is would be asking the thing we are trying to
+/// verify.
 ///
 /// It names the artifact rather than the version, because a version does not
 /// identify a binary. One Opencode version is published as nine archives — two
@@ -41,14 +48,20 @@ const UNPACK_CHUNK: usize = 64 * 1024;
 /// AVX2 — and every one of them unpacks a file called `opencode`. A record
 /// carrying only the version and that name would answer "already installed" to
 /// a pin asking for a different one of the nine, and hand back a binary this
-/// machine may not even be able to start. The digest is what tells them apart,
-/// and it is the same digest the download was accepted against, so a record
-/// that matches is a record about bytes Nessa verified.
+/// machine may not even be able to start.
 ///
-/// Every field is compared against the pin before the record is believed, and
-/// none of it is used to build a path. A record holding somewhere to launch
-/// from would be a second, independent claim about where runtimes live, free to
-/// disagree with the store that wrote it and still name a real file.
+/// The digest is what tells them apart, and it is the same digest the download
+/// was accepted against, so a record that matches names bytes the install
+/// verified — verified by the use case, which compares the digest before this
+/// store is asked to unpack anything, not by this file.
+///
+/// [`Self::describes`] compares exactly what the layout keys on, and no more.
+/// The platform and the requirements are written down for whoever opens the
+/// file, and they are facts *about the digest*: one archive is one build, and
+/// the pin reader refuses a file that names an archive twice. Comparing them
+/// would make a pin that corrects one of those fields, leaving the archive
+/// alone, reinstall bytes that are already there — over a directory of the
+/// same name, since the layout does not key on them.
 #[derive(Debug, Serialize, Deserialize)]
 struct InstallationRecord {
     version: String,
@@ -57,10 +70,8 @@ struct InstallationRecord {
     platform: String,
     /// The C library the installed build needs, absent where the platform has
     /// only one.
-    #[serde(default)]
     libc: Option<String>,
     /// Whether the installed build needs AVX2.
-    #[serde(default)]
     requires_avx2: bool,
     /// The archive digest this runtime was accepted against.
     digest: String,
@@ -81,26 +92,24 @@ impl InstallationRecord {
         }
     }
 
-    /// Whether this record describes exactly the artifact `release` pins.
+    /// Whether this record describes the file the layout would put there.
     ///
-    /// Compared field by field rather than on the digest alone. The digest is
-    /// the identity and would be enough on its own, but a record agreeing on it
-    /// and disagreeing about anything else was not written by this store for
-    /// this pin, and "close enough" is how a machine ends up launching a
-    /// binary built for a different one.
+    /// Exactly the three fields the path is built from — the version and the
+    /// digest name the directory, and the entry names the file in it. Nothing
+    /// else, deliberately: a field that decided "already installed" without
+    /// deciding *where* would send an install to rename over a file this
+    /// record still names, and the rollback after a failed settle would then
+    /// take away a runtime it did not write.
+    ///
+    /// The entry is compared in full rather than by its last segment, because
+    /// two entries of one archive can share a file name. The pin reader
+    /// refuses a file that names one archive twice, so within a valid pin the
+    /// digest already fixes the entry; comparing it costs nothing and does not
+    /// depend on that holding.
     fn describes(&self, release: &PinnedRelease) -> bool {
-        *self == Self::of(release)
-    }
-}
-
-impl PartialEq for InstallationRecord {
-    fn eq(&self, other: &Self) -> bool {
-        self.version == other.version
-            && self.platform == other.platform
-            && self.libc == other.libc
-            && self.requires_avx2 == other.requires_avx2
-            && self.digest == other.digest
-            && self.executable == other.executable
+        self.version == release.version().as_str()
+            && self.digest == release.archive_digest().as_str()
+            && self.executable == release.executable().as_str()
     }
 }
 
@@ -125,9 +134,12 @@ impl PartialEq for InstallationRecord {
 /// Keyed by version alone they would overwrite one another, and a machine that
 /// had installed one would be told it already had another.
 ///
-/// A runtime is unpacked beside the previous one rather than over it, so a pin
-/// that moves does not half-overwrite a binary that something may still be
-/// running. `installed.json` is written only once the executable is in place
+/// A pin that moves lands in a directory of its own rather than over the
+/// previous runtime, so the old binary stays where it is and whatever is
+/// running it keeps working. Re-publishing the *same* artifact does rename
+/// over the file already there, which is safe for a different reason: a rename
+/// is atomic and a process that has the old binary open keeps the bytes it
+/// opened. `installed.json` is written only once the executable is in place
 /// *and* on the disk, which is what makes a crashed install read as "nothing
 /// installed" rather than as a runtime that is not there.
 ///
@@ -228,17 +240,45 @@ impl ManagedRuntimes {
     /// Blocking on purpose. The other install is unpacking a file this one
     /// would otherwise unpack again; waiting for it is the outcome the caller
     /// wants, and the recheck immediately after is what turns that wait into a
-    /// result rather than a second download.
+    /// result rather than a second unpack. Not a second *download*: the
+    /// archive was fetched and hashed before this store was asked to publish
+    /// anything, so the waiting install has already paid for the bytes.
     fn hold(&self, agent: &AgentName) -> Result<File, StoreFailure> {
         let directory = self.agent_root(agent);
         private_directory(&directory)?;
         let path = self.lock_path(agent);
-        // `OpenOrCreate`, so the first install to run creates it and every
-        // later one takes the same file. It stays behind afterwards, which is
-        // what lets it be the same file next time; it holds no bytes.
-        let lock = open(&path, OpenMode::OpenOrCreate).map_err(|error| at(&path, error))?;
-        lock.lock().map_err(|error| at(&path, error))?;
-        Ok(lock)
+        // Tried for a limited number of turns rather than once, because the
+        // exclusion is on the file this handle has open, not on the name: if
+        // something outside Nessa removes or replaces `install.lock` between
+        // the open and the lock, two installs can each hold a different inode
+        // and believe they are alone. Re-opening and comparing is what notices
+        // that, and taking the lock again on the file that is there now is
+        // what recovers from it.
+        for _ in 0..LOCK_ATTEMPTS {
+            // `OpenOrCreate`, so the first install to run creates it and every
+            // later one takes the same file. It stays behind afterwards, which
+            // is what lets it be the same file next time; it holds no bytes.
+            let lock = open(&path, OpenMode::OpenOrCreate).map_err(|error| at(&path, error))?;
+            // Tried without waiting first, so that an install which is about
+            // to wait can say so. Between the download and the runtime being
+            // ready this command prints nothing, and a person watching it
+            // stall after a hundred megabytes deserves to know it is queued
+            // behind another install rather than hung.
+            if lock.try_lock().is_err() {
+                tracing::info!(
+                    agent = %agent,
+                    "waiting for another install of this agent to finish"
+                );
+                lock.lock().map_err(|error| at(&path, error))?;
+            }
+            if same_file(&lock, &path)? {
+                return Ok(lock);
+            }
+        }
+        Err(StoreFailure::Unwritable(format!(
+            "{}: kept being replaced while an install waited for it",
+            path.display()
+        )))
     }
 
     /// Note what is now installed, once it really is.
@@ -248,7 +288,12 @@ impl ManagedRuntimes {
     /// that names an executable the disk does not have. The directory is synced
     /// afterwards so the rename itself survives, which also makes durable the
     /// version directory created a moment earlier.
-    fn record(&self, agent: &AgentName, release: &PinnedRelease) -> Result<(), StoreFailure> {
+    fn record(
+        &self,
+        agent: &AgentName,
+        release: &PinnedRelease,
+        durable: impl Fn(&Path) -> io::Result<()>,
+    ) -> Result<(), StoreFailure> {
         let record = InstallationRecord::of(release);
         let directory = self.agent_root(agent);
         let mut staging = PrivateTempFile::new_in(&directory).map_err(unwritable)?;
@@ -258,7 +303,12 @@ impl ManagedRuntimes {
         staging
             .persist(&self.record_path(agent))
             .map_err(unwritable)?;
-        sync_directory(&directory).map_err(unwritable)
+        // Through the same primitive as the walk above it, because this is the
+        // sync that makes the record's own rename durable — the last thing
+        // between an install and being acknowledged. Reaching for
+        // `sync_directory` directly here would leave the final step of the
+        // guarantee outside anything a test can watch.
+        durable(&directory).map_err(unwritable)
     }
 
     /// Make an unpacked executable durable and record it as installed.
@@ -286,10 +336,17 @@ impl ManagedRuntimes {
         // a crash able to come back to a machine with no version directory at
         // all and a record insisting there is one. Outward, so each level is
         // durable before the entry naming it is claimed to be.
+        //
+        // On Unix. Windows does not expose directory fsync at all, so
+        // `sync_directory` is a documented no-op there and this walk does
+        // nothing: what durability Windows has comes from the write-through
+        // move inside `replace`, which covers the files but not the entries
+        // naming them. Nessa pins no Windows release today, and whoever pins
+        // one inherits that gap rather than this guarantee.
         for directory in self.created_directories(agent, release) {
             durable(&directory).map_err(unwritable)?;
         }
-        self.record(agent, release)
+        self.record(agent, release, durable)
     }
 
     /// Take an executable back out after the install failed to complete.
@@ -779,6 +836,35 @@ fn refused_kind(kind: EntryType) -> Option<&'static str> {
 /// is the difference between an error somebody can act on and one they cannot.
 fn private_directory(path: &Path) -> Result<(), StoreFailure> {
     create_directory(path).map_err(|error| at(path, error))
+}
+
+/// Whether the handle taken on `path` is still the file that `path` names.
+///
+/// The lock lives on an open file, not on a name, so a lock file replaced
+/// between the open and the lock would leave two installs each holding a
+/// different file and each believing it was the only one publishing. Compared
+/// on device and inode, which is the pair that identifies a file rather than a
+/// way of reaching one.
+#[cfg(unix)]
+fn same_file(lock: &File, path: &Path) -> Result<bool, StoreFailure> {
+    use std::os::unix::fs::MetadataExt;
+
+    let held = lock.metadata().map_err(unwritable)?;
+    match fs::metadata(path) {
+        Ok(named) => Ok(held.dev() == named.dev() && held.ino() == named.ino()),
+        // Removed rather than replaced. The handle is still a lock nobody else
+        // can take through it, but the next install would create a new file
+        // and take a second one, so this one excludes nothing.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(at(path, error)),
+    }
+}
+
+/// Windows keeps the name for as long as the file is open, so the file that
+/// was locked is the file at that path by construction.
+#[cfg(not(unix))]
+fn same_file(_lock: &File, _path: &Path) -> Result<bool, StoreFailure> {
+    Ok(true)
 }
 
 /// A write failure, said of the path it happened to.

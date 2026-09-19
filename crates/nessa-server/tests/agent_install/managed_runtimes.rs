@@ -1,14 +1,19 @@
 use super::*;
+use std::cell::RefCell;
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::RecvTimeoutError;
+use std::time::Duration;
+
+use nessa_local_storage::OpenMode;
 
 use sha2::Sha256;
 use tar::{EntryType, Header};
 
 use crate::agent_install::domain::{
-    AgentName, ArchivePath, ArchiveUrl, ReleasePlatform, ReleaseRequirements,
+    AgentName, ArchivePath, ArchiveUrl, Libc, ReleasePlatform, ReleaseRequirements,
 };
 
 /// The SHA-256 of the three bytes `abc`, which is the standard test vector.
@@ -136,11 +141,17 @@ fn installed_path(root: &Path) -> PathBuf {
 /// Built here rather than read back, so a test can rewrite the file with
 /// something that differs in exactly one field and nothing else.
 fn record_of(version: &str, executable: &str) -> serde_json::Value {
+    // `requires_avx2`, not `requiresAvx2`: this file is the store's own note
+    // and carries no `rename_all`, unlike the pin file. Spelled the pin file's
+    // way the key would be refused outright, and before the fields were
+    // required it was worse — serde filled the field from its default and the
+    // helper's promise to differ "in exactly one field and nothing else" was
+    // quietly false.
     serde_json::json!({
         "version": version,
         "platform": "macos-aarch64",
         "libc": serde_json::Value::Null,
-        "requiresAvx2": false,
+        "requires_avx2": false,
         "digest": "a".repeat(64),
         "executable": executable,
     })
@@ -1041,7 +1052,7 @@ fn every_directory_an_install_creates_is_made_durable_from_the_inside_out() {
     // durability primitive rather than by inspecting the disk afterwards,
     // because a directory entry that was never synced reads back exactly like
     // one that was: the omission this guards against has no trace to find.
-    let synced = std::cell::RefCell::new(Vec::new());
+    let synced = RefCell::new(Vec::new());
     store
         .settle(&agent(), &release, |directory| {
             synced.borrow_mut().push(directory.to_path_buf());
@@ -1049,7 +1060,12 @@ fn every_directory_an_install_creates_is_made_durable_from_the_inside_out() {
         })
         .expect("a chain that is all there settles");
 
-    assert_eq!(synced.into_inner(), expected);
+    // The chain, and then the agent directory once more: that last one is the
+    // sync that makes the record's own rename durable, which is the last thing
+    // standing between an install and being acknowledged.
+    let mut walked = expected.clone();
+    walked.push(root.path().join("opencode"));
+    assert_eq!(synced.into_inner(), walked);
 }
 
 #[test]
@@ -1106,7 +1122,7 @@ fn one_agent_is_published_one_install_at_a_time() {
 
     let contender = nessa_local_storage::open(
         &root.path().join("opencode").join("install.lock"),
-        nessa_local_storage::OpenMode::OpenOrCreate,
+        OpenMode::OpenOrCreate,
     )
     .expect("a second handle on the same lock");
     assert!(
@@ -1330,7 +1346,6 @@ fn a_failure_after_the_rename_says_nothing_was_installed_and_means_it() {
     // so the command publishes again — and if settling that install fails, the
     // executable has to go back out. Leaving it would mean reporting a failure
     // with a live, recorded runtime on the disk.
-    use std::os::unix::fs::PermissionsExt;
 
     let root = tempfile::tempdir().expect("temporary root");
     let store = ManagedRuntimes::new(root.path());
@@ -1399,20 +1414,20 @@ fn a_different_artifact_of_one_version_is_not_already_installed() {
             ),
         ),
         (
-            "an archive of the same version for another platform",
-            artifact(
-                "1.18.31",
-                "package/bin/opencode",
-                &"a".repeat(64),
-                "linux",
-                "x86_64",
-            ),
-        ),
-        (
-            "an archive holding the same name at another path",
+            "another entry of the same archive, under the same file name",
             artifact(
                 "1.18.31",
                 "bin/opencode",
+                &"a".repeat(64),
+                "macos",
+                "aarch64",
+            ),
+        ),
+        (
+            "a later version of the same archive",
+            artifact(
+                "1.19.0",
+                "package/bin/opencode",
                 &"a".repeat(64),
                 "macos",
                 "aarch64",
@@ -1526,16 +1541,154 @@ fn a_publication_waits_for_the_one_already_running() {
 
         assert!(
             matches!(
-                waiting.recv_timeout(std::time::Duration::from_millis(500)),
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                waiting.recv_timeout(Duration::from_millis(500)),
+                Err(RecvTimeoutError::Timeout)
             ),
             "a second install published while the first still held the lock"
         );
         drop(held);
-        let published = waiting
-            .recv_timeout(std::time::Duration::from_secs(30))
-            .expect("the waiting install runs once the lock is free")
-            .expect("the executable is unpacked");
+        // Told apart from a timeout, because a panic in the waiting thread
+        // drops its sender and arrives here as `Disconnected` — which reported
+        // as "the lock was never released" would send the next reader looking
+        // at the lock instead of at the panic.
+        let published = match waiting.recv_timeout(Duration::from_secs(30)) {
+            Ok(published) => published.expect("the executable is unpacked"),
+            Err(RecvTimeoutError::Timeout) => {
+                panic!("the waiting install did not run once the lock was free")
+            }
+            Err(RecvTimeoutError::Disconnected) => panic!("the waiting install panicked"),
+        };
         assert_eq!(published, installed_path(root.path()));
     });
+}
+
+#[test]
+fn a_pin_that_corrects_itself_about_an_archive_reinstalls_nothing() {
+    // The record and the layout have to agree about what identifies an
+    // artifact. They key on the version, the digest and the entry; the
+    // platform and what the build needs are written down for whoever opens the
+    // file, and they are facts about the digest, since one archive is one
+    // build.
+    //
+    // If reuse compared them too, a pin correcting one of them — which is
+    // exactly the edit this branch makes, adding `libc` and `requiresAvx2` to
+    // every entry — would read as "not installed", rename over the very file
+    // the record still names, and, on a settle that failed, take it away
+    // again. So a release that differs only there is the artifact already
+    // installed, and nothing is unpacked.
+    //
+    // Proven the only honest way: the second call is handed an archive with no
+    // executable in it and a durability primitive that fails. A publish that
+    // did any work could not have returned the path.
+    let root = tempfile::tempdir().expect("temporary root");
+    let store = ManagedRuntimes::new(root.path());
+    let installed = release("1.18.31", "package/bin/opencode");
+    let published = publish(
+        &store,
+        &installed,
+        &archive("package/bin/opencode", b"the runtime"),
+    )
+    .expect("the executable is unpacked");
+
+    let corrected = PinnedRelease::new(
+        ReleaseVersion::parse("1.18.31").expect("usable version"),
+        ReleasePlatform::new("linux", "x86_64").expect("usable platform"),
+        ReleaseRequirements::new(Some(Libc::Musl), true),
+        ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url"),
+        ArchiveDigest::parse(&"a".repeat(64)).expect("usable digest"),
+        ArchivePath::parse("package/bin/opencode").expect("contained path"),
+    );
+
+    assert_eq!(
+        store.installed(&agent(), &corrected),
+        Ok(Some(published.clone())),
+        "a pin that corrected only what it says about the archive read as uninstalled"
+    );
+
+    let mut staged = staged(&store, &archive("package/bin/other", b"nothing"));
+    let again = store
+        .publish_durably(&agent(), &corrected, &mut staged, |_| {
+            Err(std::io::Error::other("this must never be reached"))
+        })
+        .expect("the artifact already installed is handed back");
+
+    assert_eq!(again, published);
+    assert_eq!(
+        std::fs::read(&published).expect("the installed runtime reads"),
+        b"the runtime"
+    );
+}
+
+#[test]
+fn what_a_build_needs_is_written_down_even_though_reuse_does_not_read_it() {
+    // Recorded for whoever opens the file — "which of the nine is this?" is
+    // not a question a digest answers to a person. Asserted because a field
+    // nothing compares is a field that can quietly stop being written.
+    let root = tempfile::tempdir().expect("temporary root");
+    let store = ManagedRuntimes::new(root.path());
+    let musl = PinnedRelease::new(
+        ReleaseVersion::parse("1.18.31").expect("usable version"),
+        ReleasePlatform::new("linux", "x86_64").expect("usable platform"),
+        ReleaseRequirements::new(Some(Libc::Musl), true),
+        ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url"),
+        ArchiveDigest::parse(&"a".repeat(64)).expect("usable digest"),
+        ArchivePath::parse("package/bin/opencode").expect("contained path"),
+    );
+    publish(
+        &store,
+        &musl,
+        &archive("package/bin/opencode", b"the runtime"),
+    )
+    .expect("the executable is unpacked");
+
+    let written: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.path().join("opencode").join("installed.json"))
+            .expect("the record reads"),
+    )
+    .expect("the record is json");
+
+    assert_eq!(written["platform"], "linux-x86_64");
+    assert_eq!(written["libc"], "musl");
+    assert_eq!(written["requires_avx2"], true);
+    assert_eq!(written["digest"], "a".repeat(64));
+    assert_eq!(written["executable"], "package/bin/opencode");
+}
+
+// Unix only, because it is the platform where a file can be replaced or
+// removed while somebody holds it open. Windows keeps the name for as long as
+// the file is open, so there the file that was locked is the file at that path
+// by construction.
+#[test]
+#[cfg(unix)]
+fn a_lock_only_counts_while_it_is_the_file_at_that_path() {
+    // The lock lives on an open file, not on a name. If something outside
+    // Nessa removes or replaces `install.lock` between the open and the lock —
+    // a tidy-up, a partial restore, an uninstall script — two installs end up
+    // holding two different files and each believes it is alone, which is the
+    // race the lock was added to prevent, back again and invisible.
+    let root = tempfile::tempdir().expect("temporary root");
+    let directory = root.path().join("opencode");
+    nessa_local_storage::create_directory(&directory).expect("a private agent directory");
+    let path = directory.join("install.lock");
+    let held = nessa_local_storage::open(&path, OpenMode::OpenOrCreate).expect("a lock file");
+
+    assert_eq!(
+        same_file(&held, &path),
+        Ok(true),
+        "a file nothing touched was reported as replaced"
+    );
+
+    std::fs::rename(&path, directory.join("moved-aside")).expect("moving the lock file aside");
+    assert_eq!(
+        same_file(&held, &path),
+        Ok(false),
+        "a lock file that was removed still counted"
+    );
+
+    nessa_local_storage::open(&path, OpenMode::CreateNew).expect("a new lock file in its place");
+    assert_eq!(
+        same_file(&held, &path),
+        Ok(false),
+        "a lock file that was replaced still counted"
+    );
 }

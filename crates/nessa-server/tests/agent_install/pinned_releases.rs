@@ -21,6 +21,36 @@ fn opencode() -> AgentName {
     AgentName::parse("opencode").expect("a plain agent name")
 }
 
+/// One entry as the generator writes it, with every field present.
+///
+/// Built rather than spelled out per test, because every field is required and
+/// unknown fields are refused: a fixture written by hand drifts from the shape
+/// the reader accepts, and a test that then fails to parse proves nothing
+/// about the rule it was written for.
+fn entry(
+    operating_system: &str,
+    architecture: &str,
+    libc: Option<&str>,
+    avx2: bool,
+    digest_byte: char,
+) -> serde_json::Value {
+    serde_json::json!({
+        "operatingSystem": operating_system,
+        "architecture": architecture,
+        "libc": libc,
+        "requiresAvx2": avx2,
+        "version": "1.0.0",
+        "archiveUrl": format!("https://registry.example/{digest_byte}.tgz"),
+        "archiveDigest": std::iter::repeat_n(digest_byte, 64).collect::<String>(),
+        "executable": "package/bin/opencode",
+    })
+}
+
+/// A pin document holding exactly `entries` for opencode.
+fn document(entries: Vec<serde_json::Value>) -> String {
+    serde_json::json!({ "agents": { "opencode": entries } }).to_string()
+}
+
 /// Every machine the pin file is expected to have a build for.
 ///
 /// Named here rather than derived from the file, so that dropping a build from
@@ -67,27 +97,51 @@ fn every_supported_machine_has_a_build() {
 }
 
 #[test]
-fn a_machine_is_never_offered_a_build_it_cannot_start() {
-    // The other half of the coverage question, and the half that matters most:
-    // a build offered to a machine that cannot run it does not fail politely.
-    // A glibc binary on a musl-only machine dies in the loader, and an AVX2
-    // binary on a processor without it dies on an illegal instruction, both
-    // after Nessa has told somebody their runtime is ready.
-    let releases = releases_for(&opencode()).expect("the pinned releases parse");
-    for (operating_system, architecture, libc, avx2) in COVERED {
-        let host = machine(operating_system, architecture, *libc, *avx2);
-        for release in releases.iter().filter(|release| release.runs_on(&host)) {
-            let needs = release.requirements();
-            assert!(
-                !needs.avx2() || *avx2,
-                "{host} was offered a build that needs avx2"
-            );
-            assert!(
-                needs.libc().is_none() || needs.libc() == *libc,
-                "{host} was offered a {needs} build"
-            );
-        }
+fn what_each_pin_says_it_needs_agrees_with_the_archive_it_names() {
+    // The one claim in this change that nothing else can check. Which builds
+    // need AVX2 and which C library each is linked against is a hand-written
+    // table in `scripts/agents/pin-opencode.mjs`; every Rust test downstream
+    // takes the generated file as ground truth, so flipping one `requiresAvx2`
+    // to false there would leave the whole suite green and hand every older
+    // x86-64 machine a binary that dies on an illegal instruction.
+    //
+    // The archive's own name is the independent witness. Opencode publishes
+    // one npm package per build and names them for what they are: `-baseline`
+    // is the build for processors without AVX2, `-musl` is the musl build, and
+    // the plain x64 package is the one compiled for AVX2.
+    //
+    // Asserting "a build that cannot start is never offered" instead would say
+    // nothing: `runs_on` is defined as exactly that comparison, so the
+    // assertion would restate the filter and hold for any file at all.
+    for release in releases_for(&opencode()).expect("the pinned releases parse") {
+        let package = package_named_by(release.archive_url().as_str());
+        let x86 = release.platform().architecture() == "x86_64";
+        let needs = release.requirements();
+
+        assert_eq!(
+            needs.avx2(),
+            x86 && !package.contains("-baseline"),
+            "{package} and what it says it needs disagree about avx2"
+        );
+        let libc = match release.platform().operating_system() {
+            "linux" if package.contains("-musl") => Some(Libc::Musl),
+            "linux" => Some(Libc::Gnu),
+            _ => None,
+        };
+        assert_eq!(
+            needs.libc(),
+            libc,
+            "{package} and what it says it needs disagree about the c library"
+        );
     }
+}
+
+/// The npm package an archive URL names, which is the vendor's own word for
+/// which build it is.
+fn package_named_by(url: &str) -> &str {
+    url.strip_prefix("https://registry.npmjs.org/")
+        .and_then(|rest| rest.split('/').next())
+        .expect("every pinned archive is an npm tarball")
 }
 
 #[test]
@@ -104,18 +158,6 @@ fn every_pin_names_one_version() {
         1,
         "the pinned platforms disagree about the version: {versions:?}"
     );
-}
-
-#[test]
-fn every_pin_is_fetched_over_https() {
-    let releases = releases_for(&opencode()).expect("the pinned releases parse");
-    for release in releases {
-        assert!(
-            release.archive_url().as_str().starts_with("https://"),
-            "{} is not https",
-            release.archive_url()
-        );
-    }
 }
 
 #[test]
@@ -232,13 +274,15 @@ fn an_agent_pinned_twice_is_refused_rather_than_resolved() {
 fn a_platform_pinned_twice_is_refused_rather_than_resolved() {
     // Which of two entries for one platform gets installed would otherwise be
     // decided by the order they happen to be written in.
-    let document = r#"{"agents":{"opencode":[
-        {"operatingSystem":"macos","architecture":"aarch64","version":"1.0.0","archiveUrl":"https://registry.example/a.tgz","archiveDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","executable":"package/bin/opencode"},
-        {"operatingSystem":"macos","architecture":"aarch64","version":"1.0.0","archiveUrl":"https://registry.example/b.tgz","archiveDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","executable":"package/bin/opencode"}
-    ]}}"#;
     let platform = ReleasePlatform::new("macos", "aarch64").expect("usable platform");
     assert_eq!(
-        releases_in(document, &opencode()),
+        releases_in(
+            &document(vec![
+                entry("macos", "aarch64", None, false, 'a'),
+                entry("macos", "aarch64", None, false, 'b'),
+            ]),
+            &opencode()
+        ),
         Err(PinFileError::PlatformPinnedTwice {
             agent: "opencode".into(),
             platform,
@@ -253,12 +297,15 @@ fn one_platform_may_be_pinned_twice_for_two_different_builds() {
     // needs rather than only where it runs: two Linux x86-64 archives are an
     // ordinary pin when one is for musl and the other for glibc. Refusing them
     // would make the file unable to say what Opencode actually publishes.
-    let document = r#"{"agents":{"opencode":[
-        {"operatingSystem":"linux","architecture":"x86_64","libc":"gnu","version":"1.0.0","archiveUrl":"https://registry.example/a.tgz","archiveDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","executable":"package/bin/opencode"},
-        {"operatingSystem":"linux","architecture":"x86_64","libc":"musl","version":"1.0.0","archiveUrl":"https://registry.example/b.tgz","archiveDigest":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","executable":"package/bin/opencode"},
-        {"operatingSystem":"linux","architecture":"x86_64","libc":"musl","requiresAvx2":true,"archiveUrl":"https://registry.example/c.tgz","version":"1.0.0","archiveDigest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","executable":"package/bin/opencode"}
-    ]}}"#;
-    let releases = releases_in(document, &opencode()).expect("three distinct builds are a pin");
+    let releases = releases_in(
+        &document(vec![
+            entry("linux", "x86_64", Some("gnu"), false, 'a'),
+            entry("linux", "x86_64", Some("musl"), false, 'b'),
+            entry("linux", "x86_64", Some("musl"), true, 'c'),
+        ]),
+        &opencode(),
+    )
+    .expect("three distinct builds are a pin");
     assert_eq!(releases.len(), 3);
     assert!(releases[0].runs_on(&machine("linux", "x86_64", Some(Libc::Gnu), false)));
     assert!(releases[1].runs_on(&machine("linux", "x86_64", Some(Libc::Musl), false)));
@@ -271,11 +318,11 @@ fn a_c_library_nessa_cannot_check_is_refused() {
     // The field is a name written by hand in a generated file. A spelling this
     // build does not know would otherwise read as "no requirement" and offer
     // the build to every machine on its platform.
-    let document = r#"{"agents":{"opencode":[
-        {"operatingSystem":"linux","architecture":"x86_64","libc":"glibc","version":"1.0.0","archiveUrl":"https://registry.example/a.tgz","archiveDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","executable":"package/bin/opencode"}
-    ]}}"#;
     assert_eq!(
-        releases_in(document, &opencode()),
+        releases_in(
+            &document(vec![entry("linux", "x86_64", Some("glibc"), false, 'a')]),
+            &opencode()
+        ),
         Err(PinFileError::Invalid {
             agent: "opencode".into(),
             reason: PinRejected::Libc("glibc".into()),
@@ -284,17 +331,88 @@ fn a_c_library_nessa_cannot_check_is_refused() {
 }
 
 #[test]
-fn a_build_that_says_nothing_about_a_processor_asks_for_nothing() {
-    // `requiresAvx2` absent has to read as false, and this is the direction the
-    // default has to fall: a build wrongly marked as not needing AVX2 runs
-    // everywhere and only gives up speed, where the other mistake is an illegal
-    // instruction on a machine that was told its runtime was ready.
-    let document = r#"{"agents":{"opencode":[
-        {"operatingSystem":"macos","architecture":"aarch64","version":"1.0.0","archiveUrl":"https://registry.example/a.tgz","archiveDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","executable":"package/bin/opencode"}
-    ]}}"#;
-    let releases = releases_in(document, &opencode()).expect("a pin with no requirements");
-    assert_eq!(releases[0].requirements(), &ReleaseRequirements::default());
-    assert!(releases[0].runs_on(&machine("macos", "aarch64", None, false)));
+fn a_build_that_says_nothing_about_what_it_needs_is_refused() {
+    // What a build needs is stated by absence as much as by presence: no
+    // `libc` means it runs against either, no `requiresAvx2` means it runs on
+    // any processor. So a key dropped in a merge, or misspelled by whoever
+    // next edits the generator, would quietly turn a build that runs on some
+    // machines into one offered to all of them — and that mistake ends in an
+    // illegal instruction on somebody else's machine, where a missing key ends
+    // in a failing test on the machine of whoever wrote it.
+    let mut complete = entry("macos", "aarch64", None, false, 'a');
+    for missing in ["libc", "requiresAvx2", "version", "archiveDigest"] {
+        let mut incomplete = complete.clone();
+        incomplete
+            .as_object_mut()
+            .expect("the fixture is an object")
+            .remove(missing);
+        assert!(
+            matches!(
+                releases_in(&document(vec![incomplete]), &opencode()),
+                Err(PinFileError::Malformed(_))
+            ),
+            "a release with no {missing} was read as one that says something"
+        );
+    }
+
+    // And a key this build does not know is refused rather than ignored, which
+    // is the same mistake wearing a typo.
+    let misspelled = complete.as_object_mut().expect("the fixture is an object");
+    misspelled.remove("requiresAvx2");
+    misspelled.insert("requiresAVX2".into(), true.into());
+    assert!(
+        matches!(
+            releases_in(&document(vec![complete]), &opencode()),
+            Err(PinFileError::Malformed(_))
+        ),
+        "a misspelled requirement was passed over"
+    );
+}
+
+#[test]
+fn a_linux_build_that_names_no_c_library_is_refused() {
+    // Every Linux build has one, so this is a field that was left out rather
+    // than a build that runs against either. Read as written it would be
+    // offered to every Linux machine, half of which cannot start it — and it
+    // would also slip past the duplicate check, which compares what two builds
+    // need rather than which machines they overlap on.
+    assert_eq!(
+        releases_in(
+            &document(vec![entry("linux", "x86_64", None, false, 'a')]),
+            &opencode()
+        ),
+        Err(PinFileError::LinuxWithoutLibc {
+            agent: "opencode".into(),
+            version: "1.0.0".into(),
+        })
+    );
+    // macOS has one C library, so saying nothing there is the truth.
+    assert!(releases_in(
+        &document(vec![entry("macos", "aarch64", None, false, 'a')]),
+        &opencode()
+    )
+    .is_ok());
+}
+
+#[test]
+fn one_archive_is_not_pinned_twice() {
+    // The digest is the identity of a build, and the store keys an
+    // installation by it. Two releases naming one archive are two descriptions
+    // of the same bytes, with one directory between them and nothing to say
+    // which description the file there belongs to.
+    assert_eq!(
+        releases_in(
+            &document(vec![
+                entry("linux", "x86_64", Some("gnu"), false, 'a'),
+                entry("linux", "x86_64", Some("musl"), false, 'a'),
+            ]),
+            &opencode()
+        ),
+        Err(PinFileError::ArchivePinnedTwice {
+            agent: "opencode".into(),
+            digest: "a".repeat(64),
+        })
+    );
 }
 
 #[test]
@@ -302,10 +420,10 @@ fn a_pin_that_breaks_a_domain_rule_names_the_rule_it_broke() {
     // The file is generated, but it is also checked in and editable. A pin that
     // is wrong has to say which field and why, because the only thing anyone
     // can do about it is edit that field.
-    let document = r#"{"agents":{"opencode":[
-        {"operatingSystem":"macos","architecture":"aarch64","version":"1.0.0","archiveUrl":"http://registry.example/a.tgz","archiveDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","executable":"package/bin/opencode"}
-    ]}}"#;
-    let failure = releases_in(document, &opencode()).expect_err("http is not a pin");
+    let mut insecure = entry("macos", "aarch64", None, false, 'a');
+    insecure["archiveUrl"] = "http://registry.example/a.tgz".into();
+    let failure =
+        releases_in(&document(vec![insecure]), &opencode()).expect_err("http is not a pin");
     assert_eq!(
         failure,
         PinFileError::Invalid {
@@ -344,27 +462,26 @@ fn the_host_platform_is_nameable() {
 }
 
 #[test]
-fn this_machine_knows_which_c_library_it_has() {
-    // Taken from what this binary was linked against, so on any target Nessa
-    // actually ships — every one of which is glibc or musl — there is an
-    // answer. A target with neither would be one where every Linux build is
-    // refused, which is a decision to make deliberately rather than to
-    // discover from a bug report.
-    if cfg!(target_os = "linux") {
+fn this_machine_gets_a_build_when_one_is_pinned_for_its_platform() {
+    // The adapter and the pin file, checked against each other on whatever
+    // machine the suite is running on. Asking the adapter to agree with a copy
+    // of its own `cfg!` expression would prove nothing and would accuse the
+    // code falsely on a target linked against neither library — the case where
+    // the honest answer is `None`.
+    //
+    // This is the assertion that answer has to survive: a machine whose C
+    // library could not be established, on a platform Nessa does pin, gets
+    // nothing it can install. Skipped rather than failed where the platform
+    // itself is unpinned, which is Windows today.
+    let host = host_platform();
+    let releases = releases_for(&opencode()).expect("the pinned releases parse");
+    if releases
+        .iter()
+        .any(|release| release.platform() == host.platform())
+    {
         assert!(
-            host_platform().satisfies(&ReleaseRequirements::new(Some(host_libc_here()), false)),
-            "this linux build does not agree with itself about its c library"
+            releases.iter().any(|release| release.runs_on(&host)),
+            "{host} has pinned builds for its platform and none it can run"
         );
-    }
-}
-
-/// The C library this test binary was linked against, worked out the same way
-/// the adapter does. Written out here rather than reused so that the adapter's
-/// own answer is being checked against something, not against itself.
-fn host_libc_here() -> Libc {
-    if cfg!(target_env = "musl") {
-        Libc::Musl
-    } else {
-        Libc::Gnu
     }
 }

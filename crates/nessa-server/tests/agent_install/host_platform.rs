@@ -122,14 +122,77 @@ fn what_a_build_needs_reads_as_a_sentence() {
 
 #[test]
 fn a_machine_reads_as_a_sentence_too() {
-    assert_eq!(machine(None, false).to_string(), "linux-x86_64");
-    assert_eq!(
-        machine(Some(Libc::Musl), false).to_string(),
-        "linux-x86_64 with musl"
-    );
     assert_eq!(
         machine(Some(Libc::Gnu), true).to_string(),
         "linux-x86_64 with gnu and avx2"
     );
-    assert_eq!(machine(None, true).to_string(), "linux-x86_64 and avx2");
+    assert_eq!(
+        machine(Some(Libc::Musl), false).to_string(),
+        "linux-x86_64 with musl and no avx2"
+    );
+    // The absences are said out loud, because the one place this is shown to a
+    // person is the message saying nothing is pinned for their machine — and
+    // "no tested release for linux-x86_64" on a platform pinned four times
+    // over sends them looking for the wrong thing entirely.
+    assert_eq!(
+        machine(None, false).to_string(),
+        "linux-x86_64 with no c library nessa could name and no avx2"
+    );
+    assert_eq!(
+        machine(None, true).to_string(),
+        "linux-x86_64 with no c library nessa could name and avx2"
+    );
+}
+
+#[test]
+fn two_builds_one_machine_can_both_run_never_ask_the_same_amount_of_it() {
+    // What makes choosing between them independent of the order they are
+    // listed in. Enumerated rather than argued: every machine this can
+    // describe, against every build it can describe, asserting that no two
+    // distinct builds a single machine runs are ranked equal.
+    //
+    // A tie would mean the choice fell back to the order of the pin file,
+    // which is the outcome `PinFileError::PlatformPinnedTwice` exists to
+    // prevent and which a ranking on AVX2 alone would allow: a build naming no
+    // C library and one naming this machine's library are both runnable, and
+    // differ.
+    let libcs = [None, Some(Libc::Gnu), Some(Libc::Musl)];
+    let every_build: Vec<ReleaseRequirements> = libcs
+        .iter()
+        .flat_map(|libc| [false, true].map(|avx2| ReleaseRequirements::new(*libc, avx2)))
+        .collect();
+
+    for libc in libcs {
+        for avx2 in [false, true] {
+            let host = machine(libc, avx2);
+            let runnable: Vec<_> = every_build
+                .iter()
+                .filter(|build| host.satisfies(build))
+                .collect();
+            for (index, build) in runnable.iter().enumerate() {
+                for other in &runnable[..index] {
+                    assert_ne!(
+                        build.demand(),
+                        other.demand(),
+                        "{host} runs both {build} and {other}, and ranks them equal"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn asking_more_of_a_machine_ranks_higher() {
+    // The direction of the order, stated once so the ranking above is not just
+    // "some total order". A build that needs AVX2 outranks one that does not,
+    // and a build that names a C library outranks one that names none.
+    assert!(
+        ReleaseRequirements::new(None, true).demand()
+            > ReleaseRequirements::new(None, false).demand()
+    );
+    assert!(
+        ReleaseRequirements::new(Some(Libc::Gnu), false).demand()
+            > ReleaseRequirements::new(None, false).demand()
+    );
 }

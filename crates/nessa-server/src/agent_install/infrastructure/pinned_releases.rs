@@ -18,26 +18,49 @@ use crate::agent_install::domain::{
 const PINS: &str = include_str!("../../../data/agent-releases.json");
 
 /// One release as written in the pin file.
+///
+/// Every field is required, and a field this build does not know is refused.
+/// Both of those matter here in one direction: what a build needs of a machine
+/// is stated by *absence* as much as by presence — no `libc` means it runs
+/// against either, no `requiresAvx2` means it runs on any processor — so a key
+/// that is dropped in a merge, or misspelled by whoever next edits the
+/// generator, would quietly turn a build that runs on some machines into one
+/// offered to all of them. That mistake ends in an illegal instruction or a
+/// loader error on somebody's machine; a missing key ends in a failing test on
+/// the machine of whoever wrote it. The file is generated and the generator
+/// writes every field, so there is nothing legitimate to tolerate.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ReleaseDocument {
     operating_system: String,
     architecture: String,
-    /// Absent where the platform has only one, which is every platform but
-    /// Linux. Absent on Linux would mean a build that runs against either,
-    /// which none of the ones Nessa pins are.
-    #[serde(default)]
+    /// `null` where the platform has only one, which is every platform but
+    /// Linux. `null` on Linux would mean a build that runs against either,
+    /// which none of the ones Nessa pins are — and which the reader refuses,
+    /// because a Linux build that names no library is indistinguishable from
+    /// one whose library was left out.
+    #[serde(deserialize_with = "written_out")]
     libc: Option<String>,
-    /// Absent reads as false, which is the safe direction: a build wrongly
-    /// marked as not needing AVX2 runs everywhere and only gives up speed,
-    /// where the other mistake is an illegal instruction on a machine that
-    /// was told its runtime was ready.
-    #[serde(default)]
     requires_avx2: bool,
     version: String,
     archive_url: String,
     archive_digest: String,
     executable: String,
+}
+
+/// Read an optional field that still has to be written out.
+///
+/// Serde fills a missing `Option` field with `None` and says nothing, which is
+/// the one behaviour this file cannot afford: `null` here means "this build
+/// runs against any C library", so a key dropped in a merge would read as a
+/// deliberate statement that it does. Deserializing the `Option` explicitly
+/// makes the key required while still accepting `null` as the answer.
+fn written_out<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::deserialize(deserializer)
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,6 +126,16 @@ pub enum PinFileError {
         platform: ReleasePlatform,
         requirements: ReleaseRequirements,
     },
+    /// One agent has two releases naming the same archive. One archive is one
+    /// build, so the two disagree about something that cannot differ — and the
+    /// store keys an installation by that digest, so it could not keep them
+    /// apart if it tried.
+    ArchivePinnedTwice { agent: String, digest: String },
+    /// A Linux release says nothing about which C library it needs. Every
+    /// Linux build has one, so this is a field that was left out rather than a
+    /// build that runs against either — and read as written it would be
+    /// offered to machines it cannot start on.
+    LinuxWithoutLibc { agent: String, version: String },
 }
 
 impl fmt::Display for PinFileError {
@@ -118,6 +151,15 @@ impl fmt::Display for PinFileError {
                 requirements,
             } => {
                 write!(f, "{agent} is pinned twice for {platform} ({requirements})")
+            }
+            Self::ArchivePinnedTwice { agent, digest } => {
+                write!(f, "{agent} pins the archive {digest} twice")
+            }
+            Self::LinuxWithoutLibc { agent, version } => {
+                write!(
+                    f,
+                    "the linux release of {agent} {version} does not say which c library it needs"
+                )
             }
         }
     }
@@ -158,8 +200,13 @@ pub fn host_platform() -> HostPlatform {
 /// machine carrying both.
 ///
 /// `None` on a target built against neither, which is not a machine Nessa
-/// ships for. A release that names a library is then refused rather than
-/// installed on a guess.
+/// ships for. Every Linux release names a library, so such a machine is
+/// offered nothing and told so, rather than installed on a guess.
+///
+/// `Gnu` on a `*-windows-gnu` target means MinGW rather than glibc, which is a
+/// different fact wearing the same name. Nothing reaches that today, because
+/// no Windows release is pinned; whoever pins one has to decide what the word
+/// means there before this answer can be trusted.
 fn host_libc() -> Option<Libc> {
     if cfg!(target_env = "musl") {
         Some(Libc::Musl)
@@ -232,6 +279,30 @@ fn releases_in(document: &str, agent: &AgentName) -> Result<Vec<PinnedRelease>, 
                 requirements: *release.requirements(),
             });
         }
+        // The digest is the identity of a build, and the store keys an
+        // installation by it: two releases naming one archive would be two
+        // descriptions of the same bytes, with one directory between them and
+        // nothing to say which description the file there belongs to.
+        if releases[..index]
+            .iter()
+            .any(|earlier| earlier.archive_digest() == release.archive_digest())
+        {
+            return Err(PinFileError::ArchivePinnedTwice {
+                agent: agent.to_string(),
+                digest: release.archive_digest().as_str().to_owned(),
+            });
+        }
+        // A Linux build that names no library is not a build that runs against
+        // either; it is a field somebody left out. Read as written it would be
+        // offered to every Linux machine, half of which cannot start it.
+        if release.platform().operating_system() == "linux"
+            && release.requirements().libc().is_none()
+        {
+            return Err(PinFileError::LinuxWithoutLibc {
+                agent: agent.to_string(),
+                version: release.version().as_str().to_owned(),
+            });
+        }
     }
     Ok(releases)
 }
@@ -244,6 +315,7 @@ fn releases_in(document: &str, agent: &AgentName) -> Result<Vec<PinnedRelease>, 
 /// download that installs something unexpected.
 fn release(entry: &ReleaseDocument) -> Result<PinnedRelease, PinRejected> {
     let libc = entry.libc.as_deref().map(Libc::parse).transpose()?;
+
     Ok(PinnedRelease::new(
         ReleaseVersion::parse(&entry.version)?,
         ReleasePlatform::new(&entry.operating_system, &entry.architecture)?,

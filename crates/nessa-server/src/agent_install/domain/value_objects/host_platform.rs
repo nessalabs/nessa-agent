@@ -77,6 +77,28 @@ impl ReleaseRequirements {
     pub fn avx2(&self) -> bool {
         self.avx2
     }
+
+    /// How much this build asks of a machine, as a key two builds can be
+    /// ranked by.
+    ///
+    /// Used to choose between the builds a machine can run, where the vendor's
+    /// own default is the demanding one: the undemanding build exists for
+    /// machines that cannot take it, and installing it everywhere would give
+    /// up what it is there to preserve.
+    ///
+    /// Ordered on AVX2 first and then on whether a C library is named, which
+    /// is a *total* order over any set of builds one machine can run — and
+    /// that is what makes the choice independent of the order the pin file
+    /// happens to list them in. Two eligible builds that tied here would have
+    /// to agree on AVX2 and both name a library or both name none; a machine
+    /// satisfies a named library only by having that exact one, so both would
+    /// name the same library, and two builds whose requirements agree entirely
+    /// are the duplicate the pin reader refuses. A single bit would not be
+    /// enough: a build naming no library and one naming this machine's library
+    /// are both runnable here, differ, and would tie.
+    pub fn demand(&self) -> (bool, bool) {
+        (self.avx2, self.libc.is_some())
+    }
 }
 
 impl fmt::Display for ReleaseRequirements {
@@ -133,15 +155,23 @@ impl HostPlatform {
 }
 
 impl fmt::Display for HostPlatform {
+    /// Says both facts every time, including when the answer is nothing.
+    ///
+    /// The one place a machine is shown to a person is the message saying
+    /// nothing is pinned for it, and the case that needs explaining most is a
+    /// C library that could not be established — which, left unsaid, reads as
+    /// a platform nobody built for, on a platform pinned four times over.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.platform)?;
-        if let Some(libc) = self.libc {
-            write!(f, " with {libc}")?;
+        match self.libc {
+            Some(libc) => write!(f, " with {libc}")?,
+            None => f.write_str(" with no c library nessa could name")?,
         }
-        if self.avx2 {
-            f.write_str(" and avx2")?;
-        }
-        Ok(())
+        f.write_str(if self.avx2 {
+            " and avx2"
+        } else {
+            " and no avx2"
+        })
     }
 }
 

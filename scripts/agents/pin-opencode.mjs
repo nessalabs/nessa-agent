@@ -54,6 +54,16 @@ const registry = "https://registry.npmjs.org"
 // Windows is deliberately absent. Opencode publishes builds for it, but nothing
 // in Nessa launches an agent runtime on Windows yet, and pinning a platform
 // that is never installed would be claiming a test that never ran.
+//
+// Two things this table cannot say, and which therefore are not checked before
+// a runtime is launched. A `-baseline` build is not a build for any x86-64
+// processor: it still assumes roughly a Nehalem, so a machine older than that
+// gets an illegal instruction from the build named for not needing one. And a
+// glibc build has a minimum glibc *version*, so an old distribution gets a
+// `GLIBC_2.xx not found` from the loader. Both are the failure this whole
+// mechanism exists to prevent, on machines old enough that the vendor does not
+// describe them either. Saying so here is the honest alternative to implying
+// the check is complete.
 const PLATFORMS = [
   {
     operatingSystem: "macos",
@@ -218,6 +228,11 @@ export async function agreesWithRegistry(archive, dist, named) {
 
   // A closed set, because `createHash` throws on a name it does not know and a
   // registry that starts publishing a new one should not break pinning.
+  //
+  // `split("-", 2)` truncates rather than rejoining, so a hash containing a
+  // hyphen would be compared against its own first segment and refused. That
+  // is the safe direction, and it is unreachable anyway: `integrity` is
+  // standard base64, whose alphabet has no hyphen.
   const checkable = INTEGRITY_ALGORITHMS.includes(algorithm) && expected
   if (!checkable && typeof shasum !== "string") {
     // Said out loud rather than passed over, because a skipped check and a

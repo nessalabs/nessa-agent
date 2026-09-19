@@ -502,6 +502,16 @@ which refuses its own malformed spellings at construction, so a bad pin is a
 failing test rather than a surprising install. `PinnedRelease::accept` is the
 one comparison between what was pinned and what arrived.
 
+It also owns what a build needs of a machine and what a machine has, in
+`host_platform.rs`: `Libc`, `ReleaseRequirements` and `HostPlatform`. These
+exist because a platform does not identify a binary — one Opencode version
+ships as nine archives, differing in C library and processor baseline as well
+as in operating system and architecture, and two of the four Linux x86-64
+builds do not start on any given machine. `PinnedRelease::runs_on` is the
+comparison, and `ReleaseRequirements::demand` ranks two builds a machine can
+both run, which is what makes the choice between them independent of the order
+the pin file lists them in.
+
 `application/` owns the order and none of the effects: `InstallAgentRuntime`
 does installed-already, then download, hash, accept, publish, and never unpacks
 an archive that was not accepted. Its two ports are `ArchiveSource` (the
@@ -511,13 +521,19 @@ that are unpacked.
 
 `infrastructure/` holds the three outside things: `pinned_releases.rs` reads
 `data/agent-releases.json`, compiled in so the tested version cannot depend on
-what is beside the binary; `https_archives.rs` fetches over HTTPS only, through
-a bounded redirect chain and a bounded body; `managed_runtimes.rs` keeps
-installed runtimes under one private directory, unpacking each version beside
-the last and writing its record durably once the executable is really there.
+what is beside the binary, and is also the one boundary that reads *the
+machine* — `host_platform()` builds a `HostPlatform` from the compiler's own
+target, the C library this binary was linked against and what the processor
+reports, so everything above it chooses by comparing two values rather than by
+asking the operating system; `https_archives.rs` fetches over HTTPS only,
+through a bounded redirect chain and a bounded body; `managed_runtimes.rs`
+keeps installed runtimes under one private directory, one directory per
+artifact rather than per version, serialising publication behind a per-agent
+lock and writing its record durably once the executable is really there.
 
-`composition/install_command.rs` wires those for `nessa install-agent NAME` and
-reports one line of JSON on stdout. `scripts/agents/pin-opencode.mjs` regenerates
+`composition/install_command.rs` wires those for `nessa install-agent NAME`,
+picks the build for this machine — the most demanding of the pinned releases
+that run on it — and reports one line of JSON on stdout. `scripts/agents/pin-opencode.mjs` regenerates
 the pin file by downloading and hashing every platform's archive. Tests under
 `tests/agent_install/` split the domain's rules, the ordering, the two adapters
 and the command's output.

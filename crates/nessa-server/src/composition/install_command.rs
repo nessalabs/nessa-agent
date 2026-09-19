@@ -82,8 +82,36 @@ fn pinned(agent: &AgentName, host: &HostPlatform) -> Result<PinnedRelease, RunEr
             "{agent} is not an agent nessa installs"
         )));
     }
-    preferred(releases, host)
-        .ok_or_else(|| RunError::Agent(format!("nessa has no tested {agent} release for {host}")))
+    preferred(releases.clone(), host)
+        .ok_or_else(|| RunError::Agent(unrunnable(agent, host, &releases)))
+}
+
+/// Say why none of the pinned builds runs here, in terms the reader can act
+/// on.
+///
+/// "No tested release for linux-x86_64" is a true sentence and a useless one
+/// when linux-x86_64 is pinned four times over: what is missing is not the
+/// platform, it is something about *this machine* the builds all ask for and
+/// it does not provide. The likeliest case is a machine whose C library could
+/// not be established, and the reader has no way to guess that from the
+/// platform alone. So the builds that exist for the platform are listed by
+/// what each of them needs, which is the difference between "nessa does not
+/// support my computer" and "nessa could not tell which of these fits".
+fn unrunnable(agent: &AgentName, host: &HostPlatform, releases: &[PinnedRelease]) -> String {
+    let mut needs: Vec<String> = releases
+        .iter()
+        .filter(|release| release.platform() == host.platform())
+        .map(|release| release.requirements().to_string())
+        .collect();
+    needs.dedup();
+    if needs.is_empty() {
+        return format!("nessa has no tested {agent} release for {host}");
+    }
+    format!(
+        "nessa has no tested {agent} release this machine can run: it is {host},          and the {agent} builds for {} need {}",
+        host.platform(),
+        needs.join(", or ")
+    )
 }
 
 /// The best of `releases` for this machine, if any of them runs on it at all.
@@ -98,11 +126,11 @@ fn preferred(releases: Vec<PinnedRelease>, host: &HostPlatform) -> Option<Pinned
         .filter(|release| release.runs_on(host))
         // Several pinned archives can run here at once: the vendor publishes a
         // build that needs AVX2 and one that does not, and a machine with AVX2
-        // runs either. Take the more demanding one, which is the vendor's own
-        // default build — the undemanding one exists for machines that cannot
-        // take it, and installing it everywhere would give up what it is there
-        // to preserve.
-        .max_by_key(|release| release.requirements().avx2())
+        // runs either. The domain says which of two builds asks more of a
+        // machine, and that ranking is total over any set one machine can run,
+        // so this answer does not depend on the order the pin file lists them
+        // in. See [`ReleaseRequirements::demand`].
+        .max_by_key(|release| release.requirements().demand())
 }
 
 /// Say what went wrong, and whether it is worth trying again.
@@ -118,7 +146,7 @@ fn explain(failure: &InstallFailure) -> String {
         // does about it rather than saying the same thing twice.
         InstallFailure::UnsupportedPlatform(_) => format!(
             "{failure}; nothing was installed, and nothing will be until nessa \
-             ships a tested build for this platform"
+             ships a build this machine can run"
         ),
         InstallFailure::Download(SourceFailure::Refused(status)) => {
             format!("{failure}; the pinned release may have been withdrawn ({status})")

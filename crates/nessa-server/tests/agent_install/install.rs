@@ -1,7 +1,8 @@
 use super::*;
-use crate::agent_install::domain::{Libc, ReleasePlatform};
+use crate::agent_install::domain::{Libc, ReleasePlatform, ReleaseRequirements};
 use crate::agent_install_test_support::{
-    agent, host, host_of, platform, release, FakeSource, FakeStore, OTHER_DIGEST, PINNED_DIGEST,
+    agent, host, host_of, platform, release, release_needing, FakeSource, FakeStore, OTHER_DIGEST,
+    PINNED_DIGEST,
 };
 
 #[test]
@@ -364,4 +365,55 @@ fn the_fake_store_stages_the_way_the_real_one_does() {
         second.path(),
         "two downloads shared one staged file"
     );
+}
+
+#[test]
+fn a_build_this_machine_cannot_run_is_refused_before_anything_is_fetched() {
+    // The other half of the refusal, and the one this change introduced: the
+    // platform matches and the *requirements* do not. A musl build on a glibc
+    // machine dies in the loader, and an AVX2 build on a processor without it
+    // dies on an illegal instruction, so neither is worth a hundred megabytes
+    // first.
+    //
+    // The pre-existing half — a release for another operating system — is
+    // covered above; the old code caught that one, and only that one.
+    let platform = platform();
+    for (named, host, requirements) in [
+        (
+            "a musl build on a glibc machine",
+            host_of(&platform, Some(Libc::Gnu), true),
+            ReleaseRequirements::new(Some(Libc::Musl), false),
+        ),
+        (
+            "a glibc build on a machine with neither",
+            host_of(&platform, None, true),
+            ReleaseRequirements::new(Some(Libc::Gnu), false),
+        ),
+        (
+            "an avx2 build on a processor without it",
+            host_of(&platform, Some(Libc::Gnu), false),
+            ReleaseRequirements::new(Some(Libc::Gnu), true),
+        ),
+    ] {
+        let root = tempfile::tempdir().expect("temporary root");
+        let source = FakeSource::serving(b"archive bytes");
+        let store = FakeStore::empty(root.path());
+
+        let failure = InstallAgentRuntime {
+            source: &source,
+            store: &store,
+        }
+        .execute(
+            &agent(),
+            &release_needing("1.18.31", PINNED_DIGEST, &platform, requirements),
+            &host,
+        )
+        .expect_err(named);
+
+        assert_eq!(failure, InstallFailure::UnsupportedPlatform(host));
+        assert!(
+            source.requested().is_empty(),
+            "{named} was downloaded before it was refused"
+        );
+    }
 }

@@ -265,29 +265,81 @@ fn machine(
 }
 
 #[test]
-fn a_machine_is_only_ever_offered_a_build_it_can_run() {
-    // The whole matrix, against the compiled-in pin file: two C libraries on
-    // Linux, and a processor with and without AVX2 on each. Both of the wrong
-    // choices here are a binary that does not start — a glibc build dies in the
-    // loader on a musl-only machine, and an AVX2 build dies on an illegal
-    // instruction — after Nessa has told somebody their runtime is ready.
-    for (operating_system, architecture, libc, avx2) in [
-        ("linux", "x86_64", Some(Libc::Gnu), true),
-        ("linux", "x86_64", Some(Libc::Gnu), false),
-        ("linux", "x86_64", Some(Libc::Musl), true),
-        ("linux", "x86_64", Some(Libc::Musl), false),
-        ("linux", "aarch64", Some(Libc::Gnu), false),
-        ("linux", "aarch64", Some(Libc::Musl), false),
-        ("macos", "x86_64", None, true),
-        ("macos", "x86_64", None, false),
-        ("macos", "aarch64", None, false),
+fn each_machine_gets_the_build_opencode_publishes_for_it() {
+    // The whole matrix, against the compiled-in pin file, named by the package
+    // each machine ends up with. Both of the wrong choices here are a binary
+    // that does not start — a glibc build dies in the loader on a musl-only
+    // machine, and an AVX2 build dies on an illegal instruction — after Nessa
+    // has told somebody their runtime is ready.
+    //
+    // Asserting `chosen.runs_on(&host)` instead would say nothing: `preferred`
+    // filters on exactly that, so the assertion would restate the filter and
+    // hold for any pin file at all, including one that marked every build as
+    // running everywhere. The package name is the vendor's own word for which
+    // build it is, so it is a fact from outside this code.
+    for (operating_system, architecture, libc, avx2, expected) in [
+        (
+            "linux",
+            "x86_64",
+            Some(Libc::Gnu),
+            true,
+            "opencode-linux-x64",
+        ),
+        (
+            "linux",
+            "x86_64",
+            Some(Libc::Gnu),
+            false,
+            "opencode-linux-x64-baseline",
+        ),
+        (
+            "linux",
+            "x86_64",
+            Some(Libc::Musl),
+            true,
+            "opencode-linux-x64-musl",
+        ),
+        (
+            "linux",
+            "x86_64",
+            Some(Libc::Musl),
+            false,
+            "opencode-linux-x64-baseline-musl",
+        ),
+        (
+            "linux",
+            "aarch64",
+            Some(Libc::Gnu),
+            false,
+            "opencode-linux-arm64",
+        ),
+        (
+            "linux",
+            "aarch64",
+            Some(Libc::Musl),
+            false,
+            "opencode-linux-arm64-musl",
+        ),
+        ("macos", "x86_64", None, true, "opencode-darwin-x64"),
+        (
+            "macos",
+            "x86_64",
+            None,
+            false,
+            "opencode-darwin-x64-baseline",
+        ),
+        ("macos", "aarch64", None, false, "opencode-darwin-arm64"),
     ] {
         let host = machine(operating_system, architecture, libc, avx2);
         let chosen = pinned(&opencode(), &host).expect("every supported machine has a build");
 
         assert!(
-            chosen.runs_on(&host),
-            "{host} was offered a build it cannot run"
+            chosen
+                .archive_url()
+                .as_str()
+                .contains(&format!("/{expected}/")),
+            "{host} was given {} rather than {expected}",
+            chosen.archive_url()
         );
     }
 }
@@ -334,17 +386,47 @@ fn the_two_c_libraries_get_two_different_builds() {
 }
 
 #[test]
-fn a_machine_with_no_known_c_library_is_told_so_rather_than_guessed_at() {
+fn a_machine_with_no_known_c_library_is_told_what_the_builds_need() {
     // Every Linux build names a library, so a target linked against neither is
     // refused before anything is downloaded. The alternative is a hundred
     // megabytes fetched and a loader error.
+    //
+    // What the message says matters as much as that there is one. "No tested
+    // release for linux-x86_64" is true and useless when linux-x86_64 is
+    // pinned four times over: it reads as "nessa does not support my
+    // computer", when the fact is that nessa could not tell which of four
+    // builds fits it. So the message has to name both halves — what this
+    // machine is, and what the builds that exist ask for.
     let host = machine("linux", "x86_64", None, true);
 
-    let failure = pinned(&opencode(), &host).expect_err("no build is known to run here");
+    let message = pinned(&opencode(), &host)
+        .expect_err("no build is known to run here")
+        .to_string();
 
-    let message = failure.to_string();
     assert!(
-        message.contains("no tested opencode release") && message.contains("linux"),
+        message.contains("no c library nessa could name"),
+        "the message does not say what is missing about this machine: {message}"
+    );
+    for needed in ["gnu", "musl", "avx2"] {
+        assert!(
+            message.contains(needed),
+            "the message does not say the builds need {needed}: {message}"
+        );
+    }
+}
+
+#[test]
+fn a_platform_nessa_pins_nothing_for_is_told_so_plainly() {
+    // The other shape of the same refusal, and the one where naming what the
+    // builds need would be nonsense: there are none.
+    let host = machine("plan9", "sparc64", None, false);
+
+    let message = pinned(&opencode(), &host)
+        .expect_err("plan9 is not a pinned platform")
+        .to_string();
+
+    assert!(
+        message.contains("no tested opencode release") && message.contains("plan9"),
         "unhelpful message: {message}"
     );
 }
