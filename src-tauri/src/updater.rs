@@ -697,7 +697,13 @@ pub fn install_update(app: AppHandle) {
 /// diagnostics, where a bug report can find it.
 fn refuse(app: &AppHandle, reason: &str) {
     eprintln!("[nessa] could not install the update: {reason}");
-    let _ = app.emit_to(panel::MAIN_WINDOW, host::UPDATE_FAILED, reason);
+    // The one emit worth naming when it fails. A lost progress event costs a
+    // position of a bar and the next chunk redraws it; a lost refusal leaves a
+    // tab saying it is downloading with nothing ever arriving to correct it,
+    // and somebody asked for this install.
+    if let Err(error) = app.emit_to(panel::MAIN_WINDOW, host::UPDATE_FAILED, reason) {
+        eprintln!("[nessa] and the panel was not told: {error}");
+    }
 }
 
 /// The real installer: the plugin's own download-and-install, reporting what it

@@ -42,6 +42,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs"
+import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -328,7 +329,11 @@ export function publish({ configPath, agent, acpEntry, node, mcpBinary, interrup
   if (round.agent.acpEntry !== acpEntry || round.agent.node !== node)
     skip("the generated configuration did not survive a round trip", "please report this")
 
-  const temporary = `${configPath}.${process.pid}.tmp`
+  // Random, not the pid. A run killed between the write and the rename leaves
+  // the temp file behind, and a later run that happens to get the same pid then
+  // fails `wx` with EEXIST — reported as "check the namespace's permissions",
+  // which names the wrong cause entirely.
+  const temporary = `${configPath}.${randomUUID()}.tmp`
   try {
     writeFileSync(temporary, text, { mode: 0o600, flag: "wx" })
     chmodSync(temporary, 0o600)

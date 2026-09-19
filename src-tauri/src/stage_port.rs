@@ -23,10 +23,15 @@ struct GatewayPorts {
 
 /// Port the gateway listens on for `stage`, or `None` when the table has no
 /// entry — the same stages `nessa-server` itself accepts.
+/// Parsed once. These are bytes compiled into the binary, so re-parsing them per
+/// call bought nothing — and the server's reader of the same table already does
+/// it this way, which is one fewer difference between two things that must agree.
+static TABLE: std::sync::LazyLock<GatewayPorts> = std::sync::LazyLock::new(|| {
+    serde_json::from_str(PORTS_JSON).expect("bundled gateway-ports.json must parse")
+});
+
 pub fn stage_port(stage: &str) -> Option<u16> {
-    let table: GatewayPorts =
-        serde_json::from_str(PORTS_JSON).expect("bundled gateway-ports.json must parse");
-    table.stages.get(stage).copied()
+    TABLE.stages.get(stage).copied()
 }
 
 #[cfg(test)]

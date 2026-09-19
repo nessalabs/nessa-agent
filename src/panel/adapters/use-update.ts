@@ -15,7 +15,7 @@ import {
   type UpdateNotice,
   type UpdateTab,
 } from "../application/update-surface"
-import { attachThenAsk } from "../application/update-subscription"
+import { attachThenAsk } from "../application/attach-then-ask"
 
 /** What the panel needs from an update: two views and three gestures. */
 export interface PanelUpdate {

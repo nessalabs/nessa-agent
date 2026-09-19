@@ -52,7 +52,9 @@ for draining writes or stopping workers.
 
 `src-tauri/src/composition.rs` holds `HostDependencies`: the settings store, the
 shortcut store, the surface credential, the registered gateway, and the release
-source, each a trait the host owns with a substitute in tests. `main`'s `setup`
+source. Four of the five are traits the host owns with a substitute in tests;
+the gateway is the concrete `Gateway`, whose own `GatewayHost` is the trait, so
+its substitution happens one level down. `main`'s `setup`
 assembles it once, keeps it to hand the pieces down (`tray::create`,
 `updater::check_in_background`), and manages it so a `#[tauri::command]` can
 declare `State<'_, HostDependencies>` and be given it. `platform::current()`

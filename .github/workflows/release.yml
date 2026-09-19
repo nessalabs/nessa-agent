@@ -81,6 +81,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # Checked before it is interpolated into an API path. `workflow_dispatch`
+          # takes whatever was typed, and the shape check that would catch it
+          # lives in the *next* job — a value containing `../` would re-target
+          # the request before anything looked at it.
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "Not a release tag: ${TAG}"
+            echo "Expected vMAJOR.MINOR.PATCH, optionally with a pre-release suffix."
+            exit 1
+          fi
           sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" \
             --jq '.object.sha' 2>/dev/null || true)"
           if [ -z "$sha" ]; then

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { attachThenAsk } from "./update-subscription"
+import { attachThenAsk } from "./attach-then-ask"
 
 function deferred<T>() {
   let settle!: (value: T) => void
