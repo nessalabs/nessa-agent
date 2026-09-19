@@ -71,7 +71,7 @@
 #[cfg(debug_assertions)]
 use std::env;
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
@@ -610,6 +610,31 @@ fn under_cargo_target(executable: &Path) -> bool {
     false
 }
 
+/// Whether an install may go ahead, given what the operating system said this
+/// process is running from.
+///
+/// Takes the answer rather than asking the question, so every branch is
+/// reachable from a test: a location that may be replaced, one that may not,
+/// and an operating system that would not say. The asking itself is one line at
+/// the call site and cannot fail in a way this does not describe.
+///
+/// A refusal carries the sentence somebody reads, because each has a different
+/// thing to tell them: a build tree is a mistake to correct, and a query that
+/// failed is a machine that cannot be reasoned about from here.
+fn admits_install(executable: std::io::Result<PathBuf>) -> Result<(), String> {
+    match executable.map(|path| replaceable(&path)) {
+        Ok(Replaceable::Bundle) => Ok(()),
+        Ok(Replaceable::Loose) => Err(
+            "this build is not an installed one. The updater replaces the directory the \
+             running executable is in, which here is the build directory — so nothing was \
+             downloaded. Install a packaged build, or exercise the download with \
+             scripts/desktop/updater-harness.mjs."
+                .to_string(),
+        ),
+        Err(error) => Err(format!("cannot tell what is running ({error})")),
+    }
+}
+
 fn replaceable(executable: &Path) -> Replaceable {
     if under_cargo_target(executable) {
         return Replaceable::Loose;
@@ -736,25 +761,17 @@ pub fn install_update(app: AppHandle) {
 
     // Before anything is taken out of the slot: an install from a build that is
     // not installed would replace the directory it is running from.
-    // Through `refuse`, like every other way this can decline: the tab is on
-    // screen because somebody pressed install, and it must not sit at nought
-    // per cent for ever waiting for a download that was never going to start.
-    match std::env::current_exe().map(|executable| replaceable(&executable)) {
-        Ok(Replaceable::Bundle) => {}
-        Ok(Replaceable::Loose) => {
-            refuse(
-                &app,
-                "this build is not an installed one. The updater replaces the directory the \
-                 running executable is in, which here is the build directory — so nothing was \
-                 downloaded. Install a packaged build, or exercise the download with \
-                 scripts/desktop/updater-harness.mjs.",
-            );
-            return;
-        }
-        Err(error) => {
-            refuse(&app, &format!("cannot tell what is running ({error})"));
-            return;
-        }
+    // The asking is here and the deciding is in `admits_install`, so the
+    // refusals are exercised by tests rather than only by running on a machine
+    // that happens to be arranged the right way.
+    //
+    // Reported through `refuse`, like every other way this can decline: the tab
+    // is on screen because somebody pressed install, and it must not sit at
+    // nought per cent for ever waiting for a download that was never going to
+    // start.
+    if let Err(reason) = admits_install(std::env::current_exe()) {
+        refuse(&app, &reason);
+        return;
     }
 
     let Some(pending) = app.try_state::<PendingUpdate>() else {
@@ -1105,17 +1122,61 @@ mod tests {
     fn a_build_directory_is_never_something_to_install_over() {
         // The exact path `just dev` runs, and what the plugin would have taken
         // as its destination: `target/debug`, renamed away and deleted.
+        //
+        // Written with this platform's separators. A Windows literal here read
+        // as one component everywhere else — no `target` in it — so off Windows
+        // this asserted nothing about cargo layouts, and on Linux it asserted
+        // the opposite of what it says. `check-desktop.mjs` skips these tests on
+        // Linux, so nothing would have said so.
         for loose in [
-            "/Users/dev/nessa-agent/target/debug/nessa-app",
-            "/Users/dev/nessa-agent/target/release/nessa-app",
-            "C:\\dev\\nessa-agent\\target\\debug\\nessa-app.exe",
+            ["/Users/dev/nessa-agent", "target", "debug", "nessa-app"],
+            ["/Users/dev/nessa-agent", "target", "release", "nessa-app"],
         ] {
+            let path: PathBuf = loose.iter().collect();
             assert_eq!(
-                replaceable(Path::new(loose)),
+                replaceable(&path),
                 Replaceable::Loose,
-                "{loose} would have been installed over",
+                "{} would have been installed over",
+                path.display(),
             );
         }
+    }
+
+    /// The same layout as Windows spells it, where the separators are real.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_build_directory_is_never_something_to_install_over() {
+        let path = Path::new(r"C:\dev\nessa-agent\target\debug\nessa-app.exe");
+
+        assert_eq!(replaceable(path), Replaceable::Loose);
+    }
+
+    /// Every way the install can be turned away before anything is taken out of
+    /// the slot, including the one a machine cannot be arranged to produce.
+    #[test]
+    fn an_install_is_admitted_only_from_somewhere_it_may_replace() {
+        let installed = PathBuf::from("/Applications/Nessa.app/Contents/MacOS/nessa-app");
+        let build_tree: PathBuf = ["/Users/dev/nessa-agent", "target", "debug", "nessa-app"]
+            .iter()
+            .collect();
+
+        // Only meaningful where an installed application is what a bundle is.
+        if cfg!(target_os = "macos") {
+            assert_eq!(admits_install(Ok(installed)), Ok(()));
+        }
+
+        let refused = admits_install(Ok(build_tree)).expect_err("a build tree is refused");
+        assert!(refused.contains("not an installed one"), "{refused}");
+        assert!(refused.contains("nothing was downloaded"), "{refused}");
+
+        // The operating system declining to answer is its own refusal, and says
+        // something different: there is nothing here to correct.
+        let unknown = admits_install(Err(std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied,
+        )))
+        .expect_err("an unanswerable question is refused");
+        assert!(unknown.contains("cannot tell what is running"), "{unknown}");
+        assert!(!unknown.contains("not an installed one"), "{unknown}");
     }
 
     /// And an installed application still installs, or the guard has taken the
