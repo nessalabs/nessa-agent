@@ -146,9 +146,15 @@ export function SetupGate({
   // And told in place to a surface that has no host to write it to. Only on a
   // finish, which is the same rule the handoff applies: a choice made on the
   // way out of setup is not a decision. From an effect rather than from the
-  // branch below, so rendering stays a function of what setup reports — the
-  // panel reaches `create` only from a send or a control, both of which are
-  // somebody pressing something well after this has run.
+  // branch below, so rendering stays a function of what setup reports.
+  //
+  // Which means the panel is mounted, and its own effects have run, before
+  // this one does: React runs a child's effects before its parent's. Nothing
+  // rests on that ordering. What makes the handover safe is that the receiving
+  // side treats a later answer as later — a host read still in flight when
+  // this fires no longer clears what it wrote — so a creation that beat this
+  // effect is the only thing the window costs, and that is the same window a
+  // conversation created mid-setup already lives in.
   React.useEffect(() => {
     if (onboarding.active || finishedOn === undefined) return
     onHandOver?.(finishedOn)
