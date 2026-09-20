@@ -271,7 +271,10 @@ conversation vertical owns a draft file's upload state and the
 `stageAttachment` effect, which answers with the reference the gateway stored;
 the panel owns the original bytes and the order of one upload. Image conversion
 and its limits belong to the gateway, so no TypeScript module scales, converts,
-or compresses an image.
+or compresses an image. A test outside a context imports that context's
+`testing.ts` — the store's commands, the scenario substitute, typed errors, and
+the pure parts of the barrel — rather than its internals, and mocks the barrel
+with it when the barrel's components cannot be resolved.
 
 ## MCP tools
 

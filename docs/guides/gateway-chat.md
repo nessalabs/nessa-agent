@@ -123,60 +123,132 @@ send   -> conversation.send { text, attachments: [the returned references] }
 - **The gateway normalizes; the panel does not.** Converting, scaling, and
   compressing an image to what the selected model takes happens on the gateway,
   so those limits live in one place. The panel has no canvas work and knows no
-  per-image byte or pixel limit. The only byte limits it puts on a single file
-  are the existing preview budget and upload cap of 20 MB.
+  per-image byte or pixel limit. The only byte limit it puts on a single file is
+  the 64 MiB a file may be to attach and upload at all — enough for a camera RAW
+  file. (The client also holds a message's images to the protocol schema's
+  5242880-byte `ImageAttachment` bound; that is the contract's, not a model's.)
 - **The returned reference is what a message names.** Both `begin` (when the
   conversation already holds the bytes) and the upload answer with the stored
   reference, which may differ from the file in digest, media type, and size — a
-  HEIC, BMP, or very large PNG comes back as a smaller PNG or JPEG. The digest
-  the panel computes only identifies the upload and is never sent in a message.
-  The client validates the reference's shape and refuses a `begin` reply whose
-  fields contradict its state.
+  HEIC, camera RAW, BMP, or very large PNG comes back as a smaller PNG or JPEG.
+  The digest the panel computes only identifies the upload and is never sent in
+  a message. Storage is media-agnostic and the client's `StoredAttachment` type
+  says so; narrowing one to an image a message may name (`asImageAttachment`) is
+  a separate step, taken in the panel's gateway adapter.
 - **Any `image/*` file is uploaded**; whether the gateway can read it is the
-  gateway's answer. Files that are not images are still preview-only: they are
-  not uploaded, and sending refuses them with a reason.
+  gateway's answer. A browser reports most camera RAW files, and some HEIC, with
+  no type at all, so at attach time a known image extension (`.heic`, `.dng`,
+  `.cr3`, `.nef`, `.arw`, `.tiff`, … — `declaredMediaType` in
+  `src/conversation/model/attachments.ts`) declares the file an image. The
+  gateway reads the real encoding from the bytes. Files that are not images are
+  still preview-only: they are not uploaded, and sending refuses them with a
+  reason. An image the webview cannot paint gets a labelled tile, in the composer
+  and in the transcript, rather than a broken picture.
+- **At most three uploads run at once per window.** The gateway takes four and
+  holds each slot until the image is normalized, so a window that started every
+  upload when a dozen images were dropped would have most refused. The rest wait
+  at `not-started`, shown as waiting, and start as slots free. When the upload
+  route still answers `temporarily_unavailable` — the one refusal that does not
+  spend the ticket — the same ticket is offered again after 1, 2, then 4
+  seconds, and after that the tile fails as `busy` with its retry.
 - **Upload state is on the file.** Each draft file is `not-started`, `uploading`,
   `stored` (with the whole returned reference), or `failed` with a typed reason:
-  `unreadable` (this window could not read or hash it), `unsupported-image`
-  (`unsupported_image`: not a format the gateway can read), `too-large`
-  (`image_too_large`: it could not be brought under the model's limits),
-  `unavailable` (no connection or answer, a spent or expired ticket, storage or
-  the audit record away), and `rejected` (any other refusal). The tile shows the
-  state and says why; it offers retry except for the gateway's two verdicts on
-  the image itself, which the same bytes would meet again. Removing a tile
-  mid-upload is allowed; the late result finds no file and changes nothing.
-- **`sendDraft` is the one place a draft is declined, always with a typed kind
-  and a visible reason, and the draft is kept.** For files those are
-  `unsupported-file` (not an image), `upload-failed`, `upload-in-flight`,
-  `too-many-images` (more than 10), `images-too-large` (more than 10 MiB
-  together — both counted over the returned references, not the attached files),
-  `image-input-unsupported`, `image-input-unknown`, and `unknown-attachment`. A
-  message of images alone sends; its tab is titled by the first image's name.
+
+  | Reason | From | Retry offered |
+  | --- | --- | --- |
+  | `unreadable` | This window could not read or hash the bytes. | yes |
+  | `unsupported-image` | `unsupported_image`, or a stored reference that is not one of the four image encodings. | no |
+  | `too-large` | `image_too_large`: it could not be brought under the model's limits. | no |
+  | `image-input-unsupported` | `image_input_unsupported`: the agent's model takes no images. | no |
+  | `busy` | `temporarily_unavailable` after the bounded retries; a refused `begin` as `attachment_capacity` or `temporarily_unavailable`. | yes |
+  | `interrupted` | `upload_interrupted`, `upload_timeout` (the gateway's 408, or the client's own three-minute deadline for a PUT that never answers), or an aborted request. | yes |
+  | `unavailable` | No connection or answer; `ticket_invalid`; `storage_unavailable` / `attachment_storage_unavailable`; `audit_unavailable`; a refused `begin` as `agent_not_configured` or `conversation_not_found`. | yes |
+  | `rejected` | `size_mismatch`, `digest_mismatch`, a `begin` refused as `invalid_request` or with a code the client was not taught, an unrecognised answer. | yes |
+
+  The tile shows the state and says why. Removing a tile mid-upload is allowed;
+  the late result finds no file and changes nothing. The composer's own copy of
+  the draft never decides a file's fate: `setDraft` takes prose from the caller
+  and files from the store, so a stale render cannot undo an upload, a removal,
+  or a send.
+- **`sendDraft` is the one place a draft is declined locally, always with a typed
+  kind and a visible reason, and the draft is kept.** `not-connected` (no session
+  yet: "Not connected to the gateway yet. Your draft has been kept."),
+  `empty-draft` (the one silent kind: there is nothing to say about nothing),
+  `message-too-large`, and for files `unsupported-file` (not an image),
+  `upload-failed`, `upload-in-flight`, `too-many-images` (more than 10),
+  `images-too-large` (more than 10 MiB together — both counted over the returned
+  references, not the attached files), `image-input-unsupported`,
+  `image-input-unknown`, and `unknown-attachment`. A message of images alone
+  sends; its tab is titled by the first image's name. The composer's submit has
+  no early return of its own except an attachment still being read, which says
+  so in the panel.
 - **Whether the agent takes images is never guessed.** `capabilities.imageInput`
   is false until an agent is open for the conversation. Staging an image creates
   the conversation and starts its reads, so the answer has normally arrived
   before anybody presses send; the composer also says so as soon as it is known.
   If no view has arrived yet, send is declined as `image-input-unknown`, a read
-  is requested, and sending again a moment later goes through. If the gateway
-  refuses the message anyway, the turn is marked not sent and its images return
-  to the draft still stored.
+  is requested, and sending again a moment later goes through.
+- **A send the gateway refuses before admission is not "delivery unknown".** The
+  client knows which RPC codes the gateway decides before it admits a message
+  (`invalid_request`, `agent_not_configured`, `image_input_unsupported`,
+  `attachment_not_found`, `attachment_unavailable`, `conversation_not_found`,
+  `conversation_capacity`) and reports them as a typed `rejection`. The panel
+  marks the turn not sent, says why in a sentence chosen by that type, and puts
+  the message back in the draft with its images. Any other failure after
+  admission was attempted stays uncertain and keeps its explicit retry.
+- **A dead reference is uploaded again.** Closing a conversation on the gateway
+  — which is what Stop does — releases every file it held, sent or not. So after
+  Stop, every `stored` image still in that conversation's draft goes back to
+  `not-started` and uploads again before the next send; this happens whether the
+  close was acknowledged or not, because uploading bytes the conversation still
+  holds answers `stored` without sending them. And when a send is refused as
+  `attachment_not_found` or `attachment_unavailable` anyway, the recovered
+  draft's images come back as `not-started` rather than offering the same dead
+  reference again.
 - **Retry re-sends the same references.** A turn's content does not change after
   it is sent, and the client freezes the list with the command, so one execution
   ID always names one message.
 - **The upload request carries the ticket and nothing else**: no cookies, and a
   redirect is an error. It goes to the session URL's host and port over
-  `http`/`https`. The browser preview connects through the dev server, so its
-  uploads need that server to forward `/attachments`; the desktop panel talks to
-  the gateway directly. The ticket is a secret and appears in no error message.
+  `http`/`https`; the browser preview's dev server forwards `/attachments`. The
+  ticket is a secret and appears in no error message.
 - **Sent images in the transcript.** A turn sent from this window paints its
   tiles from the local object URL — the original as attached, not the stored
-  copy — which is kept for as long as the turn is shown and released with the
-  conversation. A turn known only from a view — after a reload, or sent from
-  another surface — shows a labelled placeholder (media type and size). Reading
-  image bytes back from the gateway is not implemented.
+  copy. Once the gateway has the message those originals are only previews: they
+  stop counting against what may be attached, and at most 64 MiB of them are
+  kept per window, the oldest falling back to the labelled placeholder (media
+  type and size) that a turn known only from a view gets — after a reload, or
+  sent from another surface. A message still sending, of unknown delivery, or
+  refused keeps its originals, because it may return to the draft. Reading image
+  bytes back from the gateway is not implemented.
+- **Closing a tab.** A tab whose gateway conversation this window created only to
+  upload into — a view has shown it empty and idle — is closed on the gateway
+  when the tab closes, which releases its staged bytes; a failure there is
+  logged and the tab still closes. Such a conversation is also not saved with
+  the browser's tabs once it is known to be empty with nothing drafted. A tab
+  with turns, or whose view has not arrived, is only closed locally, as before.
 
-The preview budgets (20 files, 20 MB each, 50 MB per draft, 100 MB per window)
-are unchanged and separate from the message rules above.
+The preview budgets are 20 files, 64 MiB each, 128 MiB per draft, and 256 MiB
+per window (sent originals excluded, as above). They are separate from the
+message rules. Every size the panel shows is in binary units and says so (MiB,
+KiB).
+
+### Known limitations
+
+- **No way to release one staged file.** Removing a stored tile is local: the
+  gateway has no "release this hold" command, so the bytes stay held until the
+  conversation closes or an unsent upload expires. This needs a gateway API; it
+  is not worked around here.
+- **Closing a tab with turns does not release staged-but-unsent bytes**, for the
+  same reason, and because closing a tab never stops a conversation's work.
+- **A tab closed before its first view arrives** is not closed on the gateway
+  even if this window created it, because it cannot be told from a restored
+  conversation with a history.
+- **An upload in flight when Stop is pressed** settles against the closed
+  conversation's next opening; whether the gateway keeps that hold is its
+  decision, and a send that finds it gone recovers as above.
+- **Removing a tile does not abort its PUT**; the request finishes and its result
+  is ignored.
 
 ## Views and retry behavior
 
