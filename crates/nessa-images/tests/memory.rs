@@ -207,7 +207,6 @@ impl PlatformDecoder for Oversized {
     fn decode(&self, _: &[u8], _: u32) -> Result<DecodedImage, Error> {
         Ok(DecodedImage {
             pixels: RgbaImage::from_pixel(self.0, self.1, Rgba([1, 2, 3, 255])),
-            lossless: false,
         })
     }
 }

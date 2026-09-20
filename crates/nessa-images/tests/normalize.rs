@@ -1,16 +1,12 @@
 //! Every rule in the crate documentation, against images built here. No files.
+mod support;
+
 use image::{
     codecs::gif::GifEncoder, ColorType, Delay, DynamicImage, Frame, ImageFormat, Rgb, RgbImage,
     Rgba, RgbaImage,
 };
 use nessa_images::{normalize, Encoding, Error, Limits, LimitsError, Normalized};
-use std::io::Cursor;
-
-const ALL: [Encoding; 4] = [Encoding::Png, Encoding::Jpeg, Encoding::Gif, Encoding::Webp];
-
-fn limits(accepted: &[Encoding], max_bytes: u64, max_long_edge_px: u32) -> Limits {
-    Limits::new(accepted.to_vec(), max_bytes, max_long_edge_px).unwrap()
-}
+use support::{crc32, encoded, limits, turned_a_quarter, ALL, HEIC};
 
 /// Pixels no encoder can compress: what a photograph looks like to PNG.
 fn noise(width: u32, height: u32) -> RgbImage {
@@ -33,12 +29,6 @@ fn halves(width: u32, height: u32) -> RgbImage {
             Rgb([0, 0, 255])
         }
     })
-}
-
-fn encoded(pixels: impl Into<DynamicImage>, format: ImageFormat) -> Vec<u8> {
-    let mut bytes = Cursor::new(Vec::new());
-    pixels.into().write_to(&mut bytes, format).unwrap();
-    bytes.into_inner()
 }
 
 fn decoded(bytes: &[u8]) -> DynamicImage {
@@ -199,28 +189,10 @@ fn an_alpha_channel_that_hides_nothing_is_not_written_back() {
     assert_eq!(decoded(&fitted.bytes).color(), ColorType::Rgb8);
 }
 
-/// A JPEG whose metadata says "rotate a quarter turn clockwise to view".
-fn rotated_jpeg(pixels: RgbImage) -> Vec<u8> {
-    let plain = encoded(pixels, ImageFormat::Jpeg);
-    let tiff: &[u8] = &[
-        b'I', b'I', 42, 0, 8, 0, 0, 0, // little-endian TIFF, first directory at 8
-        1, 0, // one entry
-        0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, // Orientation (0x0112), SHORT, 1 value: 6
-        0, 0, 0, 0, // no further directory
-    ];
-    let mut segment = b"Exif\0\0".to_vec();
-    segment.extend_from_slice(tiff);
-    let mut bytes = vec![0xff, 0xd8, 0xff, 0xe1];
-    bytes.extend_from_slice(&(segment.len() as u16 + 2).to_be_bytes());
-    bytes.extend_from_slice(&segment);
-    bytes.extend_from_slice(&plain[2..]);
-    bytes
-}
-
 #[test]
 fn recorded_rotation_is_applied_to_the_pixels_even_when_nothing_else_needs_changing() {
     // Stored 80 wide with red on the left; viewed upright it is 40 wide with red on top.
-    let input = rotated_jpeg(halves(80, 40));
+    let input = turned_a_quarter(&encoded(halves(80, 40), ImageFormat::Jpeg));
     let fitted = normalize(&input, &limits(&ALL, 1 << 20, 4096)).unwrap();
     assert!(fitted.changed);
     assert_eq!((fitted.width, fitted.height), (40, 80));
@@ -253,15 +225,12 @@ fn only_the_first_frame_of_an_animation_is_kept() {
 
 #[test]
 fn bytes_that_are_not_a_readable_image_are_refused_by_kind() {
-    let heic = [
-        0, 0, 0, 24, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c', 0, 0, 0, 0,
-    ];
     for unsupported in [
         &b""[..],
         b"not an image at all",
         b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>",
         b"%PDF-1.7",
-        &heic,
+        &HEIC,
     ] {
         assert_eq!(
             normalize(unsupported, &limits(&ALL, 1 << 20, 4096)),
@@ -348,17 +317,6 @@ fn an_image_that_would_pass_through_must_first_be_shown_to_decode() {
         png.extend(crc32(chunk).to_be_bytes());
     }
     assert_eq!(normalize(&png, &roomy), Err(Error::Undecodable));
-}
-
-fn crc32(bytes: &[u8]) -> u32 {
-    let mut crc = u32::MAX;
-    for byte in bytes {
-        crc ^= u32::from(*byte);
-        for _ in 0..8 {
-            crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
-        }
-    }
-    !crc
 }
 
 #[test]

@@ -38,7 +38,6 @@ fn photo(width: u32, height: u32) -> DecodedImage {
         pixels: RgbaImage::from_fn(width, height, |x, y| {
             Rgba([(x % 251) as u8, (y % 241) as u8, ((x + y) % 239) as u8, 255])
         }),
-        lossless: false,
     }
 }
 

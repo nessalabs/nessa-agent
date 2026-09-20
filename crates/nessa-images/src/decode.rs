@@ -10,11 +10,9 @@ use image::RgbaImage;
 /// straight (not premultiplied) alpha.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DecodedImage {
-    /// The pixels, already turned upright.
+    /// The pixels, already turned upright. What a system decoder is asked about
+    /// (HEIC, AVIF, camera RAW) is a photograph, and is fitted as one.
     pub pixels: RgbaImage,
-    /// Whether the source can hold exact pixels, as a screenshot does. HEIC and
-    /// camera RAW are photographs and answer false.
-    pub lossless: bool,
 }
 
 /// A decoder this crate does not contain, asked only for encodings its own

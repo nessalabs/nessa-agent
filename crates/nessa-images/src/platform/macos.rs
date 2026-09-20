@@ -151,10 +151,7 @@ impl PlatformDecoder for ImageIo {
             RgbaImage::from_raw(pixel_width, pixel_height, buffer).ok_or(Error::Undecodable)?;
         // Everything ImageIO is asked about here is a photograph or a rendering
         // of one, so the result is treated as one and fitted as JPEG first.
-        Ok(DecodedImage {
-            pixels,
-            lossless: false,
-        })
+        Ok(DecodedImage { pixels })
     }
 }
 

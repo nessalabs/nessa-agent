@@ -1,23 +1,10 @@
 //! When an image is handed back as it came, when it is not, and that memory is
 //! counted for the work actually done.
-use image::{
-    codecs::gif::GifEncoder, Delay, DynamicImage, Frame, ImageFormat, Rgb, RgbImage, Rgba,
-    RgbaImage,
-};
-use nessa_images::{normalize_with, Encoding, Error, Limits};
-use std::io::Cursor;
+mod support;
 
-const ALL: [Encoding; 4] = [Encoding::Png, Encoding::Jpeg, Encoding::Gif, Encoding::Webp];
-
-fn limits(accepted: &[Encoding], max_bytes: u64, max_long_edge_px: u32) -> Limits {
-    Limits::new(accepted.to_vec(), max_bytes, max_long_edge_px).unwrap()
-}
-
-fn encoded(pixels: impl Into<DynamicImage>, format: ImageFormat) -> Vec<u8> {
-    let mut bytes = Cursor::new(Vec::new());
-    pixels.into().write_to(&mut bytes, format).unwrap();
-    bytes.into_inner()
-}
+use image::{codecs::gif::GifEncoder, Delay, Frame, ImageFormat, Rgb, RgbImage, Rgba, RgbaImage};
+use nessa_images::{normalize_with, Encoding, Error};
+use support::{encoded, limits, ALL};
 
 fn animation(frames: &[[u8; 4]]) -> Vec<u8> {
     let mut bytes = Vec::new();
