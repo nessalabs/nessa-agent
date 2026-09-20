@@ -17,10 +17,10 @@ use crate::domain::{
     agent_execution::{
         executions::{ExecutionId, MessageChunk, MessageId, MessageKind},
         permissions::PermissionId,
-        prompts::{ImageMediaType, ImageReference, PromptText, UserMessage},
+        prompts::{ImageReference, PromptText, UserMessage},
         sessions::ExecutionSessionId,
     },
-    common::value_objects::Sha256Digest,
+    common::value_objects::{ImageMediaType, Sha256Digest},
 };
 use serde::{Deserialize, Serialize};
 

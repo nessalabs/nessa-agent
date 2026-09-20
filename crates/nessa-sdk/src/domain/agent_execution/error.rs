@@ -21,8 +21,6 @@ pub enum ExecutionError {
         /// Maximum permitted number of entries.
         max: usize,
     },
-    /// The image encoding is outside the supported closed set.
-    UnsupportedImageMediaType,
     /// A path description is empty or contains a NUL byte.
     InvalidPath,
     /// The local storage key is not a portable session identity.

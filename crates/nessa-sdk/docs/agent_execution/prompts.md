@@ -54,8 +54,13 @@ size) and never holds bytes, so a request stays small enough to compare for retr
 identity, queue, and persist whole. Its constructor owns the rules: text or at
 least one image, at most 10 images, 5 MiB each and 10 MiB together.
 
-Image input has three gates, and each can only narrow the one before it. The
-model's metadata must list image input. The binding offers it only when
+Image input has four gates, and each can only narrow the one before it. The
+model's metadata must list image input and record its `ImageInputLimits` (media
+types, encoded size, and edge ceilings, in `data/models.json`); a model without
+recorded limits is offered no images, because nothing could prepare one for it.
+`EffectiveCapabilities::image_input()` carries those limits to whoever prepares
+images, and the message's own ceilings stay absolute whatever a model allows. The
+binding offers image input only when
 composition gave `AcpConfig::images` a `UserImageSource`; an image sent to a
 text-only binding is refused at admission, before the message is accepted. And
 the connected agent must have advertised `promptCapabilities.image` at

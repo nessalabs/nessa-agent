@@ -1,8 +1,9 @@
 use nessa_sdk::domain::common::value_objects::TokenLimits;
-use nessa_sdk::domain::common::value_objects::{Date, Url};
+use nessa_sdk::domain::common::value_objects::{Date, ImageMediaType, Url};
 use nessa_sdk::domain::model_metadata::{
     aggregates::Catalog,
     entities::ModelMetadata,
+    value_objects::ImageInputLimits,
     value_objects::Modalities,
     value_objects::ModelDescription,
     value_objects::ModelFeatures,
@@ -209,4 +210,58 @@ fn provider_names_parse_into_the_closed_provider_set() {
         ModelProvider::try_from("anthropic"),
         Ok(ModelProvider::Anthropic)
     );
+}
+
+#[test]
+fn image_input_limits_are_positive_consistent_and_derive_what_is_worth_sending() {
+    use ImageMediaType::{Jpeg, Png};
+    let limits = ImageInputLimits::new(vec![Jpeg, Png], 5_000_000, 8000, 2000, 2576).unwrap();
+    assert_eq!(limits.media_types(), [Jpeg, Png]);
+    assert_eq!(limits.max_encoded_bytes(), 5_000_000);
+    // Base64 turns three bytes into four characters.
+    assert_eq!(limits.max_raw_bytes(), 3_750_000);
+    assert_eq!(limits.max_edge_px(), 8000);
+    // All the model sees, but never past the many-image ceiling a long
+    // conversation reaches.
+    assert_eq!(limits.target_long_edge_px(), 2000);
+    let standard = ImageInputLimits::new(vec![Png], 5_000_000, 8000, 2000, 1568).unwrap();
+    assert_eq!(standard.target_long_edge_px(), 1568);
+
+    for invalid in [
+        ImageInputLimits::new(vec![], 1, 1, 1, 1),
+        ImageInputLimits::new(vec![Png, Jpeg, Png], 1, 1, 1, 1),
+        ImageInputLimits::new(vec![Png], 0, 1, 1, 1),
+        ImageInputLimits::new(vec![Png], 1, 0, 1, 1),
+        ImageInputLimits::new(vec![Png], 1, 1, 0, 1),
+        ImageInputLimits::new(vec![Png], 1, 1, 1, 0),
+        ImageInputLimits::new(vec![Png], 1, 100, 101, 100),
+        ImageInputLimits::new(vec![Png], 1, 100, 100, 101),
+    ] {
+        assert!(
+            matches!(
+                invalid,
+                Err(MetadataError::Invalid {
+                    field: "image input",
+                    ..
+                })
+            ),
+            "{invalid:?}"
+        );
+    }
+}
+
+#[test]
+fn image_limits_require_the_image_input_modality() {
+    let limits = ImageInputLimits::new(vec![ImageMediaType::Png], 1, 1, 1, 1).unwrap();
+    let sees_images = model(ModelProvider::Anthropic, true);
+    assert_eq!(sees_images.image_input(), None);
+    let recorded = sees_images.with_image_input(limits.clone()).unwrap();
+    assert_eq!(recorded.image_input(), Some(&limits));
+    assert!(matches!(
+        model(ModelProvider::Anthropic, false).with_image_input(limits),
+        Err(MetadataError::Invalid {
+            field: "image input",
+            ..
+        })
+    ));
 }

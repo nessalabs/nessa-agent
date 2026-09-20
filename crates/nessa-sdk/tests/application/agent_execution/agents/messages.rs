@@ -100,8 +100,8 @@ async fn custom_storage_cannot_restore_oversized_input_before_provider_open() {
 #[tokio::test]
 async fn an_image_for_a_text_only_binding_is_refused_before_every_admission_save() {
     use nessa_sdk::domain::{
-        agent_execution::prompts::{ImageMediaType, ImageReference},
-        common::value_objects::Sha256Digest,
+        agent_execution::prompts::ImageReference,
+        common::value_objects::{ImageMediaType, Sha256Digest},
     };
     let image =
         ImageReference::new(Sha256Digest::from_bytes([3; 32]), ImageMediaType::Png, 64).unwrap();

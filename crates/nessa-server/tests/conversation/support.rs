@@ -323,6 +323,7 @@ fn capabilities() -> EffectiveCapabilities {
         model_id: "test".into(),
         display_name: "Test".into(),
         input: text,
+        image_input: None,
         output: text,
         tool_use: true,
         reasoning: false,

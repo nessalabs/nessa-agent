@@ -1,43 +1,10 @@
 #![deny(missing_docs)]
 
 use super::PromptText;
-use crate::domain::{agent_execution::ExecutionError, common::value_objects::Sha256Digest};
-
-/// Image encodings a user message may refer to. A closed set: an encoding is
-/// added here when an adapter can deliver it, not when a caller names it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ImageMediaType {
-    /// `image/png`
-    Png,
-    /// `image/jpeg`
-    Jpeg,
-    /// `image/gif`
-    Gif,
-    /// `image/webp`
-    Webp,
-}
-impl ImageMediaType {
-    /// Parse the exact lowercase media type. Parameters, other casing, and
-    /// every other type return [`ExecutionError::UnsupportedImageMediaType`].
-    pub fn parse(value: &str) -> Result<Self, ExecutionError> {
-        match value {
-            "image/png" => Ok(Self::Png),
-            "image/jpeg" => Ok(Self::Jpeg),
-            "image/gif" => Ok(Self::Gif),
-            "image/webp" => Ok(Self::Webp),
-            _ => Err(ExecutionError::UnsupportedImageMediaType),
-        }
-    }
-    /// The media type as written in a content header.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Png => "image/png",
-            Self::Jpeg => "image/jpeg",
-            Self::Gif => "image/gif",
-            Self::Webp => "image/webp",
-        }
-    }
-}
+use crate::domain::{
+    agent_execution::ExecutionError,
+    common::value_objects::{ImageMediaType, Sha256Digest},
+};
 
 /// One image a user message refers to: what the bytes hash to, how they are
 /// encoded, and how many there are. It never holds the bytes, so a message

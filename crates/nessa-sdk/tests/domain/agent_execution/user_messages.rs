@@ -1,5 +1,5 @@
 use super::support::*;
-use nessa_sdk::domain::common::value_objects::Sha256Digest;
+use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 
 fn image(seed: u8, size: u64) -> ImageReference {
     ImageReference::new(
@@ -8,35 +8,6 @@ fn image(seed: u8, size: u64) -> ImageReference {
         size,
     )
     .unwrap()
-}
-
-#[test]
-fn image_media_types_are_a_closed_exact_set() {
-    for (text, kind) in [
-        ("image/png", ImageMediaType::Png),
-        ("image/jpeg", ImageMediaType::Jpeg),
-        ("image/gif", ImageMediaType::Gif),
-        ("image/webp", ImageMediaType::Webp),
-    ] {
-        assert_eq!(ImageMediaType::parse(text), Ok(kind));
-        assert_eq!(kind.as_str(), text);
-    }
-    for rejected in [
-        "",
-        "image/PNG",
-        "image/png; charset=binary",
-        " image/png",
-        "image/svg+xml",
-        "image/heic",
-        "application/pdf",
-        "text/plain",
-    ] {
-        assert_eq!(
-            ImageMediaType::parse(rejected),
-            Err(ExecutionError::UnsupportedImageMediaType),
-            "{rejected:?}"
-        );
-    }
 }
 
 #[test]

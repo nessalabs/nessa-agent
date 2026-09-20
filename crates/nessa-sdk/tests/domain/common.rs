@@ -1,5 +1,6 @@
 use nessa_sdk::domain::common::value_objects::{
-    Date, Sha256Digest, Sha256DigestError, TokenLimits, TokenLimitsError, Url,
+    Date, ImageMediaType, ImageMediaTypeError, Sha256Digest, Sha256DigestError, TokenLimits,
+    TokenLimitsError, Url,
 };
 
 #[test]
@@ -155,6 +156,35 @@ fn sha256_digests_have_one_text_form() {
             Sha256Digest::parse(&invalid),
             Err(Sha256DigestError),
             "{invalid:?}"
+        );
+    }
+}
+
+#[test]
+fn image_media_types_are_a_closed_exact_set() {
+    for (text, kind) in [
+        ("image/png", ImageMediaType::Png),
+        ("image/jpeg", ImageMediaType::Jpeg),
+        ("image/gif", ImageMediaType::Gif),
+        ("image/webp", ImageMediaType::Webp),
+    ] {
+        assert_eq!(ImageMediaType::parse(text), Ok(kind));
+        assert_eq!(kind.as_str(), text);
+    }
+    for rejected in [
+        "",
+        "image/PNG",
+        "image/png; charset=binary",
+        " image/png",
+        "image/svg+xml",
+        "image/heic",
+        "application/pdf",
+        "text/plain",
+    ] {
+        assert_eq!(
+            ImageMediaType::parse(rejected),
+            Err(ImageMediaTypeError),
+            "{rejected:?}"
         );
     }
 }

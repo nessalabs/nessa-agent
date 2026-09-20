@@ -248,6 +248,7 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
         model_id: "fixture".into(),
         display_name: "Fixture".into(),
         input: text,
+        image_input: None,
         output: text,
         tool_use: true,
         reasoning: false,

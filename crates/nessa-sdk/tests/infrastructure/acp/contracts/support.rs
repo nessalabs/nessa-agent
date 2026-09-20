@@ -88,6 +88,7 @@ pub(super) fn test_acp_configuration(
         model_id: "exact-fixture-model".into(),
         display_name: "Fixture".into(),
         input: text,
+        image_input: None,
         output: text,
         tool_use: true,
         reasoning: true,

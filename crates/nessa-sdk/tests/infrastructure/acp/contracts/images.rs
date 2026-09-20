@@ -1,7 +1,8 @@
 //! A user message's images reach the agent only when every gate agrees: the
 //! model, a configured byte source, and the agent's own advertised capability.
 use super::support::*;
-use crate::domain::common::value_objects::Sha256Digest;
+use crate::application::dto::ImageInputLimitsDto;
+use crate::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::atomic::AtomicUsize, sync::atomic::Ordering};
@@ -37,6 +38,14 @@ fn message(id: &str, text: Option<&str>, images: Vec<ImageReference>) -> Executi
 
 /// The shared fixture with a model that lists image input, and an optional source.
 fn image_provider(mode: &str, source: Option<Arc<FixedImages>>) -> (TempDir, ClaudeAcpProvider) {
+    image_provider_with(mode, source, true)
+}
+
+fn image_provider_with(
+    mode: &str,
+    source: Option<Arc<FixedImages>>,
+    limits_recorded: bool,
+) -> (TempDir, ClaudeAcpProvider) {
     let (root, mut config, _) = test_acp_configuration(mode, 32);
     config.execution_timeout = None;
     config.images = source.map(|source| source as Arc<dyn UserImageSource>);
@@ -53,6 +62,13 @@ fn image_provider(mode: &str, source: Option<Arc<FixedImages>>) -> (TempDir, Cla
             image: true,
             ..text
         },
+        image_input: limits_recorded.then(|| ImageInputLimitsDto {
+            media_types: vec!["image/png".into(), "image/jpeg".into()],
+            max_encoded_bytes: 5_000_000,
+            max_edge_px: 8000,
+            many_images_max_edge_px: 2000,
+            native_long_edge_px: 1568,
+        }),
         output: text,
         tool_use: true,
         reasoning: true,
@@ -278,5 +294,32 @@ async fn steering_carries_images_the_same_way_a_prompt_does() {
         ])
     );
     assert_eq!(active.await.unwrap(), Ok(ExecutionOutcome::Completed));
+    close(&opened).await;
+}
+
+#[tokio::test]
+async fn a_model_without_recorded_image_limits_is_offered_no_images() {
+    let _slot = process_test_slot().await;
+    // The model lists image input, a source is configured, and the agent
+    // advertises images. Nothing says what an acceptable image is, so nothing
+    // could have prepared one: the binding offers none.
+    let source = Arc::new(FixedImages::default());
+    let (root, provider) = image_provider_with("image-input", Some(source.clone()), false);
+    let opened = provider.open(None).await.unwrap();
+    assert!(!opened.session.capabilities().features().input().image());
+    assert_eq!(opened.session.capabilities().image_input(), None);
+
+    let image = reference(b"image", ImageMediaType::Png);
+    let result = opened
+        .session
+        .execute(message("refused", Some("look"), vec![image]))
+        .await
+        .into_result();
+    assert!(
+        matches!(result, Err(AgentError::InvalidInput(_))),
+        "{result:?}"
+    );
+    assert_eq!(source.reads.load(Ordering::SeqCst), 0);
+    assert_eq!(observed(&root, "prompt-observed"), None);
     close(&opened).await;
 }

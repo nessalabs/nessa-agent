@@ -31,10 +31,10 @@ use nessa_sdk::domain::agent_execution::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
         PermissionOptionId,
     },
-    prompts::{ImageMediaType, ImageReference, PromptText, UserMessage},
+    prompts::{ImageReference, PromptText, UserMessage},
     sessions::SessionId,
 };
-use nessa_sdk::domain::common::value_objects::Sha256Digest;
+use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 use std::{
     collections::{HashMap, HashSet},
     future::Future,

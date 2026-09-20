@@ -19,4 +19,4 @@ pub use prompt::{
 };
 
 mod user_message;
-pub use user_message::{ImageMediaType, ImageReference, UserMessage};
+pub use user_message::{ImageReference, UserMessage};

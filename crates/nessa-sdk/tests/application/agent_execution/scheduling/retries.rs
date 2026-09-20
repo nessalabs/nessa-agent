@@ -1,6 +1,6 @@
 //! Stable submission identities recover receipts without repeating provider effects.
 use super::*;
-use nessa_sdk::domain::common::value_objects::Sha256Digest;
+use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 
 #[tokio::test]
 async fn scheduling_concurrent_retries_share_dispatch_and_settlement() {
