@@ -366,7 +366,7 @@ mod tests {
         let audience = AudienceId::new("local").unwrap();
         let evidence = SessionEvidence::new(b"browser-session".to_vec()).unwrap();
         let mut revoked = fixture("org", MembershipStatus::Active);
-        revoked.snapshot.credential.revoke(10).unwrap();
+        revoked.snapshot.credential.restore_revoked_at(10).unwrap();
         assert!(matches!(
             ready(
                 ResumeSession {
@@ -461,7 +461,7 @@ mod tests {
             Err(AccessError::InactiveMembership)
         );
         adapter.now = 15;
-        adapter.snapshot.credential.revoke(15).unwrap();
+        adapter.snapshot.credential.restore_revoked_at(15).unwrap();
         assert_eq!(
             authenticate(&adapter, "local", b"test"),
             Err(AccessError::InvalidCredential)

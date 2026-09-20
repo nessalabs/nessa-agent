@@ -4,31 +4,40 @@
 //! is appropriate here because secrets are uniformly random, not user passwords;
 //! verification uses a constant-time comparison. The registry lock is held for
 //! this store's lifetime and every mutation is persisted before publication.
+//!
+//! Every lifecycle change is committed together with its evidence: the registry
+//! file carries an append-only `transitions` list produced by the domain and
+//! checked by the same validator on write and on reopen. A failed write is a
+//! failed commit, so there is no "committed but unaudited" state to reconcile.
 
 use crate::{
     application::{
         credential_admin::{
-            AuthRevisionSource, CredentialAdmin, CredentialAdminError, IssueCredentialOutcome,
-            IssueCredentialRequest, ListCredentialsRequest, RevokeCredentialRequest,
+            AuthRevisionSource, CredentialAdmin, CredentialAdminError, CredentialTransitionReader,
+            IssueCredentialOutcome, IssueCredentialRequest, ListCredentialsRequest,
+            ListTransitionsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
         },
         dto::{
-            CredentialGrantDto, CredentialMetadataDto, MembershipInputDto, MembershipRoleDto,
-            MembershipStateDto, OrganizationInputDto, PrincipalInputDto, PrincipalKindDto,
-            ResourceDto,
+            CredentialGrantDto, CredentialMetadataDto, CredentialTransitionDto, InitiatorDto,
+            MembershipInputDto, MembershipRoleDto, MembershipStateDto, OrganizationInputDto,
+            PrincipalInputDto, PrincipalKindDto, ResourceDto, TransitionCauseDto,
         },
         ports::{
             AccessError, AccessReader, AccessSnapshot, CredentialEvidence, CredentialVerifier,
             PortFuture, VerifiedCredential,
         },
     },
-    domain::{AudienceId, Credential, CredentialId, Membership},
+    domain::{
+        AudienceId, Credential, CredentialId, CredentialTransition, DomainError, Initiator,
+        IssuanceCause, Membership, PrincipalId, Supersession,
+    },
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fmt,
     fs::File,
     io::{self, Read, Write},
@@ -40,7 +49,9 @@ use std::{
 };
 use subtle::ConstantTimeEq;
 
-const SCHEMA_VERSION: u32 = 1;
+/// Schema 2 added the `transitions` list. Earlier files are not read; the
+/// project is pre-alpha and carries no registry compatibility.
+const SCHEMA_VERSION: u32 = 2;
 const TOKEN_PREFIX: &str = "nessa_v1";
 /// Per-store resource bounds, injected by composition.
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -120,6 +131,8 @@ pub struct BootstrapRequest {
 }
 
 pub struct BootstrapOutcome {
+    /// The issuance and any supersessions committed with it.
+    pub transitions: Vec<CredentialTransitionDto>,
     pub metadata: CredentialMetadataDto,
     pub evidence: CredentialEvidence,
     pub revision: u64,
@@ -169,6 +182,8 @@ struct Registry {
     credentials: Vec<StoredCredential>,
     issue_receipts: Vec<IssueReceipt>,
     revoke_receipts: Vec<RevokeReceipt>,
+    /// Append-only lifecycle evidence, committed with the state it describes.
+    transitions: Vec<CredentialTransitionDto>,
 }
 
 /// One-process owner of a local registry. Opening never bootstraps credentials.
@@ -312,10 +327,10 @@ impl LocalCredentialStore {
             revoked_at: None,
             grants: request.grants,
         };
-        validate_metadata(&metadata)?;
+        let credential = domain_credential(&metadata)?;
         validate_grants(&metadata, &request.gateway_id, true)?;
         let (evidence, verifier) = issue_secret(&metadata.id)?;
-        let registry = Registry {
+        let mut registry = Registry {
             schema_version: SCHEMA_VERSION,
             gateway_id: request.gateway_id,
             owner_membership_id: request.membership.id.clone(),
@@ -329,12 +344,22 @@ impl LocalCredentialStore {
             }],
             issue_receipts: vec![],
             revoke_receipts: vec![],
+            transitions: vec![],
         };
+        record_transition(
+            &mut registry,
+            &credential
+                .issued(IssuanceCause::Bootstrap, Initiator::LocalOperator)
+                .map_err(|_| LocalStoreError::Corrupt)?,
+            None,
+        );
+        let transitions = registry.transitions.clone();
         self.persist(&registry)?;
         *slot = Some(registry.clone());
         self.publish_snapshot(registry)?;
         self.publish_revision(1);
         Ok(BootstrapOutcome {
+            transitions,
             metadata,
             evidence,
             revision: 1,
@@ -376,7 +401,15 @@ impl LocalCredentialStore {
                 .ok_or(LocalStoreError::Corrupt)?
                 .metadata
                 .clone();
-            return Ok(IssueCredentialOutcome::ExistingSecretUnavailable { metadata });
+            let transitions =
+                transitions_of_command(current, &request.issuer_principal_id, &request.request_id);
+            if transitions.is_empty() {
+                return Err(LocalStoreError::Corrupt);
+            }
+            return Ok(IssueCredentialOutcome::ExistingSecretUnavailable {
+                metadata,
+                transitions,
+            });
         }
         if current.credentials.len() >= self.config.max_credentials
             || current.issue_receipts.len() >= self.config.max_receipts
@@ -394,10 +427,19 @@ impl LocalCredentialStore {
             revoked_at: None,
             grants: request.grants,
         };
-        validate_metadata(&metadata)?;
+        let credential = domain_credential(&metadata)?;
         validate_grants(&metadata, &current.gateway_id, administrative_allowed)?;
+        let initiator = Initiator::Principal(
+            PrincipalId::new(request.issuer_principal_id.clone())
+                .map_err(|_| LocalStoreError::Conflict)?,
+        );
         let (evidence, verifier) = issue_secret(&metadata.id)?;
         let mut next = current.clone();
+        next.revision = next
+            .revision
+            .checked_add(1)
+            .ok_or(LocalStoreError::Capacity)?;
+        let first_transition = next.transitions.len();
         if administrative_allowed {
             // An administrative issuance is a rotation: it replaces whatever
             // credential this principal already holds in the organization being
@@ -405,16 +447,33 @@ impl LocalCredentialStore {
             // the same principal holds in other organizations are not this
             // rotation's to end. Owner recovery replaces narrower than this —
             // only the owner credential itself — see `recover_owner`.
-            supersede_replaced(
-                &mut next.credentials,
-                &Replaces {
-                    principal_id: &request.principal.id,
-                    organization_id: &request.membership.organization_id,
-                    requiring_action: None,
-                },
+            let replaces = Replaces {
+                principal_id: &request.principal.id,
+                organization_id: &request.membership.organization_id,
+                requiring_action: None,
+            };
+            supersede_matching(
+                &mut next,
+                |existing| replaces.matches(existing),
                 request.issued_at,
-            );
+                credential.id(),
+                Supersession::Provision,
+                &initiator,
+                Some(&request.request_id),
+            )?;
         }
+        let cause = if administrative_allowed {
+            IssuanceCause::SurfaceProvision
+        } else {
+            IssuanceCause::AdminIssue
+        };
+        record_transition(
+            &mut next,
+            &credential
+                .issued(cause, initiator)
+                .map_err(|_| LocalStoreError::Corrupt)?,
+            Some(&request.request_id),
+        );
         if !next.principals.iter().any(|p| p.id == request.principal.id) {
             next.principals.push(request.principal);
         }
@@ -437,16 +496,17 @@ impl LocalCredentialStore {
             fingerprint,
             credential_id: metadata.id.clone(),
         });
-        next.revision = next
-            .revision
-            .checked_add(1)
-            .ok_or(LocalStoreError::Capacity)?;
+        let transitions = next.transitions[first_transition..].to_vec();
         self.persist(&next)?;
         let revision = next.revision;
         *slot = Some(next.clone());
         self.publish_snapshot(next)?;
         self.publish_revision(revision);
-        Ok(IssueCredentialOutcome::Issued { metadata, evidence })
+        Ok(IssueCredentialOutcome::Issued {
+            metadata,
+            evidence,
+            transitions,
+        })
     }
 
     /// Trusted offline provisioning only. The OS owner selects a distinct surface
@@ -566,7 +626,7 @@ impl LocalCredentialStore {
             revoked_at: None,
             grants,
         };
-        validate_metadata(&metadata)?;
+        let credential = domain_credential(&metadata)?;
         validate_grants(&metadata, &current.gateway_id, true)?;
         if current
             .credentials
@@ -577,21 +637,39 @@ impl LocalCredentialStore {
         }
         let (evidence, verifier) = issue_secret(&metadata.id)?;
         let mut next = current.clone();
-        supersede_replaced(&mut next.credentials, &replaces, issued_at);
-        next.credentials.push(StoredCredential {
-            metadata: metadata.clone(),
-            verifier,
-        });
         next.revision = next
             .revision
             .checked_add(1)
             .ok_or(LocalStoreError::Capacity)?;
+        let first_transition = next.transitions.len();
+        supersede_matching(
+            &mut next,
+            |existing| replaces.matches(existing),
+            issued_at,
+            credential.id(),
+            Supersession::OwnerRecovery,
+            &Initiator::LocalOperator,
+            None,
+        )?;
+        record_transition(
+            &mut next,
+            &credential
+                .issued(IssuanceCause::OwnerRecovery, Initiator::LocalOperator)
+                .map_err(|_| LocalStoreError::Corrupt)?,
+            None,
+        );
+        next.credentials.push(StoredCredential {
+            metadata: metadata.clone(),
+            verifier,
+        });
+        let transitions = next.transitions[first_transition..].to_vec();
         self.persist(&next)?;
         let revision = next.revision;
         *slot = Some(next.clone());
         self.publish_snapshot(next)?;
         self.publish_revision(revision);
         Ok(BootstrapOutcome {
+            transitions,
             metadata,
             evidence,
             revision,
@@ -613,7 +691,33 @@ impl LocalCredentialStore {
             .collect())
     }
 
-    pub fn revoke_sync(&self, request: RevokeCredentialRequest) -> Result<u64, LocalStoreError> {
+    pub fn list_transitions_sync(
+        &self,
+        request: &ListTransitionsRequest,
+    ) -> Result<Vec<CredentialTransitionDto>, LocalStoreError> {
+        let registry = self.registry()?;
+        let registry = registry.as_ref().ok_or(LocalStoreError::NotInitialized)?;
+        let owned: HashSet<&str> = registry
+            .credentials
+            .iter()
+            .filter(|entry| entry.metadata.organization_id == request.organization_id)
+            .map(|entry| entry.metadata.id.as_str())
+            .collect();
+        Ok(registry
+            .transitions
+            .iter()
+            .filter(|transition| owned.contains(transition.credential_id.as_str()))
+            .cloned()
+            .collect())
+    }
+
+    /// Revoke once and return the revocation's evidence. A replayed command or a
+    /// repeated revocation of an already-revoked credential returns the record
+    /// that was committed the first time; nothing is relabelled.
+    pub fn revoke_sync(
+        &self,
+        request: RevokeCredentialRequest,
+    ) -> Result<RevokeCredentialOutcome, LocalStoreError> {
         let mut slot = self.slot()?;
         let current = slot.as_ref().ok_or(LocalStoreError::NotInitialized)?;
         if request.request_id.trim().is_empty() || request.request_id.len() > 200 {
@@ -630,42 +734,65 @@ impl LocalCredentialStore {
                 && receipt.request_id == request.request_id
         }) {
             return if receipt.credential_id == request.credential_id {
-                Ok(current.revision)
+                Ok(RevokeCredentialOutcome {
+                    revision: current.revision,
+                    revocation: revocation_of(current, &request.credential_id)
+                        .ok_or(LocalStoreError::Corrupt)?,
+                })
             } else {
                 Err(LocalStoreError::Conflict)
             };
         }
-        let mut next = current.clone();
-        let credential = next
+        if !current
             .credentials
-            .iter_mut()
-            .find(|entry| entry.metadata.id == request.credential_id)
-            .ok_or(LocalStoreError::NotFound)?;
-        if next.revoke_receipts.len() >= self.config.max_receipts {
+            .iter()
+            .any(|entry| entry.metadata.id == request.credential_id)
+        {
+            return Err(LocalStoreError::NotFound);
+        }
+        if current.revoke_receipts.len() >= self.config.max_receipts {
             return Err(LocalStoreError::Capacity);
         }
-        if request.revoked_at < credential.metadata.issued_at {
-            return Err(LocalStoreError::Conflict);
-        }
-        credential
-            .metadata
-            .revoked_at
-            .get_or_insert(request.revoked_at);
-        next.revoke_receipts.push(RevokeReceipt {
-            issuer_principal_id: request.issuer_principal_id,
-            request_id: request.request_id,
-            credential_id: request.credential_id,
-        });
+        let initiator = Initiator::Principal(
+            PrincipalId::new(request.issuer_principal_id.clone())
+                .map_err(|_| LocalStoreError::Conflict)?,
+        );
+        let mut next = current.clone();
         next.revision = next
             .revision
             .checked_add(1)
             .ok_or(LocalStoreError::Capacity)?;
+        let entry = next
+            .credentials
+            .iter_mut()
+            .find(|entry| entry.metadata.id == request.credential_id)
+            .ok_or(LocalStoreError::NotFound)?;
+        let mut credential = domain_credential(&entry.metadata)?;
+        let transition = match credential.revoke(request.revoked_at, initiator) {
+            Ok(transition) => transition,
+            Err(DomainError::RevokedBeforeIssued { .. }) => return Err(LocalStoreError::Conflict),
+            Err(_) => return Err(LocalStoreError::Corrupt),
+        };
+        entry.metadata.revoked_at = credential.revoked_at();
+        if let Some(transition) = &transition {
+            record_transition(&mut next, transition, Some(&request.request_id));
+        }
+        next.revoke_receipts.push(RevokeReceipt {
+            issuer_principal_id: request.issuer_principal_id,
+            request_id: request.request_id,
+            credential_id: request.credential_id.clone(),
+        });
+        let revocation =
+            revocation_of(&next, &request.credential_id).ok_or(LocalStoreError::Corrupt)?;
         self.persist(&next)?;
         let revision = next.revision;
         *slot = Some(next.clone());
         self.publish_snapshot(next)?;
         self.publish_revision(revision);
-        Ok(revision)
+        Ok(RevokeCredentialOutcome {
+            revision,
+            revocation,
+        })
     }
 
     fn slot(&self) -> Result<MutexGuard<'_, Option<Registry>>, LocalStoreError> {
@@ -857,9 +984,21 @@ impl CredentialAdmin for LocalCredentialStore {
     fn revoke<'a>(
         &'a self,
         request: RevokeCredentialRequest,
-    ) -> PortFuture<'a, u64, CredentialAdminError> {
+    ) -> PortFuture<'a, RevokeCredentialOutcome, CredentialAdminError> {
         Box::pin(async move {
             self.revoke_sync(request)
+                .map_err(CredentialAdminError::from)
+        })
+    }
+}
+
+impl CredentialTransitionReader for LocalCredentialStore {
+    fn list_transitions<'a>(
+        &'a self,
+        request: ListTransitionsRequest,
+    ) -> PortFuture<'a, Vec<CredentialTransitionDto>, CredentialAdminError> {
+        Box::pin(async move {
+            self.list_transitions_sync(&request)
                 .map_err(CredentialAdminError::from)
         })
     }
@@ -958,26 +1097,10 @@ fn parse_token(bytes: &[u8]) -> Result<(String, Vec<u8>), AccessError> {
     Ok((id, secret))
 }
 
-/// Record an automatic revocation under the domain's rule for one.
-///
-/// [`Credential::revoke`] keeps the first recorded revocation and refuses one
-/// that predates issuance, and a stored credential that disagrees is rejected by
-/// this registry's own validation on the way to disk.
-///
-/// The recorded instant is therefore the *later* of the request and the
-/// superseded credential's own issuance, and is not an observed event time: a
-/// caller-supplied `issued_at` behind an existing credential supersedes it at
-/// that credential's issuance rather than failing the whole operation as corrupt.
-/// This is deliberately not what the explicit revoke path does — an admin naming
-/// a time before issuance is told so, because there the time is the request. An
-/// automatic supersession has no such caller to correct.
-///
-/// What is *not* recorded is which of the two automatic causes this was, or who
-/// it followed from; see the credential transition-audit work for that.
-fn supersede(metadata: &mut CredentialMetadataDto, at: u64) {
-    if metadata.revoked_at.is_none() {
-        metadata.revoked_at = Some(at.max(metadata.issued_at));
-    }
+/// Rebuild the domain credential a stored record describes. A record the
+/// domain rejects is a conflict on the way in and corruption on the way out.
+fn domain_credential(metadata: &CredentialMetadataDto) -> Result<Credential, LocalStoreError> {
+    Credential::try_from(metadata.clone()).map_err(|_| LocalStoreError::Conflict)
 }
 
 /// Which existing credentials a new issuance replaces.
@@ -1004,19 +1127,167 @@ impl Replaces<'_> {
     }
 }
 
-/// Supersede every credential the scope selects.
-fn supersede_replaced(credentials: &mut [StoredCredential], replaces: &Replaces<'_>, at: u64) {
-    for entry in credentials {
-        if replaces.matches(&entry.metadata) {
-            supersede(&mut entry.metadata, at);
-        }
-    }
+fn validate_metadata(metadata: &CredentialMetadataDto) -> Result<(), LocalStoreError> {
+    domain_credential(metadata).map(|_| ())
 }
 
-fn validate_metadata(metadata: &CredentialMetadataDto) -> Result<(), LocalStoreError> {
-    Credential::try_from(metadata.clone())
-        .map(|_| ())
-        .map_err(|_| LocalStoreError::Conflict)
+/// Append domain evidence under the revision `registry` is about to commit.
+/// Callers bump `registry.revision` before recording.
+fn record_transition(
+    registry: &mut Registry,
+    transition: &CredentialTransition,
+    correlation: Option<&str>,
+) {
+    let sequence = registry.transitions.len() as u64 + 1;
+    registry.transitions.push(CredentialTransitionDto::record(
+        transition,
+        sequence,
+        registry.revision,
+        correlation.map(str::to_owned),
+    ));
+}
+
+/// Retire every credential `retire` selects (see [`Replaces`]) in favour of
+/// `by`, through the domain's supersession rule, recording one transition per
+/// credential that actually changed. Already-revoked credentials keep their
+/// original record.
+fn supersede_matching(
+    registry: &mut Registry,
+    retire: impl Fn(&CredentialMetadataDto) -> bool,
+    at: u64,
+    by: &CredentialId,
+    kind: Supersession,
+    initiator: &Initiator,
+    correlation: Option<&str>,
+) -> Result<(), LocalStoreError> {
+    let mut transitions = Vec::new();
+    for entry in registry
+        .credentials
+        .iter_mut()
+        .filter(|entry| retire(&entry.metadata))
+    {
+        let mut credential =
+            Credential::try_from(entry.metadata.clone()).map_err(|_| LocalStoreError::Corrupt)?;
+        if let Some(transition) = credential.supersede(at, by.clone(), kind, initiator.clone()) {
+            entry.metadata.revoked_at = credential.revoked_at();
+            transitions.push(transition);
+        }
+    }
+    for transition in &transitions {
+        record_transition(registry, transition, correlation);
+    }
+    Ok(())
+}
+
+/// The record under which `credential_id` stopped being valid.
+fn revocation_of(registry: &Registry, credential_id: &str) -> Option<CredentialTransitionDto> {
+    registry
+        .transitions
+        .iter()
+        .rev()
+        .find(|transition| {
+            transition.credential_id == credential_id && transition.after.revoked_at.is_some()
+        })
+        .cloned()
+}
+
+/// Every transition one issue command committed, identified by its initiator
+/// and idempotency key.
+fn transitions_of_command(
+    registry: &Registry,
+    issuer_principal_id: &str,
+    request_id: &str,
+) -> Vec<CredentialTransitionDto> {
+    registry
+        .transitions
+        .iter()
+        .filter(|transition| {
+            transition.correlation.as_deref() == Some(request_id)
+                && matches!(&transition.initiator, InitiatorDto::Principal { id } if id == issuer_principal_id)
+        })
+        .cloned()
+        .collect()
+}
+
+/// The one rule for recorded evidence, applied before every write and on every
+/// reopen: each transition satisfies the domain, chains from the previous state
+/// of its credential, and ends at the state the registry actually stores.
+fn validate_transitions(
+    registry: &Registry,
+    config: &LocalStoreConfig,
+    principals: &HashSet<&String>,
+) -> Result<(), LocalStoreError> {
+    if registry.transitions.len() > 2 * config.max_credentials {
+        return Err(LocalStoreError::Corrupt);
+    }
+    let mut chains: HashMap<&str, Vec<&CredentialTransitionDto>> = HashMap::new();
+    let mut previous_revision = 0;
+    for (index, transition) in registry.transitions.iter().enumerate() {
+        if transition.sequence != index as u64 + 1
+            || transition.revision < previous_revision
+            || transition.revision > registry.revision
+            || transition
+                .correlation
+                .as_ref()
+                .is_some_and(|value| value.trim().is_empty() || value.len() > 200)
+        {
+            return Err(LocalStoreError::Corrupt);
+        }
+        previous_revision = transition.revision;
+        CredentialTransition::try_from(transition.clone()).map_err(|_| LocalStoreError::Corrupt)?;
+        if let InitiatorDto::Principal { id } = &transition.initiator {
+            if !principals.contains(id) {
+                return Err(LocalStoreError::Corrupt);
+            }
+        }
+        chains
+            .entry(transition.credential_id.as_str())
+            .or_default()
+            .push(transition);
+    }
+    let issued_revision = |credential_id: &str| {
+        chains
+            .get(credential_id)
+            .and_then(|chain| chain.first())
+            .map(|first| first.revision)
+    };
+    let mut seen = 0;
+    for stored in &registry.credentials {
+        let chain = chains
+            .get(stored.metadata.id.as_str())
+            .ok_or(LocalStoreError::Corrupt)?;
+        seen += chain.len();
+        let (first, rest) = chain.split_first().ok_or(LocalStoreError::Corrupt)?;
+        if !matches!(first.cause, TransitionCauseDto::Issued { .. }) || rest.len() > 1 {
+            return Err(LocalStoreError::Corrupt);
+        }
+        let mut previous = first;
+        for transition in rest {
+            let TransitionCauseDto::Revoked { cause } = &transition.cause else {
+                return Err(LocalStoreError::Corrupt);
+            };
+            if transition.before != Some(previous.after) {
+                return Err(LocalStoreError::Corrupt);
+            }
+            if let crate::application::dto::RevocationCauseDto::Superseded { by, .. } = cause {
+                if issued_revision(by) != Some(transition.revision) {
+                    return Err(LocalStoreError::Corrupt);
+                }
+            }
+            previous = transition;
+        }
+        if previous.after.issued_at != stored.metadata.issued_at
+            || previous.after.expires_at != stored.metadata.expires_at
+            || previous.after.revoked_at != stored.metadata.revoked_at
+        {
+            return Err(LocalStoreError::Corrupt);
+        }
+    }
+    // A transition naming a credential the registry does not hold.
+    if seen != registry.transitions.len() {
+        return Err(LocalStoreError::Corrupt);
+    }
+    Ok(())
 }
 
 fn validate_registry(
@@ -1042,6 +1313,7 @@ fn validate_registry(
         .map(|value| &value.id)
         .collect();
     let principals: HashSet<_> = registry.principals.iter().map(|value| &value.id).collect();
+    validate_transitions(registry, config, &principals)?;
     let memberships: HashSet<_> = registry.memberships.iter().map(|value| &value.id).collect();
     let membership_bindings: HashSet<_> = registry
         .memberships
@@ -1250,7 +1522,10 @@ mod tests {
     use super::*;
     use crate::domain::MembershipRole;
     use crate::{
-        application::dto::{CredentialGrantDto, PrincipalKindDto, ResourceDto},
+        application::dto::{
+            CredentialGrantDto, CredentialLifecycleDto, IssuanceCauseDto, PrincipalKindDto,
+            ResourceDto, RevocationCauseDto, SupersessionDto,
+        },
         domain::AudienceId,
     };
     use std::{
@@ -1517,6 +1792,7 @@ mod tests {
         let IssueCredentialOutcome::Issued {
             metadata,
             evidence: chat,
+            ..
         } = issue(
             "nessa-panel",
             "chat-one",
@@ -1642,20 +1918,27 @@ mod tests {
         });
         let credential_id = format!("{principal_id}-in-{organization_id}");
         let (evidence, verifier) = issue_secret(&credential_id).unwrap();
-        next.credentials.push(StoredCredential {
-            metadata: CredentialMetadataDto {
-                id: credential_id,
-                principal_id: principal_id.into(),
-                organization_id: organization_id.clone(),
-                audience_id: next.gateway_id.clone(),
-                issued_at: 120,
-                expires_at: None,
-                revoked_at: None,
-                grants: vec![grant(&organization_id, "server.read")],
-            },
-            verifier,
-        });
+        let metadata = CredentialMetadataDto {
+            id: credential_id,
+            principal_id: principal_id.into(),
+            organization_id: organization_id.clone(),
+            audience_id: next.gateway_id.clone(),
+            issued_at: 120,
+            expires_at: None,
+            revoked_at: None,
+            grants: vec![grant(&organization_id, "server.read")],
+        };
         next.revision += 1;
+        record_transition(
+            &mut next,
+            &domain_credential(&metadata)
+                .unwrap()
+                .issued(IssuanceCause::AdminIssue, Initiator::LocalOperator)
+                .unwrap(),
+            None,
+        );
+        next.credentials
+            .push(StoredCredential { metadata, verifier });
         store.persist(&next).unwrap();
         let revision = next.revision;
         *slot = Some(next.clone());
@@ -1913,8 +2196,8 @@ mod tests {
             ready(store.verify(&owner.evidence, &AudienceId::new("gateway-1").unwrap())).is_ok()
         );
         store.fail_before_replace.store(false, Ordering::Release);
-        assert_eq!(store.revoke_sync(request.clone()).unwrap(), 2);
-        assert_eq!(store.revoke_sync(request).unwrap(), 2);
+        assert_eq!(store.revoke_sync(request.clone()).unwrap().revision, 2);
+        assert_eq!(store.revoke_sync(request).unwrap().revision, 2);
     }
 
     #[test]
@@ -1933,9 +2216,9 @@ mod tests {
         store
             .fail_next_directory_sync
             .store(true, Ordering::Release);
-        assert_eq!(store.revoke_sync(request.clone()).unwrap(), 2);
+        assert_eq!(store.revoke_sync(request.clone()).unwrap().revision, 2);
         assert_eq!(revisions.recv().unwrap(), 2);
-        assert_eq!(store.revoke_sync(request.clone()).unwrap(), 2);
+        assert_eq!(store.revoke_sync(request.clone()).unwrap().revision, 2);
         assert!(revisions.try_recv().is_err());
         assert_eq!(
             ready(store.verify(&owner.evidence, &AudienceId::new("gateway-1").unwrap())),
@@ -1943,7 +2226,7 @@ mod tests {
         );
         drop(store);
         let reopened = open_store(&path).unwrap();
-        assert_eq!(reopened.revoke_sync(request).unwrap(), 2);
+        assert_eq!(reopened.revoke_sync(request).unwrap().revision, 2);
     }
 
     #[test]
@@ -2080,5 +2363,448 @@ mod tests {
             open_store(registry),
             Err(LocalStoreError::Corrupt)
         ));
+    }
+
+    // ---- lifecycle transition evidence ----
+
+    fn transitions(store: &LocalCredentialStore) -> Vec<CredentialTransitionDto> {
+        store
+            .list_transitions_sync(&ListTransitionsRequest {
+                organization_id: "org-1".into(),
+            })
+            .unwrap()
+    }
+    fn member_issue(request_id: &str, credential_id: &str) -> IssueCredentialRequest {
+        IssueCredentialRequest {
+            request_id: request_id.into(),
+            issuer_principal_id: "owner".into(),
+            credential_id: credential_id.into(),
+            principal: PrincipalInputDto {
+                id: "reader".into(),
+                kind: PrincipalKindDto::Integration,
+            },
+            membership: MembershipInputDto {
+                id: "reader-membership".into(),
+                principal_id: "reader".into(),
+                organization_id: "org-1".into(),
+                role: MembershipRoleDto::Member,
+                state: MembershipStateDto::Active,
+            },
+            audience_id: "gateway-1".into(),
+            issued_at: 120,
+            expires_at: None,
+            grants: vec![grant("org-1", "server.read")],
+        }
+    }
+    fn revoke(request_id: &str, credential_id: &str, at: u64) -> RevokeCredentialRequest {
+        RevokeCredentialRequest {
+            request_id: request_id.into(),
+            issuer_principal_id: "owner".into(),
+            credential_id: credential_id.into(),
+            revoked_at: at,
+        }
+    }
+    fn principal(id: &str) -> InitiatorDto {
+        InitiatorDto::Principal { id: id.into() }
+    }
+    fn lifecycle(
+        issued_at: u64,
+        expires_at: Option<u64>,
+        revoked_at: Option<u64>,
+    ) -> CredentialLifecycleDto {
+        CredentialLifecycleDto {
+            issued_at,
+            expires_at,
+            revoked_at,
+        }
+    }
+    type Edit = Box<dyn FnOnce(&mut serde_json::Value)>;
+    fn rewrite(path: &Path, edit: impl FnOnce(&mut serde_json::Value)) {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        edit(&mut value);
+        fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn every_lifecycle_path_records_target_before_after_cause_and_initiator() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("auth/credentials.v1.json");
+        let store = open_store(&path).unwrap();
+
+        let booted = store.bootstrap(bootstrap()).unwrap();
+        assert_eq!(booted.transitions, transitions(&store));
+        let issued = store
+            .issue_sync(member_issue("issue-reader", "reader-credential"))
+            .unwrap();
+        let IssueCredentialOutcome::Issued {
+            transitions: issued,
+            ..
+        } = issued
+        else {
+            panic!("fresh issuance")
+        };
+        assert_eq!(issued.len(), 1);
+        store
+            .provision_surface(
+                "panel",
+                "panel-1".into(),
+                "panel-a".into(),
+                vec!["server.read".into()],
+                130,
+                None,
+            )
+            .unwrap();
+        let reprovisioned = store
+            .provision_surface(
+                "panel",
+                "panel-2".into(),
+                "panel-b".into(),
+                vec!["server.read".into()],
+                140,
+                None,
+            )
+            .unwrap();
+        let IssueCredentialOutcome::Issued {
+            transitions: reprovisioned,
+            ..
+        } = reprovisioned
+        else {
+            panic!("fresh reprovisioning")
+        };
+        let revoked = store
+            .revoke_sync(revoke("revoke-reader", "reader-credential", 150))
+            .unwrap();
+        let recovered = store.recover_owner("owner-2".into(), 160, None).unwrap();
+
+        let all = transitions(&store);
+        assert_eq!(
+            all.iter().map(|t| t.sequence).collect::<Vec<_>>(),
+            (1..=all.len() as u64).collect::<Vec<_>>()
+        );
+        let expected = vec![
+            CredentialTransitionDto {
+                sequence: 1,
+                revision: 1,
+                correlation: None,
+                credential_id: "owner-credential".into(),
+                before: None,
+                after: lifecycle(100, Some(200), None),
+                cause: TransitionCauseDto::Issued {
+                    cause: IssuanceCauseDto::Bootstrap,
+                },
+                initiator: InitiatorDto::LocalOperator,
+                at: 100,
+            },
+            CredentialTransitionDto {
+                sequence: 2,
+                revision: 2,
+                correlation: Some("issue-reader".into()),
+                credential_id: "reader-credential".into(),
+                before: None,
+                after: lifecycle(120, None, None),
+                cause: TransitionCauseDto::Issued {
+                    cause: IssuanceCauseDto::AdminIssue,
+                },
+                initiator: principal("owner"),
+                at: 120,
+            },
+            CredentialTransitionDto {
+                sequence: 3,
+                revision: 3,
+                correlation: Some("panel-1".into()),
+                credential_id: "panel-a".into(),
+                before: None,
+                after: lifecycle(130, None, None),
+                cause: TransitionCauseDto::Issued {
+                    cause: IssuanceCauseDto::SurfaceProvision,
+                },
+                initiator: principal("owner"),
+                at: 130,
+            },
+            CredentialTransitionDto {
+                sequence: 4,
+                revision: 4,
+                correlation: Some("panel-2".into()),
+                credential_id: "panel-a".into(),
+                before: Some(lifecycle(130, None, None)),
+                after: lifecycle(130, None, Some(140)),
+                cause: TransitionCauseDto::Revoked {
+                    cause: RevocationCauseDto::Superseded {
+                        by: "panel-b".into(),
+                        supersession: SupersessionDto::Provision,
+                    },
+                },
+                initiator: principal("owner"),
+                at: 140,
+            },
+            CredentialTransitionDto {
+                sequence: 5,
+                revision: 4,
+                correlation: Some("panel-2".into()),
+                credential_id: "panel-b".into(),
+                before: None,
+                after: lifecycle(140, None, None),
+                cause: TransitionCauseDto::Issued {
+                    cause: IssuanceCauseDto::SurfaceProvision,
+                },
+                initiator: principal("owner"),
+                at: 140,
+            },
+            CredentialTransitionDto {
+                sequence: 6,
+                revision: 5,
+                correlation: Some("revoke-reader".into()),
+                credential_id: "reader-credential".into(),
+                before: Some(lifecycle(120, None, None)),
+                after: lifecycle(120, None, Some(150)),
+                cause: TransitionCauseDto::Revoked {
+                    cause: RevocationCauseDto::Explicit,
+                },
+                initiator: principal("owner"),
+                at: 150,
+            },
+            CredentialTransitionDto {
+                sequence: 7,
+                revision: 6,
+                correlation: None,
+                credential_id: "owner-credential".into(),
+                before: Some(lifecycle(100, Some(200), None)),
+                after: lifecycle(100, Some(200), Some(160)),
+                cause: TransitionCauseDto::Revoked {
+                    cause: RevocationCauseDto::Superseded {
+                        by: "owner-2".into(),
+                        supersession: SupersessionDto::OwnerRecovery,
+                    },
+                },
+                initiator: InitiatorDto::LocalOperator,
+                at: 160,
+            },
+            CredentialTransitionDto {
+                sequence: 8,
+                revision: 6,
+                correlation: None,
+                credential_id: "owner-2".into(),
+                before: None,
+                after: lifecycle(160, None, None),
+                cause: TransitionCauseDto::Issued {
+                    cause: IssuanceCauseDto::OwnerRecovery,
+                },
+                initiator: InitiatorDto::LocalOperator,
+                at: 160,
+            },
+        ];
+        assert_eq!(all, expected);
+        assert_eq!(issued, expected[1..2]);
+        assert_eq!(reprovisioned, expected[3..5]);
+        assert_eq!(revoked.revocation, expected[5]);
+        assert_eq!(recovered.transitions, expected[6..8]);
+        assert_eq!(
+            ready(store.list_transitions(ListTransitionsRequest {
+                organization_id: "elsewhere".into()
+            }))
+            .unwrap(),
+            Vec::new()
+        );
+
+        drop(store);
+        assert_eq!(transitions(&open_store(&path).unwrap()), expected);
+    }
+
+    #[test]
+    fn a_credential_is_revoked_once_and_keeps_its_first_cause() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("auth/credentials.v1.json");
+        let store = open_store(&path).unwrap();
+        store.bootstrap(bootstrap()).unwrap();
+        store
+            .provision_surface(
+                "panel",
+                "panel-1".into(),
+                "panel-a".into(),
+                vec!["server.read".into()],
+                130,
+                None,
+            )
+            .unwrap();
+        store
+            .provision_surface(
+                "panel",
+                "panel-2".into(),
+                "panel-b".into(),
+                vec!["server.read".into()],
+                140,
+                None,
+            )
+            .unwrap();
+        let superseded =
+            revocation_of(store.registry().unwrap().as_ref().unwrap(), "panel-a").unwrap();
+
+        // An explicit revoke after supersession changes nothing and reports the
+        // supersession, not a relabelled explicit revocation.
+        let again = store.revoke_sync(revoke("late", "panel-a", 170)).unwrap();
+        assert_eq!(again.revocation, superseded);
+        let replayed = store.revoke_sync(revoke("late", "panel-a", 999)).unwrap();
+        assert_eq!(replayed, again);
+        let other_key = store.revoke_sync(revoke("later", "panel-a", 180)).unwrap();
+        assert_eq!(other_key.revocation, superseded);
+        assert_eq!(
+            transitions(&store)
+                .iter()
+                .filter(|t| t.credential_id == "panel-a" && t.before.is_some())
+                .count(),
+            1
+        );
+
+        // A deliberate time before issuance is the caller's mistake and leaves no trace.
+        let before = transitions(&store);
+        assert!(matches!(
+            store.revoke_sync(revoke("early", "panel-b", 139)),
+            Err(LocalStoreError::Conflict)
+        ));
+        assert_eq!(transitions(&store), before);
+    }
+
+    #[test]
+    fn idempotent_issue_replay_returns_the_original_transitions() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("auth/credentials.v1.json");
+        let store = open_store(&path).unwrap();
+        store.bootstrap(bootstrap()).unwrap();
+        let first = store
+            .issue_sync(member_issue("issue-reader", "reader-credential"))
+            .unwrap();
+        let IssueCredentialOutcome::Issued {
+            transitions: original,
+            ..
+        } = first
+        else {
+            panic!("fresh issuance")
+        };
+        let replay = store
+            .issue_sync(member_issue("issue-reader", "reader-credential"))
+            .unwrap();
+        let IssueCredentialOutcome::ExistingSecretUnavailable {
+            transitions: replayed,
+            ..
+        } = replay
+        else {
+            panic!("replay returns no secret")
+        };
+        assert_eq!(replayed, original);
+        assert_eq!(transitions(&store).len(), 2);
+    }
+
+    #[test]
+    fn a_failed_commit_leaves_no_evidence_and_the_retry_records_it_once() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("auth/credentials.v1.json");
+        let store = open_store(&path).unwrap();
+        store.bootstrap(bootstrap()).unwrap();
+        let request = revoke("revoke-owner", "owner-credential", 150);
+
+        store.fail_before_replace.store(true, Ordering::Release);
+        assert!(store.revoke_sync(request.clone()).is_err());
+        store.fail_before_replace.store(false, Ordering::Release);
+        assert_eq!(transitions(&store).len(), 1);
+        drop(store);
+        let store = open_store(&path).unwrap();
+        assert_eq!(transitions(&store).len(), 1);
+
+        store.fail_directory_sync.store(true, Ordering::Release);
+        assert!(store.revoke_sync(request.clone()).is_err());
+        drop(store);
+        let store = open_store(&path).unwrap();
+        // The replaced file is either the old or the new state; both are consistent.
+        let recorded = transitions(&store);
+        assert!(recorded.len() <= 2);
+        let outcome = store.revoke_sync(request).unwrap();
+        let recorded = transitions(&store);
+        assert_eq!(recorded.len(), 2);
+        assert_eq!(recorded[1], outcome.revocation);
+        assert_eq!(
+            recorded[1].cause,
+            TransitionCauseDto::Revoked {
+                cause: RevocationCauseDto::Explicit
+            }
+        );
+    }
+
+    #[test]
+    fn tampered_or_missing_evidence_is_rejected_by_the_same_rule_on_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("auth/credentials.v1.json");
+        let store = open_store(&path).unwrap();
+        store.bootstrap(bootstrap()).unwrap();
+        store
+            .issue_sync(member_issue("issue-reader", "reader-credential"))
+            .unwrap();
+        store
+            .revoke_sync(revoke("revoke-reader", "reader-credential", 150))
+            .unwrap();
+        drop(store);
+        let good = fs::read(&path).unwrap();
+        assert!(open_store(&path).is_ok());
+
+        let cases: Vec<(&str, Edit)> = vec![
+            (
+                "revoked credential without its revocation record",
+                Box::new(|v| {
+                    v["transitions"].as_array_mut().unwrap().pop();
+                }),
+            ),
+            (
+                "gap in sequence",
+                Box::new(|v| {
+                    v["transitions"][2]["sequence"] = serde_json::json!(4);
+                }),
+            ),
+            (
+                "before does not chain from the prior state",
+                Box::new(|v| {
+                    v["transitions"][2]["before"]["expiresAt"] = serde_json::json!(999);
+                }),
+            ),
+            (
+                "initiator names no principal",
+                Box::new(|v| {
+                    v["transitions"][1]["initiator"] =
+                        serde_json::json!({"kind": "principal", "id": "ghost"});
+                }),
+            ),
+            (
+                "record for a credential the registry does not hold",
+                Box::new(|v| {
+                    v["transitions"][1]["credentialId"] = serde_json::json!("ghost-credential");
+                }),
+            ),
+            (
+                "revocation time disagrees with the credential",
+                Box::new(|v| {
+                    v["credentials"][1]["metadata"]["revokedAt"] = serde_json::json!(151);
+                }),
+            ),
+            (
+                "revision after the registry revision",
+                Box::new(|v| {
+                    v["transitions"][2]["revision"] = serde_json::json!(99);
+                }),
+            ),
+            (
+                "relabelled cause with the wrong shape",
+                Box::new(|v| {
+                    v["transitions"][2]["cause"] =
+                        serde_json::json!({"kind": "issued", "cause": "admin_issue"});
+                }),
+            ),
+        ];
+        for (name, edit) in cases {
+            fs::write(&path, &good).unwrap();
+            rewrite(&path, edit);
+            assert!(
+                matches!(open_store(&path), Err(LocalStoreError::Corrupt)),
+                "accepted: {name}"
+            );
+        }
     }
 }

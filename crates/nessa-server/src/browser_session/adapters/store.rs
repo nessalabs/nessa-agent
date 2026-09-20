@@ -2,6 +2,7 @@ use crate::browser_session::{
     application::{BrowserSession, SessionStore},
     domain::value_objects::RemovalReason,
 };
+use crate::core::trusted_origin::is_trusted_origin_value;
 use nessa_auth::application::ports::{AccessError, PortFuture};
 use nessa_auth::domain::CredentialId;
 use nessa_local_storage::{open, OpenMode};
@@ -324,7 +325,7 @@ impl State {
             }
             if let Some(after) = &change.after {
                 if after.origin().len() > 1024
-                    || !crate::server::entrypoint::origin::is_trusted_origin_value(after.origin())
+                    || !is_trusted_origin_value(after.origin())
                     || !after.origin().starts_with("http")
                 {
                     return Err(AccessError::Unavailable);
