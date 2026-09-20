@@ -1,6 +1,6 @@
 import { ComposerDeliveryMode } from "@nessa-ui/react/composer-queue"
 import type { AttachmentResources } from "../adapters/attachment-resources"
-import { attachmentNotice } from "../application/upload-image"
+import { attachmentNotice, droppedFilesRefusal } from "../application/attachment-notice"
 import * as React from "react"
 import { CircleArrowUp, Download, Square } from "lucide-react"
 import { AgentNotification } from "@nessa-ui/react/agent-notification"
@@ -57,6 +57,7 @@ import { FileDropZone } from "@nessa-ui/react/file-drop-zone"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 
 import { AddAttachmentMenu } from "./add-attachment-menu"
+import { AttachmentNotification } from "./attachment-notification"
 import { AttachmentTile } from "./attachment-tile"
 import { AttachmentIcon } from "./attachment-icon"
 import { WaveformIcon } from "./waveform-icon"
@@ -114,8 +115,11 @@ export function App({
   )
   const attachments = useFileAttachments(chat, attachmentResources)
   const uploads = useAttachmentUploads(chat, attachmentResources, digest)
-  // What the draft's files need said about them now, rather than at send.
+  // What the draft's files need said about them now, rather than at send, and
+  // why the last thing offered was turned away. One notice, one order, decided
+  // in one place — see `attachmentNotice`.
   const fileNotice = attachmentNotice({
+    refusal: attachments.refusal,
     files: attachments.files.map((file) => ({
       id: file.id,
       name: file.name,
@@ -127,7 +131,7 @@ export function App({
   const folderDrop = useFolderDrop(
     chat.active.id,
     attachments.addFiles,
-    attachments.setError,
+    attachments.refuse,
   )
   const session = useSession()
   // Panel-level, not conversation-level: an available update is a fact about
@@ -150,7 +154,7 @@ export function App({
     pasteAttachment,
   } = useComposer(chat, (id) => {
     if (!attachments.isPending(id) && !folderDrop.isPending(id)) return false
-    attachments.setError("Attachments are still loading. Send again once they finish.")
+    attachments.refuse({ reason: "sending-while-reading" })
     return true
   })
   const contentDrop = useContentDrop({
@@ -296,11 +300,14 @@ export function App({
       <FileDropZone
         asChild
         onFiles={attachments.addFiles}
-        onRejectedFiles={() =>
-          attachments.setError(
-            "Some dropped files could not be attached. Try selecting them with +.",
-          )
-        }
+        // The zone says which rule refused each file, so the panel can say why
+        // rather than guessing at one sentence for all of them — and, for the
+        // file that is simply too heavy, can avoid offering the + picker, which
+        // holds it to this same `maxSize` and would refuse it again.
+        onRejectedFiles={(rejections) => {
+          const refusal = droppedFilesRefusal(rejections)
+          if (refusal) attachments.refuse(refusal)
+        }}
         maxFiles={MAX_DRAFT_ATTACHMENTS}
         maxSize={MAX_ATTACHMENT_BYTES}
       >
@@ -496,21 +503,29 @@ export function App({
                 onDismiss={update.dismiss}
               />
             )}
-            {/* One short line about the draft's files. The tile already marks a
-                failed upload and carries the full reason, so this does not repeat
-                it; it offers the retry once for every upload worth retrying. */}
-            {fileNotice && !attachments.error && (
+            {/* One short line about the draft's files, whether it is a failed
+                upload or something this panel would not take. The tile already
+                marks a failed upload and carries the full reason, so this does
+                not repeat it; it offers the retry once for every upload worth
+                retrying. */}
+            {fileNotice && (
+              <AttachmentNotification
+                notice={fileNotice}
+                onRetryUploads={(files) => files.forEach(uploads.retry)}
+                onChooseFiles={attachments.chooseFiles}
+                onDismiss={attachments.clearRefusal}
+              />
+            )}
+            {/* Not the connection's own notice below, which the session's phase
+                owns: this is what the surface around the session could not do —
+                restoring a sign-in, ending one — and it is said on the same
+                surface rather than as red text under the composer. */}
+            {sessionError && (
               <AgentNotification
                 className="mb-2"
                 state="disconnected"
-                title={fileNotice.title}
-                description={fileNotice.description}
-                retryLabel="Retry"
-                onRetry={
-                  fileNotice.retry.length > 0
-                    ? () => fileNotice.retry.forEach(uploads.retry)
-                    : undefined
-                }
+                title="Session needs attention"
+                description={sessionError}
               />
             )}
             <ConversationNotification
@@ -531,21 +546,6 @@ export function App({
                 disabled={!!chat.active.controlPending}
               />
             )}
-            {sessionError && (
-              <p role="alert" className="px-3 nessa-text-4 text-destructive">
-                {sessionError}
-              </p>
-            )}
-            {attachments.error && (
-              <p role="alert" className="px-3 nessa-text-4 text-destructive">
-                {attachments.error}
-              </p>
-            )}
-            {attachments.reading && (
-              <p role="status" className="px-3 nessa-text-4 text-muted-foreground">
-                Reading files…
-              </p>
-            )}
             <PillComposer
               key={chat.active.id}
               expandable={viewedPaste === null && attachments.viewed === null}
@@ -558,6 +558,16 @@ export function App({
               onSubmit={submit}
             >
               <ChatComposerAttachments>
+                {/* Reading a file is transient and it is not a problem, so it
+                    belongs with the tiles that are doing it rather than beside
+                    a notice about something going wrong. The placeholder tiles
+                    are what it looks like; this is the same thing said once,
+                    politely, to somebody who cannot see them. */}
+                {attachments.pendingFiles.length > 0 && (
+                  <span key="reading" role="status" className="sr-only">
+                    Reading files…
+                  </span>
+                )}
                 {attachments.pendingFiles.map((file, index) => (
                   <span
                     key={index}

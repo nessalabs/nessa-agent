@@ -11,7 +11,7 @@ import {
   MAX_SESSION_ATTACHMENT_BYTES,
   type AttachmentResources,
 } from "../adapters/attachment-resources"
-import { windowBudgetMessage } from "../application/upload-image"
+import type { AttachmentRefusal } from "../application/attachment-notice"
 
 const MIB = 1024 * 1024
 
@@ -51,7 +51,11 @@ export function useFileAttachments(
   const pendingConversation = React.useRef<string | null>(null)
   const mounted = React.useRef(true)
   const [reading, setReading] = React.useState(false)
-  const [error, setError] = React.useState<string | null>(null)
+  // Why the last thing offered was not taken, if it was not. Typed rather than
+  // a sentence: what to say about it, and whether there is anything to be done,
+  // belong to `attachment-notice`, which says it in the same notification the
+  // draft's own files are reported through.
+  const [refusal, setRefusal] = React.useState<AttachmentRefusal | null>(null)
   const [viewed, setViewed] = React.useState<{
     conversationId: string
     file: FileAttachment
@@ -89,7 +93,7 @@ export function useFileAttachments(
   function addFiles(selected: readonly File[], targetId = chat.active.id) {
     if (!selected.length) return
     if (busyRef.current) {
-      setError("Please wait for the selected files to finish loading.")
+      setRefusal({ reason: "reading-files" })
       return
     }
     const conversationId = targetId
@@ -98,34 +102,41 @@ export function useFileAttachments(
     )
     if (!target) return
     const targetFiles = target.draft.filter((part) => part.type === "file")
+    // Three bounds, told apart, because the advice for each is different and
+    // one of them has no advice at all: a file over the per-file bound is
+    // refused by every route into this composer.
+    const tooLarge = selected.filter((file) => file.size > MAX_ATTACHMENT_BYTES)
+    if (tooLarge.length > 0) {
+      setRefusal({ reason: "file-too-large", names: tooLarge.map((file) => file.name) })
+      return
+    }
+    if (targetFiles.length + selected.length > MAX_DRAFT_ATTACHMENTS) {
+      setRefusal({ reason: "too-many-files" })
+      return
+    }
     if (
-      selected.some((file) => file.size > MAX_ATTACHMENT_BYTES) ||
-      targetFiles.length + selected.length > MAX_DRAFT_ATTACHMENTS ||
       [...targetFiles, ...selected].reduce((total, file) => total + file.size, 0) >
-        MAX_DRAFT_ATTACHMENT_BYTES
+      MAX_DRAFT_ATTACHMENT_BYTES
     ) {
-      setError(
-        `Attach up to ${MAX_DRAFT_ATTACHMENTS} files, ${MAX_ATTACHMENT_BYTES / MIB} MiB each and ${MAX_DRAFT_ATTACHMENT_BYTES / MIB} MiB total per draft.`,
-      )
+      setRefusal({ reason: "draft-too-large" })
       return
     }
     if (!resources.canAdd(selected.reduce((total, file) => total + file.size, 0))) {
-      setError(
-        windowBudgetMessage(
-          MAX_SESSION_ATTACHMENT_BYTES / MIB,
-          conversationsRef.current.some((conversation) =>
-            conversation.draft.some((part) => part.type === "file"),
-          ),
+      setRefusal({
+        reason: "window-budget",
+        maxMiB: MAX_SESSION_ATTACHMENT_BYTES / MIB,
+        draftsHoldFiles: conversationsRef.current.some((conversation) =>
+          conversation.draft.some((part) => part.type === "file"),
         ),
-      )
+      })
       return
     }
-    setError(null)
+    setRefusal(null)
     try {
       // Object URLs are ready synchronously; no FileReader or duplicate thumbnail URLs.
       chat.attachFiles(resources.add(selected), conversationId)
     } catch {
-      setError("The files could not be attached. Please select them again.")
+      setRefusal({ reason: "unreadable-files" })
     }
   }
 
@@ -135,7 +146,7 @@ export function useFileAttachments(
     busyRef.current = true
     pendingConversation.current = targetId
     setReading(true)
-    setError(null)
+    setRefusal(null)
     setPending({
       conversationId: targetId,
       files: [{ name: "Image", mimeType: "image/" }],
@@ -150,10 +161,7 @@ export function useFileAttachments(
       setPending(null)
       addFiles([file], targetId)
     } catch {
-      if (mounted.current)
-        setError(
-          "The image could not be loaded. Save the image, then drop the file here.",
-        )
+      if (mounted.current) setRefusal({ reason: "unreadable-image-url" })
     } finally {
       download.current = null
       pendingConversation.current = null
@@ -170,8 +178,9 @@ export function useFileAttachments(
     pendingFiles: pending?.conversationId === chat.active.id ? pending.files : [],
     files,
     reading,
-    error,
-    setError,
+    refusal,
+    refuse: (next: AttachmentRefusal) => setRefusal(next),
+    clearRefusal: () => setRefusal(null),
     addFiles,
     addImageUrl,
     chooseFiles: () => inputRef.current?.click(),

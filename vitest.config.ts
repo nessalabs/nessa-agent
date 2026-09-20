@@ -24,6 +24,9 @@ export default defineConfig({
       "@nessa-ui/react/chat-bubbles": resolve(
         "node_modules/@nessa-ui/react/src/components/chat-bubbles.tsx",
       ),
+      "@nessa-ui/react/agent-notification": resolve(
+        "node_modules/@nessa-ui/react/src/components/agent-notification.tsx",
+      ),
     },
   },
   test: {
