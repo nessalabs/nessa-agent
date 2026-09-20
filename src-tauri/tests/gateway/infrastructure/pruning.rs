@@ -2,7 +2,7 @@ use super::super::control::RetirementEvidence;
 use super::super::generation::random_generation;
 use super::{
     collect, listing, removable, retained_runtimes, Collected, LabelDirectory, Listing,
-    RetainedRuntimes, RuntimeVersions,
+    RetainedRuntimes, RuntimeVersions, Skipped,
 };
 use std::{
     cell::RefCell,
@@ -32,7 +32,7 @@ struct FakeVersions {
 }
 impl FakeVersions {
     /// Goes through the real split, so a fake directory reads like a real one.
-    fn holding_entries(entries: Vec<OsString>) -> Self {
+    fn holding_entries(entries: Vec<Result<OsString, String>>) -> Self {
         Self {
             listing: Ok(listing(entries)),
             refuse: Vec::new(),
@@ -40,7 +40,7 @@ impl FakeVersions {
         }
     }
     fn holding(names: &[String]) -> Self {
-        Self::holding_entries(names.iter().map(OsString::from).collect())
+        Self::holding_entries(names.iter().map(|name| Ok(OsString::from(name))).collect())
     }
     fn unreadable(error: &str) -> Self {
         Self {
@@ -183,7 +183,7 @@ fn an_update_leaves_the_current_version_and_collects_the_generations_behind_it()
         collect(&versions, &only_current()),
         Collected {
             removed: expected.clone(),
-            failures: Vec::new(),
+            skipped: Vec::new(),
         }
     );
     assert_eq!(*versions.attempted.borrow(), expected);
@@ -212,39 +212,55 @@ fn a_refused_removal_is_reported_and_does_not_stop_the_others() {
         collect(&versions, &only_current()),
         Collected {
             removed: vec![fingerprint("c")],
-            failures: vec![(fingerprint("b"), "permission denied".into())],
+            skipped: vec![Skipped::Removal {
+                name: fingerprint("b"),
+                reason: "permission denied".into(),
+            }],
         }
     );
 }
 
 /// APFS accepts only valid UTF-8, so no test on this machine can create such an
-/// entry; the split is exercised through `listing`, the way `staging.rs` tests
-/// its own rejection of a name it cannot create either.
+/// entry, and no local filesystem will fail one `readdir` and not the next;
+/// both are exercised through `listing`, the way `staging.rs` tests its own
+/// rejection of a name it cannot create either.
 #[test]
-fn an_entry_with_no_name_is_reported_and_the_obsolete_version_beside_it_still_goes() {
+fn an_entry_with_no_usable_name_is_reported_and_the_obsolete_version_beside_it_still_goes() {
     let odd = OsString::from_vec(vec![0xff]);
     let versions = FakeVersions::holding_entries(vec![
-        OsString::from(fingerprint("a")),
-        OsString::from(fingerprint("b")),
-        odd.clone(),
+        Ok(OsString::from(fingerprint("a"))),
+        Ok(OsString::from(fingerprint("b"))),
+        Ok(odd.clone()),
+        Err("Input/output error".to_owned()),
     ]);
     let collected = collect(&versions, &only_current());
 
+    // The obsolete runtime still goes, and neither odd entry was attempted.
     assert_eq!(collected.removed, vec![fingerprint("b")]);
     assert_eq!(*versions.attempted.borrow(), vec![fingerprint("b")]);
-    assert_eq!(collected.failures.len(), 1);
-    assert_eq!(collected.failures[0].0, odd.to_string_lossy());
-    assert!(collected.failures[0].1.contains("left in place"));
+    assert_eq!(
+        collected.skipped,
+        vec![
+            Skipped::Unreadable("Input/output error".to_owned()),
+            Skipped::Unnamed(odd.to_string_lossy().into_owned()),
+        ]
+    );
 }
 
+/// The two decisions a retried retirement asks for, in order.
+///
+/// This pins the rule over that pair of evidence values, not the wiring: which
+/// fence `register` hands to `retained_runtimes` is the call site's, and with
+/// no seam to drive `register` from a test, passing a re-read fence there — or
+/// none — would not fail this. That gap is stated in the change's report.
 #[test]
-fn a_failed_retirement_keeps_its_runtime_until_a_later_reconciliation_sees_it_through() {
+fn an_unfinished_fence_keeps_its_runtime_and_a_later_acknowledgement_releases_it() {
     let current = fingerprint("a");
     let old = fingerprint("b");
 
-    // The retry's own reconciliation reads the failed attempt's fence before it
-    // asks the old gateway again, so it still describes an unfinished
-    // retirement even once the replacement is up.
+    // What a retry's own reconciliation holds: the failed attempt's fence, read
+    // before the old gateway was asked again, so it still describes an
+    // unfinished retirement even once the replacement is up.
     let during_retry = retained_runtimes(&current, &current, None, Some(&evidence("b", false)));
     let versions = FakeVersions::holding(&[current.clone(), old.clone()]);
     assert_eq!(
@@ -253,7 +269,7 @@ fn a_failed_retirement_keeps_its_runtime_until_a_later_reconciliation_sees_it_th
     );
     assert!(versions.attempted.borrow().is_empty());
 
-    // The next reconciliation reads the acknowledgement the retry wrote.
+    // What the next one holds: the acknowledgement the retry wrote.
     let afterwards = retained_runtimes(&current, &current, None, Some(&evidence("b", true)));
     let versions = FakeVersions::holding(&[current, old.clone()]);
     assert_eq!(collect(&versions, &afterwards).removed, vec![old]);
@@ -266,7 +282,7 @@ fn a_directory_that_cannot_be_read_is_reported_and_removes_nothing() {
         collect(&versions, &only_current()),
         Collected {
             removed: Vec::new(),
-            failures: vec![(String::new(), "no such file or directory".into())],
+            skipped: vec![Skipped::Directory("no such file or directory".into())],
         }
     );
     assert!(versions.attempted.borrow().is_empty());
@@ -320,7 +336,7 @@ fn the_real_directory_removes_a_published_tree_and_keeps_the_current_one() {
     );
 
     let collected = collect(&directory, &only_current());
-    assert_eq!(collected.failures, Vec::new());
+    assert_eq!(collected.skipped, Vec::new());
     assert_eq!(collected.removed.len(), 2);
     assert!(current.exists());
     assert!(!stale.exists());
@@ -340,16 +356,16 @@ fn the_real_directory_refuses_an_entry_that_is_not_a_directory_it_owns() {
     let collected = collect(&directory, &only_current());
     assert_eq!(collected.removed, Vec::<String>::new());
     assert_eq!(
-        collected.failures,
+        collected.skipped,
         vec![
-            (
-                fingerprint("b"),
-                "Staged runtime entry is not a directory".to_owned()
-            ),
-            (
-                fingerprint("c"),
-                "Staged runtime entry is not a directory".to_owned()
-            ),
+            Skipped::Removal {
+                name: fingerprint("b"),
+                reason: "Staged runtime entry is not a directory".to_owned(),
+            },
+            Skipped::Removal {
+                name: fingerprint("c"),
+                reason: "Staged runtime entry is not a directory".to_owned(),
+            },
         ]
     );
     assert!(outside.join("nessa").exists());
@@ -363,6 +379,8 @@ fn a_missing_directory_is_a_reported_failure_rather_than_a_panic() {
     let directory = LabelDirectory::at(&fixture.0.join("never-registered"));
     let collected = collect(&directory, &only_current());
     assert_eq!(collected.removed, Vec::<String>::new());
-    assert_eq!(collected.failures.len(), 1);
-    assert_eq!(collected.failures[0].0, "");
+    assert!(matches!(
+        collected.skipped.as_slice(),
+        [Skipped::Directory(_)]
+    ));
 }

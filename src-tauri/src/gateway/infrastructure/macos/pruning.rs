@@ -116,36 +116,62 @@ fn sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
+/// One entry a pass did not remove, and why.
+///
+/// Each variant carries only what it can honestly say. A failed removal knows
+/// the name it was working on and can be turned back into a path; an entry the
+/// directory would not yield, or whose name is not text, cannot, and saying so
+/// is the point of keeping them apart. The caller words each one; nothing here
+/// pretends an entry was attempted when it was not.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Skipped {
+    /// The label's directory could not be listed at all, so nothing was
+    /// collected.
+    Directory(String),
+    /// One entry could not be read out of the directory. It has no name here,
+    /// so the rule was never applied to it and no removal was attempted.
+    Unreadable(String),
+    /// The entry's name is not valid text, so it is not a name this host
+    /// writes and the rule leaves it alone. The string is a lossy rendering
+    /// for the log, never a path: it may name nothing at all.
+    Unnamed(String),
+    /// A removal was attempted for this name and failed.
+    Removal { name: String, reason: String },
+}
+
 /// One reading of a label's runtime directory.
 ///
-/// An entry whose name is not text is still an entry: it is not a name this
-/// host writes, so the rule would leave it alone anyway, and it must not take
-/// the recognised versions beside it down with it. It is kept apart from the
-/// names rather than dropped, so that what was passed over is still said.
+/// An entry that cannot be read, or whose name is not text, is still an entry:
+/// it is not a name this host writes, so the rule would leave it alone anyway,
+/// and it must not take the recognised versions beside it down with it. Such
+/// entries are kept apart from the names rather than dropped, so that what was
+/// passed over is still said.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Listing {
     /// Every entry that has a name, in a stable order.
     pub names: Vec<String>,
-    /// Entries that could not be named, as lossy text, and why they were
-    /// passed over.
-    pub passed_over: Vec<(String, String)>,
+    /// Entries no name could be taken from, in a stable order.
+    pub passed_over: Vec<Skipped>,
 }
 
-/// Splits what a directory holds into names and entries that have none.
+/// Splits what a directory yielded into names and entries that have none.
 ///
-/// Separate from the reading so the non-UTF-8 case can be tested at all: APFS
-/// accepts only valid UTF-8, so no test on this machine can create such an
-/// entry, and `staging.rs` keeps its own representation test for the same
-/// reason.
-fn listing(entries: Vec<OsString>) -> Listing {
+/// Separate from the reading so both failing cases can be tested at all: APFS
+/// accepts only valid UTF-8, so no test on this machine can create an entry
+/// with an invalid name, and an `EIO` part-way through a directory is not
+/// something a test can ask a local filesystem for either. `staging.rs` keeps
+/// its own representation test for the same reason.
+fn listing(entries: Vec<Result<OsString, String>>) -> Listing {
     let mut listing = Listing::default();
     for entry in entries {
-        match entry.into_string() {
-            Ok(name) => listing.names.push(name),
-            Err(raw) => listing.passed_over.push((
-                raw.to_string_lossy().into_owned(),
-                "Staged runtime entry has no valid UTF-8 name and was left in place".into(),
-            )),
+        match entry {
+            Ok(entry) => match entry.into_string() {
+                Ok(name) => listing.names.push(name),
+                Err(raw) => listing
+                    .passed_over
+                    .push(Skipped::Unnamed(raw.to_string_lossy().into_owned())),
+            },
+            Err(error) => listing.passed_over.push(Skipped::Unreadable(error)),
         }
     }
     // Directory order is whatever the filesystem says; a stable order keeps
@@ -167,24 +193,25 @@ pub(super) trait RuntimeVersions {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct Collected {
     pub removed: Vec<String>,
-    /// Entry name and why it was not removed: a removal that failed, an entry
-    /// that could not be named, or an empty name when the directory itself
-    /// could not be read.
-    pub failures: Vec<(String, String)>,
+    /// Everything this pass did not remove, each saying which kind of thing
+    /// happened to it.
+    pub skipped: Vec<Skipped>,
 }
 
 /// Removes every entry the rule allows, and keeps going past the ones it cannot.
 ///
 /// One failed removal says nothing about the next: a version whose permissions
 /// were changed by hand does not make the version beside it unremovable. The
-/// same holds one level up — an entry that cannot even be named is reported and
-/// stepped over, never a reason to collect nothing.
+/// same holds one level up — an entry the directory would not yield, or that
+/// cannot be named, is reported and stepped over, never a reason to collect
+/// nothing. Only a directory that cannot be listed at all ends the pass, because
+/// then there is nothing to decide about.
 pub(super) fn collect(versions: &impl RuntimeVersions, retained: &RetainedRuntimes) -> Collected {
     let mut collected = Collected::default();
     let listing = match versions.list() {
         Ok(listing) => listing,
         Err(error) => {
-            collected.failures.push((String::new(), error));
+            collected.skipped.push(Skipped::Directory(error));
             return collected;
         }
     };
@@ -194,10 +221,10 @@ pub(super) fn collect(versions: &impl RuntimeVersions, retained: &RetainedRuntim
         }
         match versions.remove(&name) {
             Ok(()) => collected.removed.push(name),
-            Err(error) => collected.failures.push((name, error)),
+            Err(reason) => collected.skipped.push(Skipped::Removal { name, reason }),
         }
     }
-    collected.failures.extend(listing.passed_over);
+    collected.skipped.extend(listing.passed_over);
     collected
 }
 
@@ -212,10 +239,17 @@ impl LabelDirectory {
 
 impl RuntimeVersions for LabelDirectory {
     fn list(&self) -> Result<Listing, String> {
-        let mut entries = Vec::new();
-        for entry in fs::read_dir(&self.0).map_err(|error| error.to_string())? {
-            entries.push(entry.map_err(|error| error.to_string())?.file_name());
-        }
+        // Opening the directory is the whole pass; one entry it then refuses to
+        // yield is one entry, and taking the versions beside it down with it
+        // would be the same defect as failing on a name that is not text.
+        let entries = fs::read_dir(&self.0)
+            .map_err(|error| error.to_string())?
+            .map(|entry| {
+                entry
+                    .map(|entry| entry.file_name())
+                    .map_err(|error| error.to_string())
+            })
+            .collect();
         Ok(listing(entries))
     }
     fn remove(&self, name: &str) -> Result<(), String> {
@@ -234,20 +268,37 @@ impl RuntimeVersions for LabelDirectory {
 /// Collects one label's directory and reports what happened.
 ///
 /// Registration's result is deliberately unreachable from here. Disk that was
-/// not reclaimed is said on the app's log, with the path, and nothing else.
+/// not reclaimed is said on the app's log and nothing else.
+///
+/// Each line says what actually happened to the thing it names. A path appears
+/// only where one was really worked on: an entry with no usable name is
+/// reported against its directory, and its lossy rendering is given as what it
+/// looked like, never as somewhere to go and look.
 pub(super) fn prune_runtimes(installations: &Path, retained: &RetainedRuntimes) {
     let collected = collect(&LabelDirectory::at(installations), retained);
+    let directory = installations.display();
     for name in &collected.removed {
         eprintln!(
             "[nessa] Removed staged gateway runtime {}",
             installations.join(name).display()
         );
     }
-    for (name, error) in &collected.failures {
-        eprintln!(
-            "[nessa] Could not remove staged gateway runtime {}: {error}",
-            installations.join(name).display()
-        );
+    for skipped in &collected.skipped {
+        match skipped {
+            Skipped::Directory(reason) => eprintln!(
+                "[nessa] Could not list staged gateway runtimes in {directory}; none were removed: {reason}"
+            ),
+            Skipped::Unreadable(reason) => eprintln!(
+                "[nessa] An entry of {directory} could not be read and was left in place; no removal was attempted: {reason}"
+            ),
+            Skipped::Unnamed(lossy) => eprintln!(
+                "[nessa] An entry of {directory} has no valid text name and was left in place; no removal was attempted. Its name reads approximately as {lossy:?}, which is not a path"
+            ),
+            Skipped::Removal { name, reason } => eprintln!(
+                "[nessa] Could not remove staged gateway runtime {}: {reason}",
+                installations.join(name).display()
+            ),
+        }
     }
 }
 #[cfg(test)]

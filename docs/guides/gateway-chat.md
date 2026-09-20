@@ -296,7 +296,9 @@ Nothing else in the directory is touched: only a name this host writes — a
 64-hex fingerprint, or `.staging-` and one — is ever a candidate, and each
 removal is re-checked against the filesystem for a real directory this user
 owns. A reconciliation that failed collects nothing, since its predecessor may
-still be running. A removal that fails is logged with its path and changes
+still be running. One entry never stops the pass: an entry the directory will
+not yield, and one whose name is not valid text, are each reported and stepped
+over, and the versions beside them are still collected. A removal that fails is logged with its path and changes
 nothing about registration: a gateway that is up matters more than disk that was
 not reclaimed. macOS may retain its protected `com.apple.provenance`
 marker on both copy paths; runtime identity and policy do not derive from that
