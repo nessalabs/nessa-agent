@@ -281,6 +281,15 @@ fn an_image_is_checked_against_the_models_encodings_and_byte_limit() {
         limits.check(Gif, 7),
         Err(ImageInputViolation::MediaType(Gif))
     );
+    // Each says which limit, in words a person can act on.
+    assert_eq!(
+        limits.check(Gif, 1).unwrap_err().to_string(),
+        "the model does not accept image/gif"
+    );
+    assert_eq!(
+        limits.check(Png, 7).unwrap_err().to_string(),
+        "an image of 7 bytes exceeds the model's 6"
+    );
 }
 
 #[test]
