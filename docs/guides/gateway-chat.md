@@ -297,11 +297,17 @@ with an unusual path does not rewrite the service. It is asked once per run of t
 reconciliation: the panel reconciles on every webview load, and a profile edited
 while Nessa is open would otherwise produce a different definition and retire a
 healthy gateway mid-session. A changed profile therefore takes effect the next
-time the app is launched, and that launch re-registers the service. A login shell
-that hangs, fails, or answers with something that is not a path costs the
-registration nothing: it keeps the path already registered, or falls back to the
-system path on a first run, says so on stderr, and is not asked again until the
-app is launched again. The staged runtime is never on it, so the
+time the app is launched, and that launch re-registers the service. The shell is asked
+interactively where that means something — `zsh -l -c` reads `.zprofile` and
+never `.zshrc`, and `.zshrc` is where pnpm and nvm put themselves — and the
+answer comes back between unguessable markers, so a profile that prints a banner
+or tries to answer for the shell does neither. Each attempt is bounded by one
+deadline covering output and exit together, and a shell that overruns it is
+killed with its process group. The order when something goes wrong is
+interactive login shell, then login shell, then the path already registered for
+the service, then the system path; each step says so on stderr, and none of them
+costs the registration anything. Nothing is asked again until the app is
+launched again. The staged runtime is never on it, so the
 agent's `node` is the user's or none at all.
 
 The desktop bootstrap registers `so.nessa.gateway.prod` in the user's launchd

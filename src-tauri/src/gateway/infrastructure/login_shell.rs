@@ -1,26 +1,39 @@
 //! Asking the user's login shell what their `PATH` is.
 //!
-//! A login shell is the user's own code — `.zprofile`, `.bash_profile`, whatever
-//! Homebrew, nvm or mise wrote into them — run by this host. So it is run the
-//! way untrusted code is run: a clean environment with nothing secret in it, no
-//! terminal, output read to a bound, a deadline, and an answer that is a
-//! [`SearchPath`] or nothing.
+//! A login shell is the user's own code — `.zshrc`, `.zprofile`, `.bash_profile`,
+//! whatever Homebrew, nvm, pnpm or mise wrote into them — run by this host. So it
+//! is run the way untrusted code is run: a clean environment with nothing secret
+//! in it, no terminal, no stdin, output read to a bound, one deadline over the
+//! whole thing, and an answer that is a [`SearchPath`] or nothing.
 //!
 //! ```text
-//! LoginShell::resolve ──spawn──▶ <login shell> -lc "printenv PATH"
-//!        │                              │
-//!        └──deadline, bounded read──────┘──▶ SearchPath::parse
+//! LoginShell::resolve ─▶ <shell> -i -l -c "<marker> printenv PATH <marker>"
+//!          │ failed ──▶ <shell>    -l -c "<same>"
+//!          │                              │
+//!          └──one deadline, bounded read──┘──▶ between markers ──▶ SearchPath
 //! ```
-//! Arrows mean process control and the value coming back. A shell that is still
-//! running when the deadline passes is killed with its process group and
-//! reported as [`LoginShellError::TimedOut`]; registration carries on without it.
+//! Arrows mean process control and the value coming back; each failed attempt is
+//! reported before the next is tried, and the caller keeps the path its service
+//! is already registered with if both fail.
+//!
+//! Two decisions are worth the detail:
+//!
+//! **Interactive first.** `zsh -l -c` reads `.zprofile` and never `.zshrc`, and
+//! `.zshrc` is where pnpm's installer and the standard nvm setup put themselves.
+//! A non-interactive probe therefore *succeeds* with a `PATH` missing the tools
+//! the user actually has, which no fallback can catch, because nothing failed.
+//! So the shells that make the distinction — zsh, bash — are asked interactively
+//! first, and every other shell gets the login probe it understands.
+//!
+//! **Markers, not the last line.** An interactive shell prints things: a motd, a
+//! plugin banner, a prompt, a warning about a missing directory. The `PATH` is
+//! written between two markers made of bytes from `/dev/urandom`, and only what
+//! is between them is read — a profile cannot print a convincing answer because
+//! it cannot know what to print, and noise around it does not matter.
 //!
 //! What this module does not verify about itself: that a real `.zprofile` on a
-//! real machine exports what the user expects. Its tests stand in their own
-//! shell scripts for that, and the deadline path is covered by a script that
-//! never returns — its descendants are killed with the process group, which the
-//! test asserts only for the shell itself, because when the kernel reaps a
-//! descendant of a dead leader is not ours to observe.
+//! real machine exports what its owner expects. Its tests supply their own
+//! shells and their own profiles, including a real zsh with a real `.zshrc`.
 use super::super::application::{LoginShellError, LoginShellPath};
 use super::super::domain::value_objects::SearchPath;
 
@@ -50,57 +63,77 @@ impl LoginShellPath for LoginShell {
 mod unix {
     use super::{LoginShellError, LoginShellPath, SearchPath};
     use std::{
-        ffi::{CStr, OsStr},
+        ffi::{CStr, OsStr, OsString},
+        fs::File,
         io::Read,
         os::unix::{ffi::OsStrExt, process::CommandExt},
         path::{Path, PathBuf},
         process::{Command, Stdio},
-        sync::mpsc,
+        sync::mpsc::{self, Receiver, RecvTimeoutError},
         thread,
-        time::Duration,
+        time::{Duration, Instant},
     };
 
-    /// How long a registration will wait for a login shell before giving up on
-    /// it.
+    /// How long one attempt may take, start to finish: the shell's output and
+    /// the shell's exit, not one of them.
     ///
     /// Long enough for the version managers people actually have in their
-    /// profiles; short enough that a profile which waits for input costs one
-    /// pause at startup rather than a gateway that never registers.
+    /// profiles; short enough that a profile which never returns costs a pause
+    /// at startup rather than a gateway that never registers. A shell that gets
+    /// both attempts can cost two of these, once per run of the app.
     const DEADLINE: Duration = Duration::from_secs(5);
+
+    /// How long to wait for a killed shell to be reaped before reporting the
+    /// timeout anyway.
+    ///
+    /// `SIGKILL` cannot be caught or blocked, so this is a confirmation rather
+    /// than a wait. Whether it arrives or not the child is owned by a thread
+    /// that does nothing but reap it, so no zombie is left behind either way.
+    const REAP_GRACE: Duration = Duration::from_secs(2);
 
     /// The shell to ask when the account record names none that can be run.
     const FALLBACK_SHELL: &str = "/bin/sh";
-
-    /// What the login shell is asked to run.
-    ///
-    /// `printenv` rather than `echo $PATH`: every shell that a Mac ships or a
-    /// user installs exports `PATH` as one colon-separated string, but not all
-    /// of them interpolate it as one — fish holds it as a list and would print
-    /// it with the separators gone, which is a different path that happens to
-    /// look like one.
-    const REPORT_PATH: &str = "/usr/bin/printenv PATH";
 
     /// The most output to read before deciding this is not a shell reporting a
     /// path.
     const OUTPUT_LIMIT: u64 = 64 * 1024;
 
-    /// The path the shell reported, which is the last line it printed.
-    ///
-    /// Profiles print things — a fortune, a version manager's notice, a warning
-    /// about a missing directory. The command asked for is the last thing to
-    /// run, so its answer is the last line, and everything above it is somebody
-    /// else's.
-    pub(super) fn reported_path(output: &str) -> &str {
-        output
-            .lines()
-            .rev()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("")
+    /// How much randomness a marker carries. A profile that cannot guess these
+    /// bytes cannot put words in the shell's mouth.
+    const MARKER_BYTES: usize = 16;
+
+    /// How a shell is asked, in the order the answers are preferred.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    pub(super) enum Probe {
+        /// `-i -l -c`: reads the interactive files as well as the login ones.
+        /// Only for shells that distinguish them and survive having no terminal.
+        InteractiveLogin,
+        /// `-l -c`: the login files. What every shell here understands, and the
+        /// fallback when an interactive profile blocks or fails.
+        Login,
+    }
+    impl Probe {
+        fn arguments(self) -> &'static [&'static str] {
+            match self {
+                Self::InteractiveLogin => &["-i", "-l", "-c"],
+                Self::Login => &["-l", "-c"],
+            }
+        }
+        fn describe(self) -> &'static str {
+            match self {
+                Self::InteractiveLogin => "interactive login shell",
+                Self::Login => "login shell",
+            }
+        }
     }
 
     /// The account's login shell, run for its `PATH`.
     pub(in super::super) struct LoginShell {
         shell: PathBuf,
+        /// What the shell is given. Built once, from this process's
+        /// environment, by [`LoginShell::for_current_user`]; nothing else of
+        /// this process reaches the user's profile.
+        environment: Vec<(&'static str, OsString)>,
         deadline: Duration,
     }
 
@@ -116,22 +149,65 @@ mod unix {
         pub(in super::super) fn for_current_user() -> Self {
             Self {
                 shell: account_shell(),
+                environment: carried_environment(),
                 deadline: DEADLINE,
             }
         }
 
+        /// A shell of the test's choosing, with the environment and deadline it
+        /// wants — including the environment this host really builds.
         #[cfg(test)]
-        pub(in super::super) fn with_shell(shell: PathBuf, deadline: Duration) -> Self {
-            Self { shell, deadline }
+        pub(in super::super) fn probing(
+            shell: PathBuf,
+            environment: Vec<(&'static str, OsString)>,
+            deadline: Duration,
+        ) -> Self {
+            Self {
+                shell,
+                environment,
+                deadline,
+            }
+        }
+
+        /// How this shell is worth asking, most complete answer first.
+        ///
+        /// zsh and bash read the files most installers write to — `.zshrc`,
+        /// `.bashrc` — only when they are interactive, so they are asked that
+        /// way first and fall back to a login shell. Anything else is asked the
+        /// one way every shell here understands: a `-i` that a shell does not
+        /// take, or takes badly without a terminal, would cost an attempt to
+        /// learn nothing.
+        fn probes(&self) -> &'static [Probe] {
+            match self.shell.file_name().and_then(OsStr::to_str) {
+                Some("zsh" | "bash") => &[Probe::InteractiveLogin, Probe::Login],
+                _ => &[Probe::Login],
+            }
+        }
+
+        /// One attempt: run the shell, read what is between the markers, and
+        /// put it through the value object.
+        fn ask(&self, probe: Probe) -> Result<SearchPath, LoginShellError> {
+            let marker = Marker::random()?;
+            let output = self.report(probe, &marker)?;
+            let reported = between(&output, &marker.begin, &marker.end).ok_or_else(|| {
+                LoginShellError::Unavailable(format!("{} printed no marked PATH", probe.describe()))
+            })?;
+            SearchPath::parse(reported).map_err(LoginShellError::Rejected)
         }
 
         /// What the shell printed, or why nothing usable came back.
-        fn report(&self) -> Result<String, LoginShellError> {
+        ///
+        /// One deadline covers the whole attempt. Output arriving is not proof
+        /// the shell is finished with — a profile can close its stdout, or fill
+        /// the output limit, and then never return — so the exit is waited for
+        /// under the same clock, and whichever runs out first kills the shell's
+        /// process group and reaps it.
+        fn report(&self, probe: Probe, marker: &Marker) -> Result<String, LoginShellError> {
             let unavailable =
                 |error: std::io::Error| LoginShellError::Unavailable(error.to_string());
             let mut child = Command::new(&self.shell)
-                .arg("-lc")
-                .arg(REPORT_PATH)
+                .args(probe.arguments())
+                .arg(marker.command())
                 // Nothing of this process's environment reaches the user's
                 // profile: not the surface credential, not a provider token,
                 // not the launch context. The shell gets what a shell needs to
@@ -139,11 +215,10 @@ mod unix {
                 .env_clear()
                 .env("PATH", SearchPath::system().as_str())
                 .env("TERM", "dumb")
-                .envs(
-                    ["HOME", "USER", "LOGNAME"]
-                        .into_iter()
-                        .filter_map(|key| std::env::var_os(key).map(|value| (key, value))),
-                )
+                .envs(self.environment.iter().cloned())
+                // No terminal and no input: an interactive profile that asks a
+                // question reads end-of-file and carries on instead of waiting
+                // for an answer that is never coming.
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
@@ -152,57 +227,169 @@ mod unix {
                 .process_group(0)
                 .spawn()
                 .map_err(unavailable)?;
+            let deadline = Instant::now() + self.deadline;
             let group = child.id() as i32;
             let mut output = child
                 .stdout
                 .take()
                 .ok_or_else(|| LoginShellError::Unavailable("no shell output".into()))?;
-            let (reader, reported) = mpsc::channel();
+
+            let (send_read, read) = mpsc::channel();
             thread::spawn(move || {
                 let mut bytes = Vec::new();
-                let read = output
+                let collected = output
                     .by_ref()
                     .take(OUTPUT_LIMIT)
                     .read_to_end(&mut bytes)
                     .map(|_| bytes);
-                // Dropping the pipe here is what ends a shell that is still
-                // pouring out more than the limit: its next write has nowhere
-                // to go, so the wait below returns instead of blocking on a
-                // reader that has stopped reading.
+                // Let go of the pipe as soon as reading is over, so a shell
+                // still pouring out more than the limit finds nowhere to write.
                 drop(output);
                 // A receiver that has already given up on the deadline is the
                 // expected end of this thread, not a failure of it.
-                let _ = reader.send(read);
+                let _ = send_read.send(collected);
             });
-            // The read ends when the shell and everything holding its output
-            // are done with it, so a profile that backgrounds a process holding
-            // the pipe open is caught by this deadline rather than by the exit.
-            let Ok(read) = reported.recv_timeout(self.deadline) else {
-                stop(group);
-                // Reaped here, so the deadline cannot leave a zombie behind.
-                let _ = child.wait();
-                return Err(LoginShellError::TimedOut);
+            // The child belongs to this thread from here on. Whatever the
+            // deadline does, something is always waiting to reap it.
+            let (send_exit, exited) = mpsc::channel();
+            thread::spawn(move || {
+                let _ = send_exit.send(child.wait());
+            });
+
+            let collected = match receive(&read, deadline) {
+                Ok(collected) => collected,
+                Err(waited) => return Err(self.stop(group, &exited, waited)),
             };
-            let bytes = read.map_err(unavailable)?;
-            let status = child.wait().map_err(unavailable)?;
+            let bytes = match collected {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    // A read that failed leaves a shell nobody is reading.
+                    let _ = self.stop(group, &exited, RecvTimeoutError::Timeout);
+                    return Err(unavailable(error));
+                }
+            };
+            let status = match receive(&exited, deadline) {
+                Ok(status) => status.map_err(unavailable)?,
+                Err(waited) => return Err(self.stop(group, &exited, waited)),
+            };
             if !status.success() {
                 return Err(LoginShellError::Unavailable(format!(
-                    "login shell exited with {status}"
+                    "{} exited with {status}",
+                    probe.describe()
                 )));
             }
             String::from_utf8(bytes)
                 .map_err(|_| LoginShellError::Unavailable("login shell output is not UTF-8".into()))
         }
+
+        /// Kills the shell's process group and waits for the reap to be
+        /// confirmed, then says why the attempt ended.
+        fn stop(
+            &self,
+            group: i32,
+            exited: &Receiver<std::io::Result<std::process::ExitStatus>>,
+            waited: RecvTimeoutError,
+        ) -> LoginShellError {
+            kill_group(group);
+            let _ = exited.recv_timeout(REAP_GRACE);
+            match waited {
+                RecvTimeoutError::Timeout => LoginShellError::TimedOut,
+                // Nothing sends on these channels except threads that send
+                // exactly once, so a closed one is a thread that did not get
+                // that far — which is not the same thing as a slow profile.
+                RecvTimeoutError::Disconnected => {
+                    LoginShellError::Unavailable("login shell ended without an answer".into())
+                }
+            }
+        }
     }
 
     impl LoginShellPath for LoginShell {
         fn resolve(&self) -> Result<SearchPath, LoginShellError> {
-            SearchPath::parse(reported_path(&self.report()?)).map_err(LoginShellError::Rejected)
+            let mut last = None;
+            for probe in self.probes() {
+                match self.ask(*probe) {
+                    Ok(path) => return Ok(path),
+                    Err(error) => {
+                        eprintln!(
+                            "[nessa] Reading the {} for the agent's PATH did not work ({error})",
+                            probe.describe()
+                        );
+                        last = Some(error);
+                    }
+                }
+            }
+            Err(last.expect("every shell is asked at least once"))
         }
     }
 
+    /// What `channel` delivers before `deadline`.
+    fn receive<T>(channel: &Receiver<T>, deadline: Instant) -> Result<T, RecvTimeoutError> {
+        channel.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+    }
+
+    /// The text between the first marker and the end marker that follows it.
+    ///
+    /// Searched from the end, because a shell that echoes what it was asked to
+    /// run — a profile with `set -v`, a plugin that traces commands — prints the
+    /// markers before it prints the answer. The last pair is the answer.
+    pub(super) fn between<'a>(output: &'a str, begin: &str, end: &str) -> Option<&'a str> {
+        let opened = output.rfind(begin)? + begin.len();
+        let rest = &output[opened..];
+        Some(rest[..rest.find(end)?].trim())
+    }
+
+    /// The pair of markers one attempt writes its answer between.
+    pub(super) struct Marker {
+        begin: String,
+        end: String,
+    }
+    impl Marker {
+        /// A fresh pair, from the system's randomness.
+        ///
+        /// Hex, so the marker is its own shell quoting: there is nothing in it a
+        /// shell could read as syntax.
+        fn random() -> Result<Self, LoginShellError> {
+            let mut bytes = [0u8; MARKER_BYTES];
+            File::open("/dev/urandom")
+                .and_then(|mut source| source.read_exact(&mut bytes))
+                .map_err(|error| {
+                    LoginShellError::Unavailable(format!("no marker for the login shell: {error}"))
+                })?;
+            let token: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+            Ok(Self {
+                begin: format!("nessa-path-{token}-begin"),
+                end: format!("nessa-path-{token}-end"),
+            })
+        }
+
+        /// What the shell is asked to run.
+        ///
+        /// `printenv` rather than `echo $PATH`: every shell exports `PATH` as one
+        /// colon-separated string, but not all of them interpolate it as one —
+        /// fish holds it as a list and would print it with the separators gone,
+        /// which is a different path that happens to look like one.
+        fn command(&self) -> String {
+            format!(
+                "/usr/bin/printf %s {}; /usr/bin/printenv PATH; /usr/bin/printf %s {}",
+                self.begin, self.end
+            )
+        }
+    }
+
+    /// The variables a login shell is given.
+    ///
+    /// A closed set: what a shell needs to find the tools its own profile calls,
+    /// and nothing else this process happens to be holding.
+    pub(super) fn carried_environment() -> Vec<(&'static str, OsString)> {
+        ["HOME", "USER", "LOGNAME"]
+            .into_iter()
+            .filter_map(|key| std::env::var_os(key).map(|value| (key, value)))
+            .collect()
+    }
+
     /// Kills the whole process group the shell was given.
-    fn stop(group: i32) {
+    fn kill_group(group: i32) {
         // SAFETY: `group` is this process's own child, made a group leader when
         // it was spawned, and a negative pid signals that group alone.
         unsafe { libc::kill(-group, libc::SIGKILL) };
