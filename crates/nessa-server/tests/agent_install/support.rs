@@ -87,6 +87,7 @@ pub(crate) fn release_needing(
         ArchiveDigest::parse(digest).expect("test digest is usable"),
         ArchivePath::parse("package/bin/opencode").expect("test path is contained"),
     )
+    .expect("a release whose requirements fit its platform")
 }
 
 /// The platform these tests pretend to run on, so that a result never depends

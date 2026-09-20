@@ -383,22 +383,34 @@ fn a_build_that_says_nothing_about_what_it_needs_is_refused() {
 }
 
 #[test]
-fn a_linux_build_that_names_no_c_library_is_refused() {
-    // Every Linux build has one, so this is a field that was left out rather
-    // than a build that runs against either. Read as written it would be
-    // offered to every Linux machine, half of which cannot start it — and it
-    // would also slip past the duplicate check, which compares what two builds
-    // need rather than which machines they overlap on.
-    assert_eq!(
-        releases_in(
-            &document(vec![entry("linux", "x86_64", None, false, 'a')]),
-            &opencode()
-        ),
-        Err(PinFileError::LinuxWithoutLibc {
-            agent: "opencode".into(),
-            version: "1.0.0".into(),
-        })
-    );
+fn a_build_whose_requirements_do_not_fit_its_platform_is_refused_through_this_file_too() {
+    // The rule itself belongs to `PinnedRelease` and is tested there, without
+    // JSON. What this holds is that the file is read *through* it: the pin
+    // document is one way to assemble a release and must not be a way around
+    // the pair of rules that decide which machines a build is offered to.
+    for (operating_system, architecture, libc, avx2) in [
+        // A Linux build naming no C library. Read as written it would be
+        // offered to every Linux machine, half of which cannot start it — and
+        // it would slip past the duplicate check too, which compares what two
+        // builds need rather than which machines they overlap on.
+        ("linux", "x86_64", None, false),
+        // AVX2 asked of a processor that has no such thing.
+        ("linux", "aarch64", Some("gnu"), true),
+    ] {
+        assert!(
+            matches!(
+                releases_in(
+                    &document(vec![entry(operating_system, architecture, libc, avx2, 'a')]),
+                    &opencode()
+                ),
+                Err(PinFileError::Invalid {
+                    reason: PinRejected::Requirements(_),
+                    ..
+                })
+            ),
+            "{operating_system}-{architecture} with libc {libc:?} and avx2 {avx2} was accepted"
+        );
+    }
     // macOS has one C library, so saying nothing there is the truth.
     assert!(releases_in(
         &document(vec![entry("macos", "aarch64", None, false, 'a')]),

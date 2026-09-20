@@ -131,11 +131,6 @@ pub enum PinFileError {
     /// store keys an installation by that digest, so it could not keep them
     /// apart if it tried.
     ArchivePinnedTwice { agent: String, digest: String },
-    /// A Linux release says nothing about which C library it needs. Every
-    /// Linux build has one, so this is a field that was left out rather than a
-    /// build that runs against either — and read as written it would be
-    /// offered to machines it cannot start on.
-    LinuxWithoutLibc { agent: String, version: String },
 }
 
 impl fmt::Display for PinFileError {
@@ -154,12 +149,6 @@ impl fmt::Display for PinFileError {
             }
             Self::ArchivePinnedTwice { agent, digest } => {
                 write!(f, "{agent} pins the archive {digest} twice")
-            }
-            Self::LinuxWithoutLibc { agent, version } => {
-                write!(
-                    f,
-                    "the linux release of {agent} {version} does not say which c library it needs"
-                )
             }
         }
     }
@@ -292,17 +281,6 @@ fn releases_in(document: &str, agent: &AgentName) -> Result<Vec<PinnedRelease>, 
                 digest: release.archive_digest().as_str().to_owned(),
             });
         }
-        // A Linux build that names no library is not a build that runs against
-        // either; it is a field somebody left out. Read as written it would be
-        // offered to every Linux machine, half of which cannot start it.
-        if release.platform().operating_system() == "linux"
-            && release.requirements().libc().is_none()
-        {
-            return Err(PinFileError::LinuxWithoutLibc {
-                agent: agent.to_string(),
-                version: release.version().as_str().to_owned(),
-            });
-        }
     }
     Ok(releases)
 }
@@ -316,14 +294,14 @@ fn releases_in(document: &str, agent: &AgentName) -> Result<Vec<PinnedRelease>, 
 fn release(entry: &ReleaseDocument) -> Result<PinnedRelease, PinRejected> {
     let libc = entry.libc.as_deref().map(Libc::parse).transpose()?;
 
-    Ok(PinnedRelease::new(
+    PinnedRelease::new(
         ReleaseVersion::parse(&entry.version)?,
         ReleasePlatform::new(&entry.operating_system, &entry.architecture)?,
         ReleaseRequirements::new(libc, entry.requires_avx2),
         ArchiveUrl::parse(&entry.archive_url)?,
         ArchiveDigest::parse(&entry.archive_digest)?,
         ArchivePath::parse(&entry.executable)?,
-    ))
+    )
 }
 
 #[cfg(test)]

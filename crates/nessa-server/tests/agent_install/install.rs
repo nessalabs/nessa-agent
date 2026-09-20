@@ -377,7 +377,12 @@ fn a_build_this_machine_cannot_run_is_refused_before_anything_is_fetched() {
     //
     // The pre-existing half — a release for another operating system — is
     // covered above; the old code caught that one, and only that one.
-    let platform = platform();
+    //
+    // Linux x86-64 rather than the suite's usual macOS, because both scenarios
+    // below need a platform where they could actually happen: macOS has one C
+    // library and aarch64 has no AVX2, so a release making either demand there
+    // is one `PinnedRelease::new` refuses to assemble at all.
+    let platform = ReleasePlatform::new("linux", "x86_64").expect("usable platform");
     for (named, host, requirements) in [
         (
             "a musl build on a glibc machine",

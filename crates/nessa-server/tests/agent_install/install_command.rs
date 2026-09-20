@@ -18,14 +18,20 @@ fn digest(byte: char) -> ArchiveDigest {
 }
 
 fn rejection() -> ArchiveRejected {
+    // macOS aarch64, rather than whatever this machine is. What this fixture
+    // is about is a digest that did not match, which has nothing to do with
+    // the platform — and reading the real one made the fixture depend on the
+    // suite's own host: on Linux it assembled a release naming no C library,
+    // which is a build that cannot exist.
     PinnedRelease::new(
         ReleaseVersion::parse("1.0.0").expect("usable version"),
-        host_platform().platform().clone(),
+        ReleasePlatform::new("macos", "aarch64").expect("usable platform"),
         ReleaseRequirements::default(),
         ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url"),
         digest('a'),
         ArchivePath::parse("package/bin/opencode").expect("contained path"),
     )
+    .expect("a release whose requirements fit its platform")
     .accept(&digest('b'))
     .expect_err("another archive is not the pinned one")
 }
@@ -554,4 +560,5 @@ fn build(libc: Option<Libc>, avx2: bool, digest_byte: char) -> PinnedRelease {
         digest(digest_byte),
         ArchivePath::parse("package/bin/opencode").expect("contained path"),
     )
+    .expect("a release whose requirements fit its platform")
 }

@@ -19,6 +19,7 @@ fn release(digest: ArchiveDigest) -> PinnedRelease {
         digest,
         ArchivePath::parse("package/bin/opencode").expect("contained path"),
     )
+    .expect("a release whose requirements fit its platform")
 }
 
 #[test]
@@ -239,7 +240,8 @@ fn a_release_also_runs_only_where_what_it_needs_is_there() {
         url(),
         digest('a'),
         ArchivePath::parse("package/bin/opencode").expect("contained path"),
-    );
+    )
+    .expect("a release whose requirements fit its platform");
     let linux = |libc, avx2| {
         HostPlatform::new(
             ReleasePlatform::new("linux", "x86_64").expect("usable platform"),
@@ -252,4 +254,72 @@ fn a_release_also_runs_only_where_what_it_needs_is_there() {
     assert!(!release.runs_on(&linux(Some(Libc::Musl), false)));
     assert!(!release.runs_on(&linux(Some(Libc::Gnu), true)));
     assert!(!release.runs_on(&linux(None, true)));
+}
+
+/// A release whose requirements and platform disagree is refused at assembly.
+///
+/// The rule this holds is the one thing about a pin that no single value object
+/// can see: `ReleaseRequirements` and `ReleasePlatform` are each perfectly
+/// valid alone and together can describe a build that cannot exist. Tested
+/// here, without JSON, because the pin file is one way to assemble a release
+/// and the rule has to hold for every other way too.
+#[test]
+fn a_build_that_could_not_exist_is_not_a_release() {
+    let assemble = |operating_system: &str, architecture: &str, requirements| {
+        PinnedRelease::new(
+            ReleaseVersion::parse("1.0.0").expect("usable version"),
+            ReleasePlatform::new(operating_system, architecture).expect("usable platform"),
+            requirements,
+            url(),
+            digest('a'),
+            ArchivePath::parse("package/bin/opencode").expect("contained path"),
+        )
+    };
+
+    // A Linux build naming no C library. `satisfies` reads an unnamed library
+    // as "nothing required", so this would be offered to every Linux machine
+    // and fail in the loader on half of them — which is the whole failure this
+    // context exists to prevent.
+    assert!(matches!(
+        assemble("linux", "x86_64", ReleaseRequirements::new(None, false)),
+        Err(PinRejected::Requirements(_))
+    ));
+
+    // AVX2 asked of an architecture that has no such instruction set. Not
+    // dangerous, but unreachable: nothing would ever satisfy it, so the pin
+    // would install on no machine at all and say nothing about why.
+    assert!(matches!(
+        assemble(
+            "linux",
+            "aarch64",
+            ReleaseRequirements::new(Some(Libc::Gnu), true)
+        ),
+        Err(PinRejected::Requirements(_))
+    ));
+    assert!(matches!(
+        assemble("macos", "aarch64", ReleaseRequirements::new(None, true)),
+        Err(PinRejected::Requirements(_))
+    ));
+
+    // And the builds that do exist. macOS has one C library, so naming none
+    // there is the truth rather than an omission; 32-bit x86 processors have
+    // AVX2 too, so the check is about the instruction set and not about the
+    // one architecture Nessa happens to pin for.
+    for ok in [
+        assemble(
+            "linux",
+            "x86_64",
+            ReleaseRequirements::new(Some(Libc::Musl), true),
+        ),
+        assemble(
+            "linux",
+            "aarch64",
+            ReleaseRequirements::new(Some(Libc::Gnu), false),
+        ),
+        assemble("macos", "aarch64", ReleaseRequirements::default()),
+        assemble("macos", "x86_64", ReleaseRequirements::new(None, true)),
+        assemble("x86", "x86", ReleaseRequirements::new(None, true)),
+    ] {
+        assert!(ok.is_ok(), "{ok:?} is a build that exists");
+    }
 }

@@ -40,6 +40,11 @@ pub enum PinRejected {
     /// leave this type and the unpacker disagreeing about where the segments
     /// divide, which comes to the same thing.
     ExecutablePath(String),
+    /// What the build needs and the platform it is for do not agree. Every
+    /// other variant above is about one value being unreadable on its own;
+    /// this is the one rule that spans two of them, which is why it is refused
+    /// here rather than left to whoever assembles the pair.
+    Requirements(String),
 }
 
 impl fmt::Display for PinRejected {
@@ -52,6 +57,9 @@ impl fmt::Display for PinRejected {
             ),
             Self::Libc(value) => {
                 write!(f, "release names a c library nessa cannot check: {value:?}")
+            }
+            Self::Requirements(detail) => {
+                write!(f, "release requirements do not fit its platform: {detail}")
             }
             Self::Digest(value) => write!(
                 f,
@@ -374,10 +382,30 @@ pub struct PinnedRelease {
 impl PinnedRelease {
     /// Describe a release.
     ///
-    /// Infallible: every part of a pin that can be wrong is wrong at the moment
-    /// that part is read, and each one is its own type above. Assembling four
-    /// values that are each already valid cannot produce an invalid release, so
-    /// there is nothing left here to refuse.
+    /// Almost every part of a pin that can be wrong is wrong at the moment that
+    /// part is read, and each one is its own type above. What is left, and what
+    /// this refuses, is the pair: [`ReleaseRequirements`] and
+    /// [`ReleasePlatform`] are each perfectly valid alone and can still
+    /// describe a build that cannot exist.
+    ///
+    /// Two such rules, and both decide whether a machine is offered something
+    /// it cannot start, which is what this whole context exists to prevent:
+    ///
+    /// - A Linux build names a C library. Every Linux build is linked against
+    ///   one, so `None` there is a field somebody left out rather than a build
+    ///   that runs against either — and [`HostPlatform::satisfies`] reads an
+    ///   unnamed library as "nothing required", so such a release would be
+    ///   offered to every Linux machine and would fail in the loader on half
+    ///   of them.
+    /// - AVX2 is asked for only where a processor could have it. An `aarch64`
+    ///   build requiring it is not dangerous, only unreachable: nothing would
+    ///   ever satisfy it, so the pin would quietly install on no machine at
+    ///   all. A requirement nothing can meet is a typo, not a requirement.
+    ///
+    /// Here rather than in the adapter that reads the pin file, because a pin
+    /// file is one way to assemble a release and not the only one: a second
+    /// source, or a caller in a test, would otherwise construct exactly the
+    /// release these two rules exist to refuse.
     pub fn new(
         version: ReleaseVersion,
         platform: ReleasePlatform,
@@ -385,15 +413,28 @@ impl PinnedRelease {
         archive_url: ArchiveUrl,
         archive_digest: ArchiveDigest,
         executable: ArchivePath,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, PinRejected> {
+        if platform.operating_system() == "linux" && requirements.libc().is_none() {
+            return Err(PinRejected::Requirements(format!(
+                "{platform} does not say which c library it needs"
+            )));
+        }
+        // `x86` as well as `x86_64`: a 32-bit x86 processor can have AVX2, and
+        // the host answer is read from the processor rather than the target.
+        if requirements.avx2() && !matches!(platform.architecture(), "x86_64" | "x86") {
+            return Err(PinRejected::Requirements(format!(
+                "{platform} requires avx2, which no {} processor has",
+                platform.architecture()
+            )));
+        }
+        Ok(Self {
             version,
             platform,
             requirements,
             archive_url,
             archive_digest,
             executable,
-        }
+        })
     }
 
     pub fn version(&self) -> &ReleaseVersion {

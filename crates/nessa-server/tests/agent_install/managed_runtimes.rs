@@ -82,6 +82,7 @@ fn artifact(
         ArchiveDigest::parse(digest).expect("usable digest"),
         ArchivePath::parse(executable).expect("contained path"),
     )
+    .expect("a release whose requirements fit its platform")
 }
 
 /// Stage `bytes` for `store`, the way a download would have left them.
@@ -1844,7 +1845,8 @@ fn a_pin_that_corrects_itself_about_an_archive_reinstalls_nothing() {
         ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url"),
         ArchiveDigest::parse(&"a".repeat(64)).expect("usable digest"),
         ArchivePath::parse("package/bin/opencode").expect("contained path"),
-    );
+    )
+    .expect("a release whose requirements fit its platform");
 
     assert_eq!(
         store.installed(&agent(), &corrected),
@@ -1880,7 +1882,8 @@ fn what_a_build_needs_is_written_down_even_though_reuse_does_not_read_it() {
         ArchiveUrl::parse("https://registry.example/runtime.tgz").expect("a fetchable url"),
         ArchiveDigest::parse(&"a".repeat(64)).expect("usable digest"),
         ArchivePath::parse("package/bin/opencode").expect("contained path"),
-    );
+    )
+    .expect("a release whose requirements fit its platform");
     publish(
         &store,
         &musl,
