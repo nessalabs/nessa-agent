@@ -188,12 +188,38 @@ pub struct ConversationCapabilities {
     pub steer: bool,
     pub resume: bool,
     pub permissions: bool,
+    pub image_input: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageAttachment {
+    pub digest: String,
+    pub mime_type: String,
+    pub size: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttachmentBeginParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub digest: String,
+    pub mime_type: String,
+    pub size: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttachmentBeginResult {
+    pub request_id: String,
+    pub state: String,
+    pub ticket: Option<String>,
+    pub expires_at_ms: Option<u64>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationMessage {
     pub execution_id: String,
     pub user_text: String,
+    pub attachments: Vec<ImageAttachment>,
     pub status: ConversationMessageStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -208,6 +234,7 @@ pub struct ConversationMessage {
 pub struct ConversationPending {
     pub execution_id: String,
     pub text: String,
+    pub attachments: Vec<ImageAttachment>,
     pub mode: ConversationPendingMode,
 }
 #[derive(Deserialize, Serialize)]
@@ -277,6 +304,7 @@ pub struct ConversationSendParams {
     pub request_id: String,
     pub execution_id: String,
     pub text: String,
+    pub attachments: Vec<ImageAttachment>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

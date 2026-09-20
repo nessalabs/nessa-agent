@@ -16,7 +16,8 @@
     "conversation.answer": "ConversationAnswerParams",
     "conversation.cancel": "ConversationCancelParams",
     "conversation.close": "ConversationCloseParams",
-    "conversation.reorder": "ConversationReorderParams"
+    "conversation.reorder": "ConversationReorderParams",
+    "attachment.begin": "AttachmentBeginParams"
   },
   "events": {
     "session.challenge": "SessionChallenge"

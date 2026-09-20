@@ -240,13 +240,50 @@ export interface ConversationCapabilities {
   resume: boolean
   /** Can review provider permission requests. */
   permissions: boolean
+  /** The connected agent advertised image input. False until an agent has been opened, and whenever it advertised none. */
+  imageInput: boolean
+}
+/** One uploaded image a message refers to. The bytes travel on the upload path, never in a socket message. */
+export interface ImageAttachment {
+  /** SHA-256 of the image bytes: `sha256:` and 64 lowercase hexadecimal digits. */
+  digest: string
+  /** Image encoding. */
+  mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+  /** Image length in bytes, at most 5 MiB. */
+  size: number
+}
+/** Ask to upload one file into a conversation. Repeating it for bytes the conversation already holds needs no upload. */
+export interface AttachmentBeginParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** SHA-256 of the bytes to be uploaded; the upload is refused unless the received bytes hash to it. */
+  digest: string
+  /** Declared lowercase media type without parameters. Storage accepts any; what a message may refer to is narrower. */
+  mimeType: string
+  /** Exact length in bytes, at most 20 MiB; the upload is refused unless it is exactly this long. */
+  size: number
+}
+/** Either the conversation already holds these bytes, or a single-use ticket to upload them. */
+export interface AttachmentBeginResult {
+  /** The action this answers. */
+  requestId: string
+  /** `stored` needs nothing further; `upload_required` carries a ticket. */
+  state: "stored" | "upload_required"
+  /** Secret single-use upload ticket, sent as the `x-nessa-upload-ticket` header of one `PUT /attachments`. Null when stored. Do not log it. */
+  ticket: string | null
+  /** Unix milliseconds after which the ticket is refused. Null when stored. */
+  expiresAtMs: number | null
 }
 /** One bounded conversation turn; omitted older text is indicated by the enclosing truncated flag. */
 export interface ConversationMessage {
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
-  /** User input text. */
+  /** User input text; empty for a message of images alone. */
   userText: string
+  /** Images the user sent with this turn, in attachment order. */
+  attachments: ImageAttachment[]
   /** Current invocation state. */
   status: ConversationMessageStatus
   /** Bounded diagnostic for this invocation. */
@@ -262,8 +299,10 @@ export interface ConversationMessage {
 export interface ConversationPending {
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
-  /** Waiting user input. */
+  /** Waiting user input; empty for a message of images alone. */
   text: string
+  /** Images waiting with this input, in attachment order. */
+  attachments: ImageAttachment[]
   /** Queue or steering admission. */
   mode: ConversationPendingMode
 }
@@ -356,8 +395,10 @@ export interface ConversationSendParams {
   requestId: string
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
-  /** User message, at most 8 KiB UTF-8; gateway enforces the byte bound. */
+  /** User message, at most 8 KiB UTF-8; gateway enforces the byte bound. May be blank only when attachments are present. */
   text: string
+  /** Images already uploaded into this conversation, in attachment order; at most 20 MiB in total. Empty for a message of text alone. */
+  attachments: ImageAttachment[]
 }
 /** Remove an input that has not dispatched. */
 export interface ConversationRemoveParams {
@@ -491,5 +532,6 @@ export const ProductMethod = {
   ConversationCancel: "conversation.cancel",
   ConversationClose: "conversation.close",
   ConversationReorder: "conversation.reorder",
+  AttachmentBegin: "attachment.begin",
 } as const
 export const ProductEvent = { SessionChallenge: "session.challenge" } as const
