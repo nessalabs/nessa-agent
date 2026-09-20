@@ -1,7 +1,6 @@
 import * as React from "react"
 import { isImageFile, type useConversation } from "../../conversation"
 import type { AttachmentResources } from "../adapters/attachment-resources"
-import { sha256Digest } from "../adapters/sha256"
 import { nextUploads, uploadImage } from "../application/upload-image"
 
 /**
@@ -39,7 +38,7 @@ import { nextUploads, uploadImage } from "../application/upload-image"
 export function useAttachmentUploads(
   chat: ReturnType<typeof useConversation>,
   resources: AttachmentResources,
-  digest: (bytes: Blob) => Promise<string> = sha256Digest,
+  digest: (bytes: Blob) => Promise<string>,
 ) {
   const inFlight = React.useRef(new Map<string, AbortController>())
   const settled = React.useRef(new Set<string>())
