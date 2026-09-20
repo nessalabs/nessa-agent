@@ -94,7 +94,12 @@ function BrowserSession({
   onTerminalFailure: (error: unknown) => void
 }) {
   return (
-    <SetupGate agents={scope.dependencies.agents}>
+    // The choice is carried in place: this surface has no host to write it to,
+    // so the gate telling the dependencies is the only record it gets.
+    <SetupGate
+      agents={scope.dependencies.agents}
+      onHandOver={scope.dependencies.rememberChosenAgent}
+    >
       <SessionLifecycle
         dependencies={scope.dependencies}
         onTerminalFailure={onTerminalFailure}

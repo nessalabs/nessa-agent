@@ -24,23 +24,33 @@ export function createDependencies(
 ) {
   const config = options.environment ?? loadEnvironment({})
   const session = createSessionHandle()
-  // Asked once per application rather than once per conversation. The answer is
-  // written down before the panel exists and nothing changes it while the panel
-  // runs, so re-asking would be one host round trip per new conversation for an
-  // answer that cannot have moved.
+  // Asked once per conversation until somebody has chosen, and once per
+  // application from then on. Only a choice is an answer; everything else is
+  // asked again.
   //
-  // What is never kept is a failure, in either of the two shapes it takes. A
-  // remembered rejection would be a panel that can no longer start, send, close
-  // or answer a permission until it is restarted. A remembered "the host could
-  // not be asked" is quieter and lasts just as long: it reads as "nobody chose",
-  // so one unlucky round trip during startup sends every conversation for the
-  // rest of the panel's life to the gateway's default — and the agent the user
-  // picked is never asked for again, however well the host recovers.
+  // Keeping a "nobody chose" looks safe and is not, because the panel exists
+  // before the choice is written. The panel webview is up from startup and
+  // setup is a second window beside it, whose third step teaches the summon
+  // shortcut by having the user press it — which puts them in a live composer,
+  // one step after picking an agent and before `finish_setup` records
+  // anything. A message sent from there creates a conversation, the host
+  // truthfully answers "nobody has chosen", and a remembered answer would send
+  // every conversation for the rest of the launch to the gateway's default. It
+  // would look exactly like the choice having been honoured. The same holds for
+  // a `settings.json` that could not be read, which `SettingsStore::load` turns
+  // into defaults rather than an error.
+  //
+  // A failure is never kept either, in either shape it takes. A remembered
+  // rejection would be a panel that can no longer start, send, close or answer
+  // a permission until it is restarted.
+  //
+  // The cost of asking again is one local host round trip per `create`, on a
+  // path that already awaits the gateway, and only until somebody has chosen.
   let chosen: Promise<string | undefined> | undefined
   const chosenAgent = () =>
     (chosen ??= loadChosenAgent()
       .then((answer) => {
-        if (answer.outcome === "unavailable") chosen = undefined
+        if (answer.outcome !== "chosen") chosen = undefined
         return answer.outcome === "chosen" ? answer.agent : undefined
       })
       .catch((cause: unknown) => {
@@ -50,6 +60,23 @@ export function createDependencies(
   return {
     session,
     attachments: createAttachmentResources(),
+    /**
+     * Keep a choice made on this surface, for a surface that has no host.
+     *
+     * In a browser setup hands over to the panel in place, in this same page:
+     * there is nothing to write the choice to and nothing to read it back
+     * from, so being told is the only record it gets. Without this the picker
+     * is a control whose selection goes nowhere — the user is shown Codex as
+     * ready, picks it, and every conversation runs on the gateway's default
+     * with nothing on screen saying so.
+     *
+     * Held here rather than in the surface because this is where the same
+     * question is answered for the desktop, and the agent a creation names has
+     * to be one fact however the surface learned it.
+     */
+    rememberChosenAgent: (agent: string) => {
+      chosen = Promise.resolve(agent)
+    },
     // Setup's one pre-session question. Constructed here so the surface takes
     // it as a dependency rather than importing the transport it happens to use.
     agents: options.agents ?? httpAgentReadiness({ baseUrl: config.gatewayBaseUrl }),
