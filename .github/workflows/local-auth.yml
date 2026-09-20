@@ -81,6 +81,34 @@ jobs:
         working-directory: .ci-gateway
       - run: node scripts/check-product-protocol.mjs
         working-directory: .ci-gateway
+  # The desktop app compiled the way a release compiles it, and nothing more.
+  #
+  # `cfg(debug_assertions)` is off in the release profile, so code gated on it
+  # disappears and anything still naming it stops compiling. Every other job
+  # here builds in debug, so that break is invisible until a tag is pushed —
+  # which is exactly how v0.1.0 failed, twenty minutes into a signed macOS
+  # build, on `SIMULATED_UPDATE` being gated while its one release-profile
+  # reader was not.
+  #
+  # macOS because the app's gateway is macOS-only and the other targets compile
+  # a stub. `cargo check`, not a build: this is about what compiles, and the
+  # release workflow remains the only thing that produces a bundle. The
+  # frontend is built first because `generate_context!` embeds `dist/`, which
+  # has to exist before the crate can be checked at all.
+  desktop-release-profile:
+    name: Desktop app compiles in release profile
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/desktop/prepare.mjs
+      - run: pnpm build
+      - run: cargo check -p nessa-app --release --all-targets
   frontend:
     runs-on: ubuntu-latest
     steps:

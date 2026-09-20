@@ -2,6 +2,7 @@ use crate::browser_session::{
     application::{BrowserSession, SessionStore},
     domain::value_objects::RemovalReason,
 };
+use crate::core::trusted_origin::is_trusted_origin_value;
 use nessa_auth::application::ports::{AccessError, PortFuture};
 use nessa_auth::domain::CredentialId;
 use nessa_local_storage::{open, OpenMode};
@@ -26,6 +27,7 @@ enum Reason {
     Renewed,
     SignOut,
     IdleExpired,
+    FutureRenewal,
     CredentialRevoked,
     CredentialExpired,
     InactiveMembership,
@@ -143,11 +145,39 @@ impl From<&Record> for StoredRecord {
         }
     }
 }
+/// The journal file, whose advisory lock is given up explicitly.
+///
+/// An `flock` belongs to the open file description, not to the descriptor. A
+/// subprocess forked while this one is open keeps a duplicate of that
+/// description until it execs — `O_CLOEXEC` closes the descriptor there, not
+/// at the fork — so closing ours alone would leave the journal locked by a
+/// child that has no interest in it, for as long as it takes to exec. Only
+/// unlocking releases the description itself, which is what every holder of
+/// it sees, so it happens here rather than being left to a close.
+struct Journal(File);
+impl std::ops::Deref for Journal {
+    type Target = File;
+    fn deref(&self) -> &File {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for Journal {
+    fn deref_mut(&mut self) -> &mut File {
+        &mut self.0
+    }
+}
+impl Drop for Journal {
+    fn drop(&mut self) {
+        if let Err(error) = self.0.unlock() {
+            tracing::error!(%error, "browser session journal unlock failed");
+        }
+    }
+}
 struct State {
     sessions: BTreeMap<String, BrowserSession>,
     login_replacements: BTreeMap<String, Option<(String, BrowserSession)>>,
     sequence: u64,
-    file: Option<File>,
+    file: Option<Journal>,
     max_journal_bytes: u64,
     healthy: bool,
 }
@@ -156,16 +186,22 @@ struct State {
 /// evidence and is synced before publication. A write failure fails closed until restart.
 pub struct PersistentSessions(Arc<Mutex<State>>, Arc<Semaphore>);
 impl PersistentSessions {
-    pub fn open(path: &Path) -> Result<Self, AccessError> {
-        Self::open_bounded(path, MAX_JOURNAL_BYTES)
+    /// Open the journal and reconcile what it claims about time with `now`.
+    ///
+    /// `now` is read from the same wall clock the store's callers use.
+    pub fn open(path: &Path, now: u64) -> Result<Self, AccessError> {
+        Self::open_bounded(path, MAX_JOURNAL_BYTES, now)
     }
 
-    fn open_bounded(path: &Path, max_journal_bytes: u64) -> Result<Self, AccessError> {
+    fn open_bounded(path: &Path, max_journal_bytes: u64, now: u64) -> Result<Self, AccessError> {
         if max_journal_bytes == 0 {
             return Err(AccessError::Unavailable);
         }
-        let mut file = open(path, OpenMode::OpenOrCreate).map_err(|_| AccessError::Unavailable)?;
+        let file = open(path, OpenMode::OpenOrCreate).map_err(|_| AccessError::Unavailable)?;
         file.try_lock().map_err(|_| AccessError::Unavailable)?;
+        // Owned from the instant the lock is taken, so every path out of this
+        // function — including the refusals below — releases it.
+        let mut file = Journal(file);
         if file.metadata().map_err(|_| AccessError::Unavailable)?.len() > max_journal_bytes {
             return Err(AccessError::Unavailable);
         }
@@ -180,7 +216,7 @@ impl PersistentSessions {
             max_journal_bytes,
             healthy: true,
         };
-        let mut reader = BufReader::new(&mut file);
+        let mut reader = BufReader::new(&mut *file);
         let mut line = Vec::new();
         loop {
             line.clear();
@@ -201,6 +237,30 @@ impl PersistentSessions {
         file.seek(SeekFrom::End(0))
             .map_err(|_| AccessError::Unavailable)?;
         state.file = Some(file);
+        // A record's own instant is untrusted input: nothing in the file
+        // constrains it, so a forged or clock-damaged `Renewed` chain can claim
+        // any deadline. Bounding the *outcome* against a clock reading here
+        // caps that at one idle window past this start, for every rule that
+        // reads `record.at`, without the store refusing to open. Refusing would
+        // turn a backwards clock step into a lockout with no way out, and
+        // keeping a store-wide instant in memory would wedge every later write
+        // — both of which is why the ordering guard tried in #49 was reverted.
+        // A forged *expiry* remains possible and is not worth that trade: the
+        // journal is private and exclusively locked, and whoever can forge one
+        // can already destroy sessions by truncating the file.
+        let swept: Vec<Change> = state
+            .sessions
+            .iter()
+            .filter(|(_, session)| !session.is_plausible_at(now))
+            .map(|(id, session)| Change {
+                id: id.clone(),
+                before: Some(session.clone()),
+                after: None,
+                reason: Reason::FutureRenewal,
+                initiator: None,
+            })
+            .collect();
+        state.commit(now, swept)?;
         Ok(Self(
             Arc::new(Mutex::new(state)),
             Arc::new(Semaphore::new(1)),
@@ -286,11 +346,9 @@ impl State {
         let mut next = self.sessions.clone();
         let mut next_login_replacements = self.login_replacements.clone();
         for change in &record.changes {
-            if change
-                .before
-                .as_ref()
-                .is_some_and(|s| record.at < s.renewed_at())
-                || change.id.len() != 64
+            if change.before.as_ref().is_some_and(|s| {
+                record.at < s.renewed_at() && !matches!(change.reason, Reason::FutureRenewal)
+            }) || change.id.len() != 64
                 || !change.id.bytes().all(|v| v.is_ascii_hexdigit())
                 || next.get(&change.id) != change.before.as_ref()
             {
@@ -298,7 +356,7 @@ impl State {
             }
             if let Some(after) = &change.after {
                 if after.origin().len() > 1024
-                    || !crate::server::entrypoint::origin::is_trusted_origin_value(after.origin())
+                    || !is_trusted_origin_value(after.origin())
                     || !after.origin().starts_with("http")
                 {
                     return Err(AccessError::Unavailable);
@@ -332,12 +390,12 @@ impl State {
                     // Provenance and restoration eligibility are separate questions.
                     //
                     // Eligibility is judged against the record's own instant, as
-                    // `IdleExpired` and `Renewed` already are. A journal is only
-                    // as truthful about time as whoever could write it, and that
-                    // is not a trust this rule introduces: a forged `Renewed`
-                    // can already extend a session indefinitely. Bounding a
-                    // record's instant against a clock would answer all three at
-                    // once, and belongs with them rather than here.
+                    // `IdleExpired` and `Renewed` already are. What that instant
+                    // may claim is bounded at `open`, which retires any live
+                    // state a clock cannot vouch for. A remembered prior needs
+                    // no such bound of its own: the record that replaced it
+                    // carried it as a `before`, so it could not precede that
+                    // record, and this one cannot precede that one either.
                     // The record must name the prior this login actually replaced,
                     // but a prior that is not restorable at this record's instant
                     // — outside its own active window, or whose ID a later
@@ -378,6 +436,13 @@ impl State {
                 }
                 (Reason::IdleExpired, Some(before), None) => {
                     !before.is_active_at(record.at) && change.initiator.is_none()
+                }
+                // The one transition whose `before` may postdate the record: it
+                // exists precisely to retire state no clock could vouch for.
+                // The condition is self-contained, so replaying this record
+                // later under any clock reaches the same verdict.
+                (Reason::FutureRenewal, Some(before), None) => {
+                    !before.is_plausible_at(record.at) && change.initiator.is_none()
                 }
                 (
                     Reason::CredentialRevoked

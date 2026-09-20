@@ -1,4 +1,6 @@
-use crate::browser_session::domain::value_objects::{Lifetime, IDLE_SECONDS};
+use crate::browser_session::domain::value_objects::{
+    Lifetime, FUTURE_TOLERANCE_SECONDS, IDLE_SECONDS,
+};
 #[test]
 fn rolling_idle_deadlines_preserve_creation() {
     let original = Lifetime::new(100).unwrap();
@@ -11,4 +13,15 @@ fn rolling_idle_deadlines_preserve_creation() {
     assert!(Lifetime::restore(100, 99, 100 + IDLE_SECONDS).is_none());
     assert!(Lifetime::restore(100, 100, 100 + IDLE_SECONDS + 1).is_none());
     assert!(Lifetime::new(u64::MAX).is_none());
+}
+
+#[test]
+fn a_renewal_is_plausible_up_to_one_tolerance_ahead_of_the_clock() {
+    let lifetime = Lifetime::new(100_000).unwrap();
+    assert!(lifetime.is_plausible_at(100_000));
+    assert!(lifetime.is_plausible_at(100_001));
+    assert!(lifetime.is_plausible_at(100_000 - FUTURE_TOLERANCE_SECONDS));
+    assert!(!lifetime.is_plausible_at(100_000 - FUTURE_TOLERANCE_SECONDS - 1));
+    // A clock reading near the end of the range must not wrap into acceptance.
+    assert!(Lifetime::new(1).unwrap().is_plausible_at(u64::MAX));
 }

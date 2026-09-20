@@ -29,8 +29,22 @@ import { createAuthApi, type AuthApi } from "./auth-api.js"
  * ```
  */
 export class NessaClient {
-  /** Default development gateway address. Non-development stages require an explicit URL. */
-  static readonly defaultUrl = "ws://127.0.0.1:7420"
+  /**
+   * Default development gateway address. Non-development stages require an
+   * explicit URL.
+   *
+   * 7421 is the `dev` port in `protocol/defaults/gateway-ports.json`, not 7420:
+   * an installed Nessa owns 7420 through a launchd service that outlives the
+   * app, so the dev gateway listens next door rather than fighting it for the
+   * socket. This literal is checked against that table in `nessa-client.test.ts`
+   * — the package stays self-contained, and the number still cannot drift.
+   *
+   * It is a default, not a discovery mechanism: `NESSA_PORT` and
+   * `NESSA_INSTANCE` both move the gateway somewhere this cannot predict, and
+   * a caller in that position passes `url` until the gateway publishes where
+   * it bound.
+   */
+  static readonly defaultUrl = "ws://127.0.0.1:7421"
 
   /** Authorized gateway health. */
   readonly server: ServerApi

@@ -360,6 +360,15 @@ file `auth/browser-sessions.jsonl`. Its append-only journal retains typed transi
 causes (including credential revocation/expiry, inactive membership, identity
 mismatch, and invalid credential state), honest
 automatic or caller attribution, and before/after state; it contains no submitted access tokens.
+A record states the instant its transitions happened, and nothing in the file
+can vouch for that instant. At startup, after replay, any surviving session
+whose renewal claims to be more than an hour ahead of the clock is removed and
+that removal is journalled with the cause `FutureRenewal` and no initiator. A
+forged or clock-damaged journal therefore cannot extend a session past the next
+startup, and a backwards clock step costs one sign-in rather than refusing to
+open the store or leaving it unable to record a sign-out. A forged *expiry*
+remains possible; it grants nothing beyond what truncating the private,
+exclusively locked journal already would.
 Storage failure rejects the transition and makes the store unavailable until
 restart; corrupt journals fail startup. Journal reads, writes, and flushes run on
 the server's blocking pool and browser authentication deadlines cover the complete
