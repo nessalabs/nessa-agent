@@ -259,6 +259,24 @@ pub(super) fn recorded_failure(logs: &Path) -> Option<RecordedFailure> {
     parse_record(&bytes)
 }
 
+/// Forget a record this host has acted on, before it starts the service again.
+///
+/// The generation is reused when the definition has not changed, so the record
+/// the retry was authorized by would otherwise still be sitting there while the
+/// replacement starts — and a replacement launchd has not spawned yet looks,
+/// for those first moments, exactly like one that has already given up. The new
+/// run writes its own record if it gives up too.
+///
+/// A record that will not go is worth saying and not worth refusing to start
+/// over: the correlation is what it is for, and this only narrows the window.
+pub(super) fn forget_recorded_failure(logs: &Path) {
+    match std::fs::remove_file(logs.join(RECORD_FILE)) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => eprintln!("[nessa] could not clear the gateway's startup failure: {error}"),
+    }
+}
+
 /// The record's bytes, read apart from the file they came out of, so that what
 /// the server writes can be checked against what this reads.
 pub(super) fn parse_record(bytes: &[u8]) -> Option<RecordedFailure> {

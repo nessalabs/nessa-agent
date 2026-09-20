@@ -1,4 +1,7 @@
-use super::{diagnose, log_tail, parse_last_exit, parse_record, recorded_failure, LastExit};
+use super::{
+    diagnose, forget_recorded_failure, log_tail, parse_last_exit, parse_record, recorded_failure,
+    LastExit,
+};
 use nessa_local_storage::OpenMode;
 use std::{fs, io::Write, os::unix::fs::PermissionsExt, path::Path};
 
@@ -492,5 +495,25 @@ fn an_unreadable_or_malformed_record_says_nothing_at_all() {
     }
     // Nor is something far larger than a record.
     assert_eq!(parse_record(&vec![b'x'; 65_537]), None);
+    fs::remove_dir_all(&directory).unwrap();
+}
+
+/// A record this host has acted on does not outlive the retry it authorized.
+/// The generation is reused for an unchanged definition, so one left in place
+/// would still match while the replacement is being spawned — and a service
+/// launchd has not got to yet looks exactly like one that has given up.
+#[test]
+fn a_record_that_has_been_acted_on_is_not_left_for_the_next_run_to_find() {
+    let directory = scratch("forget");
+    let path = directory.join("gateway-startup-failure.json");
+    write_private_log(
+        &path,
+        &record_json("credentialRegistryInvalid", Some(GENERATION)),
+    );
+    forget_recorded_failure(&directory);
+    assert!(!path.exists());
+    assert_eq!(recorded_failure(&directory), None);
+    // Forgetting what is not there is what every other reconciliation does.
+    forget_recorded_failure(&directory);
     fs::remove_dir_all(&directory).unwrap();
 }

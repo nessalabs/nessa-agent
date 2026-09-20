@@ -310,6 +310,9 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
                 return Err(unavailable_service(recorded.as_ref(), port));
             }
             launchctl(&["bootout", &service])?;
+            if recorded.is_some() {
+                startup::forget_recorded_failure(&installed_logs);
+            }
             clear_install_attempt(&lock_directory)?;
         }
         ServiceState::Unloaded => clear_install_attempt(&lock_directory)?,
