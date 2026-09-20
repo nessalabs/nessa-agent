@@ -254,11 +254,18 @@ fn a_real_zsh_reports_the_tools_its_zshrc_adds() {
         .map(PathBuf::from)
         .find(|shell| shell.is_file())
     else {
-        // Said rather than passed quietly: this is the only test that proves the
-        // interactive probe against a shell that makes the distinction, and a
-        // machine without zsh has not run it.
-        eprintln!("no zsh on this machine; the interactive-profile test did not run");
-        return;
+        // On the platform this ships on there is no such thing as no zsh: macOS
+        // has shipped `/bin/zsh` for years and logs users into it. Skipping
+        // there would let the one test that proves the interactive probe
+        // disappear into a green run, because a passing test's output is
+        // captured — a skip and a pass look identical from the outside.
+        #[cfg(target_os = "macos")]
+        panic!("macOS ships /bin/zsh; a machine without it is not one to skip this on");
+        #[cfg(not(target_os = "macos"))]
+        {
+            eprintln!("no zsh on this machine; the interactive-profile test did not run");
+            return;
+        }
     };
     let home = temporary_directory("zshrc");
     let tools = home.join("tools");
