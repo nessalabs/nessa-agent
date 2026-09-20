@@ -2687,6 +2687,8 @@ dependencies = [
  "nessa-sdk",
  "serde",
  "serde_json",
+ "sha2",
+ "subtle",
  "tempfile",
  "tokio",
  "tracing",

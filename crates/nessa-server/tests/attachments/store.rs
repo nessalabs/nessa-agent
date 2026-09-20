@@ -1,0 +1,601 @@
+//! The real store on a real filesystem: privacy, hostile names, restart, and
+//! uploads racing a release of the same bytes.
+use super::*;
+use crate::attachments::domain::{Caller, MediaType, TicketLifetime, UploadTicket};
+use crate::attachments_test_support::{
+    attachment, conversation, digest_of, organization, principal, CONVERSATION, OTHER_CONVERSATION,
+};
+use std::sync::Arc;
+use tokio::sync::Barrier;
+
+const PDF: &str = "application/pdf";
+
+fn open(root: &Path) -> LocalAttachmentStore {
+    LocalAttachmentStore::open(root.join("attachments")).unwrap()
+}
+fn hold_for(organization_id: &str, conversation_id: &str, uploaded: &[u8], stored: &[u8]) -> Hold {
+    let media_type = if uploaded == stored { PDF } else { "image/png" };
+    let ticket = UploadTicket::new(
+        organization(organization_id),
+        conversation(conversation_id),
+        attachment(uploaded, media_type),
+        Caller::new(principal("owner"), "panel", "begin-1").unwrap(),
+        TicketLifetime::starting(1_000).unwrap(),
+    );
+    Hold::from_upload(&ticket, attachment(stored, media_type), 2_000).unwrap()
+}
+/// Stage `stored` in two writes and keep it under `hold`.
+async fn keep(store: &LocalAttachmentStore, hold: &Hold, stored: &[u8]) -> HoldChange {
+    let mut staged = store.stage().await.unwrap();
+    let (first, second) = stored.split_at(stored.len() / 2);
+    staged.write(first.to_vec()).await.unwrap();
+    staged.write(second.to_vec()).await.unwrap();
+    let received = staged.finish().await.unwrap();
+    assert_eq!(received.digest, digest_of(stored));
+    assert_eq!(received.size, stored.len() as u64);
+    assert_eq!(staged.read().await.unwrap(), stored);
+    staged.keep(hold.clone()).await.unwrap()
+}
+async fn upload(store: &LocalAttachmentStore, conversation_id: &str, bytes: &[u8]) -> Hold {
+    let hold = hold_for("org", conversation_id, bytes, bytes);
+    keep(store, &hold, bytes).await;
+    hold
+}
+async fn holds(store: &LocalAttachmentStore, hold: &Hold) -> bool {
+    store
+        .holds(
+            hold.organization_id(),
+            hold.conversation_id(),
+            hold.stored(),
+        )
+        .await
+        .unwrap()
+}
+fn files_beneath(directory: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            found.extend(files_beneath(&path));
+        } else {
+            found.push(path);
+        }
+    }
+    found
+}
+
+#[tokio::test]
+async fn a_kept_upload_is_held_found_and_read_and_survives_a_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open(root.path());
+    let hold = hold_for("org", CONVERSATION, b"what was sent", b"what is kept");
+    assert_eq!(
+        keep(&store, &hold, b"what is kept").await,
+        HoldChange { previous: None }
+    );
+    // Keeping it again replaces the hold and says what it replaced.
+    assert_eq!(
+        keep(&store, &hold, b"what is kept").await.previous,
+        Some(hold.clone())
+    );
+    drop(store);
+
+    let store = open(root.path());
+    assert!(holds(&store, &hold).await);
+    assert_eq!(
+        store
+            .find_upload(
+                hold.organization_id(),
+                hold.conversation_id(),
+                hold.uploaded()
+            )
+            .await
+            .unwrap(),
+        Some(hold.clone())
+    );
+    // The stored file was never uploaded, and the uploaded one is not kept.
+    assert!(store
+        .find_upload(
+            hold.organization_id(),
+            hold.conversation_id(),
+            hold.stored()
+        )
+        .await
+        .unwrap()
+        .is_none());
+    assert!(!store
+        .holds(
+            hold.organization_id(),
+            hold.conversation_id(),
+            hold.uploaded()
+        )
+        .await
+        .unwrap());
+    assert_eq!(
+        store
+            .read(hold.stored().digest(), 1024)
+            .await
+            .unwrap()
+            .unwrap(),
+        b"what is kept"
+    );
+    assert_eq!(
+        store
+            .read(hold.stored().digest(), 4)
+            .await
+            .unwrap()
+            .unwrap(),
+        b"what"
+    );
+    assert!(store
+        .read(digest_of(b"what was sent"), 1024)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(fs::read_dir(root.path().join("attachments/incoming"))
+        .unwrap()
+        .next()
+        .is_none());
+}
+
+#[tokio::test]
+async fn every_fact_of_a_hold_must_agree_before_it_answers() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open(root.path());
+    let hold = upload(&store, CONVERSATION, b"bytes").await;
+    let asks = |organization_id: &str, conversation_id: &str, stored: Attachment| {
+        let (organization_id, conversation_id) =
+            (organization(organization_id), conversation(conversation_id));
+        let store = &store;
+        async move {
+            store
+                .holds(&organization_id, &conversation_id, &stored)
+                .await
+                .unwrap()
+        }
+    };
+    assert!(asks("org", CONVERSATION, attachment(b"bytes", PDF)).await);
+    assert!(!asks("org", CONVERSATION, attachment(b"bytes", "text/plain")).await);
+    assert!(!asks("org", CONVERSATION, attachment(b"other", PDF)).await);
+    assert!(!asks("org", OTHER_CONVERSATION, attachment(b"bytes", PDF)).await);
+    // Organizations that differ only by case, or that look like a path, are
+    // different owners with different directories.
+    for other in ["Org", "ORG", "../org", "org/../org", "."] {
+        assert!(!asks(other, CONVERSATION, attachment(b"bytes", PDF)).await);
+    }
+    // A digest with another size describes bytes that cannot exist.
+    let impossible =
+        Attachment::new(digest_of(b"bytes"), MediaType::parse(PDF).unwrap(), 6).unwrap();
+    assert!(!asks("org", CONVERSATION, impossible).await);
+    assert!(holds(&store, &hold).await);
+}
+
+#[tokio::test]
+async fn a_hold_without_its_bytes_is_not_a_hold() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open(root.path());
+    let hold = upload(&store, CONVERSATION, b"bytes").await;
+    fs::remove_file(
+        root.path()
+            .join("attachments/blobs")
+            .join(digest_of(b"bytes").to_hex()),
+    )
+    .unwrap();
+    assert!(!holds(&store, &hold).await);
+    // So beginning again asks for the bytes instead of claiming to have them.
+    assert!(store
+        .find_upload(
+            hold.organization_id(),
+            hold.conversation_id(),
+            hold.uploaded()
+        )
+        .await
+        .unwrap()
+        .is_none());
+    assert!(store.read(digest_of(b"bytes"), 16).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn names_from_outside_never_leave_the_root() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open(root.path());
+    for organization_id in ["../../escape", "/etc", "a/b", "..", "org\\evil", "Ω"] {
+        let hold = hold_for(organization_id, CONVERSATION, b"bytes", b"bytes");
+        keep(&store, &hold, b"bytes").await;
+        assert!(holds(&store, &hold).await);
+    }
+    let outside: Vec<_> = fs::read_dir(root.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(outside, ["attachments"]);
+    // Six owners, six records, one copy of the bytes; every name is derived.
+    let holds_root = root.path().join("attachments/holds");
+    let records = files_beneath(&holds_root);
+    assert_eq!(records.len(), 6);
+    for record in records {
+        let relative = record.strip_prefix(&holds_root).unwrap();
+        let names: Vec<_> = relative
+            .iter()
+            .map(|name| name.to_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(names.len(), 3);
+        assert!(names[0].len() == 64 && names[0].bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_eq!(names[1], CONVERSATION);
+        assert_eq!(names[2], format!("{}.json", digest_of(b"bytes").to_hex()));
+    }
+    assert_eq!(
+        files_beneath(&root.path().join("attachments/blobs")).len(),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn everything_written_is_private_and_what_is_not_private_is_refused_not_repaired() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    let root = tempfile::tempdir().unwrap();
+    let store = open(root.path());
+    let hold = upload(&store, CONVERSATION, b"bytes").await;
+    let attachments = root.path().join("attachments");
+    for file in files_beneath(&attachments) {
+        assert_eq!(mode(&file), 0o600, "{}", file.display());
+        let mut directory = file.parent().unwrap();
+        while directory.starts_with(&attachments) {
+            assert_eq!(mode(directory), 0o700, "{}", directory.display());
+            directory = directory.parent().unwrap();
+        }
+    }
+
+    // Bytes someone else can read are not served, and are left as found.
+    let blob = attachments.join("blobs").join(digest_of(b"bytes").to_hex());
+    fs::set_permissions(&blob, fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(
+        store.read(digest_of(b"bytes"), 16).await,
+        Err(StoreUnavailable)
+    );
+    assert_eq!(
+        store
+            .holds(
+                hold.organization_id(),
+                hold.conversation_id(),
+                hold.stored()
+            )
+            .await,
+        Err(StoreUnavailable)
+    );
+    assert_eq!(mode(&blob), 0o644);
+    fs::set_permissions(&blob, fs::Permissions::from_mode(0o600)).unwrap();
+
+    // A second name for the same bytes is refused the same way.
+    fs::hard_link(&blob, attachments.join("blobs/alias")).unwrap();
+    assert_eq!(
+        store.read(digest_of(b"bytes"), 16).await,
+        Err(StoreUnavailable)
+    );
+    fs::remove_file(attachments.join("blobs/alias")).unwrap();
+    assert!(holds(&store, &hold).await);
+    drop(store);
+
+    // Neither is a directory that is not private.
+    for name in ["", "blobs", "holds", "incoming"] {
+        let directory = attachments.join(name);
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(LocalAttachmentStore::open(attachments.clone()).is_err());
+        assert_eq!(mode(&directory), 0o755);
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    assert!(holds(&open(root.path()), &hold).await);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_linked_directory_is_not_followed() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open(root.path());
+    let hold = hold_for("org", CONVERSATION, b"bytes", b"bytes");
+    let elsewhere = root.path().join("elsewhere");
+    nessa_local_storage::create_directory(&elsewhere).unwrap();
+    let organization_directory = root
+        .path()
+        .join("attachments/holds")
+        .join(organization_directory(hold.organization_id()));
+    std::os::unix::fs::symlink(&elsewhere, &organization_directory).unwrap();
+
+    let mut staged = store.stage().await.unwrap();
+    staged.write(b"bytes".to_vec()).await.unwrap();
+    staged.finish().await.unwrap();
+    assert_eq!(staged.keep(hold.clone()).await, Err(StoreUnavailable));
+    assert!(fs::read_dir(&elsewhere).unwrap().next().is_none());
+    // The bytes published for a hold that never came to exist are not left behind.
+    assert!(store.read(digest_of(b"bytes"), 16).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn staged_bytes_that_are_not_the_described_file_are_never_published() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open(root.path());
+    let hold = hold_for("org", CONVERSATION, b"described", b"described");
+    for written in [b"something else".as_slice(), b"describe"] {
+        let mut staged = store.stage().await.unwrap();
+        staged.write(written.to_vec()).await.unwrap();
+        staged.finish().await.unwrap();
+        assert_eq!(staged.keep(hold.clone()).await, Err(StoreUnavailable));
+    }
+    // Nor a transfer nobody finished.
+    let mut staged = store.stage().await.unwrap();
+    staged.write(b"described".to_vec()).await.unwrap();
+    assert_eq!(staged.keep(hold.clone()).await, Err(StoreUnavailable));
+
+    let attachments = root.path().join("attachments");
+    assert!(files_beneath(&attachments.join("blobs")).is_empty());
+    assert!(files_beneath(&attachments.join("holds")).is_empty());
+    assert!(files_beneath(&attachments.join("incoming")).is_empty());
+}
+
+#[tokio::test]
+async fn an_abandoned_transfer_removes_its_file_and_a_crashed_one_is_swept_at_open() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open(root.path());
+    let incoming = root.path().join("attachments/incoming");
+    let mut staged = store.stage().await.unwrap();
+    staged.write(b"partial".to_vec()).await.unwrap();
+    assert_eq!(files_beneath(&incoming).len(), 1);
+    drop(staged);
+    assert!(files_beneath(&incoming).is_empty());
+
+    // What a crash leaves: a transfer's file, and a half-written hold record.
+    let hold = upload(&store, CONVERSATION, b"bytes").await;
+    drop(store);
+    let conversation_directory = root.path().join("attachments").join(hold_directory(
+        hold.organization_id(),
+        hold.conversation_id(),
+    ));
+    for leftover in [
+        incoming.join(".nessa-crashed.tmp"),
+        conversation_directory.join(".nessa-crashed.tmp"),
+    ] {
+        fs::write(leftover, b"junk").unwrap();
+    }
+    let store = open(root.path());
+    assert!(files_beneath(&incoming).is_empty());
+    assert_eq!(files_beneath(&conversation_directory).len(), 1);
+    assert!(holds(&store, &hold).await);
+}
+
+#[tokio::test]
+async fn release_lets_go_of_one_conversation_and_bytes_go_with_their_last_hold() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open(root.path());
+    let first = upload(&store, CONVERSATION, b"shared").await;
+    let second = upload(&store, OTHER_CONVERSATION, b"shared").await;
+    let alone = upload(&store, OTHER_CONVERSATION, b"alone").await;
+    let foreign = hold_for("other-org", OTHER_CONVERSATION, b"alone2", b"alone2");
+    keep(&store, &foreign, b"alone2").await;
+    assert_eq!(
+        files_beneath(&root.path().join("attachments/blobs")).len(),
+        3
+    );
+
+    let mut report = store
+        .release(&organization("org"), &conversation(OTHER_CONVERSATION))
+        .await
+        .unwrap();
+    report
+        .released
+        .sort_by_key(|released| released.hold.stored().size());
+    assert_eq!(
+        report,
+        ReleaseReport {
+            released: vec![
+                ReleasedHold {
+                    hold: alone.clone(),
+                    blob: BlobOutcome::Removed
+                },
+                ReleasedHold {
+                    hold: second.clone(),
+                    blob: BlobOutcome::StillHeld
+                },
+            ],
+            failures: 0,
+        }
+    );
+    assert!(!holds(&store, &second).await);
+    assert!(!holds(&store, &alone).await);
+    assert!(holds(&store, &first).await);
+    // Same conversation identifier, another organization: untouched.
+    assert!(holds(&store, &foreign).await);
+    assert!(store.read(digest_of(b"alone"), 16).await.unwrap().is_none());
+
+    let report = store
+        .release(&organization("org"), &conversation(CONVERSATION))
+        .await
+        .unwrap();
+    assert_eq!(report.released[0].blob, BlobOutcome::Removed);
+    assert!(store
+        .read(digest_of(b"shared"), 16)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        store
+            .release(&organization("org"), &conversation(CONVERSATION))
+            .await
+            .unwrap(),
+        ReleaseReport::default()
+    );
+    // A restart agrees with all of it.
+    drop(store);
+    let store = open(root.path());
+    assert!(!holds(&store, &first).await);
+    assert!(holds(&store, &foreign).await);
+}
+
+#[tokio::test]
+async fn a_record_that_cannot_be_read_is_reported_kept_and_never_costs_the_others() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open(root.path());
+    let good = upload(&store, CONVERSATION, b"good").await;
+    let damaged = upload(&store, CONVERSATION, b"damaged").await;
+    // Valid JSON, valid values, but it claims to be another conversation's hold.
+    let claimed = hold_for("org", OTHER_CONVERSATION, b"damaged", b"damaged");
+    let record = root.path().join("attachments").join(hold_path(&damaged));
+    fs::write(&record, encode(&claimed)).unwrap();
+    assert_eq!(
+        store
+            .holds(
+                damaged.organization_id(),
+                damaged.conversation_id(),
+                damaged.stored()
+            )
+            .await,
+        Err(StoreUnavailable)
+    );
+    // An unrelated upload still begins.
+    assert!(store
+        .find_upload(
+            good.organization_id(),
+            good.conversation_id(),
+            good.uploaded()
+        )
+        .await
+        .unwrap()
+        .is_some());
+
+    let report = store
+        .release(&organization("org"), &conversation(CONVERSATION))
+        .await
+        .unwrap();
+    assert_eq!(report.failures, 1);
+    assert_eq!(report.released.len(), 1);
+    assert_eq!(report.released[0].hold, good);
+    assert_eq!(report.released[0].blob, BlobOutcome::Removed);
+    // The unreadable record is exactly as it was, and its bytes are still protected.
+    assert_eq!(fs::read(&record).unwrap(), encode(&claimed));
+    assert_eq!(
+        store
+            .read(digest_of(b"damaged"), 16)
+            .await
+            .unwrap()
+            .unwrap(),
+        b"damaged"
+    );
+    for garbage in [b"{}".as_slice(), b"not json", &[b'x'; 9000]] {
+        fs::write(&record, garbage).unwrap();
+        assert_eq!(
+            store
+                .release(&organization("org"), &conversation(CONVERSATION))
+                .await
+                .unwrap()
+                .failures,
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn taking_a_hold_back_restores_exactly_what_it_replaced() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open(root.path());
+    // Nothing before: the hold and its bytes both go.
+    let hold = hold_for("org", CONVERSATION, b"bytes", b"bytes");
+    let change = keep(&store, &hold, b"bytes").await;
+    store.revert(hold.clone(), change).await.unwrap();
+    assert!(!holds(&store, &hold).await);
+    assert!(store.read(digest_of(b"bytes"), 16).await.unwrap().is_none());
+
+    // Bytes someone else holds stay.
+    let other = upload(&store, OTHER_CONVERSATION, b"bytes").await;
+    let change = keep(&store, &hold, b"bytes").await;
+    store.revert(hold.clone(), change).await.unwrap();
+    assert!(!holds(&store, &hold).await);
+    assert!(holds(&store, &other).await);
+
+    // A hold that replaced another puts the other back.
+    let earlier = hold_for("org", CONVERSATION, b"first upload", b"same result");
+    let later = hold_for("org", CONVERSATION, b"second upload", b"same result");
+    keep(&store, &earlier, b"same result").await;
+    let change = keep(&store, &later, b"same result").await;
+    assert_eq!(change.previous, Some(earlier.clone()));
+    store.revert(later.clone(), change).await.unwrap();
+    assert_eq!(
+        store
+            .find_upload(
+                earlier.organization_id(),
+                earlier.conversation_id(),
+                earlier.uploaded()
+            )
+            .await
+            .unwrap(),
+        Some(earlier)
+    );
+    assert!(store
+        .find_upload(
+            later.organization_id(),
+            later.conversation_id(),
+            later.uploaded()
+        )
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bytes_are_never_lost_while_a_hold_on_them_exists() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Arc::new(open(root.path()));
+    for round in 0..40_u32 {
+        let bytes = format!("round {round}").into_bytes();
+        let leaving = upload(&store, CONVERSATION, &bytes).await;
+        let arriving = hold_for("org", OTHER_CONVERSATION, &bytes, &bytes);
+        // The arriving upload is fully staged, so only its publish-and-hold
+        // races the release of the last other hold on the same bytes.
+        let mut staged = store.stage().await.unwrap();
+        staged.write(bytes.clone()).await.unwrap();
+        staged.finish().await.unwrap();
+        let barrier = Arc::new(Barrier::new(3));
+        let keeping = {
+            let (barrier, hold) = (barrier.clone(), arriving.clone());
+            tokio::spawn(async move {
+                barrier.wait().await;
+                staged.keep(hold).await.unwrap();
+            })
+        };
+        let releasing = {
+            let (barrier, store) = (barrier.clone(), store.clone());
+            tokio::spawn(async move {
+                barrier.wait().await;
+                store
+                    .release(&organization("org"), &conversation(CONVERSATION))
+                    .await
+                    .unwrap()
+            })
+        };
+        let asking = {
+            let (barrier, store, hold) = (barrier.clone(), store.clone(), arriving.clone());
+            tokio::spawn(async move {
+                barrier.wait().await;
+                // Whatever this sees, it must be able to see it: never an error
+                // from a half-published file.
+                holds(&store, &hold).await
+            })
+        };
+        keeping.await.unwrap();
+        let report = releasing.await.unwrap();
+        asking.await.unwrap();
+        assert_eq!(report.failures, 0);
+        assert!(!holds(&store, &leaving).await);
+        // Whichever went first, the surviving hold still has its bytes.
+        assert!(holds(&store, &arriving).await, "round {round}");
+        assert_eq!(
+            store.read(digest_of(&bytes), 64).await.unwrap().unwrap(),
+            bytes
+        );
+        store
+            .release(&organization("org"), &conversation(OTHER_CONVERSATION))
+            .await
+            .unwrap();
+        assert!(store.read(digest_of(&bytes), 64).await.unwrap().is_none());
+    }
+}
