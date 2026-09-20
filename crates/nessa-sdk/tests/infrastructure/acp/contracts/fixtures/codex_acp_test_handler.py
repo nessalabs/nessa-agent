@@ -104,6 +104,12 @@ for line in sys.stdin:
             # Named so a test can tell a resumed session from a second new one:
             # both answer a prompt, and only one of them is the restart path.
             (root / "resumed").write_text(session)
+            # No `sessionId` back. The real adapter's `resumeSession` returns
+            # models, modes and config options and nothing else — only
+            # `forkSession` names a session — so answering with one would
+            # exercise the identity check in the branch Codex never takes.
+            result(msg["id"], configs())
+            continue
         result(msg["id"], {"sessionId": session, **configs()})
     elif method == "session/set_config_option":
         params = msg["params"]
