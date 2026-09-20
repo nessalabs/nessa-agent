@@ -58,20 +58,38 @@ fn document(entries: Vec<serde_json::Value>) -> String {
 /// kind of machine — fails this test instead of passing quietly.
 ///
 /// Machines rather than platforms, because a platform is not what a build is
-/// chosen for. Linux x86-64 appears four times: the two C libraries, each on a
-/// processor with AVX2 and on one without. Dropping the baseline build would
-/// leave the first list unchanged and every older x86-64 machine with nothing
-/// that starts.
+/// chosen for: Linux x86-64 appears once per C library, and each entry also
+/// says what the processor has to be.
+///
+/// Every x86-64 machine here has AVX2, and that is the pin file being honest
+/// rather than an omission. See [`UNSERVED`].
 const COVERED: &[(&str, &str, Option<Libc>, bool)] = &[
     ("macos", "aarch64", None, false),
-    ("macos", "x86_64", None, false),
     ("macos", "x86_64", None, true),
     ("linux", "aarch64", Some(Libc::Gnu), false),
     ("linux", "aarch64", Some(Libc::Musl), false),
-    ("linux", "x86_64", Some(Libc::Gnu), false),
     ("linux", "x86_64", Some(Libc::Gnu), true),
-    ("linux", "x86_64", Some(Libc::Musl), false),
     ("linux", "x86_64", Some(Libc::Musl), true),
+];
+
+/// Every machine the pin file is expected to have nothing for.
+///
+/// An x86-64 processor without AVX2. Opencode names three `-baseline` packages
+/// as the builds for exactly this machine, and at 1.18.31 they are not: each
+/// holds an executable byte-identical to its plain sibling, and all three of
+/// those binaries are full of AVX2 instructions. Pinning one would not give
+/// this machine something that runs. It would hand it the AVX2 binary under a
+/// name promising otherwise, and turn a clean "no build for this machine" into
+/// an illegal instruction after a 180 MB download.
+///
+/// So this is the other half of [`COVERED`], and the more fragile half: the
+/// natural repair for "Opencode is not offered on this machine" is to add the
+/// package the vendor named for it, which is the one thing that must not
+/// happen while it holds the same bytes. This says so as a test.
+const UNSERVED: &[(&str, &str, Option<Libc>)] = &[
+    ("macos", "x86_64", None),
+    ("linux", "x86_64", Some(Libc::Gnu)),
+    ("linux", "x86_64", Some(Libc::Musl)),
 ];
 
 #[test]
@@ -97,6 +115,23 @@ fn every_supported_machine_has_a_build() {
 }
 
 #[test]
+fn a_machine_without_avx2_is_offered_nothing_rather_than_something_that_dies() {
+    let releases = releases_for(&opencode()).expect("the pinned releases parse");
+    for (operating_system, architecture, libc) in UNSERVED {
+        let host = machine(operating_system, architecture, *libc, false);
+        let offered: Vec<_> = releases
+            .iter()
+            .filter(|release| release.runs_on(&host))
+            .map(|release| package_named_by(release.archive_url().as_str()))
+            .collect();
+        assert!(
+            offered.is_empty(),
+            "{host} is offered {offered:?}, which needs a processor it does not have"
+        );
+    }
+}
+
+#[test]
 fn what_each_pin_says_it_needs_agrees_with_the_archive_it_names() {
     // The one claim in this change that nothing else can check. Which builds
     // need AVX2 and which C library each is linked against is a hand-written
@@ -113,19 +148,24 @@ fn what_each_pin_says_it_needs_agrees_with_the_archive_it_names() {
     // for; it cannot catch a vendor whose names do not describe their
     // contents.
     //
-    // At 1.18.31 they do not: `opencode-linux-x64` and
-    // `opencode-linux-x64-baseline` publish a byte-identical
-    // `package/bin/opencode` (sha256 f9dab322…, 185,030,784 bytes, measured
-    // from both archives), and the darwin-x64 pair likewise. One binary cannot
-    // both need AVX2 and not need it. The measurement that *is* independent
-    // now lives in the generator — `sameBinaryUnderDifferentClaims` hashes the
-    // entry it already extracts and refuses a release whose builds claim
-    // different things about the same bytes — so this test stays as the check
-    // on the generated file and that one is the check on the vendor.
+    // At 1.18.31 they do not, which is why no `-baseline` package is pinned at
+    // all and why the rule below is the flat one: every x86-64 build needs
+    // AVX2. All three pairs publish a byte-identical `package/bin/opencode`
+    // (linux-x64 sha256 f9dab322…, darwin-x64 9cd3d83b…, linux-x64-musl
+    // b4a7415a…, measured from both archives of each pair), and all three of
+    // those binaries disassemble full of AVX2. One binary cannot both need
+    // AVX2 and not need it, and which way it resolves was settled by reading
+    // the bytes rather than by preferring one of the vendor's two names.
+    // [`UNSERVED`] is the consequence, and
+    // `a_machine_without_avx2_is_offered_nothing_rather_than_something_that_dies`
+    // is what holds it.
     //
-    // Asserting "a build that cannot start is never offered" instead would say
-    // nothing: `runs_on` is defined as exactly that comparison, so the
-    // assertion would restate the filter and hold for any file at all.
+    // The measurement that *is* independent lives in the generator —
+    // `sameBinaryUnderDifferentClaims` hashes the entry it already extracts and
+    // refuses a release whose builds claim different things about the same
+    // bytes — so this test stays as the check on the generated file and that
+    // one is the check on the vendor. `pin-opencode.test.mjs` closes the gap
+    // between them by asserting that this file is the one that table describes.
     for release in releases_for(&opencode()).expect("the pinned releases parse") {
         let package = package_named_by(release.archive_url().as_str());
         let x86 = release.platform().architecture() == "x86_64";
@@ -133,8 +173,12 @@ fn what_each_pin_says_it_needs_agrees_with_the_archive_it_names() {
 
         assert_eq!(
             needs.avx2(),
-            x86 && !package.contains("-baseline"),
+            x86,
             "{package} and what it says it needs disagree about avx2"
+        );
+        assert!(
+            !package.contains("-baseline"),
+            "{package} is pinned, and at 1.18.31 no baseline build is one"
         );
         let libc = match release.platform().operating_system() {
             "linux" if package.contains("-musl") => Some(Libc::Musl),

@@ -54,7 +54,11 @@ impl fmt::Display for Libc {
 /// Stated as what the build *needs* rather than as the vendor's name for it.
 /// `baseline` and `musl` are Opencode's words for its own artifacts, and a
 /// second agent will have different ones; what has to be compared against the
-/// machine is the same either way.
+/// machine is the same either way. That separation is what lets the pin file
+/// disagree with a name: at 1.18.31 Opencode's three `-baseline` archives hold
+/// the same bytes as their AVX2 siblings, so none of them is pinned and a
+/// machine without AVX2 matches nothing rather than matching a build named for
+/// it. `scripts/agents/pin-opencode.mjs` records the measurement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ReleaseRequirements {
     /// The C library this build needs, where that is a distinction at all.

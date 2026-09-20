@@ -324,6 +324,10 @@ fn each_machine_gets_the_build_opencode_publishes_for_it() {
     // machine, and an AVX2 build dies on an illegal instruction — after Nessa
     // has told somebody their runtime is ready.
     //
+    // Every x86-64 row has AVX2 because at 1.18.31 every x86-64 build needs it;
+    // the machines that therefore get nothing are
+    // `a_processor_without_avx2_is_told_no_tested_build_fits_it` below.
+    //
     // Asserting `chosen.runs_on(&host)` instead would say nothing: `preferred`
     // filters on exactly that, so the assertion would restate the filter and
     // hold for any pin file at all, including one that marked every build as
@@ -340,23 +344,9 @@ fn each_machine_gets_the_build_opencode_publishes_for_it() {
         (
             "linux",
             "x86_64",
-            Some(Libc::Gnu),
-            false,
-            "opencode-linux-x64-baseline",
-        ),
-        (
-            "linux",
-            "x86_64",
             Some(Libc::Musl),
             true,
             "opencode-linux-x64-musl",
-        ),
-        (
-            "linux",
-            "x86_64",
-            Some(Libc::Musl),
-            false,
-            "opencode-linux-x64-baseline-musl",
         ),
         (
             "linux",
@@ -373,13 +363,6 @@ fn each_machine_gets_the_build_opencode_publishes_for_it() {
             "opencode-linux-arm64-musl",
         ),
         ("macos", "x86_64", None, true, "opencode-darwin-x64"),
-        (
-            "macos",
-            "x86_64",
-            None,
-            false,
-            "opencode-darwin-x64-baseline",
-        ),
         ("macos", "aarch64", None, false, "opencode-darwin-arm64"),
     ] {
         let host = machine(operating_system, architecture, libc, avx2);
@@ -397,26 +380,33 @@ fn each_machine_gets_the_build_opencode_publishes_for_it() {
 }
 
 #[test]
-fn a_processor_with_avx2_gets_the_build_that_uses_it() {
-    // Both builds run on such a machine, so this is a preference rather than a
-    // filter — and the demanding one is the vendor's own default. The baseline
-    // build exists for machines that cannot take it, and installing it
-    // everywhere would give up exactly what it is there to preserve.
-    let with = machine("linux", "x86_64", Some(Libc::Gnu), true);
-    let without = machine("linux", "x86_64", Some(Libc::Gnu), false);
+fn a_processor_without_avx2_is_told_no_tested_build_fits_it() {
+    // At 1.18.31 there is no x86-64 Opencode that runs here. The vendor names
+    // three `-baseline` packages for this machine and every one of them holds
+    // the same bytes as its AVX2 sibling, so none is pinned; the pin file's own
+    // side of that is `a_machine_without_avx2_is_offered_nothing_...`.
+    //
+    // This is the half a person sees. A refusal naming what this machine is and
+    // what the builds ask for is a sentence somebody can act on; the failure
+    // this replaces was a download followed by an illegal instruction.
+    //
+    // Which build a machine that *can* run either gets is
+    // `the_more_demanding_of_two_builds_wins`, over releases built here rather
+    // than through the pin file, because at this version the file no longer
+    // holds such a pair to choose between.
+    let host = machine("linux", "x86_64", Some(Libc::Gnu), false);
 
-    let fast = pinned(&opencode(), &with).expect("a build for a machine with avx2");
-    let baseline = pinned(&opencode(), &without).expect("a build for a machine without it");
+    let message = pinned(&opencode(), &host)
+        .expect_err("no pinned build runs on a processor without avx2")
+        .to_string();
 
-    assert!(
-        fast.requirements().avx2(),
-        "the faster build was passed over"
+    assert_eq!(
+        message,
+        "agent setup failed: nessa has no tested opencode release this machine can run: \
+         it is linux-x86_64 with gnu and no avx2, \
+         and the opencode builds for linux-x86_64 need \
+         gnu and avx2, or musl and avx2"
     );
-    assert!(
-        !baseline.requirements().avx2(),
-        "a processor without avx2 was offered a build that needs it"
-    );
-    assert_ne!(fast.archive_digest(), baseline.archive_digest());
 }
 
 #[test]
@@ -472,7 +462,7 @@ fn a_machine_with_no_known_c_library_is_told_what_the_builds_need() {
         "agent setup failed: nessa has no tested opencode release this machine can run: \
          it is linux-x86_64 with no c library nessa could name and avx2, \
          and the opencode builds for linux-x86_64 need \
-         gnu and avx2, or gnu, or musl and avx2, or musl"
+         gnu and avx2, or musl and avx2"
     );
 }
 

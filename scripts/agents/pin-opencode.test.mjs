@@ -1,11 +1,21 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import test from "node:test"
 import { createHash } from "node:crypto"
 import {
+  EXECUTABLE,
+  PLATFORMS,
   agreesWithRegistry,
   executableDigest,
   sameBinaryUnderDifferentClaims,
@@ -242,4 +252,64 @@ test("builds that differ, and ones that agree about what they are, pin", (t) => 
       build("opencode-darwin-arm64-again", { digest: "a" }),
     ]),
   )
+})
+
+/**
+ * The checked-in pin file is what this generator would write.
+ *
+ * Everything else in this file tests the generator. Nothing tested the file it
+ * produces, and the file is the thing that ships: it is checked in, it is
+ * compiled into the server, and it is editable by hand. A pin whose claims no
+ * longer match the table they came from is exactly the case the Rust side
+ * cannot see either — it reads the file as ground truth.
+ *
+ * The three fields compared are the three the generator does not measure. The
+ * digest, the URL and the version come off the registry and can only be
+ * rechecked by fetching, which is what `pin-opencode` is for; the platform,
+ * the C library, the AVX2 requirement and the entry path come out of
+ * `PLATFORMS` and `EXECUTABLE` and are copied verbatim, so a file that
+ * disagrees with them was edited after it was generated.
+ *
+ * The set is compared too, not just the entries in it. A dropped build leaves
+ * every remaining entry agreeing perfectly and a whole class of machine with
+ * nothing to install, and an added one is a claim the generator never made.
+ */
+test("the pinned releases are the ones this table describes", () => {
+  const pins = JSON.parse(
+    readFileSync(
+      join(
+        dirname(fileURLToPath(import.meta.url)),
+        "../../crates/nessa-server/data/agent-releases.json",
+      ),
+      "utf8",
+    ),
+  ).agents.opencode
+  const named = (url) => url.split("/")[3]
+
+  assert.deepEqual(
+    pins.map((pin) => named(pin.archiveUrl)).sort(),
+    PLATFORMS.map((platform) => platform.package).sort(),
+    "the pin file and the generator's table describe different builds",
+  )
+
+  for (const pin of pins) {
+    const platform = PLATFORMS.find((entry) => entry.package === named(pin.archiveUrl))
+    assert.deepEqual(
+      {
+        operatingSystem: pin.operatingSystem,
+        architecture: pin.architecture,
+        libc: pin.libc,
+        requiresAvx2: pin.requiresAvx2,
+        executable: pin.executable,
+      },
+      {
+        operatingSystem: platform.operatingSystem,
+        architecture: platform.architecture,
+        libc: platform.libc,
+        requiresAvx2: platform.requiresAvx2,
+        executable: EXECUTABLE,
+      },
+      `${platform.package} is pinned as something other than what the table says it is`,
+    )
+  }
 })

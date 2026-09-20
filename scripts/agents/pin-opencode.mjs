@@ -47,33 +47,44 @@ const registry = "https://registry.npmjs.org"
 // without it dies on an illegal instruction.
 //
 // `libc` is null where the platform has only one, which is every platform here
-// but Linux. `requiresAvx2` follows Opencode's own naming: the plain x64 build
-// is meant to be compiled for a processor with AVX2 and the `-baseline` one the
-// build for everything else, so the pair is a preference on a machine that has
-// AVX2 and the baseline is the only choice on a machine that does not.
+// but Linux. `requiresAvx2` is a claim about the bytes, and at 1.18.31 it is
+// `true` for every x86-64 build there is.
 //
-// "Meant to be", because the name is a claim by the vendor and this table
-// repeats it. At 1.18.31 the claim is not true of the files: the plain and
-// `-baseline` packages publish a byte-identical executable on both linux-x64
-// and darwin-x64. `sameBinaryUnderDifferentClaims` is what stops that being
-// pinned silently — it hashes what each archive actually holds and refuses a
-// release whose builds say different things about the same bytes. This table
-// is still names; that check is what keeps the names honest.
+// Six packages, not nine: the three `-baseline` ones are deliberately absent.
+// Opencode names them as the builds for a processor without AVX2, and at
+// 1.18.31 they are not. Each publishes an executable byte-identical to its
+// plain sibling — linux-x64 and linux-x64-baseline both sha256 f9dab322…,
+// darwin-x64 and its baseline 9cd3d83b…, linux-x64-musl and its baseline
+// b4a7415a… — and all three of those binaries are full of AVX2: `vpermd`,
+// `vpbroadcastd`, `vextracti128`, `vpsllvd`, thousands of sites each, measured
+// with `llvm-objdump -d` on the archives this file pins.
+//
+// So pinning a `-baseline` package would not give an older machine something
+// that runs. It would hand it the AVX2 binary under a name promising
+// otherwise, and turn a clean "no build for this machine" into an illegal
+// instruction after a 180 MB download. Leaving them out is what makes the file
+// true: at this pin, Opencode needs AVX2 on x86-64, `preferred` matches
+// nothing on a machine without it, and the install says so.
+//
+// `sameBinaryUnderDifferentClaims` is what found this and is why it stays: it
+// hashes what each archive actually holds and refuses a release whose builds
+// say different things about the same bytes. Running the generator against
+// 1.18.31 with the baseline packages in this table throws, by design. If a
+// later release publishes baseline builds that really are baseline — different
+// bytes, no AVX2 in them — they belong back in this table, and that check is
+// what will say whether they do.
 //
 // Windows is deliberately absent. Opencode publishes builds for it, but nothing
 // in Nessa launches an agent runtime on Windows yet, and pinning a platform
 // that is never installed would be claiming a test that never ran.
 //
-// Two things this table cannot say, and which therefore are not checked before
-// a runtime is launched. A `-baseline` build is not a build for any x86-64
-// processor: it still assumes roughly a Nehalem, so a machine older than that
-// gets an illegal instruction from the build named for not needing one. And a
-// glibc build has a minimum glibc *version*, so an old distribution gets a
-// `GLIBC_2.xx not found` from the loader. Both are the failure this whole
-// mechanism exists to prevent, on machines old enough that the vendor does not
-// describe them either. Saying so here is the honest alternative to implying
-// the check is complete.
-const PLATFORMS = [
+// One thing this table still cannot say, and which therefore is not checked
+// before a runtime is launched: a glibc build has a minimum glibc *version*, so
+// an old distribution gets a `GLIBC_2.xx not found` from the loader. That is
+// the failure this whole mechanism exists to prevent, on machines old enough
+// that the vendor does not describe them either. Saying so here is the honest
+// alternative to implying the check is complete.
+export const PLATFORMS = [
   {
     operatingSystem: "macos",
     architecture: "aarch64",
@@ -87,13 +98,6 @@ const PLATFORMS = [
     libc: null,
     requiresAvx2: true,
     package: "opencode-darwin-x64",
-  },
-  {
-    operatingSystem: "macos",
-    architecture: "x86_64",
-    libc: null,
-    requiresAvx2: false,
-    package: "opencode-darwin-x64-baseline",
   },
   {
     operatingSystem: "linux",
@@ -119,30 +123,16 @@ const PLATFORMS = [
   {
     operatingSystem: "linux",
     architecture: "x86_64",
-    libc: "gnu",
-    requiresAvx2: false,
-    package: "opencode-linux-x64-baseline",
-  },
-  {
-    operatingSystem: "linux",
-    architecture: "x86_64",
     libc: "musl",
     requiresAvx2: true,
     package: "opencode-linux-x64-musl",
-  },
-  {
-    operatingSystem: "linux",
-    architecture: "x86_64",
-    libc: "musl",
-    requiresAvx2: false,
-    package: "opencode-linux-x64-baseline-musl",
   },
 ]
 
 // Where the executable sits inside every one of those packages. Asserted below
 // rather than assumed: if a future release moves it, this script fails instead
 // of writing a pin that installs nothing.
-const EXECUTABLE = "package/bin/opencode"
+export const EXECUTABLE = "package/bin/opencode"
 
 // What the first bytes of a program look like on the platforms this script
 // pins. ELF for Linux; Mach-O for macOS, thin in either byte order and fat,
