@@ -5,7 +5,7 @@ use super::{
     ProviderExecutionReply, ProviderOperationFailure, ProviderOperationFuture,
     ProviderSessionBackend, ProviderSessionState, SessionCloseRequest, SteeringOutcome,
 };
-use crate::application::agent_execution::agents::AgentError;
+use crate::application::agent_execution::agents::{AgentError, AgentFuture};
 use crate::application::agent_execution::{
     executions::{ExecutionAudit, ExecutionAuditRecord, ExecutionRequest},
     permissions::{
@@ -18,7 +18,7 @@ use crate::domain::{
         executions::ExecutionId, permissions::PermissionStateView, sessions::ExecutionSessionId,
     },
     effective_capabilities::value_objects::{
-        CapabilityRequirement, EffectiveCapabilities, Modality,
+        CapabilityError, CapabilityRequirement, EffectiveCapabilities, Modality,
     },
 };
 use std::sync::Arc;
@@ -68,10 +68,7 @@ impl ProviderSession {
     }
     /// Deliver application-owned lifecycle evidence to the mandatory audit sink.
     /// The sink defines its bounded acknowledgement and durability contract.
-    pub(crate) fn record_audit(
-        &self,
-        record: ExecutionAuditRecord,
-    ) -> crate::application::agent_execution::agents::AgentFuture<'_, ()> {
+    pub(crate) fn record_audit(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
         self.audit.record(record)
     }
     pub(crate) fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
@@ -124,13 +121,15 @@ impl ProviderSession {
                 input.estimated_input_tokens,
                 input.reserved_output_tokens,
             )
-            .map_err(|error| AgentError::InvalidInput(error.to_string()))?;
+            .map_err(offered_image_input_or)?;
         if !images.is_empty() {
             // Image input is offered exactly when its limits are recorded, so
             // the modality check above has already refused a model without them.
-            let limits = self.capabilities.image_input().ok_or_else(|| {
-                AgentError::InvalidInput("the model records no image limits".into())
-            })?;
+            // Answering the same refusal rather than asserting keeps that one
+            // fact one typed error wherever the two are ever read apart.
+            let Some(limits) = self.capabilities.image_input() else {
+                return Err(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered));
+            };
             for image in images {
                 limits
                     .check(image.media_type(), image.size())
@@ -234,5 +233,17 @@ impl ProviderSession {
     /// silently create a replacement conversation.
     pub(crate) fn shutdown(&self, request: SessionCloseRequest) -> CleanupFuture<'_> {
         self.backend.close(request)
+    }
+}
+
+/// One unmet requirement as the caller's typed answer: an image the attachment
+/// never offered to carry is the same fact as an image the agent refuses, and
+/// is reported as such rather than as a sentence inside `InvalidInput`.
+fn offered_image_input_or(error: CapabilityError) -> AgentError {
+    match error {
+        CapabilityError::Unsupported(CapabilityRequirement::Input(Modality::Image)) => {
+            AgentError::ImageInputRefused(ImageInputRefusal::NotOffered)
+        }
+        other => AgentError::InvalidInput(other.to_string()),
     }
 }

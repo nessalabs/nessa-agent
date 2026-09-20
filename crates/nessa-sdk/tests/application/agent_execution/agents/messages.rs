@@ -120,10 +120,13 @@ async fn an_image_for_a_text_only_binding_is_refused_before_every_admission_save
                 ..request("image")
             };
             // Refused, never sent as its text alone with the image dropped.
+            // The attachment itself carries no image, which is its own typed
+            // fact rather than a sentence about unmet capabilities.
             let result = submit(&agent, input, operation).await;
-            assert!(
-                matches!(result, Err(AgentError::InvalidInput(_))),
-                "{result:?}"
+            assert_eq!(
+                result,
+                Err(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered)),
+                "operation {operation}"
             );
             assert_eq!(provider.calls.executions.load(Ordering::SeqCst), 0);
             assert_eq!(storage.0.lock().unwrap().writes, writes);

@@ -1,5 +1,6 @@
 //! File decoding enforces the same actual message-byte limit as live admission.
 use super::*;
+use serde_json::Value;
 
 #[tokio::test]
 async fn file_decode_rejects_oversized_message_without_rewriting() {
@@ -210,13 +211,13 @@ async fn saved_image_references_are_restored_through_the_message_rules() {
     lease.save(value.clone()).await.unwrap();
     let path = journal_path(&directory, "image-rules");
     let original = std::fs::read(&path).unwrap();
-    let valid: serde_json::Value = snapshot_json(&original).unwrap();
+    let valid: Value = snapshot_json(&original).unwrap();
     let one = valid
         .pointer("/invocations/0/user_images/0")
         .unwrap()
         .clone();
 
-    let corruptions: Vec<(&str, serde_json::Value)> = vec![
+    let corruptions: Vec<(&str, Value)> = vec![
         ("/invocations/0/user_images/0/digest", "sha256:00".into()),
         (
             "/invocations/0/user_images/0/digest",

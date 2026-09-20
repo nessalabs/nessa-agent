@@ -1,7 +1,9 @@
 use super::super::{
     executions::{
         event_queue::{EventQueueBudget, EventReceiver},
-        prompt_content::{fits_one_frame, read_images, ImageBlocks, IMAGE_READ_TIMEOUT},
+        prompt_content::{
+            encoded_image_bytes, fits_one_frame, read_images, ImageBlocks, IMAGE_READ_TIMEOUT,
+        },
         steering::RESPONSE_TIMEOUT,
         worker,
     },
@@ -34,7 +36,10 @@ use std::{
     sync::{atomic::AtomicU64, Arc, Mutex as ControlMutex},
     time::Duration,
 };
-use tokio::sync::{mpsc, oneshot, watch, Mutex, MutexGuard};
+use tokio::{
+    sync::{mpsc, oneshot, watch, Mutex, MutexGuard, OwnedSemaphorePermit, Semaphore},
+    time::Instant,
+};
 
 pub(crate) type ProcessFactory = Arc<dyn Fn() -> Result<ProcessScope, AgentError> + Send + Sync>;
 
@@ -83,6 +88,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     let (event_generations, queued) = mpsc::channel(16);
     let control = ControlMutex::new(generation.control());
     let (close_activity, _) = watch::channel(());
+    let image_budget = Arc::new(Semaphore::new(in_flight_image_bytes(&factory.config)));
     let session = Arc::new(AcpSession {
         id: session_id.clone(),
         factory,
@@ -90,6 +96,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         control,
         close_activity,
         event_generations,
+        image_budget,
     });
     Ok(OpenedProviderSession {
         session: ProviderSession::new(session_id, session, capabilities, session_audit),
@@ -266,6 +273,17 @@ fn enqueue(sender: &mpsc::Sender<Command>, command: Command) -> Result<(), Agent
     })
 }
 
+/// Encoded image bytes one session may hold outside the worker at once.
+///
+/// Every queued command retains its own images, so without this the sixteen
+/// slots of the command queue would each be allowed a whole frame of them.
+/// Two frames is what the worker can ever be asked for at once, one execution
+/// and one native steering, and a message that passes admission always fits
+/// one frame, so a single message can never be refused for want of budget.
+fn in_flight_image_bytes(config: &AcpConfig) -> usize {
+    config.max_frame_bytes.saturating_mul(2)
+}
+
 struct AcpSession<P> {
     id: ExecutionSessionId,
     factory: WorkerFactory<P>,
@@ -275,6 +293,8 @@ struct AcpSession<P> {
     control: ControlMutex<Control>,
     close_activity: watch::Sender<()>,
     event_generations: mpsc::Sender<EventStream>,
+    // Retained by the blocks of every message read but not yet written.
+    image_budget: Arc<Semaphore>,
 }
 impl<P: AcpProfile + Clone> AcpSession<P> {
     async fn live_generation(&self) -> Result<MutexGuard<'_, Generation>, AgentError> {
@@ -398,12 +418,13 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
                 (generation.commands.clone(), generation.observations.clone())
             };
             // The generation lock is released: a stalled source must not hold
-            // up steering, permission answers, or the next restoration.
-            let limit = self
-                .factory
-                .config
-                .execution_timeout
-                .map_or(IMAGE_READ_TIMEOUT, |limit| limit.min(IMAGE_READ_TIMEOUT));
+            // up steering, permission answers, or the next restoration. The
+            // execution's own deadline starts here, before the read, so reading
+            // spends it instead of adding to it.
+            let execution_timeout = self.factory.config.execution_timeout;
+            let deadline = execution_timeout.map(|limit| Instant::now() + limit);
+            let limit =
+                execution_timeout.map_or(IMAGE_READ_TIMEOUT, |limit| limit.min(IMAGE_READ_TIMEOUT));
             let images = match self
                 .images(&input.user_message, &commands, closing, limit)
                 .await
@@ -411,10 +432,14 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
                 Ok(images) => images,
                 Err(error) => return ProviderExecutionReply::Rejected(error),
             };
+            let prompt = DispatchedPrompt {
+                input,
+                images,
+                deadline,
+            };
             // A generation that stopped meanwhile has closed this queue, so the
             // request is refused rather than handed to a different process.
-            if let Err(error) = enqueue(&commands, Command::ExecutionRequest(input, images, sender))
-            {
+            if let Err(error) = enqueue(&commands, Command::ExecutionRequest(prompt, sender)) {
                 return ProviderExecutionReply::Rejected(error);
             }
             let result = receiver.await.unwrap_or_else(|_| {
@@ -453,6 +478,9 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
             };
             // Read with the lock released and off the worker's task: the
             // active execution keeps being driven, and can finish, meanwhile.
+            // The steering deadline starts here, before the read, so the whole
+            // call is answered within it rather than within it twice over.
+            let deadline = Instant::now() + RESPONSE_TIMEOUT;
             let limit = IMAGE_READ_TIMEOUT.min(RESPONSE_TIMEOUT);
             let images = self
                 .images(&input.user_message, &commands, closing, limit)
@@ -465,7 +493,12 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
                     };
                     ProviderOperationFailure::new(error, state)
                 })?;
-            enqueue(&commands, Command::Steer(target, input, images, sender)).map_err(|error| {
+            let prompt = DispatchedPrompt {
+                input,
+                images,
+                deadline: Some(deadline),
+            };
+            enqueue(&commands, Command::Steer(target, prompt, sender)).map_err(|error| {
                 ProviderOperationFailure::new(error, ProviderSessionState::Usable)
             })?;
             receiver.await.unwrap_or_else(|_| {
@@ -574,9 +607,14 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
     /// The caller holds no lock. The read is abandoned, with
     /// [`AgentError::Closed`], when this context is closed or the generation
     /// behind `commands` stops for any reason (consumer loss and a failed
-    /// process included), and it fails after `limit`. The connected agent's
-    /// answer is checked first so that nothing is read for an agent that takes
-    /// no images; the worker repeats that check when it dispatches.
+    /// process included), and it fails after `limit`. What could refuse the
+    /// images outright is answered first, so nothing is read for a message
+    /// that was never going to be sent; the worker repeats those checks when
+    /// it dispatches.
+    ///
+    /// The session's share of in-flight encoded bytes is taken before the first
+    /// read and travels with the blocks. A message that cannot have it is
+    /// [`AgentError::Busy`], again with nothing read.
     async fn images(
         &self,
         message: &UserMessage,
@@ -584,25 +622,48 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
         mut closing: watch::Receiver<()>,
         limit: Duration,
     ) -> Result<ImageBlocks, AgentError> {
-        let agent = self.operation_capabilities();
-        if !message.images().is_empty() && agent.negotiated && !agent.image_input {
-            return Err(AgentError::ImageInputRefused(
-                ImageInputRefusal::AgentDoesNotAccept,
-            ));
+        if !message.images().is_empty() {
+            if self.factory.config.images.is_none() {
+                return Err(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered));
+            }
+            let agent = self.operation_capabilities();
+            if agent.negotiated && !agent.image_input {
+                return Err(AgentError::ImageInputRefused(
+                    ImageInputRefusal::AgentDoesNotAccept,
+                ));
+            }
         }
+        let charge = self.charge_images(message)?;
         let stopped = async {
             tokio::select! {
                 _ = closing.changed() => {}
                 () = commands.closed() => {}
             }
         };
-        read_images(
+        let blocks = read_images(
             self.factory.config.images.as_deref(),
             message,
             limit,
             stopped,
         )
-        .await
+        .await?;
+        Ok(blocks.charged(charge))
+    }
+    /// This message's share of the bytes one session may hold outside the
+    /// worker, taken before anything is read so a refusal costs no read.
+    fn charge_images(
+        &self,
+        message: &UserMessage,
+    ) -> Result<Option<OwnedSemaphorePermit>, AgentError> {
+        let bytes = encoded_image_bytes(message);
+        if bytes == 0 {
+            return Ok(None);
+        }
+        self.image_budget
+            .clone()
+            .try_acquire_many_owned(bytes)
+            .map(Some)
+            .map_err(|_| AgentError::Busy)
     }
     async fn operation_failure(&self, error: AgentError) -> ProviderOperationFailure {
         let generation = self.generation.lock().await;
@@ -623,21 +684,26 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
     }
 }
 
+/// One user message on its way to the worker: already admitted, with its
+/// images read and encoded, and with what is left of the deadline of the phase
+/// that began before that read.
+pub(crate) struct DispatchedPrompt {
+    pub input: ExecutionRequest,
+    pub images: ImageBlocks,
+    /// When this phase must be finished. `None` only for an execution the host
+    /// left unbounded in time; the frame's own write allowance may extend it.
+    pub deadline: Option<Instant>,
+}
+
 pub(crate) enum Command {
-    /// Native steering for the identified execution, with its image blocks
-    /// already read and encoded.
+    /// Native steering for the identified execution.
     Steer(
         ExecutionId,
-        ExecutionRequest,
-        ImageBlocks,
+        DispatchedPrompt,
         oneshot::Sender<ProviderOperationResult<SteeringOutcome>>,
     ),
-    /// One prompt, with its image blocks already read and encoded.
-    ExecutionRequest(
-        ExecutionRequest,
-        ImageBlocks,
-        oneshot::Sender<ProviderExecutionReply>,
-    ),
+    /// One prompt.
+    ExecutionRequest(DispatchedPrompt, oneshot::Sender<ProviderExecutionReply>),
     CancelPermission(
         PermissionCancellationRequest,
         oneshot::Sender<ProviderOperationResult<PermissionCancellation>>,

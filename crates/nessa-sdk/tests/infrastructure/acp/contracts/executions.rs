@@ -1,4 +1,6 @@
 use super::support::*;
+use serde_json::Value;
+use std::fs::read_to_string;
 use tokio::{sync::oneshot, time::Instant};
 
 #[tokio::test]
@@ -12,6 +14,7 @@ async fn slow_consumer_hits_shared_byte_budget_and_still_audits_and_cleans_up() 
         // These individually valid maxima previously allowed about 64 GiB of text.
         let (root, mut config, model) = test_acp_configuration("permission-byte-flood", 4096);
         config.max_frame_bytes = 16 * 1024 * 1024;
+        config.max_incoming_frame_bytes = 16 * 1024 * 1024;
         config.execution_timeout = None;
         let binding = ClaudeAcpProvider::new(
             config,
@@ -388,4 +391,45 @@ async fn acp_message_id_is_retained_for_each_streamed_fragment() {
         .await
         .into_result()
         .unwrap();
+}
+
+#[tokio::test]
+async fn an_agent_frame_over_the_inbound_ceiling_fails_although_the_host_writes_larger_ones() {
+    let _process_slot = process_test_slot().await;
+    // What this host writes and what it will accept are two separate ceilings.
+    // Carrying images needs the first to be large; the second is the buffer an
+    // agent subprocess can make this host allocate, and stays small.
+    let (root, mut config, model) = test_acp_configuration("oversize", 16);
+    config.max_frame_bytes = 16 * 1024 * 1024;
+    config.max_incoming_frame_bytes = 8192;
+    config.execution_timeout = None;
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(RecordingAudit::default()),
+    )
+    .unwrap();
+    let opened = binding.open(None).await.unwrap();
+    let mut large = prompt("large");
+    let text = "x".repeat(64 * 1024);
+    large.user_message = UserMessage::text_only(PromptText::new(&text).unwrap());
+    // This message is eight times the inbound ceiling and is admitted and
+    // written; the fixture's twenty-thousand-byte answer is what fails.
+    let result = timeout(Duration::from_secs(5), opened.session.execute(large))
+        .await
+        .unwrap()
+        .into_result();
+    assert!(matches!(result, Err(AgentError::Protocol(_))), "{result:?}");
+    let observed: Value =
+        serde_json::from_str(&read_to_string(root.path().join("prompt-observed")).unwrap())
+            .unwrap();
+    assert_eq!(observed[0]["text"].as_str().map(str::len), Some(text.len()));
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
 }

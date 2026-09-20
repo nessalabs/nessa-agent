@@ -282,6 +282,7 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
         kill_timeout: Duration::from_secs(10),
         event_capacity: 16,
         max_frame_bytes: 4096,
+        max_incoming_frame_bytes: 4096,
         images: None,
     };
     config.validate().unwrap();

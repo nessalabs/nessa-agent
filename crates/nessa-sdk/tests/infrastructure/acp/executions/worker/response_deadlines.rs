@@ -77,7 +77,7 @@ async fn blocked_worker(
         },
         audit: Arc::new(Audit::default()),
         cancellation_cause: None,
-        reader: Reader::new(stdout, config.max_frame_bytes),
+        reader: Reader::new(stdout, config.max_incoming_frame_bytes),
         scope,
         config,
         capabilities,
@@ -94,7 +94,7 @@ async fn blocked_worker(
         }),
         steering: None,
         steering_supported: false,
-        image_input: false,
+        agent_accepts_images: false,
         operation_capabilities,
         permissions: HashMap::new(),
         shutdown_deadline: None,
@@ -250,22 +250,12 @@ async fn selected_dispatch_deadline_bounds_idle_permission_response() {
         worker.active = None;
         let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
         let (reply, _result) = oneshot::channel();
-        let command = Command::ExecutionRequest(
-            ExecutionRequest {
-                execution_id: ExecutionId::new("next").unwrap(),
-                user_message: UserMessage::text_only(PromptText::new("hello").unwrap()),
-                estimated_input_tokens: 1,
-                reserved_output_tokens: 1,
-            },
-            ImageBlocks::none(),
-            reply,
-        );
         tokio::time::pause();
         let began = Instant::now();
         let result = worker
             .drain_ready_before_dispatch(
                 &mut execution,
-                &command,
+                &DispatchCaller::Execution(&reply),
                 Some(began + Duration::from_millis(20)),
             )
             .await;
@@ -351,4 +341,84 @@ async fn shutdown_grace_preserves_explicit_cause_past_old_steering_deadline() {
     assert_eq!(result, Ok(()));
     assert_eq!(worker.cancellation_cause, Some(cause));
     assert!(elapsed >= Duration::from_millis(20) && elapsed <= Duration::from_millis(21));
+}
+
+fn request(id: &str) -> ExecutionRequest {
+    ExecutionRequest {
+        execution_id: ExecutionId::new(id).unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("hello").unwrap()),
+        estimated_input_tokens: 1,
+        reserved_output_tokens: 1,
+    }
+}
+
+#[tokio::test]
+async fn a_steering_acknowledgement_is_armed_with_what_the_read_left() {
+    let (mut worker, mut execution, _events) = blocked_worker("").await;
+    worker.steering_supported = true;
+    tokio::time::pause();
+    let began = Instant::now();
+    // Most of the steering deadline went on reading this message's images
+    // before its command reached the worker, and this is the rest of it.
+    let remaining = Duration::from_millis(300);
+    assert!(remaining < steering::RESPONSE_TIMEOUT);
+    let (reply, _outcome) = oneshot::channel();
+    let command = Command::Steer(
+        ExecutionId::new("active").unwrap(),
+        dispatched(request("steer"), Some(began + remaining)),
+        reply,
+    );
+    let result = worker.command(&mut execution, command).await;
+    let elapsed = Instant::now() - began;
+    tokio::time::resume();
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(result, Err(AgentError::Deadline));
+    assert_eq!(
+        worker.steering.as_ref().map(|pending| pending.deadline),
+        Some(began + remaining),
+        "a fresh steering interval was armed"
+    );
+    assert!(
+        elapsed >= remaining && elapsed <= remaining + Duration::from_millis(1),
+        "{elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_execution_write_is_armed_with_what_the_read_left() {
+    let (mut worker, _, _events) = blocked_worker("").await;
+    worker.active = None;
+    let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
+    // The configured limit is longer than what is left, so arming from it
+    // would give this prompt more time than its caller was promised.
+    let configured = worker.config.execution_timeout.expect("a configured limit");
+    let remaining = Duration::from_millis(300);
+    assert!(remaining < configured);
+    tokio::time::pause();
+    let began = Instant::now();
+    let (reply, _result) = oneshot::channel();
+    let command =
+        Command::ExecutionRequest(dispatched(request("next"), Some(began + remaining)), reply);
+    let result = worker.command(&mut execution, command).await;
+    let elapsed = Instant::now() - began;
+    tokio::time::resume();
+    worker
+        .scope
+        .cleanup(Duration::ZERO, Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(result, Err(AgentError::Deadline));
+    assert_eq!(
+        worker.active.as_ref().and_then(|active| active.deadline),
+        Some(began + remaining),
+        "a fresh execution interval was armed"
+    );
+    assert!(
+        elapsed >= remaining && elapsed <= remaining + Duration::from_millis(1),
+        "{elapsed:?}"
+    );
 }

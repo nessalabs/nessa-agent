@@ -7,6 +7,20 @@ use crate::infrastructure::acp::{
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// A prompt as a session hands one to the worker: its images already read,
+/// and the deadline of the phase that began before that read.
+fn dispatched(input: ExecutionRequest, deadline: Option<Instant>) -> DispatchedPrompt {
+    DispatchedPrompt {
+        input,
+        images: ImageBlocks::none(),
+        deadline,
+    }
+}
+/// The same for native steering, whose deadline is never absent.
+fn steered(input: ExecutionRequest) -> DispatchedPrompt {
+    dispatched(input, Some(Instant::now() + steering::RESPONSE_TIMEOUT))
+}
+
 struct UnexpectedAudit;
 impl ExecutionAudit for UnexpectedAudit {
     fn record(&self, _: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
@@ -55,7 +69,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             },
             audit: Arc::new(UnexpectedAudit),
             cancellation_cause: None,
-            reader: Reader::new(stdout, config.max_frame_bytes),
+            reader: Reader::new(stdout, config.max_incoming_frame_bytes),
             scope,
             config,
             capabilities,
@@ -67,7 +81,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             active: None,
             steering: None,
             steering_supported: false,
-            image_input: false,
+            agent_accepts_images: false,
             operation_capabilities,
             permissions: HashMap::new(),
             shutdown_deadline: None,

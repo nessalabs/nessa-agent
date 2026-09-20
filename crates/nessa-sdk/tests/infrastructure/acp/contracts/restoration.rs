@@ -6,6 +6,7 @@ async fn undrained_restored_generations_cannot_each_allocate_a_fresh_byte_budget
     let audit = Arc::new(RecordingAudit::default());
     let (root, mut config, model) = test_acp_configuration("byte-generation", 4096);
     config.max_frame_bytes = 16 * 1024 * 1024;
+    config.max_incoming_frame_bytes = 16 * 1024 * 1024;
     config.execution_timeout = None;
     let binding = ClaudeAcpProvider::new(
         config,

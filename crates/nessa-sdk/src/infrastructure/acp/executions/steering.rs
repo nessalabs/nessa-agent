@@ -8,10 +8,14 @@ use std::time::Duration;
 use tokio::{sync::oneshot, time::Instant};
 
 /// Bound extension acknowledgements even when the execution itself has no timeout.
-/// The worker extends this by the extra write time a frame of a mebibyte or more
-/// is allowed, so steering that carries images is not failed by its own size.
-/// Reading those images happens before the command reaches the worker, under
-/// this same bound, and does not consume it.
+///
+/// This is the whole of what one steering call may spend. Reading its images
+/// happens first, on the calling task, and spends part of it; the worker arms
+/// the acknowledgement deadline with what is left rather than with a fresh
+/// interval. The one thing added on top is the extra write time a frame of a
+/// mebibyte or more is allowed, so steering that carries images is not failed
+/// by its own size: the total bound is this interval plus one second for each
+/// whole mebibyte of the frame.
 pub(in crate::infrastructure::acp) const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One sent steering request. Keeping its reply until response or teardown makes

@@ -118,6 +118,7 @@ pub(super) fn test_acp_configuration(
         kill_timeout: Duration::from_secs(2),
         event_capacity: capacity,
         max_frame_bytes: 8192,
+        max_incoming_frame_bytes: 8192,
         images: None,
     };
     (root, config, model)

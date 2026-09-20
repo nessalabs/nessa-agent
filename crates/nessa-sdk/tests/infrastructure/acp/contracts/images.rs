@@ -10,13 +10,14 @@ use crate::infrastructure::acp::executions::{
     prompt_content::IMAGE_READ_TIMEOUT, steering::RESPONSE_TIMEOUT,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     future::pending,
     sync::atomic::{AtomicUsize, Ordering},
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 
 /// How a [`FixedImages`] source behaves for a digest it has no answer for.
 #[derive(Default)]
@@ -63,6 +64,35 @@ fn stalling() -> (Arc<FixedImages>, mpsc::UnboundedReceiver<()>) {
     (source, begins)
 }
 
+/// Answers every read with the same bytes, but only once the test says so.
+/// Says when each read began, so a test knows the budget is being held.
+struct Gated {
+    bytes: Vec<u8>,
+    began: mpsc::UnboundedSender<()>,
+    release: Semaphore,
+    reads: AtomicUsize,
+}
+impl UserImageSource for Gated {
+    fn read(&self, _: ImageReference) -> UserImageFuture<'_> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        self.began.send(()).unwrap();
+        Box::pin(async move {
+            self.release.acquire().await.unwrap().forget();
+            Ok(self.bytes.clone())
+        })
+    }
+}
+fn gated(bytes: Vec<u8>) -> (Arc<Gated>, mpsc::UnboundedReceiver<()>) {
+    let (began, begins) = mpsc::unbounded_channel();
+    let source = Arc::new(Gated {
+        bytes,
+        began,
+        release: Semaphore::new(0),
+        reads: AtomicUsize::new(0),
+    });
+    (source, begins)
+}
+
 fn reference(bytes: &[u8], media_type: ImageMediaType) -> ImageReference {
     let digest = Sha256Digest::from_bytes(Sha256::digest(bytes).into());
     ImageReference::new(digest, media_type, bytes.len() as u64).unwrap()
@@ -90,16 +120,21 @@ fn image_provider_with(
 ) -> (TempDir, ClaudeAcpProvider) {
     let (root, mut config, _) = test_acp_configuration(mode, 32);
     config.execution_timeout = None;
-    image_provider_from(root, config, source, limits_recorded)
+    image_provider_from(
+        root,
+        config,
+        source.map(|source| source as Arc<dyn UserImageSource>),
+        limits_recorded,
+    )
 }
 
 fn image_provider_from(
     root: TempDir,
     mut config: AcpConfig,
-    source: Option<Arc<FixedImages>>,
+    source: Option<Arc<dyn UserImageSource>>,
     limits_recorded: bool,
 ) -> (TempDir, ClaudeAcpProvider) {
-    config.images = source.map(|source| source as Arc<dyn UserImageSource>);
+    config.images = source;
     let text = ModalitiesDto {
         text: true,
         image: false,
@@ -148,7 +183,7 @@ async fn close(opened: &OpenedProviderSession) {
         .unwrap();
 }
 
-fn observed(root: &TempDir, name: &str) -> Option<serde_json::Value> {
+fn observed(root: &TempDir, name: &str) -> Option<Value> {
     std::fs::read_to_string(root.path().join(name))
         .ok()
         .map(|text| serde_json::from_str(&text).unwrap())
@@ -178,7 +213,7 @@ async fn an_advertising_agent_receives_text_then_images_in_attachment_order() {
     assert_eq!(result, Ok(ExecutionOutcome::Completed));
     assert_eq!(
         observed(&root, "prompt-observed").unwrap(),
-        serde_json::json!([
+        json!([
             {"type": "text", "text": "what is this?"},
             {"type": "image", "mimeType": "image/jpeg", "data": STANDARD.encode(jpeg)},
             {"type": "image", "mimeType": "image/png", "data": STANDARD.encode(png)},
@@ -191,7 +226,7 @@ async fn an_advertising_agent_receives_text_then_images_in_attachment_order() {
     assert_eq!(result, Ok(ExecutionOutcome::Completed));
     assert_eq!(
         observed(&root, "prompt-observed").unwrap(),
-        serde_json::json!([
+        json!([
             {"type": "image", "mimeType": "image/png", "data": STANDARD.encode(png)},
         ])
     );
@@ -238,7 +273,8 @@ async fn a_binding_without_a_byte_source_refuses_images_at_admission() {
     let (root, provider) = image_provider("image-input", None);
     let opened = provider.open(None).await.unwrap();
     assert!(!opened.session.capabilities().features().input().image());
-    // The agent advertised images, but this process has nowhere to read them from.
+    // This agent did advertise images; it is this process that has nowhere to
+    // read them from, so the connection carries none.
     assert!(!opened.session.operation_capabilities().image_input);
 
     let image = reference(b"image", ImageMediaType::Webp);
@@ -247,9 +283,9 @@ async fn a_binding_without_a_byte_source_refuses_images_at_admission() {
         .execute(message("refused", Some("look"), vec![image]))
         .await
         .into_result();
-    assert!(
-        matches!(result, Err(AgentError::InvalidInput(_))),
-        "{result:?}"
+    assert_eq!(
+        result,
+        Err(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered))
     );
     assert_eq!(observed(&root, "prompt-observed"), None);
     close(&opened).await;
@@ -341,7 +377,7 @@ async fn steering_carries_images_the_same_way_a_prompt_does() {
     assert_eq!(outcome.unwrap(), SteeringOutcome::Injected);
     assert_eq!(
         observed(&root, "steering-observed").unwrap(),
-        serde_json::json!([
+        json!([
             {"type": "text", "text": "adjust"},
             {"type": "image", "mimeType": "image/png", "data": STANDARD.encode(bytes)},
         ])
@@ -368,9 +404,9 @@ async fn a_model_without_recorded_image_limits_is_offered_no_images() {
         .execute(message("refused", Some("look"), vec![image]))
         .await
         .into_result();
-    assert!(
-        matches!(result, Err(AgentError::InvalidInput(_))),
-        "{result:?}"
+    assert_eq!(
+        result,
+        Err(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered))
     );
     assert_eq!(source.reads.load(Ordering::SeqCst), 0);
     assert_eq!(observed(&root, "prompt-observed"), None);
@@ -586,7 +622,7 @@ async fn a_steering_read_that_never_answers_does_not_hold_up_the_active_executio
     assert!(!steering.is_finished());
     assert_eq!(
         observed(&root, "steering-observed").unwrap(),
-        serde_json::json!([{"type": "text", "text": "text steering"}])
+        json!([{"type": "text", "text": "text steering"}])
     );
 
     // Close abandons the read and tells its caller so.
@@ -648,5 +684,145 @@ async fn a_steering_read_that_never_answers_is_unavailable_at_the_steering_bound
         .await;
     assert_eq!(outcome.unwrap(), SteeringOutcome::Injected);
     assert_eq!(active.await.unwrap(), Ok(ExecutionOutcome::Completed));
+    close(&opened).await;
+}
+
+#[tokio::test]
+async fn reading_a_prompts_images_spends_the_executions_deadline_rather_than_adding_to_it() {
+    let _slot = process_test_slot().await;
+    let bytes = b"attached".to_vec();
+    let image = reference(&bytes, ImageMediaType::Png);
+    let (source, mut begins) = gated(bytes);
+    let (root, mut config, _) = test_acp_configuration("image-stall", 32);
+    // Long enough that half of it is still plenty of real time for the agent.
+    let limit = Duration::from_secs(4);
+    config.execution_timeout = Some(limit);
+    let (root, provider) = image_provider_from(root, config, Some(source.clone()), true);
+    let mut opened = provider.open(None).await.unwrap();
+    let session = opened.session.clone();
+    let sent = message("stalled", Some("look"), vec![image]);
+    let running = tokio::spawn(async move { session.execute(sent).await.into_result() });
+    begins.recv().await.unwrap();
+
+    // Half of the execution's four seconds goes on reading its image.
+    tokio::time::pause();
+    tokio::time::advance(limit / 2).await;
+    tokio::time::resume();
+    source.release.add_permits(1);
+    // The agent has the prompt, says so, and never finishes it.
+    assert_eq!(
+        next(&mut opened).await,
+        ExecutionUpdate::Message(MessageChunk::text("running"))
+    );
+
+    // The other half is all that is left. A fresh timer would want four more.
+    tokio::time::pause();
+    tokio::time::advance(limit / 2).await;
+    tokio::time::resume();
+    // A fresh timer would still want two more seconds at this point.
+    let result = timeout(Duration::from_secs(1), running)
+        .await
+        .expect("the execution was armed with a fresh deadline after the read")
+        .unwrap();
+    assert_eq!(result, Err(AgentError::Deadline));
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn reading_a_steerings_images_spends_the_steering_deadline_rather_than_adding_to_it() {
+    let _slot = process_test_slot().await;
+    let bytes = b"attached".to_vec();
+    let image = reference(&bytes, ImageMediaType::Png);
+    let (source, mut begins) = gated(bytes);
+    let (root, mut config, _) = test_acp_configuration("steering-image-stall", 32);
+    config.execution_timeout = None;
+    let (root, provider) = image_provider_from(root, config, Some(source.clone()), true);
+    let mut opened = provider.open(None).await.unwrap();
+    let active = start(&opened, "first").await;
+    assert_eq!(
+        next(&mut opened).await,
+        ExecutionUpdate::Message(MessageChunk::text("running:first"))
+    );
+    let session = opened.session.clone();
+    let sent = message("stalled", Some("adjust"), vec![image]);
+    let steering = tokio::spawn(async move {
+        session
+            .steer(ExecutionId::new("first").unwrap(), sent)
+            .await
+            .map_err(|failure| failure.into_error())
+    });
+    begins.recv().await.unwrap();
+
+    // Three fifths of the five-second steering deadline goes on the read.
+    let read = RESPONSE_TIMEOUT * 3 / 5;
+    tokio::time::pause();
+    tokio::time::advance(read).await;
+    tokio::time::resume();
+    source.release.add_permits(1);
+    // The agent has the steering request and never acknowledges it.
+    wait_for_file(&root, "steering-observed").await;
+
+    // The remaining two fifths, and no more.
+    tokio::time::pause();
+    tokio::time::advance(RESPONSE_TIMEOUT - read).await;
+    tokio::time::resume();
+    // A fresh interval would still want three more seconds at this point.
+    let result = timeout(Duration::from_secs(1), steering)
+        .await
+        .expect("the acknowledgement was armed with a fresh deadline after the read")
+        .unwrap();
+    assert_eq!(result, Err(AgentError::Deadline));
+    let _ = timeout(Duration::from_secs(5), active).await;
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn a_session_bounds_the_encoded_image_bytes_waiting_to_be_dispatched() {
+    let _slot = process_test_slot().await;
+    // Two frames of the configured eight kibibytes is what one session holds,
+    // and each of these messages is six kibibytes once base64 has grown it.
+    let bytes = vec![7_u8; 4500];
+    let image = reference(&bytes, ImageMediaType::Png);
+    let (source, mut begins) = gated(bytes);
+    let (root, mut config, _) = test_acp_configuration("image-input", 32);
+    config.execution_timeout = None;
+    let (root, provider) = image_provider_from(root, config, Some(source.clone()), true);
+    let opened = provider.open(None).await.unwrap();
+
+    let mut reading = Vec::new();
+    for id in ["first", "second"] {
+        let session = opened.session.clone();
+        let sent = message(id, None, vec![image]);
+        reading.push(tokio::spawn(async move {
+            session.execute(sent).await.into_result()
+        }));
+        begins.recv().await.unwrap();
+    }
+    // The third message has nowhere to put its bytes, and is told so before a
+    // single one of them is read.
+    let refused = opened
+        .session
+        .execute(message("third", None, vec![image]))
+        .await
+        .into_result();
+    assert_eq!(refused, Err(AgentError::Busy));
+    assert_eq!(source.reads.load(Ordering::SeqCst), 2);
+    assert_eq!(observed(&root, "prompt-observed"), None);
+
+    // Once those two have been written the budget is free again.
+    source.release.add_permits(2);
+    for handle in reading {
+        timeout(Duration::from_secs(5), handle).await.unwrap().ok();
+    }
+    source.release.add_permits(1);
+    let result = timeout(
+        Duration::from_secs(5),
+        opened.session.execute(message("later", None, vec![image])),
+    )
+    .await
+    .expect("the budget was not returned")
+    .into_result();
+    assert_eq!(result, Ok(ExecutionOutcome::Completed));
+    assert_eq!(source.reads.load(Ordering::SeqCst), 3);
     close(&opened).await;
 }

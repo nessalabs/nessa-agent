@@ -256,7 +256,7 @@ for line in sys.stdin:
                 pending = None
             elif mode == "permission-provider-error":
                 send({"id": pending, "error": {"code": -32000, "message": "fixture provider failure"}})
-        elif mode in ("stall", "complete-on-stop", "ignore-stop", "late-tool-close", "consumer-loss-during-close"):
+        elif mode in ("stall", "image-stall", "complete-on-stop", "ignore-stop", "late-tool-close", "consumer-loss-during-close"):
             if mode == "late-tool-close":
                 update({"sessionUpdate": "tool_call", **tool()})
             if mode == "ignore-stop":
@@ -297,7 +297,7 @@ for line in sys.stdin:
             result(msg["id"] + 1, {"outcome": "injected"})
         elif mode == "steering-error":
             send({"id": msg["id"], "error": {"code": -32001, "message": "ambiguous"}})
-        elif mode == "steering-stall":
+        elif mode in ("steering-stall", "steering-image-stall"):
             pass
         elif mode == "steering-required":
             result(pending, {"stopReason": "end_turn"})

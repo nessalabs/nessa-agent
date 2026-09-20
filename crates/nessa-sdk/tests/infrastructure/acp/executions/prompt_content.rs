@@ -11,7 +11,7 @@ use std::{
     future::pending,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
 };
 use tokio::{sync::oneshot, time::Instant};
@@ -49,7 +49,7 @@ impl UserImageSource for Always {
 
 /// Never answers. Says when a read began and when its future was dropped.
 struct Stalled {
-    started: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    started: Mutex<Option<oneshot::Sender<()>>>,
     dropped: Arc<AtomicBool>,
 }
 struct SetOnDrop(Arc<AtomicBool>);
@@ -75,7 +75,7 @@ fn stalled() -> (Stalled, oneshot::Receiver<()>, Arc<AtomicBool>) {
     let (started, began) = oneshot::channel();
     let dropped = Arc::new(AtomicBool::new(false));
     let source = Stalled {
-        started: std::sync::Mutex::new(Some(started)),
+        started: Mutex::new(Some(started)),
         dropped: dropped.clone(),
     };
     (source, began, dropped)
@@ -182,9 +182,7 @@ async fn images_without_a_source_are_the_typed_refusal() {
     let result = read_images(None, &sent, IMAGE_READ_TIMEOUT, pending()).await;
     assert_eq!(
         result.err(),
-        Some(AgentError::ImageInputRefused(
-            ImageInputRefusal::AgentDoesNotAccept
-        ))
+        Some(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered))
     );
 }
 

@@ -124,6 +124,7 @@ async fn worker_with_ready_frames_boundary(
 ) {
     let (_, mut config, capabilities) = profile_setup();
     config.max_frame_bytes = 16 * 1024;
+    config.max_incoming_frame_bytes = 16 * 1024;
     let mut bytes = serde_json::to_string(&json!({"jsonrpc":"2.0","method":"ready"})).unwrap();
     bytes.push('\n');
     bytes.push_str(prefix);
@@ -140,7 +141,10 @@ async fn worker_with_ready_frames_boundary(
         process.args(["-c", "import sys,json;sys.stdout.buffer.write(sys.argv[1].encode());sys.stdout.buffer.flush();m=json.loads(sys.stdin.readline());print(json.dumps({'jsonrpc':'2.0','id':m['id'],'error':{'code':-32099,'message':'test prompt observed'}}),flush=True);sys.stdin.read()", &bytes]);
     }
     let mut scope = ProcessScope::spawn(process).unwrap();
-    let mut reader = Reader::new(scope.stdout.take().unwrap(), config.max_frame_bytes);
+    let mut reader = Reader::new(
+        scope.stdout.take().unwrap(),
+        config.max_incoming_frame_bytes,
+    );
     assert_eq!(
         reader.next().await.unwrap().method.as_deref(),
         Some("ready")
@@ -179,7 +183,7 @@ async fn worker_with_ready_frames_boundary(
             active: None,
             steering: None,
             steering_supported: true,
-            image_input: false,
+            agent_accepts_images: false,
             operation_capabilities,
             permissions: HashMap::new(),
             shutdown_deadline: None,
@@ -233,8 +237,7 @@ async fn same_poll_policy_drift_prevents_prompt_and_native_steering_writes() {
                     commands
                         .send(Command::Steer(
                             ExecutionId::new("active").unwrap(),
-                            request(),
-                            ImageBlocks::none(),
+                            steered(request()),
                             steer_reply,
                         ))
                         .await
@@ -242,8 +245,7 @@ async fn same_poll_policy_drift_prevents_prompt_and_native_steering_writes() {
                 } else {
                     commands
                         .send(Command::ExecutionRequest(
-                            request(),
-                            ImageBlocks::none(),
+                            dispatched(request(), None),
                             reply,
                         ))
                         .await
@@ -297,8 +299,7 @@ async fn valid_ready_burst_larger_than_batch_preserves_prompt_dispatch() {
     let (reply, _result) = oneshot::channel();
     commands
         .send(Command::ExecutionRequest(
-            request(),
-            ImageBlocks::none(),
+            dispatched(request(), None),
             reply,
         ))
         .await
@@ -357,8 +358,7 @@ async fn close_interrupts_ready_policy_backlog_without_dispatching_pending_promp
         let (reply, result) = oneshot::channel();
         commands
             .send(Command::ExecutionRequest(
-                request(),
-                ImageBlocks::none(),
+                dispatched(request(), None),
                 reply,
             ))
             .await
@@ -410,7 +410,7 @@ async fn exhausted_task_budget_does_not_hide_ready_policy_frames() {
     let failure = worker
         .command(
             &mut execution,
-            Command::ExecutionRequest(request(), ImageBlocks::none(), reply),
+            Command::ExecutionRequest(dispatched(request(), None), reply),
         )
         .await;
     worker
@@ -448,11 +448,9 @@ async fn selected_operation_deadline_includes_ready_policy_validation() {
         let (reply, result) = oneshot::channel();
         let (steer_reply, steer_result) = oneshot::channel();
         let limit = if matches!(dispatch, Dispatch::Prompt) {
-            worker.config.execution_timeout = Some(Duration::from_secs(1));
             commands
                 .send(Command::ExecutionRequest(
-                    request(),
-                    ImageBlocks::none(),
+                    dispatched(request(), Some(Instant::now() + Duration::from_secs(1))),
                     reply,
                 ))
                 .await
@@ -471,8 +469,7 @@ async fn selected_operation_deadline_includes_ready_policy_validation() {
             commands
                 .send(Command::Steer(
                     ExecutionId::new("active").unwrap(),
-                    request(),
-                    ImageBlocks::none(),
+                    steered(request()),
                     steer_reply,
                 ))
                 .await
@@ -557,8 +554,7 @@ async fn ready_completion_keeps_native_steering_prompt_fallback() {
             &mut execution,
             Command::Steer(
                 ExecutionId::new("active").unwrap(),
-                request(),
-                ImageBlocks::none(),
+                steered(request()),
                 reply,
             ),
         )
@@ -611,8 +607,7 @@ async fn interrupted_dispatch_receipt_retains_deadline_and_consumer_failure() {
                     &mut execution,
                     Command::Steer(
                         ExecutionId::new("active").unwrap(),
-                        request(),
-                        ImageBlocks::none(),
+                        steered(request()),
                         reply,
                     )
                 )
@@ -665,7 +660,7 @@ async fn dropped_selected_caller_leaves_context_available_for_next_request() {
         worker
             .command(
                 &mut execution,
-                Command::ExecutionRequest(request(), ImageBlocks::none(), reply)
+                Command::ExecutionRequest(dispatched(request(), None), reply)
             )
             .await,
         Ok(())
@@ -680,7 +675,7 @@ async fn dropped_selected_caller_leaves_context_available_for_next_request() {
         worker
             .command(
                 &mut execution,
-                Command::ExecutionRequest(request(), ImageBlocks::none(), reply)
+                Command::ExecutionRequest(dispatched(request(), None), reply)
             )
             .await,
         Ok(())

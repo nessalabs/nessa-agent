@@ -4,7 +4,10 @@
 //! ```text
 //! admission ──► fits_one_frame            (sizes only; nothing is read)
 //! session   ──► read_images ──► ImageBlocks ──► worker ──► content_blocks
-//!                  │
+//!                  │                 │
+//!                  │                 └── the session's in-flight byte budget,
+//!                  │                     taken before the read, given back
+//!                  │                     once these bytes are a frame
 //!                  └── UserImageSource, bounded, abandoned on close
 //! ```
 //!
@@ -13,6 +16,10 @@
 //! deadlines, consumer loss, and the agent's output, so nothing it awaits may
 //! depend on an injected source. The worker receives blocks that are already
 //! verified and encoded.
+//!
+//! Encoded image bytes travel in the command queue, so a session bounds how
+//! many of them may be waiting there at once; see [`encoded_image_bytes`] and
+//! `AcpConfig::images`.
 use crate::application::agent_execution::{
     agents::AgentError,
     providers::{ImageInputRefusal, UserImageError, UserImageSource},
@@ -28,6 +35,7 @@ use std::{
     task::Poll,
     time::Duration,
 };
+use tokio::sync::OwnedSemaphorePermit;
 
 /// Longest wait for every image of one message together.
 ///
@@ -51,12 +59,50 @@ const IMAGE_BLOCK_BYTES: u64 = 64;
 
 /// Image blocks ready to send, in the message's attachment order. Each was
 /// read, checked against its reference, and encoded before this existed.
-pub(crate) struct ImageBlocks(Vec<Value>);
+///
+/// The value also carries this message's share of its session's in-flight
+/// image budget. The share is taken before the first byte is read and is given
+/// back when the blocks have become a frame, or as soon as they are dropped.
+pub(crate) struct ImageBlocks {
+    blocks: Vec<Value>,
+    charge: Option<OwnedSemaphorePermit>,
+}
 impl ImageBlocks {
-    /// The blocks of a message that refers to no image.
+    /// The blocks of a message that refers to no image. Nothing is charged for
+    /// a message that carries no bytes.
     pub(crate) fn none() -> Self {
-        Self(Vec::new())
+        Self {
+            blocks: Vec::new(),
+            charge: None,
+        }
     }
+    /// The same blocks, holding `charge` until it is taken or dropped.
+    pub(in crate::infrastructure::acp) fn charged(
+        mut self,
+        charge: Option<OwnedSemaphorePermit>,
+    ) -> Self {
+        self.charge = charge;
+        self
+    }
+    /// Hand the budget share to the caller, which holds it until these bytes
+    /// have been written as a frame.
+    pub(in crate::infrastructure::acp) fn take_charge(&mut self) -> Option<OwnedSemaphorePermit> {
+        self.charge.take()
+    }
+}
+
+/// How many bytes `message`'s images occupy once base64 has grown them by a
+/// third: what one message costs the session's in-flight image budget.
+///
+/// A message admitted by [`fits_one_frame`] always fits one frame, so this is
+/// never larger than the configured frame size.
+pub(in crate::infrastructure::acp) fn encoded_image_bytes(message: &UserMessage) -> u32 {
+    let bytes: u64 = message
+        .images()
+        .iter()
+        .map(|image| image.size().div_ceil(3) * 4)
+        .sum();
+    u32::try_from(bytes).unwrap_or(u32::MAX)
 }
 
 /// Refuse a message that cannot fit one frame of `max_frame_bytes` once its
@@ -111,7 +157,8 @@ fn json_string_bytes(text: &str) -> u64 {
 ///
 /// # Errors
 ///
-/// - [`ImageInputRefusal::AgentDoesNotAccept`] without a `source`.
+/// - [`ImageInputRefusal::NotOffered`] without a `source`: this process has
+///   nowhere to read bytes from, so the binding carries no image at all.
 /// - [`AgentError::Closed`] when `stopped` resolves first.
 /// - [`UserImageError::Unavailable`] when `limit` passes first or the source
 ///   panics; the source's own error otherwise.
@@ -125,9 +172,7 @@ pub(in crate::infrastructure::acp) async fn read_images(
     if message.images().is_empty() {
         return Ok(ImageBlocks::none());
     }
-    let source = source.ok_or(AgentError::ImageInputRefused(
-        ImageInputRefusal::AgentDoesNotAccept,
-    ))?;
+    let source = source.ok_or(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered))?;
     tokio::select! { biased;
         () = stopped => Err(AgentError::Closed),
         () = tokio::time::sleep(limit) => Err(AgentError::UserImage(UserImageError::Unavailable)),
@@ -151,15 +196,20 @@ async fn read_all(
         if &digest != image.digest().as_bytes() {
             return Err(UserImageError::Mismatch);
         }
-        // Encode now and let the raw bytes go, so at most one image is ever
-        // held both ways.
+        // Encode, then drop the raw bytes before the block is built, so one
+        // image is held both ways only while it is being encoded.
+        let encoded = STANDARD.encode(&bytes);
+        drop(bytes);
         blocks.push(json!({
             "type": "image",
             "mimeType": image.media_type().as_str(),
-            "data": STANDARD.encode(&bytes),
+            "data": encoded,
         }));
     }
-    Ok(ImageBlocks(blocks))
+    Ok(ImageBlocks {
+        blocks,
+        charge: None,
+    })
 }
 
 /// One read, with a panic in the injected source turned into a typed failure
@@ -196,16 +246,16 @@ pub(in crate::infrastructure::acp) fn content_blocks(
     message: &UserMessage,
     images: ImageBlocks,
 ) -> Result<Vec<Value>, AgentError> {
-    if images.0.len() != message.images().len() {
+    if images.blocks.len() != message.images().len() {
         return Err(AgentError::Protocol(
             "resolved image blocks do not match the message".into(),
         ));
     }
-    let mut blocks = Vec::with_capacity(1 + images.0.len());
+    let mut blocks = Vec::with_capacity(1 + images.blocks.len());
     if let Some(text) = message.text() {
         blocks.push(json!({"type":"text","text":text.as_str()}));
     }
-    blocks.extend(images.0);
+    blocks.extend(images.blocks);
     Ok(blocks)
 }
 

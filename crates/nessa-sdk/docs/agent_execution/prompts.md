@@ -75,11 +75,15 @@ A refusal there saved nothing, queued nothing, and sent nothing:
 
 | Refused because | Error |
 | --- | --- |
-| the model or the binding offers no image input | `InvalidInput` |
+| the model or the binding offers no image input | `ImageInputRefused(NotOffered)` |
 | an image's encoding is not one the model lists | `ImageInputRefused(MediaType(..))` |
 | an image is larger than the model's `max_raw_bytes()` | `ImageInputRefused(ImageTooLarge { .. })` |
 | the agent is known not to take images | `ImageInputRefused(AgentDoesNotAccept)` |
 | the encoded message cannot fit `max_frame_bytes` | `MessageTooLarge { .. }` |
+
+`NotOffered` and `AgentDoesNotAccept` are two different facts and stay apart:
+the first is this attachment, which was never going to carry an image; the
+second is the agent now on the other end of it, which a restoration can change.
 
 The agent's answer is refused only when it is a known "no".
 `OperationCapabilities::negotiated` is false while a context is being opened or
@@ -106,9 +110,28 @@ panics, is `UserImage(Unavailable)`; the context stays usable. A source must
 not return more than `size + 1` bytes for a reference: the port hands back an
 owned buffer, so only the implementation can stop a larger one being built.
 
+Reading spends the operation's own deadline rather than adding to it. An
+`execution_timeout` starts when the request is submitted and covers the read,
+the prompt write, and the run; the five-second steering deadline starts when
+`steer` is called and covers the read and the acknowledgement. What the worker
+arms when it dispatches is what is left of that interval, not a fresh one.
+
 Writing a frame to the agent may take one second plus one more for each whole
 mebibyte of the frame, so a message carrying images is not failed by the bound
-meant for small frames; an execution timeout still ends the write earlier.
+meant for small frames; an execution timeout still ends the write earlier. That
+write allowance is the one thing added on top of a steering deadline, so a
+steering call carrying a frame of *n* whole mebibytes is bounded by five
+seconds plus *n*.
+
+Encoded image bytes travel in the session's command queue, so one session holds
+at most twice `max_frame_bytes` of them outside its worker. A message whose
+images would pass that is `Busy` before a byte is read; since an admitted
+message always fits one frame, a message alone can never be refused this way.
+
+`max_frame_bytes` bounds what this host writes. What an agent may send it is
+`max_incoming_frame_bytes`, a separate ceiling with the same range, because
+that one is the buffer an agent subprocess can make the host allocate: raising
+the frame size to carry images does not raise what an agent can demand.
 
 Each `Agent::invoke(ExecutionRequest { user_message, .. })` sends only that new
 user message on `session/prompt`. The ACP agent maintains history and emits the

@@ -125,6 +125,10 @@ mod build {
         UserMessage::MAX_IMAGE_BYTES as usize / 3 * 4 + 1024 * 1024 <= MAX_FRAME_BYTES,
         "one message's images, encoded, must fit one ACP frame"
     );
+    /// What an agent may send us, which is the buffer this host can be made to
+    /// allocate for one frame and has nothing to do with the prompts it writes.
+    /// An agent answers in text, so it keeps the mebibyte it had before images.
+    const MAX_INCOMING_FRAME_BYTES: usize = 1024 * 1024;
     pub(super) fn provider(
         config: &AgentConfig,
         model: &ModelMetadata,
@@ -187,6 +191,7 @@ mod build {
                 kill_timeout: Duration::from_secs(2),
                 event_capacity: 256,
                 max_frame_bytes: MAX_FRAME_BYTES,
+                max_incoming_frame_bytes: MAX_INCOMING_FRAME_BYTES,
                 images: Some(images),
             },
             model,
