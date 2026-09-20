@@ -23,10 +23,10 @@ use nessa_sdk::application::agent_execution::{
         PermissionCancellationRequest, PermissionSelectionState,
     },
     providers::AgentProvider,
-    sessions::{SessionManager, SessionStorage, StorageError},
+    sessions::{SessionManager, SessionSnapshot, SessionStorage, StorageError},
 };
 use nessa_sdk::domain::agent_execution::{
-    executions::ExecutionId,
+    executions::{ExecutionId, InvocationStage},
     permissions::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
         PermissionOptionId,
@@ -904,25 +904,32 @@ impl ConversationService {
             if !record.allows(&caller.organization_id, &caller.principal_id) {
                 return Err(ConversationError::NotFound);
             }
-            let closed = match service.resolve(&id, &caller).await {
+            let (closed, may_release) = match service.resolve(&id, &caller).await {
                 Ok(live) => {
                     let result = live.agent.close(actor).await;
                     // Refresh only terminal records. A concurrently accepted new turn
                     // retains its live observation state; there is no second closed flag.
                     let snapshot = live.agent.session_manager().snapshot().await;
                     live.projection.lock().await.settled_all(snapshot.as_ref());
-                    result.map(|_| ()).map_err(ConversationError::Agent)
+                    // A closed agent runs nothing more, so nothing can still
+                    // need the files. An agent that did not close keeps its
+                    // saved invocations, and one of those may be a turn that
+                    // names images and has not settled.
+                    let may_release = result.is_ok() || !awaits_images(snapshot.as_ref());
+                    (
+                        result.map(|_| ()).map_err(ConversationError::Agent),
+                        may_release,
+                    )
                 }
                 // No room for another live conversation, a provider that will
                 // not start, storage that will not open: the agent was not
-                // closed, and that is reported. The files are still let go.
-                Err(error) => Err(error),
+                // closed, and that is reported. Nothing was read about what it
+                // has queued either, so its files stay where they are and the
+                // next close, which can open it, lets them go.
+                Err(error) => (Err(error), false),
             };
-            // Uploads are let go whether or not the agent closed cleanly: the
-            // owner asked for this conversation to end, and nothing queued can
-            // still need them. Both failures are kept; neither hides the other.
-            let released = match &service.inner.attachments {
-                Some(attachments) => {
+            let released = match (&service.inner.attachments, may_release) {
+                (Some(attachments), true) => {
                     attachments
                         .release(AttachmentRelease {
                             organization_id: caller.organization_id.clone(),
@@ -934,7 +941,14 @@ impl ConversationService {
                         })
                         .await
                 }
-                None => Ok(()),
+                (Some(_), false) => {
+                    tracing::warn!(
+                        conversation_id = %id,
+                        "a conversation that did not close keeps its uploads"
+                    );
+                    Ok(())
+                }
+                (None, _) => Ok(()),
             };
             match (closed, released) {
                 (Ok(()), Ok(())) => Ok(()),
@@ -1073,6 +1087,33 @@ impl ConversationService {
         }
     }
 }
+
+/// Whether the saved session still has a turn that names images and has not
+/// settled. Such a turn is dispatched when the agent next opens, and its images
+/// are read then, so its conversation's files must outlive a close that did not
+/// reach the agent. Without a snapshot nothing is known, which is not the same
+/// as knowing there is nothing.
+fn awaits_images(snapshot: Option<&SessionSnapshot>) -> bool {
+    let Some(snapshot) = snapshot else {
+        return true;
+    };
+    snapshot.invocations.iter().any(|record| {
+        !record.request.user_message.images().is_empty()
+            && record.result.is_none()
+            && !record.scheduling.last().is_some_and(|event| {
+                matches!(
+                    event.stage,
+                    InvocationStage::Cancelled
+                        | InvocationStage::Injected
+                        | InvocationStage::Settled
+                )
+            })
+    })
+}
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/close_release.rs"]
+mod close_release_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/conversation/retirement.rs"]

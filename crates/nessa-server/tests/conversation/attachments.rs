@@ -353,9 +353,10 @@ async fn a_release_that_fails_is_reported_without_hiding_an_agent_that_did_not_c
 }
 
 #[tokio::test]
-async fn closing_lets_go_of_uploads_even_when_the_agent_cannot_be_reached() {
+async fn a_close_that_never_reached_the_agent_keeps_the_uploads_its_queue_may_still_need() {
     // Room for one live conversation, and it is taken. The second conversation
-    // exists and is owned, but no agent can be opened for it.
+    // exists and is owned, but no agent can be opened for it, so nothing is
+    // known about what it has queued.
     let attachments = Arc::new(MemoryAttachments::default());
     let provider = Arc::new(ProviderFactory::default());
     let repository = Arc::new(MemoryRepository::default());
@@ -407,23 +408,15 @@ async fn closing_lets_go_of_uploads_even_when_the_agent_cannot_be_reached() {
             .await,
         Err(ConversationError::Capacity)
     ));
-    // ...but its files were let go, in the closer's name, without a provider.
-    {
-        let releases = attachments.releases.lock().unwrap();
-        assert_eq!(releases.len(), 1);
-        assert_eq!(releases[0].conversation_id, unreachable);
-        assert_eq!(releases[0].initiator_surface_id, "phone");
-    }
-    assert!(attachments.held.lock().unwrap().is_empty());
+    // ...and its files stay where they are. A saved turn that names images is
+    // dispatched when the agent next opens and reads its bytes then, and
+    // nothing here has read what this conversation has saved.
+    assert!(attachments.releases.lock().unwrap().is_empty());
+    assert_eq!(attachments.held.lock().unwrap().len(), 1);
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
 
-    // The ownership check did not go anywhere: somebody else's close, and a
-    // close of nothing, let go of nothing.
-    attachments.held.lock().unwrap().push((
-        OrganizationId::new("org").unwrap(),
-        unreachable.clone(),
-        image(2),
-    ));
+    // The ownership check still comes first: somebody else's close, and a
+    // close of nothing, let go of nothing and report nothing else.
     let mut stranger = caller("phone", "close-2");
     stranger.principal_id = PrincipalId::new("stranger").unwrap();
     for (id, who) in [
@@ -435,8 +428,28 @@ async fn closing_lets_go_of_uploads_even_when_the_agent_cannot_be_reached() {
             Err(ConversationError::NotFound)
         ));
     }
-    assert_eq!(attachments.releases.lock().unwrap().len(), 1);
+    assert!(attachments.releases.lock().unwrap().is_empty());
     assert_eq!(attachments.held.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn an_agent_that_did_not_close_still_lets_go_of_what_nothing_saved_can_need() {
+    // The agent is live, its turn is settled, and only its close failed. The
+    // saved invocation cannot be dispatched again, so its images are let go.
+    let (service, provider, attachments, id) = conversation_holding(&[image(1)]).await;
+    send(&service, &id, "image-turn", "look", &[image(1)])
+        .await
+        .unwrap();
+    completed(&service, &id, 1).await;
+    *provider.close_failure.lock().unwrap() = Some(AgentError::Deadline);
+    assert!(matches!(
+        service.close(id.clone(), caller("panel", "close-1")).await,
+        Err(ConversationError::Agent(_))
+    ));
+    assert_eq!(attachments.releases.lock().unwrap().len(), 1);
+    assert!(attachments.held.lock().unwrap().is_empty());
+    *provider.close_failure.lock().unwrap() = None;
+    service.shutdown().await.unwrap();
 }
 
 #[tokio::test]
