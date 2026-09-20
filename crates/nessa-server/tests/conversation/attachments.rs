@@ -501,3 +501,46 @@ async fn an_agent_that_advertises_images_in_front_of_a_model_offered_none_takes_
     assert!(provider.executions.lock().unwrap().is_empty());
     service.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn an_agent_whose_answer_is_not_known_is_not_told_no_and_the_view_keeps_its_last_answer() {
+    let attachments = Arc::new(MemoryAttachments::default());
+    let (service, provider, _, _) = image_fixture(true, Some(attachments.clone()));
+    let id = new_id();
+    service
+        .create(id.clone(), caller("panel", "create"))
+        .await
+        .unwrap();
+    attachments.held.lock().unwrap().push((
+        OrganizationId::new("org").unwrap(),
+        id.clone(),
+        image(1),
+    ));
+    let read = || service.read(id.clone(), caller("panel", "read"));
+    assert!(read().await.unwrap().capabilities.image_input);
+
+    // A restoration clears what the agent negotiated until it has answered
+    // again. Both facts a panel can see must keep agreeing through it: the view
+    // does not turn to "no", and a send is admitted rather than refused as
+    // `image_input_unsupported`, which the panel offers no retry for.
+    provider.answer_unknown.store(true, Ordering::SeqCst);
+    provider.image_input.store(false, Ordering::SeqCst);
+    assert!(read().await.unwrap().capabilities.image_input);
+    send(&service, &id, "during", "look", &[image(1)])
+        .await
+        .unwrap();
+    // What this conversation uploaded is still checked: unknown is not a pass.
+    assert!(matches!(
+        send(&service, &id, "unheld", "look", &[image(2)]).await,
+        Err(ConversationError::AttachmentNotFound)
+    ));
+
+    // Once the restored agent has answered no, that is what both say.
+    provider.answer_unknown.store(false, Ordering::SeqCst);
+    assert!(!read().await.unwrap().capabilities.image_input);
+    assert!(matches!(
+        send(&service, &id, "after", "look", &[image(1)]).await,
+        Err(ConversationError::ImagesUnsupported)
+    ));
+    service.shutdown().await.unwrap();
+}

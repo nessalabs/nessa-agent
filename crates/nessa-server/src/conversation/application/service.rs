@@ -453,7 +453,7 @@ impl ConversationService {
                                 steer: true,
                                 resume: agent.operation_capabilities().session_resume,
                                 permissions: agent.capabilities().features().tool_use(),
-                                image_input: service.takes_images(&agent),
+                                image_input: service.takes_images(&agent) == Some(true),
                             };
                             let mut projection =
                                 Projection::new(id.to_string(), capabilities, snapshot.as_ref());
@@ -552,6 +552,11 @@ impl ConversationService {
         projection.recover_permissions(snapshot.as_ref());
         projection.queue_order(&order);
         projection.view.capabilities.resume = live.agent.operation_capabilities().session_resume;
+        // The last known answer stands while the agent is being restored, so the
+        // view never says no to what a send at the same moment would admit.
+        if let Some(takes_images) = self.takes_images(&live.agent) {
+            projection.view.capabilities.image_input = takes_images;
+        }
         Ok(projection.read())
     }
     /// Admit one SDK-owned queued/steering input. Its completion outlives this call and its socket.
@@ -619,7 +624,7 @@ impl ConversationService {
                     .inner
                     .attachments
                     .as_ref()
-                    .filter(|_| service.takes_images(&live.agent))
+                    .filter(|_| service.takes_images(&live.agent) != Some(false))
                     .ok_or(ConversationError::ImagesUnsupported)?;
                 for image in message.images() {
                     if !attachments
@@ -945,15 +950,22 @@ impl ConversationService {
         })
         .await
     }
-    /// Whether a message to this agent may carry images. Three facts must
-    /// agree: this gateway keeps uploads, the connected agent agreed to
-    /// receive images, and the selected model is offered them, which it is
-    /// only with recorded image limits. An agent that advertises images in
-    /// front of a model that is offered none takes no images.
-    fn takes_images(&self, agent: &Agent) -> bool {
-        self.inner.attachments.is_some()
-            && agent.operation_capabilities().image_input
-            && agent.capabilities().features().input().image()
+    /// Whether a message to this agent may carry images, or `None` while that
+    /// is not known. Three facts must agree: this gateway keeps uploads, the
+    /// selected model is offered images, which it is only with recorded image
+    /// limits, and the connected agent agreed to receive them. An agent that
+    /// advertises images in front of a model that is offered none takes none.
+    ///
+    /// The first two never change. The agent's answer is unknown while it is
+    /// opening or being restored, and unknown is not no: a message sent then is
+    /// admitted, and the SDK refuses it at dispatch, with the same meaning, if
+    /// the restored agent turns out to take no images.
+    fn takes_images(&self, agent: &Agent) -> Option<bool> {
+        if self.inner.attachments.is_none() || !agent.capabilities().features().input().image() {
+            return Some(false);
+        }
+        let agent = agent.operation_capabilities();
+        agent.negotiated.then_some(agent.image_input)
     }
     async fn admit(&self) -> Result<RwLockReadGuard<'_, ()>, ConversationError> {
         let permit = self.inner.admission.read().await;

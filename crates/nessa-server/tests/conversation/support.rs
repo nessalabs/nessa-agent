@@ -131,6 +131,8 @@ pub(crate) struct ProviderFactory {
     pub(crate) close_requests: Mutex<Vec<SessionCloseRequest>>,
     /// Whether the agent agreed to take images, and its model can see them.
     pub(crate) image_input: AtomicBool,
+    /// Set while the agent's answer is not known, as during a restoration.
+    pub(crate) answer_unknown: AtomicBool,
     /// Whether the selected model is offered images: it records image limits
     /// and the binding passes them on. A separate fact from what the agent
     /// advertised, and the two can disagree.
@@ -276,6 +278,7 @@ impl ProviderSessionBackend for Backend {
     fn operation_capabilities(&self) -> OperationCapabilities {
         OperationCapabilities {
             image_input: self.factory.image_input.load(Ordering::SeqCst),
+            negotiated: !self.factory.answer_unknown.load(Ordering::SeqCst),
             ..OperationCapabilities::default()
         }
     }
