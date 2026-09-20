@@ -21,7 +21,7 @@ pub struct CompositionRoot;
 impl CompositionRoot {
     /// Dispatch the single CLI contract; local provisioning never contacts a server.
     pub async fn run(args: &[String]) -> Result<(), RunError> {
-        match parse(args).map_err(RunError::Authentication)? {
+        match parse(args).map_err(RunError::Usage)? {
             Command::Help => {
                 std::io::stdout().write_all(HELP.as_bytes())?;
                 Ok(())
@@ -427,6 +427,40 @@ mod tests {
             shutdown_result(&poisoned),
             Err(RunError::Shutdown(Some(ConversationError::Audit)))
         ));
+    }
+
+    /// Every command is parsed before it is dispatched, so a mistyped one used
+    /// to be reported as an authentication failure whatever it was trying to
+    /// do. A usage problem is its own fact and says only what was wrong.
+    #[tokio::test]
+    async fn a_command_line_this_binary_cannot_run_is_a_usage_failure_not_an_authentication_one() {
+        for words in [
+            vec!["auth", "token", "--cloud"],
+            vec!["install-agent"],
+            vec!["nonsense"],
+        ] {
+            let args: Vec<String> = words.iter().map(|word| (*word).to_string()).collect();
+            let error = CompositionRoot::run(&args)
+                .await
+                .expect_err("the command line is not one nessa can run");
+            assert!(matches!(error, RunError::Usage(_)), "{words:?}: {error:?}");
+            let reported = error.to_string();
+            assert!(
+                !reported.contains("authentication setup failed"),
+                "{words:?}: {reported}"
+            );
+            // Parsing failed, so nothing was dispatched: the message is the
+            // parser's own, carried out whole rather than summarized.
+            assert_eq!(reported, parse(&args).expect_err("rejected"), "{words:?}");
+        }
+
+        // And the one that says what to do instead still says it.
+        let cloud: Vec<String> = ["auth", "token", "--cloud"]
+            .iter()
+            .map(|word| (*word).to_string())
+            .collect();
+        let error = CompositionRoot::run(&cloud).await.unwrap_err();
+        assert!(error.to_string().contains("use --local"), "{error}");
     }
 
     #[test]

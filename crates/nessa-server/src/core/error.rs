@@ -14,6 +14,10 @@ use std::io::{self, ErrorKind};
 #[derive(Debug)]
 pub enum RunError {
     Environment(EnvironmentError),
+    /// The command line itself did not name something this binary can run.
+    /// Every command is parsed before it is dispatched, so this is the one
+    /// failure any invocation can end in, whatever it was trying to do.
+    Usage(String),
     /// Product authentication failed to initialize; contains no credential material.
     Authentication(String),
     /// Invalid or unavailable configured agent provider.
@@ -34,6 +38,10 @@ impl fmt::Display for RunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Agent(message) => write!(f, "agent setup failed: {message}"),
+            // Said as it is. A usage message already names what was wrong with
+            // the command, and the help text is one of the things it can be, so
+            // there is no failing subsystem to announce in front of it.
+            Self::Usage(message) => write!(f, "{message}"),
             Self::Authentication(message) => write!(f, "authentication setup failed: {message}"),
             Self::Environment(error) => write!(f, "invalid configuration: {error}"),
             Self::Bind { addr, source } => match source.kind() {
@@ -58,7 +66,7 @@ impl std::error::Error for RunError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Environment(error) => Some(error),
-            Self::Authentication(_) | Self::Agent(_) => None,
+            Self::Usage(_) | Self::Authentication(_) | Self::Agent(_) => None,
             Self::Bind { source, .. } => Some(source),
             Self::Serve(source) => Some(source),
             Self::Shutdown(error) => error.as_ref().map(|error| error as _),
