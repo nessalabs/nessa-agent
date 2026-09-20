@@ -69,7 +69,7 @@ impl TryFrom<CredentialMetadataDto> for Credential {
             grants,
         )?;
         if let Some(at) = dto.revoked_at {
-            credential.revoke(at)?;
+            credential.restore_revoked_at(at)?;
         }
         Ok(credential)
     }

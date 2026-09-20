@@ -1211,7 +1211,7 @@ mod tests {
                     .lock()
                     .unwrap()
                     .credential
-                    .revoke(100)
+                    .restore_revoked_at(100)
                     .unwrap(),
                 "expired" => authority.now.store(200, Ordering::SeqCst),
                 "disabled" => {
@@ -1605,7 +1605,7 @@ mod tests {
     }
     fn revoke(authority: &Authority) {
         let mut snapshot = authority.snapshot.lock().unwrap();
-        snapshot.credential.revoke(100).unwrap();
+        snapshot.credential.restore_revoked_at(100).unwrap();
         snapshot.revision += 1;
     }
 
