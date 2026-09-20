@@ -66,6 +66,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             active: None,
             steering: None,
             steering_supported: false,
+            image_input: false,
             operation_capabilities,
             permissions: HashMap::new(),
             shutdown_deadline: None,

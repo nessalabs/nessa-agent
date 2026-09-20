@@ -14,7 +14,7 @@ use nessa_sdk::domain::agent_execution::permissions::{
     PermissionScope, PermissionStateView,
 };
 use nessa_sdk::domain::agent_execution::prompts::{
-    PromptSource, PromptSourceKind, PromptText, SystemPromptBuilder,
+    PromptSource, PromptSourceKind, PromptText, SystemPromptBuilder, UserMessage,
 };
 use nessa_sdk::domain::agent_execution::sessions::SessionId;
 use nessa_sdk::domain::common::value_objects::TokenLimits;
@@ -158,6 +158,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             kill_timeout: Duration::from_secs(2),
             event_capacity: 256,
             max_frame_bytes: 1024 * 1024,
+            images: None,
         },
         &model,
         limits,
@@ -195,7 +196,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     ))?;
     let input = ExecutionRequest {
         execution_id: execution_id.clone(),
-        user_message: PromptText::new(utf8(6)?)?,
+        user_message: UserMessage::text_only(PromptText::new(utf8(6)?)?),
         estimated_input_tokens: utf8(5)?.parse()?,
         reserved_output_tokens: limits.max_output(),
     };

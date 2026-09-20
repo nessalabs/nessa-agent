@@ -1,7 +1,7 @@
 # System instructions and user input
 
 `SystemPromptBuilder` builds only `SystemPrompt`: reusable system instructions with
-ordered source attribution. `ExecutionRequest` contains a separate `user_message: PromptText`, an `ExecutionId`, and caller-supplied token admission counts. For example:
+ordered source attribution. `ExecutionRequest` contains a separate `user_message: UserMessage`, an `ExecutionId`, and caller-supplied token admission counts. For example:
 
 ```rust
 use nessa_sdk::domain::agent_execution::prompts::SystemPromptBuilder;
@@ -47,6 +47,24 @@ For the pinned Claude harness this replaces its default system prompt, using
 through `binding.system_prompt()`. If omitted, the harness uses its own default;
 Nessa does not claim to capture those hidden instructions. Standard ACP has no
 portable system-prompt setter, so this extension stays in `claude_acp`.
+
+A `UserMessage` is one turn's `PromptText`, its images, or both. It refers to
+each image by `ImageReference` (SHA-256 digest, one of four media types, and
+size) and never holds bytes, so a request stays small enough to compare for retry
+identity, queue, and persist whole. Its constructor owns the rules: text or at
+least one image, at most 10 images, 5 MiB each and 10 MiB together.
+
+Image input has three gates, and each can only narrow the one before it. The
+model's metadata must list image input. The binding offers it only when
+composition gave `AcpConfig::images` a `UserImageSource`; an image sent to a
+text-only binding is refused at admission, before the message is accepted. And
+the connected agent must have advertised `promptCapabilities.image` at
+`initialize`, reported as `OperationCapabilities::image_input`; otherwise the
+adapter rejects the input as `Unsupported` without dispatching it. At dispatch
+the adapter reads each image through the source, checks its length and digest
+against the reference, and sends it as a base64 ACP `image` block after the text.
+A missing, unreadable, or substituted image is `AgentError::UserImage` and
+nothing is sent. One encoded message must fit `max_frame_bytes`.
 
 Each `Agent::invoke(ExecutionRequest { user_message, .. })` sends only that new
 user message on `session/prompt`. The ACP agent maintains history and emits the

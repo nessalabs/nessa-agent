@@ -13,11 +13,14 @@ use crate::application::agent_execution::{
     providers::ProviderIdentity,
     sessions::storage::{InvocationRecord, StorageError},
 };
-use crate::domain::agent_execution::{
-    executions::{ExecutionId, MessageChunk, MessageId, MessageKind},
-    permissions::PermissionId,
-    prompts::PromptText,
-    sessions::ExecutionSessionId,
+use crate::domain::{
+    agent_execution::{
+        executions::{ExecutionId, MessageChunk, MessageId, MessageKind},
+        permissions::PermissionId,
+        prompts::{ImageMediaType, ImageReference, PromptText, UserMessage},
+        sessions::ExecutionSessionId,
+    },
+    common::value_objects::Sha256Digest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -28,13 +31,42 @@ pub(super) struct Provider {
     pub(super) model_id: String,
     pub(super) context: String,
 }
+/// One image a saved user message refers to; the bytes are never saved here.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Image {
+    pub(super) digest: String,
+    pub(super) media_type: String,
+    pub(super) size: u64,
+}
+impl From<&ImageReference> for Image {
+    fn from(value: &ImageReference) -> Self {
+        Self {
+            digest: value.digest().to_string(),
+            media_type: value.media_type().as_str().into(),
+            size: value.size(),
+        }
+    }
+}
+impl Image {
+    fn decode(self) -> Result<ImageReference, StorageError> {
+        ImageReference::new(
+            Sha256Digest::parse(&self.digest).map_err(corrupt)?,
+            ImageMediaType::parse(&self.media_type).map_err(corrupt)?,
+            self.size,
+        )
+        .map_err(corrupt)
+    }
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Metadata {
     pub(super) target_event_offset: Option<usize>,
     pub(super) submission: Submission,
     pub(super) execution_id: String,
+    /// Empty for a message of images alone.
     pub(super) user_message: String,
+    pub(super) user_images: Vec<Image>,
     pub(super) estimated_input_tokens: u64,
     pub(super) reserved_output_tokens: u32,
     pub(super) actor: Actor,
@@ -72,7 +104,14 @@ impl From<&InvocationRecord> for Metadata {
             target_event_offset: value.target_event_offset,
             submission: value.submission.into(),
             execution_id: value.request.execution_id.as_str().into(),
-            user_message: value.request.user_message.as_str().into(),
+            user_message: value.request.user_message.text_str().into(),
+            user_images: value
+                .request
+                .user_message
+                .images()
+                .iter()
+                .map(Into::into)
+                .collect(),
             estimated_input_tokens: value.request.estimated_input_tokens,
             reserved_output_tokens: value.request.reserved_output_tokens,
             actor: (&value.actor).into(),
@@ -133,7 +172,19 @@ impl Metadata {
             submission: self.submission.into(),
             request: ExecutionRequest {
                 execution_id: ExecutionId::new(self.execution_id).map_err(corrupt)?,
-                user_message: PromptText::new(self.user_message).map_err(corrupt)?,
+                // Saved text is empty exactly when the message was images alone;
+                // the message's own constructor refuses one with neither.
+                user_message: UserMessage::new(
+                    (!self.user_message.is_empty())
+                        .then(|| PromptText::new(self.user_message))
+                        .transpose()
+                        .map_err(corrupt)?,
+                    self.user_images
+                        .into_iter()
+                        .map(Image::decode)
+                        .collect::<Result<_, _>>()?,
+                )
+                .map_err(corrupt)?,
                 estimated_input_tokens: self.estimated_input_tokens,
                 reserved_output_tokens: self.reserved_output_tokens,
             },

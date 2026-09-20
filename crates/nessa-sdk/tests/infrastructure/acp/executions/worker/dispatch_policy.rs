@@ -1,7 +1,10 @@
 //! Ready wire policy evidence precedes prompt writes, including native steering.
 use super::*;
 use crate::application::agent_execution::{executions::ExecutionRequest, tools::ToolReviewInput};
-use crate::domain::agent_execution::{prompts::PromptText, tools::ToolCallUpdate};
+use crate::domain::agent_execution::{
+    prompts::{PromptText, UserMessage},
+    tools::ToolCallUpdate,
+};
 use crate::infrastructure::acp::executions::event_queue::EventReceiver;
 use std::sync::Mutex;
 
@@ -79,7 +82,7 @@ impl AcpProfile for PolicyProfile {
 fn request() -> ExecutionRequest {
     ExecutionRequest {
         execution_id: ExecutionId::new("next").unwrap(),
-        user_message: PromptText::new("read file").unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("read file").unwrap()),
         estimated_input_tokens: 1,
         reserved_output_tokens: 10,
     }
@@ -176,6 +179,7 @@ async fn worker_with_ready_frames_boundary(
             active: None,
             steering: None,
             steering_supported: true,
+            image_input: false,
             operation_capabilities,
             permissions: HashMap::new(),
             shutdown_deadline: None,

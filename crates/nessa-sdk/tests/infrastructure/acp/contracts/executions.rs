@@ -314,7 +314,8 @@ async fn blocked_prompt_write_obeys_execution_deadline_or_the_default_write_boun
         .unwrap();
         let opened = binding.open(None).await.unwrap();
         let mut request = prompt("blocked-write");
-        request.user_message = PromptText::new("x".repeat(2 * 1024 * 1024)).unwrap();
+        request.user_message =
+            UserMessage::text_only(PromptText::new("x".repeat(2 * 1024 * 1024)).unwrap());
         tokio::time::pause();
         let began = Instant::now();
         let session = opened.session.clone();

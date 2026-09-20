@@ -106,8 +106,8 @@ fn a_user_message_bounds_image_count_and_total_bytes() {
         })
     );
 
-    // Four of the largest image fill the total exactly; one more byte does not fit.
-    let full = vec![image(9, ImageReference::MAX_BYTES); 4];
+    // Two of the largest image fill the total exactly; one more byte does not fit.
+    let full = vec![image(9, ImageReference::MAX_BYTES); 2];
     assert!(UserMessage::new(None, full.clone()).is_ok());
     let mut over = full;
     over.push(image(9, 1));

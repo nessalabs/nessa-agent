@@ -486,7 +486,7 @@ async fn repeated_oversized_prompts_leave_the_same_context_ready_for_valid_input
     // Escapes make the encoded frame oversized even though raw input is smaller.
     for index in 0..24 {
         let request = ExecutionRequest {
-            user_message: PromptText::new("\u{0}".repeat(2048)).unwrap(),
+            user_message: UserMessage::text_only(PromptText::new("\u{0}".repeat(2048)).unwrap()),
             ..prompt(&format!("oversized-{index}"))
         };
         assert!(

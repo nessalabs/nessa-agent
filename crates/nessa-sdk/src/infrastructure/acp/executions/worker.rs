@@ -26,7 +26,7 @@ use crate::application::agent_execution::permissions::{
 use crate::application::agent_execution::providers::{
     CleanupReport, ExecutionReport, ObservationFailureCause, OperationCapabilities,
     ProviderExecutionReply, ProviderOperationFailure, ProviderSessionState, ResourceCleanup,
-    SessionCloseRequest, SteeringOutcome,
+    SessionCloseRequest, SteeringOutcome, UserImageError,
 };
 use crate::domain::agent_execution::executions::{
     ExecutionId, ExecutionOutcome, MessageChunk, MessageId,
@@ -34,13 +34,16 @@ use crate::domain::agent_execution::executions::{
 use crate::domain::agent_execution::permissions::{
     PermissionCancellationReason, PermissionCancellationReasonView, PermissionId,
 };
+use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::infrastructure::{
     json_rpc::{self, Envelope, Reader, RpcId},
     process::ProcessScope,
 };
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     future::{poll_fn, Future},
@@ -84,6 +87,8 @@ struct Worker<P> {
     active: Option<ActiveExecution>,
     steering: Option<PendingSteering>,
     steering_supported: bool,
+    /// The connected agent advertised `promptCapabilities.image` at initialize.
+    image_input: bool,
     operation_capabilities: watch::Sender<OperationCapabilities>,
     permissions: HashMap<PermissionId, RpcId>,
     shutdown_deadline: Option<Instant>,
@@ -131,6 +136,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         active: None,
         steering: None,
         steering_supported: false,
+        image_input: false,
         operation_capabilities,
         permissions: HashMap::new(),
         shutdown_deadline: None,
@@ -559,6 +565,11 @@ impl<P: AcpProfile> Worker<P> {
         }
         self.profile.validate_initialize(&init)?;
         self.steering_supported = self.profile.supports_steering(&init);
+        // Only an agent that said so receives an image, and only when this
+        // process has somewhere to read the bytes from.
+        self.image_input = self.config.images.is_some()
+            && init.pointer("/agentCapabilities/promptCapabilities/image")
+                == Some(&Value::Bool(true));
         let mut params = self
             .profile
             .new_session_params(&self.config, &self.capabilities);
@@ -615,11 +626,50 @@ impl<P: AcpProfile> Worker<P> {
         self.operation_capabilities
             .send_replace(OperationCapabilities {
                 native_steering: self.steering_supported,
+                image_input: self.image_input,
                 session_resume: init
                     .pointer("/agentCapabilities/sessionCapabilities/resume")
                     .is_some_and(Value::is_object),
             });
         Ok(())
+    }
+
+    /// The ACP content blocks for one user message: its text, then its images
+    /// in attachment order. Nothing has been written when this fails, so the
+    /// caller rejects the input without a dispatch.
+    ///
+    /// Image bytes are read here, at dispatch, and live only until the frame is
+    /// written. Each is checked against its reference before it is encoded, so
+    /// a source cannot substitute content for what the user attached.
+    async fn prompt_blocks(&self, message: &UserMessage) -> Result<Vec<Value>, AgentError> {
+        let mut blocks = Vec::with_capacity(1 + message.images().len());
+        if let Some(text) = message.text() {
+            blocks.push(json!({"type":"text","text":text.as_str()}));
+        }
+        if message.images().is_empty() {
+            return Ok(blocks);
+        }
+        let source = match &self.config.images {
+            Some(source) if self.image_input => source,
+            _ => {
+                return Err(AgentError::Unsupported(
+                    "provider does not accept image input".into(),
+                ))
+            }
+        };
+        for image in message.images() {
+            let bytes = source.read(*image).await.map_err(AgentError::UserImage)?;
+            let digest: [u8; 32] = Sha256::digest(&bytes).into();
+            if bytes.len() as u64 != image.size() || &digest != image.digest().as_bytes() {
+                return Err(AgentError::UserImage(UserImageError::Mismatch));
+            }
+            blocks.push(json!({
+                "type": "image",
+                "mimeType": image.media_type().as_str(),
+                "data": STANDARD.encode(&bytes),
+            }));
+        }
+        Ok(blocks)
     }
 
     async fn drive(&mut self, execution: &mut ExecutionController) -> Result<(), AgentError> {
@@ -911,12 +961,19 @@ impl<P: AcpProfile> Worker<P> {
                     let _ = reply.send(ProviderExecutionReply::Rejected(error));
                     return Ok(());
                 }
+                let prompt = match self.prompt_blocks(&input.user_message).await {
+                    Ok(prompt) => prompt,
+                    Err(error) => {
+                        let _ = reply.send(ProviderExecutionReply::Rejected(error));
+                        return Ok(());
+                    }
+                };
                 let id = self.pending_id()?;
                 let frame = match json_rpc::encode(
                     json_rpc::request(
                         id,
                         "session/prompt",
-                        json!({"sessionId":execution.id().as_str(),"prompt":[{"type":"text","text":input.user_message.as_str()}]}),
+                        json!({"sessionId":execution.id().as_str(),"prompt":prompt}),
                     ),
                     self.config.max_frame_bytes,
                 ) {
@@ -975,6 +1032,16 @@ impl<P: AcpProfile> Worker<P> {
                         ProviderSessionState::Usable,
                     )));
                 } else {
+                    let prompt = match self.prompt_blocks(&input.user_message).await {
+                        Ok(prompt) => prompt,
+                        Err(error) => {
+                            let _ = reply.send(Err(ProviderOperationFailure::new(
+                                error,
+                                ProviderSessionState::Usable,
+                            )));
+                            return Ok(());
+                        }
+                    };
                     let id = self.pending_id()?;
                     let frame = match json_rpc::encode(
                         json_rpc::request(
@@ -982,7 +1049,7 @@ impl<P: AcpProfile> Worker<P> {
                             "_session/steering",
                             json!({
                                 "sessionId": execution.id().as_str(),
-                                "prompt": [{"type":"text", "text":input.user_message.as_str()}],
+                                "prompt": prompt,
                                 "_meta": {"steering":{"idleBehavior":"promptRequired"}}
                             }),
                         ),

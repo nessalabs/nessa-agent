@@ -1,6 +1,6 @@
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::hooks::{HookError, HookFailure};
-use crate::application::agent_execution::providers::CloseOutcome;
+use crate::application::agent_execution::providers::{CloseOutcome, UserImageError};
 use crate::application::agent_execution::sessions::storage::StorageError;
 use crate::domain::agent_execution::executions::{ExecutionOutcome, SchedulingError};
 use serde::{Deserialize, Serialize};
@@ -122,6 +122,9 @@ pub(super) enum SavedError {
     },
     Unsupported(String),
     InvalidInput(String),
+    UserImageMissing,
+    UserImageUnavailable,
+    UserImageMismatch,
     Protocol(String),
     Transport(String),
     Busy,
@@ -212,6 +215,9 @@ impl From<SavedError> for AgentError {
                 cleanup_result: Box::new((*cleanup_result).map(Into::into).map_err(Into::into)),
             },
             SavedError::Unsupported(value) => Self::Unsupported(value),
+            SavedError::UserImageMissing => Self::UserImage(UserImageError::Missing),
+            SavedError::UserImageUnavailable => Self::UserImage(UserImageError::Unavailable),
+            SavedError::UserImageMismatch => Self::UserImage(UserImageError::Mismatch),
             SavedError::InvalidInput(value) => Self::InvalidInput(value),
             SavedError::Protocol(value) => Self::Protocol(value),
             SavedError::Transport(value) => Self::Transport(value),
@@ -296,6 +302,9 @@ impl From<AgentError> for SavedError {
                 cleanup_result: Box::new((*cleanup_result).map(Into::into).map_err(Into::into)),
             },
             AgentError::Unsupported(value) => Self::Unsupported(value),
+            AgentError::UserImage(UserImageError::Missing) => Self::UserImageMissing,
+            AgentError::UserImage(UserImageError::Unavailable) => Self::UserImageUnavailable,
+            AgentError::UserImage(UserImageError::Mismatch) => Self::UserImageMismatch,
             AgentError::InvalidInput(value) => Self::InvalidInput(value),
             AgentError::Protocol(value) => Self::Protocol(value),
             AgentError::Transport(value) => Self::Transport(value),

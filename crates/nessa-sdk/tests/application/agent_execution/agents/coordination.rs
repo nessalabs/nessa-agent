@@ -29,7 +29,7 @@ impl ExecutionAudit for AcceptingAudit {
 use crate::domain::{
     agent_execution::{
         executions::{ExecutionId, ExecutionOutcome, InvocationStage, SchedulingCause},
-        prompts::PromptText,
+        prompts::{PromptText, UserMessage},
         sessions::ExecutionSessionId,
     },
     effective_capabilities::value_objects::{BindingRestrictions, EffectiveCapabilities},
@@ -214,7 +214,7 @@ fn actor() -> ActionContext {
 fn input() -> ExecutionRequest {
     ExecutionRequest {
         execution_id: ExecutionId::new("recovered").unwrap(),
-        user_message: PromptText::new("resume").unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("resume").unwrap()),
         estimated_input_tokens: 1,
         reserved_output_tokens: 10,
     }

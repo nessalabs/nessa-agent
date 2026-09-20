@@ -16,4 +16,7 @@ pub struct OperationCapabilities {
     /// The provider supports restoring the same context after connection close.
     /// Saved history can still be missing or unavailable when restoration is tried.
     pub session_resume: bool,
+    /// The provider accepts images in a user message. Model metadata says what a
+    /// model can see; this says what the connected agent agreed to receive.
+    pub image_input: bool,
 }

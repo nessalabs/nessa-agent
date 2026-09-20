@@ -18,9 +18,12 @@
 //! Diagnostic errors never determine admission or resource ownership.
 //! OperationCapabilities flows from the live backend through ProviderSession to
 //! Agent; immutable model capabilities remain a separate admission contract.
+//! UserImageSource is how an adapter turns a message's image references into
+//! bytes at dispatch; requests, queues, and snapshots only ever hold references.
 
 mod close;
 mod identity;
+mod images;
 mod open;
 mod operations;
 mod ports;
@@ -29,6 +32,7 @@ mod session;
 mod steering;
 pub use close::SessionCloseRequest;
 pub use identity::ProviderIdentity;
+pub use images::{UserImageError, UserImageFuture, UserImageSource};
 pub use open::{ProviderCleanup, ProviderOpenError, ProviderOpenFuture};
 pub use operations::OperationCapabilities;
 pub use ports::{

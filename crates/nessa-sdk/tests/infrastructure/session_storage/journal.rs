@@ -10,7 +10,8 @@ async fn journal_appends_small_tails_without_rewriting_prior_history() {
     let mut value = snapshot("incremental");
     value.invocations[0].events.clear();
     value.invocations[0].result = None;
-    value.invocations[0].request.user_message = PromptText::new("input ".repeat(1000)).unwrap();
+    value.invocations[0].request.user_message =
+        UserMessage::text_only(PromptText::new("input ".repeat(1000)).unwrap());
     lease.save(value.clone()).await.unwrap();
     let path = journal_path(&root.path().join("private"), "incremental");
     let first = std::fs::read(&path).unwrap();

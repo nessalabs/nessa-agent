@@ -1,13 +1,14 @@
 //! Trusted host configuration for launching and supervising an ACP process.
 #![deny(missing_docs)]
 
-use crate::application::agent_execution::agents::AgentError;
+use crate::application::agent_execution::{agents::AgentError, providers::UserImageSource};
 use crate::domain::agent_execution::permissions::PermissionOfferPolicy;
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashSet},
     ffi::OsString,
     path::PathBuf,
+    sync::Arc,
     time::Duration,
 };
 
@@ -92,6 +93,12 @@ pub struct AcpConfig {
     /// fixed limit of 65,536 JSON values and object keys, including ignored fields, to bound
     /// collection allocation before envelope validation.
     pub max_frame_bytes: usize,
+    /// Where the bytes of a user message's images come from. `None` means this
+    /// process cannot deliver images, so its binding offers no image input. With
+    /// a source, an image is still sent only to an agent that advertised
+    /// `promptCapabilities.image`, and one encoded message must fit
+    /// `max_frame_bytes`: base64 grows image bytes by a third.
+    pub images: Option<Arc<dyn UserImageSource>>,
 }
 impl AcpConfig {
     pub(crate) fn validate(&self) -> Result<(), AgentError> {

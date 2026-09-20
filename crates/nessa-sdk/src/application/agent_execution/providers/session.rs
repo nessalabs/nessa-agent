@@ -93,9 +93,18 @@ impl ProviderSession {
     /// The provider retains conversation history.
     pub(crate) fn validate(&self, input: &ExecutionRequest) -> Result<(), AgentError> {
         input.validate_message_size()?;
+        // Require what the message actually holds. An image sent to a text-only
+        // binding is refused here, before acceptance, and never dropped.
+        let mut requirements = Vec::with_capacity(2);
+        if input.user_message.text().is_some() {
+            requirements.push(CapabilityRequirement::Input(Modality::Text));
+        }
+        if !input.user_message.images().is_empty() {
+            requirements.push(CapabilityRequirement::Input(Modality::Image));
+        }
         self.capabilities
             .validate(
-                &[CapabilityRequirement::Input(Modality::Text)],
+                &requirements,
                 input.estimated_input_tokens,
                 input.reserved_output_tokens,
             )

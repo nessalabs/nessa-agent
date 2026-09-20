@@ -3,7 +3,10 @@ use super::*;
 use crate::application::agent_execution::{
     executions::ExecutionRequest, permissions::ActionContext,
 };
-use crate::domain::agent_execution::{permissions::PermissionStateView, prompts::PromptText};
+use crate::domain::agent_execution::{
+    permissions::PermissionStateView,
+    prompts::{PromptText, UserMessage},
+};
 use crate::infrastructure::acp::executions::event_queue::EventReceiver;
 use std::{
     fs::File,
@@ -91,6 +94,7 @@ async fn blocked_worker(
         }),
         steering: None,
         steering_supported: false,
+        image_input: false,
         operation_capabilities,
         permissions: HashMap::new(),
         shutdown_deadline: None,
@@ -249,7 +253,7 @@ async fn selected_dispatch_deadline_bounds_idle_permission_response() {
         let command = Command::ExecutionRequest(
             ExecutionRequest {
                 execution_id: ExecutionId::new("next").unwrap(),
-                user_message: PromptText::new("hello").unwrap(),
+                user_message: UserMessage::text_only(PromptText::new("hello").unwrap()),
                 estimated_input_tokens: 1,
                 reserved_output_tokens: 1,
             },

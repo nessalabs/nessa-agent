@@ -34,7 +34,7 @@ impl Seek for CountDecode {
 }
 fn metadata() -> Value {
     json!({
-        "submission":"Immediate", "execution_id":"active", "user_message":"input",
+        "submission":"Immediate", "execution_id":"active", "user_message":"input", "user_images":[],
         "estimated_input_tokens":1, "reserved_output_tokens":1,
         "actor":{"principal_id":"user","surface_id":"test","request_id":"invoke"},
         "provider_report":null,"local_outcome":null,"cancellation":null,"result":null

@@ -2,7 +2,10 @@
 #![deny(missing_docs)]
 
 use crate::application::agent_execution::hooks::HookFailure;
-use crate::application::agent_execution::{providers::CloseOutcome, sessions::StorageError};
+use crate::application::agent_execution::{
+    providers::{CloseOutcome, UserImageError},
+    sessions::StorageError,
+};
 use crate::domain::agent_execution::executions::{ExecutionOutcome, SchedulingError};
 use std::{error::Error, fmt, future::Future, pin::Pin};
 
@@ -85,6 +88,9 @@ pub enum AgentError {
     Unsupported(String),
     /// Input failed admission validation without dispatching this attempt.
     InvalidInput(String),
+    /// An image the message refers to could not be supplied intact, so the
+    /// message was not dispatched. Nothing is sent without it.
+    UserImage(UserImageError),
     /// An immediate operation overlaps existing work; queued admission has a separate contract.
     Busy,
     /// The operation was locally cancelled or its provider context disconnected; cleanup is a separate fact.

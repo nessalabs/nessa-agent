@@ -110,6 +110,7 @@ impl ProviderSessionBackend for WorkflowBackend {
         OperationCapabilities {
             native_steering: true,
             session_resume: true,
+            image_input: false,
         }
     }
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {

@@ -36,8 +36,8 @@ impl Sha256Digest {
             return Err(Sha256DigestError);
         }
         let mut bytes = [0_u8; 32];
-        for (byte, pair) in bytes.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
-            *byte = (nibble(pair[0])? << 4) | nibble(pair[1])?;
+        for (byte, [high, low]) in bytes.iter_mut().zip(hex.as_bytes().as_chunks::<2>().0) {
+            *byte = (nibble(*high)? << 4) | nibble(*low)?;
         }
         Ok(Self(bytes))
     }

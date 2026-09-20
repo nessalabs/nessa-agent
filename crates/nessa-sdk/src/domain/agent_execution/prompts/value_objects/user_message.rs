@@ -102,8 +102,9 @@ pub struct UserMessage {
 impl UserMessage {
     /// Most images in one message.
     pub const MAX_IMAGES: usize = 10;
-    /// Most image bytes in one message, across all of its images.
-    pub const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+    /// Most image bytes in one message, across all of its images. Encoded for
+    /// a provider they grow by a third, and must still fit one 16 MiB frame.
+    pub const MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
 
     /// Combine optional `text` with `images` in attachment order. Neither is
     /// [`ExecutionError::EmptyValue`]; more than [`Self::MAX_IMAGES`] is

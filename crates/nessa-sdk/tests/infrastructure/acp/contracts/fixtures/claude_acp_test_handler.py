@@ -13,6 +13,9 @@ model = os.environ["ANTHROPIC_MODEL"]
 assert model == os.environ["ANTHROPIC_CUSTOM_MODEL_OPTION"]
 assert os.environ["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] == "100"
 session = str(os.getpid())
+def prompt_text(blocks):
+    # A message of images alone has no text block.
+    return next((block["text"] for block in blocks if block["type"] == "text"), "")
 def record(name, value):
     temporary = root / (name + ".tmp")
     temporary.write_text(value)
@@ -80,7 +83,7 @@ for line in sys.stdin:
         if mode == "startup-update-before-initialize":
             update({"sessionUpdate": "current_mode_update", "currentModeId": "default"})
         assert msg["params"]["clientCapabilities"]["terminal"] is False
-        result(msg["id"], {"protocolVersion": 1, "agentInfo": {"version": "wrong" if mode == "wrong-version" else "0.76.0"}, "agentCapabilities": {"sessionCapabilities": {} if (mode == "resume-unsupported" or (mode == "steering-resume-removed" and (root / "saved-session").exists())) else {"resume": {}}}, "_meta": {"steering": {"supported": mode.startswith("steering") and mode != "steering-unsupported" and not (mode == "steering-capabilities-change" and (root / "saved-session").exists())}}})
+        result(msg["id"], {"protocolVersion": 1, "agentInfo": {"version": "wrong" if mode == "wrong-version" else "0.76.0"}, "agentCapabilities": {"promptCapabilities": {"image": "image" in mode}, "sessionCapabilities": {} if (mode == "resume-unsupported" or (mode == "steering-resume-removed" and (root / "saved-session").exists())) else {"resume": {}}}, "_meta": {"steering": {"supported": mode.startswith("steering") and mode != "steering-unsupported" and not (mode == "steering-capabilities-change" and (root / "saved-session").exists())}}})
     elif method in ("session/new", "session/resume"):
         if mode == "startup-update-before-session":
             update({"sessionUpdate": "current_mode_update", "currentModeId": "default"})
@@ -174,7 +177,8 @@ for line in sys.stdin:
             assert msg["params"]["prompt"][0]["type"] == "text"
             assert msg["params"]["prompt"][0]["text"] in ("first user message", "second user message")
         pending = msg["id"]
-        user_text = msg["params"]["prompt"][0]["text"]
+        record("prompt-observed", json.dumps(msg["params"]["prompt"]))
+        user_text = prompt_text(msg["params"]["prompt"])
         prior_history = history[:]
         history.append(user_text)
         record("saved-session", json.dumps({"id": session, "history": history}))
@@ -301,7 +305,7 @@ for line in sys.stdin:
             result(msg["id"], {"outcome": "promptRequired", "reason": "noRunningTurn"})
         else:
             result(msg["id"], {"outcome": "injected"})
-            text("steered:" + msg["params"]["prompt"][0]["text"])
+            text("steered:" + prompt_text(msg["params"]["prompt"]))
             result(pending, {"stopReason": "end_turn"})
             pending = None
     elif method == "session/cancel":
