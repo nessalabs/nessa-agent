@@ -1,4 +1,11 @@
 pub const IDLE_SECONDS: u64 = 30 * 24 * 60 * 60;
+/// How far ahead of the clock a stored renewal may claim to have happened.
+///
+/// Journalled instants are only as truthful as whoever can write the journal,
+/// and a wall clock can legitimately disagree with itself across a restart.
+/// One hour matches the renewal interval: the finest granularity at which a
+/// session's own time already matters.
+pub const FUTURE_TOLERANCE_SECONDS: u64 = 60 * 60;
 
 /// Time evidence for an opaque browser session's rolling idle deadline.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,6 +37,15 @@ impl Lifetime {
     }
     pub fn is_active_at(&self, now: u64) -> bool {
         now < self.idle_expires_at
+    }
+    /// Whether a clock reading of `now` can vouch for this renewal instant.
+    ///
+    /// Every extension of a session's life moves `renewed_at` forward, and
+    /// `idle_expires_at` is always exactly `renewed_at + IDLE_SECONDS`, so a
+    /// renewal the clock cannot account for is the one claim every forged or
+    /// clock-damaged lifetime has to make.
+    pub fn is_plausible_at(&self, now: u64) -> bool {
+        self.renewed_at <= now.saturating_add(FUTURE_TOLERANCE_SECONDS)
     }
     pub fn created_at(&self) -> u64 {
         self.created_at

@@ -89,6 +89,10 @@ impl BrowserSession {
     pub fn is_active_at(&self, now: u64) -> bool {
         self.lifetime.is_active_at(now)
     }
+    /// Whether this session's renewal instant is one a clock at `now` can vouch for.
+    pub fn is_plausible_at(&self, now: u64) -> bool {
+        self.lifetime.is_plausible_at(now)
+    }
     pub fn expiration_reason(&self, now: u64) -> Option<RemovalReason> {
         if self.is_active_at(now) {
             None
