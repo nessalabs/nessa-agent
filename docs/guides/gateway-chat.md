@@ -99,8 +99,84 @@ not human callers; command IDs link results with process records. See the
 [MCP server guide](../../crates/nessa-mcp/README.md) for limits and verification.
 
 The panel presents the exact original tool input and offered choices. Oversized review
-input cannot be approved through a truncated view. Uploaded panel attachments
-remain unsupported by this text-only contract and stay in the draft with an error.
+input cannot be approved through a truncated view.
+
+## Images in a message (panel and client)
+
+This section describes the panel and `@nessa/client` side of the product
+contract's `attachment.begin`, `PUT /attachments`, and the `attachments` list on
+`conversation.send` / `conversation.steer`. It claims nothing about the gateway
+beyond that contract.
+
+A message is text plus image references; bytes never ride in a conversation
+command, whose socket message is capped at 64 KiB. The panel uploads at attach
+time, not at send, and it uploads the original file:
+
+```text
+attach -> SHA-256 of the original -> conversation.create (idempotent)
+       -> attachment.begin -> stored { digest, mimeType, size }
+                           -> upload_required -> PUT /attachments with the ticket
+                                              -> 200 { digest, mimeType, size }
+send   -> conversation.send { text, attachments: [the returned references] }
+```
+
+- **The gateway normalizes; the panel does not.** Converting, scaling, and
+  compressing an image to what the selected model takes happens on the gateway,
+  so those limits live in one place. The panel has no canvas work and knows no
+  per-image byte or pixel limit. The only byte limits it puts on a single file
+  are the existing preview budget and upload cap of 20 MB.
+- **The returned reference is what a message names.** Both `begin` (when the
+  conversation already holds the bytes) and the upload answer with the stored
+  reference, which may differ from the file in digest, media type, and size — a
+  HEIC, BMP, or very large PNG comes back as a smaller PNG or JPEG. The digest
+  the panel computes only identifies the upload and is never sent in a message.
+  The client validates the reference's shape and refuses a `begin` reply whose
+  fields contradict its state.
+- **Any `image/*` file is uploaded**; whether the gateway can read it is the
+  gateway's answer. Files that are not images are still preview-only: they are
+  not uploaded, and sending refuses them with a reason.
+- **Upload state is on the file.** Each draft file is `not-started`, `uploading`,
+  `stored` (with the whole returned reference), or `failed` with a typed reason:
+  `unreadable` (this window could not read or hash it), `unsupported-image`
+  (`unsupported_image`: not a format the gateway can read), `too-large`
+  (`image_too_large`: it could not be brought under the model's limits),
+  `unavailable` (no connection or answer, a spent or expired ticket, storage or
+  the audit record away), and `rejected` (any other refusal). The tile shows the
+  state and says why; it offers retry except for the gateway's two verdicts on
+  the image itself, which the same bytes would meet again. Removing a tile
+  mid-upload is allowed; the late result finds no file and changes nothing.
+- **`sendDraft` is the one place a draft is declined, always with a typed kind
+  and a visible reason, and the draft is kept.** For files those are
+  `unsupported-file` (not an image), `upload-failed`, `upload-in-flight`,
+  `too-many-images` (more than 10), `images-too-large` (more than 10 MiB
+  together — both counted over the returned references, not the attached files),
+  `image-input-unsupported`, `image-input-unknown`, and `unknown-attachment`. A
+  message of images alone sends; its tab is titled by the first image's name.
+- **Whether the agent takes images is never guessed.** `capabilities.imageInput`
+  is false until an agent is open for the conversation. Staging an image creates
+  the conversation and starts its reads, so the answer has normally arrived
+  before anybody presses send; the composer also says so as soon as it is known.
+  If no view has arrived yet, send is declined as `image-input-unknown`, a read
+  is requested, and sending again a moment later goes through. If the gateway
+  refuses the message anyway, the turn is marked not sent and its images return
+  to the draft still stored.
+- **Retry re-sends the same references.** A turn's content does not change after
+  it is sent, and the client freezes the list with the command, so one execution
+  ID always names one message.
+- **The upload request carries the ticket and nothing else**: no cookies, and a
+  redirect is an error. It goes to the session URL's host and port over
+  `http`/`https`. The browser preview connects through the dev server, so its
+  uploads need that server to forward `/attachments`; the desktop panel talks to
+  the gateway directly. The ticket is a secret and appears in no error message.
+- **Sent images in the transcript.** A turn sent from this window paints its
+  tiles from the local object URL — the original as attached, not the stored
+  copy — which is kept for as long as the turn is shown and released with the
+  conversation. A turn known only from a view — after a reload, or sent from
+  another surface — shows a labelled placeholder (media type and size). Reading
+  image bytes back from the gateway is not implemented.
+
+The preview budgets (20 files, 20 MB each, 50 MB per draft, 100 MB per window)
+are unchanged and separate from the message rules above.
 
 ## Views and retry behavior
 
@@ -167,7 +243,8 @@ ADRs 0009/0011 remain separate future work.
 The host reserves the effective input window minus the configured output allowance
 for each submission, consistently across retries. This is a pessimistic admission
 reservation, not token billing or a claim to measure opaque provider history. The
-provider owns its context management; input text has a separate 8 KiB UTF-8 limit.
+provider owns its context management; input text has a separate 8 KiB UTF-8 limit,
+and may be blank only when the message carries an image.
 
 The initial gateway retains up to 32 conversation owners per server instance,
 including closed ones. It reports capacity before persisting rejected creates.

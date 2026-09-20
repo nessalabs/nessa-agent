@@ -255,6 +255,15 @@ Tests follow those responsibilities under `crates/nessa-server/tests/conversatio
 The floating panel uses injected conversation effects and NessaClient; neither
 owns SDK scheduling. See [gateway chat](guides/gateway-chat.md).
 
+Image input follows the same split. `@nessa/client` owns the wire: the
+`AttachmentUploadTransport` port in `application/attachment-upload.ts`, its
+`fetch` adapter in `transport/`, and `presentation/attachment-api.ts`. The
+conversation vertical owns a draft file's upload state and the
+`stageAttachment` effect, which answers with the reference the gateway stored;
+the panel owns the original bytes and the order of one upload. Image conversion
+and its limits belong to the gateway, so no TypeScript module scales, converts,
+or compresses an image.
+
 ## MCP tools
 
 `crates/nessa-mcp/src/mcp.rs` owns stdio transport and routing. Nessa-owned tools
