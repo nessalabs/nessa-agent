@@ -14,20 +14,30 @@
 //! code would have carried; the message is prose for a person and decides
 //! nothing.
 //!
+//! **This file is not a diagnostic.** It is the only thing that will ever get a
+//! service that gave up started again: launchd has been told not to, so the
+//! desktop host's next reconciliation is the last route back, and this record
+//! is what authorizes it. A record that could not be published therefore has to
+//! change how the process ends rather than be logged and forgotten — see
+//! [`super::error::report`], which publishes before it chooses an exit status.
+//!
 //! ```text
-//! run gives up ──► gateway-startup-failure.json ──► desktop host's sentence
-//!        │                      ▲
-//!   exit status 0       forgotten by the next run that starts serving
+//! run gives up ──► published? ──yes──► exit 0, host reads it, retries once
+//!                       │
+//!                       └──no──► keep the non-zero code; launchd keeps trying
 //! ```
 //!
-//! A record is only ever about the run before this one. Every run that reaches
-//! the point of serving forgets it first, and the record names the launchd
-//! service generation it belonged to, so a host reconciling a different
-//! registration cannot be told about a failure that was not its service's.
+//! Only a managed launch has a record at all, and only the one its own
+//! generation wrote. A standalone `nessa server` sharing the same data
+//! directory — the thing someone runs while diagnosing exactly this problem —
+//! must not publish evidence in a registration's name or erase the evidence
+//! that registration is relying on. [`super::Launch`] is where that is decided.
+use std::io;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
+use super::launch::Managed;
 use super::{exit_code, RunError};
 
 /// The record's name inside the stage's log directory. The desktop host looks
@@ -35,22 +45,22 @@ use super::{exit_code, RunError};
 const FILE: &str = "gateway-startup-failure.json";
 
 /// Why the last run of this gateway stopped for good.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct StartupFailure<'a> {
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StartupFailure {
     /// The name in the shared exit-code table — `credentialRegistryInvalid`,
     /// `configuration` — which is what the host turns into a sentence.
-    reason: &'a str,
+    reason: String,
     /// The code this failure would have exited with had retrying been worth it.
-    /// Carried so the record and the table can be read against each other.
+    /// Carried so the record and the table can be read against each other; the
+    /// host refuses a record where they disagree.
     exit_code: u8,
     /// The failure in its own words, for the app's log. Never parsed.
     message: String,
-    /// The launchd service generation this run was registered under, from
-    /// `NESSA_SERVICE_GENERATION`. Absent for a server nobody registered, whose
-    /// failures are nothing for a host to report.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    service_generation: Option<String>,
+    /// The launchd service generation this run was registered under. What makes
+    /// the record evidence about one registration rather than about whatever
+    /// last wrote in this directory.
+    service_generation: String,
     /// The process that wrote this, for reading the log beside it.
     process_id: u32,
 }
@@ -59,51 +69,52 @@ fn path(logs: &Path) -> PathBuf {
     logs.join(FILE)
 }
 
-/// Write down why this run gave up, replacing whatever the last one left.
+/// Publish why this run gave up, replacing whatever the last one left.
 ///
-/// A record that cannot be written costs the host its sentence, not the
-/// process its ending: the failure is already logged and the exit status is
-/// already decided, so this reports and returns.
-pub(super) fn record(error: &RunError, logs: &Path) {
-    if let Err(failure) = write(&entry(error), logs) {
-        tracing::error!(%failure, "could not record why the gateway stopped for good");
-    }
-}
-
-fn entry(error: &RunError) -> StartupFailure<'static> {
-    StartupFailure {
-        reason: exit_code::reason(error),
+/// Returns once the record is durably on disk under its own name, with the
+/// directory synced, because the caller's next decision is whether launchd may
+/// stop restarting this service — and it may only do that if this succeeded.
+pub(super) fn record(error: &RunError, managed: &Managed) -> io::Result<()> {
+    let record = StartupFailure {
+        reason: exit_code::reason(error).to_owned(),
         exit_code: exit_code::exit_code(error),
         message: error.to_string(),
-        service_generation: std::env::var("NESSA_SERVICE_GENERATION").ok(),
+        service_generation: managed.generation().to_owned(),
         process_id: std::process::id(),
-    }
-}
-
-fn write(record: &StartupFailure<'_>, logs: &Path) -> std::io::Result<()> {
+    };
+    let logs = managed.logs();
     nessa_local_storage::create_directory(logs)?;
     let mut file = nessa_local_storage::PrivateTempFile::new_in(logs)?;
-    serde_json::to_writer(file.as_file_mut(), record)?;
+    serde_json::to_writer(file.as_file_mut(), &record)?;
     file.as_file().sync_all()?;
     file.persist(&path(logs))?;
     nessa_local_storage::sync_directory(logs)
 }
 
-/// Forget the last run's record, on the way into serving.
+/// Forget the record this launch supersedes, on the way into serving.
 ///
-/// Called by the composition root before it starts, so that a record found
-/// afterwards belongs to the run that just ended and not to one from last week.
-/// A record that cannot be removed is reported: the host would otherwise be
-/// told about a failure that has already been fixed.
-pub fn forget(logs: &Path) {
-    match std::fs::remove_file(path(logs)) {
+/// Only the one this launch's own generation wrote. A record another
+/// registration left is not this process's to erase — it is what that
+/// registration will be recovered by — and one this build cannot read is left
+/// where it is rather than removed on a guess.
+pub(super) fn forget(managed: &Managed) {
+    let path = path(managed.logs());
+    if !read(&path).is_some_and(|record| record.service_generation == managed.generation()) {
+        return;
+    }
+    match std::fs::remove_file(&path) {
         Ok(()) => {}
-        // No record is the ordinary case: most runs did not give up.
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        // Gone between reading it and removing it is the outcome either way.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => {
             tracing::error!(%error, "could not forget the last gateway startup failure");
         }
     }
+}
+
+/// A record already there, when it is one this build can make sense of.
+fn read(path: &Path) -> Option<StartupFailure> {
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
 #[cfg(test)]
@@ -112,6 +123,9 @@ mod tests {
     use nessa_auth::adapters::local::LocalStoreError;
     use serde_json::Value;
 
+    const GENERATION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const OTHER: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
     /// A stage's log directory that does not exist yet, which is what a first
     /// run finds. Writing the record is what creates it, privately.
     struct Stage(tempfile::TempDir);
@@ -119,26 +133,27 @@ mod tests {
         fn new() -> Self {
             Self(tempfile::tempdir().expect("temporary directory"))
         }
-        fn logs(&self) -> PathBuf {
-            self.0.path().join("logs")
+        fn managed(&self, generation: &str) -> Managed {
+            Managed::new(generation.to_owned(), self.0.path().join("logs"))
         }
     }
 
-    fn written(error: &RunError, logs: &Path) -> Value {
-        write(&entry(error), logs).expect("record written");
-        serde_json::from_slice(&std::fs::read(path(logs)).expect("record")).expect("json")
+    fn written(error: &RunError, managed: &Managed) -> Value {
+        record(error, managed).expect("record written");
+        serde_json::from_slice(&std::fs::read(path(managed.logs())).expect("record")).expect("json")
     }
 
     /// The reason the host reads is the one the exit code would have carried,
     /// and the code is written down beside it even though the process is about
-    /// to exit zero.
+    /// to exit zero. The generation is what makes it about one registration.
     #[test]
     fn the_record_carries_the_reason_the_exit_code_could_not() {
         let stage = Stage::new();
-        let logs = &stage.logs();
-        let record = written(&RunError::Registry(LocalStoreError::Corrupt), logs);
+        let managed = stage.managed(GENERATION);
+        let record = written(&RunError::Registry(LocalStoreError::Corrupt), &managed);
         assert_eq!(record["reason"], "credentialRegistryInvalid");
         assert_eq!(record["exitCode"], 28);
+        assert_eq!(record["serviceGeneration"], GENERATION);
         assert!(
             record["message"]
                 .as_str()
@@ -154,20 +169,43 @@ mod tests {
     #[test]
     fn a_later_failure_replaces_the_earlier_one_and_serving_forgets_it() {
         let stage = Stage::new();
-        let logs = &stage.logs();
-        written(&RunError::Registry(LocalStoreError::Corrupt), logs);
+        let managed = stage.managed(GENERATION);
+        written(&RunError::Registry(LocalStoreError::Corrupt), &managed);
         let record = written(
             &RunError::Environment(crate::env::EnvironmentError::Empty {
                 variable: crate::env::HOST,
             }),
-            logs,
+            &managed,
         );
         assert_eq!(record["reason"], "configuration");
 
-        forget(logs);
-        assert!(!path(logs).exists());
+        forget(&managed);
+        assert!(!path(managed.logs()).exists());
         // Forgetting what is not there is what a first run does.
-        forget(logs);
+        forget(&managed);
+    }
+
+    /// The record is a registration's way back, and only its own generation
+    /// may take it away. A second gateway for another generation sharing this
+    /// data directory leaves it exactly where it is.
+    #[test]
+    fn only_the_generation_a_record_names_may_forget_it() {
+        let stage = Stage::new();
+        let ours = stage.managed(GENERATION);
+        written(&RunError::Registry(LocalStoreError::Corrupt), &ours);
+        let before = std::fs::read(path(ours.logs())).expect("record");
+
+        forget(&stage.managed(OTHER));
+        assert_eq!(std::fs::read(path(ours.logs())).expect("record"), before);
+
+        // Nor is a record this build cannot read removed on a guess: it is
+        // inert evidence, not this process's to decide about.
+        std::fs::write(path(ours.logs()), b"not a record").expect("write");
+        forget(&ours);
+        assert_eq!(
+            std::fs::read(path(ours.logs())).expect("record"),
+            b"not a record"
+        );
     }
 
     /// Nothing but the record is left behind: a temporary file that outlived
@@ -175,17 +213,31 @@ mod tests {
     #[test]
     fn writing_the_record_leaves_no_temporary_behind() {
         let stage = Stage::new();
-        let logs = &stage.logs();
-        written(&RunError::Registry(LocalStoreError::Corrupt), logs);
-        let names: Vec<_> = std::fs::read_dir(logs)
+        let managed = stage.managed(GENERATION);
+        written(&RunError::Registry(LocalStoreError::Corrupt), &managed);
+        let names: Vec<_> = std::fs::read_dir(managed.logs())
             .expect("directory")
             .map(|entry| entry.expect("entry").file_name())
             .collect();
         assert_eq!(names, [FILE]);
         // And it is readable through the same private-file rules the desktop
         // host opens it with.
-        assert!(
-            nessa_local_storage::open(&path(logs), nessa_local_storage::OpenMode::Read).is_ok()
-        );
+        assert!(nessa_local_storage::open(
+            &path(managed.logs()),
+            nessa_local_storage::OpenMode::Read
+        )
+        .is_ok());
+    }
+
+    /// A publication that cannot happen is reported, not swallowed: the whole
+    /// ending depends on it.
+    #[test]
+    fn a_record_that_cannot_be_written_says_so() {
+        let stage = Stage::new();
+        // A file where the log directory should be: nothing can be created
+        // under it, on any machine, without permissions or a full disk.
+        std::fs::write(stage.0.path().join("logs"), b"not a directory").expect("obstruction");
+        let managed = stage.managed(GENERATION);
+        assert!(record(&RunError::Registry(LocalStoreError::Corrupt), &managed).is_err());
     }
 }

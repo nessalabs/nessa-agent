@@ -212,17 +212,17 @@ pub(super) struct RecordedFailure {
     exit_code: u8,
     /// The failure in the server's own words, for the app log. Never parsed.
     message: String,
-    /// The launchd service generation that run was registered under. A record
-    /// with none was written by a server no host registered.
-    #[serde(default)]
-    service_generation: Option<String>,
+    /// The launchd service generation that run was registered under. Only a
+    /// launch this host registered writes a record at all, so a record without
+    /// one is not a record this host wrote the other half of.
+    service_generation: String,
     /// The process that wrote it, for finding its lines in the log beside it.
     process_id: u32,
 }
 impl RecordedFailure {
     /// Whether this record is about the registration being reconciled.
     pub(super) fn belongs_to(&self, generation: &str) -> bool {
-        self.service_generation.as_deref() == Some(generation)
+        self.service_generation == generation
     }
     /// The sentence this reason becomes, or nothing when it is a name this
     /// host has no words for.

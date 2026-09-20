@@ -190,10 +190,14 @@ are written here.
   A generic HTTP 200 is insufficient.
 - launchd restarts the gateway when its process ended unsuccessfully, and only
   then. A failure that starting again cannot fix exits zero on purpose — the one
-  status launchd reads as "do not start me again" — and records the reason it
-  could not carry beside its log, for the host to read and to authorize one fresh
-  attempt. Crashes and failures that can clear keep their exit code and their
-  restart. The gateway log is bounded at every start, with one previous file.
+  status launchd reads as "do not start me again" — but only after the reason it
+  could not carry is durably recorded beside its log, because that record is the
+  only thing that authorizes the host's one fresh attempt. A record that could
+  not be published keeps its non-zero exit and its restarts. Crashes and failures
+  that can clear keep theirs too. Only the launch the host registered may bound
+  that log, publish a record, or forget one of its own generation; a server
+  nobody registered keeps the shared table's exit codes and touches neither.
+  The gateway log is bounded at every start, with one previous file.
 - Gateway updates serialize by launchd service identity. Managed replacement
   requires correlated cleanup and audit acknowledgement; failed retirement never
   authorizes bootout. The pre-protocol gateway has one explicit legacy path.

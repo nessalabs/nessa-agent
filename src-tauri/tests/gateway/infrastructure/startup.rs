@@ -370,17 +370,15 @@ fn the_log_tail_is_the_end_of_the_log_and_never_the_whole_of_it() {
 const GENERATION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 /// Exactly what `crates/nessa-server/src/core/startup_failure.rs` serializes.
-fn record_json(reason: &str, generation: Option<&str>) -> String {
-    let mut record = serde_json::json!({
+fn record_json(reason: &str, generation: &str) -> String {
+    serde_json::json!({
         "reason": reason,
         "exitCode": code(reason),
         "message": "authentication setup failed: credential registry is invalid",
+        "serviceGeneration": generation,
         "processId": 4711u32,
-    });
-    if let Some(generation) = generation {
-        record["serviceGeneration"] = serde_json::Value::String(generation.into());
-    }
-    record.to_string()
+    })
+    .to_string()
 }
 
 /// A server that gave up exits successfully, so launchd has nothing to report
@@ -388,9 +386,8 @@ fn record_json(reason: &str, generation: Option<&str>) -> String {
 /// comes from then — and only then.
 #[test]
 fn the_reason_a_gateway_recorded_is_read_when_its_exit_status_says_nothing() {
-    let recorded =
-        parse_record(record_json("credentialRegistryInvalid", Some(GENERATION)).as_bytes())
-            .expect("record");
+    let recorded = parse_record(record_json("credentialRegistryInvalid", GENERATION).as_bytes())
+        .expect("record");
     let failure = diagnose(&LastExit::Code(0), Some(&recorded), "", PORT, READINESS);
     assert_eq!(
         failure.sentence,
@@ -430,9 +427,8 @@ fn the_reason_a_gateway_recorded_is_read_when_its_exit_status_says_nothing() {
 /// reconciled, and a reason this host has no words for is not shown as one.
 #[test]
 fn a_record_is_only_evidence_about_the_registration_that_wrote_it() {
-    let recorded =
-        parse_record(record_json("credentialRegistryInvalid", Some(GENERATION)).as_bytes())
-            .expect("record");
+    let recorded = parse_record(record_json("credentialRegistryInvalid", GENERATION).as_bytes())
+        .expect("record");
     assert!(recorded.belongs_to(GENERATION));
     assert!(!recorded.belongs_to(&"b".repeat(64)));
     assert_eq!(
@@ -440,10 +436,22 @@ fn a_record_is_only_evidence_about_the_registration_that_wrote_it() {
         Some("its credential registry is not one this version of Nessa can read.")
     );
 
-    // A server nobody registered wrote no generation, so it answers for no
-    // registration at all.
-    let unregistered = parse_record(record_json("configuration", None).as_bytes()).expect("record");
-    assert!(!unregistered.belongs_to(GENERATION));
+    // Only a launch this host registered writes a record at all, so one
+    // without a generation is not half of this contract and is refused
+    // outright rather than kept as evidence for nothing.
+    assert_eq!(
+        parse_record(
+            serde_json::json!({
+                "reason": "configuration",
+                "exitCode": code("configuration"),
+                "message": "",
+                "processId": 1u32,
+            })
+            .to_string()
+            .as_bytes()
+        ),
+        None
+    );
 
     // A name out of a JSON file is not a sentence to show someone.
     let unknown = parse_record(
@@ -473,10 +481,7 @@ fn an_unreadable_or_malformed_record_says_nothing_at_all() {
     assert_eq!(recorded_failure(&directory), None);
 
     let path = directory.join("gateway-startup-failure.json");
-    write_private_log(
-        &path,
-        &record_json("credentialRegistryInvalid", Some(GENERATION)),
-    );
+    write_private_log(&path, &record_json("credentialRegistryInvalid", GENERATION));
     assert!(recorded_failure(&directory).is_some_and(|record| record.belongs_to(GENERATION)));
 
     // A file anyone could have written is not one this host reads.
@@ -487,8 +492,10 @@ fn an_unreadable_or_malformed_record_says_nothing_at_all() {
         "",
         "not json",
         "{}",
-        // A field this host does not know is a shape it does not know.
-        "{\"reason\":\"configuration\",\"exitCode\":20,\"message\":\"\",\"processId\":1,\"extra\":true}",
+        // A field this host does not know, or one it needs and has not been
+        // given, is a shape it does not know.
+        "{\"reason\":\"configuration\",\"exitCode\":20,\"message\":\"\",\"serviceGeneration\":\"g\",\"processId\":1,\"extra\":true}",
+        "{\"reason\":\"configuration\",\"exitCode\":20,\"message\":\"\",\"processId\":1}",
     ] {
         write_private_log(&path, contents);
         assert_eq!(recorded_failure(&directory), None, "{contents}");
@@ -534,10 +541,7 @@ fn an_unreadable_or_malformed_record_says_nothing_at_all() {
 fn a_record_that_has_been_acted_on_is_not_left_for_the_next_run_to_find() {
     let directory = scratch("forget");
     let path = directory.join("gateway-startup-failure.json");
-    write_private_log(
-        &path,
-        &record_json("credentialRegistryInvalid", Some(GENERATION)),
-    );
+    write_private_log(&path, &record_json("credentialRegistryInvalid", GENERATION));
     forget_recorded_failure(&directory);
     assert!(!path.exists());
     assert_eq!(recorded_failure(&directory), None);

@@ -86,6 +86,17 @@ impl Environment {
         )
     }
 
+    /// The launchd service generation this process was registered under.
+    ///
+    /// `None` for anything the desktop host did not start: a developer's
+    /// `nessa server`, a CLI subcommand, a test. Only the plist sets it, which
+    /// is what makes it the identity of a managed launch rather than a guess.
+    pub fn service_generation_from_system() -> Option<String> {
+        read_optional(&super::source::SystemEnv, key::SERVICE_GENERATION)
+            .ok()
+            .flatten()
+    }
+
     /// Plain browser HTTP is confined to numeric loopback in development and CI.
     pub fn browser_http_allowed(&self) -> bool {
         matches!(self.stage, Stage::Dev | Stage::Ci) && is_loopback(&self.bind_host)
