@@ -207,11 +207,12 @@ send   -> conversation.send { text, attachments: [the returned references] }
   is requested, and sending again a moment later goes through.
 - **A send the gateway refuses before admission is not "delivery unknown".** The
   client knows which RPC codes the gateway decides before it admits a message
-  (`invalid_request`, `agent_not_configured`, `image_input_unsupported`,
-  `attachment_not_found`, `attachment_unavailable`, `conversation_not_found`,
-  `conversation_capacity`) and reports them as a typed `rejection`. The panel
-  marks the turn not sent, says why in a sentence chosen by that type, and puts
-  the message back in the draft with its images. Any other failure after
+  (`invalid_request`, `agent_not_configured`, `agent_startup_deadline`,
+  `image_input_unsupported`, `attachment_not_found`, `attachment_unavailable`,
+  `conversation_not_found`, `conversation_capacity`): those leave `uncertain`
+  false, and the code itself is reported as a typed `ConversationErrorCode`. The
+  panel marks the turn not sent, says why in a sentence chosen by that code, and
+  puts the message back in the draft with its images. Any other failure after
   admission was attempted stays uncertain and keeps its explicit retry.
 - **Nor is a message the client would not put on the wire.** The client is the
   one boundary that validates a message's images — the panel's model puts no
