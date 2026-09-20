@@ -37,3 +37,7 @@ mod projection_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/reorder.rs"]
 mod reorder_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/attachments.rs"]
+mod attachment_tests;
