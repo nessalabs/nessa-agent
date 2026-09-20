@@ -70,6 +70,13 @@ impl CompositionRoot {
         bundle: Option<&std::path::Path>,
         provisioning: LocalProvisioning,
     ) -> Result<(), RunError> {
+        // A run that is starting a server is the one that supersedes whatever
+        // the last one wrote down about giving up. Forgotten here rather than
+        // at process start, so a `nessa` command run alongside a stopped
+        // gateway cannot erase the reason the desktop host is about to read.
+        if let Ok(Some(logs)) = Environment::log_directory_from_system() {
+            crate::core::startup_failure::forget(&logs);
+        }
         let config = Environment::from_system()?;
         if provisioning == LocalProvisioning::Automatic {
             super::provisioning::ensure_local_credentials(&config)?;
@@ -82,9 +89,9 @@ impl CompositionRoot {
         let retirement_clock = product.clock.clone();
         let desktop_identity = if let Some(bundle) = bundle {
             let configured = std::env::var("NESSA_RUNTIME_FINGERPRINT")
-                .map_err(|_| RunError::Agent("missing desktop runtime fingerprint".into()))?;
+                .map_err(|_| RunError::Runtime("missing desktop runtime fingerprint".into()))?;
             let generation = std::env::var("NESSA_SERVICE_GENERATION")
-                .map_err(|_| RunError::Agent("missing desktop service generation".into()))?;
+                .map_err(|_| RunError::Runtime("missing desktop service generation".into()))?;
             Some(super::desktop::runtime_identity(
                 bundle,
                 configured,

@@ -1,7 +1,9 @@
 //! Fatal process errors — config, bind, and serve failures.
 //!
 //! Returned from [`super::bootstrap::run`] and [`crate::composition::CompositionRoot::serve`].
-//! Implements [`std::process::Termination`] so `main` can exit with a logged message.
+//! [`report`] turns one into how the process ends: a logged sentence, an exit
+//! status launchd reads, and — when starting again would not help — a record
+//! the desktop host reads instead of that status.
 //!
 //! Re-exported at `crate::core::RunError`.
 
@@ -10,6 +12,10 @@ use crate::env::EnvironmentError;
 use nessa_auth::adapters::local::LocalStoreError;
 use std::fmt;
 use std::io::{self, ErrorKind};
+use std::path::Path;
+
+use super::restart::{self, Restart};
+use super::startup_failure;
 
 /// Fatal errors that stop the server process.
 #[derive(Debug)]
@@ -24,6 +30,11 @@ pub enum RunError {
     Authentication(String),
     /// Invalid or unavailable configured agent provider.
     Agent(String),
+    /// The prepared runtime this process was handed is missing, unreadable, or
+    /// not the one its registration was fingerprinted against. Typed apart from
+    /// `Agent` because nothing about starting again changes any of that, and
+    /// the host has its own sentence for it.
+    Runtime(String),
     Bind {
         addr: String,
         source: io::Error,
@@ -40,6 +51,7 @@ impl fmt::Display for RunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Agent(message) => write!(f, "agent setup failed: {message}"),
+            Self::Runtime(message) => write!(f, "prepared runtime unusable: {message}"),
             // Same sentence a flattened registry error used to produce: this
             // is still what authentication setup failed on.
             Self::Registry(error) => write!(f, "authentication setup failed: {error}"),
@@ -68,7 +80,7 @@ impl std::error::Error for RunError {
         match self {
             Self::Environment(error) => Some(error),
             Self::Registry(error) => Some(error),
-            Self::Authentication(_) | Self::Agent(_) => None,
+            Self::Authentication(_) | Self::Agent(_) | Self::Runtime(_) => None,
             Self::Bind { source, .. } => Some(source),
             Self::Serve(source) => Some(source),
             Self::Shutdown(error) => error.as_ref().map(|error| error as _),
@@ -88,14 +100,58 @@ impl From<io::Error> for RunError {
     }
 }
 
-impl std::process::Termination for RunError {
-    fn report(self) -> std::process::ExitCode {
-        // The log line is for a person reading it later. The exit code is for
-        // launchd, and through it for the desktop host, which has no other way
-        // to learn why this process stopped.
-        let code = super::exit_code::exit_code(&self);
-        tracing::error!(%self, exit_code = code, "nessa failed");
-        std::process::ExitCode::from(code)
+/// End the process on `error`: say why, decide whether launchd should start it
+/// again, and leave the reason where the desktop host will find it.
+///
+/// The log line is for a person reading it later. The exit status is for
+/// launchd, and through it for the desktop host, which has no other way to
+/// learn why this process stopped. A failure that retrying cannot fix exits
+/// zero, because `KeepAlive: { SuccessfulExit: false }` is the only exit
+/// condition launchd has and zero is the only way to say "do not start me
+/// again" to it — so the reason that status cannot carry is written down
+/// instead, in `logs`. A process with no log directory has nowhere to write it
+/// and still stops; the host then has only the generic sentence.
+pub(super) fn report(error: RunError, logs: Option<&Path>) -> std::process::ExitCode {
+    let ending = ending(&error);
+    tracing::error!(
+        %error,
+        exit_code = ending.status,
+        reason = super::exit_code::reason(&error),
+        restart = ?restart::restart(&error),
+        "nessa failed"
+    );
+    if ending.recorded {
+        match logs {
+            Some(logs) => startup_failure::record(&error, logs),
+            None => tracing::error!("no log directory to record why the gateway stopped for good"),
+        }
+    }
+    std::process::ExitCode::from(ending.status)
+}
+
+/// How a run ends, as two facts rather than a number with a secret.
+#[derive(Debug, PartialEq, Eq)]
+struct Ending {
+    /// What the process exits with, and what launchd therefore reads.
+    status: u8,
+    /// Whether the reason has to be written down because that status cannot
+    /// carry it.
+    recorded: bool,
+}
+
+fn ending(error: &RunError) -> Ending {
+    match restart::restart(error) {
+        Restart::Worthwhile => Ending {
+            status: super::exit_code::exit_code(error),
+            recorded: false,
+        },
+        // Zero is not success here. It is the only thing
+        // `KeepAlive: { SuccessfulExit: false }` reads as "do not start me
+        // again", which is why the reason goes somewhere the status cannot.
+        Restart::Pointless => Ending {
+            status: 0,
+            recorded: true,
+        },
     }
 }
 
@@ -116,6 +172,40 @@ mod tests {
 
     use super::*;
     use crate::env::{EnvironmentError, HOST};
+
+    /// The two endings, told apart. A registry this build cannot read stops
+    /// the relaunch loop by exiting zero and leaves its reason behind; a port
+    /// somebody else is holding keeps the code launchd reports and is started
+    /// again.
+    #[test]
+    fn a_failure_that_retrying_cannot_fix_stops_the_service_and_says_why_elsewhere() {
+        assert_eq!(
+            ending(&RunError::Registry(LocalStoreError::Corrupt)),
+            Ending {
+                status: 0,
+                recorded: true
+            }
+        );
+        assert_eq!(
+            ending(&RunError::Bind {
+                addr: "127.0.0.1:7420".into(),
+                source: io::Error::from(ErrorKind::AddrInUse),
+            }),
+            Ending {
+                status: super::super::exit_code::exit_code(&RunError::Bind {
+                    addr: "127.0.0.1:7420".into(),
+                    source: io::Error::from(ErrorKind::AddrInUse),
+                }),
+                recorded: false
+            }
+        );
+        // Whatever the code is, a retryable failure never exits successfully:
+        // launchd would read that as a service that meant to stop.
+        assert_ne!(
+            ending(&RunError::Serve(io::Error::from(ErrorKind::BrokenPipe))).status,
+            0
+        );
+    }
 
     #[test]
     fn display_environment_error() {

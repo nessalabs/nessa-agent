@@ -30,7 +30,7 @@ static CODES: LazyLock<GatewayExitCodes> = LazyLock::new(|| {
 /// The name this error answers to in the shared table. Exhaustive by
 /// construction: a new `RunError` variant does not compile until it is given
 /// one, which is what keeps the table from falling behind the errors.
-fn reason(error: &RunError) -> &'static str {
+pub(super) fn reason(error: &RunError) -> &'static str {
     match error {
         RunError::Environment(_) => "configuration",
         // The registry lock is held for the lifetime of the store, and the
@@ -54,6 +54,7 @@ fn reason(error: &RunError) -> &'static str {
         }
         RunError::Bind { .. } => "bind",
         RunError::Agent(_) => "agent",
+        RunError::Runtime(_) => "runtime",
         RunError::Serve(_) => "serve",
         RunError::Shutdown(_) => "shutdown",
     }
@@ -99,6 +100,7 @@ mod tests {
             ))),
             RunError::Authentication("setup".into()),
             RunError::Agent("provider".into()),
+            RunError::Runtime("missing bundled runtime file".into()),
             RunError::Bind {
                 addr: "127.0.0.1:7420".into(),
                 source: Error::from(ErrorKind::AddrInUse),
