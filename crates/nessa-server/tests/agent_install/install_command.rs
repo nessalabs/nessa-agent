@@ -223,7 +223,8 @@ fn what_the_command_prints_is_one_line_of_json() {
     };
     let mut written = Vec::new();
 
-    write_report(&mut written, &report(&opencode(), &installed)).expect("the report is written");
+    let report = report(&opencode(), &installed).expect("the path is text");
+    write_report(&mut written, &report).expect("the report is written");
 
     let text = String::from_utf8(written).expect("the report is text");
     assert!(text.ends_with('\n'), "the report is not a line: {text:?}");
@@ -248,7 +249,51 @@ fn an_install_that_downloaded_nothing_says_so() {
         downloaded: false,
     };
 
-    assert_eq!(report(&opencode(), &installed)["downloaded"], false);
+    assert_eq!(
+        report(&opencode(), &installed).expect("the path is text")["downloaded"],
+        false
+    );
+}
+
+/// A path that is not text is refused rather than reported as something else.
+///
+/// A path is bytes on Unix, and this one is built under a data directory taken
+/// from `NESSA_DATA_DIR` or the home directory — neither of which has to be
+/// valid UTF-8. Rendered lossily, every undecodable byte becomes U+FFFD and
+/// the one machine-readable field in a *successful* report names a file that
+/// does not exist. The caller then fails to launch it with nothing to go on,
+/// which is the worst of the three possible outcomes; refusing is the one that
+/// can be read and acted on.
+///
+/// Unix only: Windows paths are UTF-16 and `to_str` fails there on unpaired
+/// surrogates, which is a different fault and not one this can construct.
+#[cfg(unix)]
+#[test]
+fn a_runtime_whose_path_is_not_text_is_not_reported_as_a_path_that_is() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let installed = InstalledRuntime {
+        version: ReleaseVersion::parse("1.18.31").expect("usable version"),
+        // A lone 0x80 is a continuation byte with nothing to continue: a
+        // directory name a filesystem accepts and UTF-8 does not.
+        executable: Path::new(OsStr::from_bytes(b"/tmp/\x80/opencode")).to_owned(),
+        downloaded: true,
+    };
+
+    let refused = report(&opencode(), &installed).expect_err("the path is not text");
+
+    let message = refused.to_string();
+    assert!(
+        message.contains("not a path this command can report as text"),
+        "the refusal does not say what is wrong: {message}"
+    );
+    // And it says the install itself is fine, because it is: a person told
+    // only that the command failed would reasonably start over.
+    assert!(
+        message.contains("nothing else is wrong with the installation"),
+        "the refusal reads as a failed install: {message}"
+    );
 }
 
 /// One machine, for the tests about which build gets chosen for it.

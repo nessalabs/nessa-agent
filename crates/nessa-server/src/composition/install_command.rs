@@ -39,7 +39,7 @@ pub(super) async fn execute(agent: &AgentName) -> Result<(), RunError> {
     let root = runtime_root()?;
     let agent = agent.clone();
     let installed = tokio::task::spawn_blocking(move || {
-        install(&agent, &root).map(|installed| report(&agent, &installed))
+        install(&agent, &root).and_then(|installed| report(&agent, &installed))
     })
     .await
     .map_err(|error| RunError::Agent(format!("the installer did not finish: {error}")))??;
@@ -168,13 +168,32 @@ fn explain(failure: &InstallFailure) -> String {
 }
 
 /// What the command says it did, on stdout, for whatever called it.
-fn report(agent: &AgentName, installed: &InstalledRuntime) -> Value {
-    json!({
+///
+/// Fallible for one reason: a path is bytes on Unix, and the data directory
+/// this one is built under comes from `NESSA_DATA_DIR` or the home directory,
+/// neither of which has to be valid UTF-8. `to_string_lossy` would turn every
+/// undecodable byte into U+FFFD and report a path that names nothing — a
+/// successful install whose one machine-readable field points at a file that
+/// does not exist, which a caller would then fail to launch with no idea why.
+///
+/// So it refuses instead, and the refusal says what is true: the runtime is
+/// installed, and only the report cannot be written. Installing again is free
+/// once the directory has a name that can be spelled, because an install that
+/// is already there downloads nothing.
+fn report(agent: &AgentName, installed: &InstalledRuntime) -> Result<Value, RunError> {
+    let executable = installed.executable.to_str().ok_or_else(|| {
+        RunError::Agent(format!(
+            "{agent} is installed at {}, which is not a path this command can report as text; \
+             nothing else is wrong with the installation",
+            installed.executable.display()
+        ))
+    })?;
+    Ok(json!({
         "agent": agent.as_str(),
         "version": installed.version.as_str(),
-        "executable": installed.executable.to_string_lossy(),
+        "executable": executable,
         "downloaded": installed.downloaded,
-    })
+    }))
 }
 
 /// One JSON object, one line, so a caller can read it a line at a time.

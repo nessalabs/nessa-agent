@@ -11,6 +11,18 @@
 //! updated itself underneath a tested pin would make "the version Nessa tested"
 //! untrue without anything having changed on our side.
 //!
+//! Which side owns the launch path, since two could: this one does. The store
+//! is asked, at the moment a runtime is about to be launched, for the pinned
+//! release — `RuntimeStore::installed` answers from a record it wrote, and
+//! answers "not installed" for anything that does not describe exactly the
+//! artifact the current pin names. A launcher that instead kept an absolute
+//! path from an earlier install would keep a *working* one: superseded
+//! artifacts are left where they are, so the file stays launchable after the
+//! pin moves, and the agent Nessa tested would be silently replaced by one it
+//! did not. The path `nessa install-agent` prints is therefore a report of
+//! what just happened, for a person and for a caller deciding what to say
+//! next. It is not a handle to be stored and launched from later.
+//!
 //! ```text
 //! composition -> infrastructure::releases_for    (which release, if any)
 //!             -> application::InstallAgentRuntime -> application::ArchiveSource
