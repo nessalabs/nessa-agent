@@ -306,7 +306,7 @@ async fn permission_ids_do_not_repeat_when_the_same_execution_id_is_resumed() {
 async fn close_interrupts_a_stalled_restore_before_the_startup_deadline() {
     let _process_slot = process_test_slot().await;
     let (root, mut config, model) = test_acp_configuration("resume-stall", 16);
-    config.first_frame_timeout = Duration::from_secs(30);
+    config.launch_timeout = Duration::from_secs(30);
     config.startup_timeout = Duration::from_secs(30);
     let binding = ClaudeAcpProvider::new(
         config,

@@ -12,9 +12,14 @@ pub type AgentFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, AgentError>>
 /// The step of agent startup that was running when a startup budget expired.
 ///
 /// Startup is the work between opening a provider and publishing a usable Agent.
-/// Each step is bounded by the adapter's own startup budget, and the step named
-/// here is the one that was still waiting when that budget ran out. It records
-/// what the caller was doing, not why the provider was slow.
+/// The step named here is the one that was still waiting when a budget ran out.
+/// It records what the caller was doing, not why the provider was slow.
+///
+/// The steps are not all charged to the same budget. Waiting for the provider
+/// to answer at all is mostly the operating system's work rather than the
+/// provider's, so an adapter may bound it separately and far more generously
+/// than the protocol steps that follow; the ACP adapter does, through
+/// `AcpConfig::launch_timeout` and `AcpConfig::startup_timeout`.
 ///
 /// This says nothing about whether saved context was involved: every step runs
 /// both when opening new context and when restoring saved context. That is the
@@ -22,7 +27,7 @@ pub type AgentFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, AgentError>>
 /// [`AgentStartupStep`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentStartupPhase {
-    /// Protocol negotiation with the provider, before any session exists.
+    /// Waiting for the provider's first answer, which includes launching it.
     Initialize,
     /// Establishing the provider session itself.
     Session,

@@ -43,7 +43,7 @@ use std::{
         Arc, OnceLock,
     },
 };
-use tokio::sync::{Mutex, Notify, OnceCell, RwLock, RwLockReadGuard};
+use tokio::sync::{watch, Mutex, Notify, OnceCell, RwLock, RwLockReadGuard};
 use uuid::Uuid;
 
 /// Authenticated identity and stable logical action supplied by the gateway boundary.
@@ -112,10 +112,30 @@ struct Inner {
     creation: Mutex<()>,
     retirement: OnceLock<ActionContext>,
     admission: RwLock<()>,
+    // Raised the moment retirement is decided, before it waits for exclusive
+    // admission. An opening that is parked waiting for the runtime has to learn
+    // about teardown from something other than the lock it is blocking.
+    retiring: watch::Sender<bool>,
     // None when nothing prepares the runtime, which is an explicit no-op rather
     // than a wrapper that always returns immediately.
     readiness: Option<Arc<dyn RuntimeReadiness>>,
 }
+/// Everything the conversation service reads from outside itself, injected by
+/// composition. Grouped rather than passed one by one so that adding one does
+/// not add another positional argument at every call site.
+pub struct ConversationDependencies {
+    pub provider: Arc<dyn AgentProvider>,
+    pub storage: Arc<dyn SessionStorage>,
+    pub metadata: Arc<dyn ConversationRepository>,
+    pub creation_audit: Arc<dyn super::ConversationCreationAudit>,
+    pub clock: Arc<dyn Clock>,
+    /// Joins one-time runtime preparation before a provider is opened on a
+    /// request path. `None` means nothing prepares the runtime, so the first
+    /// conversation pays the operating system's first-execution scan itself;
+    /// that is an explicit no-op rather than a wrapper that returns at once.
+    pub readiness: Option<Arc<dyn RuntimeReadiness>>,
+}
+
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
 pub struct ConversationService {
@@ -183,14 +203,18 @@ fn retryable_agent_open(error: &AgentError) -> bool {
 }
 impl ConversationService {
     pub fn new(
-        provider: Arc<dyn AgentProvider>,
-        storage: Arc<dyn SessionStorage>,
-        metadata: Arc<dyn ConversationRepository>,
-        creation_audit: Arc<dyn super::ConversationCreationAudit>,
-        clock: Arc<dyn Clock>,
+        dependencies: ConversationDependencies,
         limits: ConversationLimits,
         workspace: Option<String>,
     ) -> Result<Self, ConversationError> {
+        let ConversationDependencies {
+            provider,
+            storage,
+            metadata,
+            creation_audit,
+            clock,
+            readiness,
+        } = dependencies;
         if workspace.as_ref().is_some_and(|value| value.len() > 4096)
             || limits.max_conversations == 0
             || limits.max_input_bytes == 0
@@ -212,20 +236,10 @@ impl ConversationService {
                 creation: Mutex::new(()),
                 retirement: OnceLock::new(),
                 admission: RwLock::new(()),
-                readiness: None,
+                retiring: watch::channel(false).0,
+                readiness,
             }),
         })
-    }
-    /// Join one-time runtime preparation instead of racing it.
-    ///
-    /// Without this the first conversation on a cold runtime pays the operating
-    /// system's first-execution scan itself, inside the caller's request, even
-    /// when something else is already paying it.
-    pub fn with_runtime_readiness(mut self, readiness: Arc<dyn RuntimeReadiness>) -> Self {
-        Arc::get_mut(&mut self.inner)
-            .expect("runtime readiness is set before the service is shared")
-            .readiness = Some(readiness);
-        self
     }
     /// Persist ownership before opening a provider. Repeating the same UUID never changes its owner.
     pub async fn create(
@@ -481,8 +495,37 @@ impl ConversationService {
                             // is after the storage lease is held and before the
                             // provider is launched, so the conversation neither
                             // starts a second cold launch nor loses its place.
+                            //
+                            // Teardown supersedes the wait. Preparation has no
+                            // deadline of its own, and the caller is holding a
+                            // shared admission guard while this runs, so an
+                            // opening that waited through retirement would both
+                            // stall the fence and launch a provider nothing is
+                            // left to close.
                             if let Some(readiness) = &service.inner.readiness {
-                                readiness.wait().await;
+                                let mut retiring = service.inner.retiring.subscribe();
+                                let retired = OpeningFailure {
+                                    cause: ConversationError::Unavailable,
+                                    _cleanup: None,
+                                    retryable: false,
+                                };
+                                if *retiring.borrow() {
+                                    return Err(retired);
+                                }
+                                tokio::select! {
+                                    () = readiness.wait() => {}
+                                    _ = retiring.changed() => return Err(retired),
+                                }
+                            }
+                            // The fence can also be raised by a caller that
+                            // never had to wait, so it is checked again here
+                            // rather than only on the waiting path.
+                            if service.inner.retirement.get().is_some() {
+                                return Err(OpeningFailure {
+                                    cause: ConversationError::Unavailable,
+                                    _cleanup: None,
+                                    retryable: false,
+                                });
                             }
                             let agent = Agent::new(service.inner.provider.clone(), manager)
                                 .await
@@ -931,6 +974,10 @@ impl ConversationService {
         proposed: ActionContext,
     ) -> Result<(), ConversationError> {
         let actor = self.inner.retirement.get_or_init(|| proposed);
+        // Before waiting for exclusive admission, not after: a request parked
+        // waiting for the runtime holds a shared admission guard, and this is
+        // what tells it to stop so that guard can be released.
+        self.inner.retiring.send_replace(true);
         // Close can interrupt an admitted provider control. If admission cannot
         // drain, still attempt every owner, but retain that uncertainty and never
         // acknowledge retirement. A later request joins the retained ownership.

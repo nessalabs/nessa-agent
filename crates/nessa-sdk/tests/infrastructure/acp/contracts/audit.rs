@@ -576,7 +576,7 @@ async fn malformed_startup_permission_closes_the_known_idle_context() {
         let (root, mut config, model) = test_acp_configuration(mode, 16);
         // The malformed frame is the behavior under test. Leave enough startup
         // time for the real fixture process to run even on a contended builder.
-        config.first_frame_timeout = Duration::from_secs(30);
+        config.launch_timeout = Duration::from_secs(30);
         config.startup_timeout = Duration::from_secs(30);
         let binding = ClaudeAcpProvider::new(
             config,

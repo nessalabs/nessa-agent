@@ -1,9 +1,13 @@
 //! The warm-up runs once, off the request path, and leaves evidence behind.
 use super::{AgentWarmUp, RuntimeFingerprint, WarmUpState};
 use crate::agent_warm_up::application::{
-    WarmUpAudit, WarmUpAuditRecord, WarmUpError, WarmUpFuture, WarmUpRecords,
+    ProviderFailure, WarmUpAudit, WarmUpAuditRecord, WarmUpError, WarmUpFuture, WarmUpRecords,
 };
 use crate::conversation_test_support::{Provider, ProviderFactory, TestClock};
+use nessa_sdk::application::agent_execution::agents::{
+    AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+};
+use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
@@ -11,7 +15,7 @@ use std::sync::{
 use tokio::sync::{oneshot, Barrier};
 
 fn runtime() -> RuntimeFingerprint {
-    RuntimeFingerprint::new("/runtimes/aa/node", "/runtimes/aa/acp/index.js", "test").unwrap()
+    RuntimeFingerprint::new("gateway-test", "test", "sha256:aa").unwrap()
 }
 
 #[derive(Default)]
@@ -74,7 +78,7 @@ fn fixture() -> Fixture {
     Fixture {
         warm_up: AgentWarmUp::new(
             Arc::new(Provider(provider.clone())),
-            Arc::new(nessa_sdk::infrastructure::session_storage::InMemoryStorage::new()),
+            Arc::new(InMemoryStorage::new()),
             records.clone(),
             audit.clone(),
             Arc::new(TestClock),
@@ -174,17 +178,27 @@ async fn a_failed_audit_prevents_a_completion_record_and_leaves_the_runtime_cold
 #[tokio::test]
 async fn a_failed_launch_is_audited_as_still_cold_and_not_recorded_complete() {
     let fixture = fixture();
-    *fixture.provider.close_failure.lock().unwrap() = Some(
-        nessa_sdk::application::agent_execution::agents::AgentError::Transport(
-            "pipe closed".into(),
-        ),
-    );
+    // A startup deadline, because that is the failure this change is about: the
+    // record has to say which step ran out of budget and whether saved context
+    // was involved, not merely that something went wrong.
+    let deadline = AgentError::StartupDeadline(AgentStartupStep::new(
+        AgentStartupPhase::Session,
+        AgentStartupContext::New,
+    ));
+    *fixture.provider.close_failure.lock().unwrap() = Some(deadline.clone());
     fixture.warm_up.wait_until_settled().await;
     let records = fixture.audit.records.lock().unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].before, WarmUpState::Cold);
     assert_eq!(records[0].after, WarmUpState::Cold, "nothing was warmed");
-    assert!(records[0].failure.is_some());
+    assert_eq!(
+        records[0].failure,
+        Some(ProviderFailure {
+            error: deadline,
+            cleanup_unconfirmed: false,
+        }),
+        "the typed failure survives into the record"
+    );
     assert!(fixture.records.completed.lock().unwrap().is_empty());
 }
 

@@ -568,11 +568,11 @@ impl<P: AcpProfile> Worker<P> {
         // Two budgets, because the two halves of startup are not ours in the
         // same way. Everything up to the child's first answer is the operating
         // system's: exec, its first-execution scan of a freshly written
-        // executable, and the runtime's own boot. That is `first_frame_timeout`,
+        // executable, and the runtime's own boot. That is `launch_timeout`,
         // and it is generous. Protocol work afterwards is the provider
         // answering questions it is already running to answer, and keeps the
         // tighter `startup_timeout`.
-        let spawn_deadline = Instant::now() + self.config.first_frame_timeout;
+        let spawn_deadline = Instant::now() + self.config.launch_timeout;
         // Whether saved context is being restored is decided before any step
         // runs, so every step's deadline reports it. Reading it off the step
         // would call a restoration that expired during `initialize` new.

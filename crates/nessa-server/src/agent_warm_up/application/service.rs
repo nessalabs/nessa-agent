@@ -1,8 +1,8 @@
-use super::ports::{WarmUpAudit, WarmUpAuditRecord, WarmUpError, WarmUpRecords};
+use super::ports::{ProviderFailure, WarmUpAudit, WarmUpAuditRecord, WarmUpError, WarmUpRecords};
 use crate::agent_warm_up::domain::{RuntimeFingerprint, WarmUpState};
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::application::agent_execution::{
-    agents::Agent,
+    agents::{Agent, AgentError},
     permissions::ActionContext,
     providers::AgentProvider,
     sessions::{SessionManager, SessionStorage},
@@ -78,7 +78,19 @@ impl AgentWarmUp {
         self.inner
             .settled
             .get_or_init(|| async {
-                match self.run().await {
+                // Supervised, so a panic in a provider adapter is this task's
+                // problem and not the caller's. A conversation waiting here is
+                // promised a wait, not a failure, and must not be handed an
+                // unwind from work it did not start.
+                let warm_up = self.clone();
+                let outcome = match tokio::spawn(async move { warm_up.run().await }).await {
+                    Ok(outcome) => outcome,
+                    Err(_) => Err(WarmUpError::Provider(ProviderFailure {
+                        error: AgentError::Protocol("warm-up task did not finish".into()),
+                        cleanup_unconfirmed: true,
+                    })),
+                };
+                match outcome {
                     Ok(Outcome::AlreadyWarm) => tracing::debug!(
                         model = self.inner.runtime.model(),
                         "runtime already warmed; skipping"
@@ -107,11 +119,15 @@ impl AgentWarmUp {
         let requested_at_ms = self.inner.clock.unix_milliseconds();
         let correlation_id = Uuid::new_v4().to_string();
         let actor = ActionContext::new(GATEWAY_PRINCIPAL, WARM_UP_SURFACE, &correlation_id)
-            .map_err(|error| WarmUpError::Provider(error.to_string()))?;
-        let session = self.open_and_close(&actor).await;
-        let (session_id, failure) = match session {
-            Ok(id) => (Some(id), None),
-            Err(error) => (None, Some(error)),
+            .map_err(|error| {
+                WarmUpError::Provider(ProviderFailure {
+                    error: AgentError::InvalidInput(error.to_string()),
+                    cleanup_unconfirmed: false,
+                })
+            })?;
+        let (session_id, failure) = match self.open_and_close(&actor).await {
+            Ok(id) => (id, None),
+            Err(failure) => (None, Some(failure)),
         };
         // Evidence before the completion record: a warm-up whose audit was
         // rejected must not leave behind a record saying it succeeded.
@@ -150,13 +166,28 @@ impl AgentWarmUp {
     /// choice and is thrown away — this context must not leave a snapshot
     /// behind, and must not take an exclusive lease on a conversation a user
     /// owns.
-    async fn open_and_close(&self, actor: &ActionContext) -> Result<String, String> {
+    async fn open_and_close(
+        &self,
+        actor: &ActionContext,
+    ) -> Result<Option<String>, ProviderFailure> {
         let manager = SessionManager::open(None, self.inner.storage.clone())
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| ProviderFailure {
+                error: AgentError::Storage(error),
+                cleanup_unconfirmed: false,
+            })?;
         let agent = Agent::new(self.inner.provider.clone(), manager)
             .await
-            .map_err(|error| error.cause().to_string())?;
+            .map_err(|error| ProviderFailure {
+                // A failed opening can retain provider resources whose release
+                // the SDK has not confirmed. Recording that is the difference
+                // between "the launch failed" and "the launch failed and may
+                // still be running".
+                cleanup_unconfirmed: error.needs_cleanup(),
+                error: error.cause().clone(),
+            })?;
+        // None rather than an empty identity: the provider not naming a session
+        // is not the same fact as it naming the empty one.
         let session_id = agent
             .session_manager()
             .snapshot()
@@ -167,8 +198,14 @@ impl AgentWarmUp {
         agent
             .close(actor.clone())
             .await
-            .map_err(|error| error.to_string())?;
-        Ok(session_id.unwrap_or_default())
+            .map_err(|error| ProviderFailure {
+                cleanup_unconfirmed: matches!(
+                    error,
+                    AgentError::CleanupUncertain | AgentError::AuditAndCleanupFailure
+                ),
+                error,
+            })?;
+        Ok(session_id)
     }
 }
 

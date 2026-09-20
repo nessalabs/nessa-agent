@@ -1,8 +1,8 @@
 //! Test-only provider and metadata ports; all scheduling runs through the real SDK Agent.
 use crate::conversation::application::{
     ConversationCreation, ConversationCreationAudit, ConversationCreationAuditRecord,
-    ConversationCreationDisposition, ConversationFuture, ConversationLimits,
-    ConversationRepository, ConversationService,
+    ConversationCreationDisposition, ConversationDependencies, ConversationFuture,
+    ConversationLimits, ConversationRepository, ConversationService,
 };
 use crate::conversation::domain::{Conversation, ConversationId};
 use nessa_sdk::{
@@ -138,11 +138,14 @@ pub(crate) fn fixture(
     let repository = Arc::new(MemoryRepository::default());
     let storage = Arc::new(InMemoryStorage::new());
     let service = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
-        storage.clone(),
-        repository.clone(),
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider.clone())),
+            storage: storage.clone(),
+            metadata: repository.clone(),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            clock: Arc::new(TestClock),
+            readiness: None,
+        },
         limits,
         None,
     )

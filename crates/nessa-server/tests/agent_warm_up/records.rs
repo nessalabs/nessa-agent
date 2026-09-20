@@ -2,13 +2,8 @@
 use super::{FileWarmUpRecords, RuntimeFingerprint, WarmUpRecords};
 use std::io::Write;
 
-fn runtime(directory: &str) -> RuntimeFingerprint {
-    RuntimeFingerprint::new(
-        &format!("/runtimes/{directory}/node"),
-        &format!("/runtimes/{directory}/acp/index.js"),
-        "claude-sonnet-5",
-    )
-    .unwrap()
+fn runtime(build: &str) -> RuntimeFingerprint {
+    RuntimeFingerprint::new("claude-acp", "claude-sonnet-5", &format!("sha256:{build}")).unwrap()
 }
 
 #[tokio::test]
@@ -72,7 +67,7 @@ async fn a_damaged_record_warms_again_instead_of_refusing_to() {
 }
 
 #[tokio::test]
-async fn an_oversized_record_is_reported_rather_than_silently_ignored() {
+async fn an_unreadable_record_reads_as_cold_rather_than_disabling_warm_up() {
     let root = tempfile::tempdir().unwrap();
     let directory = root.path().join("warm-up");
     let records = FileWarmUpRecords::new(directory.clone()).unwrap();
@@ -88,5 +83,13 @@ async fn an_oversized_record_is_reported_rather_than_silently_ignored() {
         .unwrap()
         .path();
     std::fs::write(&path, vec![b'x'; 16_385]).unwrap();
-    assert!(records.completed(&installed).await.is_err());
+    // Refusing to answer would stop the warm-up before it starts and cost the
+    // user their first message on every boot, permanently.
+    assert!(!records.completed(&installed).await.unwrap());
+    // And it recovers: the next completed warm-up replaces the junk.
+    records
+        .record_completed(installed.clone(), 2_000)
+        .await
+        .unwrap();
+    assert!(records.completed(&installed).await.unwrap());
 }

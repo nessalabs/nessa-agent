@@ -1,5 +1,11 @@
-use super::super::domain::{RuntimeFingerprint, WarmUpState};
-use std::{future::Future, pin::Pin};
+use crate::agent_warm_up::domain::{RuntimeFingerprint, WarmUpState};
+use nessa_sdk::application::agent_execution::agents::AgentError;
+use std::{
+    error::Error,
+    fmt::{self, Display, Formatter},
+    future::Future,
+    pin::Pin,
+};
 
 pub type WarmUpFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, WarmUpError>> + Send + 'a>>;
 
@@ -10,19 +16,42 @@ pub enum WarmUpError {
     Records(String),
     /// The audit sink rejected the evidence or did not acknowledge it.
     Audit(String),
-    /// Opening or closing the provider session failed.
-    Provider(String),
+    /// Opening or closing the provider session failed. The SDK's own typed
+    /// failure is kept rather than flattened: a startup deadline names the step
+    /// and whether saved context was involved, and that is exactly what a
+    /// reader of a failed warm-up needs.
+    Provider(ProviderFailure),
 }
-impl std::fmt::Display for WarmUpError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for WarmUpError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Records(detail) => write!(formatter, "warm-up records: {detail}"),
             Self::Audit(detail) => write!(formatter, "warm-up audit: {detail}"),
-            Self::Provider(detail) => write!(formatter, "warm-up provider: {detail}"),
+            Self::Provider(failure) => write!(formatter, "warm-up provider: {failure}"),
         }
     }
 }
-impl std::error::Error for WarmUpError {}
+impl Error for WarmUpError {}
+
+/// A warm-up launch that did not complete, with what it left behind.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderFailure {
+    /// The SDK's typed failure, unflattened.
+    pub error: AgentError,
+    /// Whether the failed launch still owns provider resources whose release
+    /// could not be confirmed. Cleanup is retried by the SDK; this records what
+    /// was known at the time, so the evidence does not imply a clean failure.
+    pub cleanup_unconfirmed: bool,
+}
+impl Display for ProviderFailure {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.error)?;
+        if self.cleanup_unconfirmed {
+            formatter.write_str(" (cleanup unconfirmed)")?;
+        }
+        Ok(())
+    }
+}
 
 /// Durable record of which runtimes have completed a warm-up.
 ///
@@ -54,10 +83,12 @@ pub struct WarmUpAuditRecord {
     pub before: WarmUpState,
     /// State after it. Unchanged when the warm-up failed.
     pub after: WarmUpState,
-    /// Provider session the warm-up opened, when it got that far.
+    /// Provider session the warm-up opened. None when no session was
+    /// established, or when the provider did not name one; it is never an empty
+    /// identity standing in for an unknown one.
     pub session_id: Option<String>,
     /// Failure that stopped the warm-up, when it did not complete.
-    pub failure: Option<String>,
+    pub failure: Option<ProviderFailure>,
     /// Correlation shared with the provider's own closure evidence.
     pub correlation_id: String,
     /// When the gateway decided to run this warm-up.
@@ -74,3 +105,9 @@ pub struct WarmUpAuditRecord {
 pub trait WarmUpAudit: Send + Sync {
     fn record(&self, record: WarmUpAuditRecord) -> WarmUpFuture<'_, ()>;
 }
+
+// The warm-up opens and closes a provider session, so the provider's own
+// closure evidence is written by the SDK's execution audit independently of
+// this port. A warm-up interrupted before it can record its own transition —
+// the process quitting between listening and completion — therefore still
+// leaves that session's closure evidence behind, but no record here.

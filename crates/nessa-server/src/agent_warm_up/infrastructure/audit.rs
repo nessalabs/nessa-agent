@@ -4,7 +4,7 @@ use crate::agent_warm_up::application::{
 };
 use nessa_local_storage::{create_directory, sync_directory, PrivateTempFile};
 use serde_json::json;
-use std::{io::Write, path::PathBuf};
+use std::{fmt::Display, io::Write, path::PathBuf};
 use uuid::Uuid;
 
 /// Writes one immutable record per warm-up attempt.
@@ -30,9 +30,9 @@ impl WarmUpAudit for DurableWarmUpAudit {
             "recordId": id,
             "kind": "agent_runtime_warm_up",
             "target": {
-                "executable": record.runtime.executable(),
-                "entry": record.runtime.entry(),
+                "provider": record.runtime.provider(),
                 "model": record.runtime.model(),
+                "configuration": record.runtime.configuration(),
                 "sessionId": record.session_id,
             },
             "transition": {
@@ -46,7 +46,12 @@ impl WarmUpAudit for DurableWarmUpAudit {
                 "principalId": "gateway",
                 "surfaceId": "runtime_warm_up",
             },
-            "failure": record.failure,
+            "failure": record.failure.as_ref().map(|failure| json!({
+                // The SDK's typed failure, rendered here at the boundary that
+                // writes it rather than flattened where it was produced.
+                "error": format!("{:?}", failure.error),
+                "cleanupUnconfirmed": failure.cleanup_unconfirmed,
+            })),
             "correlationId": record.correlation_id,
             "requestedAtMs": record.requested_at_ms,
             "observedAtMs": record.observed_at_ms,
@@ -54,7 +59,7 @@ impl WarmUpAudit for DurableWarmUpAudit {
         let directory = self.directory.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
-                let failed = |error: &dyn std::fmt::Display| WarmUpError::Audit(error.to_string());
+                let failed = |error: &dyn Display| WarmUpError::Audit(error.to_string());
                 let mut file =
                     PrivateTempFile::new_in(&directory).map_err(|error| failed(&error))?;
                 serde_json::to_writer(file.as_file_mut(), &value)

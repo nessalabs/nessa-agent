@@ -5,5 +5,7 @@
 //! its own `RuntimeReadiness` port, so nothing here depends on conversations.
 mod ports;
 mod service;
-pub use ports::{WarmUpAudit, WarmUpAuditRecord, WarmUpError, WarmUpFuture, WarmUpRecords};
+pub use ports::{
+    ProviderFailure, WarmUpAudit, WarmUpAuditRecord, WarmUpError, WarmUpFuture, WarmUpRecords,
+};
 pub use service::AgentWarmUp;

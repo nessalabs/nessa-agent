@@ -63,11 +63,11 @@ def tool(name="Write"):
 if mode == "startup-stall":
     time.sleep(20)
     sys.exit(0)
-if mode == "slow-launch":
+if mode in ("slow-launch", "slow-launch-session-stall"):
     # Stands in for the operating system scanning a freshly written runtime on
     # its first execution: nothing is read or written until this passes, so the
-    # delay lands entirely before the child's first frame.
-    time.sleep(3)
+    # delay lands entirely before the child answers anything.
+    time.sleep(5)
 if mode == "ignore-stop":
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     def reap(_signal, _frame):
@@ -110,7 +110,7 @@ for line in sys.stdin:
                 result(msg["id"], {"sessionId": "different-session", **configs()})
                 continue
         else:
-            if mode == "new-session-stall":
+            if mode in ("new-session-stall", "slow-launch-session-stall"):
                 record("new-session-wait", session)
                 time.sleep(20)
                 continue

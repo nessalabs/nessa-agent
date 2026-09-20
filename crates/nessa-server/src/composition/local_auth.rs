@@ -9,7 +9,7 @@ use crate::{
     app::ports::Clock as ServerClock,
     browser_session::adapters::PersistentSessions,
     conversation::{
-        application::{ConversationLimits, ConversationService},
+        application::{ConversationDependencies, ConversationLimits, ConversationService},
         infrastructure::{DurableConversationCreationAudit, LocalConversationRepository},
     },
     core::RunError,
@@ -28,7 +28,7 @@ use nessa_auth::{
     },
     domain::{AudienceId, OrganizationId, ResourceId},
 };
-use nessa_sdk::infrastructure::session_storage::LocalFileStorage;
+use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, LocalFileStorage};
 use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -153,22 +153,23 @@ pub(super) fn product_state(
             DurableConversationCreationAudit::new(root.join("audit").join("creation"))
                 .map_err(|error| RunError::Agent(error.to_string()))?,
         );
-        // What a first-execution scan is paid for is the files that would be
-        // run. The desktop host stages each runtime under its own directory,
-        // so an install or an update changes these paths, which is exactly when
-        // the scan happens again.
-        let runtime = RuntimeFingerprint::new(
-            &agent.node.to_string_lossy(),
-            &agent.acp_entry.to_string_lossy(),
-            &agent.model,
-        )
-        .map_err(|error| RunError::Agent(error.to_string()))?;
+        // The provider's own credential-free identity, rather than a
+        // hand-picked list of fields: it already covers the executable, its
+        // arguments, the environment, the workspace, and every MCP server
+        // binary the child will start, and it is computed from raw OS bytes
+        // rather than a lossy path conversion. Anything that changes which
+        // files are executed changes it, which is what a first-execution scan
+        // is paid for.
+        let identity = provider.identity();
+        let runtime =
+            RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context())
+                .map_err(|error| RunError::Agent(error.to_string()))?;
         let prepared = AgentWarmUp::new(
             provider.clone(),
             // A throwaway context: the warm-up must not leave a snapshot on
             // disk and must not take an exclusive lease on a conversation a
             // user owns.
-            Arc::new(nessa_sdk::infrastructure::session_storage::InMemoryStorage::new()),
+            Arc::new(InMemoryStorage::new()),
             Arc::new(
                 FileWarmUpRecords::new(root.join("warm-up"))
                     .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -181,19 +182,21 @@ pub(super) fn product_state(
             runtime,
         );
         let service = ConversationService::new(
-            provider,
-            storage,
-            metadata,
-            creation_audit,
-            clock,
+            ConversationDependencies {
+                provider,
+                storage,
+                metadata,
+                creation_audit,
+                clock,
+                readiness: Some(Arc::new(super::warm_up::PreparedRuntime(prepared.clone()))),
+            },
             ConversationLimits {
                 reserved_output_tokens: agent.output_tokens,
                 ..ConversationLimits::default()
             },
             Some(agent.workspace.to_string_lossy().into_owned()),
         )
-        .map_err(|error| RunError::Agent(error.to_string()))?
-        .with_runtime_readiness(Arc::new(super::warm_up::PreparedRuntime(prepared.clone())));
+        .map_err(|error| RunError::Agent(error.to_string()))?;
         warm_up = Some(prepared);
         product = product.with_conversations(Arc::new(service));
     }

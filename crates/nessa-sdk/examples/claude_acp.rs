@@ -154,7 +154,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             permissions: PermissionOfferPolicy::once_only(),
             // The launch belongs to the operating system: a runtime written
             // by a fresh install is scanned on its first execution.
-            first_frame_timeout: Duration::from_secs(120),
+            launch_timeout: Duration::from_secs(120),
             startup_timeout: Duration::from_secs(45),
             execution_timeout: None,
             shutdown_grace: Duration::from_secs(3),

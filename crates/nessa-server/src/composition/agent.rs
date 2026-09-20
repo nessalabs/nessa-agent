@@ -149,7 +149,7 @@ mod build {
             // a fresh install or an update is scanned on its first
             // execution, which on a slow disk takes far longer than any
             // protocol step. Protocol work keeps the tighter budget.
-            first_frame_timeout: Duration::from_secs(120),
+            launch_timeout: Duration::from_secs(120),
             // From protocol/defaults/agent-startup-budgets.json, which the
             // client compiles in too: a client that gives up before the gateway
             // has finished failing never sees the typed answer.
