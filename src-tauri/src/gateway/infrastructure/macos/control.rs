@@ -1,5 +1,7 @@
 //! Private upgrade exchange and native process effects for the launchd adapter.
-use super::startup::{diagnose, log_tail, parse_last_exit, LastExit};
+use super::startup::{
+    diagnose, log_tail, parse_last_exit, recorded_failure, LastExit, RecordedFailure,
+};
 use nessa_local_storage::OpenMode;
 use serde::{Deserialize, Deserializer};
 use std::{
@@ -727,6 +729,7 @@ pub(super) fn assess(
     running: Option<&Health>,
     status: &ServiceStatus,
     expected: (&str, &str),
+    gave_up: Option<&RecordedFailure>,
 ) -> Step {
     if let Some(Health::Managed(runtime)) = running {
         if status.loaded
@@ -738,10 +741,16 @@ pub(super) fn assess(
             return Step::Ready(runtime.clone());
         }
     }
+    // A gone process whose last exit failed is the ordinary death. The other
+    // one is a server that exited *successfully* on purpose, because that is
+    // the only thing launchd reads as "do not start me again" — a zero status
+    // proves nothing on its own, so what makes it death is the gateway's own
+    // record of giving up, for this exact registration.
     if status.loaded
         && status.process_identity_known
         && status.pid.is_none()
-        && status.last_exit.is_failure()
+        && (status.last_exit.is_failure()
+            || gave_up.is_some_and(|record| record.belongs_to(expected.1)))
     {
         return Step::Dead;
     }
@@ -785,14 +794,22 @@ pub(super) trait ServiceWatch {
     fn sleep(&mut self, duration: Duration);
     fn health(&mut self) -> Option<Health>;
     fn status(&mut self) -> Result<ServiceStatus, String>;
+    /// What the gateway wrote down about giving up, read from beside its log.
+    /// A fourth outside thing, and behind the same seam for the same reason.
+    fn gave_up(&mut self) -> Option<RecordedFailure>;
 }
 
-/// The real one: a loopback probe, `launchctl print`, and the system clock.
+/// The real one: a loopback probe, `launchctl print`, the system clock, and the
+/// gateway's own record beside its log.
 struct LaunchdWatch<'a> {
     service: &'a str,
     port: u16,
+    logs: &'a Path,
 }
 impl ServiceWatch for LaunchdWatch<'_> {
+    fn gave_up(&mut self) -> Option<RecordedFailure> {
+        recorded_failure(self.logs)
+    }
     fn now(&self) -> Instant {
         Instant::now()
     }
@@ -819,7 +836,20 @@ pub(super) fn wait_fingerprint(
     port: u16,
     log: &Path,
 ) -> Result<ManagedRuntime, InstallFailure> {
-    wait_ready(&mut LaunchdWatch { service, port }, expected, port, log)
+    // The record the gateway leaves when it gives up sits in the same directory
+    // as the log launchd redirects it to, which is the directory this already
+    // knows. Derived here so no caller has to learn a second path.
+    let logs = log.parent().unwrap_or(Path::new(".")).to_path_buf();
+    wait_ready(
+        &mut LaunchdWatch {
+            service,
+            port,
+            logs: &logs,
+        },
+        expected,
+        port,
+        log,
+    )
 }
 
 pub(super) fn wait_ready(
@@ -839,7 +869,17 @@ pub(super) fn wait_ready(
         let due = watch.now() >= next_liveness_check;
         if matches!(running, Some(Health::Managed(_))) || due {
             let status = watch.status()?;
-            match assess(running.as_ref(), &status, expected) {
+            // Only asked for when launchd has no process to show: a running
+            // service has nothing to say about having given up, and this is a
+            // file read on every liveness check otherwise. A record belonging
+            // to another registration is dropped here rather than carried on
+            // as something to judge or to say — it is about a service that is
+            // not the one being started.
+            let gave_up = (status.pid.is_none())
+                .then(|| watch.gave_up())
+                .flatten()
+                .filter(|record| record.belongs_to(expected.1));
+            match assess(running.as_ref(), &status, expected, gave_up.as_ref()) {
                 Step::Ready(runtime) => return Ok(runtime),
                 // An observation that is not due still counts for nothing:
                 // the interval is what makes three of these a second and a
@@ -847,8 +887,13 @@ pub(super) fn wait_ready(
                 step if due => {
                     next_liveness_check = watch.now() + LIVENESS_INTERVAL;
                     if dead.observe(&step) {
-                        let failure =
-                            diagnose(&status.last_exit, &log_tail(log), port, READINESS_FAILURE);
+                        let failure = diagnose(
+                            &status.last_exit,
+                            gave_up.as_ref(),
+                            &log_tail(log),
+                            port,
+                            READINESS_FAILURE,
+                        );
                         eprintln!("[nessa] {}", failure.detail);
                         return Err(InstallFailure::Startup(failure.sentence));
                     }

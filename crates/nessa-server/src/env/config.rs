@@ -10,6 +10,10 @@ pub mod key {
     pub const STAGE: &str = "NESSA_STAGE";
     pub const HOST: &str = "NESSA_HOST";
     pub const PORT: &str = "NESSA_PORT";
+    /// The launchd service generation the desktop host registered a managed
+    /// gateway under. Set only in that plist, so its presence is what tells a
+    /// process it is the desktop's background service rather than a hand-run one.
+    pub const SERVICE_GENERATION: &str = "NESSA_SERVICE_GENERATION";
 }
 
 /// Fallback values when a var is unset.

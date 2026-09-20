@@ -150,6 +150,11 @@ fn published_runtime_is_private_reusable_immutable_and_definition_uses_staged_pa
         Path::new("nessa")
     );
     let (arguments, path) = launch_settings(&staged);
+    // The other half of this is `what_launchd_is_configured_to_run_resolves_to
+    // _a_managed_launch` in `crates/nessa-server/src/core/launch.rs`: these
+    // arguments are what tells the server it is the service launchd supervises
+    // rather than something someone typed, and the two crates share no
+    // dependency to state it in one place.
     assert_eq!(
         arguments,
         json!([staged.join("nessa"), "server", "--desktop-runtime", staged])

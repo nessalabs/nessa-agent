@@ -1,5 +1,5 @@
 use super::super::generation::service_generation;
-use super::super::startup::LastExit;
+use super::super::startup::{parse_record, LastExit, RecordedFailure};
 use super::{
     acknowledge, assess, atomic_write, classify, forward_recovery, lock_namespace, parse_health,
     parse_listener_pid, parse_pending_retirement, parse_retirement_evidence, parse_service_process,
@@ -18,6 +18,18 @@ const PORT_UNDER_TEST: u16 = 7420;
 const RUNNING_GENERATION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TARGET_GENERATION: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const INSTANCE: &str = "550e8400-e29b-41d4-a716-446655440000";
+/// The bytes `crates/nessa-server/src/core/startup_failure.rs` writes.
+fn gave_up_record(reason: &str, generation: &str) -> String {
+    json!({
+        "reason": reason,
+        "exitCode": 28,
+        "message": "authentication setup failed: credential registry is invalid",
+        "serviceGeneration": generation,
+        "processId": 4711,
+    })
+    .to_string()
+}
+
 fn runtime(fingerprint: &str, pid: u32) -> ManagedRuntime {
     ManagedRuntime {
         fingerprint: fingerprint.into(),
@@ -467,7 +479,8 @@ fn readiness_requires_the_exact_runtime_owned_by_the_loaded_process() {
         assess(
             Some(&Health::Managed(runtime.clone())),
             &observed(Some(42), true, LastExit::NeverExited),
-            expected
+            expected,
+            None
         ),
         Step::Ready(runtime.clone())
     );
@@ -479,7 +492,12 @@ fn readiness_requires_the_exact_runtime_owned_by_the_loaded_process() {
         observed(None, true, LastExit::NeverExited),
     ] {
         assert_ne!(
-            assess(Some(&Health::Managed(runtime.clone())), &status, expected),
+            assess(
+                Some(&Health::Managed(runtime.clone())),
+                &status,
+                expected,
+                None
+            ),
             Step::Ready(runtime.clone())
         );
     }
@@ -501,7 +519,8 @@ fn a_pid_we_could_not_read_is_not_a_process_that_is_gone() {
             assess(
                 None,
                 &observed(parsed.ok().flatten(), false, LastExit::Code(1)),
-                (EXPECTED_FINGERPRINT, RUNNING_GENERATION)
+                (EXPECTED_FINGERPRINT, RUNNING_GENERATION),
+                None
             ),
             Step::Waiting
         );
@@ -511,7 +530,8 @@ fn a_pid_we_could_not_read_is_not_a_process_that_is_gone() {
         assess(
             None,
             &observed(None, true, LastExit::Code(1)),
-            (EXPECTED_FINGERPRINT, RUNNING_GENERATION)
+            (EXPECTED_FINGERPRINT, RUNNING_GENERATION),
+            None
         ),
         Step::Dead
     );
@@ -535,7 +555,8 @@ fn another_gateway_on_the_port_never_answers_for_this_one() {
         assess(
             Some(&foreign),
             &observed(None, true, LastExit::Code(23)),
-            (EXPECTED_FINGERPRINT, RUNNING_GENERATION)
+            (EXPECTED_FINGERPRINT, RUNNING_GENERATION),
+            None
         ),
         Step::Dead
     );
@@ -544,7 +565,46 @@ fn another_gateway_on_the_port_never_answers_for_this_one() {
         assess(
             Some(&Health::Legacy),
             &observed(None, true, LastExit::Code(23)),
-            (EXPECTED_FINGERPRINT, RUNNING_GENERATION)
+            (EXPECTED_FINGERPRINT, RUNNING_GENERATION),
+            None
+        ),
+        Step::Dead
+    );
+}
+
+/// A server that gave up exits successfully, so nothing in launchd's answer
+/// says it failed and only its own record makes that absence a death — for the
+/// registration being started, and no other.
+#[test]
+fn a_successful_exit_is_a_death_only_with_this_registration_s_own_record() {
+    let expected = (EXPECTED_FINGERPRINT, RUNNING_GENERATION);
+    let gone = observed(None, true, LastExit::Code(0));
+    let ours =
+        parse_record(gave_up_record("credentialRegistryInvalid", RUNNING_GENERATION).as_bytes())
+            .expect("record");
+    let theirs =
+        parse_record(gave_up_record("credentialRegistryInvalid", TARGET_GENERATION).as_bytes())
+            .expect("record");
+    assert_eq!(assess(None, &gone, expected, Some(&ours)), Step::Dead);
+    assert_eq!(assess(None, &gone, expected, Some(&theirs)), Step::Waiting);
+    assert_eq!(assess(None, &gone, expected, None), Step::Waiting);
+    // A record is not licence to call a running process dead, nor an absence
+    // launchd could not establish.
+    assert_ne!(
+        assess(
+            None,
+            &observed(Some(42), true, LastExit::Code(0)),
+            expected,
+            Some(&ours)
+        ),
+        Step::Dead
+    );
+    assert_ne!(
+        assess(
+            None,
+            &observed(None, false, LastExit::Code(0)),
+            expected,
+            Some(&ours)
         ),
         Step::Dead
     );
@@ -568,7 +628,7 @@ fn a_process_that_is_running_or_has_not_failed_is_still_starting() {
             last_exit: LastExit::Code(1),
         },
     ] {
-        assert_eq!(assess(None, &status, expected), Step::Waiting);
+        assert_eq!(assess(None, &status, expected, None), Step::Waiting);
     }
 }
 
@@ -595,6 +655,10 @@ struct FakeWatch<F> {
     answer: F,
     status_calls: Vec<Duration>,
     health_calls: usize,
+    /// What the gateway has written down about giving up, as the bytes it
+    /// would actually have written.
+    gave_up: Option<Vec<u8>>,
+    gave_up_reads: usize,
 }
 impl<F: FnMut(Duration) -> (Option<Health>, Result<ServiceStatus, String>)> FakeWatch<F> {
     fn new(answer: F) -> Self {
@@ -603,7 +667,13 @@ impl<F: FnMut(Duration) -> (Option<Health>, Result<ServiceStatus, String>)> Fake
             answer,
             status_calls: Vec::new(),
             health_calls: 0,
+            gave_up: None,
+            gave_up_reads: 0,
         }
+    }
+    fn having_given_up(mut self, record: &str) -> Self {
+        self.gave_up = Some(record.as_bytes().to_vec());
+        self
     }
     /// Gaps between consecutive `launchctl print` calls.
     fn status_gaps(&self) -> Vec<Duration> {
@@ -631,6 +701,10 @@ impl<F: FnMut(Duration) -> (Option<Health>, Result<ServiceStatus, String>)> Serv
     fn status(&mut self) -> Result<ServiceStatus, String> {
         self.status_calls.push(self.elapsed);
         (self.answer)(self.elapsed).1
+    }
+    fn gave_up(&mut self) -> Option<RecordedFailure> {
+        self.gave_up_reads += 1;
+        self.gave_up.as_deref().and_then(parse_record)
     }
 }
 static BASE: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
@@ -670,6 +744,72 @@ fn a_slow_but_healthy_start_keeps_the_whole_deadline() {
     );
     assert!(watch.elapsed >= Duration::from_secs(29));
     assert!(watch.elapsed < Duration::from_secs(30));
+}
+
+/// A server that gave up exits *successfully* — the only thing launchd reads
+/// as "do not start me again" — so nothing in launchd's answer says it failed.
+/// Waiting out the deadline for a process that is never coming back is the
+/// thirty seconds this whole path exists to avoid, and the sentence at the end
+/// of it would be the readiness contract's rather than the reason.
+#[test]
+fn a_gateway_that_gave_up_is_not_waited_out_and_is_reported_by_its_own_reason() {
+    let mut watch =
+        FakeWatch::new(|_| (None, Ok(observed(None, true, LastExit::Code(0))))).having_given_up(
+            &gave_up_record("credentialRegistryInvalid", RUNNING_GENERATION),
+        );
+    let error = wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()).unwrap_err();
+    assert!(
+        matches!(&error, InstallFailure::Startup(sentence) if sentence.contains("credential registry is not one this version of Nessa can read")),
+        "{error:?}"
+    );
+    assert!(
+        watch.elapsed <= Duration::from_secs(2),
+        "{:?}",
+        watch.elapsed
+    );
+}
+
+/// The record is a file in a directory, not launchd's word about this service.
+/// One left behind by another registration is not evidence about this one, and
+/// a service that is merely slow must keep its whole deadline.
+#[test]
+fn a_record_from_another_registration_proves_nothing_about_this_one() {
+    let mut watch =
+        FakeWatch::new(|_| (None, Ok(observed(None, true, LastExit::Code(0))))).having_given_up(
+            &gave_up_record("credentialRegistryInvalid", TARGET_GENERATION),
+        );
+    let error = wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()).unwrap_err();
+    assert!(
+        matches!(&error, InstallFailure::Reconciliation(message) if message.contains("readiness deadline")),
+        "{error:?}"
+    );
+    assert!(watch.elapsed >= Duration::from_secs(30));
+}
+
+/// A process launchd is still running has nothing to say about having given
+/// up, and the record is a file read: it is not opened on every liveness check
+/// of a healthy start.
+#[test]
+fn a_running_process_is_never_asked_whether_it_gave_up() {
+    let mut watch = FakeWatch::new(|elapsed| {
+        if elapsed < Duration::from_secs(2) {
+            (None, Ok(observed(Some(42), true, LastExit::NeverExited)))
+        } else {
+            (
+                Some(Health::Managed(ready_runtime())),
+                Ok(observed(Some(42), true, LastExit::NeverExited)),
+            )
+        }
+    })
+    .having_given_up(&gave_up_record(
+        "credentialRegistryInvalid",
+        RUNNING_GENERATION,
+    ));
+    assert_eq!(
+        wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()),
+        Ok(ready_runtime())
+    );
+    assert_eq!(watch.gave_up_reads, 0);
 }
 
 #[test]
