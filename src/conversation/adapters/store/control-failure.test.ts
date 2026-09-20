@@ -1,21 +1,32 @@
+import {
+  ConversationErrorCode,
+  NessaConversationMutationError,
+  NessaRpcError,
+  type NessaClient,
+} from "@nessa/client"
 import { expect, it } from "vitest"
 import { makeStore } from "../../../store"
 import { createDependencies } from "../../../composition/dependencies"
 import { ControlFailedError, SubmissionRefusedError } from "../../application/ports"
-import { textContent } from "../../model"
+import { textContent, type CommandFailure } from "../../model"
 import { conversationNotice } from "../../ui/notification"
+import { gatewayEffects } from "../gateway/effects"
 import { scenarioEffects } from "../scenario/effects"
-import { bindConversation, sendDraft, stopGenerating } from "./slice"
+import { bindConversation, controlConversation, sendDraft, stopGenerating } from "./slice"
 
 /**
- * What a control's failure becomes on the tab.
+ * What a control's failure becomes on the tab, and what the panel then says.
  *
- * The gateway adapter is the only translator — `gateway/effects.test.ts` holds
- * it to that — so what is under test here is the half after it: the reason a
- * control failed reaches the tab in the panel's own words, the sentence is
- * chosen from that reason and not from the message, and a failure with no
- * translated reason still leaves the control's own cleanup and refresh alone.
+ * The client has one sentence for every failed control — "Conversation control
+ * did not return a trustworthy acknowledgement" — which names neither the
+ * command nor its cause, and calls the outcome unknown even where the gateway
+ * refused the control outright. So these check both halves: the reason reaches
+ * the tab in the panel's own words, and the sentence shown is one that is true
+ * of what actually happened.
  */
+const CLIENT_CONSTANT =
+  "Conversation control did not return a trustworthy acknowledgement"
+
 async function stopAfterFailing(error: unknown) {
   const effects = scenarioEffects("echo")
   const store = makeStore(
@@ -28,16 +39,22 @@ async function stopAfterFailing(error: unknown) {
   return store.getState().conversation.conversations[0]!
 }
 
+/** As the gateway adapter builds one: the reason, the outcome, the client's text. */
+function controlFailure(reason: CommandFailure, refused: boolean) {
+  const failed = new ControlFailedError(reason, refused)
+  failed.message = CLIENT_CONSTANT
+  return failed
+}
+
 it("says a close whose cleanup failed in the panel's words, by its reason", async () => {
   // Not a refusal: the conversation did close, and only letting go of the files
-  // it held did not. The panel has its own sentence for that; the gateway's
-  // "did not return a trustworthy acknowledgement" is not it.
-  const failed = new ControlFailedError("attachment-cleanup-unavailable")
-  failed.message = "Conversation control did not return a trustworthy acknowledgement"
-  const tab = await stopAfterFailing(failed)
+  // it held did not. The client's constant would call that unknown.
+  const tab = await stopAfterFailing(
+    controlFailure("attachment-cleanup-unavailable", false),
+  )
   expect(tab.failure).toBe("attachment-cleanup-unavailable")
   expect(tab.error).toMatch(/could not release the images/)
-  expect(tab.error).not.toBe(failed.message)
+  expect(tab.error).not.toBe(CLIENT_CONSTANT)
   expect(conversationNotice(tab)).toMatchObject({
     title: "Conversation needs attention",
     retry: { kind: "refresh" },
@@ -47,30 +64,64 @@ it("says a close whose cleanup failed in the panel's words, by its reason", asyn
   expect(tab.cancellationStatus).toBeUndefined()
 })
 
-it("says a control that found the agent still starting so, keeping the client's sentence", async () => {
-  const failed = new ControlFailedError("agent-startup-deadline")
-  failed.message = "The agent was still starting and ran out of time."
-  const tab = await stopAfterFailing(failed)
-  expect(tab.failure).toBe("agent-startup-deadline")
-  // No panel sentence for this one: the client's names the remedy at length.
-  expect(tab.error).toBe(failed.message)
-  expect(conversationNotice(tab)).toEqual({
+it("tells somebody whose control the gateway refused that nothing was done", async () => {
+  // The client records these as decided before anything was applied, so saying
+  // the acknowledgement could not be trusted would claim the opposite.
+  const startup = await stopAfterFailing(controlFailure("agent-startup-deadline", true))
+  expect(startup.error).toMatch(/nothing was done/)
+  expect(startup.error).not.toBe(CLIENT_CONSTANT)
+  expect(conversationNotice(startup)).toEqual({
     title: "Agent was still starting",
-    description: failed.message,
+    description: startup.error,
     retry: { kind: "refresh" },
   })
+  const invalid = await stopAfterFailing(controlFailure("invalid-request", true))
+  expect(invalid.failure).toBe("invalid-request")
+  expect(invalid.error).toMatch(/nothing was done/)
+})
+
+it("keeps the client's sentence where the outcome really is open", async () => {
+  // The same two reasons, with the gateway not saying it decided them before
+  // applying anything. "Not a trustworthy acknowledgement" is then exactly
+  // right, so it stands — the reason alone never licenses the other sentence.
+  for (const reason of ["agent-startup-deadline", "invalid-request"] as const) {
+    const tab = await stopAfterFailing(controlFailure(reason, false))
+    expect(tab.failure).toBe(reason)
+    expect(tab.error).toBe(CLIENT_CONSTANT)
+  }
+  const lost = await stopAfterFailing(controlFailure("conversation-not-found", false))
+  expect(lost.error).toBe(CLIENT_CONSTANT)
 })
 
 it("carries a refused creation's reason through the control that asked for it", async () => {
   // A control opens the conversation first, so a cold agent stops it here, with
-  // nothing sent and no failed turn. The refusal is a message's — nothing was
-  // taken — and the notice must still name the cause.
-  const effects = scenarioEffects("echo")
-  const refused = new SubmissionRefusedError("agent-startup-deadline")
-  refused.message = "The agent was still starting and ran out of time."
+  // nothing sent and no failed turn. The whole path runs, through the real
+  // adapter: the gateway's code, the client's error, the translation, the notice.
+  const client = {
+    conversation: {
+      create: () =>
+        Promise.reject(
+          new NessaConversationMutationError(
+            "server",
+            "action",
+            undefined,
+            new NessaRpcError(
+              ConversationErrorCode.AgentStartupDeadline,
+              "agent_startup_deadline",
+            ),
+            async () => undefined,
+          ),
+        ),
+      // The refresh the control runs before reporting has nothing to read.
+      read: () => Promise.reject(new Error("no conversation")),
+    },
+  } as unknown as NessaClient
   const store = makeStore(
     createDependencies({
-      conversation: { ...effects, create: () => Promise.reject(refused) },
+      conversation: gatewayEffects(
+        () => client,
+        () => Promise.reject(new Error("no wait expected")),
+      ),
     }),
   )
   // Bound but never sent into, so no failed turn can be what answers below.
@@ -79,9 +130,12 @@ it("carries a refused creation's reason through the control that asked for it", 
   const tab = store.getState().conversation.conversations[0]!
   expect(tab.turns).toEqual([])
   expect(tab.failure).toBe("agent-startup-deadline")
+  // Creation is a message's refusal, and for this one the client does have a
+  // sentence of its own, which names the remedy at length. It is kept.
+  expect(tab.error).toMatch(/still starting and ran out of time/)
   expect(conversationNotice(tab)).toEqual({
     title: "Agent was still starting",
-    description: refused.message,
+    description: tab.error,
     retry: { kind: "refresh" },
   })
 })
@@ -105,7 +159,7 @@ it("clears the previous failure when the next control starts, reason and sentenc
       conversation: {
         ...effects,
         close: async (id: string) => {
-          if (refuse) throw new ControlFailedError("attachment-cleanup-unavailable")
+          if (refuse) throw controlFailure("attachment-cleanup-unavailable", false)
           await effects.close(id)
         },
       },
@@ -122,4 +176,48 @@ it("clears the previous failure when the next control starts, reason and sentenc
   expect(tab.failure).toBeUndefined()
   expect(tab.error).toBeUndefined()
   expect(conversationNotice(tab)).toBeNull()
+})
+
+it("does not tell a refused retry its message is back in the draft, because it is not", async () => {
+  // A retry re-sends a turn whose delivery was unknown. Unlike `sendDraft` it
+  // acts on nothing when that is refused — the turn keeps its receipt and the
+  // draft is untouched — so a message's sentences, every one of which promises
+  // the draft is back with its images, would describe what did not happen.
+  const effects = scenarioEffects("echo")
+  let attempts = 0
+  const store = makeStore(
+    createDependencies({
+      conversation: {
+        ...effects,
+        send: () => {
+          attempts += 1
+          // First the acknowledgement is lost, which is what leaves a turn to
+          // retry at all. Then the gateway refuses the retry outright.
+          if (attempts === 1) return Promise.reject(new Error("acknowledgement lost"))
+          const refused = new SubmissionRefusedError("conversation-capacity")
+          refused.message = "Conversation command failed"
+          return Promise.reject(refused)
+        },
+      },
+    }),
+  )
+  await store.dispatch(sendDraft({ content: textContent("hello") }))
+  const turn = store.getState().conversation.conversations[0]!.turns[0]!
+  expect(turn).toMatchObject({ receipt: "unknown" })
+  if (turn.from !== "user" || !turn.executionId) throw new Error("no submission identity")
+  await store.dispatch(
+    controlConversation({
+      id: "c0",
+      control: { kind: "retry", executionId: turn.executionId },
+    }),
+  )
+  expect(attempts).toBe(2)
+  const tab = store.getState().conversation.conversations[0]!
+  expect(tab.failure).toBe("conversation-capacity")
+  expect(tab.error).not.toMatch(/back in the draft/)
+  expect(tab.draft).toEqual([])
+  // The turn's own receipt is what says whether it went, and it still says
+  // unknown, because nothing about the refused retry changed that.
+  expect(tab.turns[0]).toMatchObject({ receipt: "unknown" })
+  expect(conversationNotice(tab)).toMatchObject({ title: "Delivery unknown" })
 })

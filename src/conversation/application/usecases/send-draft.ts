@@ -89,10 +89,16 @@ export function imageRefusalMessage(refusal: ImageRefusal): string {
 
 /**
  * What to tell somebody whose message the gateway refused before taking it.
- * One sentence per refusal, chosen by its typed reason. `agent-not-configured`
- * and `agent-startup-deadline` answer undefined because the client's own
- * message names the remedy at length, and `invalid-request` because it has
- * nothing better to say than the client already did.
+ * One sentence per refusal, chosen by its typed reason.
+ *
+ * Four answer undefined, and the panel shows the client's own message instead.
+ * For `agent-not-configured` and `agent-startup-deadline` that message names
+ * the remedy at length — unlike a control, a refused message does get a
+ * sentence of its own from the client. `invalid-request` has nothing better to
+ * say than the client already did about the arguments it refused. And
+ * `attachment-cleanup-unavailable` is a close's news, which no message is ever
+ * refused with; it is named only so the gateway's vocabulary stays accounted
+ * for here.
  */
 export function submissionRefusalMessage(reason: CommandFailure): string | undefined {
   switch (reason) {
@@ -106,8 +112,6 @@ export function submissionRefusalMessage(reason: CommandFailure): string | undef
       return "The gateway no longer has this conversation, so the message was not sent. It is back in the draft."
     case "conversation-capacity":
       return "The gateway has too many conversations open to take this one. The message is back in the draft; close a conversation or try again shortly."
-    // The last of these is a close whose cleanup failed, which no send is ever
-    // refused with; named so the gateway's whole vocabulary stays accounted for.
     case "agent-not-configured":
     case "agent-startup-deadline":
     case "invalid-request":

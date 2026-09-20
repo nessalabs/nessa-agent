@@ -122,6 +122,11 @@ function storedImageRefusal(stored: StoredAttachment): AttachmentStagingError {
  * A code that is not here keeps the client's own sentence and reaches the panel
  * with no typed reason at all, which is what an unknown answer deserves: only
  * these change what the panel says or does about a failure.
+ *
+ * "Whichever command" is about meaning, not reach: `attachment_cleanup_unavailable`
+ * means the same thing wherever it appears, and the gateway raises it only when
+ * closing a conversation — `ConversationError::AttachmentRelease` is built in
+ * the close path alone, from the arm where the close itself succeeded.
  */
 const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   image_input_unsupported: "image-input-unsupported",
@@ -164,22 +169,26 @@ function submissionFailure(error: unknown): unknown {
 }
 
 /**
- * A control the gateway answered with a reason, in the panel's words. Anything
- * else is passed on untouched.
+ * A control the gateway answered with a reason, in the panel's words, carrying
+ * whether anything was applied as the separate fact it is. Anything else is
+ * passed on untouched.
  *
- * A control is not read through `uncertain` the way a message is, because this
- * says what went wrong and not whether it was applied. The difference is the
- * whole point of `attachment_cleanup_unavailable`: the close happened, its
- * release of the conversation's files did not, and the gateway leaves that
- * uncertain by design. The store still refreshes and never replays either way.
+ * Unlike a message, a control is translated whatever the client's `uncertain`
+ * says, because the reason is worth passing on either way — the case that makes
+ * the difference is `attachment_cleanup_unavailable`, a close that did happen
+ * and whose cleanup did not, which the client can only report as uncertain. So
+ * the verdict travels beside the reason rather than deciding whether there is
+ * one. The store still refreshes and never replays either way.
  */
 function controlFailure(error: unknown): unknown {
   if (!(error instanceof NessaConversationControlError) || !error.code) return error
   const named = failures[error.code]
   if (!named) return error
-  const failed = new ControlFailedError(named, error)
-  // The client's sentence names the command and its cause; keep it as the text
-  // to fall back to when the panel has nothing of its own to add.
+  const failed = new ControlFailedError(named, !error.uncertain, error)
+  // The client has one constant for every control — "did not return a
+  // trustworthy acknowledgement" — which names neither the command nor its
+  // cause. Kept as the text to fall back to, and the application decides where
+  // that sentence is still the honest one.
   failed.message = error.message
   return failed
 }

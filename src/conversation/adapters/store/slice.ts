@@ -1,4 +1,3 @@
-import { NessaConversationMutationError } from "@nessa/client"
 import {
   contentText,
   MAX_SENT_PREVIEW_BYTES,
@@ -72,29 +71,32 @@ const refusalDetail = (error: unknown) =>
 /** The same for a control, which has no draft to hand back and says so differently. */
 const controlDetail = (error: unknown) =>
   (error instanceof ControlFailedError
-    ? controlFailureMessage(error.reason)
+    ? controlFailureMessage(error.reason, error.refused)
     : undefined) ?? detail(error)
 
 /**
  * Did this message go? A typed refusal is the gateway, or the client that
  * validates its arguments, saying it was not taken: the draft can come back.
  * A failure after admission was attempted proves nothing either way.
+ *
+ * Every pre-admission rejection arrives as that typed refusal, because the
+ * effects port promises it: the gateway adapter translates one when the client
+ * says a message was not taken, and `effects.test.ts` holds it to every code
+ * the client decides that way. So there is no second reading of the client's
+ * own `uncertain` here, and nothing in this file reads a wire answer at all.
  */
 function sendOutcome(error: unknown, admissionAttempted: boolean): SendOutcome {
   if (error instanceof SubmissionRefusedError)
     return { kind: "refused", reupload: refusalReleasesImages(error.reason) }
-  if (
-    !admissionAttempted ||
-    error instanceof ConversationUnavailableError ||
-    (error instanceof NessaConversationMutationError && !error.uncertain)
-  )
+  if (!admissionAttempted || error instanceof ConversationUnavailableError)
     return { kind: "refused", reupload: false }
   return { kind: "uncertain" }
 }
 
 // The typed reason behind that text, in the panel's own words, when the gateway
-// gave one this build knows. Kept beside the message so a notice can branch on
-// the reason rather than the words — and so nothing here reads a wire code.
+// gave one this build knows. Kept beside the message so a notice can say why
+// without reading the words — never so a reader can infer what happened, which
+// is the typed error's business and differs between a message and a control.
 const commandFailure = (error: unknown): CommandFailure | undefined =>
   error instanceof SubmissionRefusedError || error instanceof ControlFailedError
     ? error.reason
@@ -412,14 +414,13 @@ export const controlConversation = createAsyncThunk<
     // A lost acknowledgement may follow an applied control. Read authority again;
     // never replay the control or infer that the previous order still holds.
     await dispatch(refreshConversation(id))
+    // Every control, retry included. A retry does re-send a message, but it
+    // does not act on a refusal the way `sendDraft` does — the turn keeps its
+    // receipt and the draft is untouched — so a message's sentences, which
+    // promise the draft is back with its images, would describe something that
+    // did not happen here.
     dispatch(
-      showError({
-        id,
-        // A retry is a message, and is refused in a message's words; every
-        // other control is a control and speaks for itself.
-        message: control.kind === "retry" ? refusalDetail(error) : controlDetail(error),
-        failure: commandFailure(error),
-      }),
+      showError({ id, message: controlDetail(error), failure: commandFailure(error) }),
     )
     throw error
   } finally {

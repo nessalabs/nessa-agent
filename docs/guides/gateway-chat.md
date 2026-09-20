@@ -220,13 +220,23 @@ send   -> conversation.send { text, attachments: [the returned references] }
   other failure after admission was attempted stays uncertain and keeps its
   explicit retry.
 - **A control's failure is translated the same way, and says something else.**
-  Controls carry no draft, so they get their own sentences: the one that needs
-  it is `attachment_cleanup_unavailable`, the single image code that is not a
-  refusal — the close did happen and only its release of the conversation's
-  uploads did not. That arrives as `attachment-cleanup-unavailable`, and the
-  panel says so instead of showing "did not return a trustworthy
-  acknowledgement". It changes nothing the panel does: a draft's stored images
-  are forgotten after any close, acknowledged or not.
+  The client has no sentence of its own for a control: every one of them gets
+  the constant "Conversation control did not return a trustworthy
+  acknowledgement", which names neither the command nor its cause and is only
+  true when the control really may have been applied. So the panel speaks where
+  that would be false. `attachment_cleanup_unavailable` — the single image code
+  that is not a refusal, where the close did happen and only its release of the
+  conversation's uploads did not — says so, and changes nothing the panel does:
+  a draft's stored images are forgotten after any close, acknowledged or not.
+  `invalid_request` and `agent_startup_deadline`, which the client records as
+  refused before anything was applied, say that nothing was done rather than
+  that the answer could not be trusted. Every other reason leaves the outcome
+  genuinely open, and there the client's constant is the honest sentence.
+- **A control carries its reason and its outcome as two facts.** A reason never
+  says whether the command ran: a control refused as `conversation_not_found`
+  and one whose acknowledgement was lost carry the same word. `CommandFailure`
+  is only what the panel *says*; `SubmissionRefusedError` and
+  `ControlFailedError.refused` are what it may *decide* from.
 - **Nor is a message the client would not put on the wire.** The client is the
   one boundary that validates a message's images — the panel's model puts no
   byte bound on a stored reference, because how heavy one image may be is the

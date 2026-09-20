@@ -86,15 +86,24 @@ export class SubmissionRefusedError extends Error {
 /**
  * The gateway answered a conversation control with a reason of its own.
  *
- * Deliberately not a refusal: `attachment-cleanup-unavailable` is a close that
- * did happen and whose release of the conversation's uploads did not. So this
- * carries only what went wrong, never whether the control was applied — the
- * store reads the conversation again either way, as it does for any control
- * whose acknowledgement it cannot trust.
+ * Deliberately not named a refusal, because the reason alone does not say the
+ * control was refused: `attachment-cleanup-unavailable` is a close that did
+ * happen and whose release of the conversation's uploads did not. Whether
+ * anything was applied is the separate `refused` fact beside it, and the store
+ * reads the conversation again regardless — it never replays a control.
  */
 export class ControlFailedError extends Error {
   constructor(
     readonly reason: CommandFailure,
+    /**
+     * The client's verdict that the gateway decided this control before
+     * applying any of it, so nothing happened. False leaves that open: the
+     * control may have run and only its acknowledgement been lost. Carried
+     * beside `reason` because the two do not determine each other — a
+     * permission answer whose option is still pending is refused without a
+     * pre-admission code, and a cleanup failure names a close that did run.
+     */
+    readonly refused: boolean,
     cause?: unknown,
   ) {
     super(`The gateway could not complete this control (${reason}).`, { cause })

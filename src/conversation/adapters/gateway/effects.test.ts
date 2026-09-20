@@ -4,6 +4,7 @@ import {
   MAX_MESSAGE_IMAGE_BYTES,
   MAX_MESSAGE_IMAGES,
   MAX_UPLOAD_BYTES,
+  ConversationErrorCode,
   NessaAttachmentError,
   NessaConversationControlError,
   NessaConversationMutationError,
@@ -238,13 +239,13 @@ const controlError = (code: string) =>
   )
 
 it.each([
-  ["attachment_cleanup_unavailable", "attachment-cleanup-unavailable"],
-  ["agent_startup_deadline", "agent-startup-deadline"],
-  ["conversation_not_found", "conversation-not-found"],
-  ["invalid_request", "invalid-request"],
+  ["attachment_cleanup_unavailable", "attachment-cleanup-unavailable", false],
+  ["agent_startup_deadline", "agent-startup-deadline", true],
+  ["conversation_not_found", "conversation-not-found", false],
+  ["invalid_request", "invalid-request", true],
 ] as const)(
-  "turns the gateway's control failure %s into the panel's own word for it",
-  async (code, reason) => {
+  "turns the gateway's control failure %s into the panel's own word for it, with its outcome",
+  async (code, reason, refused) => {
     const refuse = () => Promise.reject(controlError(code))
     const effects = effectsOf(
       () =>
@@ -268,9 +269,15 @@ it.each([
     for (const control of controls) {
       const error = await control().catch((error: unknown) => error)
       expect(error).toBeInstanceOf(ControlFailedError)
-      expect(error).toMatchObject({ reason })
-      // The client's sentence names the command and its cause; keep it.
-      expect((error as Error).message).toBe(controlError(code).message)
+      // The reason and the outcome, as two facts: the same reason can arrive
+      // either way, so neither may be read out of the other.
+      expect(error).toMatchObject({ reason, refused })
+      // The client says the same thing about every control that fails, naming
+      // neither the command nor its cause. Kept as the fallback text all the
+      // same; what the panel does with it is the application's to decide.
+      expect((error as Error).message).toBe(
+        "Conversation control did not return a trustworthy acknowledgement",
+      )
     }
   },
 )
@@ -278,17 +285,58 @@ it.each([
 it("keeps a cleanup failure's reason even though the close itself may have applied", async () => {
   // `attachment_cleanup_unavailable` is the one image code that is not a
   // refusal: the close happened and only its release of the uploads did not,
-  // so the client leaves it uncertain. The reason still has to reach the panel.
-  const refused = controlError("attachment_cleanup_unavailable")
-  expect(refused.uncertain).toBe(true)
+  // so the client leaves it uncertain. The reason still has to reach the panel
+  // — which is why a control is translated regardless of that verdict.
+  const uncertain = controlError("attachment_cleanup_unavailable")
+  expect(uncertain.uncertain).toBe(true)
   const effects = effectsOf(
     () =>
       ({
-        conversation: { close: () => Promise.reject(refused) },
+        conversation: { close: () => Promise.reject(uncertain) },
       }) as unknown as NessaClient,
   )
   const error = await effects.close("server").catch((error: unknown) => error)
-  expect(error).toMatchObject({ reason: "attachment-cleanup-unavailable" })
+  expect(error).toMatchObject({
+    reason: "attachment-cleanup-unavailable",
+    refused: false,
+  })
+})
+
+it("gives every code the client decides before admission a word of its own", async () => {
+  // The store no longer reads the client's `uncertain` for a message: it takes
+  // a typed refusal to mean the draft comes back, and nothing else. That rests
+  // on this adapter answering with one for every code the client decides that
+  // way, so the two sets are checked against each other rather than assumed.
+  // A code added to the client's pre-admission list without a word here fails.
+  for (const code of Object.values(ConversationErrorCode)) {
+    const rejection = new NessaConversationMutationError(
+      "server",
+      "action",
+      "execution",
+      new NessaRpcError(code, code),
+      () => Promise.reject(new Error("unused")),
+    )
+    if (rejection.uncertain) continue
+    const effects = effectsOf(
+      () =>
+        ({
+          conversation: { send: () => Promise.reject(rejection) },
+        }) as unknown as NessaClient,
+    )
+    const error = await effects
+      .send({
+        conversationId: "server",
+        executionId: "execution",
+        actionId: "action",
+        text: "look",
+        attachments: [],
+      })
+      .catch((error: unknown) => error)
+    expect(
+      error,
+      `${code} is refused before admission with no word for it`,
+    ).toBeInstanceOf(SubmissionRefusedError)
+  }
 })
 
 it("passes a control failure this build has no word for on untouched", async () => {
