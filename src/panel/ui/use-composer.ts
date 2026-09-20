@@ -11,7 +11,8 @@ import { takesExpansion } from "../application/composer-expansion"
 /** Own editor lifecycle and pasted-viewer state; App only composes the surfaces. */
 export function useComposer(
   chat: ReturnType<typeof useConversation>,
-  isAttachmentPending: (conversationId: string) => boolean,
+  /** Says so in the panel, and answers true, while an attachment is still being read. */
+  declinesPendingAttachment: (conversationId: string) => boolean,
 ) {
   const composerRef = React.useRef<ChatComposerEditorHandle>(null)
   const setComposerRef = React.useCallback((editor: ChatComposerEditorHandle | null) => {
@@ -43,8 +44,11 @@ export function useComposer(
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const content = composerRef.current?.getContent()
-    if (isAttachmentPending(chat.active.id)) return
-    if (chat.active.draft.some((part) => part.type === "file")) return
+    // A submit that goes nowhere still says why. Only a read in flight is
+    // declined here, because only this side knows about it; a draft holding
+    // files goes on to `sendDraft`, which refuses it with its reason on the
+    // conversation. Returning early for those left the panel looking broken.
+    if (declinesPendingAttachment(chat.active.id)) return
     if (!content) return
     // The pane closes on the draft having gone, not on this handler having run.
     // Calling `submit` proves nothing: the gateway may be away, the text may be

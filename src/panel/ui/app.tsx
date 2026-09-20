@@ -128,7 +128,11 @@ export function App({
     changeContent,
     pressChip,
     pasteAttachment,
-  } = useComposer(chat, (id) => attachments.isPending(id) || folderDrop.isPending(id))
+  } = useComposer(chat, (id) => {
+    if (!attachments.isPending(id) && !folderDrop.isPending(id)) return false
+    attachments.setError("Attachments are still loading. Send again once they finish.")
+    return true
+  })
   const contentDrop = useContentDrop({
     addFolderEntries: folderDrop.addFolderEntries,
     addImageUrl: attachments.addImageUrl,
