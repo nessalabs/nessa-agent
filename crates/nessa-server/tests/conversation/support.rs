@@ -1,10 +1,12 @@
 //! Test-only provider and metadata ports; all scheduling runs through the real SDK Agent.
 use crate::conversation::application::{
-    ConversationCreation, ConversationCreationAudit, ConversationCreationAuditRecord,
-    ConversationCreationDisposition, ConversationFuture, ConversationLimits,
-    ConversationRepository, ConversationService,
+    AttachmentRelease, ConversationAttachments, ConversationCreation, ConversationCreationAudit,
+    ConversationCreationAuditRecord, ConversationCreationDisposition, ConversationDependencies,
+    ConversationError, ConversationFuture, ConversationLimits, ConversationRepository,
+    ConversationService,
 };
 use crate::conversation::domain::{Conversation, ConversationId};
+use nessa_auth::domain::OrganizationId;
 use nessa_sdk::{
     application::{
         agent_execution::{
@@ -19,13 +21,14 @@ use nessa_sdk::{
             },
             providers::{
                 AgentProvider, CleanupFuture, CleanupReport, CloseOutcome, ExecutionEventStream,
-                ExecutionReport, OpenedProviderSession, ProviderExecutionFuture,
-                ProviderExecutionReply, ProviderIdentity, ProviderObservationFuture,
-                ProviderOpenFuture, ProviderOperationFailure, ProviderOperationFuture,
-                ProviderSession, ProviderSessionBackend, ProviderSessionState, SessionCloseRequest,
+                ExecutionReport, OpenedProviderSession, OperationCapabilities,
+                ProviderExecutionFuture, ProviderExecutionReply, ProviderIdentity,
+                ProviderObservationFuture, ProviderOpenFuture, ProviderOperationFailure,
+                ProviderOperationFuture, ProviderSession, ProviderSessionBackend,
+                ProviderSessionState, SessionCloseRequest,
             },
         },
-        dto::{ModalitiesDto, ModelMetadataDto},
+        dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto},
     },
     domain::{
         agent_execution::{
@@ -34,6 +37,7 @@ use nessa_sdk::{
                 PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy,
                 PermissionOption, PermissionOptionId, PermissionOptions, PermissionScope,
             },
+            prompts::ImageReference,
             sessions::ExecutionSessionId,
             tools::{ToolCallId, ToolObservation},
         },
@@ -58,7 +62,7 @@ impl ExecutionAudit for AcceptingAudit {
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
 };
@@ -125,6 +129,83 @@ pub(crate) struct ProviderFactory {
     pub(crate) close_failure: Mutex<Option<AgentError>>,
     pub(crate) close_gate: Mutex<Option<oneshot::Receiver<()>>>,
     pub(crate) close_requests: Mutex<Vec<SessionCloseRequest>>,
+    /// Whether the agent agreed to take images, and its model can see them.
+    pub(crate) image_input: AtomicBool,
+    /// Set while the agent's answer is not known, as during a restoration.
+    pub(crate) answer_unknown: AtomicBool,
+    /// Whether the selected model is offered images: it records image limits
+    /// and the binding passes them on. A separate fact from what the agent
+    /// advertised, and the two can disagree.
+    pub(crate) model_images: AtomicBool,
+    /// Every image a dispatched request referred to, in order.
+    pub(crate) images: Mutex<Vec<ImageReference>>,
+}
+
+/// What a conversation holds, as a list a test writes. Remembers every release.
+#[derive(Default)]
+pub(crate) struct MemoryAttachments {
+    pub(crate) held: Mutex<Vec<(OrganizationId, ConversationId, ImageReference)>>,
+    pub(crate) asked: AtomicUsize,
+    pub(crate) releases: Mutex<Vec<AttachmentRelease>>,
+    pub(crate) release_fails: AtomicBool,
+}
+impl ConversationAttachments for MemoryAttachments {
+    fn holds<'a>(
+        &'a self,
+        organization_id: &'a OrganizationId,
+        conversation_id: &'a ConversationId,
+        image: &'a ImageReference,
+    ) -> ConversationFuture<'a, bool> {
+        Box::pin(async move {
+            self.asked.fetch_add(1, Ordering::SeqCst);
+            Ok(self.held.lock().unwrap().iter().any(|held| {
+                held.0 == *organization_id && held.1 == *conversation_id && held.2 == *image
+            }))
+        })
+    }
+    fn release(&self, release: AttachmentRelease) -> ConversationFuture<'_, ()> {
+        Box::pin(async move {
+            self.held.lock().unwrap().retain(|held| {
+                held.0 != release.organization_id || held.1 != release.conversation_id
+            });
+            self.releases.lock().unwrap().push(release);
+            if self.release_fails.load(Ordering::SeqCst) {
+                return Err(ConversationError::Audit);
+            }
+            Ok(())
+        })
+    }
+}
+
+/// A service whose agent takes images when `image_input`, over `attachments`.
+pub(crate) fn image_fixture(
+    image_input: bool,
+    attachments: Option<Arc<dyn ConversationAttachments>>,
+) -> (
+    ConversationService,
+    Arc<ProviderFactory>,
+    Arc<MemoryRepository>,
+    Arc<InMemoryStorage>,
+) {
+    let provider = Arc::new(ProviderFactory::default());
+    provider.image_input.store(image_input, Ordering::SeqCst);
+    provider.model_images.store(image_input, Ordering::SeqCst);
+    let repository = Arc::new(MemoryRepository::default());
+    let storage = Arc::new(InMemoryStorage::new());
+    let service = ConversationService::new(
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider.clone())),
+            storage: storage.clone(),
+            metadata: repository.clone(),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    (service, provider, repository, storage)
 }
 pub(crate) fn fixture(
     limits: ConversationLimits,
@@ -138,11 +219,14 @@ pub(crate) fn fixture(
     let repository = Arc::new(MemoryRepository::default());
     let storage = Arc::new(InMemoryStorage::new());
     let service = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
-        storage.clone(),
-        repository.clone(),
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider.clone())),
+            storage: storage.clone(),
+            metadata: repository.clone(),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         limits,
         None,
     )
@@ -172,7 +256,7 @@ impl AgentProvider for Provider {
                         factory: self.0.clone(),
                         sender,
                     }),
-                    capabilities(),
+                    capabilities(self.0.model_images.load(Ordering::SeqCst)),
                     Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(Events(receiver)),
@@ -191,6 +275,13 @@ struct Backend {
     sender: mpsc::UnboundedSender<ExecutionEvent>,
 }
 impl ProviderSessionBackend for Backend {
+    fn operation_capabilities(&self) -> OperationCapabilities {
+        OperationCapabilities {
+            image_input: self.factory.image_input.load(Ordering::SeqCst),
+            negotiated: !self.factory.answer_unknown.load(Ordering::SeqCst),
+            ..OperationCapabilities::default()
+        }
+    }
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
@@ -201,6 +292,11 @@ impl ProviderSessionBackend for Backend {
                 .lock()
                 .unwrap()
                 .push(request.execution_id.as_str().into());
+            self.factory
+                .images
+                .lock()
+                .unwrap()
+                .extend_from_slice(request.user_message.images());
             self.factory.execution_started.notify_one();
             let gate = self.factory.execution_gate.lock().unwrap().take();
             if let Some(gate) = gate {
@@ -242,7 +338,7 @@ impl ProviderSessionBackend for Backend {
                 request.execution_id.clone(),
                 ExecutionUpdate::Message(MessageChunk::text(format!(
                     "Response: {}",
-                    request.user_message.as_str()
+                    request.user_message.text_str()
                 ))),
             ));
             let _ = self.sender.send(ExecutionEvent::new(
@@ -309,7 +405,7 @@ impl ProviderSessionBackend for Backend {
         })
     }
 }
-fn capabilities() -> EffectiveCapabilities {
+fn capabilities(image_input: bool) -> EffectiveCapabilities {
     let text = ModalitiesDto {
         text: true,
         image: false,
@@ -319,7 +415,19 @@ fn capabilities() -> EffectiveCapabilities {
         provider: "anthropic".into(),
         model_id: "test".into(),
         display_name: "Test".into(),
-        input: text,
+        input: ModalitiesDto {
+            text: true,
+            image: image_input,
+            audio: false,
+        },
+        // Image input is offered only with recorded limits, as the catalog records them.
+        image_input: image_input.then(|| ImageInputLimitsDto {
+            media_types: vec!["image/png".into(), "image/jpeg".into()],
+            max_encoded_bytes: 5_000_000,
+            max_edge_px: 8000,
+            many_images_max_edge_px: 2000,
+            native_long_edge_px: 2576,
+        }),
         output: text,
         tool_use: true,
         reasoning: false,
@@ -329,10 +437,14 @@ fn capabilities() -> EffectiveCapabilities {
         documentation_url: "https://example.com".into(),
     })
     .unwrap();
-    let text = Modalities::new(true, false, false).unwrap();
+    let input = Modalities::new(true, image_input, false).unwrap();
+    let output = Modalities::new(true, false, false).unwrap();
     EffectiveCapabilities::new(
         &model,
-        BindingRestrictions::new(ModelFeatures::new(text, text, true, false), model.limits()),
+        BindingRestrictions::new(
+            ModelFeatures::new(input, output, true, false),
+            model.limits(),
+        ),
         model.limits(),
     )
     .unwrap()

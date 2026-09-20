@@ -292,7 +292,7 @@ describe("NessaClient", () => {
       uptimeMs: 42,
     })
 
-    const receipt = await client.conversation.send(CONVERSATION_ID, "hey", {
+    const receipt = await client.conversation.send(CONVERSATION_ID, "hey", [], {
       executionId: "execution",
       requestId: "action",
     })

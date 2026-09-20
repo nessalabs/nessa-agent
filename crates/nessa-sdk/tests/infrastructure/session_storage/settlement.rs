@@ -88,6 +88,50 @@ async fn explicit_settlement_facts_round_trip_all_outcomes_and_cleanup_statuses(
     }
 }
 
+/// A saved startup failure must keep the step it names. Collapsing every phase
+/// onto one label would make a restored record unable to say whether saved
+/// context was being restored when the budget ran out.
+#[tokio::test]
+async fn saved_startup_deadlines_retain_the_step_that_expired() {
+    let root = tempfile::tempdir().unwrap();
+    let stores: Vec<Arc<dyn SessionStorage>> = vec![
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(LocalFileStorage::new(root.path().join("private")).unwrap()),
+    ];
+    for storage in stores {
+        let lease = storage
+            .open(SessionId::new("startup-deadline-phase").unwrap())
+            .await
+            .unwrap();
+        for phase in [
+            AgentStartupPhase::Initialize,
+            AgentStartupPhase::Session,
+            AgentStartupPhase::Configure,
+        ] {
+            // Both facts must survive independently: a restoration can expire
+            // during any step, so the context is not recoverable from the step.
+            for context in [AgentStartupContext::New, AgentStartupContext::Restored] {
+                let step = AgentStartupStep::new(phase, context);
+                let mut value = snapshot("startup-deadline-phase");
+                value.invocations[0].events.clear();
+                value.invocations[0].result = Some(Err(AgentError::StartupDeadline(step)));
+                lease.save(value).await.unwrap();
+                let restored = lease.load().await.unwrap().unwrap();
+                assert_eq!(
+                    restored.invocations[0].result,
+                    Some(Err(AgentError::StartupDeadline(step)))
+                );
+                let Some(Err(AgentError::StartupDeadline(saved))) = restored.invocations[0].result
+                else {
+                    panic!("startup deadline retained")
+                };
+                assert_eq!(saved.phase(), phase);
+                assert_eq!(saved.context(), context);
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn successful_local_result_cannot_contradict_independent_provider_facts() {
     let storage = InMemoryStorage::new();

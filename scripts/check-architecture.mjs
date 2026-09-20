@@ -91,6 +91,13 @@ for (const file of walk(src)) {
   const path = rel(file)
   const imports = importedPaths(text)
   const inComposition = path.startsWith("src/composition/")
+  // A vertical's `testing.ts` is how another vertical's tests reach what they
+  // need without importing internals. Product code has no business there: it
+  // would be a second, unchecked public surface.
+  if (!path.endsWith(".test.ts") && !path.endsWith(".test.tsx")) {
+    if (imports.some((item) => /(?:^|\/)testing$/.test(item)))
+      fail(file, "only tests import a vertical's testing entry")
+  }
   // Test fixtures must not introduce model imports across the public boundary.
   if (!path.startsWith("src/conversation/") && path.endsWith(".test.ts")) {
     if (imports.some((item) => /(?:^|\/)conversation\/model(?:\/|$)/.test(item))) {

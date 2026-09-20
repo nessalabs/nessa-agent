@@ -1,9 +1,9 @@
 //! Shared conversation ownership and admission tests use real SDK scheduling.
 use super::{
     ConversationCaller, ConversationCreation, ConversationCreationAudit,
-    ConversationCreationAuditRecord, ConversationDisposition, ConversationError,
-    ConversationFuture, ConversationLimits, ConversationMessageStatus, ConversationOwnershipState,
-    ConversationRepository, ConversationService, SubmissionMode,
+    ConversationCreationAuditRecord, ConversationDependencies, ConversationDisposition,
+    ConversationError, ConversationFuture, ConversationLimits, ConversationMessageStatus,
+    ConversationOwnershipState, ConversationRepository, ConversationService, SubmissionMode,
 };
 use crate::{
     conversation::domain::{Conversation, ConversationId},
@@ -12,7 +12,7 @@ use crate::{
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::{
     application::agent_execution::{
-        agents::AgentError,
+        agents::{AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep},
         permissions::PermissionSelectionState,
         providers::{
             AgentProvider, CleanupFuture, CleanupReport, ProviderCleanup, ProviderIdentity,
@@ -133,11 +133,14 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
         gate: Mutex::new(None),
     });
     let service = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
-        storage,
-        repository.clone(),
-        audit.clone(),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider.clone())),
+            storage,
+            metadata: repository.clone(),
+            creation_audit: audit.clone(),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -183,11 +186,14 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
         accepted: Mutex::new(Vec::new()),
     });
     let service = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
-        storage,
-        repository.clone(),
-        audit.clone(),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider.clone())),
+            storage,
+            metadata: repository.clone(),
+            creation_audit: audit.clone(),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -276,11 +282,14 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
         records: Mutex::new(Vec::new()),
     });
     let service = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
-        storage,
-        repository.clone(),
-        audit.clone(),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider.clone())),
+            storage,
+            metadata: repository.clone(),
+            creation_audit: audit.clone(),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -307,6 +316,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
                 caller("panel", "send-1"),
                 "send-1".into(),
                 "Hello".into(),
+                Vec::new(),
                 SubmissionMode::Queue,
             )
             .await,
@@ -340,6 +350,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
             caller("phone", "send-2"),
             "send-2".into(),
             "Hello".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -372,11 +383,14 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
         records: Mutex::new(Vec::new()),
     });
     let service = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
-        storage,
-        repository.clone(),
-        audit.clone(),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider.clone())),
+            storage,
+            metadata: repository.clone(),
+            creation_audit: audit.clone(),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -391,11 +405,14 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
 
     // A fresh owner map, so the next create must open the provider again.
     let service = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
-        Arc::new(InMemoryStorage::new()),
-        repository,
-        audit.clone(),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider.clone())),
+            storage: Arc::new(InMemoryStorage::new()),
+            metadata: repository,
+            creation_audit: audit.clone(),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -451,11 +468,14 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
         gate: Mutex::new(Some(gate)),
     });
     let service = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
-        storage,
-        repository,
-        audit.clone(),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider.clone())),
+            storage,
+            metadata: repository,
+            creation_audit: audit.clone(),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -553,6 +573,7 @@ async fn consumed_permission_failure_is_not_reoffered_on_the_immediate_read() {
             caller("panel", "send"),
             "review".into(),
             "change file".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -700,11 +721,14 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
     tokio::task::yield_now().await;
 
     let restarted = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
-        storage,
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider.clone())),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits {
             max_conversations: 1,
             ..ConversationLimits::default()
@@ -743,6 +767,7 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
             caller("panel", "first"),
             "first".into(),
             "Hello".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -754,6 +779,7 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
             caller("phone", "second"),
             "second".into(),
             "Again".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -771,6 +797,7 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
             caller("panel", "first"),
             "first".into(),
             "Hello".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -870,11 +897,14 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
         inner: storage,
     });
     let service = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
-        storage.clone(),
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider.clone())),
+            storage: storage.clone(),
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -922,11 +952,14 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
         started: Notify::new(),
     });
     let service = ConversationService::new(
-        Arc::new(Provider(provider)),
-        storage,
-        repository.clone(),
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider)),
+            storage,
+            metadata: repository.clone(),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -979,11 +1012,14 @@ async fn resource_free_provider_failure_retires_slot_for_retry() {
         delegate: Provider(provider.clone()),
     });
     let service = ConversationService::new(
-        provider.clone(),
-        storage,
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            provider: provider.clone(),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1022,6 +1058,114 @@ impl AgentProvider for UncertainOpenProvider {
         })
     }
 }
+fn startup_deadline() -> AgentError {
+    AgentError::StartupDeadline(AgentStartupStep::new(
+        AgentStartupPhase::Session,
+        AgentStartupContext::New,
+    ))
+}
+struct StartupDeadlineOnceProvider {
+    attempts: AtomicUsize,
+    delegate: Provider,
+}
+impl AgentProvider for StartupDeadlineOnceProvider {
+    fn identity(&self) -> ProviderIdentity {
+        self.delegate.identity()
+    }
+    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+        if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            Box::pin(async { Err(ProviderOpenError::no_resources(startup_deadline())) })
+        } else {
+            self.delegate.open(restore)
+        }
+    }
+}
+/// The client tells the user a startup deadline is worth retrying. That is only
+/// true because the slot is released when the failed launch left no resources
+/// behind, so the next command opens a fresh provider instead of being served
+/// the cached failure.
+#[tokio::test]
+async fn a_startup_deadline_releases_its_slot_so_the_same_command_can_retry() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let provider = Arc::new(StartupDeadlineOnceProvider {
+        attempts: AtomicUsize::new(0),
+        delegate: Provider(provider.clone()),
+    });
+    let service = ConversationService::new(
+        ConversationDependencies {
+            provider: provider.clone(),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = id();
+    assert!(matches!(
+        service.create(id.clone(), caller("panel", "first")).await,
+        Err(ConversationError::Agent(AgentError::StartupDeadline(step)))
+            if step.phase() == AgentStartupPhase::Session
+    ));
+    service.create(id, caller("panel", "retry")).await.unwrap();
+    assert_eq!(provider.attempts.load(Ordering::SeqCst), 2);
+    service.shutdown().await.unwrap();
+}
+struct UncertainStartupDeadlineProvider {
+    attempts: AtomicUsize,
+    identity: ProviderIdentity,
+}
+impl AgentProvider for UncertainStartupDeadlineProvider {
+    fn identity(&self) -> ProviderIdentity {
+        self.identity.clone()
+    }
+    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {
+            Err(ProviderOpenError::with_cleanup(
+                startup_deadline(),
+                Arc::new(UncertainCleanup),
+            ))
+        })
+    }
+}
+/// The other half of the same contract: when the failed launch could not be
+/// confirmed stopped, the slot is deliberately retained, so retrying *this*
+/// conversation cannot reach the provider again. The failure keeps its own
+/// meaning rather than being relabelled by the retained cleanup.
+#[tokio::test]
+async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
+    let (_, _, repository, storage) = fixture(ConversationLimits::default());
+    let provider = Arc::new(UncertainStartupDeadlineProvider {
+        attempts: AtomicUsize::new(0),
+        identity: ProviderIdentity::new("gateway-test", "test", "test").unwrap(),
+    });
+    let service = ConversationService::new(
+        ConversationDependencies {
+            provider: provider.clone(),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = id();
+    for action in ["first", "retry"] {
+        assert!(matches!(
+            service.create(id.clone(), caller("panel", action)).await,
+            Err(ConversationError::Agent(AgentError::StartupDeadline(_))),
+        ));
+    }
+    assert_eq!(provider.attempts.load(Ordering::SeqCst), 1);
+    assert!(service.shutdown().await.is_err());
+}
 #[tokio::test]
 async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
     let (_, _, repository, storage) = fixture(ConversationLimits::default());
@@ -1030,11 +1174,14 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
         identity: ProviderIdentity::new("gateway-test", "test", "test").unwrap(),
     });
     let service = ConversationService::new(
-        provider.clone(),
-        storage,
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            provider: provider.clone(),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1084,6 +1231,7 @@ async fn restart_restores_saved_messages_without_replaying_input() {
             caller("panel", "first"),
             "first".into(),
             "Hello".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -1094,11 +1242,14 @@ async fn restart_restores_saved_messages_without_replaying_input() {
     // Receipt and observation supervisors release their temporary Agent references.
     tokio::task::yield_now().await;
     let restored = ConversationService::new(
-        Arc::new(Provider(provider.clone())),
-        storage,
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider.clone())),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1127,11 +1278,14 @@ impl SessionStorage for PanickingStorage {
 async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
     let (_, provider, repository, _) = fixture(ConversationLimits::default());
     let service = ConversationService::new(
-        Arc::new(Provider(provider)),
-        Arc::new(PanickingStorage),
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider)),
+            storage: Arc::new(PanickingStorage),
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1166,6 +1320,7 @@ async fn boundary_steering_can_be_removed_without_dispatch() {
             caller("panel", "running"),
             "running".into(),
             "Hello".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -1177,6 +1332,7 @@ async fn boundary_steering_can_be_removed_without_dispatch() {
             caller("phone", "steer"),
             "steer".into(),
             "Followup".into(),
+            Vec::new(),
             SubmissionMode::Steer,
         )
         .await
@@ -1218,6 +1374,7 @@ async fn close_then_replay_does_not_reopen_or_dispatch_and_new_input_still_works
             caller("panel", "original"),
             "original".into(),
             "Hello".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -1233,6 +1390,7 @@ async fn close_then_replay_does_not_reopen_or_dispatch_and_new_input_still_works
             caller("panel", "original"),
             "original".into(),
             "Hello".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -1255,6 +1413,7 @@ async fn close_then_replay_does_not_reopen_or_dispatch_and_new_input_still_works
             caller("phone", "new"),
             "new".into(),
             "Again".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -1279,11 +1438,14 @@ impl SessionStorage for HostileStorage {
 async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
     let (_, provider, repository, _) = fixture(ConversationLimits::default());
     let service = ConversationService::new(
-        Arc::new(Provider(provider)),
-        Arc::new(HostileStorage),
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider)),
+            storage: Arc::new(HostileStorage),
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1371,6 +1533,7 @@ async fn desktop_quit_keeps_gateway_admission_open() {
             caller("panel", "submit-next"),
             "next".into(),
             "Hello".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await

@@ -66,8 +66,13 @@ impl ClaudeAcpProvider {
             ));
         }
         let text = Modalities::new(true, false, false).expect("text modality is nonempty");
+        // Image input is offered only when composition supplied the bytes'
+        // source. The model's own metadata and the connected agent's advertised
+        // prompt capabilities narrow it further; neither can widen it.
+        let input = Modalities::new(true, config.images.is_some(), false)
+            .expect("text modality is nonempty");
         let restrictions = BindingRestrictions::new(
-            ModelFeatures::new(text, text, config.tools_enabled, false),
+            ModelFeatures::new(input, text, config.tools_enabled, false),
             // This first profile deliberately excludes extended context and
             // larger output modes. These are binding ceilings, not model facts.
             TokenLimits::new(200_000, 64_000).expect("valid native profile ceilings"),

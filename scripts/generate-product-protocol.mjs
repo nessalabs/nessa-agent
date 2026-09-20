@@ -55,7 +55,9 @@ for (const [name, def] of Object.entries(schema.$defs)) {
         .map((p) => p[0].toUpperCase() + p.slice(1))
         .join("")
     ts += `export const ${name} = ${JSON.stringify(Object.fromEntries(def.enum.map((v) => [pascal(v), v])))} as const\nexport type ${name} = typeof ${name}[keyof typeof ${name}]\n`
-    rs += `#[derive(Debug, Clone, Copy, Deserialize, Serialize)]\n#[serde(rename_all = "snake_case")]\npub enum ${name} {${def.enum.map(pascal).join(",")}}\n`
+    rs += `#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]\n#[serde(rename_all = "snake_case")]\npub enum ${name} {${def.enum.map(pascal).join(",")}}\n`
+    // The wire spelling, so handlers pass the typed value where a code is written.
+    rs += `impl ${name} { pub fn as_str(self) -> &'static str { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${JSON.stringify(v)}`).join(",")} } } }\n`
     if (def["x-close-policy"]) {
       ts += `export const sessionClosePolicy = ${JSON.stringify(def["x-close-policy"])} as const\n`
       rs += `impl ${name} { pub fn web_socket_code(self) -> u16 { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${def["x-close-policy"][v].webSocketCode}`).join(",")} } } pub fn retryable(self) -> bool { match self {${def.enum.map((v) => `Self::${pascal(v)} => ${def["x-close-policy"][v].retryable}`).join(",")} } } }\n`
@@ -77,6 +79,41 @@ for (const [name, def] of Object.entries(schema.$defs)) {
   ts += "}\n"
   if (!externalRust) rs += "}\n"
 }
+/**
+ * The one value every `attachments` array in the schema agrees on, so a bound
+ * that drifted between two commands is a generation failure rather than a
+ * constant the client quietly copies from whichever array was read first.
+ */
+function attachmentArrayBound(keyword) {
+  const arrays = Object.entries(schema.$defs).flatMap(([name, def]) =>
+    Object.entries(def.properties ?? {})
+      .filter(
+        ([field, node]) =>
+          field === "attachments" && node.items?.$ref?.endsWith("/ImageAttachment"),
+      )
+      .map(([, node]) => [name, node[keyword]]),
+  )
+  if (arrays.length === 0) throw new Error(`No attachments array carries ${keyword}`)
+  const [[, bound]] = arrays
+  const disagreeing = arrays.filter(([, value]) => value !== bound)
+  if (bound === undefined || disagreeing.length > 0)
+    throw new Error(
+      `attachments arrays disagree on ${keyword}: ${JSON.stringify(arrays)}`,
+    )
+  return bound
+}
+const image = schema.$defs.ImageAttachment.properties
+// Named for what a reader of the client says, not for the schema's field paths.
+const bounds = {
+  maxImageBytes: image.size.maximum,
+  imageMimeTypes: image.mimeType.enum,
+  maxMessageImages: attachmentArrayBound("maxItems"),
+  maxMessageImageBytes: attachmentArrayBound("x-maxTotalBytes"),
+  maxUploadBytes: schema.$defs.AttachmentBeginParams.properties.size.maximum,
+}
+ts += `${doc(
+  "Bounds the product schema puts on attachments, generated from it so no copy of a number can drift.",
+)}export const bounds = ${JSON.stringify(bounds)} as const\n`
 for (const [kind, entries] of [
   ["Method", manifest.methods],
   ["Event", manifest.events],

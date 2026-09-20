@@ -3,7 +3,7 @@ use super::super::{
     permissions::wire as permission_wire,
     profile::AcpProfile,
     sessions::{
-        binding::{Command, Completion},
+        binding::{Command, Completion, DispatchedPrompt},
         cleanup::ProcessCleanup,
         AcpConfig,
     },
@@ -11,22 +11,28 @@ use super::super::{
 use super::{
     event_queue::{EventSender, QueueError},
     failure::{execution_finish_failure, requested_close_reason, retain_admitted_failure},
+    prompt_content::{content_blocks, ImageBlocks},
     steering::{self, PendingSteering},
     wire,
 };
-use crate::application::agent_execution::agents::AgentError;
+use crate::application::agent_execution::agents::{
+    AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+};
 use crate::application::agent_execution::executions::{
-    ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent, ExecutionUpdate,
+    ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent, ExecutionRequest,
+    ExecutionUpdate,
 };
 
 use crate::application::agent_execution::permissions::{
-    CancellationOrigin, PermissionAnswerDelivery, PermissionAnswerRecord, PermissionCancellation,
-    PermissionResolution, PermissionSelectionState,
+    CancellationOrigin, PermissionAnswer, PermissionAnswerDelivery, PermissionAnswerRecord,
+    PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
+    PermissionSelectionState,
 };
 use crate::application::agent_execution::providers::{
-    CleanupReport, ExecutionReport, ObservationFailureCause, OperationCapabilities,
-    ProviderExecutionReply, ProviderOperationFailure, ProviderSessionState, ResourceCleanup,
-    SessionCloseRequest, SteeringOutcome,
+    CleanupReport, ExecutionReport, ImageInputRefusal, ObservationFailureCause,
+    OperationCapabilities, ProviderExecutionReply, ProviderOperationFailure,
+    ProviderOperationResult, ProviderSessionState, ResourceCleanup, SessionCloseRequest,
+    SteeringOutcome,
 };
 use crate::domain::agent_execution::executions::{
     ExecutionId, ExecutionOutcome, MessageChunk, MessageId,
@@ -34,6 +40,7 @@ use crate::domain::agent_execution::executions::{
 use crate::domain::agent_execution::permissions::{
     PermissionCancellationReason, PermissionCancellationReasonView, PermissionId,
 };
+use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::infrastructure::{
@@ -50,7 +57,6 @@ use std::{
         Arc,
     },
     task::Poll,
-    time::Duration,
 };
 use tokio::{
     sync::{mpsc, oneshot, watch},
@@ -58,9 +64,31 @@ use tokio::{
 };
 
 type ExecutionReply = oneshot::Sender<ProviderExecutionReply>;
+type SteeringReply = oneshot::Sender<ProviderOperationResult<SteeringOutcome>>;
 enum DispatchReadiness {
     Ready,
     Interrupted(AgentError),
+}
+/// Who is waiting for the command about to be dispatched. Draining provider
+/// input stops early when that caller has gone.
+enum DispatchCaller<'a> {
+    Execution(&'a ExecutionReply),
+    Steering(&'a SteeringReply),
+}
+impl DispatchCaller<'_> {
+    fn is_gone(&self) -> bool {
+        match self {
+            Self::Execution(reply) => reply.is_closed(),
+            Self::Steering(reply) => reply.is_closed(),
+        }
+    }
+}
+/// What stopped a drain from reaching its dispatch boundary, if anything.
+fn interruption(readiness: &Result<DispatchReadiness, AgentError>) -> Option<&AgentError> {
+    match readiness {
+        Ok(DispatchReadiness::Ready) => None,
+        Ok(DispatchReadiness::Interrupted(error)) | Err(error) => Some(error),
+    }
 }
 struct ActiveExecution {
     id: i64,
@@ -84,6 +112,10 @@ struct Worker<P> {
     active: Option<ActiveExecution>,
     steering: Option<PendingSteering>,
     steering_supported: bool,
+    /// The connected agent advertised `promptCapabilities.image` at initialize.
+    /// Whether an image can actually be delivered also needs a byte source, so
+    /// the published capability is this and `config.images` together.
+    agent_accepts_images: bool,
     operation_capabilities: watch::Sender<OperationCapabilities>,
     permissions: HashMap<PermissionId, RpcId>,
     shutdown_deadline: Option<Instant>,
@@ -113,7 +145,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
 ) {
     let reader = Reader::new(
         scope.stdout.take().expect("owned stdout"),
-        config.max_frame_bytes,
+        config.max_incoming_frame_bytes,
     );
     let mut worker = Worker {
         profile,
@@ -131,6 +163,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         active: None,
         steering: None,
         steering_supported: false,
+        agent_accepts_images: false,
         operation_capabilities,
         permissions: HashMap::new(),
         shutdown_deadline: None,
@@ -228,6 +261,18 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
     }));
     if let Some(reply) = execution_reply {
         let _ = reply.send(ProviderExecutionReply::Finished(settlement));
+    }
+}
+// Startup budgets are shared by every step, so only the step that was waiting
+// identifies what expired. Other failures keep their own typed meaning.
+fn startup_deadline(
+    error: AgentError,
+    phase: AgentStartupPhase,
+    context: AgentStartupContext,
+) -> AgentError {
+    match error {
+        AgentError::Deadline => AgentError::StartupDeadline(AgentStartupStep::new(phase, context)),
+        other => other,
     }
 }
 struct WorkerResult {
@@ -423,7 +468,8 @@ impl<P: AcpProfile> Worker<P> {
         deadline: Option<Instant>,
     ) -> Result<(), AgentError> {
         let stdin = self.scope.stdin.as_mut().ok_or(AgentError::Closed)?;
-        let result = json_rpc::send_encoded(stdin, &bytes, Duration::from_secs(1), deadline).await;
+        let allowed = json_rpc::write_allowance(bytes.len());
+        let result = json_rpc::send_encoded(stdin, &bytes, allowed, deadline).await;
         if result == Err(AgentError::Deadline) && !self.closing {
             self.failure_cause = ObservationFailureCause::DeadlineExceeded;
             self.cancellation_cause.get_or_insert((
@@ -552,13 +598,25 @@ impl<P: AcpProfile> Worker<P> {
         execution: &mut Option<ExecutionController>,
     ) -> Result<(), AgentError> {
         let deadline = Instant::now() + self.config.startup_timeout;
+        // Whether saved context is being restored is decided before any step
+        // runs, so every step's deadline reports it. Reading it off the step
+        // would call a restoration that expired during `initialize` new.
+        let context = if restore.is_some() {
+            AgentStartupContext::Restored
+        } else {
+            AgentStartupContext::New
+        };
         let init = self.rpc("initialize", json!({"protocolVersion":1,"clientInfo":{"name":"nessa-sdk","version":env!("CARGO_PKG_VERSION")},
-            "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}), deadline, None).await?;
+            "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}), deadline, None)
+            .await
+            .map_err(|error| startup_deadline(error, AgentStartupPhase::Initialize, context))?;
         if init.get("protocolVersion").and_then(Value::as_u64) != Some(1) {
             return Err(json_rpc::protocol("requires ACP protocol 1"));
         }
         self.profile.validate_initialize(&init)?;
         self.steering_supported = self.profile.supports_steering(&init);
+        self.agent_accepts_images =
+            init.pointer("/agentCapabilities/promptCapabilities/image") == Some(&Value::Bool(true));
         let mut params = self
             .profile
             .new_session_params(&self.config, &self.capabilities);
@@ -579,7 +637,10 @@ impl<P: AcpProfile> Worker<P> {
         } else {
             "session/new"
         };
-        let result = self.rpc(method, params, deadline, None).await?;
+        let result = self
+            .rpc(method, params, deadline, None)
+            .await
+            .map_err(|error| startup_deadline(error, AgentStartupPhase::Session, context))?;
         let id = if let Some(id) = &restore {
             id.clone()
         } else {
@@ -608,18 +669,51 @@ impl<P: AcpProfile> Worker<P> {
                     deadline,
                     Some(execution),
                 )
-                .await?;
+                .await
+                .map_err(|error| startup_deadline(error, AgentStartupPhase::Configure, context))?;
             self.profile
                 .verify_session(&result, &self.capabilities, true)?;
         }
         self.operation_capabilities
             .send_replace(OperationCapabilities {
+                negotiated: true,
                 native_steering: self.steering_supported,
+                // Only an agent that said so receives an image, and only when
+                // this process has somewhere to read the bytes from.
+                image_input: self.config.images.is_some() && self.agent_accepts_images,
                 session_resume: init
                     .pointer("/agentCapabilities/sessionCapabilities/resume")
                     .is_some_and(Value::is_object),
             });
         Ok(())
+    }
+
+    /// The ACP content blocks for one user message: its text, then its images
+    /// in attachment order. Nothing has been written when this fails, so the
+    /// caller rejects the input without a dispatch.
+    ///
+    /// This never waits. The session read, verified, and encoded `images`
+    /// before it sent the command, because this task is the only one polling
+    /// close, deadlines, consumer loss, and the agent's output. What stays here
+    /// is the one fact only this task knows for certain after a restoration:
+    /// whether the connected agent agreed to receive images. Admission gives
+    /// the same typed answer when it already knows.
+    fn prompt_blocks(
+        &self,
+        message: &UserMessage,
+        images: ImageBlocks,
+    ) -> Result<Vec<Value>, AgentError> {
+        if !message.images().is_empty() {
+            if self.config.images.is_none() {
+                return Err(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered));
+            }
+            if !self.agent_accepts_images {
+                return Err(AgentError::ImageInputRefused(
+                    ImageInputRefusal::AgentDoesNotAccept,
+                ));
+            }
+        }
+        content_blocks(message, images)
     }
 
     async fn drive(&mut self, execution: &mut ExecutionController) -> Result<(), AgentError> {
@@ -744,20 +838,15 @@ impl<P: AcpProfile> Worker<P> {
     async fn drain_ready_before_dispatch(
         &mut self,
         execution: &mut ExecutionController,
-        command: &Command,
+        caller: &DispatchCaller<'_>,
         dispatch_deadline: Option<Instant>,
     ) -> Result<DispatchReadiness, AgentError> {
         loop {
             for _ in 0..32 {
-                let caller_gone = match command {
-                    Command::ExecutionRequest(_, reply) => reply.is_closed(),
-                    Command::Steer(_, _, reply) => reply.is_closed(),
-                    _ => false,
-                };
                 if self.close_requested.borrow().is_some()
                     || self.closing
                     || self.deferred_outcome.is_some()
-                    || caller_gone
+                    || caller.is_gone()
                 {
                     return Ok(DispatchReadiness::Interrupted(AgentError::Closed));
                 }
@@ -853,265 +942,344 @@ impl<P: AcpProfile> Worker<P> {
         execution: &mut ExecutionController,
         command: Command,
     ) -> Result<(), AgentError> {
-        let dispatch_deadline = match &command {
-            Command::ExecutionRequest(..) => self
-                .config
-                .execution_timeout
-                .map(|limit| Instant::now() + limit),
-            Command::Steer(..) => Some(Instant::now() + steering::RESPONSE_TIMEOUT),
-            _ => None,
-        };
-        if matches!(&command, Command::ExecutionRequest(..) | Command::Steer(..)) {
-            let readiness = self
-                .drain_ready_before_dispatch(execution, &command, dispatch_deadline)
-                .await;
-            let error = match &readiness {
-                Ok(DispatchReadiness::Ready) => None,
-                Ok(DispatchReadiness::Interrupted(error)) | Err(error) => Some(error.clone()),
-            };
-            if let Some(error) = error {
-                match command {
-                    Command::ExecutionRequest(_, reply) => {
-                        let report = if matches!(
-                            &readiness,
-                            Ok(DispatchReadiness::Interrupted(AgentError::Closed))
-                        ) {
-                            ProviderExecutionReply::Rejected(error)
-                        } else {
-                            ProviderExecutionReply::Finished(ExecutionReport::new(
-                                None,
-                                Some(error),
-                                ProviderSessionState::CleanupRequired,
-                            ))
-                        };
-                        let _ = reply.send(report);
-                    }
-                    Command::Steer(_, _, reply) => {
-                        let _ = reply.send(Err(ProviderOperationFailure::new(
-                            error,
-                            ProviderSessionState::CleanupRequired,
-                        )));
-                    }
-                    _ => unreachable!("only dispatch commands drain provider input"),
-                }
-                return readiness.map(|_| ());
-            }
-        }
         match command {
-            Command::ExecutionRequest(input, reply) => {
-                if reply.is_closed() {
-                    return Ok(());
-                }
-                if self.steering.is_some() {
-                    let _ = reply.send(ProviderExecutionReply::Rejected(AgentError::Busy));
-                    return Ok(());
-                }
-                let validation = self.profile.validate_execution(&input, &self.capabilities);
-                if let Err(error) = validation {
-                    let _ = reply.send(ProviderExecutionReply::Rejected(error));
-                    return Ok(());
-                }
-                let id = self.pending_id()?;
-                let frame = match json_rpc::encode(
-                    json_rpc::request(
-                        id,
-                        "session/prompt",
-                        json!({"sessionId":execution.id().as_str(),"prompt":[{"type":"text","text":input.user_message.as_str()}]}),
-                    ),
-                    self.config.max_frame_bytes,
-                ) {
-                    Ok(frame) => frame,
-                    Err(error) => {
-                        let _ = reply.send(ProviderExecutionReply::Rejected(error));
-                        return Ok(());
-                    }
-                };
-                let execution_id = input.execution_id;
-                if let Err(error) = execution.begin_execution(execution_id.clone()) {
-                    let _ = reply.send(ProviderExecutionReply::Rejected(error));
-                    return Ok(());
-                }
-                self.sequence = id;
-                self.active = Some(ActiveExecution {
-                    id,
-                    execution_id,
-                    reply,
-                    deadline: dispatch_deadline,
-                });
-                self.provider_result = None;
-                self.profile.begin_execution();
-                self.send_encoded(
-                    frame,
-                    self.active.as_ref().and_then(|active| active.deadline),
-                )
-                .await?;
+            Command::ExecutionRequest(prompt, reply) => {
+                self.dispatch_execution(execution, prompt, reply).await
             }
-            Command::Steer(target, input, reply) => {
-                if reply.is_closed() {
-                    return Ok(());
-                }
-                if self.close_requested.borrow().is_some() {
-                    let _ = reply.send(Err(ProviderOperationFailure::new(
-                        AgentError::Closed,
-                        ProviderSessionState::CleanupRequired,
-                    )));
-                } else if !self.steering_supported {
-                    let _ = reply.send(Err(ProviderOperationFailure::new(
-                        AgentError::Unsupported("provider does not support steering".into()),
-                        ProviderSessionState::Usable,
-                    )));
-                } else if self.active.as_ref().map(|active| &active.execution_id) != Some(&target) {
-                    let _ = reply.send(Ok(SteeringOutcome::PromptRequired));
-                } else if self.steering.is_some() {
-                    let _ = reply.send(Err(ProviderOperationFailure::new(
-                        AgentError::Busy,
-                        ProviderSessionState::Usable,
-                    )));
-                } else if let Err(error) =
-                    self.profile.validate_execution(&input, &self.capabilities)
-                {
-                    let _ = reply.send(Err(ProviderOperationFailure::new(
-                        error,
-                        ProviderSessionState::Usable,
-                    )));
-                } else {
-                    let id = self.pending_id()?;
-                    let frame = match json_rpc::encode(
-                        json_rpc::request(
-                            id,
-                            "_session/steering",
-                            json!({
-                                "sessionId": execution.id().as_str(),
-                                "prompt": [{"type":"text", "text":input.user_message.as_str()}],
-                                "_meta": {"steering":{"idleBehavior":"promptRequired"}}
-                            }),
-                        ),
-                        self.config.max_frame_bytes,
-                    ) {
-                        Ok(frame) => frame,
-                        Err(error) => {
-                            let _ = reply.send(Err(ProviderOperationFailure::new(
-                                error,
-                                ProviderSessionState::Usable,
-                            )));
-                            return Ok(());
-                        }
-                    };
-                    self.sequence = id;
-                    self.steering = Some(PendingSteering {
-                        id,
-                        reply,
-                        deadline: dispatch_deadline.expect("steering has an operation deadline"),
-                    });
-                    let deadline = self
-                        .active
-                        .as_ref()
-                        .and_then(|active| active.deadline)
-                        .into_iter()
-                        .chain(dispatch_deadline)
-                        .min();
-                    self.send_encoded(frame, deadline).await?;
-                }
+            Command::Steer(target, prompt, reply) => {
+                self.dispatch_steering(execution, target, prompt, reply)
+                    .await
             }
             Command::CancelPermission(input, reply) => {
-                // Queue admission transfers ownership to the worker. A dropped
-                // reply waiter must not erase the decision or its audit evidence.
-                let record = match execution.cancel_review(input) {
-                    Ok(record) => record,
-                    Err(error) => {
-                        let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
-                            error,
-                            ProviderSessionState::Usable,
-                            PermissionSelectionState::Pending,
-                        )));
-                        return Ok(());
-                    }
-                };
-                let wire_id = self
-                    .permissions
-                    .remove(record.request().id())
-                    .expect("pending wire permission");
-                if let Err(error) = self.record_cancellations(vec![record.clone()]).await {
-                    let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
-                        error.clone(),
-                        ProviderSessionState::CleanupRequired,
-                        PermissionSelectionState::Consumed,
-                    )));
-                    return Err(error);
-                }
-                let delivery = self
-                    .send(permission_wire::permission_cancel(&wire_id))
-                    .await;
-                let _ = reply.send(delivery.clone().map(|()| record).map_err(|error| {
-                    ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
-                }));
-                delivery?;
+                self.withdraw_permission(execution, input, reply).await
             }
             Command::Answer(answer, reply) => {
-                // Queue admission transfers ownership to the worker. A dropped
-                // reply waiter must not erase the decision or its audit evidence.
-                let permission_id = answer.id.clone();
-                let option_id = answer.option_id.clone();
-                let resolution = match execution.answer_permission(answer) {
-                    Ok(resolution) => resolution,
-                    Err(error) => {
-                        let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
-                            error,
-                            ProviderSessionState::Usable,
-                            PermissionSelectionState::Pending,
-                        )));
-                        return Ok(());
-                    }
-                };
-                if let Err(error) = self
-                    .record_answer(resolution.clone(), PermissionAnswerDelivery::Selected)
-                    .await
-                {
-                    let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
-                        error.clone(),
-                        ProviderSessionState::CleanupRequired,
-                        PermissionSelectionState::Consumed,
-                    )));
-                    return Err(error);
-                }
-                let wire_id = self
-                    .permissions
-                    .remove(&permission_id)
-                    .expect("pending wire permission");
-                let response = permission_wire::selected(&wire_id, option_id.as_str());
-                let result = self.send(response).await;
-                let delivery = match &result {
-                    Ok(()) => PermissionAnswerDelivery::Written,
-                    Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
-                };
-                if let Err(error) = self.record_answer(resolution.clone(), delivery).await {
-                    let error = match result {
-                        Err(delivery_error) => {
-                            AgentError::PermissionAnswerDeliveryAndAuditFailure {
-                                delivery_error: Box::new(delivery_error),
-                                cleanup_error: None,
-                            }
-                        }
-                        Ok(()) => error,
-                    };
-                    let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
-                        error.clone(),
-                        ProviderSessionState::CleanupRequired,
-                        PermissionSelectionState::Consumed,
-                    )));
-                    return Err(error);
-                }
-                let _ = reply.send(result.clone().map(|()| resolution).map_err(|error| {
-                    ProviderOperationFailure::permission_answer(
-                        error,
-                        ProviderSessionState::CleanupRequired,
-                        PermissionSelectionState::Consumed,
-                    )
-                }));
-                result?;
+                self.answer_permission(execution, answer, reply).await
             }
         }
-        Ok(())
+    }
+    /// Send one `session/prompt` for `prompt`, after applying provider evidence
+    /// that is already readable. Every refusal reaches `reply` and writes
+    /// nothing; `prompt` carries the deadline the whole execution shares,
+    /// counted from before its images were read.
+    async fn dispatch_execution(
+        &mut self,
+        execution: &mut ExecutionController,
+        prompt: DispatchedPrompt,
+        reply: ExecutionReply,
+    ) -> Result<(), AgentError> {
+        let deadline = prompt.deadline;
+        let readiness = self
+            .drain_ready_before_dispatch(execution, &DispatchCaller::Execution(&reply), deadline)
+            .await;
+        if let Some(error) = interruption(&readiness) {
+            let report = if matches!(
+                &readiness,
+                Ok(DispatchReadiness::Interrupted(AgentError::Closed))
+            ) {
+                ProviderExecutionReply::Rejected(error.clone())
+            } else {
+                ProviderExecutionReply::Finished(ExecutionReport::new(
+                    None,
+                    Some(error.clone()),
+                    ProviderSessionState::CleanupRequired,
+                ))
+            };
+            let _ = reply.send(report);
+            return readiness.map(|_| ());
+        }
+        if reply.is_closed() {
+            return Ok(());
+        }
+        if self.steering.is_some() {
+            let _ = reply.send(ProviderExecutionReply::Rejected(AgentError::Busy));
+            return Ok(());
+        }
+        let DispatchedPrompt {
+            input, mut images, ..
+        } = prompt;
+        // Held until these bytes have left as a frame, so the session's
+        // in-flight image budget covers exactly what is still retained.
+        let _budget = images.take_charge();
+        if let Err(error) = self.profile.validate_execution(&input, &self.capabilities) {
+            let _ = reply.send(ProviderExecutionReply::Rejected(error));
+            return Ok(());
+        }
+        let blocks = match self.prompt_blocks(&input.user_message, images) {
+            Ok(blocks) => blocks,
+            Err(error) => {
+                let _ = reply.send(ProviderExecutionReply::Rejected(error));
+                return Ok(());
+            }
+        };
+        let id = self.pending_id()?;
+        let frame = match json_rpc::encode(
+            json_rpc::request(
+                id,
+                "session/prompt",
+                json!({"sessionId":execution.id().as_str(),"prompt":blocks}),
+            ),
+            self.config.max_frame_bytes,
+        ) {
+            Ok(frame) => frame,
+            Err(error) => {
+                let _ = reply.send(ProviderExecutionReply::Rejected(error));
+                return Ok(());
+            }
+        };
+        let execution_id = input.execution_id;
+        if let Err(error) = execution.begin_execution(execution_id.clone()) {
+            let _ = reply.send(ProviderExecutionReply::Rejected(error));
+            return Ok(());
+        }
+        self.sequence = id;
+        self.active = Some(ActiveExecution {
+            id,
+            execution_id,
+            reply,
+            deadline,
+        });
+        self.provider_result = None;
+        self.profile.begin_execution();
+        self.send_encoded(frame, deadline).await
+    }
+    /// Send one `_session/steering` request for `prompt`, after applying
+    /// provider evidence that is already readable.
+    ///
+    /// `prompt` carries the deadline the whole steering call shares, counted
+    /// from before its images were read; the acknowledgement is awaited until
+    /// that instant plus the extra write time this frame's size is allowed.
+    async fn dispatch_steering(
+        &mut self,
+        execution: &mut ExecutionController,
+        target: ExecutionId,
+        prompt: DispatchedPrompt,
+        reply: SteeringReply,
+    ) -> Result<(), AgentError> {
+        let readiness = self
+            .drain_ready_before_dispatch(
+                execution,
+                &DispatchCaller::Steering(&reply),
+                prompt.deadline,
+            )
+            .await;
+        if let Some(error) = interruption(&readiness) {
+            let _ = reply.send(Err(ProviderOperationFailure::new(
+                error.clone(),
+                ProviderSessionState::CleanupRequired,
+            )));
+            return readiness.map(|_| ());
+        }
+        if reply.is_closed() {
+            return Ok(());
+        }
+        if let Some(answer) = self.steering_without_sending(&target, &prompt.input) {
+            let _ = reply.send(answer);
+            return Ok(());
+        }
+        let DispatchedPrompt {
+            input,
+            mut images,
+            deadline,
+        } = prompt;
+        // Held until these bytes have left as a frame, as for an execution.
+        let _budget = images.take_charge();
+        let blocks = match self.prompt_blocks(&input.user_message, images) {
+            Ok(blocks) => blocks,
+            Err(error) => {
+                let _ = reply.send(Err(ProviderOperationFailure::new(
+                    error,
+                    ProviderSessionState::Usable,
+                )));
+                return Ok(());
+            }
+        };
+        let id = self.pending_id()?;
+        let frame = match json_rpc::encode(
+            json_rpc::request(
+                id,
+                "_session/steering",
+                json!({
+                    "sessionId": execution.id().as_str(),
+                    "prompt": blocks,
+                    "_meta": {"steering":{"idleBehavior":"promptRequired"}}
+                }),
+            ),
+            self.config.max_frame_bytes,
+        ) {
+            Ok(frame) => frame,
+            Err(error) => {
+                let _ = reply.send(Err(ProviderOperationFailure::new(
+                    error,
+                    ProviderSessionState::Usable,
+                )));
+                return Ok(());
+            }
+        };
+        // The acknowledgement deadline covers the write too. A frame carrying
+        // images gets the same extra time its write does; a text frame keeps
+        // exactly what is left of the fixed steering deadline.
+        let acknowledged_by = deadline.expect("steering has an operation deadline")
+            + json_rpc::large_frame_allowance(frame.len());
+        self.sequence = id;
+        self.steering = Some(PendingSteering {
+            id,
+            reply,
+            deadline: acknowledged_by,
+        });
+        let write_deadline = self
+            .active
+            .as_ref()
+            .and_then(|active| active.deadline)
+            .into_iter()
+            .chain(Some(acknowledged_by))
+            .min();
+        self.send_encoded(frame, write_deadline).await
+    }
+    /// The answer a steering request gets without being sent, if it gets one:
+    /// a closing context, an agent that does not steer, a target that is not
+    /// the running execution, one steering already outstanding, or input the
+    /// profile refuses.
+    fn steering_without_sending(
+        &self,
+        target: &ExecutionId,
+        input: &ExecutionRequest,
+    ) -> Option<ProviderOperationResult<SteeringOutcome>> {
+        if self.close_requested.borrow().is_some() {
+            return Some(Err(ProviderOperationFailure::new(
+                AgentError::Closed,
+                ProviderSessionState::CleanupRequired,
+            )));
+        }
+        if !self.steering_supported {
+            return Some(Err(ProviderOperationFailure::new(
+                AgentError::Unsupported("provider does not support steering".into()),
+                ProviderSessionState::Usable,
+            )));
+        }
+        if self.active.as_ref().map(|active| &active.execution_id) != Some(target) {
+            return Some(Ok(SteeringOutcome::PromptRequired));
+        }
+        if self.steering.is_some() {
+            return Some(Err(ProviderOperationFailure::new(
+                AgentError::Busy,
+                ProviderSessionState::Usable,
+            )));
+        }
+        match self.profile.validate_execution(input, &self.capabilities) {
+            Ok(()) => None,
+            Err(error) => Some(Err(ProviderOperationFailure::new(
+                error,
+                ProviderSessionState::Usable,
+            ))),
+        }
+    }
+    /// Withdraw one pending review on the caller's behalf: record the decision,
+    /// then tell the agent. Queue admission transferred ownership to this
+    /// worker, so a dropped reply waiter must not erase either step.
+    async fn withdraw_permission(
+        &mut self,
+        execution: &mut ExecutionController,
+        input: PermissionCancellationRequest,
+        reply: oneshot::Sender<ProviderOperationResult<PermissionCancellation>>,
+    ) -> Result<(), AgentError> {
+        let record = match execution.cancel_review(input) {
+            Ok(record) => record,
+            Err(error) => {
+                let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
+                    error,
+                    ProviderSessionState::Usable,
+                    PermissionSelectionState::Pending,
+                )));
+                return Ok(());
+            }
+        };
+        let wire_id = self
+            .permissions
+            .remove(record.request().id())
+            .expect("pending wire permission");
+        if let Err(error) = self.record_cancellations(vec![record.clone()]).await {
+            let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
+                error.clone(),
+                ProviderSessionState::CleanupRequired,
+                PermissionSelectionState::Consumed,
+            )));
+            return Err(error);
+        }
+        let delivery = self
+            .send(permission_wire::permission_cancel(&wire_id))
+            .await;
+        let _ = reply.send(delivery.clone().map(|()| record).map_err(|error| {
+            ProviderOperationFailure::new(error, ProviderSessionState::CleanupRequired)
+        }));
+        delivery
+    }
+    /// Answer one pending review with the caller's selection: record it, send
+    /// it, then record what delivery did. Queue admission transferred ownership
+    /// to this worker, so a dropped reply waiter must not erase any of that.
+    async fn answer_permission(
+        &mut self,
+        execution: &mut ExecutionController,
+        answer: PermissionAnswer,
+        reply: oneshot::Sender<ProviderOperationResult<PermissionResolution>>,
+    ) -> Result<(), AgentError> {
+        let permission_id = answer.id.clone();
+        let option_id = answer.option_id.clone();
+        let resolution = match execution.answer_permission(answer) {
+            Ok(resolution) => resolution,
+            Err(error) => {
+                let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
+                    error,
+                    ProviderSessionState::Usable,
+                    PermissionSelectionState::Pending,
+                )));
+                return Ok(());
+            }
+        };
+        if let Err(error) = self
+            .record_answer(resolution.clone(), PermissionAnswerDelivery::Selected)
+            .await
+        {
+            let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
+                error.clone(),
+                ProviderSessionState::CleanupRequired,
+                PermissionSelectionState::Consumed,
+            )));
+            return Err(error);
+        }
+        let wire_id = self
+            .permissions
+            .remove(&permission_id)
+            .expect("pending wire permission");
+        let response = permission_wire::selected(&wire_id, option_id.as_str());
+        let result = self.send(response).await;
+        let delivery = match &result {
+            Ok(()) => PermissionAnswerDelivery::Written,
+            Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
+        };
+        if let Err(error) = self.record_answer(resolution.clone(), delivery).await {
+            let error = match result {
+                Err(delivery_error) => AgentError::PermissionAnswerDeliveryAndAuditFailure {
+                    delivery_error: Box::new(delivery_error),
+                    cleanup_error: None,
+                },
+                Ok(()) => error,
+            };
+            let _ = reply.send(Err(ProviderOperationFailure::permission_answer(
+                error.clone(),
+                ProviderSessionState::CleanupRequired,
+                PermissionSelectionState::Consumed,
+            )));
+            return Err(error);
+        }
+        let _ = reply.send(result.clone().map(|()| resolution).map_err(|error| {
+            ProviderOperationFailure::permission_answer(
+                error,
+                ProviderSessionState::CleanupRequired,
+                PermissionSelectionState::Consumed,
+            )
+        }));
+        result
     }
     async fn message(
         &mut self,

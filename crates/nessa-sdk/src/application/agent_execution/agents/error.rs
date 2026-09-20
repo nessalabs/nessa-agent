@@ -2,12 +2,119 @@
 #![deny(missing_docs)]
 
 use crate::application::agent_execution::hooks::HookFailure;
-use crate::application::agent_execution::{providers::CloseOutcome, sessions::StorageError};
+use crate::application::agent_execution::{
+    providers::{CloseOutcome, ImageInputRefusal, UserImageError},
+    sessions::StorageError,
+};
 use crate::domain::agent_execution::executions::{ExecutionOutcome, SchedulingError};
 use std::{error::Error, fmt, future::Future, pin::Pin};
 
 /// Sendable asynchronous result borrowing its adapter for the lifetime of the call.
 pub type AgentFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, AgentError>> + Send + 'a>>;
+
+/// The step of agent startup that was running when a startup budget expired.
+///
+/// Startup is the work between opening a provider and publishing a usable Agent.
+/// Each step is bounded by the adapter's own startup budget, and the step named
+/// here is the one that was still waiting when that budget ran out. It records
+/// what the caller was doing, not why the provider was slow.
+///
+/// This says nothing about whether saved context was involved: every step runs
+/// both when opening new context and when restoring saved context. That is the
+/// separate [`AgentStartupContext`], and the two travel together in
+/// [`AgentStartupStep`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentStartupPhase {
+    /// Protocol negotiation with the provider, before any session exists.
+    Initialize,
+    /// Establishing the provider session itself.
+    Session,
+    /// Applying the host's session configuration to an established session.
+    Configure,
+}
+
+/// Whether startup was opening new provider context or restoring saved context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentStartupContext {
+    /// No saved context existed; the provider was asked for a new session.
+    New,
+    /// Saved context named a provider session, which was being restored.
+    Restored,
+}
+impl AgentStartupContext {
+    /// Stable lowercase identifier for logs and diagnostics.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Restored => "restored",
+        }
+    }
+    /// Whether this startup was continuing an earlier session.
+    pub fn restores_saved_session(self) -> bool {
+        matches!(self, Self::Restored)
+    }
+}
+impl fmt::Display for AgentStartupContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The startup step that ran out of budget, together with the context it was
+/// establishing.
+///
+/// The two facts are separate: a restoration can expire while still negotiating
+/// the protocol, long before the provider is asked to resume anything, and it
+/// can expire again while applying configuration after the resume succeeded.
+/// Reading the context off the step would call both of those a new session.
+///
+/// The pair is immutable and always consistent, because it is only ever built
+/// from what the adapter was actually doing.
+///
+/// ```
+/// use nessa_sdk::application::agent_execution::agents::{
+///     AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+/// };
+/// let step = AgentStartupStep::new(AgentStartupPhase::Session, AgentStartupContext::Restored);
+/// assert_eq!(step.as_str(), "session_resume");
+/// assert!(step.context().restores_saved_session());
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AgentStartupStep {
+    phase: AgentStartupPhase,
+    context: AgentStartupContext,
+}
+impl AgentStartupStep {
+    /// Record the step that expired and the context it was establishing.
+    pub fn new(phase: AgentStartupPhase, context: AgentStartupContext) -> Self {
+        Self { phase, context }
+    }
+    /// The startup step that was still waiting when the budget ran out.
+    pub fn phase(self) -> AgentStartupPhase {
+        self.phase
+    }
+    /// Whether that step was opening new context or restoring saved context.
+    pub fn context(self) -> AgentStartupContext {
+        self.context
+    }
+    /// Stable lowercase identifier naming the resolved step, for logs and
+    /// diagnostics. Establishing a session reads as `session_new` or
+    /// `session_resume` according to the context; the other steps have one
+    /// spelling each, and the context remains available separately.
+    pub fn as_str(self) -> &'static str {
+        match (self.phase, self.context) {
+            (AgentStartupPhase::Initialize, _) => "initialize",
+            (AgentStartupPhase::Session, AgentStartupContext::New) => "session_new",
+            (AgentStartupPhase::Session, AgentStartupContext::Restored) => "session_resume",
+            (AgentStartupPhase::Configure, _) => "session_configure",
+        }
+    }
+}
+impl fmt::Display for AgentStartupStep {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Failure of an Agent operation. Inspect variants and nested outcomes rather
 /// than parsing diagnostic strings; a failed response does not prove no effect occurred.
@@ -85,6 +192,25 @@ pub enum AgentError {
     Unsupported(String),
     /// Input failed admission validation without dispatching this attempt.
     InvalidInput(String),
+    /// An image the message refers to could not be supplied intact, so the
+    /// message was not dispatched. Nothing is sent without it.
+    UserImage(UserImageError),
+    /// The message's images were refused for what they are or for who would
+    /// receive them, without reading a byte. Admission answers this before the
+    /// message is accepted, so nothing was saved, queued, or sent; an adapter
+    /// answers the same value at dispatch when only it knows that its agent
+    /// takes no images.
+    ImageInputRefused(ImageInputRefusal),
+    /// Encoded for the provider, this message cannot fit the one frame that
+    /// would carry it. Admission answers this before the message is accepted.
+    MessageTooLarge {
+        /// The message as a frame would carry it, in bytes: text as JSON, every
+        /// image as base64, and the adapter's fixed allowance for the request
+        /// around them.
+        encoded_bytes: u64,
+        /// Largest frame the provider connection carries, in bytes.
+        max_bytes: u64,
+    },
     /// An immediate operation overlaps existing work; queued admission has a separate contract.
     Busy,
     /// The operation was locally cancelled or its provider context disconnected; cleanup is a separate fact.
@@ -100,8 +226,16 @@ pub enum AgentError {
     },
     /// A pipe or transport operation failed; delivery may be uncertain.
     Transport(String),
-    /// An explicitly bounded startup, write, audit, steering, or execution operation timed out.
+    /// An explicitly bounded write, audit, steering, or execution operation timed out.
+    /// Startup has its own [`Self::StartupDeadline`], which names the step that expired.
     Deadline,
+    /// Agent startup did not finish inside its budget. The step was still
+    /// waiting when the budget expired; no session became usable, and no input
+    /// reached the provider. The provider process may still be running, so
+    /// resource cleanup remains a separate fact reported by CleanupReport, and
+    /// unconfirmed cleanup can still retain the session's storage lease.
+    /// Retrying is safe; whether it can succeed depends on that cleanup.
+    StartupDeadline(AgentStartupStep),
     /// A bounded event queue overflowed or a live subscriber lagged; consult the owning stream contract.
     Backpressure,
     /// Owned resource termination could not be confirmed.

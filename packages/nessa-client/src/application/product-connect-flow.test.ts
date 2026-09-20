@@ -24,7 +24,9 @@ describe("runProductHandshake", () => {
     }
     const challenge = { minVersion: 1, maxVersion: 1, nonce: "challenge", expiresAt: 102 }
     await expect(runProductHandshake(wire, options, challenge)).rejects.toThrow("sent")
-    expect(request.mock.calls[0]?.[2]).toBe(1_500)
+    // A cap, not a replacement: the wait may be shorter than the connection's
+    // deadline but never outlives the challenge it answers.
+    expect(request.mock.calls[0]?.[2]).toEqual({ atMostMs: 1_500 })
     request.mockClear()
     vi.setSystemTime(102_000)
     await expect(runProductHandshake(wire, options, challenge)).rejects.toThrow(

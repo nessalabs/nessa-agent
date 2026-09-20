@@ -1531,3 +1531,92 @@ body {
     box-shadow: 0 30px 80px -20px rgb(0 0 0 / 0.55);
   }
 }
+
+/*
+ * An upload, drawn on the edge of the tile it belongs to.
+ *
+ * The file is the thing being looked at, so the file stays visible: the
+ * progress goes around it rather than over it. A spinner in the middle covered
+ * the very thumbnail somebody attached to check they had picked the right one,
+ * and said no more than the edge says.
+ *
+ * The band is the same two-layer mask the panel's edge reveal uses — an inner
+ * box clipped to content, composited away from the border box, leaving a ring
+ * exactly `padding` thick — so the light sits on the tile's own outline
+ * whatever radius the design system gives it.
+ *
+ * While it uploads the band carries the Nessa rim spectrum and turns, the same
+ * light the composer's rim works by. When the gateway has it, the band becomes
+ * one calm green and goes: it is an answer, not a state to live in, and the
+ * tile it leaves behind is the plain tile of a file that is ready. Removing it
+ * is `animationend`'s to say, so what is on screen and what React holds cannot
+ * disagree.
+ */
+.nessa-upload-ring {
+  position: absolute;
+  inset: 0;
+  padding: 2px;
+  overflow: hidden;
+  pointer-events: none;
+  mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+  mask-clip: content-box, border-box;
+  mask-composite: exclude;
+  -webkit-mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+  -webkit-mask-clip: content-box, border-box;
+  -webkit-mask-composite: xor;
+}
+
+/* Wider than the tile and square, so the sweep's centre is the tile's centre
+   and no corner of the band is ever left unlit as it comes round. */
+.nessa-upload-ring[data-state="uploading"]::before {
+  content: "";
+  position: absolute;
+  inset: -50%;
+  background: conic-gradient(
+    from 0turn,
+    transparent 0turn,
+    var(--nessa-chat-rim-1) 0.12turn,
+    var(--nessa-chat-rim-3) 0.22turn,
+    var(--nessa-chat-rim-4) 0.3turn,
+    transparent 0.42turn,
+    transparent 1turn
+  );
+  animation: nessa-upload-turn 1.4s linear infinite;
+}
+
+.nessa-upload-ring[data-state="settled"] {
+  background: var(--nessa-notification-success);
+  animation: nessa-upload-settled 900ms var(--nessa-motion-easing-standard) forwards;
+}
+
+@keyframes nessa-upload-turn {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+@keyframes nessa-upload-settled {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /*
+   * The band stops travelling and stays lit: that it is uploading is the
+   * information, and the movement only carried it. The green keeps its
+   * animation — shorter, and with nothing to watch — because leaving is what
+   * that animation is for, and `animationend` is what takes the band away.
+   */
+  .nessa-upload-ring[data-state="uploading"]::before {
+    animation: none;
+    background: var(--nessa-chat-rim-3);
+  }
+  .nessa-upload-ring[data-state="settled"] {
+    animation-duration: 240ms;
+  }
+}

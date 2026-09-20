@@ -60,11 +60,15 @@ impl AgentError {
                 | Self::MultipleOperationFailures { .. }
                 | Self::OperationAndCleanupFailure { .. }
                 | Self::Scheduling(_)
+                | Self::UserImage(_)
+                | Self::ImageInputRefused(_)
+                | Self::MessageTooLarge { .. }
                 | Self::Busy
                 | Self::Closed
                 | Self::StalePermission
                 | Self::Provider { .. }
                 | Self::Deadline
+                | Self::StartupDeadline(_)
                 | Self::Backpressure
                 | Self::CleanupUncertain
                 | Self::AuditFailure

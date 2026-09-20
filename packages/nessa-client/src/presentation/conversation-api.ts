@@ -2,6 +2,7 @@ import {
   NessaConversationMutationError,
   NessaConversationControlError,
 } from "../application/conversation-mutation-error.js"
+import { agentOperationTimeoutMs } from "../application/agent-budgets.js"
 import type { RpcRequester } from "../application/session-port.js"
 import { ProductMethod } from "../generated/product.js"
 import type {
@@ -10,7 +11,9 @@ import type {
   ConversationReceipt,
   ConversationMutationResult,
   ConversationReorderResult,
+  ImageAttachment,
 } from "../generated/product.js"
+import { imageAttachmentsProblem } from "../protocol/attachment-validate.js"
 import {
   conversationId,
   conversationView,
@@ -45,16 +48,28 @@ export type ConversationApi = {
   create: (options?: ConversationCreateOptions) => Promise<ConversationCreateResult>
   /** Read current output, queue, tools, and complete actionable permission choices. */
   read: (conversationId: string) => Promise<ConversationView>
-  /** Queue text for this conversation. Optional IDs support optimistic UI correlation. */
+  /**
+   * Queue a message for this conversation: text, images, or both.
+   * @param text - At most 8 KiB UTF-8. May be blank only when `attachments` is not empty.
+   * @param attachments - The references `client.attachments` returned for
+   * images staged into this conversation, in order: at most 10, and 10 MiB
+   * together. Omit it, or pass `[]`, for a message of text alone. A retry
+   * re-sends the same list, so the same execution ID always names the same
+   * message.
+   * @param options - Optional IDs support optimistic UI correlation.
+   * @throws TypeError before anything is sent when the message breaks these bounds.
+   */
   send: (
     conversationId: string,
     text: string,
+    attachments?: readonly ImageAttachment[],
     options?: ConversationSendOptions,
   ) => Promise<ConversationSubmission>
-  /** Submit steering input using the agent's supported steering behavior. */
+  /** Submit steering input using the agent's supported steering behavior. Takes the same message as `send`, under the same bounds. */
   steer: (
     conversationId: string,
     text: string,
+    attachments?: readonly ImageAttachment[],
     options?: ConversationSendOptions,
   ) => Promise<ConversationSubmission>
   /** Remove the identified waiting input before provider dispatch. */
@@ -114,7 +129,7 @@ export function createConversationApi(
     method: string,
     params: { conversationId: string; requestId: string; executionId?: string } & Record<
       string,
-      string | readonly string[] | undefined
+      string | readonly string[] | readonly ImageAttachment[] | undefined
     >,
     validate: (value: unknown) => T,
     retryable = true,
@@ -123,7 +138,11 @@ export function createConversationApi(
     const command = Object.freeze({ ...params })
     const perform = async (): Promise<T> => {
       try {
-        return validate(await session.request(method, command))
+        return validate(
+          await session.request(method, command, {
+            atLeastMs: agentOperationTimeoutMs,
+          }),
+        )
       } catch (cause) {
         if (!retryable) {
           throw new NessaConversationControlError(
@@ -149,16 +168,33 @@ export function createConversationApi(
     method: string,
     conversationId: string,
     text: string,
+    attachments: readonly ImageAttachment[] = [],
     options: ConversationSendOptions = {},
   ) {
     validConversationId(conversationId)
     const executionId = boundedText(options.executionId ?? newId(), "Execution ID", 256)
     const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
-    boundedText(text, "Message", 8192)
-    return mutate(method, { conversationId, executionId, requestId, text }, (value) => ({
-      ...conversationReceipt(value, executionId),
-      requestId,
-    }))
+    const problem = imageAttachmentsProblem(attachments)
+    if (problem) throw new TypeError(`Invalid message attachments: ${problem}`)
+    // Text may be blank only beside an image: the message has to say something.
+    if (attachments.length === 0) boundedText(text, "Message", 8192)
+    else if (typeof text !== "string" || utf8.encode(text).byteLength > 8192)
+      throw new TypeError("Message must contain at most 8192 UTF-8 bytes")
+    // Copied and frozen with the command, so editing the caller's list between a
+    // failure and its retry cannot turn one execution ID into two messages.
+    const images = Object.freeze(
+      attachments.map(({ digest, mimeType, size }) =>
+        Object.freeze({ digest, mimeType, size }),
+      ),
+    )
+    return mutate(
+      method,
+      { conversationId, executionId, requestId, text, attachments: images },
+      (value) => ({
+        ...conversationReceipt(value, executionId),
+        requestId,
+      }),
+    )
   }
   function action(
     method: string,
@@ -191,15 +227,17 @@ export function createConversationApi(
     },
     read: async (id) =>
       conversationView(
-        await session.request(ProductMethod.ConversationRead, {
-          conversationId: validConversationId(id),
-        }),
+        await session.request(
+          ProductMethod.ConversationRead,
+          { conversationId: validConversationId(id) },
+          { atLeastMs: agentOperationTimeoutMs },
+        ),
         id,
       ),
-    send: (id, text, options) =>
-      submit(ProductMethod.ConversationSend, id, text, options),
-    steer: (id, text, options) =>
-      submit(ProductMethod.ConversationSteer, id, text, options),
+    send: (id, text, attachments, options) =>
+      submit(ProductMethod.ConversationSend, id, text, attachments, options),
+    steer: (id, text, attachments, options) =>
+      submit(ProductMethod.ConversationSteer, id, text, attachments, options),
     remove: (id, executionId, options) =>
       action(ProductMethod.ConversationRemove, id, { executionId }, options),
     reorder: async (id, executionIds, options = {}) => {

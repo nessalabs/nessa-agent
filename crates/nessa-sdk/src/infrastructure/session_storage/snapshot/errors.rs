@@ -1,9 +1,43 @@
-use crate::application::agent_execution::agents::AgentError;
+use crate::application::agent_execution::agents::{
+    AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+};
 use crate::application::agent_execution::hooks::{HookError, HookFailure};
-use crate::application::agent_execution::providers::CloseOutcome;
+use crate::application::agent_execution::providers::{
+    CloseOutcome, ImageInputRefusal, UserImageError,
+};
 use crate::application::agent_execution::sessions::storage::StorageError;
 use crate::domain::agent_execution::executions::{ExecutionOutcome, SchedulingError};
+use crate::domain::common::value_objects::ImageMediaType;
 use serde::{Deserialize, Serialize};
+/// An image encoding as saved: a closed set, so an unknown one is a corrupt
+/// record at decoding rather than a string to interpret afterwards.
+#[derive(Serialize, Deserialize)]
+pub(super) enum MediaType {
+    Png,
+    Jpeg,
+    Gif,
+    Webp,
+}
+impl From<MediaType> for ImageMediaType {
+    fn from(value: MediaType) -> Self {
+        match value {
+            MediaType::Png => Self::Png,
+            MediaType::Jpeg => Self::Jpeg,
+            MediaType::Gif => Self::Gif,
+            MediaType::Webp => Self::Webp,
+        }
+    }
+}
+impl From<ImageMediaType> for MediaType {
+    fn from(value: ImageMediaType) -> Self {
+        match value {
+            ImageMediaType::Png => Self::Png,
+            ImageMediaType::Jpeg => Self::Jpeg,
+            ImageMediaType::Gif => Self::Gif,
+            ImageMediaType::Webp => Self::Webp,
+        }
+    }
+}
 #[derive(Serialize, Deserialize)]
 pub(super) enum Outcome {
     Completed,
@@ -122,12 +156,27 @@ pub(super) enum SavedError {
     },
     Unsupported(String),
     InvalidInput(String),
+    UserImageMissing,
+    UserImageUnavailable,
+    UserImageMismatch,
+    ImageInputNotOffered,
+    ImageInputAgentDoesNotAccept,
+    ImageInputMediaType(MediaType),
+    ImageInputImageTooLarge {
+        size: u64,
+        max_bytes: u64,
+    },
+    MessageTooLarge {
+        encoded_bytes: u64,
+        max_bytes: u64,
+    },
     Protocol(String),
     Transport(String),
     Busy,
     Closed,
     StalePermission,
     Deadline,
+    StartupDeadline(StartupStep),
     Backpressure,
     CleanupUncertain,
     AuditFailure,
@@ -153,6 +202,58 @@ pub(super) enum SavedError {
         error: StorageFailure,
         execution_result: Box<Result<Outcome, SavedError>>,
     },
+}
+/// Saved counterpart of the step named by a startup deadline. The context is
+/// stored beside the step rather than folded into it, because a restoration can
+/// expire during any step.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct StartupStep {
+    phase: StartupPhase,
+    context: StartupContext,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) enum StartupPhase {
+    Initialize,
+    Session,
+    Configure,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) enum StartupContext {
+    New,
+    Restored,
+}
+impl From<AgentStartupStep> for StartupStep {
+    fn from(value: AgentStartupStep) -> Self {
+        Self {
+            phase: match value.phase() {
+                AgentStartupPhase::Initialize => StartupPhase::Initialize,
+                AgentStartupPhase::Session => StartupPhase::Session,
+                AgentStartupPhase::Configure => StartupPhase::Configure,
+            },
+            context: match value.context() {
+                AgentStartupContext::New => StartupContext::New,
+                AgentStartupContext::Restored => StartupContext::Restored,
+            },
+        }
+    }
+}
+impl From<StartupStep> for AgentStartupStep {
+    fn from(value: StartupStep) -> Self {
+        Self::new(
+            match value.phase {
+                StartupPhase::Initialize => AgentStartupPhase::Initialize,
+                StartupPhase::Session => AgentStartupPhase::Session,
+                StartupPhase::Configure => AgentStartupPhase::Configure,
+            },
+            match value.context {
+                StartupContext::New => AgentStartupContext::New,
+                StartupContext::Restored => AgentStartupContext::Restored,
+            },
+        )
+    }
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -212,6 +313,28 @@ impl From<SavedError> for AgentError {
                 cleanup_result: Box::new((*cleanup_result).map(Into::into).map_err(Into::into)),
             },
             SavedError::Unsupported(value) => Self::Unsupported(value),
+            SavedError::UserImageMissing => Self::UserImage(UserImageError::Missing),
+            SavedError::UserImageUnavailable => Self::UserImage(UserImageError::Unavailable),
+            SavedError::UserImageMismatch => Self::UserImage(UserImageError::Mismatch),
+            SavedError::ImageInputNotOffered => {
+                Self::ImageInputRefused(ImageInputRefusal::NotOffered)
+            }
+            SavedError::ImageInputAgentDoesNotAccept => {
+                Self::ImageInputRefused(ImageInputRefusal::AgentDoesNotAccept)
+            }
+            SavedError::ImageInputMediaType(media_type) => {
+                Self::ImageInputRefused(ImageInputRefusal::MediaType(media_type.into()))
+            }
+            SavedError::ImageInputImageTooLarge { size, max_bytes } => {
+                Self::ImageInputRefused(ImageInputRefusal::ImageTooLarge { size, max_bytes })
+            }
+            SavedError::MessageTooLarge {
+                encoded_bytes,
+                max_bytes,
+            } => Self::MessageTooLarge {
+                encoded_bytes,
+                max_bytes,
+            },
             SavedError::InvalidInput(value) => Self::InvalidInput(value),
             SavedError::Protocol(value) => Self::Protocol(value),
             SavedError::Transport(value) => Self::Transport(value),
@@ -219,6 +342,7 @@ impl From<SavedError> for AgentError {
             SavedError::Closed => Self::Closed,
             SavedError::StalePermission => Self::StalePermission,
             SavedError::Deadline => Self::Deadline,
+            SavedError::StartupDeadline(step) => Self::StartupDeadline(step.into()),
             SavedError::Backpressure => Self::Backpressure,
             SavedError::CleanupUncertain => Self::CleanupUncertain,
             SavedError::AuditFailure => Self::AuditFailure,
@@ -296,6 +420,28 @@ impl From<AgentError> for SavedError {
                 cleanup_result: Box::new((*cleanup_result).map(Into::into).map_err(Into::into)),
             },
             AgentError::Unsupported(value) => Self::Unsupported(value),
+            AgentError::UserImage(UserImageError::Missing) => Self::UserImageMissing,
+            AgentError::UserImage(UserImageError::Unavailable) => Self::UserImageUnavailable,
+            AgentError::UserImage(UserImageError::Mismatch) => Self::UserImageMismatch,
+            AgentError::ImageInputRefused(ImageInputRefusal::NotOffered) => {
+                Self::ImageInputNotOffered
+            }
+            AgentError::ImageInputRefused(ImageInputRefusal::AgentDoesNotAccept) => {
+                Self::ImageInputAgentDoesNotAccept
+            }
+            AgentError::ImageInputRefused(ImageInputRefusal::MediaType(media_type)) => {
+                Self::ImageInputMediaType(media_type.into())
+            }
+            AgentError::ImageInputRefused(ImageInputRefusal::ImageTooLarge { size, max_bytes }) => {
+                Self::ImageInputImageTooLarge { size, max_bytes }
+            }
+            AgentError::MessageTooLarge {
+                encoded_bytes,
+                max_bytes,
+            } => Self::MessageTooLarge {
+                encoded_bytes,
+                max_bytes,
+            },
             AgentError::InvalidInput(value) => Self::InvalidInput(value),
             AgentError::Protocol(value) => Self::Protocol(value),
             AgentError::Transport(value) => Self::Transport(value),
@@ -303,6 +449,7 @@ impl From<AgentError> for SavedError {
             AgentError::Closed => Self::Closed,
             AgentError::StalePermission => Self::StalePermission,
             AgentError::Deadline => Self::Deadline,
+            AgentError::StartupDeadline(step) => Self::StartupDeadline(step.into()),
             AgentError::Backpressure => Self::Backpressure,
             AgentError::CleanupUncertain => Self::CleanupUncertain,
             AgentError::AuditFailure => Self::AuditFailure,

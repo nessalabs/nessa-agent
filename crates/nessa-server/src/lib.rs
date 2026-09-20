@@ -2,6 +2,7 @@
 pub mod agent_install;
 pub mod agents;
 pub mod app;
+pub mod attachments;
 pub mod browser_session;
 pub mod cli;
 pub mod composition;
@@ -23,6 +24,10 @@ pub(crate) mod agent_install_test_support;
 #[cfg(test)]
 #[path = "../tests/agents/support.rs"]
 pub(crate) mod agents_test_support;
+
+#[cfg(test)]
+#[path = "../tests/attachments/support.rs"]
+pub(crate) mod attachments_test_support;
 
 #[cfg(test)]
 #[path = "../tests/conversation/support.rs"]

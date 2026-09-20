@@ -606,9 +606,139 @@
         "permissions": {
           "type": "boolean",
           "description": "Can review provider permission requests."
+        },
+        "imageInput": {
+          "type": "boolean",
+          "description": "The connected agent advertised image input. False until an agent has been opened, and whenever it advertised none."
         }
       },
-      "required": ["queue", "steer", "resume", "permissions"]
+      "required": ["queue", "steer", "resume", "permissions", "imageInput"]
+    },
+    "ImageAttachment": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One uploaded image a message refers to. The bytes travel on the upload path, never in a socket message.",
+      "properties": {
+        "digest": {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "SHA-256 of the image bytes: `sha256:` and 64 lowercase hexadecimal digits."
+        },
+        "mimeType": {
+          "type": "string",
+          "enum": ["image/png", "image/jpeg", "image/gif", "image/webp"],
+          "description": "Image encoding."
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5242880,
+          "description": "Image length in bytes, at most 5 MiB."
+        }
+      },
+      "required": ["digest", "mimeType", "size"]
+    },
+    "AttachmentBeginParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Ask to upload one file into a conversation. Repeating it for bytes the conversation already holds needs no upload.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "digest": {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "SHA-256 of the bytes to be uploaded; the upload is refused unless the received bytes hash to it."
+        },
+        "mimeType": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 127,
+          "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$",
+          "description": "Declared lowercase media type without parameters. Storage accepts any; what a message may refer to is narrower."
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 67108864,
+          "description": "Exact length in bytes, at most 64 MiB, which admits a camera RAW file; the upload is refused unless it is exactly this long."
+        }
+      },
+      "required": ["conversationId", "requestId", "digest", "mimeType", "size"]
+    },
+    "AttachmentBeginResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Either the conversation already holds this upload, with the reference a message uses for it, or a single-use ticket to upload it. A successful `PUT /attachments` answers with the same reference shape.",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The action this answers."
+        },
+        "state": {
+          "type": "string",
+          "enum": ["stored", "upload_required"],
+          "description": "`stored` needs nothing further; `upload_required` carries a ticket."
+        },
+        "ticket": {
+          "type": ["string", "null"],
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Secret single-use upload ticket, sent as the `x-nessa-upload-ticket` header of one `PUT /attachments`. Null when stored. Do not log it."
+        },
+        "expiresAtMs": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Unix milliseconds after which the ticket is refused. Null when stored."
+        },
+        "digest": {
+          "type": ["string", "null"],
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "When stored: digest of what the conversation holds, which is what a message refers to. The gateway may have converted or compressed the upload, so this can differ from the uploaded digest. Null when an upload is required."
+        },
+        "mimeType": {
+          "type": ["string", "null"],
+          "minLength": 3,
+          "maxLength": 127,
+          "description": "When stored: media type of what the conversation holds. Null when an upload is required."
+        },
+        "size": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "When stored: length in bytes of what the conversation holds. Null when an upload is required."
+        }
+      },
+      "required": [
+        "requestId",
+        "state",
+        "ticket",
+        "expiresAtMs",
+        "digest",
+        "mimeType",
+        "size"
+      ]
     },
     "ConversationMessage": {
       "type": "object",
@@ -627,7 +757,16 @@
           "minLength": 0,
           "maxLength": 32768,
           "x-utf8MaxBytes": 32768,
-          "description": "User input text."
+          "description": "User input text; empty for a message of images alone."
+        },
+        "attachments": {
+          "type": "array",
+          "maxItems": 10,
+          "x-maxTotalBytes": 10485760,
+          "items": {
+            "$ref": "#/$defs/ImageAttachment"
+          },
+          "description": "Images the user sent with this turn, in attachment order."
         },
         "status": {
           "$ref": "#/$defs/ConversationMessageStatus",
@@ -662,7 +801,7 @@
           "description": "Target event count when steering was admitted locally; does not imply provider consumption timing."
         }
       },
-      "required": ["executionId", "userText", "status", "parts"]
+      "required": ["executionId", "userText", "attachments", "status", "parts"]
     },
     "ConversationPending": {
       "type": "object",
@@ -681,14 +820,23 @@
           "minLength": 0,
           "maxLength": 8192,
           "x-utf8MaxBytes": 8192,
-          "description": "Waiting user input."
+          "description": "Waiting user input; empty for a message of images alone."
+        },
+        "attachments": {
+          "type": "array",
+          "maxItems": 10,
+          "x-maxTotalBytes": 10485760,
+          "items": {
+            "$ref": "#/$defs/ImageAttachment"
+          },
+          "description": "Images waiting with this input, in attachment order."
         },
         "mode": {
           "$ref": "#/$defs/ConversationPendingMode",
           "description": "Queue or steering admission."
         }
       },
-      "required": ["executionId", "text", "mode"]
+      "required": ["executionId", "text", "attachments", "mode"]
     },
     "ConversationPermissionOption": {
       "type": "object",
@@ -992,13 +1140,22 @@
         },
         "text": {
           "type": "string",
-          "minLength": 1,
+          "minLength": 0,
           "maxLength": 8192,
           "x-utf8MaxBytes": 8192,
-          "description": "User message, at most 8 KiB UTF-8; gateway enforces the byte bound."
+          "description": "User message, at most 8 KiB UTF-8; gateway enforces the byte bound. May be blank only when attachments are present."
+        },
+        "attachments": {
+          "type": "array",
+          "maxItems": 10,
+          "x-maxTotalBytes": 10485760,
+          "items": {
+            "$ref": "#/$defs/ImageAttachment"
+          },
+          "description": "Images already uploaded into this conversation, in attachment order; at most 10 MiB in total. Empty for a message of text alone."
         }
       },
-      "required": ["conversationId", "requestId", "executionId", "text"]
+      "required": ["conversationId", "requestId", "executionId", "text", "attachments"]
     },
     "ConversationRemoveParams": {
       "type": "object",
@@ -1320,6 +1477,33 @@
       },
       "required": ["offset", "kind", "text", "toolId"],
       "description": "One ordered observation fragment in a bounded execution projection; offsets may have gaps."
+    },
+    "ConversationErrorCode": {
+      "type": "string",
+      "enum": [
+        "agent_not_configured",
+        "unknown_method",
+        "invalid_request",
+        "conversation_not_found",
+        "conversation_capacity",
+        "conversation_closed",
+        "conversation_configuration_changed",
+        "conversation_storage_unavailable",
+        "temporarily_unavailable",
+        "audit_unavailable",
+        "submission_conflict",
+        "submission_unresolved",
+        "stale_permission",
+        "agent_startup_deadline",
+        "agent_operation_failed",
+        "image_input_unsupported",
+        "attachment_not_found",
+        "attachment_unavailable",
+        "attachment_capacity",
+        "attachment_storage_unavailable",
+        "attachment_cleanup_unavailable"
+      ],
+      "description": "Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command."
     }
   }
 }

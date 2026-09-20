@@ -1,6 +1,9 @@
 //! Serializes an attached session's prompts, observations, and permission effects.
 //!
 //! ```text
+//! sessions -> prompt_content (read a message's images; size its frame)
+//!    |
+//!    v
 //! sessions -> worker -> application ExecutionController
 //!               |  \-> tools / permissions wire mapping
 //!               |  \-> event_queue -> session event reader
@@ -25,10 +28,17 @@
 //! Permission audit delivery precedes successful settlement.
 //! Failure aggregation retains primary operation errors alongside audit and
 //! process-cleanup errors before settling command, stream, and close results.
+//! The worker never awaits an injected image source: the session reads, verifies,
+//! and encodes a message's images on the calling task, bounded and abandoned on
+//! close, and hands the worker finished blocks. The worker keeps the check only it
+//! can make for certain after a restoration, that the agent agreed to take images.
+//! A frame's write deadline grows with the frame, so a message carrying images is
+//! not failed by the one second meant for small frames.
 //! Steering waits for a correlated acknowledgement before admitting another prompt;
 //! an ambiguous result retires the worker and is never treated as unconsumed input.
 pub(in crate::infrastructure::acp) mod event_queue;
 mod failure;
-mod steering;
+pub(in crate::infrastructure::acp) mod prompt_content;
+pub(in crate::infrastructure::acp) mod steering;
 mod wire;
 pub(crate) mod worker;

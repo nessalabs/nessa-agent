@@ -26,22 +26,27 @@ mod retention;
 mod robustness;
 mod scheduling;
 mod settlement;
-use nessa_sdk::application::agent_execution::agents::AgentError;
+use nessa_sdk::application::agent_execution::agents::{
+    AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+};
 use nessa_sdk::application::agent_execution::executions::{
     ExecutionEvent, ExecutionRequest, ExecutionUpdate, SubmissionMode,
 };
 
 use nessa_sdk::application::agent_execution::hooks::{HookError, HookFailure};
 use nessa_sdk::application::agent_execution::permissions::*;
-use nessa_sdk::application::agent_execution::providers::{CloseOutcome, ProviderIdentity};
+use nessa_sdk::application::agent_execution::providers::{
+    CloseOutcome, ImageInputRefusal, ProviderIdentity, UserImageError,
+};
 use nessa_sdk::application::agent_execution::sessions::storage::*;
 use nessa_sdk::application::agent_execution::sessions::SessionManager;
 use nessa_sdk::application::agent_execution::tools::ToolReviewInput;
 use nessa_sdk::domain::agent_execution::executions::*;
 use nessa_sdk::domain::agent_execution::permissions::*;
-use nessa_sdk::domain::agent_execution::prompts::PromptText;
+use nessa_sdk::domain::agent_execution::prompts::{ImageReference, PromptText, UserMessage};
 use nessa_sdk::domain::agent_execution::sessions::*;
 use nessa_sdk::domain::agent_execution::tools::*;
+use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, LocalFileStorage};
 use std::sync::Arc;
 use tokio::sync::Barrier;
@@ -67,7 +72,7 @@ fn snapshot(name: &str) -> SessionSnapshot {
             scheduling: Vec::new(),
             request: ExecutionRequest {
                 execution_id: execution_id.clone(),
-                user_message: PromptText::new("message").unwrap(),
+                user_message: UserMessage::text_only(PromptText::new("message").unwrap()),
                 estimated_input_tokens: 12,
                 reserved_output_tokens: 24,
             },
@@ -419,6 +424,23 @@ async fn snapshots_preserve_all_settlement_errors_and_unresolved_attempts() {
         },
         AgentError::Unsupported("unsupported".into()),
         AgentError::InvalidInput("input".into()),
+        AgentError::UserImage(UserImageError::Missing),
+        AgentError::UserImage(UserImageError::Unavailable),
+        AgentError::UserImage(UserImageError::Mismatch),
+        AgentError::ImageInputRefused(ImageInputRefusal::NotOffered),
+        AgentError::ImageInputRefused(ImageInputRefusal::AgentDoesNotAccept),
+        AgentError::ImageInputRefused(ImageInputRefusal::MediaType(ImageMediaType::Png)),
+        AgentError::ImageInputRefused(ImageInputRefusal::MediaType(ImageMediaType::Jpeg)),
+        AgentError::ImageInputRefused(ImageInputRefusal::MediaType(ImageMediaType::Gif)),
+        AgentError::ImageInputRefused(ImageInputRefusal::MediaType(ImageMediaType::Webp)),
+        AgentError::ImageInputRefused(ImageInputRefusal::ImageTooLarge {
+            size: 7,
+            max_bytes: 6,
+        }),
+        AgentError::MessageTooLarge {
+            encoded_bytes: u64::MAX,
+            max_bytes: 16 * 1024 * 1024,
+        },
         AgentError::Busy,
         AgentError::Closed,
         AgentError::StalePermission,

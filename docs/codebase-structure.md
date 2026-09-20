@@ -243,6 +243,25 @@ from an already-verified root, refusing anything that is not a private
 directory of this user's and never following a symbolic link. A caller whose
 tree can be written to by anything else uses the second.
 
+`crates/nessa-images` fits one image to a consumer's limits: it reads the
+encoding from the bytes, turns the image upright, scales it down, and converts or
+compresses it to PNG or JPEG, or says by type why it could not. It knows nothing
+about agents, models, or conversations, does no I/O, and keeps no state. It reads
+the common encodings with its own decoders and hands what only an operating
+system reads well (HEIC, AVIF, JPEG XL, PSD, camera RAW) to a `PlatformDecoder`:
+ImageIO on macOS under `src/platform/`, none yet elsewhere, where those are
+refused by type. Two gates stand in front of a system decoder: `src/sniff.rs`
+puts to it only bytes that begin like one of those encodings, on every system
+and in front of a test's substitute, and the macOS adapter decodes only what
+ImageIO itself names as one of them, so a PDF is refused rather than rendered.
+`src/budget.rs` holds the one pixel and memory budget every decoder is held to
+before a pixel is read, and an image that would pass through unchanged is
+decoded whole first (`src/jpeg.rs` reads a JPEG strictly). Tests substitute the
+decoder; `tests/memory.rs` covers the budget from headers alone and
+`tests/macos.rs` runs the real decoder. The
+numbers are the caller's: the gateway takes them from the selected model's
+`imageInput` entry in the SDK catalog, the one place image limits are recorded.
+
 ## Gateway conversation ownership
 
 `crates/nessa-server/src/conversation/` groups durable conversation identity/access
@@ -250,8 +269,25 @@ tree can be written to by anything else uses the second.
 metadata/audit adapters (infrastructure). `product/conversation.rs` maps the
 canonical product wire contract; composition supplies provider, storage and audit.
 Tests follow those responsibilities under `crates/nessa-server/tests/conversation/`.
+A message refers to images by digest, never by bytes: the service asks its
+`ConversationAttachments` port whether this conversation holds each one before it
+accepts the message, and `close` releases what the conversation holds in the
+closer's name, reporting a failed release without hiding a failed agent close.
+The [attachments context](#attachments) implements that port.
 The floating panel uses injected conversation effects and NessaClient; neither
 owns SDK scheduling. See [gateway chat](guides/gateway-chat.md).
+
+Image input follows the same split. `@nessa/client` owns the wire: the
+`AttachmentUploadTransport` port in `application/attachment-upload.ts`, its
+`fetch` adapter in `transport/`, and `presentation/attachment-api.ts`. The
+conversation vertical owns a draft file's upload state and the
+`stageAttachment` effect, which answers with the reference the gateway stored;
+the panel owns the original bytes and the order of one upload. Image conversion
+and its limits belong to the gateway, so no TypeScript module scales, converts,
+or compresses an image. A test outside a context imports that context's
+`testing.ts` — the store's commands, the scenario substitute, typed errors, and
+the pure parts of the barrel — rather than its internals, and mocks the barrel
+with it when the barrel's components cannot be resolved.
 
 ## MCP tools
 
@@ -270,6 +306,7 @@ rows from the shared Transcript; it does not parse provider wire formats.
 - `scripts/desktop/prepare.mjs` builds the macOS runtime resource tree from locked dependencies.
 - `scripts/desktop/runtime-fingerprint.mjs` identifies that complete prepared tree, including model data and installed ACP dependencies; its adjacent tests cover content, layout, and relocation.
 - `src-tauri/src/gateway/application/` owns retryable reconciliation; `gateway/infrastructure/` serializes launchd transitions, distinguishes managed, legacy, and foreign processes, and requires the expected health fingerprint and service generation, runtime-instance UUID and matching launchd PID before readiness. Its `macos/generation.rs` reuses the published identity only for an equal unfenced definition and otherwise creates a fresh random generation; configuration reverts never deterministically recreate retired identities. `macos/install_attempt.rs` durably binds a pending bootstrap to the host's exact definition and generation so Retry can replace only that incomplete, unambiguously PID-less attempt; disk state alone never grants that authority.
+- The agent's `PATH` is decided, not inherited. `src-tauri/src/gateway/domain/value_objects/search_path.rs` is the value: absolute entries only, bounded, no control characters, and no staged runtime directory, so Nessa's bundled `node` never shadows the one a project pinned. `gateway/infrastructure/login_shell.rs` reads it from the account's own login shell — the shell named in the account record rather than inherited `SHELL` — behind the `LoginShellPath` port, which tests substitute. zsh and bash are asked `-i -l -c` first and `-l -c` only if that fails, for reasons that differ by shell: `zsh -l -c` reads `.zprofile` and never `.zshrc`, which is where pnpm's installer and the standard nvm setup write, so a non-interactive probe would succeed with a `PATH` missing the tools the user has and nothing would have failed for a fallback to catch; bash reads its login files either way, and what `-i` buys there is getting past the interactivity guard at the top of a `.bashrc` that `.bash_profile` sources. A bash `.bashrc` that nothing sources is knowingly not reached — such a user's own terminal does not see it either — and both halves have a real-shell test. Any other shell gets `-l -c`. The shell runs from the account's home, not from wherever the app was started, so a profile that decides the path from the working directory cannot make two launches register differently. The `PATH` is printed between markers made of `/dev/urandom` bytes and only what is between them is read, so a chatty or hostile profile can neither drown the answer nor forge one. The shell runs with a cleared environment, no stdin, a bounded read, and one deadline over both the output and the exit — output arriving is not the shell being finished with — after which its process group is killed and reaped. `Gateway` resolves it at most once per host process and caches the outcome, failure included: reconciliation runs on every webview load, and a profile edited mid-session would otherwise change the definition and retire a healthy gateway. A changed profile takes effect at the next app launch. The resolved path is registered as `NESSA_AGENT_PATH` in the launchd definition, so it is part of the service's identity and changes only by re-registration; a login shell that cannot be read this launch keeps the path already registered rather than rewriting the definition and retiring a healthy gateway. The service's own `PATH` stays the system one. `crates/nessa-server/src/composition/agent.rs` gives `NESSA_AGENT_PATH` to the ACP child — and through it to Claude Code's Bash tool and the Nessa MCP shell — falling back to the process `PATH`, which is what the developer loop has.
 - `protocol/defaults/gateway-exit-codes.json` is why the gateway process stopped, said across the process boundary. `crates/nessa-server/src/core/exit_code.rs` maps each `RunError` to a code from that table — the match is exhaustive, so a new fatal error does not compile until it has one — and `Termination::report` exits with it; `RunError::Registry` keeps the credential-registry failure typed rather than flattened into a string so it can choose its own. `src-tauri/src/gateway/infrastructure/macos/startup.rs` includes the same bytes and reads the code back from what `launchctl print` reports as the service's last exit. It never parses the log: a message can be reworded, a line can belong to an earlier run in the same append-only file, and a healthy launch mentions the same subsystems a failing one does. The log tail goes to the app's log as evidence and decides nothing.
 - Not every failure is worth restarting for, and launchd cannot be told which. Its only exit condition is `KeepAlive: { SuccessfulExit: false }` — restart unless the process exited with status zero — with no condition on *which* non-zero code, verified against launchd on macOS 26 rather than read off the man page alone. So `crates/nessa-server/src/core/restart.rs` decides, on the typed fatal error, whether starting again could end differently: a configuration this build cannot parse, a credential registry it cannot read and a prepared runtime that is missing or not the one the registration was fingerprinted against cannot, while a held registry lock, a taken port, I/O and anything whose only evidence is prose can.
 - Exiting zero to stop those restarts is not a diagnostic decision, because nothing will start the service again afterwards except the desktop host's next reconciliation, and the only thing that authorizes *that* is `logs/gateway-startup-failure.json`. So `core/error.rs` publishes the record — durably, under its own name, directory synced — and only then chooses the ending: published means exit zero, and a publication that failed keeps the non-zero code from the shared table, because launchd going on retrying is the old loop and survivable while a silent exit zero is a service nobody can start again. `core/launch.rs` decides who may do any of this: `Launch::Managed` is resolved once at the process edge from the command launchd is configured to run plus the service generation only the host's plist sets, and only it bounds the log, publishes a record, or forgets one — and only one its own generation wrote. A `nessa server` someone runs in the same data directory while diagnosing exactly this problem is `Standalone`: it keeps the table's non-zero exit codes, so scripts and other supervisors still read a failure as one, and it leaves the registration's recovery evidence untouched. `macos/startup.rs` corroborates the record against the registration being reconciled before it decides anything: it ends the readiness wait for a process launchd is not going to replace, and it is what lets the host boot out and retry a service that gave up, which is otherwise loaded and dead forever even after its cause is repaired. The reason and the exit code it carries must agree with the shared table, or it describes no run the server could have had. A record shown in a sentence is corroborated too, but decides nothing.
@@ -280,7 +317,7 @@ rows from the shared Transcript; it does not parse provider wire formats.
 - An update never runs two gateways at once. A stale managed service is asked to retire over `SIGUSR2`, must durably acknowledge with matching identity before anything else happens, and is only then booted out; the replacement is bootstrapped after that. A retirement that is not acknowledged returns an error with the old service still running, rather than booting out on a hope.
 - `startup.rs` reads `launchctl print`'s exit fields in the shapes launchd actually prints, checked against it rather than assumed: `last exit code = 0`, `(never exited)`, a bare number, a sysexits number annotated as `78: EX_CONFIG`, `last terminating signal = Segmentation fault: 11` (which replaces the exit code line rather than joining it), and `last exit reason = JETSAM_…`. A missing program is launchd's own `78: EX_CONFIG`, not the 126 or 127 a shell would report, so that is what names an unlaunchable runtime. A signal outranks an exit code, and a signal line that cannot be read resolves to unknown rather than falling back to a code it contradicts.
 - Readiness stops waiting once three consecutive half-second checks agree the process exited and was not replaced, well inside launchd's five-second restart throttle, so a crash loop reports in about a second and a half instead of at the thirty-second deadline. The port, launchd and the clock reach it through `ServiceWatch`, so the timing is tested rather than asserted: a fake advances a virtual clock when the loop sleeps and records the instant of every `launchctl print`. That covers a slow-but-healthy start keeping its whole deadline, a crash loop giving up inside two seconds, a process returning between deaths restarting the count, and the subprocess staying spaced at the liveness interval rather than running every poll. Changing any of the three constants fails those tests. The panel gets one sentence, naming the cause when the server named one, and the exit status, log tail and readiness message go to the app's log. An exit line the host cannot read resolves to unknown, which never shortens the wait; the deadline is unchanged for a process that is alive.
-- `src-tauri/src/gateway/infrastructure/macos/staging.rs` copies the bundled runtime to private immutable per-label/fingerprint directories, removes removable bundle-supplied extended attributes, syncs both cloned and byte-copied files, verifies full-tree parity with the packaging digest, and publishes atomically before service mutation. Existing versions are verified and retained; launchd arguments and PATH use the staged directory. Tests cover cross-language Unicode/framing parity, private permissions, symlinks, rejected special entries, normalized file metadata, corrupt/existing versions and interrupted attempts.
+- `src-tauri/src/gateway/infrastructure/macos/staging.rs` copies the bundled runtime to private immutable per-label/fingerprint directories, removes removable bundle-supplied extended attributes, syncs both cloned and byte-copied files, verifies full-tree parity with the packaging digest, and publishes atomically before service mutation. Existing versions are verified and retained; launchd arguments name the staged directory and no search path derives from it — the gateway addresses `nessa`, `node`, the ACP entry and `nessa-mcp` absolutely, so the staged directory is on neither the service's `PATH` nor the agent's. Tests cover cross-language Unicode/framing parity, private permissions, symlinks, rejected special entries, normalized file metadata, corrupt/existing versions and interrupted attempts.
 - `src-tauri/src/gateway/infrastructure/macos/pruning.rs` collects the staged versions nothing can be running, under the same per-label lock, once the service has advertised its identity. `removable` is the whole rule and is pure: a published fingerprint directory goes only when it is neither the registered nor the running version and neither an unanswered retirement request nor an unacknowledged fence names it. `RetirementEvidence` carries `retired` for exactly that distinction: admission fencing needs only a recorded cause, while collection needs to know whether the old gateway finished and was booted out. An interrupted `.staging-` attempt goes because holding the lock means nobody is staging; every other name is left alone. `RuntimeVersions` is the directory seam, so the rule is tested without a filesystem and the real `LabelDirectory` revalidates each entry as a directory this user owns before removing it. No single entry can stop the pass: a refused removal, an entry the directory will not yield, and an entry with no valid text name are each reported and stepped over while the recognised versions beside them are still collected. Only a directory that cannot be listed at all ends the pass. What is reported is typed rather than a message string, so each line says what actually happened: a path appears only for an entry a removal was really attempted on, and a lossy rendering of an unusable name is never presented as somewhere to look. Failures are reported with their path and never reach registration's result. Reconciliations that return an error collect nothing, because the version they were replacing may still be running.
 - `crates/nessa-server/src/desktop_runtime/` owns validated upgrade correlation, the admission-and-cleanup retirement use case, and private request/result/audit files. A managed old gateway stays alive until it has durably acknowledged retirement; launchd performs replacement only after that acknowledgement.
 - `crates/nessa-server/src/composition/desktop.rs` bootstraps private local access and injects bundled provider paths.
@@ -512,6 +549,51 @@ handler receives the shared reader over it alone via `FromRef`. Tests under
 reader's bounds, the HTTP boundary, the local probe's failure modes, and
 Claude's own sign-in conventions.
 
+## Attachments
+
+`crates/nessa-server/src/attachments/` owns the files a conversation uploads so
+its messages can refer to them. `domain/value_objects/` describe a file
+(`Attachment`: digest, `MediaType`, size, which must all agree), the verified
+`Caller` behind an action, and one `UploadTicket` with its five-minute
+`TicketLifetime`; `domain/entities/` owns the `Hold`, one conversation keeping
+one stored file and remembering the file that was uploaded to produce it;
+`domain/aggregates/` owns the `TicketBook`, where single use, expiry, replacement
+by the same request made again, withdrawal, and the bounds on outstanding
+tickets (in all, per organization, per conversation) are decided together. `application/` owns
+`AttachmentService` and its ports: `AttachmentStore` and `StagedUpload` for
+bytes, `AttachmentAudit` for evidence, `ImageNormalizer` for turning an uploaded
+image into the one that is kept, `ConversationOwnership` for asking who owns a
+conversation without opening an agent, `TicketSecrets` for randomness, and
+`UploadBody` for a transfer however it arrives. `infrastructure/store.rs` keeps
+bytes once per digest under `attachments/blobs/` and one record per hold under
+`attachments/holds/<sha256(organization)>/<conversation>/`, private, with every
+name derived rather than copied from input and one lock ordering every change;
+`audit.rs` commits one private record per transition; `conversation.rs` and
+`images.rs` implement the conversation context's `ConversationAttachments` and
+the SDK's `UserImageSource` on top of this context. `entrypoint/http.rs` is
+`PUT /attachments` and its preflight: it authenticates nobody, acts only on a
+ticket the authenticated socket issued, streams the body, and answers with the
+stored reference. `product/attachment.rs` maps `attachment.begin`.
+Composition builds the store once in `composition/attachments.rs` and hands out
+the service (shared by the socket and the route through a narrow `FromRef`), the
+conversation port, and the image source; it is composed only when an agent is.
+The normalizer is an argument of that factory: `infrastructure/normalizer.rs`
+fits every upload that says it is an image to the selected model's `imageInput`
+limits from the SDK catalog, through `crates/nessa-images`, reading the encoding
+from the bytes and never from the declared type. Composition also hands it the
+running system's image decoder, which is the one thing here that reads outside
+this process, so a test can put a decoder that refuses, answers nonsense, or
+stops dead in its place. A model with no recorded limits has no image prepared
+for it, and `ImageNormalizer::offers_images` says so before a ticket is issued:
+an `image/*` `attachment.begin` on such a gateway is refused with
+`image_input_unsupported` rather than answered with a ticket for bytes no
+message could name.
+Holds live until their conversation closes; what expires on its own is an unused
+ticket. Tests under `tests/attachments/` split domain rules, the service over
+doubles, the real store on a real filesystem, audit records, the adapters, the
+HTTP boundary, the wire mapping, the socket and router, and the facts this
+context and the published protocol schema must agree on (`agreement.rs`).
+
 ## Installing an agent runtime
 
 `crates/nessa-server/src/agent_install/` puts an agent's own runtime on the
@@ -531,11 +613,14 @@ It also owns what a build needs of a machine and what a machine has, in
 `host_platform.rs`: `Libc`, `ReleaseRequirements` and `HostPlatform`. These
 exist because a platform does not identify a binary — one Opencode version
 ships as nine archives, differing in C library and processor baseline as well
-as in operating system and architecture, and two of the four Linux x86-64
-builds do not start on any given machine. `PinnedRelease::runs_on` is the
-comparison, and `ReleaseRequirements::demand` ranks two builds a machine can
-both run, which is what makes the choice between them independent of the order
-the pin file lists them in.
+as in operating system and architecture, and a glibc build does not start on a
+musl-only machine. `PinnedRelease::runs_on` is the comparison, and
+`ReleaseRequirements::demand` ranks two builds a machine can both run, which is
+what makes the choice between them independent of the order the pin file lists
+them in. Six of those nine are pinned: the three `-baseline` packages hold the
+same bytes as their siblings at 1.18.31, so what they need is unsettled and an
+x86-64 machine without AVX2 is offered nothing rather than a build nobody has
+run on one.
 
 `application/` owns the order and none of the effects: `InstallAgentRuntime`
 does installed-already, then download, hash, accept, publish, and never unpacks

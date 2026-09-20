@@ -1,5 +1,5 @@
 import {
-  textContent,
+  referencedContent,
   type Conversation,
   type Receipt,
   type Turn,
@@ -21,7 +21,9 @@ export function applyView(current: Conversation, view: ConversationView): Conver
     projected.push({
       id: local?.id ?? `${message.executionId}:user`,
       from: "user",
-      content: local?.content ?? textContent(message.userText),
+      // Local content keeps its previews. Without it — another surface's turn,
+      // or this one after a reload — the images are known only by reference.
+      content: local?.content ?? referencedContent(message.userText, message.attachments),
       receipt: waiting.has(message.executionId)
         ? "queued"
         : message.status === "queued"
@@ -71,7 +73,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
     projected.push({
       id: local?.id ?? `${pending.executionId}:user`,
       from: "user",
-      content: local?.content ?? textContent(pending.text),
+      content: local?.content ?? referencedContent(pending.text, pending.attachments),
       receipt: "queued",
       executionId: pending.executionId,
       actionId: local?.actionId,
@@ -95,6 +97,15 @@ export function applyView(current: Conversation, view: ConversationView): Conver
     )
       projected.push(turn)
   }
+  const retainedError = current.turns.some(
+    (turn) =>
+      turn.from === "user" &&
+      turn.executionId &&
+      seen.has(turn.executionId) &&
+      turn.error === current.error,
+  )
+    ? undefined
+    : current.error
   const busy =
     view.pending.length > 0 ||
     view.messages.some((message) => ["queued", "running"].includes(message.status))
@@ -117,15 +128,10 @@ export function applyView(current: Conversation, view: ConversationView): Conver
       : "idle",
     pending: "",
     readError: undefined,
-    error: current.turns.some(
-      (turn) =>
-        turn.from === "user" &&
-        turn.executionId &&
-        seen.has(turn.executionId) &&
-        turn.error === current.error,
-    )
-      ? undefined
-      : current.error,
+    error: retainedError,
+    // The code describes `error`; clearing one without the other would leave a
+    // notice branching on a rejection the conversation no longer reports.
+    errorCode: retainedError === undefined ? undefined : current.errorCode,
     remote: {
       runtime: view.runtime,
       running: view.messages.some((message) => message.status === "running"),

@@ -308,7 +308,7 @@ async fn probe_with_manager(contradictory: bool, manager: SessionManager) -> (Ag
 fn input(id: &str) -> ExecutionRequest {
     ExecutionRequest {
         execution_id: ExecutionId::new(id).unwrap(),
-        user_message: PromptText::new("message").unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("message").unwrap()),
         estimated_input_tokens: 1,
         reserved_output_tokens: 10,
     }

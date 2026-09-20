@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 nessa-sdk = { path = "../nessa-sdk" }
+nessa-images = { path = "../nessa-images" }
 nessa-local-storage = { path = "../nessa-local-storage" }
 nessa-auth = { path = "../nessa-auth" }
 axum = { version = "0.8", features = ["ws"] }
@@ -34,6 +35,7 @@ getrandom = "0.3"
 # would hash something the pin was never measured against.
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "http2"] }
 sha2 = "0.10"
+subtle = "2.6"
 flate2 = "1"
 tar = "0.4"
 # Parsing a pinned archive URL, rather than matching on its spelling.
@@ -45,4 +47,7 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { version = "1", features = ["test-util"] }
+tokio = { version = "1", features = ["test-util", "io-util"] }
+# Only to build the pixels a substitute system decoder hands back. The image
+# library this workspace already compiles; nothing new is built.
+image = { version = "0.25.10", default-features = false }

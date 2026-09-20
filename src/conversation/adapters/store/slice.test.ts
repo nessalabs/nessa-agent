@@ -36,7 +36,13 @@ const view = (id: string, text = ""): ConversationView => ({
   pending: [],
   permissions: [],
   tools: [],
-  capabilities: { queue: true, steer: true, resume: true, permissions: true },
+  capabilities: {
+    queue: true,
+    steer: true,
+    resume: true,
+    permissions: true,
+    imageInput: false,
+  },
   truncated: false,
   queueComplete: true,
 })

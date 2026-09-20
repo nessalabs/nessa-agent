@@ -4,8 +4,19 @@ import { createDependencies } from "../../../composition/dependencies"
 import { scenarioEffects } from "../scenario/effects"
 import { gatewayEffects } from "../gateway/effects"
 import { textContent } from "../../model"
-import { bindConversation, refreshConversation, sendDraft, setDraft } from "./slice"
-import type { NessaClient } from "@nessa/client"
+import {
+  bindConversation,
+  refreshConversation,
+  sendDraft,
+  setDraft,
+  submissionStarted,
+} from "./slice"
+import {
+  ConversationErrorCode,
+  NessaConversationMutationError,
+  NessaRpcError,
+  type NessaClient,
+} from "@nessa/client"
 import { conversationNotice } from "../../ui/notification"
 
 it("a failed creation cannot make an unattempted message admission uncertain", async () => {
@@ -34,11 +45,58 @@ it("a failed creation cannot make an unattempted message admission uncertain", a
   expect(tab.draftReset).toBe(1)
   expect(conversationNotice(tab)?.retry).toEqual({ kind: "draft" })
 })
+it("carries the gateway startup-deadline code into the notice, not just its text", async () => {
+  const effects = scenarioEffects("echo")
+  const store = makeStore(
+    createDependencies({
+      conversation: {
+        ...effects,
+        create: async () => {
+          throw new NessaConversationMutationError(
+            "server",
+            "action",
+            undefined,
+            new NessaRpcError(
+              ConversationErrorCode.AgentStartupDeadline,
+              "agent_startup_deadline",
+            ),
+            async () => undefined,
+          )
+        },
+      },
+    }),
+  )
+  await store.dispatch(sendDraft({ content: textContent("first message") }))
+  const tab = store.getState().conversation.conversations[0]!
+  expect(tab.errorCode).toBe(ConversationErrorCode.AgentStartupDeadline)
+  expect(tab.turns[0]).toMatchObject({ receipt: "failed" })
+  expect(conversationNotice(tab)).toMatchObject({
+    title: "Agent was still starting",
+    retry: { kind: "draft" },
+  })
+  // A retried send clears the rejection it described, code and message together.
+  store.dispatch(setDraft({ id: tab.id, draft: textContent("retry") }))
+  store.dispatch(
+    submissionStarted({
+      conversationId: tab.id,
+      executionId: "execution",
+      actionId: "action",
+      content: textContent("retry"),
+      mode: "queued",
+    }),
+  )
+  const retried = store.getState().conversation.conversations[0]!
+  expect(retried.error).toBeUndefined()
+  expect(retried.errorCode).toBeUndefined()
+})
 it("client loss after cached creation is known unsent rather than an uncertain admission", async () => {
   let client: NessaClient | null = {
     conversation: { create: async () => ({ conversationId: "server" }) },
   } as unknown as NessaClient
-  const effects = gatewayEffects(() => client)
+  const effects = gatewayEffects(
+    () => client,
+    () => Promise.reject(new Error("no wait expected")),
+  )
   await effects.create("server")
   client = null
   const store = makeStore(createDependencies({ conversation: effects }))
@@ -68,11 +126,18 @@ it("known-unsent follow-up does not settle the earlier running invocation before
           pending: [],
           permissions: [],
           tools: [],
-          capabilities: { queue: true, steer: true, resume: true, permissions: true },
+          capabilities: {
+            queue: true,
+            steer: true,
+            resume: true,
+            permissions: true,
+            imageInput: false,
+          },
           messages: [
             {
               executionId: "active",
               userText: "first",
+              attachments: [],
               parts: [
                 { offset: 0, kind: "thought", text: "", toolId: "" },
                 { offset: 1, kind: "text", text: "", toolId: "" },
@@ -99,7 +164,10 @@ it("a reconnecting client rejects locally without attempting a message RPC", asy
     connectionState: { status: "reconnecting" },
     conversation: { send },
   } as unknown as NessaClient
-  const effects = gatewayEffects(() => client)
+  const effects = gatewayEffects(
+    () => client,
+    () => Promise.reject(new Error("no wait expected")),
+  )
   await expect(
     Promise.resolve().then(() =>
       effects.send({
@@ -107,6 +175,7 @@ it("a reconnecting client rejects locally without attempting a message RPC", asy
         executionId: "e",
         actionId: "a",
         text: "unsent",
+        attachments: [],
       }),
     ),
   ).rejects.toThrow("was not sent")

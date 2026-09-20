@@ -75,12 +75,12 @@ impl Agent {
     /// use nessa_sdk::{Agent, application::agent_execution::{
     ///     agents::AgentError, executions::ExecutionRequest, permissions::ActionContext,
     ///     providers::{AgentProvider, CloseOutcome}, sessions::{SessionManager, SessionStorage},
-    /// }, domain::agent_execution::{executions::{ExecutionId, ExecutionOutcome}, prompts::PromptText}};
+    /// }, domain::agent_execution::{executions::{ExecutionId, ExecutionOutcome}, prompts::{PromptText, UserMessage}}};
     /// # async fn chat(provider: Arc<dyn AgentProvider>, storage: Arc<dyn SessionStorage>, actor: ActionContext)
     /// # -> Result<(Result<ExecutionOutcome, AgentError>, Result<CloseOutcome, AgentError>), Box<dyn Error>> {
     /// let input = ExecutionRequest {
     ///     execution_id: ExecutionId::new("first-message")?,
-    ///     user_message: PromptText::new("Hello!")?,
+    ///     user_message: UserMessage::text_only(PromptText::new("Hello!")?),
     ///     estimated_input_tokens: 8, // Host estimate, including retained context.
     ///     reserved_output_tokens: 128,
     /// };

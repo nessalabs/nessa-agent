@@ -83,7 +83,7 @@ pub struct CredentialRevokeResult {
     pub credential_id: String,
     pub revision: u64,
 }
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionCloseReason {
     AuthenticationFailed,
@@ -97,6 +97,23 @@ pub enum SessionCloseReason {
     GatewayOverloaded,
     ServerShutdown,
     TransportInterrupted,
+}
+impl SessionCloseReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AuthenticationFailed => "authentication_failed",
+            Self::CredentialRevoked => "credential_revoked",
+            Self::CredentialExpired => "credential_expired",
+            Self::AuthorizationLost => "authorization_lost",
+            Self::ProtocolIncompatible => "protocol_incompatible",
+            Self::HandshakeTimeout => "handshake_timeout",
+            Self::TemporaryUnavailable => "temporary_unavailable",
+            Self::GatewayRestarting => "gateway_restarting",
+            Self::GatewayOverloaded => "gateway_overloaded",
+            Self::ServerShutdown => "server_shutdown",
+            Self::TransportInterrupted => "transport_interrupted",
+        }
+    }
 }
 impl SessionCloseReason {
     pub fn web_socket_code(self) -> u16 {
@@ -130,24 +147,49 @@ impl SessionCloseReason {
         }
     }
 }
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrincipalKind {
     Human,
     Integration,
     Agent,
 }
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+impl PrincipalKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::Integration => "integration",
+            Self::Agent => "agent",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MembershipRole {
     Admin,
     Member,
 }
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+impl MembershipRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::Member => "member",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MembershipState {
     Active,
     Disabled,
+}
+impl MembershipState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Disabled => "disabled",
+        }
+    }
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -157,7 +199,7 @@ pub struct SessionTermination {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_after_ms: Option<u64>,
 }
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationMessageStatus {
     Queued,
@@ -168,18 +210,48 @@ pub enum ConversationMessageStatus {
     Injected,
     Unresolved,
 }
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+impl ConversationMessageStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
+            Self::Injected => "injected",
+            Self::Unresolved => "unresolved",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationPendingMode {
     Queued,
     Steering,
 }
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+impl ConversationPendingMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Steering => "steering",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationDisposition {
     Queued,
     Injected,
     Settled,
+}
+impl ConversationDisposition {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Injected => "injected",
+            Self::Settled => "settled",
+        }
+    }
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -188,12 +260,41 @@ pub struct ConversationCapabilities {
     pub steer: bool,
     pub resume: bool,
     pub permissions: bool,
+    pub image_input: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageAttachment {
+    pub digest: String,
+    pub mime_type: String,
+    pub size: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttachmentBeginParams {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub digest: String,
+    pub mime_type: String,
+    pub size: u64,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AttachmentBeginResult {
+    pub request_id: String,
+    pub state: String,
+    pub ticket: Option<String>,
+    pub expires_at_ms: Option<u64>,
+    pub digest: Option<String>,
+    pub mime_type: Option<String>,
+    pub size: Option<u64>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConversationMessage {
     pub execution_id: String,
     pub user_text: String,
+    pub attachments: Vec<ImageAttachment>,
     pub status: ConversationMessageStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -208,6 +309,7 @@ pub struct ConversationMessage {
 pub struct ConversationPending {
     pub execution_id: String,
     pub text: String,
+    pub attachments: Vec<ImageAttachment>,
     pub mode: ConversationPendingMode,
 }
 #[derive(Deserialize, Serialize)]
@@ -277,6 +379,7 @@ pub struct ConversationSendParams {
     pub request_id: String,
     pub execution_id: String,
     pub text: String,
+    pub attachments: Vec<ImageAttachment>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -285,12 +388,21 @@ pub struct ConversationRemoveParams {
     pub request_id: String,
     pub execution_id: String,
 }
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationPermissionSelectionState {
     Pending,
     Consumed,
     Unknown,
+}
+impl ConversationPermissionSelectionState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Consumed => "consumed",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -340,13 +452,23 @@ pub struct ConversationReorderParams {
     pub request_id: String,
     pub execution_ids: Vec<String>,
 }
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationReorderOutcome {
     Applied,
     Unchanged,
     QueueChanged,
     PriorityConflict,
+}
+impl ConversationReorderOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Applied => "applied",
+            Self::Unchanged => "unchanged",
+            Self::QueueChanged => "queue_changed",
+            Self::PriorityConflict => "priority_conflict",
+        }
+    }
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -370,4 +492,56 @@ pub struct ConversationPart {
     pub tool_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationErrorCode {
+    AgentNotConfigured,
+    UnknownMethod,
+    InvalidRequest,
+    ConversationNotFound,
+    ConversationCapacity,
+    ConversationClosed,
+    ConversationConfigurationChanged,
+    ConversationStorageUnavailable,
+    TemporarilyUnavailable,
+    AuditUnavailable,
+    SubmissionConflict,
+    SubmissionUnresolved,
+    StalePermission,
+    AgentStartupDeadline,
+    AgentOperationFailed,
+    ImageInputUnsupported,
+    AttachmentNotFound,
+    AttachmentUnavailable,
+    AttachmentCapacity,
+    AttachmentStorageUnavailable,
+    AttachmentCleanupUnavailable,
+}
+impl ConversationErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AgentNotConfigured => "agent_not_configured",
+            Self::UnknownMethod => "unknown_method",
+            Self::InvalidRequest => "invalid_request",
+            Self::ConversationNotFound => "conversation_not_found",
+            Self::ConversationCapacity => "conversation_capacity",
+            Self::ConversationClosed => "conversation_closed",
+            Self::ConversationConfigurationChanged => "conversation_configuration_changed",
+            Self::ConversationStorageUnavailable => "conversation_storage_unavailable",
+            Self::TemporarilyUnavailable => "temporarily_unavailable",
+            Self::AuditUnavailable => "audit_unavailable",
+            Self::SubmissionConflict => "submission_conflict",
+            Self::SubmissionUnresolved => "submission_unresolved",
+            Self::StalePermission => "stale_permission",
+            Self::AgentStartupDeadline => "agent_startup_deadline",
+            Self::AgentOperationFailed => "agent_operation_failed",
+            Self::ImageInputUnsupported => "image_input_unsupported",
+            Self::AttachmentNotFound => "attachment_not_found",
+            Self::AttachmentUnavailable => "attachment_unavailable",
+            Self::AttachmentCapacity => "attachment_capacity",
+            Self::AttachmentStorageUnavailable => "attachment_storage_unavailable",
+            Self::AttachmentCleanupUnavailable => "attachment_cleanup_unavailable",
+        }
+    }
 }
