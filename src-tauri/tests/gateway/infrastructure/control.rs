@@ -909,6 +909,9 @@ fn durable_fence_requires_strict_success_with_valid_identity() {
         .unwrap();
     assert!(fence.matches(RUNNING_GENERATION, RUNNING_GENERATION));
     assert!(!fence.matches(RUNNING_GENERATION, TARGET_GENERATION));
+    // The acknowledged retirement is the one that says the named runtime is no
+    // longer in use; collection reads exactly this.
+    assert!(fence.retired);
     for (field, value) in [
         ("auditError", json!("failed")),
         ("cleanupError", json!("failed")),
@@ -944,6 +947,9 @@ fn admitted_cleanup_failure_forces_stale_retry_without_authorizing_bootout() {
     let evidence = parse_retirement_evidence(failed.to_string().as_bytes())
         .unwrap()
         .unwrap();
+    // Admission is fenced, but nothing proved the old runtime finished with its
+    // installation, so collection must keep it.
+    assert!(!evidence.retired);
     let desired = json!({"WorkingDirectory":"/data","EnvironmentVariables":{"NESSA_RUNTIME_FINGERPRINT":RUNNING_GENERATION}});
     let mut installed = desired.clone();
     installed["EnvironmentVariables"]["NESSA_SERVICE_GENERATION"] = json!(RUNNING_GENERATION);
@@ -1142,6 +1148,9 @@ fn matching_published_request_without_result_forces_reconciliation() {
     let pending = parse_pending_retirement(request.to_string().as_bytes(), &running)
         .unwrap()
         .unwrap();
+    // A request nobody has answered is never an acknowledged retirement, so
+    // collection keeps the runtime it names.
+    assert!(!pending.retired);
     let desired = json!({"WorkingDirectory":"/data","EnvironmentVariables":{"NESSA_RUNTIME_FINGERPRINT":RUNNING_GENERATION}});
     let mut installed = desired.clone();
     installed["EnvironmentVariables"]["NESSA_SERVICE_GENERATION"] = json!(RUNNING_GENERATION);

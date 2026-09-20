@@ -16,6 +16,7 @@ use std::{
 mod control;
 mod generation;
 mod install_attempt;
+mod pruning;
 mod staging;
 mod startup;
 use control::{
@@ -27,6 +28,7 @@ use generation::service_generation;
 use install_attempt::{
     authorizes_rebootstrap, clear as clear_install_attempt, publish as publish_install_attempt,
 };
+use pruning::{prune_runtimes, retained_runtimes};
 use staging::{launch_settings, stage_runtime};
 
 pub(super) struct Launchd;
@@ -130,7 +132,8 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
     let runtime_root = private_root.join("gateway-runtimes");
     nessa_local_storage::create_directory(&runtime_root).map_err(|error| error.to_string())?;
     nessa_local_storage::sync_directory(&private_root).map_err(|error| error.to_string())?;
-    let staged_runtime = stage_runtime(runtime, &runtime_root.join(&label), &fingerprint)?;
+    let installations = runtime_root.join(&label);
+    let staged_runtime = stage_runtime(runtime, &installations, &fingerprint)?;
     let runtime = staged_runtime.as_path();
     let (arguments, executable_path) = launch_settings(runtime);
     let agents = home.join("Library/LaunchAgents");
@@ -212,6 +215,19 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
     match state {
         ServiceState::ManagedCurrent(running) => {
             clear_install_attempt(&lock_directory)?;
+            // The loaded service already advertises the staged runtime, so the
+            // versions nothing can be running are known here too. Collecting
+            // only after a replacement would leave an ordinary launch holding
+            // whatever the last update left behind until the next one.
+            prune_runtimes(
+                &installations,
+                &retained_runtimes(
+                    &fingerprint,
+                    &running.fingerprint,
+                    pending.as_ref(),
+                    fence.as_ref(),
+                ),
+            );
             return Ok(ReconciledGateway::new(
                 service,
                 running.fingerprint,
@@ -324,6 +340,17 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
         Ok(running)
     })();
     let running = forward_recovery(installation)?;
+    // Only past `forward_recovery`: an installation that failed leaves the old
+    // registration, and possibly an old process, alive for a retry.
+    prune_runtimes(
+        &installations,
+        &retained_runtimes(
+            &fingerprint,
+            &running.fingerprint,
+            pending.as_ref(),
+            fence.as_ref(),
+        ),
+    );
     Ok(ReconciledGateway::new(
         service,
         running.fingerprint,
