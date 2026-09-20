@@ -40,11 +40,13 @@ function deferred<T>() {
 function Surface({
   setupActive,
   completed,
+  agent,
 }: {
   setupActive: boolean
   completed: boolean
+  agent?: string
 }) {
-  const handoff = useSetupHandoff(setupActive, completed)
+  const handoff = useSetupHandoff(setupActive, completed, agent)
   if (!handoff.recovery) return null
   return React.createElement(HandoffFailed, {
     ref: handoff.dialog,
@@ -65,7 +67,11 @@ async function flush() {
   })
 }
 
-async function render(props: { setupActive: boolean; completed: boolean }) {
+async function render(props: {
+  setupActive: boolean
+  completed: boolean
+  agent?: string
+}) {
   await React.act(async () => {
     root.render(
       React.createElement(React.StrictMode, null, React.createElement(Surface, props)),
@@ -133,7 +139,17 @@ describe("handing over once setup is over", () => {
   it.each([true, false])("carries how setup ended (completed=%s)", async (completed) => {
     host.finishSetupWindow.mockReturnValue(deferred<SetupHandoff>().promise)
     await render({ setupActive: false, completed })
-    expect(host.finishSetupWindow).toHaveBeenCalledWith(completed)
+    expect(host.finishSetupWindow).toHaveBeenCalledWith(completed, undefined)
+  })
+
+  it("carries the agent setup finished on, and nothing when it did not finish", async () => {
+    // The second of the two things the host cannot know. A gateway configured
+    // for more than one agent has no default worth guessing at, so a choice
+    // that does not travel here is a choice the user made and the server never
+    // hears about.
+    host.finishSetupWindow.mockReturnValue(deferred<SetupHandoff>().promise)
+    await render({ setupActive: false, completed: true, agent: "codex" })
+    expect(host.finishSetupWindow).toHaveBeenCalledWith(true, "codex")
   })
 
   it("leaves nothing on screen when the panel came up and this window is going", async () => {
@@ -192,7 +208,7 @@ describe("the screen a failed handoff leaves", () => {
 
     await press("Try again")
     expect(host.finishSetupWindow).toHaveBeenCalledTimes(2)
-    expect(host.finishSetupWindow).toHaveBeenLastCalledWith(true)
+    expect(host.finishSetupWindow).toHaveBeenLastCalledWith(true, undefined)
     // The screen is gone while the new attempt is outstanding.
     expect(container.querySelector('[role="alertdialog"]')).toBeNull()
 
