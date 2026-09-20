@@ -37,7 +37,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Seek, SeekFrom};
 use std::os::fd::{AsFd, BorrowedFd};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 /// The gateway's log, inside the stage's log directory. launchd's
@@ -95,13 +95,17 @@ fn rotate(log: &Path, output: BorrowedFd<'_>, limit: u64) -> io::Result<Rotation
         return Ok(Rotation::Kept);
     }
     // Copied before it is emptied, so an interruption costs a duplicate of the
-    // previous file rather than the log itself.
+    // previous file rather than the log itself. It holds exactly what the log
+    // held, so it is made as private as the log the host reserves — the one
+    // this run creates, and one an earlier run left behind.
     let mut kept = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
+        .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(previous(log))?;
+    kept.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     file.seek(SeekFrom::Start(0))?;
     io::copy(&mut file, &mut kept)?;
     kept.sync_all()?;
@@ -186,7 +190,8 @@ mod tests {
         assert_eq!(names.len(), 2, "{names:?}");
     }
 
-    /// A second rotation replaces the previous file rather than accumulating.
+    /// A second rotation replaces the previous file rather than accumulating,
+    /// and what it holds stays as private as the log it came out of.
     #[test]
     fn only_one_previous_file_is_kept() {
         let directory = tempfile::tempdir().expect("temporary directory");
@@ -198,6 +203,13 @@ mod tests {
                 rotate(&log, stderr.as_fd(), 100).expect("rotation"),
                 Rotation::Rolled
             );
+            // What the log held is as private in the previous file as it was
+            // in the log, every time and not only the first.
+            let mode = std::fs::metadata(previous(&log))
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "{mode:o}");
         }
         assert_eq!(read(&previous(&log)), "second".repeat(40));
     }
