@@ -132,6 +132,11 @@ system access prompt.
 Use the SDK's [harness setup](../../crates/nessa-sdk/README.md) for the pinned
 processes. Provider credentials stay in the server environment or in each agent's
 own configured credential directory, and neither agent is handed the other's.
+Which of those two places counts as a sign-in is the agent's own answer rather
+than a rule Nessa applies to both: Codex builds its authentication with the
+environment key switched off, so a key in the server environment signs Claude in
+and leaves Codex signed out, and readiness reports it that way. Signing Codex in
+is done with `codex login`, and Nessa never does it on the user's behalf.
 Requests cannot supply executables, workspaces, environment variables or tokens.
 A gateway with no conversation service at all keeps authentication/health
 available and returns `conversations_not_configured` for chat. A request naming

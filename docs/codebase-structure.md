@@ -500,8 +500,9 @@ only the order sources are asked in and what an unanswered source means, with th
 launch files, environment credentials and config directories resolved once in
 composition; `infrastructure/claude.rs` and `infrastructure/codex.rs` each hold
 what is true of that agent alone — where it keeps a credentials file, whether it
-has a keychain item at all, and the environment variables the launcher passes
-through — and `infrastructure/credentials.rs` holds what makes a variable a
+has a keychain item or answers for its own store by being run, and whether a key
+in this server's environment signs it in at all, which Claude's does and Codex's
+does not — and `infrastructure/credentials.rs` holds what makes a variable a
 credential and a file a sign-in, which is the same for both, so a third agent
 gets a third sibling rather than a branch inside either; `entrypoint/http.rs` owns the wire
 vocabulary and the cross-origin rule for `GET /onboarding/agents`, and answers a

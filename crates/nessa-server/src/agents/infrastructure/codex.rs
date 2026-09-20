@@ -1,10 +1,19 @@
 //! How Codex itself reports being signed in.
 //!
 //! Codex keeps its sign-in in places OpenAI chose, and in more than one of
-//! them: an API key in the environment, a credentials file under `CODEX_HOME`,
-//! and — where `cli_auth_credentials_store` says so — the operating system's own
-//! credential store. So the file is not the whole answer, and an absent file is
-//! not a signed-out machine.
+//! them: a credentials file under `CODEX_HOME`, and — where
+//! `cli_auth_credentials_store` says so — the operating system's own credential
+//! store. So the file is not the whole answer, and an absent file is not a
+//! signed-out machine.
+//!
+//! An API key in *this server's* environment is not among them, however much it
+//! looks like one. The app-server the adapter runs builds its authentication
+//! with the environment key switched off, so the key is never read as a
+//! credential: `codex login status` answers "not logged in" on a machine where
+//! `CODEX_API_KEY` or `OPENAI_API_KEY` is the only thing set. Nessa still hands
+//! those variables to the agent it starts, because they are the operator's to
+//! set and a later Codex may want them, but it does not count them as a
+//! sign-in — the launch would not agree.
 //!
 //! Which store is in use is Codex's own decision, made from its own
 //! configuration, and reimplementing that decision here would be a copy of it
@@ -31,16 +40,6 @@ use crate::agents::infrastructure::credentials;
 /// What Codex names its credentials file inside its own directory. It holds an
 /// API key or the tokens from a ChatGPT login, and either one starts Codex.
 const CREDENTIALS_FILE: &str = "auth.json";
-
-/// The environment variables the launcher passes through to the agent as a
-/// sign-in, in the order Codex itself prefers them.
-const CREDENTIAL_VARIABLES: [&str; 2] = ["CODEX_API_KEY", "OPENAI_API_KEY"];
-
-/// A non-empty credential in this process's environment, which is what a
-/// machine account signs in with. Returned only to know that it is there.
-pub(super) fn environment_credential() -> Option<String> {
-    credentials::environment_credential(&CREDENTIAL_VARIABLES)
-}
 
 /// Where Codex would write its credentials file on this machine.
 ///
