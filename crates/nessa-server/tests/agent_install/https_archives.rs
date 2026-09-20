@@ -7,6 +7,7 @@ use std::thread;
 use crate::agent_install::application::{InstallAgentRuntime, RuntimeStore};
 use crate::agent_install::domain::AgentName;
 use crate::agent_install::infrastructure::{host_platform, releases_for, ManagedRuntimes};
+use crate::agent_install_test_support::temporary_root;
 
 /// A staged file in a temporary directory, so the tests below can write into
 /// something real without the store's own rules getting in the way.
@@ -57,7 +58,7 @@ fn a_success_is_not_a_refusal() {
 
 #[test]
 fn a_body_that_arrives_is_stored_whole() {
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let mut staged = staged(root.path());
     let body = b"archive bytes".repeat(10_000);
 
@@ -69,7 +70,7 @@ fn a_body_that_arrives_is_stored_whole() {
 
 #[test]
 fn a_transfer_that_comes_apart_is_the_networks_doing() {
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let mut staged = staged(root.path());
     let mut body = Interrupted {
         before: b"half an archive".to_vec(),
@@ -87,7 +88,7 @@ fn a_transfer_that_comes_apart_is_the_networks_doing() {
 fn a_body_that_cannot_be_written_is_this_machines_doing() {
     // A full disk reported as an unreachable registry sends somebody to check
     // their connection when the problem is in front of them.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let path = root.path().join("download");
     std::fs::write(&path, b"").expect("an empty staged file");
     let readable = File::open(&path).expect("a handle that cannot be written");
@@ -107,7 +108,7 @@ fn a_body_that_does_not_stop_is_refused_rather_than_kept() {
     // Nothing has been hashed at this point, so the digest cannot help: without
     // a bound, a server that answers forever fills the disk for as long as the
     // transfer timeout allows.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let mut staged = staged(root.path());
     let mut endless = io::repeat(b'x');
 
@@ -125,7 +126,7 @@ fn a_body_that_does_not_stop_is_refused_rather_than_kept() {
 
 #[test]
 fn a_body_exactly_at_the_bound_is_kept() {
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let mut staged = staged(root.path());
     let body = vec![b'x'; 4096];
 
@@ -186,7 +187,7 @@ fn a_plain_http_url_is_never_fetched() {
     let archive = b"archive bytes that would be stored if http were fetched";
     let (port, served) = one_plain_http_reply(archive);
 
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let mut staged = staged(root.path());
     let source = HttpsArchives::new().expect("an https client");
 
@@ -247,7 +248,7 @@ fn installs_the_pinned_release() {
         return;
     };
 
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let source = HttpsArchives::new().expect("an https client");
 

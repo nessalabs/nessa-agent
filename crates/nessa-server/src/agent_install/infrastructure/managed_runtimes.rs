@@ -5,7 +5,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use flate2::read::MultiGzDecoder;
-use nessa_local_storage::{create_directory, open, sync_directory, OpenMode, PrivateTempFile};
+use nessa_local_storage::{
+    create_directory, create_directory_beneath, open_beneath, remove_directory_beneath,
+    remove_file_beneath, sync_directory_beneath, OpenMode, PrivateTempFile,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tar::EntryType;
@@ -158,14 +161,47 @@ impl ManagedRuntimes {
         Self { root: root.into() }
     }
 
-    /// The directory holding one agent's runtimes.
+    /// Make the root a private directory of this user's, or say why not.
     ///
-    /// The name is a [`AgentName`], which is the type that says a name can also
-    /// be a directory name, so there is nothing to re-check here. Everything in
-    /// this type routes through this method, so the whole store is anchored to
-    /// `root` in one place.
+    /// The trust boundary. Everything above the root is composition's — it is
+    /// derived from the data directory, which is where Nessa already keeps
+    /// credentials — and this is the one call that resolves a path the ordinary
+    /// way. Everything beneath it is treated as somewhere anything could have
+    /// been planted, and is reached only through the anchored primitives.
+    fn anchor(&self) -> Result<(), StoreFailure> {
+        create_directory(&self.root).map_err(|error| at(&self.root, error))
+    }
+
+    /// Create a directory beneath the root, and no further.
+    ///
+    /// [`create_directory_beneath`] opens each component in turn relative to
+    /// the verified one above it, refusing anything that is not a private
+    /// directory of this user's and never following a symbolic link. A store
+    /// that resolved these paths the ordinary way would create — and later
+    /// remove, and unpack an executable into — whatever a link at
+    /// `<root>/<agent>` or `<root>/<agent>/versions` pointed at.
+    fn private_directory(&self, relative: &Path) -> Result<(), StoreFailure> {
+        self.anchor()?;
+        create_directory_beneath(&self.root, relative)
+            .map_err(|error| at(&self.absolute(relative), error))
+    }
+
+    /// Where a path beneath the root is, said in full.
+    ///
+    /// For the two things that leave this type: the launch path it hands back,
+    /// and the paths its failures name. Never for reaching a file.
+    fn absolute(&self, relative: &Path) -> PathBuf {
+        self.root.join(relative)
+    }
+
+    /// The directory holding one agent's runtimes, relative to the root.
+    ///
+    /// Every path in this type is relative, because every one of them is
+    /// reached through a primitive that walks it component by component from
+    /// the root. The name is an [`AgentName`], which is the type that says a
+    /// name can also be a directory name, so there is nothing to re-check here.
     fn agent_root(&self, agent: &AgentName) -> PathBuf {
-        self.root.join(agent.as_str())
+        PathBuf::from(agent.as_str())
     }
 
     /// Where `agent`'s executable lives for `version`.
@@ -206,7 +242,9 @@ impl ManagedRuntimes {
             self.version_root(agent, release.version()),
             self.versions_root(agent),
             self.agent_root(agent),
-            self.root.clone(),
+            // The root itself, which the anchored primitives spell as the
+            // empty path: there is no component to walk to reach it.
+            PathBuf::new(),
         ]
     }
 
@@ -216,6 +254,16 @@ impl ManagedRuntimes {
 
     fn lock_path(&self, agent: &AgentName) -> PathBuf {
         self.agent_root(agent).join("install.lock")
+    }
+
+    /// Where `agent`'s executable is for this artifact, relative to the root.
+    ///
+    /// The file name alone, never the archive entry's own path: the entry can
+    /// be `package/bin/opencode`, and the directories of it are the archive's
+    /// business rather than this layout's.
+    fn executable_path(&self, agent: &AgentName, release: &PinnedRelease) -> PathBuf {
+        self.artifact_root(agent, release)
+            .join(release.executable().file_name())
     }
 
     /// Hold the sole right to publish one agent's runtimes.
@@ -244,8 +292,7 @@ impl ManagedRuntimes {
     /// archive was fetched and hashed before this store was asked to publish
     /// anything, so the waiting install has already paid for the bytes.
     fn hold(&self, agent: &AgentName) -> Result<File, StoreFailure> {
-        let directory = self.agent_root(agent);
-        private_directory(&directory)?;
+        self.private_directory(&self.agent_root(agent))?;
         let path = self.lock_path(agent);
         // Tried for a limited number of turns rather than once, because the
         // exclusion is on the file this handle has open, not on the name: if
@@ -258,7 +305,8 @@ impl ManagedRuntimes {
             // `OpenOrCreate`, so the first install to run creates it and every
             // later one takes the same file. It stays behind afterwards, which
             // is what lets it be the same file next time; it holds no bytes.
-            let lock = open(&path, OpenMode::OpenOrCreate).map_err(|error| at(&path, error))?;
+            let lock = open_beneath(&self.root, &path, OpenMode::OpenOrCreate)
+                .map_err(|error| at(&self.absolute(&path), error))?;
             // Tried without waiting first, so that an install which is about
             // to wait can say so. Between the download and the runtime being
             // ready this command prints nothing, and a person watching it
@@ -269,15 +317,16 @@ impl ManagedRuntimes {
                     agent = %agent,
                     "waiting for another install of this agent to finish"
                 );
-                lock.lock().map_err(|error| at(&path, error))?;
+                lock.lock()
+                    .map_err(|error| at(&self.absolute(&path), error))?;
             }
-            if same_file(&lock, &path)? {
+            if self.same_file(&lock, &path)? {
                 return Ok(lock);
             }
         }
         Err(StoreFailure::Unwritable(format!(
             "{}: kept being replaced while an install waited for it",
-            path.display()
+            self.absolute(&path).display()
         )))
     }
 
@@ -296,12 +345,13 @@ impl ManagedRuntimes {
     ) -> Result<(), StoreFailure> {
         let record = InstallationRecord::of(release);
         let directory = self.agent_root(agent);
-        let mut staging = PrivateTempFile::new_in(&directory).map_err(unwritable)?;
+        let mut staging =
+            PrivateTempFile::new_beneath(&self.root, &directory).map_err(unwritable)?;
         serde_json::to_writer_pretty(staging.as_file_mut(), &record)
             .map_err(|error| StoreFailure::Unwritable(error.to_string()))?;
         staging.as_file().sync_all().map_err(unwritable)?;
         staging
-            .persist(&self.record_path(agent))
+            .persist_beneath(&self.record_path(agent))
             .map_err(unwritable)?;
         // Through the same primitive as the walk above it, because this is the
         // sync that makes the record's own rename durable — the last thing
@@ -357,14 +407,14 @@ impl ManagedRuntimes {
     /// consequence. What cannot be removed is logged, so that a directory
     /// holding an unrecorded runtime is at least explainable.
     fn withdraw(&self, agent: &AgentName, release: &PinnedRelease, executable: &Path) {
-        if let Err(error) = fs::remove_file(executable) {
+        if let Err(error) = remove_file_beneath(&self.root, executable) {
             if error.kind() != io::ErrorKind::NotFound {
                 // `warn`, not `debug`: the shipped default keeps `info` and
                 // above, and a line nobody sees would make the sentence above
                 // untrue. This is the only trace that a runtime was left
                 // somewhere nothing will look for it again.
                 tracing::warn!(
-                    path = %executable.display(),
+                    path = %self.absolute(executable).display(),
                     %error,
                     "could not withdraw an agent runtime that was not recorded"
                 );
@@ -395,7 +445,7 @@ impl ManagedRuntimes {
     /// Silent, because a directory that will not go costs one inode and saying
     /// so would bury the failure that actually matters.
     fn sweep(&self, directory: &Path) {
-        let _ = fs::remove_dir(directory);
+        let _ = remove_directory_beneath(&self.root, directory);
     }
 
     /// Unpack the one entry the release names, into a file this store chose.
@@ -441,7 +491,8 @@ impl ManagedRuntimes {
             // the destination was computed from the pin. An archive cannot
             // direct this write anywhere, whatever its entries claim to be
             // called.
-            let mut staging = PrivateTempFile::new_in(directory).map_err(unwritable)?;
+            let mut staging =
+                PrivateTempFile::new_beneath(&self.root, directory).map_err(unwritable)?;
             // Bounded, because the digest that has already matched says nothing
             // about how far these bytes expand. One byte over the limit is read
             // deliberately, so that reaching it is distinguishable from an
@@ -485,7 +536,7 @@ impl ManagedRuntimes {
             // durable belongs to the caller, because from here on a failure
             // has an executable to take back out — and a `?` inside this loop
             // would return past the only code that knows to do that.
-            staging.persist(destination).map_err(unwritable)?;
+            staging.persist_beneath(destination).map_err(unwritable)?;
             return Ok(true);
         }
         Ok(false)
@@ -522,8 +573,8 @@ impl ManagedRuntimes {
             return Ok(installed);
         }
         let directory = self.artifact_root(agent, release);
-        private_directory(&directory)?;
-        let destination = directory.join(release.executable().file_name());
+        self.private_directory(&directory)?;
+        let destination = self.executable_path(agent, release);
         let unpacked = self.unpack(
             release,
             staged,
@@ -573,7 +624,10 @@ impl ManagedRuntimes {
             self.withdraw(agent, release, &destination);
             return Err(failure);
         }
-        Ok(destination)
+        // The one path that leaves this type, so the one that is spelled in
+        // full: everything above is relative because everything above is
+        // reached through the root rather than resolved from the outside.
+        Ok(self.absolute(&destination))
     }
 }
 
@@ -588,7 +642,11 @@ impl RuntimeStore for ManagedRuntimes {
         // one it recognises — a single link, owned by this user, readable by
         // nobody else, and not a symbolic link to somewhere else's json.
         // `fs::read` would have followed that link and answered from it.
-        let mut record = match open(&self.record_path(agent), OpenMode::ReadNonblocking) {
+        let mut record = match open_beneath(
+            &self.root,
+            &self.record_path(agent),
+            OpenMode::ReadNonblocking,
+        ) {
             Ok(file) => file,
             // Nothing recorded is a real "nothing is installed". Any other
             // failure is this machine declining to answer, and is reported
@@ -637,29 +695,42 @@ impl RuntimeStore for ManagedRuntimes {
         // again. The record is still only a note, so an executable that has
         // since been deleted — by a disk cleaner, or by someone tidying up —
         // makes it stale, and an empty one is a runtime that cannot start.
-        let executable = self
-            .artifact_root(agent, release)
-            .join(release.executable().file_name());
-        // `symlink_metadata`, not `metadata`: the second follows a symbolic
-        // link and reports on whatever it points at, so a link planted at this
-        // path would be handed back as the tested runtime — with no download,
-        // no digest and none of the archive's own checks ever running. A link
-        // is not what this store published, so it is not an installation.
-        let installed = match fs::symlink_metadata(&executable) {
-            Ok(metadata) => metadata,
+        let executable = self.executable_path(agent, release);
+        // Opened rather than stat'ed, and through the anchored primitive. It
+        // answers the whole question in one call: every directory from the root
+        // down is walked and checked, nothing along the way may be a symbolic
+        // link, and what is finally opened has to be a regular file with a
+        // single link, owned by this user and reachable by nobody else — which
+        // is exactly what this store publishes and nothing else is.
+        //
+        // `symlink_metadata` would have covered only the last of those. A link
+        // at `versions/`, or at the agent's own directory, would have been
+        // followed by the kernel before it ever looked, and whatever was found
+        // on the other side handed back as the tested runtime — with no
+        // download, no digest, and none of the archive's checks ever running.
+        // That path is then given out to be launched.
+        let installed = match open_beneath(&self.root, &executable, OpenMode::Read) {
+            Ok(file) => file,
+            // Anything that is not openable as the file this store published is
+            // answered with "nothing is installed", not with a failure. That is
+            // the recoverable answer: the pinned release is known, and
+            // installing it renames the real executable back over whatever is
+            // there. A failure would be a dead end — every attempt refusing at
+            // the same place, with nothing a person could do but go and find
+            // the file. A disk that is genuinely failing still says so, in the
+            // install that follows.
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            // Not "nothing is installed": a directory that cannot be searched,
-            // or a path that will not resolve, is this machine declining to
-            // answer. Reporting it as missing would send every later attempt
-            // to download a hundred megabytes and fail at the same place.
-            Err(error) => return Err(unreadable(error)),
+            Err(_) => return Ok(None),
         };
-        Ok((installed.is_file() && installed.len() > 0).then_some(executable))
+        // A record is a note, not evidence: an executable truncated to nothing
+        // is a runtime that cannot start.
+        let empty = installed.metadata().map_err(unreadable)?.len() == 0;
+        Ok((!empty).then(|| self.absolute(&executable)))
     }
 
     fn stage(&self, agent: &AgentName) -> Result<StagedArchive, StoreFailure> {
         let directory = self.agent_root(agent);
-        private_directory(&directory)?;
+        self.private_directory(&directory)?;
         for _ in 0..NAME_ATTEMPTS {
             let mut random = [0u8; 16];
             getrandom::fill(&mut random)
@@ -669,13 +740,13 @@ impl RuntimeStore for ManagedRuntimes {
             // Created, not opened: two installs running at once each get a file
             // of their own, and neither can truncate a download the other is
             // still measuring.
-            match open(&path, OpenMode::CreateNew) {
+            match open_beneath(&self.root, &path, OpenMode::CreateNew) {
                 Ok(file) => {
-                    release_name(&path)?;
-                    return Ok(StagedArchive::new(file, path));
+                    self.release_name(&path)?;
+                    return Ok(StagedArchive::new(file, self.absolute(&path)));
                 }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(at(&path, error)),
+                Err(error) => return Err(at(&self.absolute(&path), error)),
             }
         }
         Err(StoreFailure::Unwritable(
@@ -712,11 +783,23 @@ impl RuntimeStore for ManagedRuntimes {
         release: &PinnedRelease,
         staged: &mut StagedArchive,
     ) -> Result<PathBuf, StoreFailure> {
-        self.publish_durably(agent, release, staged, sync_directory)
+        self.publish_durably(agent, release, staged, |relative| {
+            sync_directory_beneath(&self.root, relative)
+        })
     }
 
     fn discard(&self, staged: StagedArchive) {
         let path = staged.path().to_owned();
+        // Turned back into the name this store gave it. A path that is not
+        // beneath this root is not one this store staged, and removing it is
+        // not this method's business whatever it was handed.
+        let Ok(relative) = path.strip_prefix(&self.root).map(Path::to_path_buf) else {
+            tracing::debug!(
+                path = %path.display(),
+                "declined to discard an archive that is not in this store"
+            );
+            return;
+        };
         // The handle first: on Windows a file that is still open is one the
         // filesystem will not let go of. On Unix the name went at the moment
         // the file was created, so this finds nothing and that is the answer.
@@ -724,7 +807,7 @@ impl RuntimeStore for ManagedRuntimes {
         // Survivable: a leftover archive in a directory Nessa owns costs disk
         // and nothing else, and failing an install that otherwise worked
         // because a temporary file would not delete would be worse.
-        if let Err(error) = fs::remove_file(&path) {
+        if let Err(error) = remove_file_beneath(&self.root, &relative) {
             if error.kind() != io::ErrorKind::NotFound {
                 tracing::debug!(
                     path = %path.display(),
@@ -749,16 +832,22 @@ impl RuntimeStore for ManagedRuntimes {
 /// part-way leaves its download behind on that platform, and nothing sweeps it.
 /// Nessa pins no Windows release today, so nothing reaches this yet.
 #[cfg(unix)]
-fn release_name(path: &Path) -> Result<(), StoreFailure> {
-    // Named in the failure because this is the one path where the file is
-    // created and then abandoned: the handle is dropped with the install, and
-    // an empty file nobody swept is left under a name only this message gives.
-    fs::remove_file(path).map_err(|error| at(path, error))
+impl ManagedRuntimes {
+    fn release_name(&self, relative: &Path) -> Result<(), StoreFailure> {
+        // Named in the failure because this is the one path where the file is
+        // created and then abandoned: the handle is dropped with the install,
+        // and an empty file nobody swept is left under a name only this
+        // message gives.
+        remove_file_beneath(&self.root, relative)
+            .map_err(|error| at(&self.absolute(relative), error))
+    }
 }
 
 #[cfg(not(unix))]
-fn release_name(_path: &Path) -> Result<(), StoreFailure> {
-    Ok(())
+impl ManagedRuntimes {
+    fn release_name(&self, _relative: &Path) -> Result<(), StoreFailure> {
+        Ok(())
+    }
 }
 
 /// Move one entry's data onto a staging file, keeping the two faults apart.
@@ -828,43 +917,45 @@ fn refused_kind(kind: EntryType) -> Option<&'static str> {
     }
 }
 
-/// Make `path` a directory only this user can reach, or say which one it was.
-///
-/// The refusal this can produce — a directory that already exists and is
-/// readable by somebody else — names no path of its own, and a caller looking
-/// at a message about "local storage" has three directories in play. Naming it
-/// is the difference between an error somebody can act on and one they cannot.
-fn private_directory(path: &Path) -> Result<(), StoreFailure> {
-    create_directory(path).map_err(|error| at(path, error))
-}
-
 /// Whether the handle taken on `path` is still the file that `path` names.
 ///
 /// The lock lives on an open file, not on a name, so a lock file replaced
 /// between the open and the lock would leave two installs each holding a
 /// different file and each believing it was the only one publishing. Compared
 /// on device and inode, which is the pair that identifies a file rather than a
-/// way of reaching one.
+/// way of reaching one — and the name is resolved through the same anchored
+/// open as everything else here, so what is compared against is a file beneath
+/// this root rather than wherever a link now points.
 #[cfg(unix)]
-fn same_file(lock: &File, path: &Path) -> Result<bool, StoreFailure> {
-    use std::os::unix::fs::MetadataExt;
+impl ManagedRuntimes {
+    fn same_file(&self, lock: &File, relative: &Path) -> Result<bool, StoreFailure> {
+        use std::os::unix::fs::MetadataExt;
 
-    let held = lock.metadata().map_err(unwritable)?;
-    match fs::metadata(path) {
-        Ok(named) => Ok(held.dev() == named.dev() && held.ino() == named.ino()),
-        // Removed rather than replaced. The handle is still a lock nobody else
-        // can take through it, but the next install would create a new file
-        // and take a second one, so this one excludes nothing.
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(at(path, error)),
+        let held = lock.metadata().map_err(unwritable)?;
+        match open_beneath(&self.root, relative, OpenMode::Read) {
+            Ok(named) => {
+                let named = named.metadata().map_err(unwritable)?;
+                Ok(held.dev() == named.dev() && held.ino() == named.ino())
+            }
+            // Removed rather than replaced. The handle is still a lock nobody
+            // else can take through it, but the next install would create a new
+            // file and take a second one, so this one excludes nothing. The
+            // same goes for a name that is no longer a private file of this
+            // user's: it is not the lock this handle holds.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => Ok(false),
+            Err(error) => Err(at(&self.absolute(relative), error)),
+        }
     }
 }
 
 /// Windows keeps the name for as long as the file is open, so the file that
 /// was locked is the file at that path by construction.
 #[cfg(not(unix))]
-fn same_file(_lock: &File, _path: &Path) -> Result<bool, StoreFailure> {
-    Ok(true)
+impl ManagedRuntimes {
+    fn same_file(&self, _lock: &File, _relative: &Path) -> Result<bool, StoreFailure> {
+        Ok(true)
+    }
 }
 
 /// A write failure, said of the path it happened to.
@@ -884,16 +975,22 @@ fn malformed(error: io::Error) -> StoreFailure {
     StoreFailure::MalformedArchive(error.to_string())
 }
 
-/// Make a freshly written file launchable by its owner.
+/// Make a freshly written file launchable by its owner, and by nobody else.
 ///
 /// A tar entry carries a mode, but it is not used: the mode is part of the
 /// archive, and the one thing this installation needs is true regardless of
 /// what the archive says about it. Set through the open handle rather than by
 /// path, so it lands on the file that was just written and not on whatever the
 /// name happens to mean by now.
+///
+/// Owner-only, like every other file this store writes. The directories above
+/// it are `0o700` already, so the group and world bits a release archive
+/// usually carries grant nothing — and dropping them is what lets
+/// [`RuntimeStore::installed`] check the file through the same private-file
+/// primitive as the record, instead of settling for what a stat can see.
 #[cfg(unix)]
 fn make_executable(file: &File) -> io::Result<()> {
-    file.set_permissions(fs::Permissions::from_mode(0o755))
+    file.set_permissions(fs::Permissions::from_mode(0o700))
 }
 
 #[cfg(not(unix))]

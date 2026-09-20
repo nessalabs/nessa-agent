@@ -15,6 +15,7 @@ use tar::{EntryType, Header};
 use crate::agent_install::domain::{
     AgentName, ArchivePath, ArchiveUrl, Libc, ReleasePlatform, ReleaseRequirements,
 };
+use crate::agent_install_test_support::temporary_root;
 
 /// The SHA-256 of the three bytes `abc`, which is the standard test vector.
 /// Written out rather than computed so the test would catch a hasher that
@@ -121,6 +122,19 @@ fn artifact_path(root: &Path) -> PathBuf {
     version_path(root).join("a".repeat(64))
 }
 
+/// The same directory, spelled the way the store spells it.
+///
+/// Every path inside the store is relative to its root, because every one of
+/// them is walked down from the root rather than resolved from the outside.
+/// The helpers above stay absolute: they are for looking at the disk, which is
+/// the one thing a test does from outside.
+fn artifact_relative() -> PathBuf {
+    Path::new("opencode")
+        .join("versions")
+        .join("1.18.31")
+        .join("a".repeat(64))
+}
+
 /// That same directory, created the way the store does.
 ///
 /// Made with the store's own primitive rather than `create_dir_all`, because
@@ -164,7 +178,7 @@ fn write(path: &Path, bytes: &[u8]) {
 
 #[test]
 fn nothing_recorded_is_nothing_installed() {
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     assert_eq!(
         store.installed(&agent(), &release("1.18.31", "package/bin/opencode")),
@@ -174,7 +188,7 @@ fn nothing_recorded_is_nothing_installed() {
 
 #[test]
 fn a_published_runtime_is_reported_as_installed() {
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
 
@@ -199,7 +213,7 @@ fn a_published_runtime_is_reported_as_installed() {
 
 #[test]
 fn a_published_runtime_is_executable() {
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     // The archive says 0o644. What matters is that the installed file can be
     // launched regardless of what the archive said about it.
@@ -217,7 +231,17 @@ fn a_published_runtime_is_executable() {
             .expect("reading the published runtime")
             .permissions()
             .mode();
-        assert_eq!(mode & 0o111, 0o111, "the installed runtime is executable");
+        assert_eq!(mode & 0o100, 0o100, "the installed runtime is executable");
+        // And by its owner alone, like every other file this store writes. The
+        // directories above it are private already, so the group and world bits
+        // a release archive usually carries would grant nothing — and dropping
+        // them is what lets `installed` check this file through the same
+        // private-file primitive as the record.
+        assert_eq!(
+            mode & 0o077,
+            0,
+            "the installed runtime is reachable by others"
+        );
     }
     #[cfg(not(unix))]
     let _ = published;
@@ -227,7 +251,7 @@ fn a_published_runtime_is_executable() {
 fn a_runtime_whose_executable_was_deleted_is_not_installed() {
     // The record is a note, not evidence. A disk cleaner that removed the
     // binary must not leave Nessa handing out a launch path to nothing.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     let published = publish(
@@ -246,7 +270,7 @@ fn a_runtime_whose_executable_was_deleted_is_not_installed() {
 fn a_record_naming_another_version_is_not_this_release() {
     // The pin moving is an install of the new one. A record for the version
     // before it describes a runtime, just not the one being asked about.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     publish(
         &store,
@@ -265,7 +289,7 @@ fn a_record_naming_another_version_is_not_this_release() {
 fn a_record_naming_another_executable_is_not_this_release() {
     // A pin that keeps its version and moves its executable is a different
     // release. Reusing the old binary would install nothing and say it did.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     publish(
         &store,
@@ -285,7 +309,7 @@ fn a_symbolic_link_is_not_an_installed_runtime() {
     // Answering with a link would hand out whatever it points at as the tested
     // runtime, with no download, no digest and none of the archive's own checks
     // ever running. A link is not what this store published.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     let published = publish(
@@ -307,13 +331,227 @@ fn a_symbolic_link_is_not_an_installed_runtime() {
     assert_eq!(store.installed(&agent(), &release), Ok(None));
 }
 
+/// The leaf being a link was never the whole question. Every directory between
+/// the store's root and the executable is one something could have replaced
+/// with a link, and a store that resolved its paths the ordinary way would
+/// follow it: creating, unpacking, removing and finally handing out to be
+/// launched, all on the other side of it. The anchored primitives walk down
+/// from the root one component at a time and refuse anything that is not a
+/// private directory of this user's.
+#[test]
+#[cfg(unix)]
+fn no_directory_between_the_root_and_the_runtime_may_be_a_link() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let planted_release = release("1.18.31", "package/bin/opencode");
+    // A version the far side does not have, for the install below.
+    let fresh = release("2.0.0", "package/bin/opencode");
+
+    // Somewhere else entirely, holding what a planted link would aim at: the
+    // layout an install would produce, with a binary of its own in it.
+    let elsewhere = root.path().join("elsewhere");
+    let planted = elsewhere
+        .join("1.18.31")
+        .join("a".repeat(64))
+        .join("opencode");
+    nessa_local_storage::create_directory(planted.parent().expect("a directory"))
+        .expect("a private directory elsewhere");
+    write(&planted, b"not the tested runtime");
+
+    // The agent's own directory exists; `versions` under it is a link.
+    let agent_root = root.path().join("opencode");
+    nessa_local_storage::create_directory(&agent_root).expect("a private agent directory");
+    std::os::unix::fs::symlink(&elsewhere, agent_root.join("versions")).expect("planting a link");
+
+    // Nothing is installed here, whatever is on the other side of the link and
+    // however exactly it is laid out. Reported as "not installed" rather than
+    // as a failure, because that is the answer an install can act on.
+    // Written the way the store writes it — private, owned by this user — so
+    // that what the test is about is the link and not the record.
+    nessa_local_storage::open(&agent_root.join("installed.json"), OpenMode::CreateNew)
+        .expect("a private record")
+        .write_all(
+            record_of("1.18.31", "package/bin/opencode")
+                .to_string()
+                .as_bytes(),
+        )
+        .expect("writing the record");
+    assert_eq!(
+        store.installed(&agent(), &planted_release),
+        Ok(None),
+        "a runtime on the far side of a link was handed back as the tested one"
+    );
+
+    // And an install refuses rather than unpacking through it. A version the
+    // far side does not already have, so that the directories an install makes
+    // before it writes anything are observable: creating them through the link
+    // is the first thing that would go wrong, and it would go wrong silently.
+    let failure = publish(
+        &store,
+        &fresh,
+        &archive("package/bin/opencode", b"the runtime"),
+    )
+    .expect_err("an install through a link");
+    assert!(
+        matches!(failure, StoreFailure::Unwritable(_)),
+        "{failure:?}"
+    );
+    assert!(
+        !elsewhere.join("2.0.0").exists(),
+        "the install made its directories on the far side of the link"
+    );
+    assert_eq!(
+        std::fs::read(&planted).expect("the file outside the store still reads"),
+        b"not the tested runtime",
+        "the install wrote through the link"
+    );
+    assert!(
+        agent_root.join("versions").symlink_metadata().is_ok(),
+        "the link itself was removed as though it were this store's"
+    );
+}
+
+/// Asking what is installed does not create anything first, so it is the one
+/// entry point with no directory walk of its own ahead of it. A link standing
+/// in for the agent's whole directory would make an unanchored read answer from
+/// somebody else's record — and that record decides whether Nessa hands out a
+/// launch path without downloading anything.
+#[test]
+#[cfg(unix)]
+fn an_agent_directory_that_is_a_link_is_not_read_through() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let pinned = release("1.18.31", "package/bin/opencode");
+
+    // A complete installation, somewhere this store does not own.
+    let elsewhere = root.path().join("elsewhere");
+    nessa_local_storage::create_directory(&elsewhere).expect("a private directory elsewhere");
+    let executable = elsewhere
+        .join("versions")
+        .join("1.18.31")
+        .join("a".repeat(64))
+        .join("opencode");
+    nessa_local_storage::create_directory(executable.parent().expect("a directory"))
+        .expect("a private artifact directory elsewhere");
+    nessa_local_storage::open(&executable, OpenMode::CreateNew)
+        .expect("a private executable")
+        .write_all(b"not the tested runtime")
+        .expect("writing the executable");
+    nessa_local_storage::open(&elsewhere.join("installed.json"), OpenMode::CreateNew)
+        .expect("a private record")
+        .write_all(
+            record_of("1.18.31", "package/bin/opencode")
+                .to_string()
+                .as_bytes(),
+        )
+        .expect("writing the record");
+
+    // It is a complete installation, so reading it the ordinary way would
+    // answer with a launch path — which is what makes the link worth planting.
+    std::os::unix::fs::symlink(&elsewhere, root.path().join("opencode")).expect("planting a link");
+
+    // Refused, rather than answered from over there. A refusal and not "nothing
+    // installed" because a link where this store's own directory should be is
+    // this machine declining to answer, not an empty store — and it is no dead
+    // end, since an install refuses on the same link and says the same thing.
+    let refused = store
+        .installed(&agent(), &pinned)
+        .expect_err("a record on the far side of a link decided what is installed");
+    assert!(
+        matches!(refused, StoreFailure::Unreadable(_)),
+        "{refused:?}"
+    );
+
+    // The very first thing an install does is take the agent's directory, and
+    // that is not one.
+    let failure = store
+        .stage(&agent())
+        .expect_err("an install staged a download through a link");
+    assert!(
+        matches!(failure, StoreFailure::Unwritable(_)),
+        "{failure:?}"
+    );
+    assert_eq!(
+        std::fs::read(&executable).expect("the file outside the store still reads"),
+        b"not the tested runtime",
+        "the install wrote through the link"
+    );
+}
+
+/// Every path this store touches is walked down from its root.
+///
+/// Said about the source, because the property is about the calls rather than
+/// about any one arrangement of links. A behavioural test only ever reaches the
+/// first anchored call on its path: the rest are what keeps a link planted
+/// *during* an install — after the directories were checked and before the
+/// executable is renamed, removed or synced — from being followed, and no
+/// fixture can hold that moment still.
+///
+/// The one exception is the root itself, which is composition's to give and is
+/// resolved the ordinary way exactly once, in `anchor`.
+#[test]
+fn the_store_reaches_nothing_by_a_path_it_did_not_walk() {
+    const SOURCE: &str = include_str!("../../src/agent_install/infrastructure/managed_runtimes.rs");
+
+    for call in [
+        "fs::remove_file(",
+        "fs::remove_dir(",
+        "fs::metadata(",
+        "fs::symlink_metadata(",
+        "File::open(",
+        "nessa_local_storage::open(",
+        "PrivateTempFile::new_in(",
+        ".persist(",
+        "sync_directory(",
+    ] {
+        assert!(
+            !SOURCE.contains(call),
+            "{call} resolves a whole path in the kernel, so a link anywhere \
+             along it is followed; the `_beneath` form walks down from the root"
+        );
+    }
+
+    assert_eq!(
+        SOURCE.matches("create_directory(").count(),
+        1,
+        "the root is the one path resolved the ordinary way, and only in `anchor`"
+    );
+
+    // And the path-based primitives are not in reach to be called unqualified
+    // either. Named rather than counted, so adding one is a decision somebody
+    // makes here instead of a name that quietly appears in an import.
+    let imported = SOURCE
+        .split_once("use nessa_local_storage::{")
+        .expect("the store imports its storage primitives as a group")
+        .1
+        .split_once('}')
+        .expect("the import group closes")
+        .0;
+    for name in imported.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        assert!(
+            matches!(
+                name,
+                "create_directory"
+                    | "create_directory_beneath"
+                    | "open_beneath"
+                    | "remove_directory_beneath"
+                    | "remove_file_beneath"
+                    | "sync_directory_beneath"
+                    | "OpenMode"
+                    | "PrivateTempFile"
+            ),
+            "{name} is not one of the primitives this store reaches the disk through"
+        );
+    }
+}
+
 #[test]
 #[cfg(unix)]
 fn a_record_that_is_a_symbolic_link_is_not_read_through() {
     // `installed.json` is a private file this store wrote. A link in its place
     // is not one, and following it would answer from a document somebody else
     // put somewhere else.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     publish(
@@ -352,7 +590,7 @@ fn a_record_cannot_name_a_launch_path_of_its_own() {
     // store wrote it, identical though it is, because the rewriting is the
     // premise: this is what somebody who can edit the file is left with once
     // every other spelling has been refused.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     let published = publish(
@@ -385,7 +623,7 @@ fn a_record_this_store_did_not_write_is_not_an_installation() {
     // `a_record_that_is_a_symbolic_link_is_not_read_through` covers. What is
     // *in* the file only ever answers the question asked of it, and an answer
     // of "nothing" leaves a person with an install they can simply run again.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     publish(
@@ -434,7 +672,7 @@ fn a_record_this_store_did_not_write_is_not_an_installation() {
 
 #[test]
 fn an_archive_without_the_pinned_executable_is_named_as_such() {
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
 
@@ -460,7 +698,7 @@ fn an_entry_written_with_a_leading_dot_slash_still_matches() {
     // Tar writers differ about whether paths carry a `./` prefix. The pin names
     // the path the package documents; a writer's spelling of it is not a
     // different file.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
 
     assert!(publish(
@@ -473,7 +711,7 @@ fn an_entry_written_with_a_leading_dot_slash_still_matches() {
 
 #[test]
 fn a_malformed_archive_is_reported_as_malformed() {
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
 
     match publish(
@@ -491,7 +729,7 @@ fn an_entry_that_is_not_a_regular_file_installs_nothing() {
     // A link or a directory carries no data, so unpacking one writes an empty
     // file — which `is_file` is perfectly happy with. Reporting that as the
     // installed runtime hands out a launch path to something that cannot start.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
 
@@ -523,13 +761,14 @@ fn an_archive_that_expands_past_the_bound_is_refused() {
     // fills the disk. The bound is handed in rather than taken from the
     // constant, so that reaching it costs a kilobyte here instead of half a
     // gigabyte.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     // A kilobyte of zeroes compresses to almost nothing, which is the shape of
     // the attack: small on the wire, large on the disk.
     let mut staged = staged(&store, &archive("package/bin/opencode", &[0u8; 1024]));
-    let directory = artifact_directory(root.path());
+    artifact_directory(root.path());
+    let directory = artifact_relative();
     let destination = directory.join("opencode");
 
     let failure = store
@@ -541,18 +780,19 @@ fn an_archive_that_expands_past_the_bound_is_refused() {
         "{failure:?}"
     );
     assert!(
-        !destination.exists(),
+        !installed_path(root.path()).exists(),
         "an entry past the bound was published anyway"
     );
 }
 
 #[test]
 fn an_archive_exactly_at_the_bound_is_unpacked() {
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     let mut staged = staged(&store, &archive("package/bin/opencode", &[0u8; 512]));
-    let directory = artifact_directory(root.path());
+    artifact_directory(root.path());
+    let directory = artifact_relative();
     let destination = directory.join("opencode");
 
     assert_eq!(
@@ -560,7 +800,7 @@ fn an_archive_exactly_at_the_bound_is_unpacked() {
         Ok(true)
     );
     assert_eq!(
-        std::fs::metadata(&destination)
+        std::fs::metadata(installed_path(root.path()))
             .expect("reading the published runtime")
             .len(),
         512
@@ -569,7 +809,7 @@ fn an_archive_exactly_at_the_bound_is_unpacked() {
 
 #[test]
 fn an_empty_executable_is_not_an_installation() {
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
 
@@ -585,7 +825,7 @@ fn an_archive_entry_cannot_direct_the_write() {
     // The executable lands where the pin says, computed from the agent and the
     // version. A tar entry that calls itself something else is matched against
     // the pin and otherwise has no say in the destination.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
 
     let published = publish(
@@ -607,7 +847,7 @@ fn an_archive_entry_cannot_direct_the_write() {
 fn versions_are_installed_beside_each_other() {
     // A pin that moves must not half-overwrite a binary something may still be
     // running.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let newer = release("1.18.31", "package/bin/opencode");
 
@@ -630,7 +870,7 @@ fn versions_are_installed_beside_each_other() {
 
 #[test]
 fn a_digest_is_the_sha256_of_what_was_staged() {
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let mut staged = staged(&store, b"abc");
 
@@ -644,7 +884,7 @@ fn a_digest_is_the_sha256_of_what_was_staged() {
 fn a_digest_of_something_larger_than_the_read_buffer_is_still_right() {
     // The hasher reads in chunks. A file of exactly one chunk, and one of more
     // than one, take different paths through that loop.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let body = vec![7u8; 64 * 1024 * 3 + 17];
     let mut staged = staged(&store, &body);
@@ -686,7 +926,7 @@ fn what_was_hashed_is_what_gets_unpacked() {
     // The reason a staged download is a handle rather than a path. Replacing
     // the file between the two steps must not change what comes out, because
     // both steps read the same open file.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     let mut staged = staged(&store, &archive("package/bin/opencode", b"measured"));
@@ -710,7 +950,7 @@ fn what_was_hashed_is_what_gets_unpacked() {
 fn two_installs_at_once_do_not_share_a_download() {
     // Two staged downloads racing over one name is how a self-inflicted
     // collision comes to be reported as a tampered archive.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
 
     let first = store.stage(&agent()).expect("a staged file");
@@ -723,7 +963,7 @@ fn two_installs_at_once_do_not_share_a_download() {
 fn an_agent_directory_is_private_to_this_user() {
     #[cfg(unix)]
     {
-        let root = tempfile::tempdir().expect("temporary root");
+        let root = temporary_root();
         let store = ManagedRuntimes::new(root.path());
         let _staged = store.stage(&agent()).expect("a staged file");
 
@@ -745,7 +985,7 @@ fn a_staged_download_has_no_name_to_reach_it_by() {
     // The name goes the moment the file exists. A download nothing can open is
     // a download nothing can truncate between the hash and the unpack, and one
     // a process that dies part-way cannot leave behind.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let staged = staged(&store, b"downloaded");
 
@@ -758,7 +998,7 @@ fn a_staged_download_has_no_name_to_reach_it_by() {
 
 #[test]
 fn a_discarded_archive_leaves_nothing_behind() {
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let staged = staged(&store, b"downloaded");
     let path = staged.path().to_owned();
@@ -840,7 +1080,7 @@ fn an_entry_shorter_than_its_header_says_is_not_installed() {
     // there plus the padding it reads past them, and that becomes a file made
     // executable and recorded as the tested runtime — a binary that is
     // genuinely a fragment of one.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     let truncated = short_entry_archive("package/bin/opencode", &[b'x'; 512], 100_000);
@@ -873,7 +1113,7 @@ fn an_entry_whose_bytes_come_apart_is_the_archives_fault() {
     // A gzip stream that stops half way through the entry is a corrupt archive,
     // and telling somebody their machine could not write it sends them to look
     // at a disk that is fine.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     let whole = archive("package/bin/opencode", &vec![b'x'; 200_000]);
@@ -893,7 +1133,7 @@ fn an_executable_past_the_first_gzip_member_is_still_found() {
     // stops at the first would report an archive that plainly contains the
     // pinned executable as one that does not — blaming the pin for its own
     // early stop.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     // A filler entry large enough that the halfway split lands inside it, so
@@ -921,7 +1161,7 @@ fn an_install_that_cannot_read_the_record_unpacks_nothing() {
     // recorded is one that should not start. Asked again under the lock, before
     // a single byte is unpacked, which is why nothing is left behind here: not
     // an executable that was written and taken back out, nothing at all.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     // A directory where the record goes: neither readable as a record nor
@@ -966,7 +1206,7 @@ fn an_install_that_cannot_be_settled_takes_back_only_what_it_wrote() {
     // version lives one directory over, and the version directory is shared
     // between them: a rollback that swept it, or that removed a file it did not
     // write, would be one install deleting another's finished runtime.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let theirs = artifact(
         "1.18.31",
@@ -1021,7 +1261,7 @@ fn every_directory_an_install_creates_is_made_durable_from_the_inside_out() {
     // written out, so this says "every directory between the runtime and the
     // store's root, innermost first" — the property — rather than repeating the
     // list `settle` walks.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     let published = publish(
@@ -1031,11 +1271,18 @@ fn every_directory_an_install_creates_is_made_durable_from_the_inside_out() {
     )
     .expect("the executable is unpacked");
 
+    // Relative to the store's root, which is how every path inside the store is
+    // spelled: the root itself is the empty path, there being no component to
+    // walk to reach it.
     let mut expected = Vec::new();
-    let mut directory = published.parent().expect("a runtime sits in a directory");
+    let mut directory = published
+        .parent()
+        .expect("a runtime sits in a directory")
+        .strip_prefix(root.path())
+        .expect("the runtime is under the root");
     loop {
         expected.push(directory.to_path_buf());
-        if directory == root.path() {
+        if directory == Path::new("") {
             break;
         }
         directory = directory.parent().expect("the runtime is under the root");
@@ -1064,7 +1311,7 @@ fn every_directory_an_install_creates_is_made_durable_from_the_inside_out() {
     // sync that makes the record's own rename durable, which is the last thing
     // standing between an install and being acknowledged.
     let mut walked = expected.clone();
-    walked.push(root.path().join("opencode"));
+    walked.push(PathBuf::from("opencode"));
     assert_eq!(synced.into_inner(), walked);
 }
 
@@ -1075,12 +1322,12 @@ fn an_install_whose_parent_directories_are_not_durable_is_not_recorded() {
     // innermost one. A machine that lost power here has to come back to
     // "nothing installed", not to a record naming a version directory whose own
     // entry never reached the disk.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     let directory = artifact_directory(root.path());
     write(&directory.join("opencode"), b"the runtime");
-    let versions = root.path().join("opencode").join("versions");
+    let versions = Path::new("opencode").join("versions");
 
     // Durable everywhere except the level between the version and the agent,
     // which is the one an install that synced only its leaf would skip.
@@ -1114,7 +1361,7 @@ fn one_agent_is_published_one_install_at_a_time() {
     // that is what two processes look like from the filesystem's side — and it
     // is also what two `ManagedRuntimes` in one process look like, which an
     // in-memory lock would not have covered.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let held = store
         .hold(&agent())
@@ -1142,7 +1389,7 @@ fn an_entry_that_cannot_be_written_out_is_this_machines_doing() {
     // The other half of what `expand` exists for. The sibling loop in the HTTPS
     // client has this test; the unpacker's write branch had the fix and not the
     // test, which is half a guarantee.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let path = root.path().join("staging");
     write(&path, b"");
     let mut readable = std::fs::File::open(&path).expect("a handle that cannot be written");
@@ -1191,7 +1438,7 @@ fn an_archive_without_the_pinned_executable_leaves_no_directory_behind() {
     // The version directory is made before the archive is known to hold
     // anything. A pin that is wrong about its own contents would otherwise
     // leave an empty one on every attempt.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
 
@@ -1216,7 +1463,7 @@ fn an_install_is_not_settled_until_its_directory_is_durable() {
     // as the record. Asserted directly on `settle`, because that is what tells
     // the two apart: with the sync back inside `unpack`, settling a directory
     // that is not there would write the record and report success.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     // The agent directory has to exist, or writing the record would fail on its
@@ -1247,7 +1494,7 @@ fn a_failed_install_does_not_remove_a_runtime_it_did_not_write() {
     // must sweep what this attempt made and nothing else. Taking the runtime
     // away would mean a pin that is wrong about its own contents deleting the
     // binary somebody was using.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     let installed = publish(
@@ -1299,7 +1546,7 @@ fn every_way_of_refusing_an_archive_sweeps_the_directory_it_made() {
             archive("package/bin/other", b"binary"),
         ),
     ] {
-        let root = tempfile::tempdir().expect("temporary root");
+        let root = temporary_root();
         let store = ManagedRuntimes::new(root.path());
         let release = release("1.18.31", "package/bin/opencode");
 
@@ -1317,7 +1564,7 @@ fn a_version_may_be_spelled_like_the_stores_own_files() {
     // `installed.json` is a version the domain admits, and it named the record
     // when versions sat directly under the agent. Installing one and then
     // reading it back is what shows the two no longer share a path.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let awkward = release("installed.json", "package/bin/opencode");
 
@@ -1347,7 +1594,7 @@ fn a_failure_after_the_rename_says_nothing_was_installed_and_means_it() {
     // executable has to go back out. Leaving it would mean reporting a failure
     // with a live, recorded runtime on the disk.
 
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     let installed = publish(
@@ -1392,7 +1639,7 @@ fn a_different_artifact_of_one_version_is_not_already_installed() {
     // that name would answer "already installed" to a pin asking for a
     // different one of the nine, and hand back a binary this machine may not be
     // able to start at all.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let installed = release("1.18.31", "package/bin/opencode");
     publish(
@@ -1454,7 +1701,7 @@ fn two_artifacts_of_one_version_do_not_share_a_path() {
     // if installing then puts the second artifact somewhere of its own; keyed
     // by version alone the two would rename onto one path, and whichever ran
     // second would silently replace a binary something may still be running.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let first = release("1.18.31", "package/bin/opencode");
     let second = artifact(
@@ -1491,7 +1738,7 @@ fn an_artifact_that_is_already_there_is_never_unpacked_again() {
     //
     // Proven by handing the second call an archive that does not contain the
     // executable at all: a publish that looked at it could not succeed.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     let first = publish(
@@ -1522,7 +1769,7 @@ fn a_publication_waits_for_the_one_already_running() {
     // more true. Nothing here fails because a machine was busy. What it catches
     // is a publish that never waited at all — one of these archives is a few
     // hundred bytes and completes in microseconds when nothing holds it up.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let release = release("1.18.31", "package/bin/opencode");
     let bytes = archive("package/bin/opencode", b"the runtime");
@@ -1580,7 +1827,7 @@ fn a_pin_that_corrects_itself_about_an_archive_reinstalls_nothing() {
     // Proven the only honest way: the second call is handed an archive with no
     // executable in it and a durability primitive that fails. A publish that
     // did any work could not have returned the path.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let installed = release("1.18.31", "package/bin/opencode");
     let published = publish(
@@ -1624,7 +1871,7 @@ fn what_a_build_needs_is_written_down_even_though_reuse_does_not_read_it() {
     // Recorded for whoever opens the file — "which of the nine is this?" is
     // not a question a digest answers to a person. Asserted because a field
     // nothing compares is a field that can quietly stop being written.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let store = ManagedRuntimes::new(root.path());
     let musl = PinnedRelease::new(
         ReleaseVersion::parse("1.18.31").expect("usable version"),
@@ -1666,29 +1913,45 @@ fn a_lock_only_counts_while_it_is_the_file_at_that_path() {
     // a tidy-up, a partial restore, an uninstall script — two installs end up
     // holding two different files and each believes it is alone, which is the
     // race the lock was added to prevent, back again and invisible.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
     let directory = root.path().join("opencode");
     nessa_local_storage::create_directory(&directory).expect("a private agent directory");
-    let path = directory.join("install.lock");
+    // The name the store uses, which is relative to its root.
+    let relative = std::path::Path::new("opencode/install.lock");
+    let path = root.path().join(relative);
     let held = nessa_local_storage::open(&path, OpenMode::OpenOrCreate).expect("a lock file");
 
     assert_eq!(
-        same_file(&held, &path),
+        store.same_file(&held, relative),
         Ok(true),
         "a file nothing touched was reported as replaced"
     );
 
     std::fs::rename(&path, directory.join("moved-aside")).expect("moving the lock file aside");
     assert_eq!(
-        same_file(&held, &path),
+        store.same_file(&held, relative),
         Ok(false),
         "a lock file that was removed still counted"
     );
 
     nessa_local_storage::open(&path, OpenMode::CreateNew).expect("a new lock file in its place");
     assert_eq!(
-        same_file(&held, &path),
+        store.same_file(&held, relative),
         Ok(false),
         "a lock file that was replaced still counted"
+    );
+
+    // And a name that no longer resolves to a private file of this user's is
+    // not the lock this handle holds either. The comparison is anchored, so a
+    // link put there in place of the lock is not followed to whatever it names.
+    std::fs::remove_file(&path).expect("clearing the replacement");
+    std::os::unix::fs::symlink(directory.join("moved-aside"), &path).expect("a link in its place");
+    let refused = store
+        .same_file(&held, relative)
+        .expect_err("a link standing in for the lock file was followed");
+    assert!(
+        matches!(refused, StoreFailure::Unwritable(_)),
+        "{refused:?}"
     );
 }

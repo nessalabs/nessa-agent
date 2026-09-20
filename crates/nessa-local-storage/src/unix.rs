@@ -143,6 +143,34 @@ pub fn create_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> 
     }
     Ok(())
 }
+/// Remove a file named relative to an already-private root.
+///
+/// The leaf is unlinked through a handle on its parent, opened one verified
+/// component at a time, so no symbolic link along the way can send the removal
+/// somewhere else. `fs::remove_file` resolves the whole path in the kernel and
+/// has no such anchor; a link planted at any directory above the leaf makes it
+/// delete a file outside `root`.
+pub fn remove_file_beneath(root: &Path, relative: &Path) -> io::Result<()> {
+    unlink_beneath(root, relative, 0)
+}
+
+/// Remove an empty directory named relative to an already-private root.
+///
+/// The counterpart of [`remove_file_beneath`], and empty for the same reason
+/// `rmdir` is: a directory with anything in it is one somebody still wants.
+pub fn remove_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> {
+    unlink_beneath(root, relative, libc::AT_REMOVEDIR)
+}
+
+fn unlink_beneath(root: &Path, relative: &Path, flags: i32) -> io::Result<()> {
+    let (parent, leaf) = open_parent_beneath(root, relative)?;
+    let removed = unsafe { libc::unlinkat(parent.as_raw_fd(), leaf.as_ptr(), flags) };
+    if removed != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 pub fn sync_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> {
     let directory = if relative.as_os_str().is_empty() {
         open_root(root)?

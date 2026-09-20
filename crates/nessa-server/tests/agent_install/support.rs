@@ -23,6 +23,44 @@ pub(crate) const OTHER_DIGEST: &str =
 pub(crate) const PINNED_DIGEST: &str =
     "1111111111111111111111111111111111111111111111111111111111111111";
 
+/// A store root that is private, the way the real one is.
+///
+/// `tempfile::tempdir` creates a directory the umask decides, which on most
+/// machines anybody can read. The real root is `<data directory>/agents`,
+/// created by `create_directory` and so private to its owner — and
+/// [`ManagedRuntimes`] insists on that, because every path beneath the root is
+/// reached by walking down from it and refusing anything that is not a private
+/// directory of this user's. A bare temporary directory would fail at the
+/// first step, for a reason that has nothing to do with what the test is
+/// about.
+///
+/// The temporary directory is kept alive by this value; dropping it takes the
+/// root with it.
+///
+/// [`ManagedRuntimes`]: crate::agent_install::infrastructure::ManagedRuntimes
+pub(crate) struct TemporaryRoot {
+    _temporary: tempfile::TempDir,
+    root: PathBuf,
+}
+
+impl TemporaryRoot {
+    /// The root itself, which is what a store is built on.
+    pub(crate) fn path(&self) -> &Path {
+        &self.root
+    }
+}
+
+/// A private root inside a temporary directory that goes away with it.
+pub(crate) fn temporary_root() -> TemporaryRoot {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let root = temporary.path().join("agents");
+    nessa_local_storage::create_directory(&root).expect("a private store root");
+    TemporaryRoot {
+        _temporary: temporary,
+        root,
+    }
+}
+
 /// The agent these tests install.
 pub(crate) fn agent() -> AgentName {
     AgentName::parse("opencode").expect("test agent name is plain")

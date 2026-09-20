@@ -228,6 +228,11 @@ identity providers remain future adapters.
 `crates/nessa-local-storage` owns native OS private-file mechanics shared by the
 local auth, SDK session storage, and desktop credential adapters. It has no auth/domain policy
 or Tauri dependency; callers inject the resulting adapters through composition.
+Each primitive comes in two forms: a path-based one for a directory whose whole
+path the caller trusts, and a `_beneath` one that walks a relative path down
+from an already-verified root, refusing anything that is not a private
+directory of this user's and never following a symbolic link. A caller whose
+tree can be written to by anything else uses the second.
 
 ## Gateway conversation ownership
 
@@ -529,7 +534,13 @@ asking the operating system; `https_archives.rs` fetches over HTTPS only,
 through a bounded redirect chain and a bounded body; `managed_runtimes.rs`
 keeps installed runtimes under one private directory, one directory per
 artifact rather than per version, serialising publication behind a per-agent
-lock and writing its record durably once the executable is really there.
+lock and writing its record durably once the executable is really there. Every
+path inside it is relative to that root and is reached through the storage
+crate's `*_beneath` primitives, which walk down one verified component at a
+time; the root itself, which composition owns, is the single path resolved the
+ordinary way. So no symbolic link between the root and a runtime can send a
+read, a write or a removal outside the store, and the installed executable is
+private to its owner like everything else there.
 
 `composition/install_command.rs` wires those for `nessa install-agent NAME`,
 picks the build for this machine — the most demanding of the pinned releases

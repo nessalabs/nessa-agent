@@ -6,6 +6,7 @@ use crate::agent_install::application::{InstalledRuntime, StoreFailure};
 use crate::agent_install::domain::{
     ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveUrl, PinnedRelease, ReleaseVersion,
 };
+use crate::agent_install_test_support::temporary_root;
 
 fn opencode() -> AgentName {
     AgentName::parse("opencode").expect("a plain agent name")
@@ -51,7 +52,7 @@ fn rejection() -> ArchiveRejected {
 #[test]
 #[ignore = "downloads the real release archive"]
 fn installs_from_inside_the_runtime() {
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -77,7 +78,7 @@ fn an_agent_nessa_does_not_install_is_named_as_such() {
     // Claude and Codex are expected to be on the machine already. Asking to
     // install one is a mistake worth a clear answer rather than a download that
     // fails obscurely — and it must not touch the network to say so.
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let claude = AgentName::parse("claude").expect("a plain agent name");
     let failure = install(&claude, root.path()).expect_err("claude is not installed by nessa");
     assert!(
@@ -106,7 +107,7 @@ fn an_agent_with_no_build_for_this_machine_is_told_so() {
 
 #[test]
 fn nothing_is_written_for_an_agent_with_no_release() {
-    let root = tempfile::tempdir().expect("temporary root");
+    let root = temporary_root();
     let claude = AgentName::parse("claude").expect("a plain agent name");
     let _ = install(&claude, root.path());
     assert!(

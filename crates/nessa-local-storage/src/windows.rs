@@ -6,6 +6,7 @@
 use super::*;
 use std::{
     ffi::{c_void, OsStr},
+    fs,
     mem::{size_of, zeroed},
     os::windows::{
         ffi::OsStrExt,
@@ -380,6 +381,36 @@ pub fn open_beneath(root: &Path, relative: &Path, mode: OpenMode) -> io::Result<
 pub fn sync_directory(_: &Path) -> io::Result<()> {
     Ok(())
 }
+/// Remove a file named relative to an already-private root.
+///
+/// Windows has no `unlinkat`, so this verifies the root and the path's parents
+/// the way every other entry point here does and then removes by path.
+pub fn remove_file_beneath(root: &Path, relative: &Path) -> io::Result<()> {
+    let path = beneath(root, relative)?;
+    check_parents(&path)?;
+    fs::remove_file(path)
+}
+
+/// Remove an empty directory named relative to an already-private root.
+pub fn remove_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> {
+    let path = beneath(root, relative)?;
+    check_parents(&path)?;
+    fs::remove_dir(path)
+}
+
+/// The absolute path of `relative`, once it is a name and the root is private.
+fn beneath(root: &Path, relative: &Path) -> io::Result<PathBuf> {
+    if relative.components().next().is_none()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(unsafe_file());
+    }
+    verify_directory(root)?;
+    Ok(root.join(relative))
+}
+
 pub fn sync_directory_beneath(root: &Path, relative: &Path) -> io::Result<()> {
     if relative.as_os_str().is_empty() {
         verify_directory(root)
