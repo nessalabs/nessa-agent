@@ -139,6 +139,90 @@ fn a_call_that_was_never_named_is_refused_rather_than_reviewed_under_its_identif
     assert!(refused.is_err());
 }
 
+/// `other` is the kind Opencode maps everything it has no case for to, and its
+/// requests carry `{}` for arguments, so the kind and the arguments together
+/// say nothing at all. The title is the only thing left that names what is
+/// being asked, so that is the one case it is read in.
+#[test]
+fn a_request_upstream_had_no_kind_for_is_named_by_the_word_upstream_did_use() {
+    let mut tools = HashMap::new();
+    tool_call(&call("shell-1", Some("other")), &mut tools).unwrap();
+
+    let input = permission_input(
+        &permission(json!({
+            "toolCallId": "shell-1",
+            "kind": "other",
+            "title": "nessa_shell",
+            "rawInput": {},
+        })),
+        &tools,
+    )
+    .unwrap();
+    assert_eq!(input.name, "nessa_shell");
+}
+
+/// And `other` on its own is refused, rather than recorded as `other`.
+///
+/// An approval recorded under a kind that says nothing, against `{}` for
+/// arguments, is the same record as one recorded under `tc_01H9`: it says a
+/// thing was approved and nothing about which thing.
+#[test]
+fn a_request_naming_nothing_but_the_kind_that_says_nothing_is_refused() {
+    let mut tools = HashMap::new();
+    tool_call(&call("shell-1", Some("other")), &mut tools).unwrap();
+
+    assert!(permission_input(
+        &permission(json!({"toolCallId": "shell-1", "rawInput": {}})),
+        &tools,
+    )
+    .is_err());
+}
+
+/// The title standing in for a kind is still provider text, and bounded as
+/// such. "Upstream chose this word" is a fact about one version of Opencode,
+/// not a guarantee about what arrives.
+#[test]
+fn a_title_standing_in_for_a_kind_is_still_held_to_a_name() {
+    let tools = HashMap::new();
+    for title in [
+        json!("a sentence about what\nis being asked"),
+        json!("x".repeat(MAX_NAME_BYTES + 1)),
+        json!(""),
+        json!(7),
+    ] {
+        let refused = permission_input(
+            &permission(json!({
+                "toolCallId": "shell-1",
+                "kind": "other",
+                "title": title,
+                "rawInput": {},
+            })),
+            &tools,
+        );
+        assert!(refused.is_err(), "{title} was recorded as a name");
+    }
+}
+
+/// A request that names no kind is not the `other` case, and the title is not a
+/// fallback for it. Nothing says a title arriving here is upstream's own word
+/// rather than display text composed from arguments the model supplied, which
+/// is the whole reason this profile keeps kinds and not titles.
+#[test]
+fn a_title_does_not_stand_in_where_upstream_named_no_kind_at_all() {
+    let mut tools = HashMap::new();
+    tool_call(&call("read-1", None), &mut tools).unwrap();
+
+    let refused = permission_input(
+        &permission(json!({
+            "toolCallId": "read-1",
+            "title": "src/main.rs",
+            "rawInput": {},
+        })),
+        &tools,
+    );
+    assert!(refused.is_err());
+}
+
 #[test]
 fn a_request_with_no_arguments_is_refused_rather_than_reviewed_on_its_name_alone() {
     let tools = HashMap::new();

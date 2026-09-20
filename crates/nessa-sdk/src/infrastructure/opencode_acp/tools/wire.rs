@@ -37,9 +37,51 @@ const MAX_TOOLS: usize = 4096;
 ///
 /// Retained rather than read from the request, because a permission request can
 /// arrive naming nothing but the tool call it belongs to.
+///
+/// There is one case where a kind is not enough and [`permission_input`] reads
+/// the title after all. It is documented there, with why it is the lesser of
+/// the two bad records rather than a softening of the rule above.
 #[derive(Clone)]
 pub(in crate::infrastructure::opencode_acp) struct ObservedTool {
     kind: Option<String>,
+}
+
+/// The longest provider-supplied name this profile will record.
+///
+/// The same bound the Codex profile uses, and for the same reason: a name is
+/// what a person approves under and what the audit record keeps, so it has to
+/// be a name and not a payload that happened to arrive in a name's place.
+const MAX_NAME_BYTES: usize = 128;
+
+/// The ACP kind that says nothing, and the only one that lets a title through.
+///
+/// One of the protocol's ten, so the shared mapper accepts it, and the one
+/// Opencode maps everything it has no case for to. See [`permission_input`].
+const UNINFORMATIVE_KIND: &str = "other";
+
+/// Whether a provider-supplied name is small enough and plain enough to keep.
+///
+/// Graphic ASCII rather than an allowlist of characters: what matters is that a
+/// name is a name — bounded, printable, and on one line — not that it
+/// matches
+/// a shape this repository invented.
+fn bounded_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= MAX_NAME_BYTES && name.bytes().all(|b| b.is_ascii_graphic())
+}
+
+/// This frame's title, when it is usable as a name at all.
+///
+/// [`bounded_name`] admits no spaces, which does more work here than the bound
+/// suggests: a title Opencode composed for a person to read is a phrase, and a
+/// phrase does not survive it. What does is key-shaped — `nessa_shell`,
+/// `todowrite` — which is the only thing [`permission_input`] wants from a
+/// title in the first place.
+fn bounded_title(value: &Value) -> Option<String> {
+    value
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|title| bounded_name(title))
+        .map(str::to_owned)
 }
 
 /// The ACP kind on this frame, as a string, once the shared mapper has accepted
@@ -91,11 +133,35 @@ pub(in crate::infrastructure::opencode_acp) fn tool_call(
 /// decision recorded against "Edit" with nothing saying what would be edited is
 /// not a reviewed decision, and the audit would carry it as though it were.
 ///
-/// The name is the request's own kind, or the one the announcement gave. A
-/// request that names no kind either way is refused rather than named by its
-/// `toolCallId`: an opaque identifier tells the person approving it nothing,
-/// and recording an approval under it would be recording that nobody could
-/// have known what they approved.
+/// The name is the request's own kind, or the one the announcement gave —
+/// except where that kind is `other`.
+///
+/// Opencode derives the kind from the permission's *category* and maps
+/// everything it has no case for to `other`: `skill`, `lsp`, `todowrite`,
+/// `question`, and every MCP tool, which is to say Nessa's own shell. Those
+/// requests carry `{}` for arguments, because a permission's metadata is all
+/// there is to carry. So an approval recorded as `other` says a thing was
+/// approved and nothing whatever about which thing, which is the same record as
+/// one recorded under `tc_01H9` — and refusing to write that record is the
+/// rule this function is built on.
+///
+/// The title is what is left, and it is read only there. That is a weaker
+/// identity than a kind and it is not claimed to be more: Opencode composes a
+/// title from the arguments only for the categories it has a case for, so in
+/// the `other` cases what arrives is the announcement's own title or, failing
+/// that, upstream's word for the permission. Both are better than `other` and
+/// neither is guaranteed, so it is put through the same bound as any other
+/// provider-supplied name. The choice here is not between a trustworthy name
+/// and an untrustworthy one. It is between a record naming something that may
+/// be described loosely and a record naming nothing at all, and the audit is
+/// worth more with the first.
+///
+/// Read only there, and deliberately: a kind of `edit` with a title that says
+/// "Read the README" is still reviewed as an edit. The title displaces nothing.
+///
+/// A request that names no kind, or names `other` with no usable title, is
+/// refused, for the reason it always was: recording an approval nobody could
+/// have understood is worse than refusing to record one.
 pub(in crate::infrastructure::opencode_acp) fn permission_input(
     request: &Value,
     tools: &HashMap<String, ObservedTool>,
@@ -113,9 +179,20 @@ pub(in crate::infrastructure::opencode_acp) fn permission_input(
     // permission request. `acp_tool_call` refuses anything outside the
     // protocol's ten, which is what makes reading the string back safe.
     acp_tool_call(tool)?;
-    let name = accepted_kind(tool)
-        .or_else(|| tools.get(id).and_then(|observed| observed.kind.clone()))
-        .ok_or_else(|| protocol("permission request names no tool"))?;
+    let kind =
+        accepted_kind(tool).or_else(|| tools.get(id).and_then(|observed| observed.kind.clone()));
+    let name = match kind.as_deref() {
+        Some(kind) if kind != UNINFORMATIVE_KIND => kind.to_owned(),
+        // Upstream had no case for this one, so its own word for it is the best
+        // identity there is. Bounded, because that word is still text arriving
+        // from the provider.
+        Some(_) => bounded_title(tool)
+            .ok_or_else(|| protocol("permission request names no reviewable tool"))?,
+        // No kind at all is not the same case: nothing says the title was
+        // upstream's word rather than one composed for a person to read, so it
+        // is not a fallback here.
+        None => return Err(protocol("permission request names no tool")),
+    };
     Ok(ToolReviewInput {
         name,
         arguments_json: arguments.to_string(),
