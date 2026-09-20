@@ -487,6 +487,7 @@ pub(super) struct ConfiguredAgents {
 }
 #[cfg(unix)]
 mod build {
+    use super::super::agent_budgets as budgets;
     use super::{AgentId, AgentRuntime, AgentsConfig, RunError};
     use crate::conversation::infrastructure::DurableExecutionAudit;
     use nessa_auth::application::ports::Clock;
@@ -506,7 +507,11 @@ mod build {
             opencode_acp::sessions::OpencodeAcpProvider,
         },
     };
-    use std::{fs::File, path::Path, sync::Arc, time::Duration};
+    use std::{
+        fs::File,
+        path::{Path, PathBuf},
+        sync::Arc,
+    };
 
     /// Which model catalog entries an agent's harness is allowed to run.
     ///
@@ -557,6 +562,38 @@ mod build {
             && runtime.paths().iter().all(|path| path.exists())
     }
 
+    /// The launch configuration composition injects, separated from resolving
+    /// what goes into it so a test can read back the values actually used.
+    /// Everything here is a decision; nothing here reads the filesystem.
+    pub(super) fn launch_configuration(
+        agent: AgentId,
+        config: &AgentsConfig,
+        runtime: &AgentRuntime,
+        workspace: PathBuf,
+    ) -> AcpConfig {
+        AcpConfig {
+            executable: runtime.command.clone(),
+            arguments: runtime.args.iter().map(Into::into).collect(),
+            environment: super::process_environment(agent),
+            credential_environment: super::credential_environment(agent),
+            workspace,
+            tools_enabled: runtime.tools_enabled,
+            mcp_servers: config.mcp_servers.clone(),
+            permissions: PermissionOfferPolicy::once_only(),
+            // From protocol/defaults/agent-startup-budgets.json, which the
+            // client compiles in too: a client that gives up before the gateway
+            // has finished failing never sees the typed answer. One table for
+            // every agent, because the budget is the user's patience with a
+            // cold runtime rather than anything a vendor decides.
+            startup_timeout: budgets::startup_timeout(),
+            execution_timeout: None,
+            shutdown_grace: budgets::shutdown_grace(),
+            kill_timeout: budgets::kill_timeout(),
+            event_capacity: 256,
+            max_frame_bytes: 1024 * 1024,
+        }
+    }
+
     pub(super) fn provider(
         agent: AgentId,
         config: &AgentsConfig,
@@ -589,22 +626,7 @@ mod build {
             .map_err(|e| RunError::Agent(e.to_string()))?;
         let audit =
             Arc::new(DurableExecutionAudit::new(directory.join("audit"), clock).map_err(invalid)?);
-        let acp = AcpConfig {
-            executable: runtime.command.clone(),
-            arguments: runtime.args.iter().map(Into::into).collect(),
-            environment: super::process_environment(agent),
-            credential_environment: super::credential_environment(agent),
-            workspace,
-            tools_enabled: runtime.tools_enabled,
-            mcp_servers: config.mcp_servers.clone(),
-            permissions: PermissionOfferPolicy::once_only(),
-            startup_timeout: Duration::from_secs(45),
-            execution_timeout: None,
-            shutdown_grace: Duration::from_secs(3),
-            kill_timeout: Duration::from_secs(2),
-            event_capacity: 256,
-            max_frame_bytes: 1024 * 1024,
-        };
+        let acp = launch_configuration(agent, config, runtime, workspace);
         let prompt = system_prompt()?;
         let failed = |e: AgentError| RunError::Agent(format!("{}: {e}", agent.name()));
         let provider: Arc<dyn AgentProvider> = match agent {
@@ -638,3 +660,7 @@ mod build {
 #[cfg(test)]
 #[path = "../../tests/conversation/configuration.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "../../tests/conversation/launch_configuration.rs"]
+mod launch_configuration_tests;

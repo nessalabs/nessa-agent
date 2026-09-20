@@ -1,4 +1,8 @@
-import { NessaConversationMutationError } from "@nessa/client"
+import {
+  NessaConversationControlError,
+  NessaConversationMutationError,
+  type ConversationErrorCode,
+} from "@nessa/client"
 import {
   contentText,
   hasFileAttachments,
@@ -28,6 +32,13 @@ type ThunkConfig = {
 export type SendDraftArg = { content: MessageContent; id?: string; steering?: boolean }
 const detail = (error: unknown) =>
   error instanceof Error ? error.message : "The gateway request failed."
+// The typed rejection behind that text, when the gateway supplied one. Kept
+// beside the message so a notice can branch on the code rather than the words.
+const rejectionCode = (error: unknown): ConversationErrorCode | undefined =>
+  error instanceof NessaConversationMutationError ||
+  error instanceof NessaConversationControlError
+    ? error.code
+    : undefined
 
 /** Capture a tab and logical submission before awaiting any connection or admission. */
 export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
@@ -102,6 +113,7 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
           id,
           executionId,
           message: detail(error),
+          errorCode: rejectionCode(error),
           uncertain:
             admissionAttempted &&
             !(error instanceof ConversationUnavailableError) &&
@@ -225,7 +237,7 @@ export const controlConversation = createAsyncThunk<
     // A lost acknowledgement may follow an applied control. Read authority again;
     // never replay the control or infer that the previous order still holds.
     await dispatch(refreshConversation(id))
-    dispatch(showError({ id, message: detail(error) }))
+    dispatch(showError({ id, message: detail(error), errorCode: rejectionCode(error) }))
     throw error
   } finally {
     dispatch(controlFinished(id))
@@ -327,6 +339,7 @@ const conversationSlice = createSlice({
         executionId: string
         message: string
         uncertain?: boolean
+        errorCode?: ConversationErrorCode
       }>,
     ) {
       return failSend(
@@ -335,11 +348,22 @@ const conversationSlice = createSlice({
         action.payload.executionId,
         action.payload.message,
         action.payload.uncertain,
+        action.payload.errorCode,
       )
     },
-    showError(state, action: PayloadAction<{ id: string; message: string }>) {
+    showError(
+      state,
+      action: PayloadAction<{
+        id: string
+        message: string
+        errorCode?: ConversationErrorCode
+      }>,
+    ) {
       const current = state.conversations.find((item) => item.id === action.payload.id)
-      if (current) current.error = action.payload.message
+      if (current) {
+        current.error = action.payload.message
+        current.errorCode = action.payload.errorCode
+      }
     },
     readStarted(state, action: PayloadAction<{ id: string; requestId: string }>) {
       const current = state.conversations.find((item) => item.id === action.payload.id)
@@ -389,6 +413,7 @@ const conversationSlice = createSlice({
         current.controlPending = true
         current.readRequest = undefined
         current.error = undefined
+        current.errorCode = undefined
       }
     },
     controlFinished(state, action: PayloadAction<string>) {

@@ -17,7 +17,7 @@ use crate::{
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::{
     application::agent_execution::{
-        agents::AgentError,
+        agents::{AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep},
         permissions::PermissionSelectionState,
         providers::{
             AgentProvider, CleanupFuture, CleanupReport, ProviderCleanup, ProviderIdentity,
@@ -1049,6 +1049,113 @@ impl AgentProvider for UncertainOpenProvider {
             ))
         })
     }
+}
+fn startup_deadline() -> AgentError {
+    AgentError::StartupDeadline(AgentStartupStep::new(
+        AgentStartupPhase::Session,
+        AgentStartupContext::New,
+    ))
+}
+struct StartupDeadlineOnceProvider {
+    attempts: AtomicUsize,
+    delegate: Provider,
+}
+impl AgentProvider for StartupDeadlineOnceProvider {
+    fn identity(&self) -> ProviderIdentity {
+        self.delegate.identity()
+    }
+    fn open(&self, restore: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+        if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            Box::pin(async { Err(ProviderOpenError::no_resources(startup_deadline())) })
+        } else {
+            self.delegate.open(restore)
+        }
+    }
+}
+/// The client tells the user a startup deadline is worth retrying. That is only
+/// true because the slot is released when the failed launch left no resources
+/// behind, so the next command opens a fresh provider instead of being served
+/// the cached failure.
+#[tokio::test]
+async fn a_startup_deadline_releases_its_slot_so_the_same_command_can_retry() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let provider = Arc::new(StartupDeadlineOnceProvider {
+        attempts: AtomicUsize::new(0),
+        delegate: Provider(provider.clone()),
+    });
+    let service = ConversationService::new(
+        only(provider.clone()),
+        storage,
+        repository,
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = id();
+    assert!(matches!(
+        service.create(id.clone(), caller("panel", "first"), None).await,
+        Err(ConversationError::Agent(AgentError::StartupDeadline(step)))
+            if step.phase() == AgentStartupPhase::Session
+    ));
+    service
+        .create(id, caller("panel", "retry"), None)
+        .await
+        .unwrap();
+    assert_eq!(provider.attempts.load(Ordering::SeqCst), 2);
+    service.shutdown().await.unwrap();
+}
+struct UncertainStartupDeadlineProvider {
+    attempts: AtomicUsize,
+    identity: ProviderIdentity,
+}
+impl AgentProvider for UncertainStartupDeadlineProvider {
+    fn identity(&self) -> ProviderIdentity {
+        self.identity.clone()
+    }
+    fn open(&self, _: Option<ExecutionSessionId>) -> ProviderOpenFuture<'_> {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async {
+            Err(ProviderOpenError::with_cleanup(
+                startup_deadline(),
+                Arc::new(UncertainCleanup),
+            ))
+        })
+    }
+}
+/// The other half of the same contract: when the failed launch could not be
+/// confirmed stopped, the slot is deliberately retained, so retrying *this*
+/// conversation cannot reach the provider again. The failure keeps its own
+/// meaning rather than being relabelled by the retained cleanup.
+#[tokio::test]
+async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
+    let (_, _, repository, storage) = fixture(ConversationLimits::default());
+    let provider = Arc::new(UncertainStartupDeadlineProvider {
+        attempts: AtomicUsize::new(0),
+        identity: ProviderIdentity::new("gateway-test", "test", "test").unwrap(),
+    });
+    let service = ConversationService::new(
+        only(provider.clone()),
+        storage,
+        repository,
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = id();
+    for action in ["first", "retry"] {
+        assert!(matches!(
+            service
+                .create(id.clone(), caller("panel", action), None)
+                .await,
+            Err(ConversationError::Agent(AgentError::StartupDeadline(_))),
+        ));
+    }
+    assert_eq!(provider.attempts.load(Ordering::SeqCst), 1);
+    assert!(service.shutdown().await.is_err());
 }
 #[tokio::test]
 async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {

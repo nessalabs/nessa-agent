@@ -2,6 +2,7 @@ import {
   NessaConversationMutationError,
   NessaConversationControlError,
 } from "../application/conversation-mutation-error.js"
+import { agentOperationTimeoutMs } from "../application/agent-budgets.js"
 import type { RpcRequester } from "../application/session-port.js"
 import { ProductMethod } from "../generated/product.js"
 import type {
@@ -129,7 +130,11 @@ export function createConversationApi(
     const command = Object.freeze({ ...params })
     const perform = async (): Promise<T> => {
       try {
-        return validate(await session.request(method, command))
+        return validate(
+          await session.request(method, command, {
+            atLeastMs: agentOperationTimeoutMs,
+          }),
+        )
       } catch (cause) {
         if (!retryable) {
           throw new NessaConversationControlError(
@@ -208,9 +213,11 @@ export function createConversationApi(
     },
     read: async (id) =>
       conversationView(
-        await session.request(ProductMethod.ConversationRead, {
-          conversationId: validConversationId(id),
-        }),
+        await session.request(
+          ProductMethod.ConversationRead,
+          { conversationId: validConversationId(id) },
+          { atLeastMs: agentOperationTimeoutMs },
+        ),
         id,
       ),
     send: (id, text, options) =>
