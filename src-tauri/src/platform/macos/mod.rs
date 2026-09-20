@@ -5,6 +5,8 @@ mod overlay;
 mod vibrancy;
 mod viewport;
 
+use std::process::Command;
+
 use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
 use tauri::{AppHandle, WebviewWindow};
 
@@ -71,5 +73,19 @@ impl Host for Macos {
         native.setCollectionBehavior(
             native.collectionBehavior() | NSWindowCollectionBehavior::FullScreenAuxiliary,
         );
+    }
+
+    /// `open` is what macOS itself uses to send a URL to the app registered
+    /// for it — the person's browser for the web, their mail client for
+    /// `mailto`. Spawned and left: it returns as soon as it has told the other
+    /// app, and the panel must not wait on it either way. The absolute path is
+    /// the same habit as the rest of this crate's tool calls; the host's
+    /// `PATH` is not this app's business.
+    fn open_externally(&self, url: &str) -> Result<(), String> {
+        Command::new("/usr/bin/open")
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 }
