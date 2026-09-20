@@ -78,8 +78,17 @@ export function plan(text, agent = ORIGINAL_AGENT) {
   return { state: "retrofit", text: `${JSON.stringify({ ...record, agent }, null, 2)}\n` }
 }
 
-/** Replace a record's bytes without ever leaving a half-written one in its place. */
+/**
+ * Replace a record's bytes without ever leaving a half-written one in its place.
+ *
+ * Written through to whatever the name really points at. A rename onto a
+ * symlink replaces the link with a regular file and leaves the record it
+ * pointed at untouched — still without an agent, and now unreachable by the
+ * name the gateway knows it by. The server's own writer never does that, so
+ * neither does this.
+ */
 function rewrite(path, text) {
+  path = realpathSync(path)
   const temporary = `${path}.${randomUUID()}.tmp`
   try {
     writeFileSync(temporary, text, { mode: 0o600, flag: "wx" })
@@ -97,33 +106,70 @@ function rewrite(path, text) {
 /**
  * Retrofit every record in one metadata directory.
  *
- * @returns {{retrofitted: string[], current: number, foreign: Array<{name: string, why: string}>}}
+ * One entry that cannot be read or written does not end the run. It used to:
+ * the throw escaped with the whole accumulated result inside it, so a
+ * directory that was already half converted was reported as a failure of the
+ * lot, with nothing saying which half — and nothing saying which file was the
+ * obstruction either. A subdirectory named `something.json`, or one record
+ * owned by another user, was enough. Such an entry joins `failed` beside
+ * `foreign` now, the rest are converted, and the caller exits nonzero knowing
+ * both what was done and what to fix. A second run is a no-op on everything
+ * already converted, so finishing is always safe.
+ *
+ * @returns {{retrofitted: string[], current: number, foreign: Array<{name: string, why: string}>, failed: Array<{name: string, why: string}>}}
  */
 export function retrofit(directory, { dryRun = false } = {}) {
   const names = readdirSync(directory).filter((name) => name.endsWith(".json"))
-  const result = { retrofitted: [], current: 0, foreign: [] }
+  const result = { retrofitted: [], current: 0, foreign: [], failed: [] }
   for (const name of names.sort()) {
     const path = join(directory, name)
-    const decision = plan(readFileSync(path, "utf8"))
+    let decision
+    try {
+      decision = plan(readFileSync(path, "utf8"))
+    } catch (error) {
+      result.failed.push({ name, why: `it could not be read (${error.message})` })
+      continue
+    }
     if (decision.state === "current") result.current += 1
     else if (decision.state === "foreign")
       result.foreign.push({ name, why: decision.why })
     else {
-      if (!dryRun) rewrite(path, decision.text)
+      if (!dryRun) {
+        try {
+          rewrite(path, decision.text)
+        } catch (error) {
+          result.failed.push({ name, why: `it could not be written (${error.message})` })
+          continue
+        }
+      }
       result.retrofitted.push(name)
     }
   }
   return result
 }
 
+const USAGE =
+  "usage: node scripts/retrofit-conversation-agents.mjs [--dry-run] [directory]"
+
 function main() {
   const args = process.argv.slice(2)
   const dryRun = args.includes("--dry-run")
   const given = args.filter((argument) => argument !== "--dry-run")
+  if (given.includes("--help") || given.includes("-h")) {
+    console.log(USAGE)
+    return
+  }
+  // A flag this script does not know is a mistake, not a directory. Taken as
+  // one, `--help` reported "no conversation records at --help" and exited 0,
+  // which is a script answering a question it was never asked.
+  const unknown = given.find((argument) => argument.startsWith("-"))
+  if (unknown !== undefined) {
+    console.error(`unknown option: ${unknown}`)
+    console.error(USAGE)
+    process.exit(2)
+  }
   if (given.length > 1) {
-    console.error(
-      "usage: node scripts/retrofit-conversation-agents.mjs [--dry-run] [directory]",
-    )
+    console.error(USAGE)
     process.exit(2)
   }
   const directory = given[0] ?? join(namespaceRoot(), "conversations", "metadata")
@@ -145,8 +191,15 @@ function main() {
   console.log(`    ${result.retrofitted.length} ${verb} "agent": "${ORIGINAL_AGENT}"`)
   console.log(`    ${result.current} already name their agent`)
   for (const { name, why } of result.foreign) console.log(`    skipped ${name}: ${why}`)
+  for (const { name, why } of result.failed) console.error(`    failed  ${name}: ${why}`)
   if (dryRun && result.retrofitted.length > 0)
     console.log("  rerun without --dry-run to write them")
+  // Said after the tally, so the operator sees what did get done before the
+  // failure is reported, and nonzero so a script running this one stops.
+  if (result.failed.length > 0) {
+    console.error("  fix those and run again; everything above them is already done")
+    process.exit(1)
+  }
 }
 
 const invoked = process.argv[1] ? realpathSync(process.argv[1]) : ""

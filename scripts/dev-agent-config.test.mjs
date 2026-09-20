@@ -269,6 +269,34 @@ test(
   },
 )
 
+test(
+  "publishing onto that config fails in the caller's process rather than ending it",
+  unixOnly,
+  async () => {
+    // `publish` asks the same question again under the lock, and this suite
+    // calls it here, in the process running the tests. If that guard ended the
+    // process the way the stand-down path does, a regression in it would stop
+    // this file at whichever test reached it first and report the tests that
+    // did run as a pass. So it throws, and the caller sees a failure.
+    const { publish } = await import("./dev-agent-config.mjs")
+    const data = temporaryRoot()
+    mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+    const path = join(data, "dev/config.json")
+    const agents = agentsLaunching("/checkout/dist/index.js")
+    const both = JSON.stringify({
+      agent: { node: "/old/node", acpEntry: "/old/entry.js" },
+      agents,
+    })
+    writeFileSync(path, both, { mode: 0o600 })
+
+    assert.throws(
+      () => publish({ configPath: path, agents, node: agents.runtimes.claude.command }),
+      /retired "agent" block/,
+    )
+    assert.equal(readFileSync(path, "utf8"), both)
+  },
+)
+
 test("a config that does not parse is reported, not overwritten", unixOnly, () => {
   const data = temporaryRoot()
   mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })

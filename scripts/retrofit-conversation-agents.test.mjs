@@ -1,5 +1,12 @@
 import assert from "node:assert/strict"
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
+import {
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
@@ -132,4 +139,48 @@ test("the name written here is the name the server parses", () => {
   const claude = source.match(/AgentId::Claude => "([^"]+)"/)
   assert.ok(claude, "AgentId::Claude no longer states its name where this can read it")
   assert.equal(ORIGINAL_AGENT, claude[1])
+})
+
+test("an entry it cannot read is reported without abandoning the rest", () => {
+  // The obstruction goes in the middle on purpose: sorted, `aaa` is converted
+  // before it and `zzz` after. A run that ends at the first failure leaves the
+  // directory half migrated and tells the operator the whole thing failed,
+  // naming neither the half that was done nor the file in the way.
+  const root = directoryOf({ "aaa.json": before("aaa"), "zzz.json": before("zzz") })
+  mkdirSync(join(root, "mmm.json"), { mode: 0o700 })
+
+  const result = retrofit(root)
+
+  assert.deepEqual(result.retrofitted, ["aaa.json", "zzz.json"])
+  assert.equal(result.failed.length, 1)
+  assert.equal(result.failed[0].name, "mmm.json")
+  assert.match(result.failed[0].why, /could not be read/)
+  for (const name of ["aaa.json", "zzz.json"])
+    assert.equal(
+      JSON.parse(readFileSync(join(root, name), "utf8")).agent,
+      ORIGINAL_AGENT,
+      `${name} was left behind by a run that stopped early`,
+    )
+  // And it is not a skip: a failure is something to fix, so it is kept apart
+  // from the files that simply are not records.
+  assert.deepEqual(result.foreign, [])
+})
+
+test("a record reached through a symlink is written through it, not over it", () => {
+  // `rename` onto a link replaces the link with a regular file and leaves the
+  // record it pointed at still without an agent — reachable by neither name the
+  // gateway knows. The server's own writer never does that.
+  const root = directoryOf({})
+  const real = join(root, "real-record")
+  writeFileSync(real, JSON.stringify(before("linked")), { mode: 0o600 })
+  symlinkSync(real, join(root, "linked.json"))
+
+  const result = retrofit(root)
+
+  assert.deepEqual(result.retrofitted, ["linked.json"])
+  assert.equal(JSON.parse(readFileSync(real, "utf8")).agent, ORIGINAL_AGENT)
+  assert.ok(
+    lstatSync(join(root, "linked.json")).isSymbolicLink(),
+    "the link was replaced by a copy, so the record it named is orphaned",
+  )
 })

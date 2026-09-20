@@ -91,6 +91,9 @@ function say(message) {
   process.stdout.write(`${message}\n`)
 }
 
+/** A configuration the gateway will refuse to start on. */
+class UnusableConfiguration extends Error {}
+
 /**
  * Report a configuration the gateway will refuse, and fail.
  *
@@ -98,12 +101,19 @@ function say(message) {
  * gateway starts and says so when somebody sends a message. Here it does not
  * start at all, so a zero exit would be this script reporting success for a
  * file it knows is broken.
+ *
+ * Throws rather than exiting, which `skip` can afford to do and this cannot.
+ * `publish` is exported and the test suite calls it in its own process, so an
+ * exit here would end the whole `node --test` run at the first test that
+ * reached it — and a regression in the very thing this guard watches would
+ * read as a suite that stopped early rather than one that failed. `main`
+ * turns the throw into the nonzero exit a dev loop needs.
  */
 function stop(reason, remedy) {
   say(`→ dev agent configuration is unusable: ${reason}`)
   const lines = Array.isArray(remedy) ? remedy : [remedy]
   for (const line of lines.filter(Boolean)) say(`  ${line}`)
-  process.exit(1)
+  throw new UnusableConfiguration(reason)
 }
 
 /** Report why there is no agent, and leave the gateway to start without one. */
@@ -580,4 +590,14 @@ function underLock({ configPath, agents, node, mcpBinary, interrupt }) {
 // through symlinks and `/var` → `/private/var`, but leaves `argv[1]` as typed,
 // and a script that silently did nothing would be the worst failure here.
 const invoked = process.argv[1] ? realpathSync(process.argv[1]) : ""
-if (invoked === realpathSync(fileURLToPath(import.meta.url))) main()
+if (invoked === realpathSync(fileURLToPath(import.meta.url))) {
+  try {
+    main()
+  } catch (error) {
+    // The one failure this script reports as its own. Anything else is a bug
+    // here and keeps its stack, because a dev loop that hides one is worse
+    // than one that prints it.
+    if (!(error instanceof UnusableConfiguration)) throw error
+    process.exit(1)
+  }
+}
