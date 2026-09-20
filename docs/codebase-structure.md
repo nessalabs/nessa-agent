@@ -170,6 +170,15 @@ writing the full defaults on first launch is buying.
   [adr/0002-conversation-vertical-and-gateway.md](adr/done/0002-conversation-vertical-and-gateway.md).
 - Design-system components are consumed, not wrapped "just in case". A wrapper
   with no behaviour is a layer that only forwards.
+- Decisions live in `model/` and `application/` and are tested as plain
+  functions; rendering is tested as markup through `react-dom/server`. An effect
+  that only React can run — one host call per mount, focus placement, cleanup
+  on unmount — is tested in a file that opts into the DOM with
+  `// @vitest-environment jsdom`, mounts with `react-dom/client` and React's own
+  `act`, and wraps in `StrictMode` because `main.tsx` does. The global test
+  environment stays `node`: the CI gateway harness copies `vitest.config.ts`
+  with a fixed dependency list, and every other test needs no DOM.
+  `src/onboarding/ui/use-setup-handoff.test.ts` is the example.
 - Host-window interaction goes through one seam (as it already does), so the UI
   runs in a plain browser with the seam no-oping. Keep that property: it is what
   makes design work fast, and it is a real architectural boundary, not a
