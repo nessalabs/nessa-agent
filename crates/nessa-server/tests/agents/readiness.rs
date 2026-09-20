@@ -8,6 +8,34 @@ fn readiness(probe: StubAgentProbe) -> Readiness {
     ReadAgentReadiness { probe: &probe }.execute(AgentId::Claude)
 }
 
+/// An agent that needs no account is never asked the sign-in question, so a
+/// host that would refuse to answer it is not the reason it is not offered.
+#[test]
+fn an_agent_that_needs_no_account_is_ready_once_it_is_installed() {
+    let refusing = StubAgentProbe {
+        installed: Ok(true),
+        authenticated: Err(ProbeFailure::Unanswered),
+    };
+    // The same probe, and the same refusal, answered two different ways: the
+    // difference is the agent, which is where the fact lives.
+    assert_eq!(
+        ReadAgentReadiness { probe: &refusing }.execute(AgentId::Claude),
+        Readiness::AuthenticationUnknown
+    );
+    assert_eq!(
+        ReadAgentReadiness { probe: &refusing }.execute(AgentId::Opencode),
+        Readiness::Ready
+    );
+    // And it is still an install that stands between it and running.
+    assert_eq!(
+        ReadAgentReadiness {
+            probe: &StubAgentProbe::answering(false, true)
+        }
+        .execute(AgentId::Opencode),
+        Readiness::NotInstalled
+    );
+}
+
 #[test]
 fn hands_the_two_answers_to_the_domain_rule() {
     assert_eq!(

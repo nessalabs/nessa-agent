@@ -284,6 +284,7 @@ mod build {
         infrastructure::{
             acp::sessions::AcpConfig, claude_acp::sessions::ClaudeAcpProvider,
             codex_acp::sessions::CodexAcpProvider, model_metadata_json::load_catalog,
+            opencode_acp::sessions::OpencodeAcpProvider,
         },
     };
     use std::{collections::BTreeMap, fs::File, path::Path, sync::Arc, time::Duration};
@@ -298,6 +299,7 @@ mod build {
         match agent {
             AgentId::Claude => "anthropic",
             AgentId::Codex => "openai",
+            AgentId::Opencode => "opencode",
         }
     }
 
@@ -305,15 +307,20 @@ mod build {
     ///
     /// `env_clear` is what the bindings launch with, so anything an agent needs
     /// has to be named. The vendor-specific entries are each agent's own
-    /// directory variable: naming both for both agents would be shorter and
-    /// would also hand each agent a pointer into the other's configuration.
+    /// directory variable: naming every one of them for every agent would be
+    /// shorter and would also hand each agent a pointer into the others'
+    /// configuration. Opencode has none to name — it reads its configuration
+    /// from under `HOME`, which every agent is given anyway — and an agent with
+    /// nothing of its own is not given somebody else's.
     fn process_environment(agent: AgentId) -> BTreeMap<std::ffi::OsString, std::ffi::OsString> {
         let mut environment = BTreeMap::new();
         let vendor = match agent {
-            AgentId::Claude => "CLAUDE_CONFIG_DIR",
-            AgentId::Codex => "CODEX_HOME",
+            AgentId::Claude => Some("CLAUDE_CONFIG_DIR"),
+            AgentId::Codex => Some("CODEX_HOME"),
+            AgentId::Opencode => None,
         };
-        for key in ["PATH", "HOME", "USER", "LOGNAME", "TMPDIR", vendor] {
+        let shared = ["PATH", "HOME", "USER", "LOGNAME", "TMPDIR"];
+        for key in shared.into_iter().chain(vendor) {
             if let Some(value) = std::env::var_os(key) {
                 environment.insert(key.into(), value);
             }
@@ -322,11 +329,18 @@ mod build {
     }
 
     /// The sign-in this agent is started with, read from this server's own
-    /// environment. Named per agent so neither is handed the other's key.
+    /// environment. Named per agent so none is handed another's key.
+    ///
+    /// Opencode names none. It reaches the models this binding runs it on
+    /// without an account at all, and a key for the gateway is something a
+    /// person gives Opencode itself, under `HOME` — so there is no variable
+    /// here that would start a signed-in Opencode, and inventing one would put
+    /// somebody else's key into its environment.
     fn credential_environment(agent: AgentId) -> BTreeMap<std::ffi::OsString, std::ffi::OsString> {
         let keys: &[&str] = match agent {
             AgentId::Claude => &["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
             AgentId::Codex => &["CODEX_API_KEY", "OPENAI_API_KEY"],
+            AgentId::Opencode => &[],
         };
         let mut environment = BTreeMap::new();
         for key in keys {
@@ -415,6 +429,11 @@ mod build {
             ),
             AgentId::Codex => Arc::new(
                 CodexAcpProvider::new(acp, &model, limits, audit)
+                    .map_err(failed)?
+                    .with_system_prompt(prompt),
+            ),
+            AgentId::Opencode => Arc::new(
+                OpencodeAcpProvider::new(acp, &model, limits, audit)
                     .map_err(failed)?
                     .with_system_prompt(prompt),
             ),

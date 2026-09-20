@@ -13,26 +13,35 @@ use std::path::{Path, PathBuf};
 
 /// The agent the desktop starts with when nothing else has been chosen.
 ///
-/// Both agents are bundled, so this decides only which one a caller that names
-/// none runs on. Claude, because that is the agent Nessa shipped with and the
-/// one every conversation already on disk belongs to.
+/// Which agent a caller that names none runs on: Claude, because that is the
+/// agent Nessa shipped with and the one every conversation already on disk
+/// belongs to.
 const DEFAULT_AGENT: AgentId = AgentId::Claude;
 
-/// How the desktop launches each bundled agent, relative to the bundle root.
+/// How the desktop launches one bundled agent, relative to the bundle root, or
+/// nothing for an agent the desktop does not ship.
 ///
 /// A command and its arguments, so an agent that speaks ACP through the bundled
-/// Node runtime and one that would ship as its own executable are both sayable
-/// here. Both agents Nessa bundles today are the first kind.
-fn bundled_launch(agent: AgentId) -> (&'static str, &'static str) {
+/// Node runtime and one that ships as its own executable are both sayable here.
+/// Both agents Nessa bundles today are the first kind.
+///
+/// Opencode is not bundled. It is a whole runtime of its own — nearly two
+/// hundred megabytes, against a few for a Node adapter — and shipping it would
+/// put that in every download for the people who already have an agent.
+/// `nessa install-agent opencode` fetches the pinned release instead, on the
+/// machine that wants it, which is why this says nothing about where it lives:
+/// the install writes that into the configuration.
+fn bundled_launch(agent: AgentId) -> Option<(&'static str, &'static str)> {
     match agent {
-        AgentId::Claude => (
+        AgentId::Claude => Some((
             "node",
             "claude-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js",
-        ),
-        AgentId::Codex => (
+        )),
+        AgentId::Codex => Some((
             "node",
             "codex-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js",
-        ),
+        )),
+        AgentId::Opencode => None,
     }
 }
 
@@ -45,6 +54,10 @@ fn default_model(agent: AgentId) -> &'static str {
     match agent {
         AgentId::Claude => "claude-sonnet-5",
         AgentId::Codex => "gpt-5.6-terra",
+        // Reachable only if Opencode is ever bundled; the install writes its
+        // own configuration, model included. Named rather than wildcarded so
+        // that a new agent has to say what it starts on.
+        AgentId::Opencode => "opencode/big-pickle",
     }
 }
 
@@ -58,11 +71,14 @@ pub(super) fn configure(
     }
     let catalog = bundle.join("models.json");
     let mcp = bundle.join("nessa-mcp");
+    // Only the agents this desktop ships. An agent that is installed onto the
+    // machine instead has its launch written by the install, and a bundle
+    // checked for files it was never meant to contain would refuse to start.
     let launches: Vec<(AgentId, PathBuf, PathBuf)> = AgentId::ALL
         .iter()
-        .map(|agent| {
-            let (command, entry) = bundled_launch(*agent);
-            (*agent, bundle.join(command), bundle.join(entry))
+        .filter_map(|agent| {
+            let (command, entry) = bundled_launch(*agent)?;
+            Some((*agent, bundle.join(command), bundle.join(entry)))
         })
         .collect();
     for path in [&catalog, &mcp].into_iter().chain(

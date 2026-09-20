@@ -33,25 +33,34 @@ impl Readiness {
     /// What the host's answers make of an agent, where there was anything to
     /// ask about.
     ///
-    /// `None` is an agent this server has no configuration to launch. It comes
-    /// before the other two questions rather than as a third answer among them,
-    /// because where nothing would be launched neither question is about this
-    /// agent's presence on the machine — they are about a launch nobody
-    /// configured.
+    /// The outer `None` is an agent this server has no configuration to launch.
+    /// It comes before the other two questions rather than as a third answer
+    /// among them, because where nothing would be launched neither question is
+    /// about this agent's presence on the machine — they are about a launch
+    /// nobody configured.
+    ///
+    /// The inner `None`, in place of a sign-in answer, is an agent that needs
+    /// no account: Opencode reaches the models Nessa runs it on with nothing
+    /// signed in anywhere, so there is no sign-in to have found and none to ask
+    /// anybody for. Absent rather than `Yes`, because `Yes` would mean this
+    /// machine found a sign-in — which is a different thing to be wrong about,
+    /// and the one a diagnostic would repeat.
     ///
     /// Otherwise installation is decided first, because it is the reason
     /// signing in would not help. An agent this machine cannot locate is one
     /// this server cannot start, so an undetermined installation is reported as
     /// not installed — the same advice, honestly reached.
-    pub fn from_host(answers: Option<(HostAnswer, HostAnswer)>) -> Self {
+    pub fn from_host(answers: Option<(HostAnswer, Option<HostAnswer>)>) -> Self {
         let Some((installed, authenticated)) = answers else {
             return Readiness::NotConfigured;
         };
         match (installed, authenticated) {
             (HostAnswer::No | HostAnswer::Undetermined, _) => Readiness::NotInstalled,
-            (HostAnswer::Yes, HostAnswer::Yes) => Readiness::Ready,
-            (HostAnswer::Yes, HostAnswer::No) => Readiness::NeedsAuthentication,
-            (HostAnswer::Yes, HostAnswer::Undetermined) => Readiness::AuthenticationUnknown,
+            // Installed, and nothing stands between it and running.
+            (HostAnswer::Yes, None) => Readiness::Ready,
+            (HostAnswer::Yes, Some(HostAnswer::Yes)) => Readiness::Ready,
+            (HostAnswer::Yes, Some(HostAnswer::No)) => Readiness::NeedsAuthentication,
+            (HostAnswer::Yes, Some(HostAnswer::Undetermined)) => Readiness::AuthenticationUnknown,
         }
     }
 }

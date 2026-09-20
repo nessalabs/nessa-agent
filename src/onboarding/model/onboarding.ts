@@ -9,7 +9,7 @@
  */
 
 /** An agent Nessa can be set up against. */
-export type AgentId = "claude" | "codex"
+export type AgentId = "claude" | "codex" | "opencode"
 
 /**
  * What stands between an agent and running, as its runtime reports it.
@@ -62,11 +62,18 @@ export interface AgentChoice {
 
 /** The agents offered at first run, in presentation order.
  *
- * Both have an adapter now, so neither is listed as unavailable. What is left
+ * All three have an adapter now, so none is listed as unavailable. What is left
  * between an entry and being chosen is what this machine reports about it —
  * installed, signed in — which is a different answer and one somebody can act
- * on. `supported` stays, because the day a third agent is listed before its
+ * on. `supported` stays, because the day a fourth agent is listed before its
  * adapter exists it is the only honest thing to say about it.
+ *
+ * OpenCode comes last because the order is the order someone reads, and the two
+ * agents ahead of it are the ones a person is most likely to already have. It
+ * is not last because it is worse: it is the one entry that needs no account,
+ * so on a machine with neither Claude nor Codex it is the only one that can
+ * reach a model at all, and what the picker shows against each entry is what
+ * says so.
  */
 export const AGENT_CHOICES: readonly AgentChoice[] = Object.freeze([
   Object.freeze({
@@ -77,6 +84,11 @@ export const AGENT_CHOICES: readonly AgentChoice[] = Object.freeze([
   Object.freeze({
     id: "codex" as const,
     name: "Codex",
+    supported: true,
+  }),
+  Object.freeze({
+    id: "opencode" as const,
+    name: "OpenCode",
     supported: true,
   }),
 ])

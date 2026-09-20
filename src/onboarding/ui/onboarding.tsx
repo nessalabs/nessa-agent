@@ -254,7 +254,7 @@ function AgentOption({
       className="flex w-full items-center gap-3 rounded-xl border border-white/15 bg-background/45 p-3 text-left backdrop-blur-md transition-[background-color,border-color] outline-none hover:bg-background/65 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40 aria-disabled:cursor-default aria-disabled:opacity-60 aria-disabled:hover:bg-background/45 aria-pressed:border-ring aria-pressed:bg-background/75"
     >
       <span className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground">
-        <AgentMark id={id} />
+        <AgentMark id={id} name={name} />
       </span>
       <span className="nessa-text-4 font-medium text-foreground">{name}</span>
       <span className="ml-auto flex items-center">

@@ -144,11 +144,34 @@ describe("first-run setup", () => {
   })
 
   it("offers Claude first and marks every listed agent honestly", () => {
-    expect(AGENT_CHOICES.map((choice) => choice.id)).toEqual(["claude", "codex"])
-    expect(AGENT_CHOICES.map((choice) => choice.name)).toEqual(["Claude", "Codex"])
-    // Both have an adapter now. What is left between a listed agent and being
-    // picked is what this machine reports about it.
+    expect(AGENT_CHOICES.map((choice) => choice.id)).toEqual([
+      "claude",
+      "codex",
+      "opencode",
+    ])
+    expect(AGENT_CHOICES.map((choice) => choice.name)).toEqual([
+      "Claude",
+      "Codex",
+      "OpenCode",
+    ])
+    // All three have an adapter now. What is left between a listed agent and
+    // being picked is what this machine reports about it.
     expect(AGENT_CHOICES.every((choice) => choice.supported)).toBe(true)
+  })
+
+  it("treats the agent that needs no account like any other listed one", () => {
+    // OpenCode reaches a model with nothing signed in, and that is the
+    // runtime's fact to report, not the picker's to assume: it is choosable
+    // because the answer said `ready`, by the same rule as the other two.
+    const picking = recordReadiness(startAgentChoice(beginOnboarding()), {
+      opencode: "ready",
+    })
+    expect(agentChoice("opencode")?.supported).toBe(true)
+    expect(agentReadiness(picking, "opencode")).toBe("ready")
+    expect(chooseAgent(picking, "opencode").agent).toBe("opencode")
+    // And nothing about needing no account makes an absent one pickable.
+    const missing = recordReadiness(picking, { opencode: "not-installed" })
+    expect(chooseAgent(missing, "opencode").agent).toBeUndefined()
   })
 })
 
