@@ -8,6 +8,8 @@ use super::check_whole;
 use crate::Error;
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use std::io::Cursor;
+#[cfg(target_os = "macos")]
+use std::{fs, process::Command};
 
 /// A plain baseline JPEG of `width` by `height`, as this crate's own encoder
 /// writes one: three components, no restarts, nothing between the headers.
@@ -31,7 +33,8 @@ fn scan_start(input: &[u8]) -> usize {
 }
 
 /// Whether `input` holds a marker segment of `marker`, reading only the header
-/// segments in front of the scan.
+/// segments in front of the scan. Only the system-written fixture is asked.
+#[cfg(target_os = "macos")]
 fn has_marker(input: &[u8], marker: u8) -> bool {
     let mut at = 2;
     while at + 4 <= input.len() && input[at] == 0xff {
@@ -86,7 +89,6 @@ fn padding_and_a_comment_between_the_headers_are_not_damage() {
 /// so this is a file macOS itself considers ordinary.
 #[cfg(target_os = "macos")]
 fn adobe_cmyk(width: u32, height: u32) -> Vec<u8> {
-    use std::{fs, process::Command};
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("source.png");
     let target = directory.path().join("target.jpg");
