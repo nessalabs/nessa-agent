@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs"
@@ -311,10 +312,16 @@ test(
 test(
   "a repair that cannot be written fails the caller instead of reporting success",
   {
-    ...unixOnly,
+    // One reason, not two options merged: spreading `unixOnly` and then naming
+    // `skip` again replaced its answer with `false`, so this ran on Windows and
+    // failed there while every other test in the file was skipped.
+    //
     // Root writes through a read-only directory, so the write cannot be made to
-    // fail here. It fails for an ordinary user, which is what CI runs as.
-    skip: process.getuid?.() === 0 ? "run as root; a write here cannot fail" : false,
+    // fail as root either. It fails for an ordinary user, which is what the
+    // Linux and macOS runners are.
+    skip:
+      unixOnly.skip ??
+      (process.getuid?.() === 0 ? "run as root; a write here cannot fail" : false),
   },
   async () => {
     // The one path left that reports a configuration the gateway will refuse,
@@ -349,6 +356,68 @@ test(
     } finally {
       chmodSync(directory, 0o700)
     }
+  },
+)
+
+test(
+  "a generated document the gateway would refuse fails the caller, not the run",
+  unixOnly,
+  async () => {
+    // The guards that check what this script itself produced, reached on the
+    // path where `agents` is absent so a document is actually built. They are
+    // bug reports, not stand-downs, and they run in whatever process called
+    // `publish` — so a regression in the retirement that feeds them must fail
+    // the caller rather than end its run with the status a stand-down carries.
+    const { publish } = await import("./dev-agent-config.mjs")
+    const data = temporaryRoot()
+    mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+    const path = join(data, "dev/config.json")
+    const agents = agentsLaunching("/checkout/dist/index.js")
+    // Only the retired key, so the question is still open and the document is
+    // built — which is the path the retirement, and its round-trip guard, are
+    // on. A file holding `agents` too stands down long before this.
+    writeFileSync(path, JSON.stringify({ agent: { node: "/old/node" } }), {
+      mode: 0o600,
+    })
+
+    // The ordinary run retires it and says so.
+    assert.equal(
+      publish({ configPath: path, agents, node: agents.runtimes.claude.command }),
+      true,
+    )
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).agent, undefined)
+  },
+)
+
+test(
+  "standing down does not end the process that called it either",
+  unixOnly,
+  async () => {
+    // The same rule as the guard above, for the other answer. `skip` is the
+    // stand-down, and a stand-down that exited would end a caller's run at
+    // whichever line reached it, carrying the status that says all was well.
+    // Reached here through the lock, which is also the release this throw lets
+    // run: an exit from under it left the lock file behind.
+    const { publish } = await import("./dev-agent-config.mjs")
+    const data = temporaryRoot()
+    const directory = join(data, "dev")
+    mkdirSync(directory, { recursive: true, mode: 0o700 })
+    const path = join(directory, "config.json")
+    const agents = agentsLaunching("/checkout/dist/index.js")
+
+    assert.throws(
+      () =>
+        publish({
+          configPath: path,
+          agents,
+          node: agents.runtimes.claude.command,
+          // Somebody removed the directory out from under the run, so the write
+          // cannot happen and there is no agent configured.
+          interrupt: () => rmSync(directory, { recursive: true }),
+        }),
+      /dev agent not configured|could not write/,
+    )
+    assert.equal(existsSync(`${path}.lock`), false, "the lock was left behind")
   },
 )
 

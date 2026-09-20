@@ -12,6 +12,7 @@ import {
   hasNoImmediateCfg,
 } from "./architecture/platform-boundaries.mjs"
 import { overlayPlacementViolations } from "./architecture/overlay-placement.mjs"
+import { setupGatePlacementViolations } from "./architecture/setup-gate-placement.mjs"
 import {
   normalizedPath,
   rustBoundaryViolations,
@@ -91,6 +92,9 @@ for (const file of walk(src)) {
   const path = rel(file)
   const imports = importedPaths(text)
   const inComposition = path.startsWith("src/composition/")
+  for (const violation of setupGatePlacementViolations(path, text)) {
+    fail(file, violation)
+  }
   // Test fixtures must not introduce model imports across the public boundary.
   if (!path.startsWith("src/conversation/") && path.endsWith(".test.ts")) {
     if (imports.some((item) => /(?:^|\/)conversation\/model(?:\/|$)/.test(item))) {

@@ -116,13 +116,26 @@ function stop(reason, remedy) {
   throw new UnusableConfiguration(reason)
 }
 
-/** Report why there is no agent, and leave the gateway to start without one. */
+/** A machine with no agent to configure. The gateway still starts. */
+class StoodDown extends Error {}
+
+/**
+ * Report why there is no agent, and leave the gateway to start without one.
+ *
+ * Throws, for the same reason [`stop`] does and not only on the paths a test
+ * happens to reach today: `publish` is exported and called in other processes,
+ * and a stand-down that exited would end the caller's run at whichever line
+ * reached it — silently, and with the success status a stand-down carries.
+ * `main` turns this into that status. Throwing also lets the configuration
+ * lock's `finally` run, which an exit from under it skipped, leaving a lock
+ * file behind for the next run to report as somebody else's.
+ */
 function skip(reason, remedy) {
   say(`→ dev agent not configured: ${reason}`)
   const lines = Array.isArray(remedy) ? remedy : [remedy]
   for (const line of lines.filter(Boolean)) say(`  ${line}`)
   say("  the gateway will start, but sending a message will report no agent")
-  process.exit(0)
+  throw new StoodDown(reason)
 }
 
 /**
@@ -621,8 +634,10 @@ function underLock({ configPath, agents, node, mcpBinary, interrupt }) {
   // Parse it back before it can become the file the gateway reads. A config.json
   // that does not parse is not a missing agent, it is a server that will not start.
   const round = JSON.parse(text)
+  // Not a stand-down: this script generated a document the gateway will refuse
+  // to start on, which is a bug here and not a machine without an agent.
   if (round.agent !== undefined)
-    skip(
+    stop(
       "the generated configuration still holds the retired agent block",
       "please report this",
     )
@@ -632,7 +647,7 @@ function underLock({ configPath, agents, node, mcpBinary, interrupt }) {
       round.agents.runtimes[name]?.args?.[0] === runtime.args[0],
   )
   if (!survived || round.agents.selected !== agents.selected)
-    skip("the generated configuration did not survive a round trip", "please report this")
+    stop("the generated configuration did not survive a round trip", "please report this")
 
   try {
     writeConfig(configPath, text)
@@ -667,9 +682,10 @@ if (invoked === realpathSync(fileURLToPath(import.meta.url))) {
   try {
     main()
   } catch (error) {
-    // The one failure this script reports as its own. Anything else is a bug
+    // The two answers this script gives about itself. Anything else is a bug
     // here and keeps its stack, because a dev loop that hides one is worse
     // than one that prints it.
+    if (error instanceof StoodDown) process.exit(0)
     if (!(error instanceof UnusableConfiguration)) throw error
     process.exit(1)
   }

@@ -106,12 +106,18 @@ the gateway stopped:
 
 ```bash
 node scripts/retrofit-conversation-agents.mjs            # --dry-run to look first
+node scripts/retrofit-conversation-agents.mjs --help     # what it takes
 ```
 
 It names Claude, which is honest rather than a guess — Claude was the only agent
 that could have written a record without the field — and it leaves every record
 that already states its agent exactly as it is. Until it has been run, such a
 conversation is refused as `agent_unsupported`.
+
+An entry it cannot read or write is reported by name and the rest are converted,
+so a directory is never left half migrated with nothing saying which half. It
+exits non-zero when that happens; running it again once the obstruction is gone
+is a no-op on everything already done.
 
 Each agent's model must come from its own vendor's entries
 in the catalog: Codex is signed in to OpenAI and cannot reach an Anthropic model,

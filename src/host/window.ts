@@ -358,8 +358,20 @@ export async function finishSetupWindow(
     return { outcome: "panel-unavailable", cause }
   }
   if (handoff.recordError) {
-    // Survivable, and already logged on the host's side. It costs the next
-    // launch's straight start, not this one's panel.
+    // Survivable, and already logged on the host's side: the panel is up and
+    // this window can still close, so the handoff is not abandoned over it.
+    //
+    // What it costs is more than the next launch's straight start, which is
+    // what this used to claim. The host writes the completion and the agent in
+    // one update, so a failure loses both: `chosen_agent` then truthfully says
+    // nobody chose, the panel rightly declines to remember that, and every
+    // conversation of this launch runs on the gateway's default — the same
+    // failure the in-place handover exists to prevent, reached by a different
+    // road and reported to the user as a handoff that worked.
+    //
+    // Saying so on the surface means carrying the fact through this outcome
+    // rather than only into the console, which is a change to what
+    // `setupRecovery` renders and is not made here.
     console.warn("[nessa] could not record that setup finished", handoff.recordError)
   }
   // The panel is up. A window that will not close is not a panel failure and is

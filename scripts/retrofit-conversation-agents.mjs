@@ -88,11 +88,15 @@ export function plan(text, agent = ORIGINAL_AGENT) {
  * neither does this.
  */
 function rewrite(path, text) {
-  path = realpathSync(path)
+  // The temp keeps the name it was reached by and only the rename follows the
+  // link. Putting it beside the target instead would leave a run interrupted
+  // mid-write with a `.tmp` outside the metadata directory, which is the one
+  // place the server's `PrivateTempFile::clear_stale` looks.
   const temporary = `${path}.${randomUUID()}.tmp`
+  const target = realpathSync(path)
   try {
     writeFileSync(temporary, text, { mode: 0o600, flag: "wx" })
-    renameSync(temporary, path)
+    renameSync(temporary, target)
   } catch (error) {
     try {
       unlinkSync(temporary)
