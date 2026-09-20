@@ -8,11 +8,15 @@ use nessa_auth::domain::OrganizationId;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HoldState {
     Absent,
+    /// Written, but not yet usable: its evidence had not been committed.
+    Pending,
     Held,
 }
 
 /// One conversation keeping one stored file. Its identity is the organization,
-/// the conversation, and the stored file's digest.
+/// the conversation, and the stored file: digest and media type together. The
+/// same bytes kept as two types are two holds, so declaring a file again as
+/// something else never takes away the hold a sent message names.
 ///
 /// A hold remembers two files that may differ. `uploaded` is what the caller
 /// sent and the ticket verified; `stored` is what the gateway kept, which for
@@ -50,9 +54,10 @@ impl Hold {
         )
     }
     /// Rebuild a hold from saved evidence. Only an image is ever changed on
-    /// its way into storage, and it stays an image: a record saying a text
-    /// file was stored as different bytes, or that an image became something
-    /// else, describes an upload that cannot have happened and is refused.
+    /// its way into storage, and what it becomes is an image a message can
+    /// name. A record saying a text file was stored as different bytes, or
+    /// that an image became a file no message could refer to, describes an
+    /// upload that cannot have happened and is refused.
     pub fn restore(
         organization_id: OrganizationId,
         conversation_id: ConversationId,
@@ -63,7 +68,7 @@ impl Hold {
         uploaded_at_ms: u64,
     ) -> Option<Self> {
         let possible = if uploaded.media_type().is_image() {
-            stored.media_type().is_image()
+            stored.as_image().is_some()
         } else {
             uploaded == stored
         };

@@ -20,3 +20,7 @@ pub use store::LocalAttachmentStore;
 #[cfg(test)]
 #[path = "../../../tests/attachments/adapters.rs"]
 mod adapter_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/attachments/service_over_store.rs"]
+mod service_over_store_tests;

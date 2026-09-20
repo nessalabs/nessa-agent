@@ -112,6 +112,15 @@ impl UploadTicket {
     pub fn lifetime(&self) -> TicketLifetime {
         self.lifetime
     }
+    /// Whether `other` is this same request made again: the same caller, under
+    /// the same action identifier, describing the same file for the same
+    /// conversation. Only when it was issued may differ.
+    pub fn repeats(&self, other: &Self) -> bool {
+        self.organization_id == other.organization_id
+            && self.conversation_id == other.conversation_id
+            && self.attachment == other.attachment
+            && self.caller == other.caller
+    }
     /// Whether this many received bytes already rule the upload out, so a
     /// transfer can stop as soon as it runs long instead of at its end.
     pub fn is_exceeded_by(&self, received: u64) -> bool {

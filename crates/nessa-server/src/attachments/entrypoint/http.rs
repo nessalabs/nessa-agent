@@ -1,8 +1,8 @@
 use crate::{
     attachments::{
         application::{
-            AttachmentService, AuditDelivery, BodyInterrupted, PortFuture, UploadBody, UploadError,
-            UploadRejection,
+            AttachmentService, AuditDelivery, PortFuture, UploadBody, UploadError,
+            UploadInterrupted, UploadRejection,
         },
         domain::Attachment,
     },
@@ -53,10 +53,10 @@ pub(crate) async fn handle_upload(
     headers: HeaderMap,
     body: Body,
 ) -> Response {
-    let allowed = match allowed_origin(&headers) {
-        Allowed::No => return StatusCode::FORBIDDEN.into_response(),
-        allowed => allowed,
-    };
+    let allowed = allowed_origin(&headers);
+    if matches!(allowed, Allowed::No) {
+        return with_cors(StatusCode::FORBIDDEN.into_response(), allowed);
+    }
     let response = match &route.attachments {
         Some(attachments) => upload(attachments, &headers, body).await,
         // No agent is configured, so nothing is kept and nothing issued tickets.
@@ -111,14 +111,24 @@ fn rejected(error: UploadError) -> Response {
         UploadError::AuditUnavailable { .. } => {
             (StatusCode::SERVICE_UNAVAILABLE, "audit_unavailable", None)
         }
+        // The upload was fine and is not kept: its conversation let go of its
+        // files meanwhile. Beginning again is the whole remedy.
+        UploadError::NotKept => (StatusCode::CONFLICT, "attachment_not_kept", None),
         UploadError::Rejected { reason, evidence } => {
             let (status, code) = match reason {
                 UploadRejection::SizeMismatch => (StatusCode::BAD_REQUEST, "size_mismatch"),
                 UploadRejection::DigestMismatch => {
                     (StatusCode::UNPROCESSABLE_ENTITY, "digest_mismatch")
                 }
-                UploadRejection::BodyInterrupted => (StatusCode::BAD_REQUEST, "upload_interrupted"),
-                UploadRejection::DeadlineElapsed => (StatusCode::REQUEST_TIMEOUT, "upload_timeout"),
+                UploadRejection::UploadInterrupted => {
+                    (StatusCode::BAD_REQUEST, "upload_interrupted")
+                }
+                UploadRejection::UploadTimeout => (StatusCode::REQUEST_TIMEOUT, "upload_timeout"),
+                // The same words `conversation.send` uses for the same fact.
+                UploadRejection::ImageInputUnsupported => (
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "image_input_unsupported",
+                ),
                 UploadRejection::UnsupportedImage => {
                     (StatusCode::UNSUPPORTED_MEDIA_TYPE, "unsupported_image")
                 }
@@ -150,10 +160,10 @@ fn refusal(status: StatusCode, code: &'static str, evidence: Option<AuditDeliver
 /// header of its own from another origin, which is every upload from the
 /// desktop shell and from the development server.
 pub(crate) async fn handle_preflight(headers: HeaderMap) -> Response {
-    let allowed = match allowed_origin(&headers) {
-        Allowed::No => return StatusCode::FORBIDDEN.into_response(),
-        allowed => allowed,
-    };
+    let allowed = allowed_origin(&headers);
+    if matches!(allowed, Allowed::No) {
+        return with_cors(StatusCode::FORBIDDEN.into_response(), allowed);
+    }
     let mut response = StatusCode::NO_CONTENT.into_response();
     let answer = response.headers_mut();
     answer.insert(
@@ -171,7 +181,8 @@ pub(crate) async fn handle_preflight(headers: HeaderMap) -> Response {
     with_cors(response, allowed)
 }
 
-/// Every answer varies by origin, and a trusted page is told it may read this one.
+/// Every answer varies by origin, a refusal of an origin included, so no cache
+/// hands one origin's answer to another. A trusted page is told it may read it.
 fn with_cors(mut response: Response, allowed: Allowed) -> Response {
     let headers = response.headers_mut();
     headers.insert(header::VARY, HeaderValue::from_static("origin"));
@@ -208,12 +219,12 @@ fn allowed_origin(headers: &HeaderMap) -> Allowed {
 /// An HTTP request body as the application's chunk source.
 struct HttpBody(BodyDataStream);
 impl UploadBody for HttpBody {
-    fn next(&mut self) -> PortFuture<'_, Option<Vec<u8>>, BodyInterrupted> {
+    fn next(&mut self) -> PortFuture<'_, Option<Vec<u8>>, UploadInterrupted> {
         Box::pin(async move {
             match self.0.next().await {
                 None => Ok(None),
                 Some(Ok(chunk)) => Ok(Some(chunk.to_vec())),
-                Some(Err(_)) => Err(BodyInterrupted),
+                Some(Err(_)) => Err(UploadInterrupted),
             }
         })
     }

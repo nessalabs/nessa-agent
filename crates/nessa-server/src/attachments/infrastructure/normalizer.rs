@@ -49,7 +49,9 @@ impl ImageNormalizer for ModelImageNormalizer {
     // read from its bytes, never from what the client called it.
     fn normalize<'a>(&'a self, original: Vec<u8>, _: &'a str) -> NormalizeFuture<'a> {
         Box::pin(async move {
-            let limits = self.limits.clone().ok_or(NormalizeError::Unsupported)?;
+            // Nothing is wrong with the upload: this model is offered no
+            // images, and saying the image could not be read would be false.
+            let limits = self.limits.clone().ok_or(NormalizeError::NotOffered)?;
             // Decoding and encoding are CPU work measured in hundreds of
             // milliseconds. A panic in a decoder is this upload's failure only.
             let fitted = tokio::task::spawn_blocking(move || normalize(&original, &limits))

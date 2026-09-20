@@ -4,6 +4,12 @@ use nessa_auth::domain::PrincipalId;
 /// The verified caller behind one action: who, from which authenticated
 /// surface, under which action identifier. Built only from session identity
 /// the gateway verified, never from request metadata.
+///
+/// The rule is the one the conversation context already applies to a caller
+/// (the SDK's `ActionContext`): not blank, at most 256 bytes, and nothing else.
+/// A caller the conversation accepts must be one this context can write down,
+/// or a close would let go of files in a name no record could carry. Evidence
+/// is stored as JSON, which can spell any character.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Caller {
     principal_id: PrincipalId,
@@ -19,10 +25,7 @@ impl Caller {
         action_id: &str,
     ) -> Result<Self, AttachmentError> {
         for value in [surface_id, action_id] {
-            if value.trim().is_empty()
-                || value.len() > Self::MAX_BYTES
-                || value.chars().any(char::is_control)
-            {
+            if value.trim().is_empty() || value.len() > Self::MAX_BYTES {
                 return Err(AttachmentError::Caller);
             }
         }

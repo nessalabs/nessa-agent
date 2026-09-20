@@ -2,14 +2,16 @@
 //! infrastructure fills in.
 //!
 //! `AttachmentService` is the one owner of every transition here: a ticket is
-//! issued, redeemed, expired, or withdrawn; a hold is created, taken back, or
-//! released; bytes are removed when their last hold goes. Each is handed to the
+//! issued, replaced, redeemed, expired, or withdrawn; a hold is written pending,
+//! recorded, and only then confirmed, or taken back by the upload that wrote it,
+//! or released; bytes are removed when their last hold goes. Each is handed to the
 //! `AttachmentAudit` port before success is reported, and an audit failure is
 //! reported without stopping cleanup.
 //!
 //! ```text
 //! begin   -> ConversationOwnership, AttachmentStore::find_upload, TicketSecrets -> TicketBook
 //! receive -> TicketBook -> UploadBody -> StagedUpload -> ImageNormalizer -> StagedUpload::keep
+//!            -> AttachmentAudit (created) -> AttachmentStore::confirm | discard
 //! release -> TicketBook (withdraw) -> AttachmentStore::release
 //! every transition -> AttachmentAudit
 //! ```
@@ -22,11 +24,11 @@ mod ticket_secret;
 
 pub use error::{AuditDelivery, BeginError, ReleaseError, UploadError};
 pub use ports::{
-    AttachmentAudit, AttachmentAuditRecord, AttachmentStore, AuditUnavailable, BlobOutcome,
-    BodyInterrupted, ConversationOwnership, HoldChange, ImageNormalizer, NormalizeError,
+    AttachmentAudit, AttachmentAuditRecord, AttachmentStore, AuditUnavailable, Confirmation,
+    ConversationOwnership, Discard, HoldClaim, ImageNormalizer, Kept, NormalizeError,
     NormalizeFuture, NormalizedImage, OwnershipUnavailable, PortFuture, ReceivedBytes,
-    ReleaseCause, ReleaseEvidence, ReleaseReport, ReleasedHold, SecretsUnavailable, StagedUpload,
-    StoreUnavailable, TicketSecrets, UploadBody, UploadRejection,
+    ReleaseCause, ReleaseEvidence, ReleaseReport, ReleasedHold, RevertCause, SecretsUnavailable,
+    StagedUpload, StoreUnavailable, TicketSecrets, UploadBody, UploadInterrupted, UploadRejection,
 };
 pub use service::{
     AttachmentCaller, AttachmentDependencies, AttachmentLimits, AttachmentService, BeginOutcome,

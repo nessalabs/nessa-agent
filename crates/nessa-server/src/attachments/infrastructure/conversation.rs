@@ -5,7 +5,7 @@ use crate::{
     attachments::{
         application::{
             AttachmentService, ConversationOwnership, OwnershipUnavailable, PortFuture,
-            ReleaseCause, ReleaseRequest,
+            ReleaseCause, ReleaseError, ReleaseRequest,
         },
         domain::Attachment,
     },
@@ -65,15 +65,18 @@ impl ConversationAttachments for ConversationHolds {
                     correlation_id: release.correlation_id,
                 })
                 .await
-                // One error must stand for both kinds. Files still in place are
-                // the failure a retry can act on, so they are named first; the
-                // service has already logged both counts.
-                .map_err(|error| {
-                    if error.storage_failures != 0 {
-                        ConversationError::Unavailable
-                    } else {
-                        ConversationError::Audit
-                    }
+                // Both facts cross the boundary: what is still in place and
+                // what happened without evidence are different failures, and a
+                // close that met both reports both.
+                .map_err(|error| match error {
+                    ReleaseError::Unattributable => ConversationError::InvalidInput,
+                    ReleaseError::Incomplete {
+                        storage_failures,
+                        audit_failures,
+                    } => ConversationError::AttachmentCleanup {
+                        storage_failures,
+                        audit_failures,
+                    },
                 })
         })
     }

@@ -1,7 +1,8 @@
 use super::MediaType;
 use crate::attachments::domain::AttachmentError;
 use nessa_sdk::domain::{
-    agent_execution::prompts::ImageReference, common::value_objects::Sha256Digest,
+    agent_execution::prompts::ImageReference,
+    common::value_objects::{ImageMediaType, Sha256Digest},
 };
 
 /// One file as three facts that must agree: what its bytes hash to, what it
@@ -18,8 +19,9 @@ pub struct Attachment {
     size: u64,
 }
 impl Attachment {
-    /// Largest file storage accepts. The prompt's own image budget is smaller.
-    pub const MAX_BYTES: u64 = 20 * 1024 * 1024;
+    /// Largest file storage accepts: what the image library will read, so a
+    /// camera's raw file fits. The prompt's own image budget is far smaller.
+    pub const MAX_BYTES: u64 = 64 * 1024 * 1024;
 
     pub fn new(
         digest: Sha256Digest,
@@ -43,6 +45,12 @@ impl Attachment {
             media_type: MediaType::of_image(image.media_type()),
             size: image.size(),
         }
+    }
+    /// This file as an image a message can name, when it is one: one of the
+    /// encodings a message takes, within a message's per-image size.
+    pub fn as_image(&self) -> Option<ImageReference> {
+        let media_type = ImageMediaType::parse(self.media_type.as_str()).ok()?;
+        ImageReference::new(self.digest, media_type, self.size).ok()
     }
     pub fn digest(&self) -> Sha256Digest {
         self.digest

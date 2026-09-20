@@ -28,6 +28,21 @@ fn ticket(conversation: &str, attachment: Attachment, issued_at_ms: u64) -> Uplo
         TicketLifetime::starting(issued_at_ms).unwrap(),
     )
 }
+/// A book bounded only in total, for rules that are not about the narrower bounds.
+fn book_of(total: usize) -> TicketBook {
+    TicketBook::new(TicketLimits {
+        total,
+        per_organization: total,
+        per_conversation: total,
+    })
+}
+/// Issue a ticket that is not a repeat of one already outstanding.
+fn issue(book: &mut TicketBook, byte: u8, ticket: UploadTicket) {
+    assert_eq!(
+        book.issue(fingerprint(byte), ticket),
+        Ok(Issued { replaced: None })
+    );
+}
 fn fingerprint(byte: u8) -> TicketFingerprint {
     TicketFingerprint::from_bytes([byte; 32])
 }
@@ -71,6 +86,18 @@ fn a_media_type_is_exactly_what_the_wire_pattern_accepts() {
     }
     assert!(MediaType::parse(&too_long[..127]).is_ok());
     assert!(MediaType::parse("image/svg+xml").unwrap().is_image());
+    // What a camera's raw file is declared as. Each is an image, so each is
+    // normalized rather than kept as sent.
+    for raw in [
+        "image/x-adobe-dng",
+        "image/x-canon-cr3",
+        "image/x-nikon-nef",
+        "image/x-sony-arw",
+        "image/heic",
+        "image/avif",
+    ] {
+        assert!(MediaType::parse(raw).unwrap().is_image(), "{raw}");
+    }
     assert!(!MediaType::parse("application/image").unwrap().is_image());
 }
 
@@ -89,28 +116,43 @@ fn an_attachment_is_one_byte_to_twenty_mebibytes() {
             accepted
         );
     }
-    assert_eq!(Attachment::MAX_BYTES, 20 * 1024 * 1024);
+    // What the image library reads, and what the wire contract allows.
+    assert_eq!(Attachment::MAX_BYTES, 64 * 1024 * 1024);
 }
 
 #[test]
 fn an_image_reference_names_the_same_file_the_store_describes() {
     let image = ImageReference::new(digest(7), ImageMediaType::Webp, 9).unwrap();
     assert_eq!(Attachment::of_image(&image), file(7, "image/webp", 9));
+    assert_eq!(file(7, "image/webp", 9).as_image(), Some(image));
+    // Stored, but nothing a message can name: another encoding, or too large.
+    assert_eq!(file(7, "image/bmp", 9).as_image(), None);
+    assert_eq!(file(7, "application/pdf", 9).as_image(), None);
+    assert_eq!(
+        file(7, "image/png", ImageReference::MAX_BYTES + 1).as_image(),
+        None
+    );
+    assert!(file(7, "image/png", ImageReference::MAX_BYTES)
+        .as_image()
+        .is_some());
 }
 
 #[test]
-fn a_caller_is_bounded_plain_text_and_nothing_else() {
+fn a_caller_is_nonblank_and_bounded_and_nothing_else() {
     let owner = || PrincipalId::new("owner").unwrap();
-    for (surface, action) in [
-        ("", "a"),
-        (" ", "a"),
-        ("panel", ""),
-        ("panel", "line\nbreak"),
-        ("panel\u{0}", "a"),
-    ] {
+    for (surface, action) in [("", "a"), (" ", "a"), ("panel", ""), ("panel", " \n")] {
         assert_eq!(
             Caller::new(owner(), surface, action),
             Err(AttachmentError::Caller)
+        );
+    }
+    // Whatever the conversation context accepts as a caller can be written
+    // down here too, control characters included: evidence must never be
+    // dropped because of how an identifier is spelled.
+    for action in ["close\u{7}1", "line\nbreak", " padded ", "\u{0}"] {
+        assert_eq!(
+            Caller::new(owner(), "panel", action).unwrap().action_id(),
+            action
         );
     }
     let longest = "a".repeat(256);
@@ -226,15 +268,20 @@ fn only_an_image_may_be_stored_as_something_else_and_it_stays_an_image() {
     assert!(Hold::from_upload(&image, file(1, "image/png", 10), 1).is_some());
     assert!(Hold::from_upload(&image, file(2, "image/jpeg", 4), 1).is_some());
     assert!(Hold::from_upload(&image, file(2, "application/pdf", 4), 1).is_none());
+    // Still an image, but not one a message could ever name.
+    assert!(Hold::from_upload(&image, file(2, "image/bmp", 4), 1).is_none());
+    assert!(Hold::from_upload(&image, file(2, "image/heic", 4), 1).is_none());
+    let oversized = file(2, "image/png", ImageReference::MAX_BYTES + 1);
+    assert!(Hold::from_upload(&image, oversized, 1).is_none());
 }
 
 #[test]
 fn a_ticket_leaves_the_book_once_and_only_by_its_own_fingerprint() {
-    let mut book = TicketBook::new(4);
+    let mut book = book_of(4);
     let first = ticket(CONVERSATION, file(1, "image/png", 10), 0);
     let second = ticket(OTHER_CONVERSATION, file(2, "image/png", 10), 0);
-    book.issue(fingerprint(1), first.clone()).unwrap();
-    book.issue(fingerprint(2), second.clone()).unwrap();
+    issue(&mut book, 1, first.clone());
+    issue(&mut book, 2, second.clone());
 
     assert_eq!(book.redeem(&fingerprint(3), 1), Redemption::Unknown);
     assert_eq!(book.outstanding(), 2);
@@ -247,11 +294,11 @@ fn a_ticket_leaves_the_book_once_and_only_by_its_own_fingerprint() {
 
 #[test]
 fn an_expired_ticket_is_returned_as_expired_whether_presented_or_swept() {
-    let mut book = TicketBook::new(4);
+    let mut book = book_of(4);
     let early = ticket(CONVERSATION, file(1, "image/png", 10), 0);
     let late = ticket(CONVERSATION, file(2, "image/png", 10), 1_000);
-    book.issue(fingerprint(1), early.clone()).unwrap();
-    book.issue(fingerprint(2), late.clone()).unwrap();
+    issue(&mut book, 1, early.clone());
+    issue(&mut book, 2, late.clone());
 
     assert!(book.expire(TICKET_LIFETIME_MS).is_empty());
     // Presented one millisecond late: it leaves the book, as expired, once.
@@ -271,30 +318,27 @@ fn an_expired_ticket_is_returned_as_expired_whether_presented_or_swept() {
 
 #[test]
 fn a_full_book_refuses_new_tickets_until_old_ones_are_accounted_for() {
-    let mut book = TicketBook::new(2);
+    let mut book = book_of(2);
     for byte in [1, 2] {
-        book.issue(
-            fingerprint(byte),
-            ticket(CONVERSATION, file(byte, "image/png", 10), 0),
-        )
-        .unwrap();
+        let outstanding = ticket(CONVERSATION, file(byte, "image/png", 10), 0);
+        issue(&mut book, byte, outstanding);
     }
     let third = || ticket(CONVERSATION, file(3, "image/png", 10), u64::MAX / 2);
-    assert_eq!(book.issue(fingerprint(3), third()), Err(BookFull));
+    assert_eq!(book.issue(fingerprint(3), third()), Err(BookFull::Total));
     // Expired tickets still count until their expiry has been handed over.
-    assert_eq!(book.issue(fingerprint(3), third()), Err(BookFull));
+    assert_eq!(book.issue(fingerprint(3), third()), Err(BookFull::Total));
     assert_eq!(book.expire(u64::MAX / 2).len(), 2);
-    book.issue(fingerprint(3), third()).unwrap();
+    issue(&mut book, 3, third());
     assert_eq!(book.outstanding(), 1);
     assert_eq!(
-        TicketBook::new(0).issue(fingerprint(1), third()),
-        Err(BookFull)
+        book_of(0).issue(fingerprint(1), third()),
+        Err(BookFull::Total)
     );
 }
 
 #[test]
 fn a_conversation_that_lets_go_takes_its_own_tickets_with_it_and_nobody_elses() {
-    let mut book = TicketBook::new(8);
+    let mut book = book_of(8);
     let mine = ticket(CONVERSATION, file(1, "image/png", 10), 0);
     let mine_too = ticket(CONVERSATION, file(2, "image/png", 10), 5);
     let theirs = ticket(OTHER_CONVERSATION, file(1, "image/png", 10), 0);
@@ -306,16 +350,120 @@ fn a_conversation_that_lets_go_takes_its_own_tickets_with_it_and_nobody_elses() 
         TicketLifetime::starting(0).unwrap(),
     );
     for (byte, issued) in [(1, &mine), (2, &theirs), (3, &mine_too), (4, &foreign)] {
-        book.issue(fingerprint(byte), issued.clone()).unwrap();
+        issue(&mut book, byte, issued.clone());
     }
     let organization = OrganizationId::new("org").unwrap();
     let conversation = ConversationId::new(CONVERSATION).unwrap();
-    assert_eq!(book.void(&organization, &conversation), [mine, mine_too]);
-    assert!(book.void(&organization, &conversation).is_empty());
+    assert_eq!(
+        book.withdraw(&organization, &conversation),
+        [mine, mine_too]
+    );
+    assert!(book.withdraw(&organization, &conversation).is_empty());
     // Gone for good, and the others untouched.
     assert_eq!(book.redeem(&fingerprint(1), 1), Redemption::Unknown);
     assert_eq!(book.redeem(&fingerprint(2), 1), Redemption::Usable(theirs));
     assert_eq!(book.redeem(&fingerprint(4), 1), Redemption::Usable(foreign));
+}
+
+#[test]
+fn the_same_request_made_again_replaces_its_ticket_instead_of_adding_one() {
+    let mut book = book_of(2);
+    let first = ticket(CONVERSATION, file(1, "image/png", 10), 0);
+    let again = ticket(CONVERSATION, file(1, "image/png", 10), 9);
+    assert_eq!(
+        book.issue(fingerprint(1), first.clone()),
+        Ok(Issued { replaced: None })
+    );
+    // Same caller, action, conversation and file; only the time differs.
+    assert_eq!(
+        book.issue(fingerprint(2), again.clone()),
+        Ok(Issued {
+            replaced: Some(first)
+        })
+    );
+    assert_eq!(book.outstanding(), 1);
+    assert_eq!(book.redeem(&fingerprint(1), 10), Redemption::Unknown);
+    // A full book still takes the repeat: the ticket it replaces makes room.
+    let elsewhere = ticket(OTHER_CONVERSATION, file(1, "image/png", 10), 0);
+    issue(&mut book, 3, elsewhere);
+    assert_eq!(
+        book.issue(fingerprint(4), again.clone()),
+        Ok(Issued {
+            replaced: Some(again.clone())
+        })
+    );
+    assert_eq!(book.outstanding(), 2);
+
+    // Anything else about the request differing makes it another request.
+    let other_action = UploadTicket::new(
+        OrganizationId::new("org").unwrap(),
+        ConversationId::new(CONVERSATION).unwrap(),
+        file(1, "image/png", 10),
+        Caller::new(PrincipalId::new("owner").unwrap(), "panel", "begin-2").unwrap(),
+        TicketLifetime::starting(9).unwrap(),
+    );
+    for different in [
+        other_action,
+        ticket(CONVERSATION, file(1, "image/jpeg", 10), 9),
+        ticket(CONVERSATION, file(2, "image/png", 10), 9),
+    ] {
+        assert!(!again.repeats(&different));
+        assert_eq!(book.issue(fingerprint(5), different), Err(BookFull::Total));
+    }
+    assert_eq!(book.redeem(&fingerprint(4), 10), Redemption::Usable(again));
+}
+
+#[test]
+fn one_conversation_cannot_take_its_organizations_tickets_nor_one_organization_everyones() {
+    let mut book = TicketBook::new(TicketLimits {
+        total: 5,
+        per_organization: 3,
+        per_conversation: 2,
+    });
+    let issued_to = |organization: &str, conversation: &str, byte: u8| {
+        UploadTicket::new(
+            OrganizationId::new(organization).unwrap(),
+            ConversationId::new(conversation).unwrap(),
+            file(byte, "image/png", 10),
+            caller(),
+            TicketLifetime::starting(0).unwrap(),
+        )
+    };
+    for byte in [1, 2] {
+        issue(&mut book, byte, issued_to("org", CONVERSATION, byte));
+    }
+    assert_eq!(
+        book.issue(fingerprint(3), issued_to("org", CONVERSATION, 3)),
+        Err(BookFull::Conversation)
+    );
+    issue(&mut book, 3, issued_to("org", OTHER_CONVERSATION, 3));
+    assert_eq!(
+        book.issue(fingerprint(4), issued_to("org", OTHER_CONVERSATION, 4)),
+        Err(BookFull::Organization)
+    );
+    // Another organization is not affected by either, until the total.
+    for byte in [4, 5] {
+        issue(&mut book, byte, issued_to("other", CONVERSATION, byte));
+    }
+    assert_eq!(
+        book.issue(fingerprint(6), issued_to("third", CONVERSATION, 6)),
+        Err(BookFull::Total)
+    );
+    // A refusal changed nothing.
+    assert_eq!(book.outstanding(), 5);
+}
+
+#[test]
+fn a_ticket_nobody_was_given_can_be_taken_back_by_its_own_fingerprint_only() {
+    let mut book = book_of(4);
+    let kept = ticket(CONVERSATION, file(1, "image/png", 10), 0);
+    issue(&mut book, 1, kept.clone());
+    let unrecorded = ticket(CONVERSATION, file(2, "image/png", 10), 0);
+    issue(&mut book, 2, unrecorded);
+    book.withdraw_unissued(&fingerprint(2));
+    book.withdraw_unissued(&fingerprint(9));
+    assert_eq!(book.outstanding(), 1);
+    assert_eq!(book.redeem(&fingerprint(1), 1), Redemption::Usable(kept));
 }
 
 #[test]

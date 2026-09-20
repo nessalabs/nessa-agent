@@ -85,14 +85,18 @@ async fn a_close_releases_through_the_service_and_reports_what_did_not_complete(
     // Released, but the evidence was lost: an audit failure, and still released.
     fixture.upload(CONVERSATION, b"second", "text/plain").await;
     fixture.audit.refusing.store(true, Ordering::SeqCst);
+    // One hold released and its bytes removed: two records, neither delivered.
     assert!(matches!(
         holds.release(release(CONVERSATION)).await,
-        Err(ConversationError::Audit)
+        Err(ConversationError::AttachmentCleanup {
+            storage_failures: 0,
+            audit_failures: 2
+        })
     ));
     assert!(fixture.store.held().is_empty());
 
-    // A file still in place is the failure a retry can act on, so it is the
-    // one named, with or without lost evidence beside it.
+    // A file still in place and evidence that was lost are different failures.
+    // Both cross the boundary; neither stands in for the other.
     for refusing in [false, true] {
         fixture.audit.refusing.store(false, Ordering::SeqCst);
         let stuck = format!("stuck {refusing}").into_bytes();
@@ -100,9 +104,16 @@ async fn a_close_releases_through_the_service_and_reports_what_did_not_complete(
         fixture.upload(CONVERSATION, b"free", "text/plain").await;
         fixture.store.stick(digest_of(&stuck));
         fixture.audit.refusing.store(refusing, Ordering::SeqCst);
+        // The first round's stuck hold is still stuck in the second.
+        let (expected_storage_failures, expected_audit_failures) =
+            if refusing { (2, 2) } else { (1, 0) };
         assert!(matches!(
             holds.release(release(CONVERSATION)).await,
-            Err(ConversationError::Unavailable)
+            Err(ConversationError::AttachmentCleanup {
+                storage_failures,
+                audit_failures
+            }) if storage_failures == expected_storage_failures
+                && audit_failures == expected_audit_failures
         ));
         // Everything that could go went; only what is stuck is still held.
         assert!(fixture
@@ -187,4 +198,18 @@ async fn image_bytes_are_missing_unavailable_or_the_bytes_and_never_more_than_as
         images.read(image(b"kept image", ImageMediaType::Png)).await,
         Err(UserImageError::Unavailable)
     );
+}
+
+#[tokio::test]
+async fn a_release_in_nobodys_name_is_refused_as_invalid_and_lets_go_of_nothing() {
+    let fixture = Fixture::new(AttachmentLimits::default());
+    fixture.upload(CONVERSATION, b"first", "text/plain").await;
+    let holds = ConversationHolds::new(fixture.service.clone());
+    let mut nobody = release(CONVERSATION);
+    nobody.initiator_surface_id = " ".into();
+    assert!(matches!(
+        holds.release(nobody).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    assert_eq!(fixture.store.held().len(), 1);
 }

@@ -1,12 +1,13 @@
 use super::{
     AttachmentAudit, AttachmentAuditRecord, AttachmentStore, AuditDelivery, AuditUnavailable,
-    BeginError, BlobOutcome, ConversationOwnership, ImageNormalizer, NormalizeError, ReceivedBytes,
-    ReleaseCause, ReleaseError, ReleaseEvidence, StagedUpload, TicketSecret, TicketSecrets,
-    UploadBody, UploadError, UploadRejection,
+    BeginError, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer, Kept,
+    NormalizeError, ReceivedBytes, ReleaseCause, ReleaseError, ReleaseEvidence, RevertCause,
+    StagedUpload, StoreUnavailable, TicketSecret, TicketSecrets, UploadBody, UploadError,
+    UploadRejection,
 };
 use crate::{
     attachments::domain::{
-        Attachment, Caller, Hold, MediaType, Redemption, TicketBook, TicketLifetime,
+        Attachment, Caller, Hold, MediaType, Redemption, TicketBook, TicketLifetime, TicketLimits,
         UploadMismatch, UploadTicket,
     },
     conversation::domain::ConversationId,
@@ -67,11 +68,18 @@ pub struct ReleaseRequest {
 /// Server-selected bounds. Callers cannot choose any of them.
 #[derive(Clone, Copy, Debug)]
 pub struct AttachmentLimits {
-    /// Most tickets outstanding at once, across every caller.
-    pub max_tickets: usize,
-    /// Most uploads in progress at once. Normalizing an image holds the whole
-    /// upload in memory, so this also bounds that memory.
+    /// Most tickets outstanding at once: in all, for one organization, and for
+    /// one conversation.
+    pub tickets: TicketLimits,
+    /// Most transfers in progress at once, across every caller. It is not
+    /// divided by organization: this gateway serves exactly one, a permit is
+    /// held for at most the upload deadline, and a caller refused for want of
+    /// one keeps its ticket.
     pub max_uploads: usize,
+    /// Most images being normalized at once. Each holds a whole upload, up to
+    /// [`Attachment::MAX_BYTES`], and its decoded pixels in memory, so this is
+    /// smaller than the number of transfers, which stream to disk.
+    pub max_normalizations: usize,
     /// How long one transfer may take from its first byte to its last.
     pub upload_deadline: Duration,
     /// How long one audit record may take to be acknowledged. Every record
@@ -81,8 +89,13 @@ pub struct AttachmentLimits {
 impl Default for AttachmentLimits {
     fn default() -> Self {
         Self {
-            max_tickets: 64,
+            tickets: TicketLimits {
+                total: 64,
+                per_organization: 32,
+                per_conversation: 16,
+            },
             max_uploads: 4,
+            max_normalizations: 2,
             upload_deadline: Duration::from_secs(120),
             audit_deadline: Duration::from_secs(5),
         }
@@ -109,6 +122,7 @@ struct Inner {
     limits: AttachmentLimits,
     book: Mutex<TicketBook>,
     uploads: Arc<Semaphore>,
+    normalizations: Semaphore,
 }
 
 /// Issues tickets, receives uploads under them, and releases holds. Clones
@@ -138,8 +152,9 @@ impl AttachmentService {
                 normalizer,
                 clock,
                 limits,
-                book: Mutex::new(TicketBook::new(limits.max_tickets)),
+                book: Mutex::new(TicketBook::new(limits.tickets)),
                 uploads: Arc::new(Semaphore::new(limits.max_uploads)),
+                normalizations: Semaphore::new(limits.max_normalizations),
             }),
         }
     }
@@ -168,44 +183,9 @@ impl AttachmentService {
         }
     }
 
-    /// Answer `attachment.begin`: either the conversation already has this
-    /// file, or here is a single-use ticket to upload it.
-    pub async fn begin(
-        &self,
-        caller: AttachmentCaller,
-        request: BeginUpload,
-    ) -> Result<BeginOutcome, BeginError> {
-        let conversation_id = ConversationId::new(&request.conversation_id)
-            .map_err(|_| BeginError::InvalidRequest)?;
-        let uploaded = Attachment::new(
-            Sha256Digest::parse(&request.digest).map_err(|_| BeginError::InvalidRequest)?,
-            MediaType::parse(&request.media_type).map_err(|_| BeginError::InvalidRequest)?,
-            request.size,
-        )
-        .map_err(|_| BeginError::InvalidRequest)?;
-        let initiator = Caller::new(
-            caller.principal_id.clone(),
-            &caller.surface_id,
-            &request.request_id,
-        )
-        .map_err(|_| BeginError::InvalidRequest)?;
-        let owns = self
-            .inner
-            .ownership
-            .owns(
-                &caller.organization_id,
-                &caller.principal_id,
-                &conversation_id,
-            )
-            .await
-            .map_err(|_| BeginError::Unavailable)?;
-        if !owns {
-            return Err(BeginError::ConversationNotFound);
-        }
-        // Tickets whose time has passed leave the book here, before capacity is
-        // judged. They are gone whether or not their expiry can be recorded;
-        // an expiry that could not be recorded fails this request visibly.
-        let now_ms = self.inner.clock.unix_milliseconds();
+    /// Remove every ticket whose time has passed and record each expiry. They
+    /// are gone whether or not that can be recorded. Returns how many could not.
+    async fn sweep(&self, now_ms: u64) -> usize {
         let expired = self.book().expire(now_ms);
         let mut unrecorded = 0_usize;
         for ticket in expired {
@@ -222,7 +202,59 @@ impl AttachmentService {
                 unrecorded,
                 "expired upload tickets were removed without audit evidence"
             );
+        }
+        unrecorded
+    }
+
+    /// Answer `attachment.begin`: either the conversation already has this
+    /// file, or here is a single-use ticket to upload it.
+    ///
+    /// Repeating the same request (caller, action identifier, conversation and
+    /// file) does not add a ticket. It replaces the earlier one, which stops
+    /// working; only a fingerprint of a secret is kept, so the earlier ticket
+    /// could not be handed out again.
+    pub async fn begin(
+        &self,
+        caller: AttachmentCaller,
+        request: BeginUpload,
+    ) -> Result<BeginOutcome, BeginError> {
+        // Tickets whose time has passed leave the book first, on every begin,
+        // whoever asks and whether or not the rest of the request is any good:
+        // stale tickets must not be what fills the book. An expiry that could
+        // not be recorded fails this request visibly.
+        let now_ms = self.inner.clock.unix_milliseconds();
+        let unrecorded = self.sweep(now_ms).await;
+        let conversation_id = ConversationId::new(&request.conversation_id)
+            .map_err(|_| BeginError::InvalidRequest)?;
+        let uploaded = Attachment::new(
+            Sha256Digest::parse(&request.digest).map_err(|_| BeginError::InvalidRequest)?,
+            MediaType::parse(&request.media_type).map_err(|_| BeginError::InvalidRequest)?,
+            request.size,
+        )
+        .map_err(|_| BeginError::InvalidRequest)?;
+        // Who is asking is settled here, before anything is read or changed,
+        // so every later record of this ticket has an initiator to name.
+        let initiator = Caller::new(
+            caller.principal_id.clone(),
+            &caller.surface_id,
+            &request.request_id,
+        )
+        .map_err(|_| BeginError::InvalidRequest)?;
+        if unrecorded != 0 {
             return Err(BeginError::Audit);
+        }
+        let owns = self
+            .inner
+            .ownership
+            .owns(
+                &caller.organization_id,
+                &caller.principal_id,
+                &conversation_id,
+            )
+            .await
+            .map_err(|_| BeginError::Unavailable)?;
+        if !owns {
+            return Err(BeginError::ConversationNotFound);
         }
         if let Some(hold) = self
             .inner
@@ -247,9 +279,30 @@ impl AttachmentService {
             initiator,
             lifetime,
         );
-        self.book()
-            .issue(secret.fingerprint(), ticket)
+        let issued = self
+            .book()
+            .issue(secret.fingerprint(), ticket.clone())
             .map_err(|_| BeginError::Capacity)?;
+        // A ticket is permission for a verified caller to write into a
+        // conversation, so issuing one is recorded, and recorded before the
+        // ticket leaves this process. Both records are attempted.
+        let mut recorded = true;
+        if let Some(replaced) = issued.replaced {
+            recorded &= self
+                .audit(AttachmentAuditRecord::TicketReplaced { ticket: replaced })
+                .await
+                == AuditDelivery::Recorded;
+        }
+        recorded &= self
+            .audit(AttachmentAuditRecord::TicketIssued { ticket })
+            .await
+            == AuditDelivery::Recorded;
+        if !recorded {
+            // Nobody has seen this ticket's secret, so taking it back undoes
+            // nothing anyone could have relied on.
+            self.book().withdraw_unissued(&secret.fingerprint());
+            return Err(BeginError::Audit);
+        }
         Ok(BeginOutcome::UploadRequired {
             ticket: secret,
             expires_at_ms: lifetime.expires_at_ms(),
@@ -295,44 +348,137 @@ impl AttachmentService {
         body: Box<dyn UploadBody>,
     ) -> Result<Attachment, UploadError> {
         let now_ms = self.inner.clock.unix_milliseconds();
+        // The presented ticket is looked at first so that, expired, it is
+        // refused and recorded as itself.
         let redemption = self.book().redeem(&secret.fingerprint(), now_ms);
-        let ticket = match redemption {
-            Redemption::Unknown => return Err(UploadError::TicketInvalid),
-            Redemption::Expired(ticket) => {
-                let evidence = self
-                    .audit(AttachmentAuditRecord::TicketExpired { ticket })
-                    .await;
-                return Err(UploadError::TicketExpired { evidence });
-            }
-            Redemption::Usable(ticket) => ticket,
+        let expired = match &redemption {
+            Redemption::Expired(ticket) => Some(
+                self.audit(AttachmentAuditRecord::TicketExpired {
+                    ticket: ticket.clone(),
+                })
+                .await,
+            ),
+            Redemption::Usable(_) | Redemption::Unknown => None,
+        };
+        // Every upload also clears out the tickets nobody came back for, so
+        // stale tickets cannot fill the book while nobody begins anything. A
+        // sweep that could not be recorded is logged, and does not fail an
+        // upload that had nothing to do with those tickets.
+        self.sweep(now_ms).await;
+        let ticket = match (redemption, expired) {
+            (Redemption::Usable(ticket), _) => ticket,
+            (_, Some(evidence)) => return Err(UploadError::TicketExpired { evidence }),
+            (_, None) => return Err(UploadError::TicketInvalid),
         };
         let (staged, hold) = match self.transfer(&ticket, declared_length, body).await {
             Ok(kept) => kept,
             Err(reason) => return Err(self.reject(ticket, reason).await),
         };
-        let change = match staged.keep(hold.clone()).await {
-            Ok(change) => change,
-            Err(_) => {
-                return Err(self
-                    .reject(ticket, UploadRejection::StorageUnavailable)
-                    .await)
+        match staged.keep(hold.clone()).await {
+            Err(StoreUnavailable) => Err(self
+                .reject(ticket, UploadRejection::StorageUnavailable)
+                .await),
+            // The conversation keeps this file already. Nothing changed, and the
+            // record says so rather than claiming a hold was created.
+            Ok(Kept::Existing(existing)) => {
+                let stored = existing.stored().clone();
+                let record = AttachmentAuditRecord::AlreadyHeld {
+                    ticket,
+                    hold: existing,
+                };
+                match self.audit(record).await {
+                    AuditDelivery::Recorded => Ok(stored),
+                    AuditDelivery::Unavailable => {
+                        Err(UploadError::AuditUnavailable { reverted: true })
+                    }
+                }
             }
-        };
-        let record = AttachmentAuditRecord::HoldCreated {
-            hold: hold.clone(),
-            before: change.before(),
-        };
-        if self.audit(record).await == AuditDelivery::Unavailable {
-            // A hold nobody can account for must not stay usable. Taking it back
-            // is cleanup, so it happens even though the sink is not answering.
-            let stored = hold.stored().digest();
-            let reverted = self.inner.store.revert(hold, change).await.is_ok();
-            if !reverted {
-                tracing::error!(%stored, "an unaudited hold could not be taken back");
-            }
+            Ok(Kept::Pending(claim)) => self.record_then_confirm(hold, claim).await,
+        }
+    }
+
+    /// The one owner of a hold's creation. The hold is written pending, which
+    /// nothing can use; its creation is recorded; only then is it made usable.
+    /// Whatever goes wrong, this upload takes back its own pending hold and no
+    /// other, and a creation that may have reached the trail is followed by a
+    /// record saying the hold did not last.
+    async fn record_then_confirm(
+        &self,
+        hold: Hold,
+        claim: HoldClaim,
+    ) -> Result<Attachment, UploadError> {
+        let created = AttachmentAuditRecord::HoldCreated { hold: hold.clone() };
+        if self.audit(created).await == AuditDelivery::Unavailable {
+            let reverted = self
+                .take_back(&hold, &claim, RevertCause::AuditUnconfirmed)
+                .await
+                .is_some();
             return Err(UploadError::AuditUnavailable { reverted });
         }
-        Ok(hold.stored().clone())
+        match self.inner.store.confirm(&hold, &claim).await {
+            Ok(Confirmation::Confirmed | Confirmation::AlreadyKept) => Ok(hold.stored().clone()),
+            Ok(Confirmation::Gone) => {
+                // Its conversation let go of its files meanwhile, or an upload
+                // of the same file that had taken this hold over took it back.
+                // Either way the creation on record did not last.
+                let reverted = AttachmentAuditRecord::HoldReverted {
+                    hold,
+                    cause: RevertCause::RemovedBeforeUsable,
+                };
+                if self.audit(reverted).await == AuditDelivery::Unavailable {
+                    tracing::error!("a hold removed before it was usable went unrecorded");
+                }
+                Err(UploadError::NotKept)
+            }
+            Err(StoreUnavailable) => {
+                let evidence = self
+                    .take_back(&hold, &claim, RevertCause::ConfirmationFailed)
+                    .await
+                    .unwrap_or(AuditDelivery::Unavailable);
+                Err(UploadError::Rejected {
+                    reason: UploadRejection::StorageUnavailable,
+                    evidence,
+                })
+            }
+        }
+    }
+
+    /// Take back this claim's pending hold and say so. `None` when it could
+    /// not be taken back; the hold then stays pending, which nothing can use.
+    async fn take_back(
+        &self,
+        hold: &Hold,
+        claim: &HoldClaim,
+        cause: RevertCause,
+    ) -> Option<AuditDelivery> {
+        match self.inner.store.discard(hold, claim).await {
+            Ok(Discard::Discarded) => {
+                // Attempted with its own bound even when the sink just failed:
+                // that failure may have been a late success.
+                let reverted = AttachmentAuditRecord::HoldReverted {
+                    hold: hold.clone(),
+                    cause,
+                };
+                let delivery = self.audit(reverted).await;
+                if delivery == AuditDelivery::Unavailable {
+                    tracing::error!(
+                        stored = %hold.stored().digest(),
+                        "a hold was taken back without audit evidence"
+                    );
+                }
+                Some(delivery)
+            }
+            // Another upload owns the hold now, or a release removed it; each
+            // of those records itself. Nothing of this claim is left to undo.
+            Ok(Discard::NotMine) => Some(AuditDelivery::Recorded),
+            Err(StoreUnavailable) => {
+                tracing::error!(
+                    stored = %hold.stored().digest(),
+                    "a pending hold could not be taken back"
+                );
+                None
+            }
+        }
     }
 
     async fn reject(&self, ticket: UploadTicket, reason: UploadRejection) -> UploadError {
@@ -365,7 +511,7 @@ impl AttachmentService {
             Self::stream(ticket, staged.as_mut(), body.as_mut()),
         )
         .await
-        .map_err(|_| UploadRejection::DeadlineElapsed)??;
+        .map_err(|_| UploadRejection::UploadTimeout)??;
         drop(body);
         ticket
             .check_received(received.size, received.digest)
@@ -374,9 +520,16 @@ impl AttachmentService {
                 UploadMismatch::Digest => UploadRejection::DigestMismatch,
             })?;
         let (staged, stored) = if uploaded.media_type().is_image() {
-            // Normalizing needs the whole image at once. It is read only now,
-            // after it proved to be the file the ticket described, and the
-            // upload permit bounds how many of these exist together.
+            // Normalizing needs the whole image at once, and its pixels. It is
+            // read only now, after it proved to be the file the ticket
+            // described, and only as many are in memory together as this
+            // permit allows; the rest wait here, already safe on disk.
+            let _normalizing = self
+                .inner
+                .normalizations
+                .acquire()
+                .await
+                .map_err(|_| UploadRejection::NormalizationFailed)?;
             let original = staged.read().await.map_err(unavailable)?;
             drop(staged);
             let normalized = self
@@ -385,6 +538,7 @@ impl AttachmentService {
                 .normalize(original, uploaded.media_type().as_str())
                 .await
                 .map_err(|error| match error {
+                    NormalizeError::NotOffered => UploadRejection::ImageInputUnsupported,
                     NormalizeError::Unsupported => UploadRejection::UnsupportedImage,
                     NormalizeError::TooLarge => UploadRejection::ImageTooLarge,
                     NormalizeError::Failed => UploadRejection::NormalizationFailed,
@@ -400,6 +554,10 @@ impl AttachmentService {
         } else {
             (staged, uploaded.clone())
         };
+        // The normalizer is outside code. What it answered is kept only if it
+        // is an image a message can name: the hold's own rule decides, so a
+        // result of another type, or over a message's per-image size, is a
+        // failed normalization and not a file nothing could ever refer to.
         let hold = Hold::from_upload(ticket, stored, self.inner.clock.unix_milliseconds())
             .ok_or(UploadRejection::NormalizationFailed)?;
         Ok((staged, hold))
@@ -414,7 +572,7 @@ impl AttachmentService {
         while let Some(chunk) = body
             .next()
             .await
-            .map_err(|_| UploadRejection::BodyInterrupted)?
+            .map_err(|_| UploadRejection::UploadInterrupted)?
         {
             received = received.saturating_add(chunk.len() as u64);
             if ticket.is_exceeded_by(received) {
@@ -437,89 +595,72 @@ impl AttachmentService {
         organization_id: &OrganizationId,
         conversation_id: &ConversationId,
         stored: &Attachment,
-    ) -> Result<bool, super::StoreUnavailable> {
+    ) -> Result<bool, StoreUnavailable> {
         self.inner
             .store
             .holds(organization_id, conversation_id, stored)
             .await
     }
 
-    /// Let go of everything one conversation holds, and of what it could still
-    /// have added. Every ticket and hold is tried and every transition that
-    /// happened is recorded; what could not be completed
-    /// is reported afterwards, and never stops the rest.
+    /// Let go of everything one conversation holds, and of the uploads it had
+    /// been permitted and not begun. Every ticket and hold is tried and every
+    /// transition that happened is recorded; what could not be completed is
+    /// reported afterwards, and never stops the rest.
+    ///
+    /// Who is letting go is settled before anything is touched. A caller that
+    /// cannot be written down changes nothing here.
     pub async fn release(&self, request: ReleaseRequest) -> Result<(), ReleaseError> {
-        let requested_at_ms = self.inner.clock.unix_milliseconds();
-        // Tickets go first, so no upload can begin after the holds are gone and
-        // leave a hold behind in a conversation that has closed. An upload
-        // already past its ticket is not stopped; see the module's limits.
-        let voided = self
+        let caller = Caller::new(
+            request.principal_id,
+            &request.surface_id,
+            &request.correlation_id,
+        )
+        .map_err(|_| ReleaseError::Unattributable)?;
+        let release = ReleaseEvidence {
+            cause: request.cause,
+            caller,
+            requested_at_ms: self.inner.clock.unix_milliseconds(),
+        };
+        // Tickets go first, so an upload that has not begun cannot begin after
+        // the holds are gone.
+        let withdrawn = self
             .book()
-            .void(&request.organization_id, &request.conversation_id);
-        // Without a report there is nothing to record about holds. The voided
-        // tickets are still gone, and still accounted for below.
+            .withdraw(&request.organization_id, &request.conversation_id);
+        // Without a report there is nothing to record about holds. The
+        // withdrawn tickets are still gone, and still accounted for below.
         let report = self
             .inner
             .store
             .release(&request.organization_id, &request.conversation_id)
             .await
             .ok();
-        // A caller that cannot be written down cannot be given as the
-        // initiator. The files are already released; what is lost is evidence,
-        // and it is reported as lost.
-        let release = Caller::new(
-            request.principal_id,
-            &request.surface_id,
-            &request.correlation_id,
-        )
-        .ok()
-        .map(|caller| ReleaseEvidence {
-            cause: request.cause,
-            caller,
-            requested_at_ms,
-        });
-        let mut audit_failures = 0_usize;
-        for ticket in voided {
-            let delivered = match &release {
-                Some(release) => {
-                    self.audit(AttachmentAuditRecord::TicketVoided {
-                        ticket,
-                        release: release.clone(),
-                    })
-                    .await
-                }
-                None => AuditDelivery::Unavailable,
-            };
-            if delivered == AuditDelivery::Unavailable {
-                audit_failures += 1;
-            }
-        }
-        let mut storage_failures = report.as_ref().map_or(1, |report| report.failures);
-        for released in report.map(|report| report.released).unwrap_or_default() {
-            let mut records = Vec::with_capacity(2);
-            if let Some(release) = &release {
-                records.push(AttachmentAuditRecord::HoldReleased {
-                    hold: released.hold.clone(),
+        let storage_failures = report.as_ref().map_or(1, |report| report.failures);
+        let mut records: Vec<_> = withdrawn
+            .into_iter()
+            .map(|ticket| AttachmentAuditRecord::TicketWithdrawn {
+                ticket,
+                release: release.clone(),
+            })
+            .collect();
+        if let Some(report) = report {
+            records.extend(report.released.into_iter().map(|released| {
+                AttachmentAuditRecord::HoldReleased {
+                    hold: released.hold,
+                    was: released.was,
                     release: release.clone(),
-                });
-            } else {
-                audit_failures += 1;
-            }
-            match released.blob {
-                BlobOutcome::StillHeld | BlobOutcome::Missing => {}
-                BlobOutcome::RemovalFailed => storage_failures += 1,
-                BlobOutcome::Removed => match &release {
-                    Some(release) => records.push(AttachmentAuditRecord::BlobRemoved {
-                        hold: released.hold,
-                        release: release.clone(),
-                    }),
-                    None => audit_failures += 1,
-                },
-            }
-            for record in records {
-                if self.audit(record).await == AuditDelivery::Unavailable {
-                    audit_failures += 1;
                 }
+            }));
+            records.extend(report.removed.into_iter().map(|hold| {
+                AttachmentAuditRecord::BlobRemoved {
+                    hold,
+                    release: release.clone(),
+                }
+            }));
+        }
+        let mut audit_failures = 0_usize;
+        for record in records {
+            if self.audit(record).await == AuditDelivery::Unavailable {
+                audit_failures += 1;
             }
         }
         if storage_failures == 0 && audit_failures == 0 {
@@ -531,7 +672,7 @@ impl AttachmentService {
             audit_failures,
             "releasing a conversation's attachments did not complete"
         );
-        Err(ReleaseError {
+        Err(ReleaseError::Incomplete {
             storage_failures,
             audit_failures,
         })

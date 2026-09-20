@@ -153,7 +153,8 @@ async fn a_model_with_no_recorded_image_limits_has_no_image_prepared_for_it() {
         normalizer
             .normalize(bitmap(4, 4, || [0, 0, 0]), "image/bmp")
             .await,
-        Err(NormalizeError::Unsupported)
+        // Not a bad image: a perfectly good one, for a model that is offered none.
+        Err(NormalizeError::NotOffered)
     );
 }
 

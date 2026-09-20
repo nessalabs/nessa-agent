@@ -4,6 +4,7 @@ mod attachment_gateway {
     use super::gateway::{chat_request, chat_session, chat_state, response, send_command};
     use super::*;
     use crate::attachments::application::{AttachmentAuditRecord, AttachmentLimits};
+    use crate::attachments::domain::TicketLimits;
     use crate::attachments_test_support::{
         digest_of, ChannelBody, Fixture, StubNormalizer, CONVERSATION,
     };
@@ -118,7 +119,11 @@ mod attachment_gateway {
     #[tokio::test]
     async fn the_socket_names_each_refusal_and_attributes_the_ticket_to_the_verified_caller() {
         let fixture = Fixture::new(AttachmentLimits {
-            max_tickets: 1,
+            tickets: TicketLimits {
+                total: 1,
+                per_organization: 1,
+                per_conversation: 1,
+            },
             ..AttachmentLimits::default()
         });
         let state = attachment_state(&fixture);
@@ -128,7 +133,7 @@ mod attachment_gateway {
         let mut uppercase = begin(BYTES, "text/plain");
         uppercase["conversationId"] = json!(CONVERSATION.to_uppercase());
         let mut oversized = begin(BYTES, "text/plain");
-        oversized["size"] = json!(20 * 1024 * 1024 + 1);
+        oversized["size"] = json!(64 * 1024 * 1024 + 1);
         for params in [
             json!({}),
             unknown_field,

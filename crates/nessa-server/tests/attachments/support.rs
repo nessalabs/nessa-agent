@@ -5,12 +5,12 @@ use crate::{
         application::{
             AttachmentAudit, AttachmentAuditRecord, AttachmentCaller, AttachmentDependencies,
             AttachmentLimits, AttachmentService, AttachmentStore, AuditUnavailable, BeginOutcome,
-            BeginUpload, BlobOutcome, BodyInterrupted, ConversationOwnership, HoldChange,
-            ImageNormalizer, NormalizeError, NormalizeFuture, NormalizedImage,
-            OwnershipUnavailable, PortFuture, ReceivedBytes, ReleaseReport, ReleasedHold,
-            SecretsUnavailable, StagedUpload, StoreUnavailable, TicketSecrets, UploadBody,
+            BeginUpload, Confirmation, ConversationOwnership, Discard, HoldClaim, ImageNormalizer,
+            Kept, NormalizeError, NormalizeFuture, NormalizedImage, OwnershipUnavailable,
+            PortFuture, ReceivedBytes, ReleaseReport, ReleasedHold, SecretsUnavailable,
+            StagedUpload, StoreUnavailable, TicketSecrets, UploadBody, UploadInterrupted,
         },
-        domain::{Attachment, Hold, MediaType},
+        domain::{Attachment, Hold, HoldState, MediaType},
     },
     conversation::domain::ConversationId,
 };
@@ -27,7 +27,7 @@ use std::{
         Arc, Mutex,
     },
 };
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::{mpsc, oneshot, Notify};
 
 pub(crate) const CONVERSATION: &str = "00000000-0000-4000-8000-0000000000a1";
 pub(crate) const OTHER_CONVERSATION: &str = "00000000-0000-4000-8000-0000000000a2";
@@ -85,9 +85,22 @@ impl Clock for ManualClock {
     }
 }
 
-/// Keeps every record it acknowledged. Can refuse, and can never answer.
+/// One record held at the sink until the test lets it go.
+pub(crate) struct AuditGate {
+    /// Which attempt waits, counting from zero.
+    pub(crate) attempt: usize,
+    pub(crate) open: oneshot::Receiver<()>,
+    /// Whether the record is refused once let go, or kept.
+    pub(crate) then_refuse: bool,
+}
+
+/// Keeps every record it acknowledged. Can refuse, can never answer, and can
+/// hold one chosen record at the door while the test does something else.
 #[derive(Default)]
 pub(crate) struct RecordingAudit {
+    pub(crate) gate: Mutex<Option<AuditGate>>,
+    /// Signalled when the gated record has arrived and is waiting.
+    pub(crate) entered: Notify,
     pub(crate) records: Mutex<Vec<AttachmentAuditRecord>>,
     pub(crate) refusing: AtomicBool,
     pub(crate) stalled: AtomicBool,
@@ -97,14 +110,49 @@ pub(crate) struct RecordingAudit {
     pub(crate) recorded: Notify,
 }
 impl RecordingAudit {
-    pub(crate) fn taken(&self) -> Vec<AttachmentAuditRecord> {
+    /// Hold the record of the given attempt (counting every attempt so far
+    /// and from zero) until the returned sender fires or drops.
+    pub(crate) fn hold_attempt(&self, attempt: usize, then_refuse: bool) -> oneshot::Sender<()> {
+        let (release, open) = oneshot::channel();
+        *self.gate.lock().unwrap() = Some(AuditGate {
+            attempt,
+            open,
+            then_refuse,
+        });
+        release
+    }
+    /// Hold the record `skip` records after the next one.
+    pub(crate) fn hold_after(&self, skip: usize, then_refuse: bool) -> oneshot::Sender<()> {
+        self.hold_attempt(self.attempts.load(Ordering::SeqCst) + skip, then_refuse)
+    }
+    /// Every record so far, in order, emptying the list.
+    pub(crate) fn taken_all(&self) -> Vec<AttachmentAuditRecord> {
         std::mem::take(&mut self.records.lock().unwrap())
+    }
+    /// The same without `TicketIssued`, which every begin leaves and which
+    /// would otherwise lead every list a test about something else reads.
+    /// Issuance has tests of its own, which read [`Self::taken_all`].
+    pub(crate) fn taken(&self) -> Vec<AttachmentAuditRecord> {
+        let mut records = self.taken_all();
+        records.retain(|record| !matches!(record, AttachmentAuditRecord::TicketIssued { .. }));
+        records
     }
 }
 impl AttachmentAudit for RecordingAudit {
     fn record(&self, record: AttachmentAuditRecord) -> PortFuture<'_, (), AuditUnavailable> {
         Box::pin(async move {
-            self.attempts.fetch_add(1, Ordering::SeqCst);
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst);
+            let gate = {
+                let mut gate = self.gate.lock().unwrap();
+                gate.take_if(|gate| gate.attempt == attempt)
+            };
+            if let Some(gate) = gate {
+                self.entered.notify_one();
+                let _ = gate.open.await;
+                if gate.then_refuse {
+                    return Err(AuditUnavailable);
+                }
+            }
             if self.stalled.load(Ordering::SeqCst) {
                 std::future::pending::<()>().await;
             }
@@ -213,8 +261,8 @@ impl ImageNormalizer for StubNormalizer {
 
 /// A body fed by the test: send chunks, send an interruption, drop the sender
 /// to finish, or hold it to stall.
-pub(crate) struct ChannelBody(mpsc::UnboundedReceiver<Result<Vec<u8>, BodyInterrupted>>);
-pub(crate) type BodySender = mpsc::UnboundedSender<Result<Vec<u8>, BodyInterrupted>>;
+pub(crate) struct ChannelBody(mpsc::UnboundedReceiver<Result<Vec<u8>, UploadInterrupted>>);
+pub(crate) type BodySender = mpsc::UnboundedSender<Result<Vec<u8>, UploadInterrupted>>;
 impl ChannelBody {
     pub(crate) fn open() -> (BodySender, Box<dyn UploadBody>) {
         let (sender, receiver) = mpsc::unbounded_channel();
@@ -230,7 +278,7 @@ impl ChannelBody {
     }
 }
 impl UploadBody for ChannelBody {
-    fn next(&mut self) -> PortFuture<'_, Option<Vec<u8>>, BodyInterrupted> {
+    fn next(&mut self) -> PortFuture<'_, Option<Vec<u8>>, UploadInterrupted> {
         Box::pin(async move { self.0.recv().await.transpose() })
     }
 }
@@ -241,16 +289,23 @@ pub(crate) struct MemoryStore {
     state: Arc<Mutex<MemoryState>>,
     pub(crate) unavailable: AtomicBool,
     pub(crate) keep_fails: Arc<AtomicBool>,
-    pub(crate) revert_fails: AtomicBool,
+    pub(crate) confirm_fails: AtomicBool,
+    pub(crate) discard_fails: AtomicBool,
     /// Transfers staged and not yet kept or dropped.
     pub(crate) staged: Arc<AtomicUsize>,
     /// Bytes written to staged transfers, ever.
     pub(crate) written: Arc<AtomicU64>,
 }
+struct MemoryRecord {
+    hold: Hold,
+    kept: bool,
+    generation: String,
+}
 #[derive(Default)]
 struct MemoryState {
     blobs: HashMap<Sha256Digest, Vec<u8>>,
-    holds: Vec<Hold>,
+    records: Vec<MemoryRecord>,
+    generations: u64,
     /// Stored digests whose hold cannot be released.
     stuck: Vec<Sha256Digest>,
 }
@@ -261,8 +316,16 @@ impl MemoryStore {
     pub(crate) fn blob_count(&self) -> usize {
         self.state.lock().unwrap().blobs.len()
     }
+    /// Usable holds only, as everything that asks the store sees them.
     pub(crate) fn held(&self) -> Vec<Hold> {
-        self.state.lock().unwrap().holds.clone()
+        let state = self.state.lock().unwrap();
+        let kept = state.records.iter().filter(|record| record.kept);
+        kept.map(|record| record.hold.clone()).collect()
+    }
+    /// Holds written and not yet usable.
+    pub(crate) fn pending(&self) -> usize {
+        let state = self.state.lock().unwrap();
+        state.records.iter().filter(|record| !record.kept).count()
     }
     pub(crate) fn stick(&self, stored: Sha256Digest) {
         self.state.lock().unwrap().stuck.push(stored);
@@ -276,25 +339,22 @@ impl MemoryStore {
     }
 }
 impl MemoryState {
+    /// A hold is one conversation keeping one stored file: digest and type.
     fn position(&self, hold: &Hold) -> Option<usize> {
-        self.holds.iter().position(|known| {
-            known.organization_id() == hold.organization_id()
-                && known.conversation_id() == hold.conversation_id()
-                && known.stored().digest() == hold.stored().digest()
+        self.records.iter().position(|known| {
+            known.hold.keeps(
+                hold.organization_id(),
+                hold.conversation_id(),
+                hold.stored(),
+            )
         })
     }
-    fn remove_unheld(&mut self, digest: Sha256Digest) -> BlobOutcome {
-        if self
-            .holds
+    fn remove_unheld(&mut self, digest: Sha256Digest) -> bool {
+        let held = self
+            .records
             .iter()
-            .any(|hold| hold.stored().digest() == digest)
-        {
-            BlobOutcome::StillHeld
-        } else if self.blobs.remove(&digest).is_some() {
-            BlobOutcome::Removed
-        } else {
-            BlobOutcome::Missing
-        }
+            .any(|record| record.hold.stored().digest() == digest);
+        !held && self.blobs.remove(&digest).is_some()
     }
 }
 impl AttachmentStore for MemoryStore {
@@ -307,8 +367,9 @@ impl AttachmentStore for MemoryStore {
         Box::pin(async move {
             self.check()?;
             let state = self.state.lock().unwrap();
-            Ok(state.holds.iter().any(|hold| {
-                hold.keeps(organization_id, conversation_id, stored)
+            Ok(state.records.iter().any(|record| {
+                record.kept
+                    && record.hold.keeps(organization_id, conversation_id, stored)
                     && state.blobs.contains_key(&stored.digest())
             }))
         })
@@ -323,13 +384,16 @@ impl AttachmentStore for MemoryStore {
             self.check()?;
             let state = self.state.lock().unwrap();
             Ok(state
-                .holds
+                .records
                 .iter()
-                .find(|hold| {
-                    hold.came_from(organization_id, conversation_id, uploaded)
-                        && state.blobs.contains_key(&hold.stored().digest())
+                .find(|record| {
+                    record.kept
+                        && record
+                            .hold
+                            .came_from(organization_id, conversation_id, uploaded)
+                        && state.blobs.contains_key(&record.hold.stored().digest())
                 })
-                .cloned())
+                .map(|record| record.hold.clone()))
         })
     }
     fn stage(&self) -> PortFuture<'_, Box<dyn StagedUpload>, StoreUnavailable> {
@@ -346,22 +410,53 @@ impl AttachmentStore for MemoryStore {
             }) as Box<dyn StagedUpload>)
         })
     }
-    fn revert(&self, hold: Hold, change: HoldChange) -> PortFuture<'_, (), StoreUnavailable> {
+    fn confirm<'a>(
+        &'a self,
+        hold: &'a Hold,
+        claim: &'a HoldClaim,
+    ) -> PortFuture<'a, Confirmation, StoreUnavailable> {
         Box::pin(async move {
-            if self.revert_fails.load(Ordering::SeqCst) {
+            if self.confirm_fails.load(Ordering::SeqCst) {
                 return Err(StoreUnavailable);
             }
             let mut state = self.state.lock().unwrap();
-            if let Some(index) = state.position(&hold) {
-                state.holds.remove(index);
+            let Some(index) = state.position(hold) else {
+                return Ok(Confirmation::Gone);
+            };
+            let record = &mut state.records[index];
+            if record.kept {
+                return Ok(if record.generation == claim.as_str() {
+                    Confirmation::Confirmed
+                } else {
+                    Confirmation::AlreadyKept
+                });
             }
-            match change.previous {
-                Some(previous) => state.holds.push(previous),
-                None => {
-                    let _ = state.remove_unheld(hold.stored().digest());
+            *record = MemoryRecord {
+                hold: hold.clone(),
+                kept: true,
+                generation: claim.as_str().to_owned(),
+            };
+            Ok(Confirmation::Confirmed)
+        })
+    }
+    fn discard<'a>(
+        &'a self,
+        hold: &'a Hold,
+        claim: &'a HoldClaim,
+    ) -> PortFuture<'a, Discard, StoreUnavailable> {
+        Box::pin(async move {
+            if self.discard_fails.load(Ordering::SeqCst) {
+                return Err(StoreUnavailable);
+            }
+            let mut state = self.state.lock().unwrap();
+            match state.position(hold) {
+                Some(index) if state.records[index].generation == claim.as_str() => {
+                    state.records.remove(index);
+                    state.remove_unheld(hold.stored().digest());
+                    Ok(Discard::Discarded)
                 }
+                _ => Ok(Discard::NotMine),
             }
-            Ok(())
         })
     }
     fn release<'a>(
@@ -373,25 +468,38 @@ impl AttachmentStore for MemoryStore {
             self.check()?;
             let mut state = self.state.lock().unwrap();
             let mut report = ReleaseReport::default();
-            let (mine, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut state.holds)
+            let (mine, others): (Vec<_>, Vec<_>) = std::mem::take(&mut state.records)
                 .into_iter()
-                .partition(|hold| {
-                    hold.organization_id() == organization_id
-                        && hold.conversation_id() == conversation_id
+                .partition(|record| {
+                    record.hold.organization_id() == organization_id
+                        && record.hold.conversation_id() == conversation_id
                 });
-            state.holds = kept;
-            let mut removed = Vec::new();
-            for hold in mine {
-                if state.stuck.contains(&hold.stored().digest()) {
+            state.records = others;
+            for record in mine {
+                if state.stuck.contains(&record.hold.stored().digest()) {
                     report.failures += 1;
-                    state.holds.push(hold);
+                    state.records.push(record);
                 } else {
-                    removed.push(hold);
+                    report.released.push(ReleasedHold {
+                        hold: record.hold,
+                        was: if record.kept {
+                            HoldState::Held
+                        } else {
+                            HoldState::Pending
+                        },
+                    });
                 }
             }
-            for hold in removed {
-                let blob = state.remove_unheld(hold.stored().digest());
-                report.released.push(ReleasedHold { hold, blob });
+            let mut considered = Vec::new();
+            for released in &report.released {
+                let digest = released.hold.stored().digest();
+                if considered.contains(&digest) {
+                    continue;
+                }
+                considered.push(digest);
+                if state.remove_unheld(digest) {
+                    report.removed.push(released.hold.clone());
+                }
             }
             Ok(report)
         })
@@ -444,7 +552,7 @@ impl StagedUpload for MemoryStaged {
     fn read(&mut self) -> PortFuture<'_, Vec<u8>, StoreUnavailable> {
         Box::pin(async move { Ok(self.bytes.clone()) })
     }
-    fn keep(self: Box<Self>, hold: Hold) -> PortFuture<'static, HoldChange, StoreUnavailable> {
+    fn keep(self: Box<Self>, hold: Hold) -> PortFuture<'static, Kept, StoreUnavailable> {
         Box::pin(async move {
             if self.keep_fails.load(Ordering::SeqCst)
                 || !self.finished
@@ -454,13 +562,25 @@ impl StagedUpload for MemoryStaged {
                 return Err(StoreUnavailable);
             }
             let mut state = self.state.lock().unwrap();
-            let previous = state.position(&hold).map(|index| state.holds.remove(index));
             state
                 .blobs
                 .entry(hold.stored().digest())
                 .or_insert_with(|| self.bytes.clone());
-            state.holds.push(hold);
-            Ok(HoldChange { previous })
+            let existing = state.position(&hold);
+            if let Some(index) = existing.filter(|index| state.records[*index].kept) {
+                return Ok(Kept::Existing(state.records[index].hold.clone()));
+            }
+            if let Some(index) = existing {
+                state.records.remove(index);
+            }
+            state.generations += 1;
+            let generation = format!("generation-{}", state.generations);
+            state.records.push(MemoryRecord {
+                hold,
+                kept: false,
+                generation: generation.clone(),
+            });
+            Ok(Kept::Pending(HoldClaim::new(&generation)))
         })
     }
 }
@@ -527,12 +647,22 @@ impl Fixture {
         bytes: &[u8],
         media_type: &str,
     ) -> String {
+        self.ticket_as("begin-1", conversation_id, bytes, media_type)
+            .await
+    }
+    /// The same, under a chosen action identifier: a different request.
+    pub(crate) async fn ticket_as(
+        &self,
+        request_id: &str,
+        conversation_id: &str,
+        bytes: &[u8],
+        media_type: &str,
+    ) -> String {
+        let mut request = begin_request(conversation_id, bytes, media_type);
+        request.request_id = request_id.into();
         match self
             .service
-            .begin(
-                caller("org", "owner"),
-                begin_request(conversation_id, bytes, media_type),
-            )
+            .begin(caller("org", "owner"), request)
             .await
             .unwrap()
         {

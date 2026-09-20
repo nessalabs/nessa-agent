@@ -10,7 +10,7 @@
 use crate::attachments::{
     application::{
         AttachmentAudit, AttachmentAuditRecord, AuditUnavailable, PortFuture, ReleaseCause,
-        ReleaseEvidence, UploadRejection,
+        ReleaseEvidence, RevertCause, UploadRejection,
     },
     domain::{Attachment, Caller, Hold, HoldState, UploadTicket},
 };
@@ -63,17 +63,22 @@ impl AttachmentAudit for DurableAttachmentAudit {
 fn hold_state(state: HoldState) -> &'static str {
     match state {
         HoldState::Absent => "absent",
+        HoldState::Pending => "pending",
         HoldState::Held => "held",
     }
 }
 
+/// The upload route's own words, so one refusal has one name everywhere.
+/// `normalization_failed` is finer than the route, which answers it as
+/// `storage_unavailable`.
 fn rejection(reason: UploadRejection) -> &'static str {
     match reason {
         UploadRejection::SizeMismatch => "size_mismatch",
         UploadRejection::DigestMismatch => "digest_mismatch",
-        UploadRejection::BodyInterrupted => "body_interrupted",
-        UploadRejection::DeadlineElapsed => "deadline_elapsed",
+        UploadRejection::UploadInterrupted => "upload_interrupted",
+        UploadRejection::UploadTimeout => "upload_timeout",
         UploadRejection::StorageUnavailable => "storage_unavailable",
+        UploadRejection::ImageInputUnsupported => "image_input_unsupported",
         UploadRejection::UnsupportedImage => "unsupported_image",
         UploadRejection::ImageTooLarge => "image_too_large",
         UploadRejection::NormalizationFailed => "normalization_failed",
@@ -83,6 +88,14 @@ fn rejection(reason: UploadRejection) -> &'static str {
 fn release_cause(cause: ReleaseCause) -> &'static str {
     match cause {
         ReleaseCause::ConversationClosed => "conversation_closed",
+    }
+}
+
+fn revert_cause(cause: RevertCause) -> &'static str {
+    match cause {
+        RevertCause::AuditUnconfirmed => "audit_unconfirmed",
+        RevertCause::ConfirmationFailed => "confirmation_failed",
+        RevertCause::RemovedBeforeUsable => "removed_before_usable",
     }
 }
 
@@ -121,6 +134,26 @@ fn ticket_target(ticket: &UploadTicket) -> Value {
     })
 }
 
+/// A transition of a ticket that its own caller caused.
+fn by_ticket_caller(
+    kind: &str,
+    ticket: &UploadTicket,
+    before: &str,
+    after: &str,
+    cause: &str,
+) -> Value {
+    json!({
+        "kind": kind,
+        "target": ticket_target(ticket),
+        "transition": {"before": before, "after": after},
+        "cause": cause,
+        "initiator": caller(ticket.caller()),
+        "correlationId": ticket.caller().action_id(),
+        "requestedAtMs": ticket.lifetime().issued_at_ms(),
+        "expiresAtMs": ticket.lifetime().expires_at_ms(),
+    })
+}
+
 fn released(
     kind: &str,
     before: &str,
@@ -142,25 +175,27 @@ fn released(
 /// Everything except the record's identity and observation time.
 pub(super) fn record_value(record: &AttachmentAuditRecord) -> Value {
     match record {
-        AttachmentAuditRecord::HoldCreated { hold, before } => json!({
-            "kind": "attachment_hold_created",
-            "target": hold_target(hold),
-            "transition": {"before": hold_state(*before), "after": hold_state(HoldState::Held)},
-            "cause": "uploaded",
-            "initiator": caller(hold.uploaded_by()),
-            "correlationId": hold.uploaded_by().action_id(),
-            "requestedAtMs": hold.ticket_issued_at_ms(),
-            "uploadedAtMs": hold.uploaded_at_ms(),
-        }),
-        AttachmentAuditRecord::UploadRejected { ticket, reason } => json!({
-            "kind": "attachment_upload_rejected",
-            "target": ticket_target(ticket),
-            "transition": {"before": "ticket_outstanding", "after": "ticket_used_without_hold"},
-            "cause": rejection(*reason),
-            "initiator": caller(ticket.caller()),
-            "correlationId": ticket.caller().action_id(),
-            "requestedAtMs": ticket.lifetime().issued_at_ms(),
-        }),
+        AttachmentAuditRecord::TicketIssued { ticket } => by_ticket_caller(
+            "attachment_ticket_issued",
+            ticket,
+            "absent",
+            "ticket_outstanding",
+            "upload_requested",
+        ),
+        AttachmentAuditRecord::TicketReplaced { ticket } => by_ticket_caller(
+            "attachment_ticket_replaced",
+            ticket,
+            "ticket_outstanding",
+            "ticket_replaced",
+            "upload_requested_again",
+        ),
+        AttachmentAuditRecord::UploadRejected { ticket, reason } => by_ticket_caller(
+            "attachment_upload_rejected",
+            ticket,
+            "ticket_outstanding",
+            "ticket_used_without_hold",
+            rejection(*reason),
+        ),
         // Nobody expires a ticket. The caller it was issued to is part of what
         // expired, not the initiator of its expiry.
         AttachmentAuditRecord::TicketExpired { ticket } => json!({
@@ -172,12 +207,12 @@ pub(super) fn record_value(record: &AttachmentAuditRecord) -> Value {
             "issuedTo": caller(ticket.caller()),
             "correlationId": ticket.caller().action_id(),
             "requestedAtMs": ticket.lifetime().issued_at_ms(),
-            "expiredAtMs": ticket.lifetime().expires_at_ms(),
+            "expiresAtMs": ticket.lifetime().expires_at_ms(),
         }),
-        AttachmentAuditRecord::TicketVoided { ticket, release } => json!({
-            "kind": "attachment_ticket_voided",
+        AttachmentAuditRecord::TicketWithdrawn { ticket, release } => json!({
+            "kind": "attachment_ticket_withdrawn",
             "target": ticket_target(ticket),
-            "transition": {"before": "ticket_outstanding", "after": "ticket_voided"},
+            "transition": {"before": "ticket_outstanding", "after": "ticket_withdrawn"},
             "cause": release_cause(release.cause),
             "initiator": caller(&release.caller),
             "issuedTo": caller(ticket.caller()),
@@ -185,9 +220,58 @@ pub(super) fn record_value(record: &AttachmentAuditRecord) -> Value {
             "ticketCorrelationId": ticket.caller().action_id(),
             "requestedAtMs": release.requested_at_ms,
         }),
-        AttachmentAuditRecord::HoldReleased { hold, release } => released(
+        // Recorded while the hold is pending: it becomes usable only once this
+        // record is committed, and a hold that then does not last is followed
+        // by `attachment_hold_reverted` or `attachment_hold_released`.
+        AttachmentAuditRecord::HoldCreated { hold } => json!({
+            "kind": "attachment_hold_created",
+            "target": hold_target(hold),
+            "transition": {
+                "before": hold_state(HoldState::Absent),
+                "after": hold_state(HoldState::Held),
+            },
+            "cause": "uploaded",
+            "initiator": caller(hold.uploaded_by()),
+            "correlationId": hold.uploaded_by().action_id(),
+            "requestedAtMs": hold.ticket_issued_at_ms(),
+            "uploadedAtMs": hold.uploaded_at_ms(),
+        }),
+        // The ticket was used; the hold is the one already there, unchanged.
+        AttachmentAuditRecord::AlreadyHeld { ticket, hold } => json!({
+            "kind": "attachment_already_held",
+            "target": {
+                "organizationId": hold.organization_id().as_str(),
+                "conversationId": hold.conversation_id().to_string(),
+                "uploaded": file(ticket.attachment()),
+                "stored": file(hold.stored()),
+            },
+            "transition": {
+                "before": hold_state(HoldState::Held),
+                "after": hold_state(HoldState::Held),
+            },
+            "cause": "uploaded",
+            "initiator": caller(ticket.caller()),
+            "correlationId": ticket.caller().action_id(),
+            "requestedAtMs": ticket.lifetime().issued_at_ms(),
+            "heldSinceMs": hold.uploaded_at_ms(),
+        }),
+        // Nobody asked for this: the upload's own bookkeeping took it back.
+        AttachmentAuditRecord::HoldReverted { hold, cause } => json!({
+            "kind": "attachment_hold_reverted",
+            "target": hold_target(hold),
+            "transition": {
+                "before": hold_state(HoldState::Pending),
+                "after": hold_state(HoldState::Absent),
+            },
+            "cause": revert_cause(*cause),
+            "initiator": {"kind": "automatic"},
+            "uploadedBy": caller(hold.uploaded_by()),
+            "correlationId": hold.uploaded_by().action_id(),
+            "requestedAtMs": hold.ticket_issued_at_ms(),
+        }),
+        AttachmentAuditRecord::HoldReleased { hold, was, release } => released(
             "attachment_hold_released",
-            hold_state(HoldState::Held),
+            hold_state(*was),
             release_cause(release.cause),
             hold,
             release,

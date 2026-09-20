@@ -1,9 +1,12 @@
 //! The upload route called directly: who may ask, what a ticket buys, and the
 //! exact words of every answer.
 use super::*;
-use crate::attachments::application::{AttachmentLimits, NormalizeError};
+use crate::attachments::application::{
+    AttachmentLimits, NormalizeError, ReleaseCause, ReleaseRequest,
+};
 use crate::attachments_test_support::{
-    digest_of, Fixture, StubNormalizer, CONVERSATION, OTHER_CONVERSATION,
+    conversation, digest_of, organization, principal, Fixture, StubNormalizer, CONVERSATION,
+    OTHER_CONVERSATION,
 };
 use axum::body::to_bytes;
 use futures_util::stream;
@@ -63,6 +66,8 @@ async fn preflight_lets_the_shell_and_the_dev_server_send_a_ticket_and_nobody_el
         assert!(!response
             .headers()
             .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
+        // A refusal of an origin varies by origin like every other answer.
+        assert_eq!(response.headers()[header::VARY], "origin");
     }
     // Not a page: nothing to allow, nothing to refuse.
     let response = handle_preflight(headers(None, &[])).await;
@@ -139,6 +144,7 @@ async fn a_page_this_server_does_not_trust_cannot_spend_a_ticket() {
     assert!(!response
         .headers()
         .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
+    assert_eq!(response.headers()[header::VARY], "origin");
     // Refused before the ticket was looked at, so it still works.
     let response = handle_upload(
         route(&fixture),
@@ -172,6 +178,7 @@ async fn a_missing_malformed_repeated_or_spent_ticket_is_one_answer() {
             response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
             "tauri://localhost"
         );
+        assert_eq!(response.headers()[header::VARY], "origin");
         assert_eq!(
             answer(response).await,
             (
@@ -317,10 +324,18 @@ async fn every_refusal_has_its_status_and_code() {
             request.insert(header::CONTENT_LENGTH, HeaderValue::from(declared));
         }
         let response = handle_upload(route(&fixture), request, Body::from(sent)).await;
+        assert_eq!(response.headers()[header::VARY], "origin");
         assert_eq!(answer(response).await, (status, body));
         assert!(fixture.store.held().is_empty());
     }
     for (error, status, code) in [
+        // The words `conversation.send` uses for the same fact: this model is
+        // offered no images. Nothing is wrong with the image.
+        (
+            NormalizeError::NotOffered,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "image_input_unsupported",
+        ),
         (
             NormalizeError::Unsupported,
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -387,6 +402,40 @@ async fn a_body_that_breaks_off_and_a_gateway_with_no_agent_each_say_so() {
         (
             StatusCode::SERVICE_UNAVAILABLE,
             serde_json::json!({"code": "storage_unavailable"})
+        )
+    );
+}
+
+#[tokio::test]
+async fn an_upload_whose_conversation_let_go_meanwhile_is_told_it_was_not_kept() {
+    let fixture = fixture();
+    let ticket = fixture.ticket(CONVERSATION, BYTES, PDF).await;
+    // The creation record waits at the sink while the conversation closes.
+    let open = fixture.audit.hold_after(0, false);
+    let entered = fixture.audit.entered.notified();
+    let state = route(&fixture);
+    let upload = tokio::spawn(async move {
+        handle_upload(state, headers(None, &[&ticket]), Body::from(BYTES)).await
+    });
+    entered.await;
+    fixture
+        .service
+        .release(ReleaseRequest {
+            organization_id: organization("org"),
+            conversation_id: conversation(CONVERSATION),
+            cause: ReleaseCause::ConversationClosed,
+            principal_id: principal("owner"),
+            surface_id: "panel".into(),
+            correlation_id: "close-1".into(),
+        })
+        .await
+        .unwrap();
+    open.send(()).unwrap();
+    assert_eq!(
+        answer(upload.await.unwrap()).await,
+        (
+            StatusCode::CONFLICT,
+            serde_json::json!({"code": "attachment_not_kept"})
         )
     );
 }

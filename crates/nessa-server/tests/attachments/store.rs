@@ -1,6 +1,7 @@
 //! The real store on a real filesystem: privacy, hostile names, restart, and
 //! uploads racing a release of the same bytes.
 use super::*;
+use crate::attachments::application::AttachmentStore;
 use crate::attachments::domain::{Caller, MediaType, TicketLifetime, UploadTicket};
 use crate::attachments_test_support::{
     attachment, conversation, digest_of, organization, principal, CONVERSATION, OTHER_CONVERSATION,
@@ -24,8 +25,8 @@ fn hold_for(organization_id: &str, conversation_id: &str, uploaded: &[u8], store
     );
     Hold::from_upload(&ticket, attachment(stored, media_type), 2_000).unwrap()
 }
-/// Stage `stored` in two writes and keep it under `hold`.
-async fn keep(store: &LocalAttachmentStore, hold: &Hold, stored: &[u8]) -> HoldChange {
+/// Stage `stored` in two writes and keep it under `hold`: written, not yet usable.
+async fn keep(store: &LocalAttachmentStore, hold: &Hold, stored: &[u8]) -> Kept {
     let mut staged = store.stage().await.unwrap();
     let (first, second) = stored.split_at(stored.len() / 2);
     staged.write(first.to_vec()).await.unwrap();
@@ -36,9 +37,23 @@ async fn keep(store: &LocalAttachmentStore, hold: &Hold, stored: &[u8]) -> HoldC
     assert_eq!(staged.read().await.unwrap(), stored);
     staged.keep(hold.clone()).await.unwrap()
 }
+async fn claim(store: &LocalAttachmentStore, hold: &Hold, stored: &[u8]) -> HoldClaim {
+    match keep(store, hold, stored).await {
+        Kept::Pending(claim) => claim,
+        Kept::Existing(existing) => panic!("already kept: {existing:?}"),
+    }
+}
+/// Keep and confirm, as an upload whose evidence was committed does.
+async fn keep_usable(store: &LocalAttachmentStore, hold: &Hold, stored: &[u8]) {
+    let claim = claim(store, hold, stored).await;
+    assert_eq!(
+        store.confirm(hold, &claim).await,
+        Ok(Confirmation::Confirmed)
+    );
+}
 async fn upload(store: &LocalAttachmentStore, conversation_id: &str, bytes: &[u8]) -> Hold {
     let hold = hold_for("org", conversation_id, bytes, bytes);
-    keep(store, &hold, bytes).await;
+    keep_usable(store, &hold, bytes).await;
     hold
 }
 async fn holds(store: &LocalAttachmentStore, hold: &Hold) -> bool {
@@ -69,14 +84,13 @@ async fn a_kept_upload_is_held_found_and_read_and_survives_a_restart() {
     let root = tempfile::tempdir().unwrap();
     let store = open(root.path());
     let hold = hold_for("org", CONVERSATION, b"what was sent", b"what is kept");
+    keep_usable(&store, &hold, b"what is kept").await;
+    // A usable hold is never replaced: keeping the same file again, even as
+    // the result of some other upload, finds the hold as it stands.
+    let another = hold_for("org", CONVERSATION, b"another original", b"what is kept");
     assert_eq!(
-        keep(&store, &hold, b"what is kept").await,
-        HoldChange { previous: None }
-    );
-    // Keeping it again replaces the hold and says what it replaced.
-    assert_eq!(
-        keep(&store, &hold, b"what is kept").await.previous,
-        Some(hold.clone())
+        keep(&store, &another, b"what is kept").await,
+        Kept::Existing(hold.clone())
     );
     drop(store);
 
@@ -201,7 +215,7 @@ async fn names_from_outside_never_leave_the_root() {
     let store = open(root.path());
     for organization_id in ["../../escape", "/etc", "a/b", "..", "org\\evil", "Ω"] {
         let hold = hold_for(organization_id, CONVERSATION, b"bytes", b"bytes");
-        keep(&store, &hold, b"bytes").await;
+        keep_usable(&store, &hold, b"bytes").await;
         assert!(holds(&store, &hold).await);
     }
     let outside: Vec<_> = fs::read_dir(root.path())
@@ -222,7 +236,10 @@ async fn names_from_outside_never_leave_the_root() {
         assert_eq!(names.len(), 3);
         assert!(names[0].len() == 64 && names[0].bytes().all(|b| b.is_ascii_hexdigit()));
         assert_eq!(names[1], CONVERSATION);
-        assert_eq!(names[2], format!("{}.json", digest_of(b"bytes").to_hex()));
+        // The stored digest, a tag for the media type, and nothing from outside.
+        assert_eq!(names[2].len(), 64 + 1 + 16 + 5);
+        assert!(names[2].starts_with(&format!("{}-", digest_of(b"bytes").to_hex())));
+        assert!(names[2].ends_with(".json"));
     }
     assert_eq!(
         files_beneath(&root.path().join("attachments/blobs")).len(),
@@ -372,7 +389,7 @@ async fn release_lets_go_of_one_conversation_and_bytes_go_with_their_last_hold()
     let second = upload(&store, OTHER_CONVERSATION, b"shared").await;
     let alone = upload(&store, OTHER_CONVERSATION, b"alone").await;
     let foreign = hold_for("other-org", OTHER_CONVERSATION, b"alone2", b"alone2");
-    keep(&store, &foreign, b"alone2").await;
+    keep_usable(&store, &foreign, b"alone2").await;
     assert_eq!(
         files_beneath(&root.path().join("attachments/blobs")).len(),
         3
@@ -391,13 +408,15 @@ async fn release_lets_go_of_one_conversation_and_bytes_go_with_their_last_hold()
             released: vec![
                 ReleasedHold {
                     hold: alone.clone(),
-                    blob: BlobOutcome::Removed
+                    was: HoldState::Held
                 },
                 ReleasedHold {
                     hold: second.clone(),
-                    blob: BlobOutcome::StillHeld
+                    was: HoldState::Held
                 },
             ],
+            // `shared` is still held by the other conversation.
+            removed: vec![alone.clone()],
             failures: 0,
         }
     );
@@ -412,7 +431,7 @@ async fn release_lets_go_of_one_conversation_and_bytes_go_with_their_last_hold()
         .release(&organization("org"), &conversation(CONVERSATION))
         .await
         .unwrap();
-    assert_eq!(report.released[0].blob, BlobOutcome::Removed);
+    assert_eq!(report.removed, std::slice::from_ref(&first));
     assert!(store
         .read(digest_of(b"shared"), 16)
         .await
@@ -440,8 +459,9 @@ async fn a_record_that_cannot_be_read_is_reported_kept_and_never_costs_the_other
     let damaged = upload(&store, CONVERSATION, b"damaged").await;
     // Valid JSON, valid values, but it claims to be another conversation's hold.
     let claimed = hold_for("org", OTHER_CONVERSATION, b"damaged", b"damaged");
-    let record = root.path().join("attachments").join(hold_path(&damaged));
-    fs::write(&record, encode(&claimed)).unwrap();
+    let record = root.path().join("attachments").join(path_of(&damaged));
+    let forged = encode(&claimed, RecordState::Kept, "forged");
+    fs::write(&record, &forged).unwrap();
     assert_eq!(
         store
             .holds(
@@ -470,9 +490,9 @@ async fn a_record_that_cannot_be_read_is_reported_kept_and_never_costs_the_other
     assert_eq!(report.failures, 1);
     assert_eq!(report.released.len(), 1);
     assert_eq!(report.released[0].hold, good);
-    assert_eq!(report.released[0].blob, BlobOutcome::Removed);
+    assert_eq!(report.removed, std::slice::from_ref(&good));
     // The unreadable record is exactly as it was, and its bytes are still protected.
-    assert_eq!(fs::read(&record).unwrap(), encode(&claimed));
+    assert_eq!(fs::read(&record).unwrap(), forged);
     assert_eq!(
         store
             .read(digest_of(b"damaged"), 16)
@@ -495,50 +515,229 @@ async fn a_record_that_cannot_be_read_is_reported_kept_and_never_costs_the_other
 }
 
 #[tokio::test]
-async fn taking_a_hold_back_restores_exactly_what_it_replaced() {
+async fn a_pending_hold_is_invisible_protects_its_bytes_and_answers_only_to_its_own_claim() {
     let root = tempfile::tempdir().unwrap();
     let store = open(root.path());
-    // Nothing before: the hold and its bytes both go.
     let hold = hold_for("org", CONVERSATION, b"bytes", b"bytes");
-    let change = keep(&store, &hold, b"bytes").await;
-    store.revert(hold.clone(), change).await.unwrap();
+    let claimed = claim(&store, &hold, b"bytes").await;
+    // Written, but nothing that asks what the conversation holds can see it.
     assert!(!holds(&store, &hold).await);
-    assert!(store.read(digest_of(b"bytes"), 16).await.unwrap().is_none());
-
-    // Bytes someone else holds stay.
-    let other = upload(&store, OTHER_CONVERSATION, b"bytes").await;
-    let change = keep(&store, &hold, b"bytes").await;
-    store.revert(hold.clone(), change).await.unwrap();
-    assert!(!holds(&store, &hold).await);
-    assert!(holds(&store, &other).await);
-
-    // A hold that replaced another puts the other back.
-    let earlier = hold_for("org", CONVERSATION, b"first upload", b"same result");
-    let later = hold_for("org", CONVERSATION, b"second upload", b"same result");
-    keep(&store, &earlier, b"same result").await;
-    let change = keep(&store, &later, b"same result").await;
-    assert_eq!(change.previous, Some(earlier.clone()));
-    store.revert(later.clone(), change).await.unwrap();
-    assert_eq!(
-        store
-            .find_upload(
-                earlier.organization_id(),
-                earlier.conversation_id(),
-                earlier.uploaded()
-            )
-            .await
-            .unwrap(),
-        Some(earlier)
-    );
     assert!(store
         .find_upload(
-            later.organization_id(),
-            later.conversation_id(),
-            later.uploaded()
+            hold.organization_id(),
+            hold.conversation_id(),
+            hold.uploaded()
         )
         .await
         .unwrap()
         .is_none());
+    // Its bytes are protected all the same: another conversation letting go
+    // of the same bytes does not take them.
+    let other = upload(&store, OTHER_CONVERSATION, b"bytes").await;
+    let report = store
+        .release(other.organization_id(), other.conversation_id())
+        .await
+        .unwrap();
+    assert!(report.removed.is_empty());
+    assert_eq!(
+        store.read(digest_of(b"bytes"), 16).await.unwrap().unwrap(),
+        b"bytes"
+    );
+
+    // A claim nobody was given changes nothing.
+    let stranger = HoldClaim::new("not-the-generation");
+    assert_eq!(store.discard(&hold, &stranger).await, Ok(Discard::NotMine));
+    // Its own claim takes it back, bytes and all, once.
+    assert_eq!(store.discard(&hold, &claimed).await, Ok(Discard::Discarded));
+    assert_eq!(store.discard(&hold, &claimed).await, Ok(Discard::NotMine));
+    assert_eq!(store.confirm(&hold, &claimed).await, Ok(Confirmation::Gone));
+    assert!(store.read(digest_of(b"bytes"), 16).await.unwrap().is_none());
+    assert!(files_beneath(&root.path().join("attachments/holds")).is_empty());
+}
+
+#[tokio::test]
+async fn taking_a_hold_back_undoes_that_upload_and_never_a_later_one_of_the_same_file() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open(root.path());
+    let first = hold_for("org", CONVERSATION, b"first original", b"same result");
+    let second = hold_for("org", CONVERSATION, b"second original", b"same result");
+
+    // The later upload is recorded and confirmed while the earlier still waits.
+    let earlier = claim(&store, &first, b"same result").await;
+    let later = claim(&store, &second, b"same result").await;
+    assert_eq!(
+        store.confirm(&second, &later).await,
+        Ok(Confirmation::Confirmed)
+    );
+    // The earlier one's evidence failed. Taking it back touches nothing.
+    assert_eq!(store.discard(&first, &earlier).await, Ok(Discard::NotMine));
+    assert!(holds(&store, &second).await);
+    assert_eq!(
+        store
+            .find_upload(
+                second.organization_id(),
+                second.conversation_id(),
+                second.uploaded()
+            )
+            .await
+            .unwrap(),
+        Some(second.clone())
+    );
+    // Had its evidence been committed instead, it would find the file kept.
+    assert_eq!(
+        store.confirm(&first, &earlier).await,
+        Ok(Confirmation::AlreadyKept)
+    );
+    store
+        .release(&organization("org"), &conversation(CONVERSATION))
+        .await
+        .unwrap();
+
+    // The other order: the earlier upload's evidence lands first, so it takes
+    // the hold over; the later one's failure then has nothing to undo.
+    let earlier = claim(&store, &first, b"same result").await;
+    let later = claim(&store, &second, b"same result").await;
+    assert_eq!(
+        store.confirm(&first, &earlier).await,
+        Ok(Confirmation::Confirmed)
+    );
+    assert_eq!(store.discard(&second, &later).await, Ok(Discard::NotMine));
+    assert_eq!(
+        store
+            .find_upload(
+                first.organization_id(),
+                first.conversation_id(),
+                first.uploaded()
+            )
+            .await
+            .unwrap(),
+        Some(first.clone())
+    );
+    // A hold confirmed under a claim is still that claim's to take back: what
+    // an upload does when making it usable failed partway.
+    assert_eq!(
+        store.discard(&first, &earlier).await,
+        Ok(Discard::Discarded)
+    );
+    assert!(!holds(&store, &first).await);
+    assert!(store
+        .read(digest_of(b"same result"), 16)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn a_release_takes_pending_holds_too_and_a_late_claim_cannot_bring_one_back() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open(root.path());
+    let kept = upload(&store, CONVERSATION, b"kept").await;
+    let waiting = hold_for("org", CONVERSATION, b"waiting", b"waiting");
+    let claimed = claim(&store, &waiting, b"waiting").await;
+
+    let mut report = store
+        .release(&organization("org"), &conversation(CONVERSATION))
+        .await
+        .unwrap();
+    report
+        .released
+        .sort_by_key(|released| released.hold.stored().size());
+    assert_eq!(
+        report.released,
+        [
+            ReleasedHold {
+                hold: kept,
+                was: HoldState::Held
+            },
+            ReleasedHold {
+                hold: waiting.clone(),
+                was: HoldState::Pending
+            },
+        ]
+    );
+    assert_eq!(report.removed.len(), 2);
+    assert_eq!(report.failures, 0);
+    // The upload that was waiting on its evidence finds its hold gone, and
+    // neither confirming nor taking back recreates anything.
+    assert_eq!(
+        store.confirm(&waiting, &claimed).await,
+        Ok(Confirmation::Gone)
+    );
+    assert_eq!(
+        store.discard(&waiting, &claimed).await,
+        Ok(Discard::NotMine)
+    );
+    assert!(files_beneath(&root.path().join("attachments/holds")).is_empty());
+    assert!(files_beneath(&root.path().join("attachments/blobs")).is_empty());
+}
+
+#[tokio::test]
+async fn the_same_bytes_kept_as_two_types_are_two_holds_and_one_copy() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open(root.path());
+    let ticket = |media_type: &str| {
+        UploadTicket::new(
+            organization("org"),
+            conversation(CONVERSATION),
+            attachment(b"bytes", media_type),
+            Caller::new(principal("owner"), "panel", "begin-1").unwrap(),
+            TicketLifetime::starting(1_000).unwrap(),
+        )
+    };
+    let png =
+        Hold::from_upload(&ticket("image/png"), attachment(b"bytes", "image/png"), 1).unwrap();
+    let raw = Hold::from_upload(
+        &ticket("application/octet-stream"),
+        attachment(b"bytes", "application/octet-stream"),
+        2,
+    )
+    .unwrap();
+    keep_usable(&store, &png, b"bytes").await;
+    keep_usable(&store, &raw, b"bytes").await;
+    // Declaring the bytes again as something else took nothing away.
+    assert!(holds(&store, &png).await);
+    assert!(holds(&store, &raw).await);
+    assert_eq!(
+        files_beneath(&root.path().join("attachments/holds")).len(),
+        2
+    );
+    assert_eq!(
+        files_beneath(&root.path().join("attachments/blobs")).len(),
+        1
+    );
+
+    let report = store
+        .release(&organization("org"), &conversation(CONVERSATION))
+        .await
+        .unwrap();
+    assert_eq!(report.released.len(), 2);
+    // One copy of the bytes, so one removal.
+    assert_eq!(report.removed.len(), 1);
+    assert_eq!(report.failures, 0);
+}
+
+#[tokio::test]
+async fn a_pending_hold_left_by_a_crash_stays_invisible_until_replaced_or_released() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open(root.path());
+    let hold = hold_for("org", CONVERSATION, b"bytes", b"bytes");
+    let lost = claim(&store, &hold, b"bytes").await;
+    drop(store);
+
+    let store = open(root.path());
+    assert!(!holds(&store, &hold).await);
+    assert_eq!(
+        store.read(digest_of(b"bytes"), 16).await.unwrap().unwrap(),
+        b"bytes"
+    );
+    // The same file uploaded again replaces it, under a claim of its own.
+    let again = claim(&store, &hold, b"bytes").await;
+    assert!(again != lost);
+    assert_eq!(
+        store.confirm(&hold, &again).await,
+        Ok(Confirmation::Confirmed)
+    );
+    assert!(holds(&store, &hold).await);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -556,10 +755,17 @@ async fn bytes_are_never_lost_while_a_hold_on_them_exists() {
         staged.finish().await.unwrap();
         let barrier = Arc::new(Barrier::new(3));
         let keeping = {
-            let (barrier, hold) = (barrier.clone(), arriving.clone());
+            let (barrier, hold, store) = (barrier.clone(), arriving.clone(), store.clone());
             tokio::spawn(async move {
                 barrier.wait().await;
-                staged.keep(hold).await.unwrap();
+                // Its evidence is committed at once, so it confirms at once.
+                match staged.keep(hold.clone()).await.unwrap() {
+                    Kept::Pending(claim) => assert_eq!(
+                        store.confirm(&hold, &claim).await,
+                        Ok(Confirmation::Confirmed)
+                    ),
+                    Kept::Existing(existing) => panic!("already kept: {existing:?}"),
+                }
             })
         };
         let releasing = {

@@ -14,7 +14,7 @@ pub mod entities;
 mod error;
 pub mod value_objects;
 
-pub use aggregates::{BookFull, Redemption, TicketBook};
+pub use aggregates::{BookFull, Issued, Redemption, TicketBook, TicketLimits};
 pub use entities::{Hold, HoldState};
 pub use error::AttachmentError;
 pub use value_objects::{
