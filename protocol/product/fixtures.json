@@ -64,7 +64,10 @@
     "requestId": "attach",
     "state": "upload_required",
     "ticket": "0000000000000000000000000000000000000000000000000000000000000000",
-    "expiresAtMs": 1
+    "expiresAtMs": 1,
+    "digest": null,
+    "mimeType": null,
+    "size": null
   },
   "ConversationView": {
     "conversationId": "00000000-0000-4000-8000-000000000001",

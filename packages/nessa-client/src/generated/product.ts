@@ -265,7 +265,7 @@ export interface AttachmentBeginParams {
   /** Exact length in bytes, at most 20 MiB; the upload is refused unless it is exactly this long. */
   size: number
 }
-/** Either the conversation already holds these bytes, or a single-use ticket to upload them. */
+/** Either the conversation already holds this upload, with the reference a message uses for it, or a single-use ticket to upload it. A successful `PUT /attachments` answers with the same reference shape. */
 export interface AttachmentBeginResult {
   /** The action this answers. */
   requestId: string
@@ -275,6 +275,12 @@ export interface AttachmentBeginResult {
   ticket: string | null
   /** Unix milliseconds after which the ticket is refused. Null when stored. */
   expiresAtMs: number | null
+  /** When stored: digest of what the conversation holds, which is what a message refers to. The gateway may have converted or compressed the upload, so this can differ from the uploaded digest. Null when an upload is required. */
+  digest: string | null
+  /** When stored: media type of what the conversation holds. Null when an upload is required. */
+  mimeType: string | null
+  /** When stored: length in bytes of what the conversation holds. Null when an upload is required. */
+  size: number | null
 }
 /** One bounded conversation turn; omitted older text is indicated by the enclosing truncated flag. */
 export interface ConversationMessage {

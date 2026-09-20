@@ -685,7 +685,7 @@
     "AttachmentBeginResult": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Either the conversation already holds these bytes, or a single-use ticket to upload them.",
+      "description": "Either the conversation already holds this upload, with the reference a message uses for it, or a single-use ticket to upload it. A successful `PUT /attachments` answers with the same reference shape.",
       "properties": {
         "requestId": {
           "type": "string",
@@ -710,9 +710,35 @@
           "type": ["integer", "null"],
           "minimum": 0,
           "description": "Unix milliseconds after which the ticket is refused. Null when stored."
+        },
+        "digest": {
+          "type": ["string", "null"],
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "When stored: digest of what the conversation holds, which is what a message refers to. The gateway may have converted or compressed the upload, so this can differ from the uploaded digest. Null when an upload is required."
+        },
+        "mimeType": {
+          "type": ["string", "null"],
+          "minLength": 3,
+          "maxLength": 127,
+          "description": "When stored: media type of what the conversation holds. Null when an upload is required."
+        },
+        "size": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "When stored: length in bytes of what the conversation holds. Null when an upload is required."
         }
       },
-      "required": ["requestId", "state", "ticket", "expiresAtMs"]
+      "required": [
+        "requestId",
+        "state",
+        "ticket",
+        "expiresAtMs",
+        "digest",
+        "mimeType",
+        "size"
+      ]
     },
     "ConversationMessage": {
       "type": "object",

@@ -213,6 +213,9 @@ pub struct AttachmentBeginResult {
     pub state: String,
     pub ticket: Option<String>,
     pub expires_at_ms: Option<u64>,
+    pub digest: Option<String>,
+    pub mime_type: Option<String>,
+    pub size: Option<u64>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

@@ -32,6 +32,7 @@ or schema version bump is needed merely to change this repository's current cont
 | `conversation.create`, `conversation.read`, `conversation.send`, `conversation.steer` | Conversation creation, projection reads, and input submission |
 | `conversation.remove`, `conversation.reorder`, `conversation.answer`, `conversation.cancel`, `conversation.close` | Pending-work, permission, and lifecycle controls |
 | `credential.issue`, `credential.list`, `credential.revoke` | Credential administration (`credential.manage`) |
+| `attachment.begin` | Single-use ticket to upload one file into a conversation (`conversation.write`). The bytes travel on `PUT /attachments`, never in a socket message; its answer is the reference a message uses |
 
 Frames use `req`, `res`, and `event`. A transport `id` correlates a response with
 its request. Mutations separately carry a stable `requestId` for explicit retries.
