@@ -2717,6 +2717,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "getrandom 0.3.4",
+ "libc",
  "nessa-auth",
  "nessa-local-storage",
  "nessa-sdk",

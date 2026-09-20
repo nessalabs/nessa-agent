@@ -13,7 +13,7 @@ pub(super) fn configure(
     data: &Path,
 ) -> Result<(), RunError> {
     if !bundle.is_absolute() {
-        return Err(failure("runtime directory must be absolute"));
+        return Err(unusable_runtime("runtime directory must be absolute"));
     }
     let node = bundle.join("node");
     let entry =
@@ -22,7 +22,7 @@ pub(super) fn configure(
     let mcp = bundle.join("nessa-mcp");
     for path in [&node, &entry, &catalog, &mcp] {
         if !path.is_file() {
-            return Err(failure(format!(
+            return Err(unusable_runtime(format!(
                 "missing bundled runtime file: {}",
                 path.display()
             )));
@@ -67,6 +67,13 @@ fn failure(error: impl std::fmt::Display) -> RunError {
     RunError::Agent(error.to_string())
 }
 
+/// A prepared runtime tree that is not there, cannot be read, or is not the one
+/// this registration was fingerprinted against. Typed apart from the agent's
+/// own setup failures because no number of restarts changes what is on disk.
+fn unusable_runtime(error: impl std::fmt::Display) -> RunError {
+    RunError::Runtime(error.to_string())
+}
+
 #[cfg(test)]
 #[path = "../../tests/conversation/desktop.rs"]
 mod tests;
@@ -79,16 +86,17 @@ pub(super) fn runtime_identity(
     instance: String,
     process_id: u32,
 ) -> Result<RunningRuntime, RunError> {
+    let manifest = std::fs::read(bundle.join("manifest.json")).map_err(unusable_runtime)?;
     let installed: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(bundle.join("manifest.json"))?).map_err(failure)?;
+        serde_json::from_slice(&manifest).map_err(unusable_runtime)?;
     if installed
         .get("fingerprint")
         .and_then(serde_json::Value::as_str)
         != Some(configured.as_str())
     {
-        return Err(failure(
+        return Err(unusable_runtime(
             "configured desktop fingerprint differs from installed runtime manifest",
         ));
     }
-    RunningRuntime::new(configured, instance, process_id, generation).map_err(failure)
+    RunningRuntime::new(configured, instance, process_id, generation).map_err(unusable_runtime)
 }

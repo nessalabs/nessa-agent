@@ -1,4 +1,4 @@
-use crate::cli::entrypoint::{parse, Command, LocalProvisioning, HELP};
+use crate::cli::entrypoint::{Command, LocalProvisioning, HELP};
 use crate::conversation::application::ConversationError;
 #[cfg(target_os = "macos")]
 use crate::desktop_runtime::{
@@ -7,7 +7,11 @@ use crate::desktop_runtime::{
 };
 use crate::env::Environment;
 use crate::server::entrypoint::http;
-use crate::{app::dependencies::RuntimeDependencies, core::RunError, env::UptimeBackend};
+use crate::{
+    app::dependencies::RuntimeDependencies,
+    core::{Launch, RunError},
+    env::UptimeBackend,
+};
 use axum::Extension;
 use std::future::Future;
 use std::io::Write;
@@ -20,14 +24,19 @@ pub struct CompositionRoot;
 
 impl CompositionRoot {
     /// Dispatch the single CLI contract; local provisioning never contacts a server.
-    pub async fn run(args: &[String]) -> Result<(), RunError> {
-        match parse(args).map_err(RunError::Usage)? {
+    ///
+    /// `launch` is what started this process, resolved once at the edge. Only a
+    /// launch the desktop host registered may touch that registration's
+    /// recovery record, so it travels with the command rather than being
+    /// re-derived from the environment wherever it is needed.
+    pub async fn run(command: Command, launch: &Launch) -> Result<(), RunError> {
+        match command {
             Command::Help => {
                 std::io::stdout().write_all(HELP.as_bytes())?;
                 Ok(())
             }
-            Command::Server(provisioning) => Self::serve(provisioning).await,
-            Command::Desktop(directory) => Self::serve_desktop(&directory).await,
+            Command::Server(provisioning) => Self::serve(provisioning, launch).await,
+            Command::Desktop(directory) => Self::serve_desktop(&directory, launch).await,
             Command::Offline(mut args) => {
                 if args.get(1).is_some_and(|v| v == "init")
                     && !args.iter().any(|v| v == "--owner-token-file")
@@ -57,20 +66,28 @@ impl CompositionRoot {
         }
     }
 
-    pub async fn serve(provisioning: LocalProvisioning) -> Result<(), RunError> {
-        Self::serve_runtime(None, provisioning).await
+    pub async fn serve(provisioning: LocalProvisioning, launch: &Launch) -> Result<(), RunError> {
+        Self::serve_runtime(None, provisioning, launch).await
     }
 
     /// The packaged app owns its private namespace and has no operator to run the
     /// offline commands, so it always provisions what is missing.
-    async fn serve_desktop(bundle: &std::path::Path) -> Result<(), RunError> {
-        Self::serve_runtime(Some(bundle), LocalProvisioning::Automatic).await
+    async fn serve_desktop(bundle: &std::path::Path, launch: &Launch) -> Result<(), RunError> {
+        Self::serve_runtime(Some(bundle), LocalProvisioning::Automatic, launch).await
     }
 
     async fn serve_runtime(
         bundle: Option<&std::path::Path>,
         provisioning: LocalProvisioning,
+        launch: &Launch,
     ) -> Result<(), RunError> {
+        // A managed launch supersedes whatever its own registration last wrote
+        // down about giving up. Nothing else may: a `nessa server` someone runs
+        // in the same data directory while diagnosing exactly this problem
+        // would otherwise erase the record the desktop host is about to recover
+        // the service by. One launchd service per label means no second process
+        // can be holding this generation while this one starts.
+        launch.forget_startup_failure();
         let config = Environment::from_system()?;
         if provisioning == LocalProvisioning::Automatic {
             super::provisioning::ensure_local_credentials(&config)?;
@@ -83,9 +100,9 @@ impl CompositionRoot {
         let retirement_clock = product.clock.clone();
         let desktop_identity = if let Some(bundle) = bundle {
             let configured = std::env::var("NESSA_RUNTIME_FINGERPRINT")
-                .map_err(|_| RunError::Agent("missing desktop runtime fingerprint".into()))?;
-            let generation = std::env::var("NESSA_SERVICE_GENERATION")
-                .map_err(|_| RunError::Agent("missing desktop service generation".into()))?;
+                .map_err(|_| RunError::Runtime("missing desktop runtime fingerprint".into()))?;
+            let generation = Environment::service_generation_from_system()
+                .ok_or_else(|| RunError::Runtime("missing desktop service generation".into()))?;
             Some(super::desktop::runtime_identity(
                 bundle,
                 configured,
@@ -427,40 +444,6 @@ mod tests {
             shutdown_result(&poisoned),
             Err(RunError::Shutdown(Some(ConversationError::Audit)))
         ));
-    }
-
-    /// Every command is parsed before it is dispatched, so a mistyped one used
-    /// to be reported as an authentication failure whatever it was trying to
-    /// do. A usage problem is its own fact and says only what was wrong.
-    #[tokio::test]
-    async fn a_command_line_this_binary_cannot_run_is_a_usage_failure_not_an_authentication_one() {
-        for words in [
-            vec!["auth", "token", "--cloud"],
-            vec!["install-agent"],
-            vec!["nonsense"],
-        ] {
-            let args: Vec<String> = words.iter().map(|word| (*word).to_string()).collect();
-            let error = CompositionRoot::run(&args)
-                .await
-                .expect_err("the command line is not one nessa can run");
-            assert!(matches!(error, RunError::Usage(_)), "{words:?}: {error:?}");
-            let reported = error.to_string();
-            assert!(
-                !reported.contains("authentication setup failed"),
-                "{words:?}: {reported}"
-            );
-            // Parsing failed, so nothing was dispatched: the message is the
-            // parser's own, carried out whole rather than summarized.
-            assert_eq!(reported, parse(&args).expect_err("rejected"), "{words:?}");
-        }
-
-        // And the one that says what to do instead still says it.
-        let cloud: Vec<String> = ["auth", "token", "--cloud"]
-            .iter()
-            .map(|word| (*word).to_string())
-            .collect();
-        let error = CompositionRoot::run(&cloud).await.unwrap_err();
-        assert!(error.to_string().contains("use --local"), "{error}");
     }
 
     #[test]

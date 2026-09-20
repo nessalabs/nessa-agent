@@ -39,6 +39,10 @@ tar = "0.4"
 # Parsing a pinned archive URL, rather than matching on its spelling.
 url = "2"
 
+[target.'cfg(unix)'.dependencies]
+# Opening the gateway log without following a link where it should be.
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
