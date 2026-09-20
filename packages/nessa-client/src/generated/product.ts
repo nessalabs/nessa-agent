@@ -262,7 +262,7 @@ export interface AttachmentBeginParams {
   digest: string
   /** Declared lowercase media type without parameters. Storage accepts any; what a message may refer to is narrower. */
   mimeType: string
-  /** Exact length in bytes, at most 20 MiB; the upload is refused unless it is exactly this long. */
+  /** Exact length in bytes, at most 64 MiB, which admits a camera RAW file; the upload is refused unless it is exactly this long. */
   size: number
 }
 /** Either the conversation already holds this upload, with the reference a message uses for it, or a single-use ticket to upload it. A successful `PUT /attachments` answers with the same reference shape. */

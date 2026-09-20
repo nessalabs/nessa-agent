@@ -676,8 +676,8 @@
         "size": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 20971520,
-          "description": "Exact length in bytes, at most 20 MiB; the upload is refused unless it is exactly this long."
+          "maximum": 67108864,
+          "description": "Exact length in bytes, at most 64 MiB, which admits a camera RAW file; the upload is refused unless it is exactly this long."
         }
       },
       "required": ["conversationId", "requestId", "digest", "mimeType", "size"]
