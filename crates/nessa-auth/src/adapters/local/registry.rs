@@ -399,11 +399,21 @@ impl LocalCredentialStore {
         let (evidence, verifier) = issue_secret(&metadata.id)?;
         let mut next = current.clone();
         if administrative_allowed {
-            for entry in &mut next.credentials {
-                if entry.metadata.principal_id == request.principal.id {
-                    supersede(&mut entry.metadata, request.issued_at);
-                }
-            }
+            // An administrative issuance is a rotation: it replaces whatever
+            // credential this principal already holds in the organization being
+            // provisioned, whatever that credential's grants were. Credentials
+            // the same principal holds in other organizations are not this
+            // rotation's to end. Owner recovery replaces narrower than this —
+            // only the owner credential itself — see `recover_owner`.
+            supersede_replaced(
+                &mut next.credentials,
+                &Replaces {
+                    principal_id: &request.principal.id,
+                    organization_id: &request.membership.organization_id,
+                    requiring_action: None,
+                },
+                request.issued_at,
+            );
         }
         if !next.principals.iter().any(|p| p.id == request.principal.id) {
             next.principals.push(request.principal);
@@ -528,19 +538,20 @@ impl LocalCredentialStore {
             .iter()
             .find(|membership| membership.id == current.owner_membership_id)
             .ok_or(LocalStoreError::Corrupt)?;
+        // Recovery replaces the owner credential itself, not everything the
+        // owner principal holds: only credentials in the owner's organization
+        // that carry `credential.manage`. The same scope selects the grants to
+        // carry forward and the credentials to end.
+        let replaces = Replaces {
+            principal_id: &membership.principal_id,
+            organization_id: &membership.organization_id,
+            requiring_action: Some("credential.manage"),
+        };
         let grants = current
             .credentials
             .iter()
             .rev()
-            .find(|entry| {
-                entry.metadata.principal_id == membership.principal_id
-                    && entry.metadata.organization_id == membership.organization_id
-                    && entry
-                        .metadata
-                        .grants
-                        .iter()
-                        .any(|grant| grant.action == "credential.manage")
-            })
+            .find(|entry| replaces.matches(&entry.metadata))
             .ok_or(LocalStoreError::Corrupt)?
             .metadata
             .grants
@@ -566,18 +577,7 @@ impl LocalCredentialStore {
         }
         let (evidence, verifier) = issue_secret(&metadata.id)?;
         let mut next = current.clone();
-        for entry in &mut next.credentials {
-            if entry.metadata.principal_id == membership.principal_id
-                && entry.metadata.organization_id == membership.organization_id
-                && entry
-                    .metadata
-                    .grants
-                    .iter()
-                    .any(|grant| grant.action == "credential.manage")
-            {
-                supersede(&mut entry.metadata, issued_at);
-            }
-        }
+        supersede_replaced(&mut next.credentials, &replaces, issued_at);
         next.credentials.push(StoredCredential {
             metadata: metadata.clone(),
             verifier,
@@ -977,6 +977,39 @@ fn parse_token(bytes: &[u8]) -> Result<(String, Vec<u8>), AccessError> {
 fn supersede(metadata: &mut CredentialMetadataDto, at: u64) {
     if metadata.revoked_at.is_none() {
         metadata.revoked_at = Some(at.max(metadata.issued_at));
+    }
+}
+
+/// Which existing credentials a new issuance replaces.
+///
+/// A credential belongs to one (principal, organization) membership, so a
+/// replacement is always scoped to both; a principal's credentials in other
+/// organizations are never selected. `requiring_action` narrows further to
+/// credentials carrying that grant, which is how owner recovery targets the
+/// owner credential alone. The two automatic revocation sites differ only in
+/// that one field.
+struct Replaces<'a> {
+    principal_id: &'a str,
+    organization_id: &'a str,
+    requiring_action: Option<&'a str>,
+}
+
+impl Replaces<'_> {
+    fn matches(&self, metadata: &CredentialMetadataDto) -> bool {
+        metadata.principal_id == self.principal_id
+            && metadata.organization_id == self.organization_id
+            && self
+                .requiring_action
+                .is_none_or(|action| metadata.grants.iter().any(|grant| grant.action == action))
+    }
+}
+
+/// Supersede every credential the scope selects.
+fn supersede_replaced(credentials: &mut [StoredCredential], replaces: &Replaces<'_>, at: u64) {
+    for entry in credentials {
+        if replaces.matches(&entry.metadata) {
+            supersede(&mut entry.metadata, at);
+        }
     }
 }
 
@@ -1582,6 +1615,111 @@ mod tests {
             ready(store.verify(&CredentialEvidence::new(original_token).unwrap(), &audience)),
             Err(AccessError::InvalidCredential)
         );
+        assert!(ready(store.verify(&recovered.evidence, &audience)).is_ok());
+    }
+
+    /// Give `principal_id` a `server.read` credential in a second organization.
+    ///
+    /// No public operation adds an organization to a local registry, so the
+    /// fixture is written directly. It still goes through `persist`, which
+    /// validates the whole registry the same way a real commit is validated.
+    fn seed_credential_in_second_organization(
+        store: &LocalCredentialStore,
+        principal_id: &str,
+    ) -> CredentialEvidence {
+        let mut slot = store.slot().unwrap();
+        let mut next = slot.as_ref().unwrap().clone();
+        let organization_id = "org-2".to_string();
+        next.organizations.push(OrganizationInputDto {
+            id: organization_id.clone(),
+        });
+        next.memberships.push(MembershipInputDto {
+            id: format!("{principal_id}@{organization_id}"),
+            principal_id: principal_id.into(),
+            organization_id: organization_id.clone(),
+            role: MembershipRoleDto::Member,
+            state: MembershipStateDto::Active,
+        });
+        let credential_id = format!("{principal_id}-in-{organization_id}");
+        let (evidence, verifier) = issue_secret(&credential_id).unwrap();
+        next.credentials.push(StoredCredential {
+            metadata: CredentialMetadataDto {
+                id: credential_id,
+                principal_id: principal_id.into(),
+                organization_id: organization_id.clone(),
+                audience_id: next.gateway_id.clone(),
+                issued_at: 120,
+                expires_at: None,
+                revoked_at: None,
+                grants: vec![grant(&organization_id, "server.read")],
+            },
+            verifier,
+        });
+        next.revision += 1;
+        store.persist(&next).unwrap();
+        let revision = next.revision;
+        *slot = Some(next.clone());
+        store.publish_snapshot(next).unwrap();
+        store.publish_revision(revision);
+        evidence
+    }
+
+    #[test]
+    fn reprovisioning_leaves_the_same_principals_credential_in_another_organization_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let store = open_store(root.path().join("auth/credentials.v1.json")).unwrap();
+        store.bootstrap(bootstrap()).unwrap();
+        let provision = |request: &str, id: &str, at: u64| {
+            let outcome = store
+                .provision_surface(
+                    "panel",
+                    request.into(),
+                    id.into(),
+                    vec!["server.read".into()],
+                    at,
+                    None,
+                )
+                .unwrap();
+            let IssueCredentialOutcome::Issued { evidence, .. } = outcome else {
+                panic!("a new surface credential was expected")
+            };
+            evidence
+        };
+        let first = provision("panel-1", "panel-token-1", 150);
+        let elsewhere = seed_credential_in_second_organization(&store, "surface:panel");
+
+        let replacement = provision("panel-2", "panel-token-2", 300);
+
+        let audience = AudienceId::new("gateway-1").unwrap();
+        assert_eq!(
+            ready(store.verify(&first, &audience)),
+            Err(AccessError::InvalidCredential),
+            "the credential being rotated is ended"
+        );
+        assert!(
+            ready(store.verify(&elsewhere, &audience)).is_ok(),
+            "the same principal's credential in another organization is not this rotation's"
+        );
+        assert!(ready(store.verify(&replacement, &audience)).is_ok());
+    }
+
+    #[test]
+    fn owner_recovery_leaves_the_owners_credential_in_another_organization_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let store = open_store(root.path().join("auth/credentials.v1.json")).unwrap();
+        let original = store.bootstrap(bootstrap()).unwrap();
+        let elsewhere = seed_credential_in_second_organization(&store, "owner");
+
+        let recovered = store
+            .recover_owner("replacement-owner".into(), 150, Some(250))
+            .unwrap();
+
+        let audience = AudienceId::new("gateway-1").unwrap();
+        assert_eq!(
+            ready(store.verify(&original.evidence, &audience)),
+            Err(AccessError::InvalidCredential)
+        );
+        assert!(ready(store.verify(&elsewhere, &audience)).is_ok());
         assert!(ready(store.verify(&recovered.evidence, &audience)).is_ok());
     }
 
