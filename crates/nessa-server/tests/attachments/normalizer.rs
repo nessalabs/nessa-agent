@@ -31,7 +31,6 @@ impl PlatformDecoder for Oversized {
             pixels: RgbaImage::from_fn(900, 600, |x, y| {
                 Rgba([(x % 251) as u8, (y % 241) as u8, ((x + y) % 239) as u8, 255])
             }),
-            lossless: false,
         })
     }
 }

@@ -261,12 +261,15 @@ fn error_code(error: &ConversationError) -> &'static str {
             // or the SDK's admission noticed it. An image outside the model's
             // limits, or a message too large for one frame, is a request this
             // gateway could never have delivered as it stands.
-            AgentError::ImageInputRefused(ImageInputRefusal::AgentDoesNotAccept) => {
-                "image_input_unsupported"
-            }
-            AgentError::ImageInputRefused(_) | AgentError::MessageTooLarge { .. } => {
-                "invalid_request"
-            }
+            // No images here, whichever layer noticed: the agent declined them,
+            // or this model or binding offers none. One fact, one code.
+            AgentError::ImageInputRefused(
+                ImageInputRefusal::AgentDoesNotAccept | ImageInputRefusal::NotOffered,
+            ) => "image_input_unsupported",
+            AgentError::ImageInputRefused(
+                ImageInputRefusal::MediaType(_) | ImageInputRefusal::ImageTooLarge { .. },
+            )
+            | AgentError::MessageTooLarge { .. } => "invalid_request",
             AgentError::UserImage(_) => "attachment_unavailable",
             AgentError::AuditFailure => "audit_unavailable",
             _ => "agent_operation_failed",

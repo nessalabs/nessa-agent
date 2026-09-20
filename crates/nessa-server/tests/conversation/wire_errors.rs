@@ -84,6 +84,10 @@ fn an_image_message_refused_before_acceptance_says_which_kind_of_refusal_it_was(
             "image_input_unsupported",
         ),
         (
+            AgentError::ImageInputRefused(ImageInputRefusal::NotOffered),
+            "image_input_unsupported",
+        ),
+        (
             AgentError::ImageInputRefused(ImageInputRefusal::MediaType(ImageMediaType::Webp)),
             "invalid_request",
         ),
