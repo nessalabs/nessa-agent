@@ -1,4 +1,5 @@
 import { NessaRpcError } from "./rpc-error.js"
+import type { ConversationErrorCode } from "../generated/product.js"
 
 /** One upload, as the route needs it. The ticket is a secret: never log it. */
 export type AttachmentUploadRequest = {
@@ -124,15 +125,23 @@ export function uploadRefusal(body: unknown): AttachmentFailureCode {
  * issued for a file no message could ever name.
  */
 export type AttachmentBeginRefusal =
-  | "invalid_request"
-  | "image_input_unsupported"
-  | "conversation_not_found"
-  | "attachment_capacity"
-  | "attachment_storage_unavailable"
+  // Drawn from the generated codes rather than spelled again beside them: a
+  // code the protocol renames leaves this union, and every list and switch
+  // over it stops compiling instead of quietly answering `unexpected`.
+  | Extract<
+      ConversationErrorCode,
+      | "invalid_request"
+      | "image_input_unsupported"
+      | "conversation_not_found"
+      | "attachment_capacity"
+      | "attachment_storage_unavailable"
+      | "audit_unavailable"
+      | "temporarily_unavailable"
+      | "agent_not_configured"
+    >
+  // The upload route's own word for what the socket calls
+  // `attachment_storage_unavailable`; it is an HTTP code, not a conversation one.
   | "storage_unavailable"
-  | "audit_unavailable"
-  | "temporarily_unavailable"
-  | "agent_not_configured"
   | "unexpected"
 
 /** The codes above that the gateway itself answers with; `unexpected` is not one. */
