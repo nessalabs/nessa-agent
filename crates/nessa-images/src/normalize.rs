@@ -1,3 +1,20 @@
+//! The pipeline itself: decide whether an image can be handed back untouched,
+//! and otherwise decode it, turn it upright, scale it, and encode it until it
+//! is inside the consumer's limits.
+//!
+//! ```text
+//! normalize_with ─► header only: size, orientation, pixel and memory budget
+//!        │
+//!        ├─ acceptable as it is ─► proved to decode, one frame ─► the same bytes
+//!        │
+//!        └─ otherwise ─► decode ─► fit: scale ► turn ► encode ─► fits? ─► bytes
+//!                                        ▲                          │
+//!                                        └──── one step smaller ◄── no
+//! ```
+//!
+//! Arrows are the order of work. Memory is counted before each step that
+//! allocates: once from the header for the decode and the first pass, and again
+//! before every smaller size, so nothing is charged for work that is not done.
 use crate::{
     budget::{check_pixels, check_working_bytes, MAX_PLATFORM_LONG_EDGE_PX},
     jpeg::check_whole,
@@ -6,11 +23,16 @@ use crate::{
     Encoding, Error, Limits, PlatformDecoder,
 };
 use image::{
-    codecs::{jpeg::JpegEncoder, png::PngEncoder},
+    codecs::{
+        gif::GifDecoder,
+        jpeg::JpegEncoder,
+        png::{PngDecoder, PngEncoder},
+        webp::WebPDecoder,
+    },
     imageops::FilterType,
     metadata::Orientation,
-    ColorType, DynamicImage, ImageDecoder, ImageError, ImageFormat, ImageReader, RgbImage,
-    RgbaImage,
+    AnimationDecoder, ColorType, DynamicImage, ImageDecoder, ImageError, ImageFormat, ImageReader,
+    Limits as DecoderLimits, RgbImage, RgbaImage,
 };
 use std::{borrow::Cow, io::Cursor};
 
@@ -31,6 +53,16 @@ const MIN_LONG_EDGE_PX: u32 = 256;
 /// Bytes a pixel in the buffer the scaler holds between its two passes: four
 /// channels of `f32`, whatever the source was.
 const SCALER_BYTES_PER_PIXEL: u64 = 16;
+
+/// What kind of picture the bytes held, which decides the encoding tried first.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Source {
+    /// Exact pixels, as a screenshot or a diagram has: PNG keeps them exact.
+    Exact,
+    /// Already lossy, or a photograph: JPEG, since PNG would be several times
+    /// the size for nothing.
+    Photograph,
+}
 
 /// An image inside every limit it was fitted to.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -97,7 +129,7 @@ pub fn normalize_with(
         _ if names_a_system_encoding(input) => return fit_with_platform(input, limits, platform),
         _ => return Err(Error::UnsupportedEncoding),
     };
-    let mut decode_limits = image::Limits::default();
+    let mut decode_limits = DecoderLimits::default();
     decode_limits.max_alloc = Some(MAX_DECODER_ALLOC_BYTES);
     reader.limits(decode_limits);
     // This reads the header and no pixels.
@@ -111,31 +143,27 @@ pub fn normalize_with(
     check_working_bytes(decoded_bytes)?;
     // A decoder that cannot read orientation has none recorded to apply.
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
-    let upright = orientation == Orientation::NoTransforms;
-    // The decoder below forgives a JPEG that is cut short; this does not.
-    let shown_whole = source == Some(Encoding::Jpeg);
-    if shown_whole {
-        check_whole(input, width, height)?;
-    }
-
-    if let Some(encoding) = source.filter(|encoding| limits.accepts(*encoding)) {
-        if upright
-            && input.len() as u64 <= limits.max_bytes()
-            && width.max(height) <= limits.max_long_edge_px()
-        {
-            // A header is not an image. Decode the pixels to prove there is one
-            // (the first frame of an animation), then hand back the bytes that
-            // were given, not a re-encoding of what was decoded.
-            if !shown_whole {
-                DynamicImage::from_decoder(decoder).map_err(decode_error)?;
-            }
-            return Ok(Normalized {
-                bytes: input.to_vec(),
-                encoding,
-                width,
-                height,
-                changed: false,
-            });
+    let inside_every_limit = orientation == Orientation::NoTransforms
+        && input.len() as u64 <= limits.max_bytes()
+        && width.max(height) <= limits.max_long_edge_px();
+    let untouched = source
+        .filter(|encoding| limits.accepts(*encoding) && inside_every_limit)
+        // Only the first frame of an animation is kept, so an animation is
+        // never handed back as it came.
+        .filter(|encoding| !is_animated(*encoding, input));
+    match untouched {
+        // A header is not an image, so the bytes are proved to be one before
+        // they are handed back. A JPEG is proved strictly, because its decoder
+        // below shows a file cut short as its top half. One that fails that
+        // proof may still be a picture every viewer shows (CMYK, a stray
+        // marker); it is decoded and written again rather than refused.
+        Some(Encoding::Jpeg) if check_whole(input, width, height).is_ok() => {
+            return Ok(unchanged(input, Encoding::Jpeg, width, height));
+        }
+        Some(Encoding::Jpeg) | None => {}
+        Some(encoding) => {
+            DynamicImage::from_decoder(decoder).map_err(decode_error)?;
+            return Ok(unchanged(input, encoding, width, height));
         }
     }
 
@@ -143,11 +171,42 @@ pub fn normalize_with(
         (width, height),
         decoded_bytes,
         decoder.color_type(),
-        !upright,
+        orientation,
         limits.max_long_edge_px(),
     ))?;
     let pixels = DynamicImage::from_decoder(decoder).map_err(decode_error)?;
-    fit(pixels, orientation, source != Some(Encoding::Jpeg), limits)
+    let kind = if source == Some(Encoding::Jpeg) {
+        Source::Photograph
+    } else {
+        Source::Exact
+    };
+    fit(pixels, orientation, kind, limits)
+}
+
+/// Whether `input`, already known to be `encoding`, holds more than one frame.
+/// Bytes that cannot be read this way are not an animation here; whether they
+/// are an image at all is settled by the decode that follows.
+fn is_animated(encoding: Encoding, input: &[u8]) -> bool {
+    let bytes = Cursor::new(input);
+    match encoding {
+        Encoding::Gif => GifDecoder::new(bytes)
+            .is_ok_and(|decoder| decoder.into_frames().take(2).flatten().count() > 1),
+        Encoding::Webp => WebPDecoder::new(bytes).is_ok_and(|decoder| decoder.has_animation()),
+        Encoding::Png => {
+            PngDecoder::new(bytes).is_ok_and(|decoder| decoder.is_apng().unwrap_or(false))
+        }
+        Encoding::Jpeg => false,
+    }
+}
+
+fn unchanged(input: &[u8], encoding: Encoding, width: u32, height: u32) -> Normalized {
+    Normalized {
+        bytes: input.to_vec(),
+        encoding,
+        width,
+        height,
+        changed: false,
+    }
 }
 
 /// Decode `input` with the system's decoder, then fit what it returns. What it
@@ -170,28 +229,37 @@ fn fit_with_platform(
         (width, height),
         u64::from(width) * u64::from(height) * 4,
         ColorType::Rgba8,
-        false,
+        Orientation::NoTransforms,
         limits.max_long_edge_px(),
     ))?;
+    // What a system decoder is asked about (HEIC, AVIF, camera RAW) is a
+    // photograph, and it comes back already upright.
     let pixels = DynamicImage::ImageRgba8(decoded.pixels);
-    fit(pixels, Orientation::NoTransforms, decoded.lossless, limits)
+    fit(
+        pixels,
+        Orientation::NoTransforms,
+        Source::Photograph,
+        limits,
+    )
 }
 
-/// The most memory [`fit`] holds at once for an image of `size` that decodes to
-/// `decoded_bytes` of `color`, counted before anything is decoded. Keep this in
-/// step with `fit`: each term below is one moment in it.
+/// The most memory [`fit`] holds up to the end of its first pass, for an image
+/// of `size` that decodes to `decoded_bytes` of `color`, counted before anything
+/// is decoded. Each term is one moment in `fit`. A smaller size is counted when
+/// it is about to be made, by [`scaling_bytes`], and not here: an image that fits
+/// at its first size never pays for a scaling it does not do.
 ///
 /// Saturating arithmetic: a figure too large to count is over any budget.
 fn working_bytes(
     size: (u32, u32),
     decoded_bytes: u64,
     color: ColorType,
-    turned: bool,
+    orientation: Orientation,
     max_long_edge_px: u32,
 ) -> u64 {
     let (width, height) = size;
     let pixels = u64::from(width) * u64::from(height);
-    let channels: u64 = if color.has_alpha() { 4 } else { 3 };
+    let channels = channels_of(color);
     // The eight-bit copy everything after decoding works from.
     let working = pixels.saturating_mul(channels);
     // Made beside the decoded pixels, unless they already are that copy.
@@ -206,32 +274,51 @@ fn working_bytes(
     } else {
         0
     };
-    let long_edge = width.max(height);
-    let (first_scaled_edge, turning) = if long_edge > max_long_edge_px {
-        (max_long_edge_px, 0)
+    let first_pass = if width.max(height) > max_long_edge_px {
+        // Scaled first, and turned upright afterwards, when it is small.
+        scaling_bytes(size, channels, max_long_edge_px)
+    } else if orientation != Orientation::NoTransforms {
+        // Used whole, so the whole image is turned: two of it.
+        working.saturating_mul(2)
     } else {
-        // Nothing is scaled at first, so the whole image is turned upright, and
-        // the first smaller size is one step below the whole.
-        let next = (f64::from(long_edge) * SCALE_STEP) as u32;
-        (next, if turned { working.saturating_mul(2) } else { 0 })
+        0
     };
-    // Scaling keeps the source, a buffer of the source's width and the new
-    // height between its two passes, and the result. The result is then turned
-    // or flattened onto white, either of which holds two of it.
-    let (scaled_width, scaled_height) = scaled_size(size, first_scaled_edge);
+    // Unscaled, a see-through image is flattened onto white beside itself.
+    let flattening = working.saturating_add(pixels.saturating_mul(3));
+    [converting, dropping_alpha, first_pass, flattening]
+        .into_iter()
+        .fold(decoded_bytes, u64::max)
+}
+
+/// The most memory held while an image of `size` and `channels` is scaled so
+/// that its long edge is `long_edge`: the source, a buffer of the source's
+/// width and the new height between the scaler's two passes, and the result,
+/// which is then turned or flattened onto white, either of which holds two.
+fn scaling_bytes(size: (u32, u32), channels: u64, long_edge: u32) -> u64 {
+    let (width, height) = size;
+    let source = (u64::from(width) * u64::from(height)).saturating_mul(channels);
+    let (scaled_width, scaled_height) = scaled_size(size, long_edge);
     let scaled = (u64::from(scaled_width) * u64::from(scaled_height)).saturating_mul(channels);
     let between_passes =
         (u64::from(width) * u64::from(scaled_height)).saturating_mul(SCALER_BYTES_PER_PIXEL);
-    let scaling = working.saturating_add(
+    source.saturating_add(
         between_passes
             .saturating_add(scaled)
             .max(scaled.saturating_mul(2)),
-    );
-    // Unscaled, a see-through image is flattened onto white beside itself.
-    let flattening = working.saturating_add(pixels.saturating_mul(3));
-    [converting, dropping_alpha, turning, scaling, flattening]
-        .into_iter()
-        .fold(decoded_bytes, u64::max)
+    )
+}
+
+fn channels_of(color: ColorType) -> u64 {
+    if color.has_alpha() {
+        4
+    } else {
+        3
+    }
+}
+
+/// The long edge tried after `long_edge` produced nothing that fits.
+fn next_smaller(long_edge: u32) -> u32 {
+    (f64::from(long_edge) * SCALE_STEP) as u32
 }
 
 /// Scale and encode `pixels` until they are inside `limits`. `orientation` is
@@ -244,7 +331,7 @@ fn working_bytes(
 fn fit(
     pixels: DynamicImage,
     orientation: Orientation,
-    lossless_source: bool,
+    source: Source,
     limits: &Limits,
 ) -> Result<Normalized, Error> {
     let mut pixels = eight_bit(pixels);
@@ -263,7 +350,8 @@ fn fit(
     // PNG first for what was lossless or see-through: screenshots and diagrams,
     // where JPEG smears exactly the detail that matters. And PNG always for a
     // consumer that takes nothing else.
-    let try_png = limits.accepts(Encoding::Png) && (lossless_source || transparent || !try_jpeg);
+    let try_png =
+        limits.accepts(Encoding::Png) && (source == Source::Exact || transparent || !try_jpeg);
 
     let mut long_edge = pixels
         .width()
@@ -292,10 +380,13 @@ fn fit(
                 }
             }
         }
-        let next = (f64::from(long_edge) * SCALE_STEP) as u32;
+        let next = next_smaller(long_edge);
         if next < MIN_LONG_EDGE_PX {
             return Err(Error::CannotFit);
         }
+        // The smaller size is about to be made, so this is where it is counted.
+        let size = (pixels.width(), pixels.height());
+        check_working_bytes(scaling_bytes(size, channels_of(pixels.color()), next))?;
         long_edge = next;
     }
 }

@@ -204,11 +204,12 @@ fn pixels_that_are_few_enough_but_too_wide_to_hold_are_refused_too() {
         normalize(&pnm_header(12_000, 8_000, 255), &limits(2_000)),
         Err(Error::Undecodable)
     );
-    // Asked for whole rather than scaled down, those pixels would need the
-    // scaler's buffer at nearly full size: refused, by the limits given.
+    // Asked for whole rather than scaled down, nothing is scaled at first, so
+    // nothing is counted for scaling: this too is read on. Making it smaller
+    // is counted when that is about to happen (see `tests/passthrough.rs`).
     assert_eq!(
         normalize(&pnm_header(12_000, 8_000, 255), &limits(12_000)),
-        Err(Error::TooLargeToDecode)
+        Err(Error::Undecodable)
     );
 }
 

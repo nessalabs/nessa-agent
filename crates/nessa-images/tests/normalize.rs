@@ -3,7 +3,7 @@ use image::{
     codecs::gif::GifEncoder, ColorType, Delay, DynamicImage, Frame, ImageFormat, Rgb, RgbImage,
     Rgba, RgbaImage,
 };
-use nessa_images::{normalize, Encoding, Error, Limits, LimitsError};
+use nessa_images::{normalize, Encoding, Error, Limits, LimitsError, Normalized};
 use std::io::Cursor;
 
 const ALL: [Encoding; 4] = [Encoding::Png, Encoding::Jpeg, Encoding::Gif, Encoding::Webp];
@@ -279,6 +279,23 @@ fn bytes_that_are_not_a_readable_image_are_refused_by_kind() {
     );
 }
 
+/// Damaged bytes are never the answer. A JPEG is the one encoding whose decoder
+/// still shows part of a damaged file, as every viewer does, so it may be
+/// written again; anything else that is damaged is refused.
+fn never_handed_back(
+    result: Result<Normalized, Error>,
+    damaged: &[u8],
+    format: ImageFormat,
+    how: &str,
+) {
+    match result {
+        Ok(image) if format == ImageFormat::Jpeg => {
+            assert!(image.changed && image.bytes != damaged, "jpeg {how}");
+        }
+        other => assert_eq!(other, Err(Error::Undecodable), "{format:?} {how}"),
+    }
+}
+
 #[test]
 fn an_image_that_would_pass_through_must_first_be_shown_to_decode() {
     // Every one of these is in an accepted encoding, upright, and inside both
@@ -294,11 +311,7 @@ fn an_image_that_would_pass_through_must_first_be_shown_to_decode() {
         assert!(!normalize(&whole, &roomy).unwrap().changed, "{name}");
 
         let truncated = &whole[..whole.len() / 2];
-        assert_eq!(
-            normalize(truncated, &roomy),
-            Err(Error::Undecodable),
-            "{name} cut short"
-        );
+        never_handed_back(normalize(truncated, &roomy), truncated, format, "cut short");
 
         // The header is kept so the size still reads; the pixels are overwritten.
         let mut corrupt = whole.clone();
@@ -317,7 +330,7 @@ fn an_image_that_would_pass_through_must_first_be_shown_to_decode() {
                 "{name} overwritten"
             );
         } else {
-            assert_eq!(result, Err(Error::Undecodable), "{name} overwritten");
+            never_handed_back(result, &corrupt, format, "overwritten");
         }
     }
 

@@ -69,9 +69,13 @@
 //! Passing through is not taking a header's word. The image is decoded whole
 //! first, a JPEG by a strict decoder because the forgiving one used for fitting
 //! shows a file cut short as its top half, and only then are the original bytes
-//! returned. A file that is truncated or damaged is [`Error::Undecodable`]. GIF
-//! is the limit of that promise: it carries no checksum, so damaged pixel data
-//! that still reads as codes is an image as far as any decoder can tell.
+//! returned. Strictness decides that one thing: a JPEG the strict decoder refuses
+//! may still be a picture every viewer shows, so it is read by the forgiving one
+//! and written again, and what neither can read is [`Error::Undecodable`], as is
+//! any other encoding that is truncated or damaged. GIF is the limit of that
+//! promise: it carries no checksum, so damaged pixel data that still reads as
+//! codes is an image as far as any decoder can tell. An animation is never
+//! handed back as it came: its first frame is written again.
 #![deny(missing_docs)]
 
 mod budget;
