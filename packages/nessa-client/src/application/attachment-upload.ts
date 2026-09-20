@@ -53,6 +53,8 @@ export const UPLOAD_DEADLINE_MS = 180_000
  * - `ticket_invalid`: unknown, expired, or already used.
  * - `size_mismatch`, `digest_mismatch`: not the bytes the ticket was issued for.
  * - `upload_interrupted`: the body stopped arriving.
+ * - `attachment_not_kept`: the bytes were good, but the conversation let go of
+ *   its files before they were kept. Beginning again stages them.
  * - `upload_timeout`: the transfer outlived the gateway's deadline — or this
  *   client's own, when no answer came at all (then there is no `status`).
  * - `unsupported_image`: not an image format the gateway can read.
@@ -72,6 +74,7 @@ export type AttachmentFailureCode =
   | "size_mismatch"
   | "digest_mismatch"
   | "upload_interrupted"
+  | "attachment_not_kept"
   | "upload_timeout"
   | "unsupported_image"
   | "image_too_large"
@@ -91,6 +94,7 @@ const uploadRefusals: readonly AttachmentFailureCode[] = [
   "size_mismatch",
   "digest_mismatch",
   "upload_interrupted",
+  "attachment_not_kept",
   "upload_timeout",
   "unsupported_image",
   "image_too_large",

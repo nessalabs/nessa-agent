@@ -244,6 +244,7 @@ it.each([
   [400, { code: "size_mismatch" }, "size_mismatch"],
   [422, { code: "digest_mismatch" }, "digest_mismatch"],
   [400, { code: "upload_interrupted" }, "upload_interrupted"],
+  [409, { code: "attachment_not_kept" }, "attachment_not_kept"],
   [408, { code: "upload_timeout" }, "upload_timeout"],
   [415, { code: "unsupported_image" }, "unsupported_image"],
   [413, { code: "image_too_large" }, "image_too_large"],

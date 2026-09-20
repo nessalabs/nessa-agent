@@ -161,7 +161,7 @@ send   -> conversation.send { text, attachments: [the returned references] }
   | `too-large` | `image_too_large`: it could not be brought under the model's limits. | no |
   | `image-input-unsupported` | `image_input_unsupported`: the agent's model takes no images. | no |
   | `busy` | `temporarily_unavailable` after the bounded retries; a refused `begin` as `attachment_capacity` or `temporarily_unavailable`. | yes |
-  | `interrupted` | `upload_interrupted`, `upload_timeout` (the gateway's 408, or the client's own three-minute deadline for a PUT that never answers), or an aborted request. | yes |
+  | `interrupted` | `upload_interrupted`, `attachment_not_kept`, `upload_timeout` (the gateway's 408, or the client's own three-minute deadline for a PUT that never answers), or an aborted request. | yes |
   | `unavailable` | No connection or answer; `ticket_invalid`; `storage_unavailable` / `attachment_storage_unavailable`; `audit_unavailable`; a refused `begin` as `agent_not_configured` or `conversation_not_found`. | yes |
   | `rejected` | `size_mismatch`, `digest_mismatch`, a `begin` refused as `invalid_request` or with a code the client was not taught, an unrecognised answer. | yes |
 

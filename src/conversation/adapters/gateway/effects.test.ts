@@ -226,6 +226,7 @@ it.each([
   ["image_too_large", "too-large"],
   ["image_input_unsupported", "image-input-unsupported"],
   ["upload_interrupted", "interrupted"],
+  ["attachment_not_kept", "interrupted"],
   ["upload_timeout", "interrupted"],
   ["aborted", "interrupted"],
   ["ticket_invalid", "unavailable"],

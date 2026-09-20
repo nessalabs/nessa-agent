@@ -67,6 +67,9 @@ function stagingFailure(error: unknown): AttachmentStagingError {
         return new AttachmentStagingError("busy", error)
       case "upload_interrupted":
       case "upload_timeout":
+      // Let go of while it was arriving: nothing is wrong with the file, and
+      // uploading it again is the whole remedy.
+      case "attachment_not_kept":
       case "aborted":
         return new AttachmentStagingError("interrupted", error)
       case "unreachable":
