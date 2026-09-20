@@ -32,6 +32,15 @@ export interface SetupHandoffState {
   closeFailed: boolean
   /** How many attempts have been made, so the next one has its own number. */
   attempts: number
+  /**
+   * Which host call the next attempt makes.
+   *
+   * The two are not interchangeable. `hand-over` shows the panel, writes setup
+   * off and closes this window; `record` does the last two only, and is what
+   * the screen after a refused write asks for — the panel is already up, and
+   * showing it again re-anchors and refits a window somebody may have moved to.
+   */
+  resume: "hand-over" | "record"
 }
 
 /** Nothing asked for, nothing answered. */
@@ -40,6 +49,7 @@ export const noSetupHandoff: SetupHandoffState = {
   outcome: undefined,
   closeFailed: false,
   attempts: 0,
+  resume: "hand-over",
 }
 
 /** What can happen to the handoff. */
@@ -50,6 +60,8 @@ export type SetupHandoffEvent =
   | { type: "settled"; attempt: number; outcome: SetupHandoff }
   /** Somebody pressed the retry on the recovery screen. */
   | { type: "retry" }
+  /** Somebody pressed "save again" on the screen a refused write left. */
+  | { type: "save-again" }
   /** A close was asked for and the host said what it did. */
   | { type: "closed"; close: SetupWindowClose }
 
@@ -80,6 +92,10 @@ export function applySetupHandoff(
       // Everything the previous attempt left, except how many there have been:
       // the next attempt needs a number the outstanding one cannot answer to.
       return { ...noSetupHandoff, attempts: state.attempts }
+    case "save-again":
+      // The same fresh attempt, pointed at the write alone. Reached only from
+      // the screen a refused write leaves, where the panel is already up.
+      return { ...noSetupHandoff, attempts: state.attempts, resume: "record" }
     case "closed":
       // A browser has no window of its own to close. That is not a failure, and
       // it is also not a screen this can be reached from — the old surface

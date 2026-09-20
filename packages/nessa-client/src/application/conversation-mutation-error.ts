@@ -73,7 +73,14 @@ function refusal(cause: unknown): string | undefined {
  * asks whether it could already have been applied — and a control resolves its
  * conversation before it is dispatched, so it meets exactly the refusals a
  * creation meets and meets them just as early. A startup deadline belongs here
- * too: startup ends before anything reaches the provider. */
+ * too: startup ends before anything reaches the provider, and so do the image
+ * codes: in `submit` every one of them is raised before `enqueue` returns a
+ * receipt.
+ *
+ * Closed on purpose, with each entry checked against the gateway. A code that
+ * is not here leaves the outcome uncertain, which is the safe reading —
+ * `temporarily_unavailable` among them, which a supervising task also reports
+ * when work it had already admitted was lost. */
 const rejectedBeforeDispatch = (code: string): boolean =>
   (
     [
@@ -82,6 +89,11 @@ const rejectedBeforeDispatch = (code: string): boolean =>
       ConversationErrorCode.ConversationsNotConfigured,
       ConversationErrorCode.InvalidRequest,
       ConversationErrorCode.AgentStartupDeadline,
+      ConversationErrorCode.ConversationNotFound,
+      ConversationErrorCode.ConversationCapacity,
+      ConversationErrorCode.ImageInputUnsupported,
+      ConversationErrorCode.AttachmentNotFound,
+      ConversationErrorCode.AttachmentUnavailable,
     ] as string[]
   ).includes(code)
 

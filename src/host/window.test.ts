@@ -197,22 +197,51 @@ describe("handing setup over to the panel", () => {
     })
   })
 
-  // Survivable: a settings file that would not take the flag costs a second run
-  // of setup, not the panel somebody is waiting on.
-  it("hands over anyway when the completion write was refused", async () => {
+  // Not survivable the way this used to say. The write carries the completion
+  // flag and the chosen agent in one update, so losing it loses the choice, and
+  // every conversation of the launch then runs on the gateway's default while
+  // the screen says the handoff worked.
+  it("reports a refused write rather than a handoff that worked", async () => {
     const { finishSetupWindow } = await import("./window")
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     invoke.mockResolvedValue({
-      setupClosed: true,
+      // The host leaves the window open for exactly this, so the surface has
+      // somewhere to say it and something to offer.
+      setupClosed: false,
       closeError: null,
       recordError: "could not record that setup finished: disk full",
     })
-    await expect(finishSetupWindow(true)).resolves.toEqual({ outcome: "handed-over" })
-    expect(warn).toHaveBeenCalledWith(
-      "[nessa] could not record that setup finished",
-      "could not record that setup finished: disk full",
-    )
-    warn.mockRestore()
+    await expect(finishSetupWindow(true)).resolves.toEqual({
+      outcome: "setup-not-recorded",
+      cause: "could not record that setup finished: disk full",
+    })
+  })
+
+  it("asks for the write alone when saving again, and ends the handoff on it", async () => {
+    const { retrySetupRecord } = await import("./window")
+    invoke.mockResolvedValue({ setupClosed: true, closeError: null, recordError: null })
+    await expect(retrySetupRecord("codex")).resolves.toEqual({ outcome: "handed-over" })
+    // The panel is already up. Asking for the whole handoff again would summon
+    // it a second time, re-anchoring a window somebody may have moved to.
+    expect(invoke).toHaveBeenCalledWith("retry_setup_record", { agent: "codex" })
+  })
+
+  it("leaves the same screen up when saving again is refused again", async () => {
+    const { retrySetupRecord } = await import("./window")
+    invoke.mockResolvedValue({
+      setupClosed: false,
+      closeError: null,
+      recordError: "could not record that setup finished: disk full",
+    })
+    await expect(retrySetupRecord()).resolves.toEqual({
+      outcome: "setup-not-recorded",
+      cause: "could not record that setup finished: disk full",
+    })
+    // A host that cannot be asked at all leaves the same screen, for the same
+    // reason: nothing was written, and pressing it again is still the remedy.
+    invoke.mockRejectedValue(new Error("the host went away"))
+    await expect(retrySetupRecord()).resolves.toMatchObject({
+      outcome: "setup-not-recorded",
+    })
   })
 
   it("has no second window to hand over to outside the desktop host", async () => {

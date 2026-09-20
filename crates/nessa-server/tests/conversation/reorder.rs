@@ -32,6 +32,7 @@ async fn reordered_view_matches_real_dispatch_and_stale_order_cannot_resubmit() 
             caller("a"),
             "a".into(),
             "first".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -49,6 +50,7 @@ async fn reordered_view_matches_real_dispatch_and_stale_order_cannot_resubmit() 
                 caller(execution),
                 execution.into(),
                 execution.into(),
+                Vec::new(),
                 SubmissionMode::Queue,
             )
             .await

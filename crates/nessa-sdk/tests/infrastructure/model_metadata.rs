@@ -81,6 +81,35 @@ fn shipped_catalog_loads_from_a_file_and_contains_only_the_current_lineup() {
         ),
         (1_000_000, 128_000)
     );
+    // Image limits are recorded for every Claude model and differ only in the
+    // resolution the model sees. OpenAI's are not recorded, so those models are
+    // offered no images however their modality flag reads.
+    for model in models {
+        let limits = model.image_input.as_ref();
+        if model.provider != "anthropic" {
+            assert_eq!(limits, None, "{}", model.model_id);
+            continue;
+        }
+        let limits = limits.unwrap();
+        assert_eq!(
+            limits.media_types,
+            ["image/jpeg", "image/png", "image/gif", "image/webp"]
+        );
+        assert_eq!(
+            (
+                limits.max_encoded_bytes,
+                limits.max_edge_px,
+                limits.many_images_max_edge_px
+            ),
+            (5_000_000, 8000, 2000)
+        );
+        let native = if model.model_id.starts_with("claude-haiku-4-5") {
+            1568
+        } else {
+            2576
+        };
+        assert_eq!(limits.native_long_edge_px, native, "{}", model.model_id);
+    }
 }
 
 #[test]

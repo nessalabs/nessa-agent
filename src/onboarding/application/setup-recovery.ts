@@ -2,16 +2,20 @@
  * What the setup window has to put on screen when the handoff did not end with
  * this window quietly gone.
  *
- * Two different failures reach this point and they are not the same news. A
+ * Three different failures reach this point and they are not the same news. A
  * panel that never came up leaves somebody with no Nessa at all, and the thing
  * to offer is the handoff again. A panel that came up over a window that would
  * not close leaves them with Nessa running behind a window in the way, and the
  * thing to offer is that window's close — retrying the handoff would summon a
- * panel that is already up and re-run a write already made.
+ * panel that is already up and re-run a write already made. A panel that came
+ * up over a write this machine refused leaves them with Nessa running and the
+ * agent they just chose unrecorded, and the thing to offer is that write
+ * again, alone.
  *
  * Reporting the second as the first is what this module exists to stop: the
  * screen said "Nessa could not open the panel" while the panel stood open
- * behind it.
+ * behind it. The third was reported as nothing at all — a console line, and a
+ * window that closed itself before it could say anything.
  *
  * It is a function rather than branches inside the surface for the reason
  * `readiness-check.ts` and `dismiss-shortcut.ts` are: the decision is the part
@@ -29,12 +33,23 @@ export interface SetupRecovery {
   /** The sentence under it: what is true now, and what to do about it. */
   detail: string
   /**
-   * True when the panel is on screen and this window is the only thing left to
-   * deal with. The screen then offers a close alone; there is nothing to hand
-   * over again.
+   * The one thing worth pressing besides closing the window, or `null` when
+   * closing is all there is left to do.
+   *
+   * Named rather than a `panelShown` flag, which it used to be: that flag
+   * answered "is the panel up" and was read as "is there anything to retry",
+   * and the two stopped agreeing the moment a third ending existed where the
+   * panel is up and there *is* something to ask for again.
    */
-  panelShown: boolean
+  offer: SetupRecoveryOffer | null
 }
+
+/** What the recovery screen can ask the host for. */
+export type SetupRecoveryOffer =
+  /** The whole handoff, from showing the panel. Only when it never came up. */
+  | "hand-over-again"
+  /** The write and the close alone, because the panel is already up. */
+  | "save-again"
 
 /**
  * The screen a handoff leaves behind, or `null` when it leaves none.
@@ -57,7 +72,18 @@ export function setupRecovery(handoff: SetupHandoff | undefined): SetupRecovery 
         heading: "Nessa is open behind this window",
         detail:
           "Setup finished and the panel is ready. This window would not close — try closing it again.",
-        panelShown: true,
+        offer: null,
+      }
+    // The panel is up and usable, so this is not an outage — but nothing was
+    // written down, which costs the agent that was just chosen as well as the
+    // straight start next time. Both facts belong on screen, because a person
+    // who closes this window instead has lost the choice without being told.
+    case "setup-not-recorded":
+      return {
+        heading: "Nessa is open, but setup was not saved",
+        detail:
+          "The panel is ready to use. This machine would not record that setup finished, so Nessa will ask again next time and this session will use its default agent. Try saving again.",
+        offer: "save-again",
       }
     case "panel-unavailable":
     default:
@@ -65,7 +91,7 @@ export function setupRecovery(handoff: SetupHandoff | undefined): SetupRecovery 
         heading: "Nessa could not open the panel",
         detail:
           "Setup finished. Try again, or summon Nessa from the menu bar icon or with your summon shortcut.",
-        panelShown: false,
+        offer: "hand-over-again",
       }
   }
 }

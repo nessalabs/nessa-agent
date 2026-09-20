@@ -44,6 +44,8 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo test -p nessa-mcp
       - run: cargo clippy -p nessa-mcp --all-targets -- -D warnings
+      - run: cargo test -p nessa-images
+      - run: cargo clippy -p nessa-images --all-targets -- -D warnings
       - run: node scripts/check-architecture.mjs
       # The repository's own scripts had tests that nothing ran: a developer
       # setup script and a one-time data migration, both of which change a

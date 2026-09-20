@@ -1,11 +1,11 @@
 #![deny(missing_docs)]
 
 use super::{
-    CleanupFuture, OperationCapabilities, ProviderExecutionFuture, ProviderExecutionReply,
-    ProviderOperationFailure, ProviderOperationFuture, ProviderSessionBackend,
-    ProviderSessionState, SessionCloseRequest, SteeringOutcome,
+    CleanupFuture, ImageInputRefusal, OperationCapabilities, ProviderExecutionFuture,
+    ProviderExecutionReply, ProviderOperationFailure, ProviderOperationFuture,
+    ProviderSessionBackend, ProviderSessionState, SessionCloseRequest, SteeringOutcome,
 };
-use crate::application::agent_execution::agents::AgentError;
+use crate::application::agent_execution::agents::{AgentError, AgentFuture};
 use crate::application::agent_execution::{
     executions::{ExecutionAudit, ExecutionAuditRecord, ExecutionRequest},
     permissions::{
@@ -18,7 +18,7 @@ use crate::domain::{
         executions::ExecutionId, permissions::PermissionStateView, sessions::ExecutionSessionId,
     },
     effective_capabilities::value_objects::{
-        CapabilityRequirement, EffectiveCapabilities, Modality,
+        CapabilityError, CapabilityRequirement, EffectiveCapabilities, Modality,
     },
 };
 use std::sync::Arc;
@@ -27,7 +27,9 @@ use std::sync::Arc;
 /// Adapters construct this handle; runtime controls are crate-private so callers
 /// go through Agent storage, hooks, and scheduling.
 /// A provider context client. Clones share its execution, shutdown, and restoration lifecycle.
-/// Admission uses the same immutable capabilities selected at session creation.
+/// Admission uses the same immutable capabilities selected at session creation,
+/// the connected agent's negotiated answer on images when that is known, and the
+/// backend's own `validate_input`.
 /// The backend owns execution concurrency and cleanup; the host authorizes answers.
 ///
 /// Consumer code cannot dispatch this handle directly:
@@ -66,10 +68,7 @@ impl ProviderSession {
     }
     /// Deliver application-owned lifecycle evidence to the mandatory audit sink.
     /// The sink defines its bounded acknowledgement and durability contract.
-    pub(crate) fn record_audit(
-        &self,
-        record: ExecutionAuditRecord,
-    ) -> crate::application::agent_execution::agents::AgentFuture<'_, ()> {
+    pub(crate) fn record_audit(&self, record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
         self.audit.record(record)
     }
     pub(crate) fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
@@ -88,18 +87,62 @@ impl ProviderSession {
     pub fn operation_capabilities(&self) -> OperationCapabilities {
         self.backend.operation_capabilities()
     }
-    /// Send one new user message. The ACP backend automatically restores a closed
-    /// context before execution; missing history or unsupported resume is an error.
-    /// The provider retains conversation history.
+    /// Decide whether `input` may be accepted at all. Every way in runs this
+    /// before anything is saved, queued, or sent: an immediate invocation, a
+    /// queued one, queued steering, and native steering, and again when the
+    /// backend is finally called.
+    ///
+    /// In order: the text's byte limit; the modalities and token budget of the
+    /// selected model; each image against that model's recorded limits; the
+    /// connected agent's own answer on images; then whatever the backend
+    /// already knows it could never deliver.
+    ///
+    /// The agent's answer is refused only when it is a known "no". While a
+    /// context is being opened or restored the answer is not known, and that is
+    /// not a refusal: the message is admitted, and the adapter answers the same
+    /// typed [`ImageInputRefusal::AgentDoesNotAccept`] at dispatch if the
+    /// restored agent takes no images. A closed context keeps its last
+    /// negotiation, because the same agent is what a restoration would start.
     pub(crate) fn validate(&self, input: &ExecutionRequest) -> Result<(), AgentError> {
         input.validate_message_size()?;
+        // Require what the message actually holds. An image sent to a text-only
+        // binding is refused here, before acceptance, and never dropped.
+        let images = input.user_message.images();
+        let mut requirements = Vec::with_capacity(2);
+        if input.user_message.text().is_some() {
+            requirements.push(CapabilityRequirement::Input(Modality::Text));
+        }
+        if !images.is_empty() {
+            requirements.push(CapabilityRequirement::Input(Modality::Image));
+        }
         self.capabilities
             .validate(
-                &[CapabilityRequirement::Input(Modality::Text)],
+                &requirements,
                 input.estimated_input_tokens,
                 input.reserved_output_tokens,
             )
-            .map_err(|error| AgentError::InvalidInput(error.to_string()))
+            .map_err(offered_image_input_or)?;
+        if !images.is_empty() {
+            // Image input is offered exactly when its limits are recorded, so
+            // the modality check above has already refused a model without them.
+            // Answering the same refusal rather than asserting keeps that one
+            // fact one typed error wherever the two are ever read apart.
+            let Some(limits) = self.capabilities.image_input() else {
+                return Err(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered));
+            };
+            for image in images {
+                limits
+                    .check(image.media_type(), image.size())
+                    .map_err(|violation| AgentError::ImageInputRefused(violation.into()))?;
+            }
+            let agent = self.backend.operation_capabilities();
+            if agent.negotiated && !agent.image_input {
+                return Err(AgentError::ImageInputRefused(
+                    ImageInputRefusal::AgentDoesNotAccept,
+                ));
+            }
+        }
+        self.backend.validate_input(input)
     }
     /// Dispatch `input` after checking actual message bytes and caller-estimated tokens.
     /// This adapter operation does not persist evidence or run Agent hooks.
@@ -190,5 +233,17 @@ impl ProviderSession {
     /// silently create a replacement conversation.
     pub(crate) fn shutdown(&self, request: SessionCloseRequest) -> CleanupFuture<'_> {
         self.backend.close(request)
+    }
+}
+
+/// One unmet requirement as the caller's typed answer: an image the attachment
+/// never offered to carry is the same fact as an image the agent refuses, and
+/// is reported as such rather than as a sentence inside `InvalidInput`.
+fn offered_image_input_or(error: CapabilityError) -> AgentError {
+    match error {
+        CapabilityError::Unsupported(CapabilityRequirement::Input(Modality::Image)) => {
+            AgentError::ImageInputRefused(ImageInputRefusal::NotOffered)
+        }
+        other => AgentError::InvalidInput(other.to_string()),
     }
 }

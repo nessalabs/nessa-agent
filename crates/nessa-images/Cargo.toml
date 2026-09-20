@@ -1,0 +1,22 @@
+[package]
+name = "nessa-images"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.89"
+publish = false
+description = "Fit an image to a consumer's limits: convert its encoding, scale it down, compress it."
+
+[dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff", "ico", "qoi", "pnm", "hdr"] }
+# The JPEG decoder `image` already builds on, named here to run it in strict
+# mode: `image` only offers its forgiving mode. Same versions, nothing new built.
+zune-core = "0.5.3"
+zune-jpeg = "0.5.15"
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFData", "CFDictionary", "CFNumber", "CFString", "CFBase", "CFCGTypes"] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = ["std", "CGImage", "CGContext", "CGBitmapContext", "CGColorSpace", "CGGeometry"] }
+objc2-image-io = { version = "0.3.2", default-features = false, features = ["std", "CGImageSource", "CGImageProperties", "objc2-core-graphics"] }

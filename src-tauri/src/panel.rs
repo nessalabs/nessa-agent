@@ -144,7 +144,9 @@ pub struct SetupHandoff {
     /// Why the setup window is still on screen, when it is.
     pub close_error: Option<String>,
     /// Why completion was not written down, when it was asked for and refused.
-    /// The panel is up either way; the cost is a second run of setup.
+    /// The panel is up either way, and the setup window is deliberately still
+    /// on screen: this is the one failure whose only remedy is asking again,
+    /// and the window is the only surface left that can offer it.
     pub record_error: Option<String>,
 }
 
@@ -204,16 +206,45 @@ pub fn finish_setup(
         // nothing after startup reads this flag, and the launch that does reads
         // it off disk before anything is managed at all.
         || record_completion(&*settings_store, agent.clone()),
-        || match app.get_webview_window(SETUP_WINDOW) {
-            // Closing it destroys it, which is what lets the panel back down to
-            // its ordinary level (see the `Destroyed` handler in `main.rs`).
-            Some(setup) => setup
-                .close()
-                .map_err(|error| format!("could not close setup: {error}")),
-            // Already gone. The end state this asks for is the one that holds.
-            None => Ok(()),
-        },
+        || close_setup_window(&app),
     )
+}
+
+/// Write setup off again, after a handoff whose write was refused.
+///
+/// The panel is already up — `finish_setup` showed it before it tried to write
+/// — so this is the write and the close alone. Summoning the panel a second
+/// time is not a no-op: `show` re-anchors and refits a window somebody may have
+/// moved to, which is why the recovery screen offers this rather than the whole
+/// handoff again.
+///
+/// The agent travels again because the write is one update carrying both facts,
+/// and the surface still has the choice it finished on; nothing was recorded
+/// for it to be read back from.
+#[tauri::command]
+pub fn retry_setup_record(
+    app: AppHandle,
+    deps: State<'_, HostDependencies>,
+    agent: Option<String>,
+) -> SetupHandoff {
+    let settings_store = deps.settings.clone();
+    settle(
+        || record_completion(&*settings_store, agent),
+        || close_setup_window(&app),
+    )
+}
+
+/// Close the setup window, or report why it would not go.
+fn close_setup_window(app: &AppHandle) -> Result<(), String> {
+    match app.get_webview_window(SETUP_WINDOW) {
+        // Closing it destroys it, which is what lets the panel back down to
+        // its ordinary level (see the `Destroyed` handler in `main.rs`).
+        Some(setup) => setup
+            .close()
+            .map_err(|error| format!("could not close setup: {error}")),
+        // Already gone. The end state this asks for is the one that holds.
+        None => Ok(()),
+    }
 }
 
 /// The order of the handoff, with its three effects supplied.
@@ -229,22 +260,55 @@ fn hand_over(
 ) -> Result<SetupHandoff, String> {
     show_panel()?;
 
-    let record_error = if completed { record().err() } else { None };
-    if let Some(error) = &record_error {
-        // Survivable: the panel is up, and the cost is one more run of setup.
-        eprintln!("[nessa] {error}");
+    if !completed {
+        // Nothing to write: leaving setup is free to change its mind.
+        return Ok(close_only(close_setup));
     }
+    Ok(settle(record, close_setup))
+}
 
+/// Write setup off and close the window, which is the second half of a handoff
+/// and the whole of a retry after the write refused.
+///
+/// The window stays when the write refuses, and that is the point of the split.
+/// This used to close it anyway and call the cost "one more run of setup",
+/// which was wrong twice over. The write carries the completion flag and the
+/// agent in one update, so losing it loses the choice as well: `chosen_agent`
+/// then truthfully answers that nobody chose, the panel rightly declines to
+/// remember a choice nobody made, and every conversation of that launch runs on
+/// the gateway's default — the exact failure the handoff exists to prevent,
+/// reached by another road and reported as a handoff that worked. Closing the
+/// window also destroyed the only surface that could say so.
+///
+/// So it is kept, and `setup-recovery.ts` gives it a screen that offers this
+/// step again. Only this step: the panel is already up, and asking for the
+/// whole handoff again would summon a panel that is on screen.
+fn settle(
+    record: impl FnOnce() -> Result<(), String>,
+    close_setup: impl FnOnce() -> Result<(), String>,
+) -> SetupHandoff {
+    if let Some(error) = record().err() {
+        eprintln!("[nessa] {error}");
+        return SetupHandoff {
+            setup_closed: false,
+            close_error: None,
+            record_error: Some(error),
+        };
+    }
+    close_only(close_setup)
+}
+
+/// Close the setup window and report what that did.
+fn close_only(close_setup: impl FnOnce() -> Result<(), String>) -> SetupHandoff {
     let close_error = close_setup().err();
     if let Some(error) = &close_error {
         eprintln!("[nessa] {error}");
     }
-
-    Ok(SetupHandoff {
+    SetupHandoff {
         setup_closed: close_error.is_none(),
         close_error,
-        record_error,
-    })
+        record_error: None,
+    }
 }
 
 /// Put the setup window on screen, now that its page has rendered.
@@ -600,8 +664,11 @@ mod tests {
         assert_eq!(steps.order(), Vec::<&str>::new());
     }
 
+    /// The window is the only surface that can say the choice was not saved,
+    /// and the only one that can offer to save it again. Closing it over a
+    /// refused write destroyed that surface and reported a handoff that worked.
     #[test]
-    fn a_refused_write_still_closes_the_setup_window() {
+    fn a_refused_write_keeps_the_setup_window_on_screen() {
         let steps = Steps::default();
         let handoff = hand_over(
             true,
@@ -617,20 +684,64 @@ mod tests {
         )
         .expect("the panel came up");
 
-        // Survivable: the cost is one more run of setup, not the panel.
-        assert_eq!(steps.order(), ["show", "close"]);
-        assert!(handoff.setup_closed);
+        assert_eq!(steps.order(), ["show"], "the window was closed anyway");
+        assert!(!handoff.setup_closed);
+        assert!(
+            handoff.close_error.is_none(),
+            "nothing tried to close it, so nothing refused"
+        );
         assert_eq!(
             handoff.record_error.as_deref(),
             Some("could not record that setup finished: disk full")
         );
     }
 
-    /// A settings file that cannot be read is now *refused* the flag rather
-    /// than replaced with defaults carrying it. The refusal has to cost a
-    /// second run of setup and nothing more: the panel is still shown and the
-    /// setup window still closed, with the reason reported rather than
-    /// swallowed.
+    /// What the recovery screen asks for. The panel is already up, so this is
+    /// the write and the close alone, and it ends the handoff for good.
+    #[test]
+    fn saving_again_writes_and_then_closes_the_window() {
+        let steps = Steps::default();
+        let handoff = settle(
+            || {
+                steps.took("record");
+                Ok(())
+            },
+            || {
+                steps.took("close");
+                Ok(())
+            },
+        );
+
+        assert_eq!(steps.order(), ["record", "close"]);
+        assert!(handoff.setup_closed);
+        assert!(handoff.record_error.is_none());
+    }
+
+    /// A second refusal leaves exactly what the first did, so the screen it
+    /// was pressed from is still there to be pressed again.
+    #[test]
+    fn saving_again_and_being_refused_again_keeps_the_window() {
+        let steps = Steps::default();
+        let handoff = settle(
+            || Err("could not record that setup finished: disk full".to_string()),
+            || {
+                steps.took("close");
+                Ok(())
+            },
+        );
+
+        assert_eq!(steps.order(), Vec::<&str>::new());
+        assert!(!handoff.setup_closed);
+        assert_eq!(
+            handoff.record_error.as_deref(),
+            Some("could not record that setup finished: disk full")
+        );
+    }
+
+    /// A settings file that cannot be read is *refused* the flag rather than
+    /// replaced with defaults carrying it. The panel is still shown — a file
+    /// this build cannot read is not a reason to withhold it — and the reason
+    /// is reported rather than swallowed, on a window that stays up to say it.
     #[test]
     fn a_settings_file_that_will_not_take_the_flag_still_hands_the_panel_over() {
         let steps = Steps::default();
@@ -655,8 +766,8 @@ mod tests {
         )
         .expect("a file this build cannot read is not a reason to withhold the panel");
 
-        assert_eq!(steps.order(), ["show", "close"]);
-        assert!(handoff.setup_closed);
+        assert_eq!(steps.order(), ["show"]);
+        assert!(!handoff.setup_closed);
         assert!(handoff.close_error.is_none());
         assert_eq!(handoff.record_error.as_deref(), Some(refusal.as_str()));
     }
@@ -761,9 +872,10 @@ mod tests {
         assert_eq!(settings.storage.get(&settings.path), None);
     }
 
-    /// The refusal the handoff is built to survive, produced by a real settings
-    /// store over a file this build cannot parse: the flag is refused, the
-    /// person's bytes are still on disk, and the panel is handed over anyway.
+    /// The refusal the handoff has to report, produced by a real settings store
+    /// over a file this build cannot parse: the flag is refused, the person's
+    /// bytes are still on disk, the panel is up anyway — and the setup window
+    /// stays, because it is the only thing that can say the choice was lost.
     #[test]
     fn a_settings_file_that_will_not_parse_refuses_the_flag_and_keeps_its_bytes() {
         let settings = crate::settings::testing::in_memory();
@@ -778,7 +890,7 @@ mod tests {
         )
         .expect("a file this build cannot read is not a reason to withhold the panel");
 
-        assert!(handoff.setup_closed);
+        assert!(!handoff.setup_closed);
         assert!(handoff
             .record_error
             .as_deref()

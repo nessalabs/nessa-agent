@@ -7,7 +7,8 @@ async fn reject_duplicate_ids(storage: &dyn SessionStorage) {
     lease.save(original.clone()).await.unwrap();
     let mut invalid = original.clone();
     let mut duplicate = invalid.invocations[0].clone();
-    duplicate.request.user_message = PromptText::new("different logical input").unwrap();
+    duplicate.request.user_message =
+        UserMessage::text_only(PromptText::new("different logical input").unwrap());
     invalid.invocations.push(duplicate);
     assert!(matches!(
         lease.save(invalid).await,

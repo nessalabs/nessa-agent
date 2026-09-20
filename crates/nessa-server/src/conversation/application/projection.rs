@@ -1,7 +1,7 @@
 use super::view::{
-    ConversationCapabilities, ConversationMessage, ConversationMessageStatus, ConversationPart,
-    ConversationPending, ConversationPendingMode, ConversationPermission,
-    ConversationPermissionOption, ConversationTool, ConversationView,
+    ConversationAttachment, ConversationCapabilities, ConversationMessage,
+    ConversationMessageStatus, ConversationPart, ConversationPending, ConversationPendingMode,
+    ConversationPermission, ConversationPermissionOption, ConversationTool, ConversationView,
 };
 use nessa_sdk::application::agent_execution::{
     executions::{ExecutionEvent, ExecutionUpdate},
@@ -9,6 +9,7 @@ use nessa_sdk::application::agent_execution::{
 };
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
+    prompts::UserMessage,
     tools::{ToolContentView, ToolStatus},
 };
 use std::collections::HashSet;
@@ -110,13 +111,17 @@ impl Projection {
             event_count: 0,
             execution_id: id.into(),
             user_text: String::new(),
+            attachments: Vec::new(),
             steering_target: None,
             status: ConversationMessageStatus::Running,
             error: None,
         });
         self.view.messages.len() - 1
     }
-    pub fn admitted(&mut self, id: &str, text: &str, mode: ConversationPendingMode) {
+    pub fn admitted(&mut self, id: &str, input: &UserMessage, mode: ConversationPendingMode) {
+        let text = input.text_str();
+        let attachments: Vec<ConversationAttachment> =
+            input.images().iter().map(Into::into).collect();
         let existed = self
             .view
             .messages
@@ -125,6 +130,7 @@ impl Projection {
         let index = self.ensure_message(id);
         let message = &mut self.view.messages[index];
         message.user_text = clipped(text, MAX_TEXT);
+        message.attachments = attachments.clone();
         if !existed {
             message.status = ConversationMessageStatus::Queued;
         }
@@ -139,6 +145,7 @@ impl Projection {
                 self.view.pending.push(ConversationPending {
                     execution_id: id.into(),
                     text: clipped(text, MAX_TEXT),
+                    attachments,
                     mode,
                 });
             } else {
@@ -502,7 +509,14 @@ impl Projection {
             .and_then(|event| event.target.as_ref())
             .map(|target| target.as_str().to_owned());
         self.view.messages[index].user_text =
-            clipped(record.request.user_message.as_str(), MAX_TEXT);
+            clipped(record.request.user_message.text_str(), MAX_TEXT);
+        self.view.messages[index].attachments = record
+            .request
+            .user_message
+            .images()
+            .iter()
+            .map(Into::into)
+            .collect();
         self.view.messages[index].parts.clear();
         self.view.messages[index].event_count = 0;
         self.view.messages[index].steering_offset = record.target_event_offset;

@@ -39,11 +39,16 @@ use crate::agents::domain::AgentId;
 use crate::conversation::application::ConversationAgent;
 use crate::core::RunError;
 use nessa_auth::application::ports::Clock;
-use nessa_sdk::infrastructure::acp::sessions::StdioMcpServer;
+use nessa_sdk::{
+    application::agent_execution::providers::UserImageSource,
+    domain::model_metadata::{entities::ModelMetadata, value_objects::ImageInputLimits},
+    infrastructure::{acp::sessions::StdioMcpServer, model_metadata_json::load_catalog},
+};
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     ffi::OsString,
+    fs::File,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -368,6 +373,101 @@ pub(super) fn launch_environment(agent: AgentId) -> BTreeMap<OsString, OsString>
     environment
 }
 
+/// Which model catalog entries an agent's harness is allowed to run.
+///
+/// Not a preference: each harness speaks to one vendor's API and is signed in
+/// to it, so a catalog entry from another vendor is a model that agent cannot
+/// reach, and saying so at startup beats a provider refusing every prompt.
+fn catalog_provider(agent: AgentId) -> &'static str {
+    match agent {
+        AgentId::Claude => "anthropic",
+        AgentId::Codex => "openai",
+        AgentId::Opencode => "opencode",
+    }
+}
+
+/// The model this agent runs, as the catalog records it.
+///
+/// Read here rather than inside the provider because two things need it: the
+/// provider is built for it, and uploaded images are fitted to the image
+/// limits it publishes.
+pub(super) fn model(
+    agent: AgentId,
+    config: &AgentsConfig,
+    runtime: &AgentRuntime,
+) -> Result<ModelMetadata, RunError> {
+    ModelMetadata::try_from(
+        load_catalog(
+            File::open(&config.catalog)
+                .map_err(|_| RunError::Agent("cannot read model catalog".into()))?,
+        )
+        .map_err(|e| RunError::Agent(e.to_string()))?
+        .select(catalog_provider(agent), &runtime.model)
+        .map_err(|e| RunError::Agent(e.to_string()))?,
+    )
+    .map_err(|e| RunError::Agent(e.to_string()))
+}
+
+/// The image limits every configured agent can meet.
+///
+/// Uploads are kept once and shared: one attachment store, holding images for
+/// conversations that each run on their own agent. So an image is fitted to
+/// what the strictest configured model accepts rather than to the selected
+/// one's — fitting it to one agent's model and sending it to another's is how
+/// an image that uploaded cleanly comes back refused at the moment it is sent,
+/// which is the one place there is nothing left to do about it.
+///
+/// `None` is a gateway that keeps no images: either no configured model
+/// publishes image input, or the models between them share no encoding, and in
+/// both cases there is no image this gateway could store and then send.
+pub(super) fn image_limits(config: &AgentsConfig) -> Result<Option<ImageInputLimits>, RunError> {
+    let mut strictest: Option<ImageInputLimits> = None;
+    for (agent, runtime) in config.agents() {
+        let Some(limits) = model(agent, config, runtime)?.image_input().cloned() else {
+            // A model that takes no images cannot be met by any image at all.
+            return Ok(None);
+        };
+        strictest = Some(match strictest {
+            None => limits,
+            Some(held) => match narrower(&held, &limits) {
+                Some(both) => both,
+                // No encoding both accept, so nothing is storable for both.
+                None => return Ok(None),
+            },
+        });
+    }
+    Ok(strictest)
+}
+
+/// The limits an image has to meet to satisfy both models.
+///
+/// Every figure is the smaller of the two, and the encodings are those both
+/// accept, in the first's published order. `None` when that leaves no encoding.
+/// Taking the smaller of each edge cannot break the rule that neither smaller
+/// edge exceeds the maximum: each model already satisfies it, so the smallest
+/// maximum is at least its own model's smaller edges, and so at least the
+/// smallest of them.
+fn narrower(held: &ImageInputLimits, other: &ImageInputLimits) -> Option<ImageInputLimits> {
+    let media_types: Vec<_> = held
+        .media_types()
+        .iter()
+        .filter(|media_type| other.media_types().contains(media_type))
+        .copied()
+        .collect();
+    if media_types.is_empty() {
+        return None;
+    }
+    ImageInputLimits::new(
+        media_types,
+        held.max_encoded_bytes().min(other.max_encoded_bytes()),
+        held.max_edge_px().min(other.max_edge_px()),
+        held.many_images_max_edge_px()
+            .min(other.many_images_max_edge_px()),
+        held.native_long_edge_px().min(other.native_long_edge_px()),
+    )
+    .ok()
+}
+
 /// Build a provider for every configured agent that can be built.
 ///
 /// All of them, not only the selected one: a conversation records the agent it
@@ -407,13 +507,25 @@ pub(super) fn providers(
     config: &AgentsConfig,
     directory: &Path,
     clock: Arc<dyn Clock>,
+    images: Arc<dyn UserImageSource>,
 ) -> Result<ConfiguredAgents, RunError> {
     config.validate()?;
     let selected = config.selected()?;
     let mut providers = HashMap::new();
     let mut unavailable = HashSet::new();
     for (agent, runtime) in config.agents() {
-        let provider = match build::provider(agent, config, runtime, directory, clock.clone()) {
+        // Every agent is given the source, not only the one whose profile is
+        // known to use it: the runtime sends an image only to an agent that
+        // advertised `promptCapabilities.image`, so an agent that takes none is
+        // offered none without this having to know which those are.
+        let provider = match build::provider(
+            agent,
+            config,
+            runtime,
+            directory,
+            clock.clone(),
+            images.clone(),
+        ) {
             Ok(provider) => provider,
             Err(failure) if agent == selected => return Err(failure),
             Err(failure) => {
@@ -454,6 +566,7 @@ pub(super) fn providers(
     config: &AgentsConfig,
     _: &Path,
     _: Arc<dyn Clock>,
+    _: Arc<dyn UserImageSource>,
 ) -> Result<ConfiguredAgents, RunError> {
     config.validate()?;
     Err(RunError::Agent(
@@ -492,40 +605,47 @@ mod build {
     use crate::conversation::infrastructure::DurableExecutionAudit;
     use nessa_auth::application::ports::Clock;
     use nessa_sdk::{
-        application::agent_execution::{agents::AgentError, providers::AgentProvider},
+        application::agent_execution::{
+            agents::AgentError,
+            providers::{AgentProvider, UserImageSource},
+        },
         domain::{
             agent_execution::{
                 permissions::PermissionOfferPolicy,
-                prompts::{PromptSource, PromptSourceKind, SystemPrompt, SystemPromptBuilder},
+                prompts::{
+                    PromptSource, PromptSourceKind, SystemPrompt, SystemPromptBuilder, UserMessage,
+                },
             },
             common::value_objects::TokenLimits,
-            model_metadata::entities::ModelMetadata,
         },
         infrastructure::{
             acp::sessions::AcpConfig, claude_acp::sessions::ClaudeAcpProvider,
-            codex_acp::sessions::CodexAcpProvider, model_metadata_json::load_catalog,
-            opencode_acp::sessions::OpencodeAcpProvider,
+            codex_acp::sessions::CodexAcpProvider, opencode_acp::sessions::OpencodeAcpProvider,
         },
     };
     use std::{
-        fs::File,
+        collections::BTreeMap,
+        ffi::OsString,
         path::{Path, PathBuf},
         sync::Arc,
     };
 
-    /// Which model catalog entries an agent's harness is allowed to run.
-    ///
-    /// Not a preference: each harness speaks to one vendor's API and is signed
-    /// in to it, so a catalog entry from another vendor is a model that agent
-    /// cannot reach, and saying so at startup beats a provider refusing every
-    /// prompt.
-    fn catalog_provider(agent: AgentId) -> &'static str {
-        match agent {
-            AgentId::Claude => "anthropic",
-            AgentId::Codex => "openai",
-            AgentId::Opencode => "opencode",
-        }
-    }
+    /// The largest ACP frame, derived from the largest message rather than
+    /// chosen beside it. One `session/prompt` carries every image of a message
+    /// as base64, which grows bytes by a third: `UserMessage::MAX_IMAGE_BYTES`
+    /// (10 MiB) becomes 13⅓ MiB. With 8 KiB of text and the JSON around each
+    /// block, that fits 16 MiB and nothing smaller that is a round number. 16
+    /// MiB is also the most `AcpConfig` accepts, so the image budget cannot
+    /// grow without the SDK's ceiling growing first.
+    const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+    const _: () = assert!(
+        UserMessage::MAX_IMAGE_BYTES as usize / 3 * 4 + 1024 * 1024 <= MAX_FRAME_BYTES,
+        "one message's images, encoded, must fit one ACP frame"
+    );
+    /// What an agent may send us, which is the buffer this host can be made to
+    /// allocate for one frame and has nothing to do with the prompts it writes.
+    /// An agent answers in text, so it keeps the mebibyte it had before images.
+    const MAX_INCOMING_FRAME_BYTES: usize = 1024 * 1024;
 
     /// Nessa's own instructions, attributed to Nessa rather than to the agent.
     ///
@@ -564,18 +684,25 @@ mod build {
 
     /// The launch configuration composition injects, separated from resolving
     /// what goes into it so a test can read back the values actually used.
-    /// Everything here is a decision; nothing here reads the filesystem.
+    /// Everything here is a decision; nothing here reads the filesystem or this
+    /// process's own environment.
+    ///
+    /// `images` is the one dependency rather than a decision: the source a
+    /// binding reads a message's uploads from, and `None` is a binding that
+    /// sends none.
     pub(super) fn launch_configuration(
-        agent: AgentId,
         config: &AgentsConfig,
         runtime: &AgentRuntime,
         workspace: PathBuf,
+        environment: BTreeMap<OsString, OsString>,
+        credential_environment: BTreeMap<OsString, OsString>,
+        images: Option<Arc<dyn UserImageSource>>,
     ) -> AcpConfig {
         AcpConfig {
             executable: runtime.command.clone(),
             arguments: runtime.args.iter().map(Into::into).collect(),
-            environment: super::process_environment(agent),
-            credential_environment: super::credential_environment(agent),
+            environment,
+            credential_environment,
             workspace,
             tools_enabled: runtime.tools_enabled,
             mcp_servers: config.mcp_servers.clone(),
@@ -590,7 +717,9 @@ mod build {
             shutdown_grace: budgets::shutdown_grace(),
             kill_timeout: budgets::kill_timeout(),
             event_capacity: 256,
-            max_frame_bytes: 1024 * 1024,
+            max_frame_bytes: MAX_FRAME_BYTES,
+            max_incoming_frame_bytes: MAX_INCOMING_FRAME_BYTES,
+            images,
         }
     }
 
@@ -600,18 +729,10 @@ mod build {
         runtime: &AgentRuntime,
         directory: &Path,
         clock: Arc<dyn Clock>,
+        images: Arc<dyn UserImageSource>,
     ) -> Result<Arc<dyn AgentProvider>, RunError> {
         let invalid = |error| RunError::Agent(format!("{error}"));
-        let model = ModelMetadata::try_from(
-            load_catalog(
-                File::open(&config.catalog)
-                    .map_err(|_| RunError::Agent("cannot read model catalog".into()))?,
-            )
-            .map_err(|e| RunError::Agent(e.to_string()))?
-            .select(catalog_provider(agent), &runtime.model)
-            .map_err(|e| RunError::Agent(e.to_string()))?,
-        )
-        .map_err(|e| RunError::Agent(e.to_string()))?;
+        let model = super::model(agent, config, runtime)?;
         let workspace = config
             .workspace
             .canonicalize()
@@ -626,7 +747,14 @@ mod build {
             .map_err(|e| RunError::Agent(e.to_string()))?;
         let audit =
             Arc::new(DurableExecutionAudit::new(directory.join("audit"), clock).map_err(invalid)?);
-        let acp = launch_configuration(agent, config, runtime, workspace);
+        let acp = launch_configuration(
+            config,
+            runtime,
+            workspace,
+            super::process_environment(agent),
+            super::credential_environment(agent),
+            Some(images),
+        );
         let prompt = system_prompt()?;
         let failed = |e: AgentError| RunError::Agent(format!("{}: {e}", agent.name()));
         let provider: Arc<dyn AgentProvider> = match agent {

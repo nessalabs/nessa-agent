@@ -7,7 +7,7 @@ use crate::application::agent_execution::permissions::{
 use crate::application::agent_execution::providers::ProviderCleanup;
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::permissions::{PermissionOptionId, PermissionStateView};
-use crate::domain::agent_execution::prompts::PromptText;
+use crate::domain::agent_execution::prompts::{PromptText, UserMessage};
 use crate::domain::agent_execution::tools::ToolCallUpdate;
 use crate::infrastructure::acp::executions::event_queue::EventReceiver;
 use std::{pin::Pin, sync::Mutex, task::Context};
@@ -131,12 +131,15 @@ async fn begin(
     worker
         .commands
         .send(Command::ExecutionRequest(
-            ExecutionRequest {
-                execution_id: ExecutionId::new("run").unwrap(),
-                user_message: PromptText::new("read").unwrap(),
-                estimated_input_tokens: 1,
-                reserved_output_tokens: 10,
-            },
+            dispatched(
+                ExecutionRequest {
+                    execution_id: ExecutionId::new("run").unwrap(),
+                    user_message: UserMessage::text_only(PromptText::new("read").unwrap()),
+                    estimated_input_tokens: 1,
+                    reserved_output_tokens: 10,
+                },
+                None,
+            ),
             reply,
         ))
         .await
@@ -398,12 +401,15 @@ async fn worker_phase_panics_preserve_scope_and_startup_or_execution_receipt() {
             worker
                 .commands
                 .send(Command::ExecutionRequest(
-                    ExecutionRequest {
-                        execution_id: ExecutionId::new("panic-run").unwrap(),
-                        user_message: PromptText::new("read").unwrap(),
-                        estimated_input_tokens: 1,
-                        reserved_output_tokens: 10,
-                    },
+                    dispatched(
+                        ExecutionRequest {
+                            execution_id: ExecutionId::new("panic-run").unwrap(),
+                            user_message: UserMessage::text_only(PromptText::new("read").unwrap()),
+                            estimated_input_tokens: 1,
+                            reserved_output_tokens: 10,
+                        },
+                        None,
+                    ),
                     reply,
                 ))
                 .await

@@ -1,10 +1,14 @@
 //! Opening failures retain their actionable meaning at the product boundary.
 use super::{
     error_code, permission_answer_failure, AgentError, ConversationError, ConversationErrorCode,
-    OutgoingMessage, PermissionSelectionState, StorageError,
+    ImageInputRefusal, OutgoingMessage, PermissionSelectionState, StorageError,
 };
-use nessa_sdk::application::agent_execution::agents::{
-    AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+use nessa_sdk::{
+    application::agent_execution::{
+        agents::{AgentStartupContext, AgentStartupPhase, AgentStartupStep},
+        providers::UserImageError,
+    },
+    domain::common::value_objects::ImageMediaType,
 };
 
 #[test]
@@ -93,4 +97,85 @@ fn every_refusal_this_gateway_states_is_understood_by_the_client() {
     // fail, so it has no `ConversationError` to derive it from; it is pinned
     // end to end by the gateway tests instead.
     assert!(client.contains("conversations_not_configured:"));
+}
+
+#[test]
+fn a_close_that_failed_twice_is_named_for_the_conversation_that_did_not_close() {
+    let cleanup = || ConversationError::AttachmentCleanup {
+        storage_failures: 1,
+        audit_failures: 2,
+    };
+    // Closed, but its uploads were not all let go: cleanup the caller can retry.
+    for closed in [
+        cleanup(),
+        ConversationError::AttachmentRelease(Box::new(cleanup())),
+    ] {
+        assert_eq!(
+            error_code(&closed),
+            ConversationErrorCode::AttachmentCleanupUnavailable
+        );
+    }
+    // Not closed and not cleaned up: what the caller must act on is the close,
+    // and closing again lets go of the uploads again.
+    for (agent, code) in [
+        (
+            ConversationError::Capacity,
+            ConversationErrorCode::ConversationCapacity,
+        ),
+        (
+            ConversationError::Agent(AgentError::Deadline),
+            ConversationErrorCode::AgentOperationFailed,
+        ),
+    ] {
+        let both = ConversationError::CloseIncomplete {
+            agent: Box::new(agent),
+            release: Box::new(cleanup()),
+        };
+        assert_eq!(error_code(&both), code);
+    }
+}
+
+#[test]
+fn an_image_message_refused_before_acceptance_says_which_kind_of_refusal_it_was() {
+    // Every one of these is decided before the message is accepted, and the
+    // client recovers the draft for exactly these codes. `agent_operation_failed`
+    // would tell it delivery is unknown.
+    for (error, code) in [
+        (
+            AgentError::ImageInputRefused(ImageInputRefusal::AgentDoesNotAccept),
+            ConversationErrorCode::ImageInputUnsupported,
+        ),
+        (
+            AgentError::ImageInputRefused(ImageInputRefusal::NotOffered),
+            ConversationErrorCode::ImageInputUnsupported,
+        ),
+        (
+            AgentError::ImageInputRefused(ImageInputRefusal::MediaType(ImageMediaType::Webp)),
+            ConversationErrorCode::InvalidRequest,
+        ),
+        (
+            AgentError::ImageInputRefused(ImageInputRefusal::ImageTooLarge {
+                size: 9,
+                max_bytes: 6,
+            }),
+            ConversationErrorCode::InvalidRequest,
+        ),
+        (
+            AgentError::MessageTooLarge {
+                encoded_bytes: 17,
+                max_bytes: 16,
+            },
+            ConversationErrorCode::InvalidRequest,
+        ),
+        (
+            AgentError::UserImage(UserImageError::Missing),
+            ConversationErrorCode::AttachmentUnavailable,
+        ),
+    ] {
+        assert_eq!(error_code(&ConversationError::Agent(error)), code);
+    }
+    assert_eq!(
+        error_code(&ConversationError::ImagesUnsupported),
+        ConversationErrorCode::ImageInputUnsupported
+    );
 }

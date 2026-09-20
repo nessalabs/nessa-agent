@@ -3,7 +3,7 @@ pub(super) use crate::application::agent_execution::executions::ExecutionUpdate;
 pub(super) use crate::application::agent_execution::executions::*;
 pub(super) use crate::application::agent_execution::permissions::*;
 pub(super) use crate::application::agent_execution::providers::*;
-pub(super) use crate::application::dto::{ModalitiesDto, ModelMetadataDto};
+pub(super) use crate::application::dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto};
 pub(super) use crate::domain::agent_execution::{
     executions::*, permissions::*, prompts::*, sessions::ExecutionFinish,
 };
@@ -90,6 +90,7 @@ pub(super) fn test_acp_configuration(
         model_id: "exact-fixture-model".into(),
         display_name: "Fixture".into(),
         input: text,
+        image_input: None,
         output: text,
         tool_use: true,
         reasoning: true,
@@ -119,6 +120,8 @@ pub(super) fn test_acp_configuration(
         kill_timeout: Duration::from_secs(2),
         event_capacity: capacity,
         max_frame_bytes: 8192,
+        max_incoming_frame_bytes: 8192,
+        images: None,
     };
     (root, config, model)
 }
@@ -165,6 +168,7 @@ pub(super) fn codex_configuration(
         max_output_tokens: 200,
         knowledge_cutoff: "2026-01".into(),
         documentation_url: "https://example.com".into(),
+        image_input: None,
     })
     .unwrap();
     (root, config, model)
@@ -215,6 +219,7 @@ pub(super) fn opencode_configuration(
         max_output_tokens: 200,
         knowledge_cutoff: "2026-01".into(),
         documentation_url: "https://example.com".into(),
+        image_input: None,
     })
     .unwrap();
     (root, config, model)
@@ -264,6 +269,17 @@ pub(super) fn test_opencode_binding_on_a_model_that_takes_images(
             image: true,
             audio: false,
         },
+        // Recorded limits, not just the modality. A model whose limits are not
+        // recorded is offered no images whatever its modality says, so without
+        // these the assertion below would hold for a reason that has nothing to
+        // do with the binding — which is the one thing it is there to test.
+        image_input: Some(ImageInputLimitsDto {
+            media_types: vec!["image/png".into(), "image/jpeg".into()],
+            max_encoded_bytes: 5_000_000,
+            max_edge_px: 8000,
+            many_images_max_edge_px: 2000,
+            native_long_edge_px: 1568,
+        }),
         output: ModalitiesDto {
             text: true,
             image: false,
@@ -292,7 +308,7 @@ pub(super) fn test_opencode_binding_on_a_model_that_takes_images(
 pub(super) fn prompt(text: &str) -> ExecutionRequest {
     ExecutionRequest {
         execution_id: ExecutionId::new(text).unwrap(),
-        user_message: PromptText::new(text).unwrap(),
+        user_message: UserMessage::text_only(PromptText::new(text).unwrap()),
         estimated_input_tokens: 10,
         reserved_output_tokens: 100,
     }

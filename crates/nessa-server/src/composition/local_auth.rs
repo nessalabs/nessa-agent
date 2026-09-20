@@ -6,9 +6,12 @@ use crate::{
         infrastructure::{AgentLaunchFiles, LocalAgentProbe},
     },
     app::ports::Clock as ServerClock,
+    attachments::{application::AttachmentService, infrastructure::ModelImageNormalizer},
     browser_session::adapters::PersistentSessions,
     conversation::{
-        application::{ConversationAgents, ConversationLimits, ConversationService},
+        application::{
+            ConversationAgents, ConversationDependencies, ConversationLimits, ConversationService,
+        },
         infrastructure::{DurableConversationCreationAudit, LocalConversationRepository},
     },
     core::RunError,
@@ -92,8 +95,8 @@ pub(super) fn product_state(
     // and its use depends on the order.
     let (conversations, unavailable) = match &settings.agents {
         Some(agents) => {
-            let (service, unavailable) = conversations(agents, directory)?;
-            (Some(service), unavailable)
+            let (service, attachments, unavailable) = conversations(agents, directory)?;
+            (Some((service, attachments)), unavailable)
         }
         None => (None, HashSet::new()),
     };
@@ -125,8 +128,10 @@ pub(super) fn product_state(
         .map_err(setup_error)?,
     ));
     product.browser_http_allowed = config.browser_http_allowed();
-    if let Some(service) = conversations {
-        product = product.with_conversations(Arc::new(service));
+    if let Some((service, attachments)) = conversations {
+        product = product
+            .with_conversations(Arc::new(service))
+            .with_attachments(attachments);
     }
     Ok(product)
 }
@@ -176,32 +181,54 @@ fn launch_files(
         .unwrap_or_default()
 }
 
-/// The conversation service, and which configured agents this run cannot start
-/// even though they are installed.
+/// The conversation service and the attachment service beside it, and which
+/// configured agents this run cannot start even though they are installed.
 ///
-/// The second half is the reason this is a function rather than the tail of
+/// That last part is the reason this is a function rather than the tail of
 /// [`product_state`]: it has to be known before the readiness probe is built,
 /// and it is only known once every provider has been built. See
 /// [`super::agent::ConfiguredAgents`].
 fn conversations(
     agents: &AgentsConfig,
     directory: &Path,
-) -> Result<(ConversationService, HashSet<AgentId>), RunError> {
-    let root = directory
+) -> Result<(ConversationService, AttachmentService, HashSet<AgentId>), RunError> {
+    let namespace = directory
         .parent()
-        .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
-        .join("conversations");
+        .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?;
+    let root = namespace.join("conversations");
     nessa_local_storage::create_directory(&root)
         .map_err(|error| RunError::Agent(error.to_string()))?;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let selected = agents.selected()?;
-    let built = super::agent::providers(agents, &root, clock.clone())?;
-    let storage = Arc::new(
-        LocalFileStorage::new(root.join("sessions"))
-            .map_err(|error| RunError::Agent(error.to_string()))?,
-    );
+    // Ownership records come first. A binding needs somewhere to read image
+    // bytes, reading them needs the attachment store, and beginning an upload
+    // needs to ask who owns a conversation: so the repository is built, then
+    // attachments over it, and only then the providers.
     let metadata = Arc::new(
         LocalConversationRepository::new(root.join("metadata"))
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
+    let attachments = super::attachments::attachments(
+        &namespace.join("attachments"),
+        metadata.clone(),
+        // The image limits from the catalog, which is the one place they are
+        // recorded, taken across every configured agent's model rather than the
+        // selected one's: the store is shared by conversations that each run on
+        // their own agent. Every uploaded image is fitted to them, using the
+        // running system's decoder for the encodings the image library does not
+        // read itself.
+        Arc::new(
+            ModelImageNormalizer::new(
+                super::agent::image_limits(agents)?.as_ref(),
+                nessa_images::platform_decoder(),
+            )
+            .map_err(|error| RunError::Agent(format!("model image limits: {error}")))?,
+        ),
+        clock.clone(),
+    )?;
+    let built = super::agent::providers(agents, &root, clock.clone(), attachments.images.clone())?;
+    let storage = Arc::new(
+        LocalFileStorage::new(root.join("sessions"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
     let creation_audit = Arc::new(
@@ -209,17 +236,20 @@ fn conversations(
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
     let service = ConversationService::new(
-        ConversationAgents::new(built.providers, selected)
-            .map_err(|error| RunError::Agent(error.to_string()))?,
-        storage,
-        metadata,
-        creation_audit,
-        clock,
+        ConversationDependencies {
+            agents: ConversationAgents::new(built.providers, selected)
+                .map_err(|error| RunError::Agent(error.to_string()))?,
+            storage,
+            metadata,
+            creation_audit,
+            attachments: Some(attachments.conversations),
+            clock,
+        },
         ConversationLimits::default(),
         Some(agents.workspace.to_string_lossy().into_owned()),
     )
     .map_err(|error| RunError::Agent(error.to_string()))?;
-    Ok((service, built.unavailable))
+    Ok((service, attachments.service, built.unavailable))
 }
 
 fn setup_error(error: impl std::fmt::Display) -> RunError {

@@ -101,6 +101,7 @@ function BrowserSession({
       />
       <App
         attachmentResources={scope.dependencies.attachments}
+        digest={scope.dependencies.digest}
         onSignOut={onDisconnect}
         sessionError={error}
       />

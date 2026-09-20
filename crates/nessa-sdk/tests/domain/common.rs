@@ -1,4 +1,7 @@
-use nessa_sdk::domain::common::value_objects::{Date, TokenLimits, TokenLimitsError, Url};
+use nessa_sdk::domain::common::value_objects::{
+    Date, ImageMediaType, ImageMediaTypeError, Sha256Digest, Sha256DigestError, TokenLimits,
+    TokenLimitsError, Url,
+};
 
 #[test]
 fn dates_preserve_precision_and_delegate_calendar_validation() {
@@ -124,5 +127,64 @@ fn token_limit_diagnostics_describe_the_invalid_shared_value() {
         let error = TokenLimits::new(context, output).unwrap_err();
         assert_eq!(error.to_string(), message);
         assert!(std::error::Error::source(&error).is_none());
+    }
+}
+
+#[test]
+fn sha256_digests_have_one_text_form() {
+    let hex = "00ff".repeat(16);
+    let text = format!("sha256:{hex}");
+    let digest = Sha256Digest::parse(&text).unwrap();
+    assert_eq!(digest.to_string(), text);
+    assert_eq!(digest.to_hex(), hex);
+    assert_eq!(digest, Sha256Digest::from_bytes(*digest.as_bytes()));
+    assert_eq!(format!("{digest:?}"), format!("Sha256Digest({text})"));
+
+    for invalid in [
+        String::new(),
+        hex.clone(),
+        format!("sha256:{}", hex.to_uppercase()),
+        format!("SHA256:{hex}"),
+        format!("sha256:{}", &hex[..62]),
+        format!("sha256:{hex}00"),
+        format!("sha256:{}g", &hex[..63]),
+        format!("sha256:{}é", &hex[..62]),
+        format!(" sha256:{hex}"),
+        format!("sha512:{hex}"),
+    ] {
+        assert_eq!(
+            Sha256Digest::parse(&invalid),
+            Err(Sha256DigestError),
+            "{invalid:?}"
+        );
+    }
+}
+
+#[test]
+fn image_media_types_are_a_closed_exact_set() {
+    for (text, kind) in [
+        ("image/png", ImageMediaType::Png),
+        ("image/jpeg", ImageMediaType::Jpeg),
+        ("image/gif", ImageMediaType::Gif),
+        ("image/webp", ImageMediaType::Webp),
+    ] {
+        assert_eq!(ImageMediaType::parse(text), Ok(kind));
+        assert_eq!(kind.as_str(), text);
+    }
+    for rejected in [
+        "",
+        "image/PNG",
+        "image/png; charset=binary",
+        " image/png",
+        "image/svg+xml",
+        "image/heic",
+        "application/pdf",
+        "text/plain",
+    ] {
+        assert_eq!(
+            ImageMediaType::parse(rejected),
+            Err(ImageMediaTypeError),
+            "{rejected:?}"
+        );
     }
 }

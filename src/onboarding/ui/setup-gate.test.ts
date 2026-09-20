@@ -44,6 +44,10 @@ const closeRefused = screenFor({
   panelShown: true,
   cause: "could not close setup: the window server said no",
 })
+const notRecorded = screenFor({
+  outcome: "setup-not-recorded",
+  cause: "could not record that setup finished: disk full",
+})
 
 describe("the screen left when the panel did not come up", () => {
   it("offers both ways out as real buttons", () => {
@@ -51,6 +55,7 @@ describe("the screen left when the panel did not come up", () => {
       React.createElement(HandoffFailed, {
         ...panelUnavailable,
         onRetry: () => {},
+        onSaveAgain: () => {},
         onClose: () => {},
       }),
     )
@@ -69,7 +74,12 @@ describe("the screen left when the panel did not come up", () => {
   it("asks for the handoff again, and for the window to close", () => {
     const onRetry = vi.fn()
     const onClose = vi.fn()
-    const screen = HandoffFailed({ ...panelUnavailable, onRetry, onClose })
+    const screen = HandoffFailed({
+      ...panelUnavailable,
+      onRetry,
+      onSaveAgain: () => {},
+      onClose,
+    })
 
     press(screen, "Try again")
     expect(onRetry).toHaveBeenCalledTimes(1)
@@ -87,6 +97,7 @@ describe("the screen left when the panel did not come up", () => {
           true,
         ),
         onRetry: () => {},
+        onSaveAgain: () => {},
         onClose: () => {},
       }),
     )
@@ -105,6 +116,7 @@ describe("the screen left when the panel came up and this window did not go", ()
       React.createElement(HandoffFailed, {
         ...closeRefused,
         onRetry: () => {},
+        onSaveAgain: () => {},
         onClose: () => {},
       }),
     )
@@ -116,13 +128,52 @@ describe("the screen left when the panel came up and this window did not go", ()
   it("offers the close alone, because there is nothing to hand over again", () => {
     const onRetry = vi.fn()
     const onClose = vi.fn()
-    const screen = HandoffFailed({ ...closeRefused, onRetry, onClose })
+    const screen = HandoffFailed({
+      ...closeRefused,
+      onRetry,
+      onSaveAgain: () => {},
+      onClose,
+    })
 
     // Retrying would summon a panel already standing behind this window, and
     // re-run a completion already written.
     expect(buttons(screen).map(label)).toEqual(["Close this window"])
     press(screen, "Close this window")
     expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onRetry).not.toHaveBeenCalled()
+  })
+})
+
+describe("the screen left when the panel came up and nothing was written down", () => {
+  it("says the panel works and that the choice was not kept", () => {
+    const markup = renderToStaticMarkup(
+      React.createElement(HandoffFailed, {
+        ...notRecorded,
+        onRetry: () => {},
+        onSaveAgain: () => {},
+        onClose: () => {},
+      }),
+    )
+    expect(markup).toContain("Nessa is open, but setup was not saved")
+    // Both halves of the cost, because closing this window loses the choice
+    // without either of them having been said.
+    expect(markup).toContain("ask again next time")
+    expect(markup).toContain("default agent")
+    // Not an outage: the panel is up and usable.
+    expect(markup).not.toContain("Nessa could not open the panel")
+  })
+
+  it("offers the write again and not the whole handoff", () => {
+    const onRetry = vi.fn()
+    const onSaveAgain = vi.fn()
+    const onClose = vi.fn()
+    const screen = HandoffFailed({ ...notRecorded, onRetry, onSaveAgain, onClose })
+
+    // Handing over again would summon a panel already on screen, re-anchoring
+    // and refitting a window somebody may have moved to.
+    expect(buttons(screen).map(label)).toEqual(["Save again", "Close this window"])
+    press(screen, "Save again")
+    expect(onSaveAgain).toHaveBeenCalledTimes(1)
     expect(onRetry).not.toHaveBeenCalled()
   })
 })
