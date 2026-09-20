@@ -6,7 +6,7 @@
 //! identity.rs      ModelProvider + ModelKey (provider + model ID)
 //! capabilities.rs  Modalities + ModelFeatures
 //! description.rs   ModelDescription (uses common Date)
-//! image_input.rs   ImageInputLimits (uses common ImageMediaType)
+//! image_input.rs   ImageInputLimits, ImageInputViolation (uses common ImageMediaType)
 //!                         |
 //!                         v
 //!                  model entity / catalog
@@ -21,4 +21,4 @@ mod image_input;
 pub use capabilities::{Modalities, ModelFeatures};
 pub use description::ModelDescription;
 pub use identity::{ModelKey, ModelProvider};
-pub use image_input::ImageInputLimits;
+pub use image_input::{ImageInputLimits, ImageInputViolation};

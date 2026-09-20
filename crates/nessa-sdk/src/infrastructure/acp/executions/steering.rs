@@ -8,7 +8,11 @@ use std::time::Duration;
 use tokio::{sync::oneshot, time::Instant};
 
 /// Bound extension acknowledgements even when the execution itself has no timeout.
-pub(super) const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
+/// The worker extends this by the extra write time a frame of a mebibyte or more
+/// is allowed, so steering that carries images is not failed by its own size.
+/// Reading those images happens before the command reaches the worker, under
+/// this same bound, and does not consume it.
+pub(in crate::infrastructure::acp) const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One sent steering request. Keeping its reply until response or teardown makes
 /// ambiguous delivery visible and prevents admission of a newer prompt meanwhile.

@@ -11,6 +11,7 @@ use super::super::{
 use super::{
     event_queue::{EventSender, QueueError},
     failure::{execution_finish_failure, requested_close_reason, retain_admitted_failure},
+    prompt_content::{content_blocks, ImageBlocks},
     steering::{self, PendingSteering},
     wire,
 };
@@ -24,9 +25,9 @@ use crate::application::agent_execution::permissions::{
     PermissionResolution, PermissionSelectionState,
 };
 use crate::application::agent_execution::providers::{
-    CleanupReport, ExecutionReport, ObservationFailureCause, OperationCapabilities,
-    ProviderExecutionReply, ProviderOperationFailure, ProviderSessionState, ResourceCleanup,
-    SessionCloseRequest, SteeringOutcome, UserImageError,
+    CleanupReport, ExecutionReport, ImageInputRefusal, ObservationFailureCause,
+    OperationCapabilities, ProviderExecutionReply, ProviderOperationFailure, ProviderSessionState,
+    ResourceCleanup, SessionCloseRequest, SteeringOutcome,
 };
 use crate::domain::agent_execution::executions::{
     ExecutionId, ExecutionOutcome, MessageChunk, MessageId,
@@ -41,9 +42,7 @@ use crate::infrastructure::{
     json_rpc::{self, Envelope, Reader, RpcId},
     process::ProcessScope,
 };
-use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     future::{poll_fn, Future},
@@ -53,7 +52,6 @@ use std::{
         Arc,
     },
     task::Poll,
-    time::Duration,
 };
 use tokio::{
     sync::{mpsc, oneshot, watch},
@@ -429,7 +427,8 @@ impl<P: AcpProfile> Worker<P> {
         deadline: Option<Instant>,
     ) -> Result<(), AgentError> {
         let stdin = self.scope.stdin.as_mut().ok_or(AgentError::Closed)?;
-        let result = json_rpc::send_encoded(stdin, &bytes, Duration::from_secs(1), deadline).await;
+        let allowed = json_rpc::write_allowance(bytes.len());
+        let result = json_rpc::send_encoded(stdin, &bytes, allowed, deadline).await;
         if result == Err(AgentError::Deadline) && !self.closing {
             self.failure_cause = ObservationFailureCause::DeadlineExceeded;
             self.cancellation_cause.get_or_insert((
@@ -625,6 +624,7 @@ impl<P: AcpProfile> Worker<P> {
         }
         self.operation_capabilities
             .send_replace(OperationCapabilities {
+                negotiated: true,
                 native_steering: self.steering_supported,
                 image_input: self.image_input,
                 session_resume: init
@@ -638,38 +638,23 @@ impl<P: AcpProfile> Worker<P> {
     /// in attachment order. Nothing has been written when this fails, so the
     /// caller rejects the input without a dispatch.
     ///
-    /// Image bytes are read here, at dispatch, and live only until the frame is
-    /// written. Each is checked against its reference before it is encoded, so
-    /// a source cannot substitute content for what the user attached.
-    async fn prompt_blocks(&self, message: &UserMessage) -> Result<Vec<Value>, AgentError> {
-        let mut blocks = Vec::with_capacity(1 + message.images().len());
-        if let Some(text) = message.text() {
-            blocks.push(json!({"type":"text","text":text.as_str()}));
+    /// This never waits. The session read, verified, and encoded `images`
+    /// before it sent the command, because this task is the only one polling
+    /// close, deadlines, consumer loss, and the agent's output. What stays here
+    /// is the one fact only this task knows for certain after a restoration:
+    /// whether the connected agent agreed to receive images. Admission gives
+    /// the same typed answer when it already knows.
+    fn prompt_blocks(
+        &self,
+        message: &UserMessage,
+        images: ImageBlocks,
+    ) -> Result<Vec<Value>, AgentError> {
+        if !message.images().is_empty() && !self.image_input {
+            return Err(AgentError::ImageInputRefused(
+                ImageInputRefusal::AgentDoesNotAccept,
+            ));
         }
-        if message.images().is_empty() {
-            return Ok(blocks);
-        }
-        let source = match &self.config.images {
-            Some(source) if self.image_input => source,
-            _ => {
-                return Err(AgentError::Unsupported(
-                    "provider does not accept image input".into(),
-                ))
-            }
-        };
-        for image in message.images() {
-            let bytes = source.read(*image).await.map_err(AgentError::UserImage)?;
-            let digest: [u8; 32] = Sha256::digest(&bytes).into();
-            if bytes.len() as u64 != image.size() || &digest != image.digest().as_bytes() {
-                return Err(AgentError::UserImage(UserImageError::Mismatch));
-            }
-            blocks.push(json!({
-                "type": "image",
-                "mimeType": image.media_type().as_str(),
-                "data": STANDARD.encode(&bytes),
-            }));
-        }
-        Ok(blocks)
+        content_blocks(message, images)
     }
 
     async fn drive(&mut self, execution: &mut ExecutionController) -> Result<(), AgentError> {
@@ -776,10 +761,10 @@ impl<P: AcpProfile> Worker<P> {
                         failure = Some(retain_admitted_failure(failure, error));
                     }
                 }
-                Command::ExecutionRequest(_, reply) => {
+                Command::ExecutionRequest(_, _, reply) => {
                     let _ = reply.send(ProviderExecutionReply::Rejected(AgentError::Closed));
                 }
-                Command::Steer(_, _, reply) => {
+                Command::Steer(_, _, _, reply) => {
                     let _ = reply.send(Err(ProviderOperationFailure::new(
                         AgentError::Closed,
                         ProviderSessionState::CleanupRequired,
@@ -800,8 +785,8 @@ impl<P: AcpProfile> Worker<P> {
         loop {
             for _ in 0..32 {
                 let caller_gone = match command {
-                    Command::ExecutionRequest(_, reply) => reply.is_closed(),
-                    Command::Steer(_, _, reply) => reply.is_closed(),
+                    Command::ExecutionRequest(_, _, reply) => reply.is_closed(),
+                    Command::Steer(_, _, _, reply) => reply.is_closed(),
                     _ => false,
                 };
                 if self.close_requested.borrow().is_some()
@@ -921,7 +906,7 @@ impl<P: AcpProfile> Worker<P> {
             };
             if let Some(error) = error {
                 match command {
-                    Command::ExecutionRequest(_, reply) => {
+                    Command::ExecutionRequest(_, _, reply) => {
                         let report = if matches!(
                             &readiness,
                             Ok(DispatchReadiness::Interrupted(AgentError::Closed))
@@ -936,7 +921,7 @@ impl<P: AcpProfile> Worker<P> {
                         };
                         let _ = reply.send(report);
                     }
-                    Command::Steer(_, _, reply) => {
+                    Command::Steer(_, _, _, reply) => {
                         let _ = reply.send(Err(ProviderOperationFailure::new(
                             error,
                             ProviderSessionState::CleanupRequired,
@@ -948,7 +933,7 @@ impl<P: AcpProfile> Worker<P> {
             }
         }
         match command {
-            Command::ExecutionRequest(input, reply) => {
+            Command::ExecutionRequest(input, images, reply) => {
                 if reply.is_closed() {
                     return Ok(());
                 }
@@ -961,7 +946,7 @@ impl<P: AcpProfile> Worker<P> {
                     let _ = reply.send(ProviderExecutionReply::Rejected(error));
                     return Ok(());
                 }
-                let prompt = match self.prompt_blocks(&input.user_message).await {
+                let prompt = match self.prompt_blocks(&input.user_message, images) {
                     Ok(prompt) => prompt,
                     Err(error) => {
                         let _ = reply.send(ProviderExecutionReply::Rejected(error));
@@ -1003,7 +988,7 @@ impl<P: AcpProfile> Worker<P> {
                 )
                 .await?;
             }
-            Command::Steer(target, input, reply) => {
+            Command::Steer(target, input, images, reply) => {
                 if reply.is_closed() {
                     return Ok(());
                 }
@@ -1032,7 +1017,7 @@ impl<P: AcpProfile> Worker<P> {
                         ProviderSessionState::Usable,
                     )));
                 } else {
-                    let prompt = match self.prompt_blocks(&input.user_message).await {
+                    let prompt = match self.prompt_blocks(&input.user_message, images) {
                         Ok(prompt) => prompt,
                         Err(error) => {
                             let _ = reply.send(Err(ProviderOperationFailure::new(
@@ -1064,18 +1049,24 @@ impl<P: AcpProfile> Worker<P> {
                             return Ok(());
                         }
                     };
+                    // The acknowledgement deadline covers the write too. A
+                    // frame carrying images gets the same extra time its write
+                    // does; a text frame keeps exactly the fixed deadline.
+                    let acknowledged_by = dispatch_deadline
+                        .expect("steering has an operation deadline")
+                        + json_rpc::large_frame_allowance(frame.len());
                     self.sequence = id;
                     self.steering = Some(PendingSteering {
                         id,
                         reply,
-                        deadline: dispatch_deadline.expect("steering has an operation deadline"),
+                        deadline: acknowledged_by,
                     });
                     let deadline = self
                         .active
                         .as_ref()
                         .and_then(|active| active.deadline)
                         .into_iter()
-                        .chain(dispatch_deadline)
+                        .chain(Some(acknowledged_by))
                         .min();
                     self.send_encoded(frame, deadline).await?;
                 }

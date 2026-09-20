@@ -1,24 +1,66 @@
 //! A user message's images reach the agent only when every gate agrees: the
 //! model, a configured byte source, and the agent's own advertised capability.
+//!
+//! Reading the bytes never holds up the context: a source that stalls or
+//! panics costs one message a typed failure and nothing else.
 use super::support::*;
 use crate::application::dto::ImageInputLimitsDto;
 use crate::domain::common::value_objects::{ImageMediaType, Sha256Digest};
+use crate::infrastructure::acp::executions::{
+    prompt_content::IMAGE_READ_TIMEOUT, steering::RESPONSE_TIMEOUT,
+};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, sync::atomic::AtomicUsize, sync::atomic::Ordering};
+use std::{
+    collections::HashMap,
+    future::pending,
+    sync::atomic::{AtomicUsize, Ordering},
+};
+use tokio::sync::mpsc;
+
+/// How a [`FixedImages`] source behaves for a digest it has no answer for.
+#[derive(Default)]
+enum Otherwise {
+    /// Nothing is stored under it.
+    #[default]
+    Missing,
+    /// The read begins, says so, and never finishes.
+    Stalls(mpsc::UnboundedSender<()>),
+    /// The read panics when it is polled.
+    Panics,
+}
 
 /// A byte source answering from a fixed table and counting every read.
 #[derive(Default)]
 struct FixedImages {
     answers: HashMap<Sha256Digest, Result<Vec<u8>, UserImageError>>,
+    otherwise: Otherwise,
     reads: AtomicUsize,
 }
 impl UserImageSource for FixedImages {
     fn read(&self, image: ImageReference) -> UserImageFuture<'_> {
         self.reads.fetch_add(1, Ordering::SeqCst);
         let answer = self.answers.get(&image.digest()).cloned();
-        Box::pin(async move { answer.unwrap_or(Err(UserImageError::Missing)) })
+        Box::pin(async move {
+            match (answer, &self.otherwise) {
+                (Some(answer), _) => answer,
+                (None, Otherwise::Missing) => Err(UserImageError::Missing),
+                (None, Otherwise::Stalls(began)) => {
+                    began.send(()).unwrap();
+                    pending().await
+                }
+                (None, Otherwise::Panics) => panic!("fixture image source panicked"),
+            }
+        })
     }
+}
+fn stalling() -> (Arc<FixedImages>, mpsc::UnboundedReceiver<()>) {
+    let (began, begins) = mpsc::unbounded_channel();
+    let source = Arc::new(FixedImages {
+        otherwise: Otherwise::Stalls(began),
+        ..Default::default()
+    });
+    (source, begins)
 }
 
 fn reference(bytes: &[u8], media_type: ImageMediaType) -> ImageReference {
@@ -48,6 +90,15 @@ fn image_provider_with(
 ) -> (TempDir, ClaudeAcpProvider) {
     let (root, mut config, _) = test_acp_configuration(mode, 32);
     config.execution_timeout = None;
+    image_provider_from(root, config, source, limits_recorded)
+}
+
+fn image_provider_from(
+    root: TempDir,
+    mut config: AcpConfig,
+    source: Option<Arc<FixedImages>>,
+    limits_recorded: bool,
+) -> (TempDir, ClaudeAcpProvider) {
     config.images = source.map(|source| source as Arc<dyn UserImageSource>);
     let text = ModalitiesDto {
         text: true,
@@ -166,9 +217,11 @@ async fn an_agent_that_did_not_advertise_images_is_sent_nothing() {
 
     let refused = message("refused", Some("look"), vec![image]);
     let result = opened.session.execute(refused).await.into_result();
-    assert!(
-        matches!(result, Err(AgentError::Unsupported(_))),
-        "{result:?}"
+    assert_eq!(
+        result,
+        Err(AgentError::ImageInputRefused(
+            ImageInputRefusal::AgentDoesNotAccept
+        ))
     );
     assert_eq!(source.reads.load(Ordering::SeqCst), 0);
     assert_eq!(observed(&root, "prompt-observed"), None);
@@ -209,7 +262,7 @@ async fn an_image_that_cannot_be_supplied_intact_sends_nothing_and_keeps_the_con
     let missing = reference(b"never stored", ImageMediaType::Png);
     let unavailable = reference(b"store is down", ImageMediaType::Png);
     let substituted = reference(bytes, ImageMediaType::Png);
-    let truncated = reference(b"longer than returned", ImageMediaType::Gif);
+    let truncated = reference(b"longer than returned", ImageMediaType::Png);
     let intact = reference(b"intact", ImageMediaType::Png);
     let source = Arc::new(FixedImages {
         answers: HashMap::from([
@@ -321,5 +374,279 @@ async fn a_model_without_recorded_image_limits_is_offered_no_images() {
     );
     assert_eq!(source.reads.load(Ordering::SeqCst), 0);
     assert_eq!(observed(&root, "prompt-observed"), None);
+    close(&opened).await;
+}
+
+#[tokio::test]
+async fn an_image_outside_the_models_limits_or_the_frame_is_refused_without_a_read() {
+    let _slot = process_test_slot().await;
+    let source = Arc::new(FixedImages::default());
+    let (root, provider) = image_provider("image-input", Some(source.clone()));
+    let opened = provider.open(None).await.unwrap();
+
+    // The fixture model lists PNG and JPEG, and its frames hold 8192 bytes.
+    let webp = reference(b"image", ImageMediaType::Webp);
+    let result = opened
+        .session
+        .execute(message("webp", Some("look"), vec![webp]))
+        .await
+        .into_result();
+    assert_eq!(
+        result,
+        Err(AgentError::ImageInputRefused(ImageInputRefusal::MediaType(
+            ImageMediaType::Webp
+        )))
+    );
+    let large = reference(&[7; 6000], ImageMediaType::Png);
+    for steering in [false, true] {
+        let sent = message("large", Some("look"), vec![large]);
+        let result = if steering {
+            opened
+                .session
+                .steer(ExecutionId::new("none").unwrap(), sent)
+                .await
+                .map(|_| ExecutionOutcome::Completed)
+                .map_err(|failure| failure.into_error())
+        } else {
+            opened.session.execute(sent).await.into_result()
+        };
+        assert!(
+            matches!(
+                result,
+                Err(AgentError::MessageTooLarge { encoded_bytes, max_bytes: 8192 })
+                    if encoded_bytes > 8000
+            ),
+            "{result:?}"
+        );
+    }
+    assert_eq!(source.reads.load(Ordering::SeqCst), 0);
+    assert_eq!(observed(&root, "prompt-observed"), None);
+    close(&opened).await;
+}
+
+#[tokio::test]
+async fn a_source_that_never_answers_does_not_keep_the_context_from_closing() {
+    let _slot = process_test_slot().await;
+    let (source, mut begins) = stalling();
+    let (root, provider) = image_provider("image-input", Some(source));
+    let opened = provider.open(None).await.unwrap();
+    let session = opened.session.clone();
+    let stalled = message(
+        "stalled",
+        Some("look"),
+        vec![reference(b"x", ImageMediaType::Png)],
+    );
+    let running = tokio::spawn(async move { session.execute(stalled).await.into_result() });
+    begins.recv().await.unwrap();
+
+    // The read is still outstanding, and close completes anyway.
+    timeout(Duration::from_secs(5), close(&opened))
+        .await
+        .expect("a stalled image read blocked close");
+    let result = timeout(Duration::from_secs(5), running)
+        .await
+        .expect("a stalled image read outlived close")
+        .unwrap();
+    assert_eq!(result, Err(AgentError::Closed));
+    assert_eq!(observed(&root, "prompt-observed"), None);
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn a_source_that_never_answers_is_unavailable_at_the_read_bound_and_keeps_the_context() {
+    let _slot = process_test_slot().await;
+    let (source, mut begins) = stalling();
+    // No execution timeout: the read still has a bound of its own.
+    let (root, provider) = image_provider("image-input", Some(source));
+    let opened = provider.open(None).await.unwrap();
+    let session = opened.session.clone();
+    let stalled = message(
+        "stalled",
+        Some("look"),
+        vec![reference(b"x", ImageMediaType::Png)],
+    );
+    let running = tokio::spawn(async move { session.execute(stalled).await.into_result() });
+    begins.recv().await.unwrap();
+
+    // Only the simulated read deadline is advanced; real time resumes before
+    // anything waits on the agent process again.
+    tokio::time::pause();
+    tokio::time::advance(IMAGE_READ_TIMEOUT).await;
+    tokio::time::resume();
+    let result = timeout(Duration::from_secs(5), running).await.unwrap();
+    assert_eq!(
+        result.unwrap(),
+        Err(AgentError::UserImage(UserImageError::Unavailable))
+    );
+    assert_eq!(observed(&root, "prompt-observed"), None);
+
+    let result = opened.session.execute(prompt("text")).await.into_result();
+    assert_eq!(result, Ok(ExecutionOutcome::Completed));
+    close(&opened).await;
+}
+
+#[tokio::test]
+async fn a_shorter_execution_timeout_shortens_the_read_bound() {
+    let _slot = process_test_slot().await;
+    let (source, mut begins) = stalling();
+    let (root, mut config, _) = test_acp_configuration("image-input", 32);
+    let limit = Duration::from_secs(2);
+    assert!(limit < IMAGE_READ_TIMEOUT);
+    config.execution_timeout = Some(limit);
+    let (root, provider) = image_provider_from(root, config, Some(source), true);
+    let opened = provider.open(None).await.unwrap();
+    let session = opened.session.clone();
+    let stalled = message(
+        "stalled",
+        Some("look"),
+        vec![reference(b"x", ImageMediaType::Png)],
+    );
+    let running = tokio::spawn(async move { session.execute(stalled).await.into_result() });
+    begins.recv().await.unwrap();
+
+    tokio::time::pause();
+    tokio::time::advance(limit).await;
+    tokio::time::resume();
+    let result = timeout(Duration::from_secs(5), running).await.unwrap();
+    assert_eq!(
+        result.unwrap(),
+        Err(AgentError::UserImage(UserImageError::Unavailable))
+    );
+    assert_eq!(observed(&root, "prompt-observed"), None);
+    close(&opened).await;
+}
+
+#[tokio::test]
+async fn a_source_that_panics_costs_one_message_and_not_the_worker() {
+    let _slot = process_test_slot().await;
+    let source = Arc::new(FixedImages {
+        otherwise: Otherwise::Panics,
+        ..Default::default()
+    });
+    let (root, provider) = image_provider("image-input", Some(source));
+    let opened = provider.open(None).await.unwrap();
+    let panicking = message(
+        "panics",
+        Some("look"),
+        vec![reference(b"x", ImageMediaType::Png)],
+    );
+    let result = opened.session.execute(panicking).await.into_result();
+    assert_eq!(
+        result,
+        Err(AgentError::UserImage(UserImageError::Unavailable))
+    );
+    assert_eq!(observed(&root, "prompt-observed"), None);
+
+    // The same process is still there and still answers.
+    let result = opened.session.execute(prompt("text")).await.into_result();
+    assert_eq!(result, Ok(ExecutionOutcome::Completed));
+    close(&opened).await;
+}
+
+#[tokio::test]
+async fn a_steering_read_that_never_answers_does_not_hold_up_the_active_execution() {
+    let _slot = process_test_slot().await;
+    let (source, mut begins) = stalling();
+    let (root, provider) = image_provider("steering-image-injected", Some(source));
+    let mut opened = provider.open(None).await.unwrap();
+    let active = start(&opened, "first").await;
+    assert_eq!(
+        next(&mut opened).await,
+        ExecutionUpdate::Message(MessageChunk::text("running:first"))
+    );
+    let session = opened.session.clone();
+    let stalled = message(
+        "stalled",
+        Some("adjust"),
+        vec![reference(b"x", ImageMediaType::Png)],
+    );
+    let steering = tokio::spawn(async move {
+        session
+            .steer(ExecutionId::new("first").unwrap(), stalled)
+            .await
+    });
+    begins.recv().await.unwrap();
+
+    // With that read outstanding the worker still takes other commands and
+    // still hears the agent: a second steering is injected, and the active
+    // execution settles.
+    let outcome = timeout(
+        Duration::from_secs(5),
+        opened
+            .session
+            .steer(ExecutionId::new("first").unwrap(), prompt("text steering")),
+    )
+    .await
+    .expect("a stalled steering read blocked the worker");
+    assert_eq!(outcome.unwrap(), SteeringOutcome::Injected);
+    let settled = timeout(Duration::from_secs(5), active)
+        .await
+        .expect("a stalled steering read kept the active execution from settling");
+    assert_eq!(settled.unwrap(), Ok(ExecutionOutcome::Completed));
+    assert!(!steering.is_finished());
+    assert_eq!(
+        observed(&root, "steering-observed").unwrap(),
+        serde_json::json!([{"type": "text", "text": "text steering"}])
+    );
+
+    // Close abandons the read and tells its caller so.
+    timeout(Duration::from_secs(5), close(&opened))
+        .await
+        .expect("a stalled steering read blocked close");
+    let failure = timeout(Duration::from_secs(5), steering)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(failure.error(), &AgentError::Closed);
+}
+
+#[tokio::test]
+async fn a_steering_read_that_never_answers_is_unavailable_at_the_steering_bound() {
+    let _slot = process_test_slot().await;
+    let (source, mut begins) = stalling();
+    let (root, provider) = image_provider("steering-image-injected", Some(source));
+    let mut opened = provider.open(None).await.unwrap();
+    let active = start(&opened, "first").await;
+    assert_eq!(
+        next(&mut opened).await,
+        ExecutionUpdate::Message(MessageChunk::text("running:first"))
+    );
+    let session = opened.session.clone();
+    let stalled = message(
+        "stalled",
+        Some("adjust"),
+        vec![reference(b"x", ImageMediaType::Png)],
+    );
+    let steering = tokio::spawn(async move {
+        session
+            .steer(ExecutionId::new("first").unwrap(), stalled)
+            .await
+    });
+    begins.recv().await.unwrap();
+
+    assert!(RESPONSE_TIMEOUT < IMAGE_READ_TIMEOUT);
+    tokio::time::pause();
+    tokio::time::advance(RESPONSE_TIMEOUT).await;
+    tokio::time::resume();
+    let failure = timeout(Duration::from_secs(5), steering)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(
+        failure.error(),
+        &AgentError::UserImage(UserImageError::Unavailable)
+    );
+    assert_eq!(observed(&root, "steering-observed"), None);
+
+    // Nothing was sent, so the active execution is untouched and still steerable.
+    assert!(!active.is_finished());
+    let outcome = opened
+        .session
+        .steer(ExecutionId::new("first").unwrap(), prompt("text steering"))
+        .await;
+    assert_eq!(outcome.unwrap(), SteeringOutcome::Injected);
+    assert_eq!(active.await.unwrap(), Ok(ExecutionOutcome::Completed));
     close(&opened).await;
 }

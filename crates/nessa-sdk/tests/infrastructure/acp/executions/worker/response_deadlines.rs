@@ -257,6 +257,7 @@ async fn selected_dispatch_deadline_bounds_idle_permission_response() {
                 estimated_input_tokens: 1,
                 reserved_output_tokens: 1,
             },
+            ImageBlocks::none(),
             reply,
         );
         tokio::time::pause();

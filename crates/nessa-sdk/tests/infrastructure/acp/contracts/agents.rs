@@ -484,6 +484,7 @@ async fn repeated_oversized_prompts_leave_the_same_context_ready_for_valid_input
     let agent = Agent::new(Arc::new(provider), manager).await.unwrap();
     // More local rejections than the former 16-generation reader queue capacity.
     // Escapes make the encoded frame oversized even though raw input is smaller.
+    // Admission measures the encoded message, so nothing is accepted or sent.
     for index in 0..24 {
         let request = ExecutionRequest {
             user_message: UserMessage::text_only(PromptText::new("\u{0}".repeat(2048)).unwrap()),
@@ -492,7 +493,7 @@ async fn repeated_oversized_prompts_leave_the_same_context_ready_for_valid_input
         assert!(
             matches!(
                 agent.invoke(request, close_action()).await,
-                Err(AgentError::InvalidInput(_))
+                Err(AgentError::MessageTooLarge { max_bytes, .. }) if max_bytes == 8192
             ),
             "rejection {index}"
         );
@@ -512,11 +513,12 @@ async fn repeated_oversized_prompts_leave_the_same_context_ready_for_valid_input
         Ok(ExecutionOutcome::Completed)
     );
     let snapshot = agent.session_manager().snapshot().await.unwrap();
-    assert_eq!(snapshot.invocations.len(), 25);
-    assert!(snapshot.invocations[..24]
-        .iter()
-        .all(|record| record.events.is_empty()
-            && matches!(record.result, Some(Err(AgentError::InvalidInput(_))))));
+    // Refused before acceptance: none of the oversized messages was saved.
+    assert_eq!(snapshot.invocations.len(), 1);
+    assert_eq!(
+        snapshot.invocations[0].request.execution_id.as_str(),
+        "valid-after-rejections"
+    );
     let launches: Vec<u32> =
         serde_json::from_slice(&std::fs::read(root.path().join("launches")).unwrap()).unwrap();
     assert_eq!(launches.len(), 1);

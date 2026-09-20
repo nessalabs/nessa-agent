@@ -137,6 +137,7 @@ async fn begin(
                 estimated_input_tokens: 1,
                 reserved_output_tokens: 10,
             },
+            ImageBlocks::none(),
             reply,
         ))
         .await
@@ -402,6 +403,7 @@ async fn worker_phase_panics_preserve_scope_and_startup_or_execution_receipt() {
                         estimated_input_tokens: 1,
                         reserved_output_tokens: 10,
                     },
+                    ImageBlocks::none(),
                     reply,
                 ))
                 .await

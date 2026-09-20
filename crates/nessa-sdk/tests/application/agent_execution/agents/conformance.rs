@@ -108,6 +108,7 @@ impl ExecutionEventStream for WorkflowEvents {
 impl ProviderSessionBackend for WorkflowBackend {
     fn operation_capabilities(&self) -> OperationCapabilities {
         OperationCapabilities {
+            negotiated: true,
             native_steering: true,
             session_resume: true,
             image_input: false,

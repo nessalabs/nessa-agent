@@ -3,7 +3,7 @@
 
 use crate::application::agent_execution::hooks::HookFailure;
 use crate::application::agent_execution::{
-    providers::{CloseOutcome, UserImageError},
+    providers::{CloseOutcome, ImageInputRefusal, UserImageError},
     sessions::StorageError,
 };
 use crate::domain::agent_execution::executions::{ExecutionOutcome, SchedulingError};
@@ -91,6 +91,22 @@ pub enum AgentError {
     /// An image the message refers to could not be supplied intact, so the
     /// message was not dispatched. Nothing is sent without it.
     UserImage(UserImageError),
+    /// The message's images were refused for what they are or for who would
+    /// receive them, without reading a byte. Admission answers this before the
+    /// message is accepted, so nothing was saved, queued, or sent; an adapter
+    /// answers the same value at dispatch when only it knows that its agent
+    /// takes no images.
+    ImageInputRefused(ImageInputRefusal),
+    /// Encoded for the provider, this message cannot fit the one frame that
+    /// would carry it. Admission answers this before the message is accepted.
+    MessageTooLarge {
+        /// The message as a frame would carry it, in bytes: text as JSON, every
+        /// image as base64, and the adapter's fixed allowance for the request
+        /// around them.
+        encoded_bytes: u64,
+        /// Largest frame the provider connection carries, in bytes.
+        max_bytes: u64,
+    },
     /// An immediate operation overlaps existing work; queued admission has a separate contract.
     Busy,
     /// The operation was locally cancelled or its provider context disconnected; cleanup is a separate fact.

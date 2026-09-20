@@ -58,18 +58,57 @@ Image input has four gates, and each can only narrow the one before it. The
 model's metadata must list image input and record its `ImageInputLimits` (media
 types, encoded size, and edge ceilings, in `data/models.json`); a model without
 recorded limits is offered no images, because nothing could prepare one for it.
-`EffectiveCapabilities::image_input()` carries those limits to whoever prepares
-images, and the message's own ceilings stay absolute whatever a model allows. The
-binding offers image input only when
-composition gave `AcpConfig::images` a `UserImageSource`; an image sent to a
-text-only binding is refused at admission, before the message is accepted. And
-the connected agent must have advertised `promptCapabilities.image` at
-`initialize`, reported as `OperationCapabilities::image_input`; otherwise the
-adapter rejects the input as `Unsupported` without dispatching it. At dispatch
-the adapter reads each image through the source, checks its length and digest
-against the reference, and sends it as a base64 ACP `image` block after the text.
-A missing, unreadable, or substituted image is `AgentError::UserImage` and
-nothing is sent. One encoded message must fit `max_frame_bytes`.
+Those limits are read in two places. Whoever prepares an image reads them from
+the selected model, `ModelMetadata::image_input()`: the gateway does this at
+composition, before any agent is open, so preparation never depends on a live
+session. Admission reads the same limits from the session's
+`EffectiveCapabilities::image_input()`, which is present exactly when the model
+and the binding both offer image input. The message's own ceilings stay absolute
+whatever a model allows. The binding offers image input only when composition
+gave `AcpConfig::images` a `UserImageSource`. And the connected agent must have
+advertised `promptCapabilities.image` at `initialize`, reported as
+`OperationCapabilities::image_input`.
+
+Every one of those is checked when a message is submitted, before it is
+accepted, by `Agent::invoke`, `enqueue`, `enqueue_steering`, and `steer` alike.
+A refusal there saved nothing, queued nothing, and sent nothing:
+
+| Refused because | Error |
+| --- | --- |
+| the model or the binding offers no image input | `InvalidInput` |
+| an image's encoding is not one the model lists | `ImageInputRefused(MediaType(..))` |
+| an image is larger than the model's `max_raw_bytes()` | `ImageInputRefused(ImageTooLarge { .. })` |
+| the agent is known not to take images | `ImageInputRefused(AgentDoesNotAccept)` |
+| the encoded message cannot fit `max_frame_bytes` | `MessageTooLarge { .. }` |
+
+The agent's answer is refused only when it is a known "no".
+`OperationCapabilities::negotiated` is false while a context is being opened or
+restored, and then `image_input: false` means "not known yet": the message is
+admitted, and the adapter answers the same `ImageInputRefused(AgentDoesNotAccept)`
+at dispatch if the restored agent turns out not to take images. A closed context
+keeps its last negotiation. The frame check counts the text as JSON, every image
+as base64, and about 2 KiB for the request around them; the largest message the
+domain allows (10 MiB of images with several mebibytes of text) does not fit the
+largest frame, and is refused here rather than after it was accepted.
+
+Just before dispatch the adapter reads each image through the source, checks its
+length and then its digest against the reference, and sends it as a base64 ACP
+`image` block after the text. A missing, unreadable, or substituted image is
+`AgentError::UserImage` and nothing is sent. The read happens on the task that
+submitted the message, never on the task that owns the agent process, so a
+source that stalls delays one message and nothing else: the active execution
+still settles, steering and permission answers still go through, and close
+still completes and abandons the read (`Closed`). All the images of one message
+are given ten seconds together, less when the execution timeout or the
+five-second steering deadline is shorter, and ten seconds even when the
+execution has no timeout. A read that runs out of time, or a source that
+panics, is `UserImage(Unavailable)`; the context stays usable. A source must
+not return more than `size + 1` bytes for a reference: the port hands back an
+owned buffer, so only the implementation can stop a larger one being built.
+
+Writing a frame to the agent may take one second plus one more for each whole
+mebibyte of the frame, so a message carrying images is not failed by the bound
+meant for small frames; an execution timeout still ends the write earlier.
 
 Each `Agent::invoke(ExecutionRequest { user_message, .. })` sends only that new
 user message on `session/prompt`. The ACP agent maintains history and emits the

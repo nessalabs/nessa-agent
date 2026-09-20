@@ -69,8 +69,16 @@ pub struct UserMessage {
 impl UserMessage {
     /// Most images in one message.
     pub const MAX_IMAGES: usize = 10;
-    /// Most image bytes in one message, across all of its images. Encoded for
-    /// a provider they grow by a third, and must still fit one 16 MiB frame.
+    /// Most image bytes in one message, across all of its images.
+    ///
+    /// Encoded as base64 for a provider they grow by a third, to about
+    /// 13.4 MiB, which leaves room for some text inside the 16 MiB that is the
+    /// largest frame an adapter carries. It does not leave room for all the
+    /// text a message may hold: the most images together with a few mebibytes
+    /// of text is a valid message that no single frame fits. That is a rule of
+    /// the adapter and its configured frame, not of a message, so the adapter
+    /// refuses such a message by type when it is submitted, before it is
+    /// accepted, rather than this constructor refusing it.
     pub const MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
 
     /// Combine optional `text` with `images` in attachment order. Neither is

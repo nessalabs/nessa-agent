@@ -69,6 +69,8 @@ pub struct AcpConfig {
     /// Some sets an explicit total runtime limit, not a stuck-agent detector.
     /// It starts when the worker selects the request to check ready policy updates
     /// and continues through prompt writing and execution without restarting.
+    /// A message's images are read before that, under a bound of their own
+    /// that this value can only shorten; see `images`.
     /// The duration must be positive and fit the runtime clock; expiry cancels
     /// the execution and starts process cleanup.
     pub execution_timeout: Option<Duration>,
@@ -89,7 +91,11 @@ pub struct AcpConfig {
     /// audit copies, and allocator/channel overhead are outside this queue budget.
     pub event_capacity: usize,
     /// Maximum JSON-RPC frame size in bytes, from 1024 through 16 MiB inclusive. Oversized
-    /// incoming or outgoing frames fail transport processing. Incoming frames also share a
+    /// incoming or outgoing frames fail transport processing. A user message that cannot
+    /// fit one frame once encoded is refused when it is submitted, before it is accepted,
+    /// with `AgentError::MessageTooLarge`; about 2 KiB of every frame is reserved for the
+    /// request around the message. Writing a frame may take one second, plus one more
+    /// for each whole mebibyte of it. Incoming frames also share a
     /// fixed limit of 65,536 JSON values and object keys, including ignored fields, to bound
     /// collection allocation before envelope validation.
     pub max_frame_bytes: usize,
@@ -98,6 +104,16 @@ pub struct AcpConfig {
     /// a source, an image is still sent only to an agent that advertised
     /// `promptCapabilities.image`, and one encoded message must fit
     /// `max_frame_bytes`: base64 grows image bytes by a third.
+    ///
+    /// The source is read on the task that submitted the message, never on the
+    /// task that owns the agent process, so a slow source delays that one
+    /// message and nothing else: the active execution, permission answers, and
+    /// close all go on. All the images of one message are given ten seconds
+    /// together, less when `execution_timeout` (or, for native steering, the
+    /// five-second steering deadline) is shorter, and ten seconds even when
+    /// `execution_timeout` is `None`. Past that, or when the source panics, the
+    /// message fails with `UserImageError::Unavailable`, nothing is sent, and
+    /// the context stays usable. Closing the context abandons the read.
     pub images: Option<Arc<dyn UserImageSource>>,
 }
 impl AcpConfig {

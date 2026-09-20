@@ -1,6 +1,8 @@
 use super::super::{
     executions::{
         event_queue::{EventQueueBudget, EventReceiver},
+        prompt_content::{fits_one_frame, read_images, ImageBlocks, IMAGE_READ_TIMEOUT},
+        steering::RESPONSE_TIMEOUT,
         worker,
     },
     profile::AcpProfile,
@@ -16,18 +18,22 @@ use crate::application::agent_execution::permissions::{
     PermissionSelectionState,
 };
 use crate::application::agent_execution::providers::{
-    CleanupFuture, CleanupReport, ExecutionEventStream, ExecutionReport, ObservationFailure,
-    ObservationFailureCause, OpenedProviderSession, OperationCapabilities, ProviderCleanup,
-    ProviderExecutionFuture, ProviderExecutionReply, ProviderObservationFuture, ProviderOpenError,
-    ProviderOperationFailure, ProviderOperationFuture, ProviderOperationResult, ProviderSession,
-    ProviderSessionBackend, ProviderSessionState, ResourceCleanup, SessionCloseRequest,
-    SteeringOutcome,
+    CleanupFuture, CleanupReport, ExecutionEventStream, ExecutionReport, ImageInputRefusal,
+    ObservationFailure, ObservationFailureCause, OpenedProviderSession, OperationCapabilities,
+    ProviderCleanup, ProviderExecutionFuture, ProviderExecutionReply, ProviderObservationFuture,
+    ProviderOpenError, ProviderOperationFailure, ProviderOperationFuture, ProviderOperationResult,
+    ProviderSession, ProviderSessionBackend, ProviderSessionState, ResourceCleanup,
+    SessionCloseRequest, SteeringOutcome,
 };
 use crate::domain::agent_execution::executions::ExecutionId;
+use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::infrastructure::process::ProcessScope;
-use std::sync::{atomic::AtomicU64, Arc, Mutex as ControlMutex};
+use std::{
+    sync::{atomic::AtomicU64, Arc, Mutex as ControlMutex},
+    time::Duration,
+};
 use tokio::sync::{mpsc, oneshot, watch, Mutex, MutexGuard};
 
 pub(crate) type ProcessFactory = Arc<dyn Fn() -> Result<ProcessScope, AgentError> + Send + Sync>;
@@ -353,6 +359,12 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
     fn operation_capabilities(&self) -> OperationCapabilities {
         *self.factory.operation_capabilities.borrow()
     }
+    fn validate_input(&self, input: &ExecutionRequest) -> Result<(), AgentError> {
+        self.factory
+            .profile
+            .validate_execution(input, &self.factory.capabilities)?;
+        fits_one_frame(&input.user_message, self.factory.config.max_frame_bytes)
+    }
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
         Box::pin(async move {
             match self.live_generation().await {
@@ -367,7 +379,10 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
     fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_> {
         Box::pin(async move {
             let (sender, receiver) = oneshot::channel();
-            let observations = {
+            // Subscribed before the context is made live, so a close at any
+            // later moment is seen by the image read below.
+            let closing = self.close_activity.subscribe();
+            let (commands, observations) = {
                 let generation = match self.live_generation().await {
                     Ok(generation) => generation,
                     Err(error) => {
@@ -380,14 +395,28 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
                         ));
                     }
                 };
-                if let Err(error) = enqueue(
-                    &generation.commands,
-                    Command::ExecutionRequest(input, sender),
-                ) {
-                    return ProviderExecutionReply::Rejected(error);
-                }
-                generation.observations.clone()
+                (generation.commands.clone(), generation.observations.clone())
             };
+            // The generation lock is released: a stalled source must not hold
+            // up steering, permission answers, or the next restoration.
+            let limit = self
+                .factory
+                .config
+                .execution_timeout
+                .map_or(IMAGE_READ_TIMEOUT, |limit| limit.min(IMAGE_READ_TIMEOUT));
+            let images = match self
+                .images(&input.user_message, &commands, closing, limit)
+                .await
+            {
+                Ok(images) => images,
+                Err(error) => return ProviderExecutionReply::Rejected(error),
+            };
+            // A generation that stopped meanwhile has closed this queue, so the
+            // request is refused rather than handed to a different process.
+            if let Err(error) = enqueue(&commands, Command::ExecutionRequest(input, images, sender))
+            {
+                return ProviderExecutionReply::Rejected(error);
+            }
             let result = receiver.await.unwrap_or_else(|_| {
                 ProviderExecutionReply::Finished(ExecutionReport::new(
                     None,
@@ -411,7 +440,8 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
     ) -> ProviderOperationFuture<'_, SteeringOutcome> {
         Box::pin(async move {
             let (sender, receiver) = oneshot::channel();
-            {
+            let closing = self.close_activity.subscribe();
+            let commands = {
                 let generation = self.generation.lock().await;
                 if generation.stopped() {
                     return Err(ProviderOperationFailure::new(
@@ -419,10 +449,25 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
                         ProviderSessionState::CleanupRequired,
                     ));
                 }
-                enqueue(&generation.commands, Command::Steer(target, input, sender)).map_err(
-                    |error| ProviderOperationFailure::new(error, ProviderSessionState::Usable),
-                )?;
-            }
+                generation.commands.clone()
+            };
+            // Read with the lock released and off the worker's task: the
+            // active execution keeps being driven, and can finish, meanwhile.
+            let limit = IMAGE_READ_TIMEOUT.min(RESPONSE_TIMEOUT);
+            let images = self
+                .images(&input.user_message, &commands, closing, limit)
+                .await
+                .map_err(|error| {
+                    let state = if error == AgentError::Closed {
+                        ProviderSessionState::CleanupRequired
+                    } else {
+                        ProviderSessionState::Usable
+                    };
+                    ProviderOperationFailure::new(error, state)
+                })?;
+            enqueue(&commands, Command::Steer(target, input, images, sender)).map_err(|error| {
+                ProviderOperationFailure::new(error, ProviderSessionState::Usable)
+            })?;
             receiver.await.unwrap_or_else(|_| {
                 Err(ProviderOperationFailure::new(
                     AgentError::Closed,
@@ -523,6 +568,42 @@ impl<P: AcpProfile + Clone + Sync> ProviderSessionBackend for AcpSession<P> {
     }
 }
 impl<P: AcpProfile + Clone> AcpSession<P> {
+    /// The image blocks for `message`, read before its command is queued so
+    /// the worker never waits on the injected source.
+    ///
+    /// The caller holds no lock. The read is abandoned, with
+    /// [`AgentError::Closed`], when this context is closed or the generation
+    /// behind `commands` stops for any reason (consumer loss and a failed
+    /// process included), and it fails after `limit`. The connected agent's
+    /// answer is checked first so that nothing is read for an agent that takes
+    /// no images; the worker repeats that check when it dispatches.
+    async fn images(
+        &self,
+        message: &UserMessage,
+        commands: &mpsc::Sender<Command>,
+        mut closing: watch::Receiver<()>,
+        limit: Duration,
+    ) -> Result<ImageBlocks, AgentError> {
+        let agent = self.operation_capabilities();
+        if !message.images().is_empty() && agent.negotiated && !agent.image_input {
+            return Err(AgentError::ImageInputRefused(
+                ImageInputRefusal::AgentDoesNotAccept,
+            ));
+        }
+        let stopped = async {
+            tokio::select! {
+                _ = closing.changed() => {}
+                () = commands.closed() => {}
+            }
+        };
+        read_images(
+            self.factory.config.images.as_deref(),
+            message,
+            limit,
+            stopped,
+        )
+        .await
+    }
     async fn operation_failure(&self, error: AgentError) -> ProviderOperationFailure {
         let generation = self.generation.lock().await;
         let completed = generation.completion.borrow().clone();
@@ -543,12 +624,20 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
 }
 
 pub(crate) enum Command {
+    /// Native steering for the identified execution, with its image blocks
+    /// already read and encoded.
     Steer(
         ExecutionId,
         ExecutionRequest,
+        ImageBlocks,
         oneshot::Sender<ProviderOperationResult<SteeringOutcome>>,
     ),
-    ExecutionRequest(ExecutionRequest, oneshot::Sender<ProviderExecutionReply>),
+    /// One prompt, with its image blocks already read and encoded.
+    ExecutionRequest(
+        ExecutionRequest,
+        ImageBlocks,
+        oneshot::Sender<ProviderExecutionReply>,
+    ),
     CancelPermission(
         PermissionCancellationRequest,
         oneshot::Sender<ProviderOperationResult<PermissionCancellation>>,

@@ -333,7 +333,10 @@ async fn blocked_prompt_write_obeys_execution_deadline_or_the_default_write_boun
         };
         assert_eq!(result, expected_result);
         let elapsed = closure_time - began;
-        let expected = limit.unwrap_or(Duration::from_secs(1));
+        // Without an execution deadline the write has its own bound, which
+        // grows with the frame: one second, and one more for each whole
+        // mebibyte of this two-mebibyte prompt.
+        let expected = limit.unwrap_or(Duration::from_secs(3));
         // Tokio's timer wheel rounds expiry to its next millisecond tick.
         assert!(
             elapsed >= expected && elapsed <= expected + Duration::from_millis(1),

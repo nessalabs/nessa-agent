@@ -234,13 +234,18 @@ async fn same_poll_policy_drift_prevents_prompt_and_native_steering_writes() {
                         .send(Command::Steer(
                             ExecutionId::new("active").unwrap(),
                             request(),
+                            ImageBlocks::none(),
                             steer_reply,
                         ))
                         .await
                         .unwrap();
                 } else {
                     commands
-                        .send(Command::ExecutionRequest(request(), reply))
+                        .send(Command::ExecutionRequest(
+                            request(),
+                            ImageBlocks::none(),
+                            reply,
+                        ))
                         .await
                         .unwrap();
                 }
@@ -291,7 +296,11 @@ async fn valid_ready_burst_larger_than_batch_preserves_prompt_dispatch() {
     let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
     let (reply, _result) = oneshot::channel();
     commands
-        .send(Command::ExecutionRequest(request(), reply))
+        .send(Command::ExecutionRequest(
+            request(),
+            ImageBlocks::none(),
+            reply,
+        ))
         .await
         .unwrap();
     let failure = worker.drive(&mut execution).await;
@@ -347,7 +356,11 @@ async fn close_interrupts_ready_policy_backlog_without_dispatching_pending_promp
         let mut execution = ExecutionController::new(ExecutionSessionId::new("context").unwrap());
         let (reply, result) = oneshot::channel();
         commands
-            .send(Command::ExecutionRequest(request(), reply))
+            .send(Command::ExecutionRequest(
+                request(),
+                ImageBlocks::none(),
+                reply,
+            ))
             .await
             .unwrap();
         let failure = worker.drive(&mut execution).await;
@@ -395,7 +408,10 @@ async fn exhausted_task_budget_does_not_hide_ready_policy_frames() {
         tokio::task::consume_budget().await;
     }
     let failure = worker
-        .command(&mut execution, Command::ExecutionRequest(request(), reply))
+        .command(
+            &mut execution,
+            Command::ExecutionRequest(request(), ImageBlocks::none(), reply),
+        )
         .await;
     worker
         .scope
@@ -434,7 +450,11 @@ async fn selected_operation_deadline_includes_ready_policy_validation() {
         let limit = if matches!(dispatch, Dispatch::Prompt) {
             worker.config.execution_timeout = Some(Duration::from_secs(1));
             commands
-                .send(Command::ExecutionRequest(request(), reply))
+                .send(Command::ExecutionRequest(
+                    request(),
+                    ImageBlocks::none(),
+                    reply,
+                ))
                 .await
                 .unwrap();
             Duration::from_secs(1)
@@ -452,6 +472,7 @@ async fn selected_operation_deadline_includes_ready_policy_validation() {
                 .send(Command::Steer(
                     ExecutionId::new("active").unwrap(),
                     request(),
+                    ImageBlocks::none(),
                     steer_reply,
                 ))
                 .await
@@ -534,7 +555,12 @@ async fn ready_completion_keeps_native_steering_prompt_fallback() {
     let operation = worker
         .command(
             &mut execution,
-            Command::Steer(ExecutionId::new("active").unwrap(), request(), reply),
+            Command::Steer(
+                ExecutionId::new("active").unwrap(),
+                request(),
+                ImageBlocks::none(),
+                reply,
+            ),
         )
         .await;
     worker
@@ -583,7 +609,12 @@ async fn interrupted_dispatch_receipt_retains_deadline_and_consumer_failure() {
             worker
                 .command(
                     &mut execution,
-                    Command::Steer(ExecutionId::new("active").unwrap(), request(), reply)
+                    Command::Steer(
+                        ExecutionId::new("active").unwrap(),
+                        request(),
+                        ImageBlocks::none(),
+                        reply,
+                    )
                 )
                 .await,
             Ok(())
@@ -632,7 +663,10 @@ async fn dropped_selected_caller_leaves_context_available_for_next_request() {
     worker.profile.drop_reply_after = Some((3, Mutex::new(Some(result))));
     assert_eq!(
         worker
-            .command(&mut execution, Command::ExecutionRequest(request(), reply))
+            .command(
+                &mut execution,
+                Command::ExecutionRequest(request(), ImageBlocks::none(), reply)
+            )
             .await,
         Ok(())
     );
@@ -644,7 +678,10 @@ async fn dropped_selected_caller_leaves_context_available_for_next_request() {
     let (reply, _result) = oneshot::channel();
     assert_eq!(
         worker
-            .command(&mut execution, Command::ExecutionRequest(request(), reply))
+            .command(
+                &mut execution,
+                Command::ExecutionRequest(request(), ImageBlocks::none(), reply)
+            )
             .await,
         Ok(())
     );

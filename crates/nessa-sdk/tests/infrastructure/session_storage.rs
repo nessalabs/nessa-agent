@@ -33,7 +33,9 @@ use nessa_sdk::application::agent_execution::executions::{
 
 use nessa_sdk::application::agent_execution::hooks::{HookError, HookFailure};
 use nessa_sdk::application::agent_execution::permissions::*;
-use nessa_sdk::application::agent_execution::providers::{CloseOutcome, ProviderIdentity};
+use nessa_sdk::application::agent_execution::providers::{
+    CloseOutcome, ImageInputRefusal, ProviderIdentity, UserImageError,
+};
 use nessa_sdk::application::agent_execution::sessions::storage::*;
 use nessa_sdk::application::agent_execution::sessions::SessionManager;
 use nessa_sdk::application::agent_execution::tools::ToolReviewInput;
@@ -420,6 +422,22 @@ async fn snapshots_preserve_all_settlement_errors_and_unresolved_attempts() {
         },
         AgentError::Unsupported("unsupported".into()),
         AgentError::InvalidInput("input".into()),
+        AgentError::UserImage(UserImageError::Missing),
+        AgentError::UserImage(UserImageError::Unavailable),
+        AgentError::UserImage(UserImageError::Mismatch),
+        AgentError::ImageInputRefused(ImageInputRefusal::AgentDoesNotAccept),
+        AgentError::ImageInputRefused(ImageInputRefusal::MediaType(ImageMediaType::Png)),
+        AgentError::ImageInputRefused(ImageInputRefusal::MediaType(ImageMediaType::Jpeg)),
+        AgentError::ImageInputRefused(ImageInputRefusal::MediaType(ImageMediaType::Gif)),
+        AgentError::ImageInputRefused(ImageInputRefusal::MediaType(ImageMediaType::Webp)),
+        AgentError::ImageInputRefused(ImageInputRefusal::ImageTooLarge {
+            size: 7,
+            max_bytes: 6,
+        }),
+        AgentError::MessageTooLarge {
+            encoded_bytes: u64::MAX,
+            max_bytes: 16 * 1024 * 1024,
+        },
         AgentError::Busy,
         AgentError::Closed,
         AgentError::StalePermission,

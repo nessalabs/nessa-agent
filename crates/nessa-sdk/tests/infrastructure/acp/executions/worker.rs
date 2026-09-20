@@ -4,6 +4,7 @@ use crate::infrastructure::acp::{
     executions::event_queue::EventQueueBudget,
     tests::profile_substitution::{profile_setup, TestAcpProfile},
 };
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 struct UnexpectedAudit;

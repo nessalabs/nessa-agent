@@ -324,6 +324,7 @@ async fn operation_capabilities_follow_successful_negotiation_and_restoration() 
         assert_eq!(
             opened.session.operation_capabilities(),
             OperationCapabilities {
+                negotiated: true,
                 native_steering: false,
                 session_resume: mode != "resume-unsupported",
                 image_input: false,
@@ -340,6 +341,7 @@ async fn operation_capabilities_follow_successful_negotiation_and_restoration() 
     assert_eq!(
         opened.session.operation_capabilities(),
         OperationCapabilities {
+            negotiated: true,
             native_steering: true,
             session_resume: true,
             image_input: false,
@@ -357,6 +359,7 @@ async fn operation_capabilities_follow_successful_negotiation_and_restoration() 
     assert_eq!(
         opened.session.operation_capabilities(),
         OperationCapabilities {
+            negotiated: true,
             native_steering: false,
             session_resume: true,
             image_input: false,
@@ -427,7 +430,7 @@ async fn oversized_steering_is_rejected_without_interrupting_the_active_prompt()
             .steer(ExecutionId::new("active-survives").unwrap(), oversized)
             .await
             .map_err(|failure| failure.into_error()),
-        Err(AgentError::InvalidInput(_))
+        Err(AgentError::MessageTooLarge { .. })
     ));
     assert!(!active.is_finished());
     assert!(!root.path().join("cancel-observed").exists());

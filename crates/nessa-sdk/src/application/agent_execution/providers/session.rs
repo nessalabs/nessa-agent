@@ -1,9 +1,9 @@
 #![deny(missing_docs)]
 
 use super::{
-    CleanupFuture, OperationCapabilities, ProviderExecutionFuture, ProviderExecutionReply,
-    ProviderOperationFailure, ProviderOperationFuture, ProviderSessionBackend,
-    ProviderSessionState, SessionCloseRequest, SteeringOutcome,
+    CleanupFuture, ImageInputRefusal, OperationCapabilities, ProviderExecutionFuture,
+    ProviderExecutionReply, ProviderOperationFailure, ProviderOperationFuture,
+    ProviderSessionBackend, ProviderSessionState, SessionCloseRequest, SteeringOutcome,
 };
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::{
@@ -27,7 +27,9 @@ use std::sync::Arc;
 /// Adapters construct this handle; runtime controls are crate-private so callers
 /// go through Agent storage, hooks, and scheduling.
 /// A provider context client. Clones share its execution, shutdown, and restoration lifecycle.
-/// Admission uses the same immutable capabilities selected at session creation.
+/// Admission uses the same immutable capabilities selected at session creation,
+/// the connected agent's negotiated answer on images when that is known, and the
+/// backend's own `validate_input`.
 /// The backend owns execution concurrency and cleanup; the host authorizes answers.
 ///
 /// Consumer code cannot dispatch this handle directly:
@@ -88,18 +90,32 @@ impl ProviderSession {
     pub fn operation_capabilities(&self) -> OperationCapabilities {
         self.backend.operation_capabilities()
     }
-    /// Send one new user message. The ACP backend automatically restores a closed
-    /// context before execution; missing history or unsupported resume is an error.
-    /// The provider retains conversation history.
+    /// Decide whether `input` may be accepted at all. Every way in runs this
+    /// before anything is saved, queued, or sent: an immediate invocation, a
+    /// queued one, queued steering, and native steering, and again when the
+    /// backend is finally called.
+    ///
+    /// In order: the text's byte limit; the modalities and token budget of the
+    /// selected model; each image against that model's recorded limits; the
+    /// connected agent's own answer on images; then whatever the backend
+    /// already knows it could never deliver.
+    ///
+    /// The agent's answer is refused only when it is a known "no". While a
+    /// context is being opened or restored the answer is not known, and that is
+    /// not a refusal: the message is admitted, and the adapter answers the same
+    /// typed [`ImageInputRefusal::AgentDoesNotAccept`] at dispatch if the
+    /// restored agent takes no images. A closed context keeps its last
+    /// negotiation, because the same agent is what a restoration would start.
     pub(crate) fn validate(&self, input: &ExecutionRequest) -> Result<(), AgentError> {
         input.validate_message_size()?;
         // Require what the message actually holds. An image sent to a text-only
         // binding is refused here, before acceptance, and never dropped.
+        let images = input.user_message.images();
         let mut requirements = Vec::with_capacity(2);
         if input.user_message.text().is_some() {
             requirements.push(CapabilityRequirement::Input(Modality::Text));
         }
-        if !input.user_message.images().is_empty() {
+        if !images.is_empty() {
             requirements.push(CapabilityRequirement::Input(Modality::Image));
         }
         self.capabilities
@@ -108,7 +124,26 @@ impl ProviderSession {
                 input.estimated_input_tokens,
                 input.reserved_output_tokens,
             )
-            .map_err(|error| AgentError::InvalidInput(error.to_string()))
+            .map_err(|error| AgentError::InvalidInput(error.to_string()))?;
+        if !images.is_empty() {
+            // Image input is offered exactly when its limits are recorded, so
+            // the modality check above has already refused a model without them.
+            let limits = self.capabilities.image_input().ok_or_else(|| {
+                AgentError::InvalidInput("the model records no image limits".into())
+            })?;
+            for image in images {
+                limits
+                    .check(image.media_type(), image.size())
+                    .map_err(|violation| AgentError::ImageInputRefused(violation.into()))?;
+            }
+            let agent = self.backend.operation_capabilities();
+            if agent.negotiated && !agent.image_input {
+                return Err(AgentError::ImageInputRefused(
+                    ImageInputRefusal::AgentDoesNotAccept,
+                ));
+            }
+        }
+        self.backend.validate_input(input)
     }
     /// Dispatch `input` after checking actual message bytes and caller-estimated tokens.
     /// This adapter operation does not persist evidence or run Agent hooks.

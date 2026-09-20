@@ -1,9 +1,14 @@
 use nessa_sdk::domain::common::value_objects::TokenLimits;
-use nessa_sdk::domain::common::value_objects::{Date, ImageMediaType, Url};
+use nessa_sdk::domain::common::value_objects::{
+    Date,
+    ImageMediaType::{self, Gif, Jpeg, Png},
+    Url,
+};
 use nessa_sdk::domain::model_metadata::{
     aggregates::Catalog,
     entities::ModelMetadata,
     value_objects::ImageInputLimits,
+    value_objects::ImageInputViolation,
     value_objects::Modalities,
     value_objects::ModelDescription,
     value_objects::ModelFeatures,
@@ -214,7 +219,6 @@ fn provider_names_parse_into_the_closed_provider_set() {
 
 #[test]
 fn image_input_limits_are_positive_consistent_and_derive_what_is_worth_sending() {
-    use ImageMediaType::{Jpeg, Png};
     let limits = ImageInputLimits::new(vec![Jpeg, Png], 5_000_000, 8000, 2000, 2576).unwrap();
     assert_eq!(limits.media_types(), [Jpeg, Png]);
     assert_eq!(limits.max_encoded_bytes(), 5_000_000);
@@ -228,14 +232,17 @@ fn image_input_limits_are_positive_consistent_and_derive_what_is_worth_sending()
     assert_eq!(standard.target_long_edge_px(), 1568);
 
     for invalid in [
-        ImageInputLimits::new(vec![], 1, 1, 1, 1),
-        ImageInputLimits::new(vec![Png, Jpeg, Png], 1, 1, 1, 1),
+        ImageInputLimits::new(vec![], 4, 1, 1, 1),
+        ImageInputLimits::new(vec![Png, Jpeg, Png], 4, 1, 1, 1),
         ImageInputLimits::new(vec![Png], 0, 1, 1, 1),
-        ImageInputLimits::new(vec![Png], 1, 0, 1, 1),
-        ImageInputLimits::new(vec![Png], 1, 1, 0, 1),
-        ImageInputLimits::new(vec![Png], 1, 1, 1, 0),
-        ImageInputLimits::new(vec![Png], 1, 100, 101, 100),
-        ImageInputLimits::new(vec![Png], 1, 100, 100, 101),
+        // Fewer than one base64 group would admit no byte at all.
+        ImageInputLimits::new(vec![Png], 1, 1, 1, 1),
+        ImageInputLimits::new(vec![Png], 3, 1, 1, 1),
+        ImageInputLimits::new(vec![Png], 4, 0, 1, 1),
+        ImageInputLimits::new(vec![Png], 4, 1, 0, 1),
+        ImageInputLimits::new(vec![Png], 4, 1, 1, 0),
+        ImageInputLimits::new(vec![Png], 4, 100, 101, 100),
+        ImageInputLimits::new(vec![Png], 4, 100, 100, 101),
     ] {
         assert!(
             matches!(
@@ -251,8 +258,34 @@ fn image_input_limits_are_positive_consistent_and_derive_what_is_worth_sending()
 }
 
 #[test]
+fn the_smallest_image_limit_still_admits_an_image() {
+    let smallest = ImageInputLimits::new(vec![Png], ImageInputLimits::MIN_ENCODED_BYTES, 1, 1, 1);
+    assert_eq!(smallest.unwrap().max_raw_bytes(), 3);
+}
+
+#[test]
+fn an_image_is_checked_against_the_models_encodings_and_byte_limit() {
+    // Eight base64 characters carry six bytes.
+    let limits = ImageInputLimits::new(vec![Png, Jpeg], 8, 1, 1, 1).unwrap();
+    assert_eq!(limits.check(Png, 6), Ok(()));
+    assert_eq!(limits.check(Jpeg, 1), Ok(()));
+    assert_eq!(
+        limits.check(Png, 7),
+        Err(ImageInputViolation::TooLarge {
+            size: 7,
+            max_bytes: 6
+        })
+    );
+    // The encoding is named first: a smaller GIF would be refused as well.
+    assert_eq!(
+        limits.check(Gif, 7),
+        Err(ImageInputViolation::MediaType(Gif))
+    );
+}
+
+#[test]
 fn image_limits_require_the_image_input_modality() {
-    let limits = ImageInputLimits::new(vec![ImageMediaType::Png], 1, 1, 1, 1).unwrap();
+    let limits = ImageInputLimits::new(vec![ImageMediaType::Png], 4, 1, 1, 1).unwrap();
     let sees_images = model(ModelProvider::Anthropic, true);
     assert_eq!(sees_images.image_input(), None);
     let recorded = sees_images.with_image_input(limits.clone()).unwrap();
