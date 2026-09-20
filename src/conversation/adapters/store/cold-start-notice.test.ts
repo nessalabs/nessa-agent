@@ -29,8 +29,17 @@ import { sendDraft } from "./slice"
  * real conversation API, the real error wrapper, the real store, and the real
  * notice.
  */
-const SERVER_WORST_CASE_MS =
-  budgets.agent.startupMs + budgets.agent.shutdownGraceMs + budgets.agent.killTimeoutMs
+// One launch the gateway cannot answer before: the operating system's scan of a
+// freshly staged runtime, the rest of the handshake, then teardown. A command
+// can wait on a warm-up doing exactly this and then do it again itself, so the
+// client budget covers two. Derived, not restated: a literal here stops
+// tracking the table the moment the table moves.
+const ONE_LAUNCH_MS =
+  budgets.agent.launchMs +
+  budgets.agent.startupMs +
+  budgets.agent.shutdownGraceMs +
+  budgets.agent.killTimeoutMs
+const SERVER_WORST_CASE_MS = ONE_LAUNCH_MS * 2
 
 function fakeSocket() {
   const sent: string[] = []
@@ -81,8 +90,9 @@ it("tells the user the agent was still starting, after the gateway takes its ful
   await vi.advanceTimersByTimeAsync(0)
   expect(sent).toHaveLength(1)
 
-  // Past the old 30 s default: the request must still be outstanding, or the
-  // answer below has nothing to correlate with.
+  // Past the old 30 s default, and past everything the gateway can spend: the
+  // request must still be outstanding, or the answer below has nothing to
+  // correlate with.
   await vi.advanceTimersByTimeAsync(SERVER_WORST_CASE_MS)
   deliver(
     JSON.stringify({
@@ -103,8 +113,10 @@ it("tells the user the agent was still starting, after the gateway takes its ful
 })
 
 it("outlasts the gateway's worst case rather than guessing a round number", () => {
-  // The budget is derived from the same table the gateway reads, so this is
-  // the relationship that has to hold, not the number it happens to produce.
+  // The budget is derived from the same table the gateway reads, so this is the
+  // relationship that has to hold, not the number it happens to produce. The
+  // worst case is two launches because a command can wait on a warm-up that
+  // fails and then open its own provider.
   expect(agentOperationTimeoutMs).toBeGreaterThan(SERVER_WORST_CASE_MS)
 })
 
