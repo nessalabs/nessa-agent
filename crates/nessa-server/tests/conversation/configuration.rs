@@ -3,6 +3,7 @@ use super::*;
 // to call it.
 #[cfg(unix)]
 use crate::composition::local_auth::SystemClock;
+use std::ffi::OsStr;
 
 /// The shared part of the configuration, with one agent under it.
 fn one_agent() -> &'static str {
@@ -178,7 +179,7 @@ fn each_agent_inherits_the_directory_variables_it_resolves_its_own_configuration
     // selection rather than whatever this machine happens to have set.
     let present = |key: &str| Some(OsString::from(format!("/fixture/{key}")));
     let inherited = |agent| -> Vec<String> {
-        inherited_environment(agent, present)
+        inherited_environment(agent, None, present)
             .keys()
             .map(|key| key.to_string_lossy().into_owned())
             .collect()
@@ -217,12 +218,19 @@ fn each_agent_inherits_the_directory_variables_it_resolves_its_own_configuration
         assert!(!other.contains(&"XDG_CONFIG_HOME".to_owned()), "{other:?}");
     }
 
-    // Every agent needs the same handful to start at all.
+    // Every agent needs the same handful to start at all. `PATH` is not among
+    // them because it is not inherited: `agent_search_path` decides it and
+    // `the_agent_is_launched_with_the_path_that_rule_chose` is what holds that
+    // end. Passing `None` above is what makes this the inherited set alone.
     for agent in [AgentId::Claude, AgentId::Codex, AgentId::Opencode] {
         let shared = inherited(agent);
-        for key in ["PATH", "HOME", "USER", "LOGNAME", "TMPDIR"] {
+        for key in ["HOME", "USER", "LOGNAME", "TMPDIR"] {
             assert!(shared.contains(&key.to_owned()), "{agent:?}: {shared:?}");
         }
+        assert!(
+            !shared.contains(&"PATH".to_owned()),
+            "{agent:?}: {shared:?}"
+        );
     }
 }
 
@@ -435,4 +443,62 @@ fn the_selected_agent_failing_to_build_is_still_fatal() {
     nessa_local_storage::create_directory(&conversations).unwrap();
 
     assert!(providers(&config, &conversations, Arc::new(SystemClock)).is_err());
+}
+
+/// The packaged case: the host resolved a path at registration, and that is the
+/// one the agent gets — not the service's own, which has none of the user's
+/// tools on it.
+#[test]
+fn the_agent_takes_the_hosts_resolved_path_over_the_services_own() {
+    assert_eq!(
+        agent_search_path(
+            Some("/opt/homebrew/bin:/usr/bin:/bin".into()),
+            Some("/usr/bin:/bin:/usr/sbin:/sbin".into()),
+        ),
+        Some("/opt/homebrew/bin:/usr/bin:/bin".into())
+    );
+}
+
+/// The developer loop: `just server` is started from a terminal, there is no
+/// host to resolve anything, and that terminal's path is already the right one.
+#[test]
+fn without_a_resolved_path_the_process_keeps_its_own() {
+    assert_eq!(
+        agent_search_path(None, Some("/Users/me/.cargo/bin:/usr/bin".into())),
+        Some("/Users/me/.cargo/bin:/usr/bin".into())
+    );
+}
+
+/// An empty variable is not a path. Treating it as one gives the agent an empty
+/// `PATH`, which searches the working directory it writes to.
+#[test]
+fn an_empty_variable_is_not_a_path() {
+    assert_eq!(
+        agent_search_path(Some("".into()), Some("/usr/bin:/bin".into())),
+        Some("/usr/bin:/bin".into())
+    );
+    assert_eq!(agent_search_path(Some("".into()), Some("".into())), None);
+    assert_eq!(agent_search_path(None, None), None);
+}
+
+/// The rule above decides nothing unless the launched environment uses it. The
+/// two were wired together separately, and a merge that kept one and dropped
+/// the other would still compile and still pass every test above.
+#[test]
+fn the_agent_is_launched_with_the_path_that_rule_chose() {
+    let launched = inherited_environment(
+        AgentId::Codex,
+        Some("/opt/homebrew/bin".into()),
+        |key: &str| std::env::var_os(key),
+    );
+    assert_eq!(
+        launched.get(OsStr::new("PATH")),
+        Some(&OsString::from("/opt/homebrew/bin"))
+    );
+    // No path to hand over means none is named, rather than an empty one, which
+    // would search the working directory the agent writes to.
+    assert!(
+        !inherited_environment(AgentId::Codex, None, |key: &str| std::env::var_os(key))
+            .contains_key(OsStr::new("PATH"))
+    );
 }

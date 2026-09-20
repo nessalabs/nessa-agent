@@ -35,7 +35,9 @@ export type ConversationCreateOptions = ConversationActionOptions & {
   conversationId?: string
   /** The coding agent this conversation runs on for the rest of its life.
    * Omitted takes the gateway's own default. A conversation that already exists
-   * reopens on the agent it was created with, whatever is passed here. */
+   * reopens on the agent it was created with, whatever is passed here. A name
+   * this gateway does not run is refused by the gateway, as a
+   * NessaConversationMutationError with `uncertain` false. */
   agent?: string
 }
 /** Message admission receipt with the client-owned action identity. */
@@ -187,10 +189,17 @@ export function createConversationApi(
     create: (options = {}) => {
       const id = validConversationId(options.conversationId ?? newId())
       const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
-      const agent =
-        options.agent === undefined
-          ? {}
-          : { agent: boundedText(options.agent, "Agent", 32) }
+      // An agent name the gateway does not know is the gateway's to refuse, and
+      // it already refuses one: an unparseable name becomes `RequestedAgent::
+      // Unknown`, which is `invalid_request` on the wire and so arrives here as
+      // a `NessaConversationMutationError` with `uncertain` false and a working
+      // `retry()`, like every other pre-admission refusal. Bounding the name
+      // here instead sorted the blank and the over-long out of that answer and
+      // into a bare `TypeError` thrown before `mutate` is even entered: no
+      // `uncertain`, no `retry()`, no reason — and thrown for a value that is
+      // usually remembered rather than typed, which made one bad remembered
+      // name fail the launch. One refuser, one shape of refusal.
+      const agent = options.agent === undefined ? {} : { agent: options.agent }
       return mutate(
         ProductMethod.ConversationCreate,
         { conversationId: id, requestId, ...agent },

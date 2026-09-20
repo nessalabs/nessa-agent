@@ -1,3 +1,4 @@
+use crate::gateway::domain::value_objects::{SearchPath, SearchPathError};
 use std::{error::Error, fmt, path::Path};
 
 /// Exact native runtime incarnation established by successful reconciliation.
@@ -70,9 +71,96 @@ impl fmt::Display for GatewayError {
     }
 }
 impl Error for GatewayError {}
+/// Why the user's login shell did not produce a search path.
+///
+/// Kept apart from [`GatewayError`]: none of these stop a registration. They
+/// are what the fallback to the system path is reported as.
+// A host with no login shell to run reports only `Unavailable`; the other two
+// are what running one can end in, and the port reads the same on every target.
+#[cfg_attr(not(unix), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoginShellError {
+    /// The shell could not be started, or did not exit successfully.
+    Unavailable(String),
+    /// The shell was still running when its deadline passed and was stopped. A
+    /// login file that waits for input or never returns lands here.
+    TimedOut,
+    /// The shell answered with something that is not a search path.
+    Rejected(SearchPathError),
+}
+impl fmt::Display for LoginShellError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unavailable(message) => write!(f, "login shell unavailable: {message}"),
+            Self::TimedOut => f.write_str("login shell did not answer before its deadline"),
+            Self::Rejected(error) => {
+                write!(f, "login shell answered with an unusable path: {error}")
+            }
+        }
+    }
+}
+impl Error for LoginShellError {}
+
+/// The `PATH` the user's own login shell would give them.
+///
+/// The agent is meant to reach the tools the user installed, and the desktop
+/// host is the part of Nessa that runs inside that user's session — so it is the
+/// part that can ask. A login shell is user-controlled code: the implementation
+/// runs it with a bounded deadline and a clean environment, and the value it
+/// returns has been through [`SearchPath::parse`].
+///
+/// Asked at most once per host process, not once per registration: reconciling
+/// again is routine — every webview load does it — and a path that changed in
+/// between would retire a healthy gateway and stop its agents mid-session. A
+/// changed profile takes effect the next time the app is launched.
+pub trait LoginShellPath: Send + Sync {
+    fn resolve(&self) -> Result<SearchPath, LoginShellError>;
+}
+
 /// Reconciliation returns the exact native runtime incarnation only after matching readiness. A stop
 /// acknowledges request delivery, not the eventual physical cleanup of each agent.
 pub trait GatewayHost: Send + Sync {
-    fn register(&self, runtime: &Path, stage: &str) -> Result<ReconciledGateway, GatewayError>;
+    /// Registers the service for `stage`, running the staged `runtime`.
+    ///
+    /// `agent_path` is the search path resolved for the agent this launch, or
+    /// `None` when the login shell could not be read. `None` is not "use the
+    /// system path": an adapter that already registered a service keeps the
+    /// path that service was registered with, so one slow login shell does not
+    /// rewrite the service definition and retire a healthy gateway.
+    fn register(
+        &self,
+        runtime: &Path,
+        stage: &str,
+        agent_path: Option<&SearchPath>,
+    ) -> Result<ReconciledGateway, GatewayError>;
     fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError>;
+}
+
+/// Substitutes for these ports, beside the ports themselves, so every module
+/// that bootstraps a [`Gateway`](super::Gateway) in a test uses the same ones.
+///
+/// Inline rather than in a file of its own, like `settings::testing`: an item
+/// at the top level of a `#[cfg(test)]` file reads to
+/// `scripts/desktop/platform-gates.mjs` as something every platform compiles
+/// and only macOS reaches, and on Windows — where that script's module walk
+/// finds no children to carry the gate to — it says so.
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::{LoginShellError, LoginShellPath, SearchPath};
+    use std::sync::Arc;
+
+    /// A login shell with a fixed answer — the path it reports, or the reason
+    /// it reported none.
+    pub(crate) struct FixedLoginShell(pub(crate) Result<SearchPath, LoginShellError>);
+    impl LoginShellPath for FixedLoginShell {
+        fn resolve(&self) -> Result<SearchPath, LoginShellError> {
+            self.0.clone()
+        }
+    }
+
+    /// A login shell that answers with the system path: enough for a test whose
+    /// subject is something else.
+    pub(crate) fn system_login_shell() -> Arc<dyn LoginShellPath> {
+        Arc::new(FixedLoginShell(Ok(SearchPath::system())))
+    }
 }
