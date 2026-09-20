@@ -4,6 +4,7 @@ import {
   RUNTIME_EXECUTABLES,
   runtimeEntitlements,
   signingArguments,
+  signingIdentity,
   signingProblems,
 } from "./runtime-signing.mjs"
 
@@ -109,4 +110,42 @@ test("an ad-hoc signature is reported the way the notary log reported it", () =>
 test("a Developer ID signature without the hardened runtime is still wrong", () => {
   const problems = signingProblems("nessa", SIGNED.replace("0x10000(runtime)", "0x0"))
   assert.deepEqual(problems, ["nessa does not have the hardened runtime enabled"])
+})
+
+/**
+ * Every way of saying "no certificate", including the one that looks like a
+ * certificate. `APPLE_SIGNING_IDENTITY=-` is Tauri's documented way to ask for
+ * an ad-hoc signature; taken literally it signs with `--options runtime` and
+ * then fails the check that reads a Developer ID authority back.
+ */
+test("unset, empty and - all mean an ad-hoc signature", () => {
+  for (const value of [undefined, "", "   ", "-", " - "])
+    assert.equal(signingIdentity(value), undefined, JSON.stringify(value))
+  assert.equal(signingIdentity(` ${IDENTITY} `), IDENTITY)
+  assert.equal(
+    signingIdentity("A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4"),
+    "A1B2C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4",
+  )
+})
+
+test("an explicit - signs ad-hoc rather than asking for a hardened runtime", () => {
+  assert.deepEqual(signingArguments("/runtime/node", { identity: "-" }), [
+    "--force",
+    "--sign",
+    "-",
+    "/runtime/node",
+  ])
+  assert.deepEqual(
+    signingArguments("/runtime/node", { identity: "-" }),
+    signingArguments("/runtime/node"),
+    "an explicit ad-hoc identity takes a different path from an absent one",
+  )
+})
+
+/** A name with spaces around it is the same name. */
+test("an identity is trimmed before it is signed with", () => {
+  assert.deepEqual(
+    signingArguments("/runtime/nessa", { identity: ` ${IDENTITY} ` }).slice(0, 3),
+    ["--force", "--sign", IDENTITY],
+  )
 })

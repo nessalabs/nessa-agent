@@ -45,25 +45,42 @@ export function runtimeEntitlements(name) {
 }
 
 /**
+ * The identity to sign with, or nothing, which means ad-hoc.
+ *
+ * Three ways of saying "no identity" arrive here and all three mean the same
+ * thing. Unset is a developer's build. Empty is a workflow mapping a secret
+ * that is not there into `env:`. And `-` is what `codesign` itself calls an
+ * ad-hoc signature — `APPLE_SIGNING_IDENTITY=-` is a documented way to ask
+ * Tauri for one, so it is a configuration, not a certificate with a strange
+ * name. Treating it as a certificate signs with `--options runtime` and then
+ * demands a Developer ID authority back from a signature that has none.
+ */
+export function signingIdentity(value) {
+  const identity = value?.trim()
+  return !identity || identity === "-" ? undefined : identity
+}
+
+/**
  * The `codesign` arguments for one runtime executable.
  *
  * @param {string} path the file to sign
  * @param {object} options
- * @param {string} [options.identity] the Developer ID identity to sign with.
- *   Absent means no Apple credentials are configured — a developer's own build
- *   — and it signs ad-hoc, which is what `-` means to `codesign`.
+ * @param {string} [options.identity] the Developer ID identity to sign with,
+ *   as {@link signingIdentity} reads it: absent, empty or `-` all mean no Apple
+ *   credentials, a developer's own build, and an ad-hoc signature.
  * @param {string} [options.entitlements] the resolved path to the entitlement
  *   plist {@link runtimeEntitlements} named, if it named one. Resolved by the
  *   caller so this stays free of the filesystem.
  * @returns {string[]} arguments, after the command name.
  */
 export function signingArguments(path, { identity, entitlements } = {}) {
-  if (!identity) return ["--force", "--sign", "-", path]
+  const real = signingIdentity(identity)
+  if (!real) return ["--force", "--sign", "-", path]
 
   // --timestamp and --options runtime are not optional extras: notarization
   // refuses a signature without a secure timestamp, and refuses an executable
   // without the hardened runtime. Each was its own error in the v0.1.0 log.
-  const args = ["--force", "--sign", identity, "--timestamp", "--options", "runtime"]
+  const args = ["--force", "--sign", real, "--timestamp", "--options", "runtime"]
   if (entitlements) args.push("--entitlements", entitlements)
   args.push(path)
   return args

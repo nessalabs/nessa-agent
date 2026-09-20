@@ -48,6 +48,23 @@ test("two signing certificates ask to be told which", () => {
 })
 
 /**
+ * The integration tests below drive the real script, and to do that they put a
+ * `security` of their own on `PATH`: an extensionless `#!/bin/sh` file, found
+ * through a colon-separated `PATH`. Neither is a thing Windows has, and the
+ * desktop check runs every one of these files on all three platforms — this
+ * fixture failed five tests in the Windows job before it was gated.
+ *
+ * Skipped rather than made portable. What they cover is a macOS-only script
+ * that shells out to a macOS-only tool, so a Windows runner proves nothing
+ * about it either way; the parser tests above are pure and keep running
+ * everywhere.
+ */
+const shellFixture =
+  process.platform === "win32"
+    ? { skip: "the security stub is a /bin/sh script on a colon-separated PATH" }
+    : {}
+
+/**
  * The script itself, run against a `security` that is a shell script.
  *
  * The parser above can be right while the script around it is wrong, and both
@@ -114,19 +131,23 @@ exit 0
  * the certificate set and no explicit identity would fail before it signed
  * anything — the automatic path would never have produced a release at all.
  */
-test("the exported identity is the certificate's name, and the hash goes elsewhere", () => {
-  const { status, exported } = runImport()
-  assert.equal(status, 0)
-  assert.equal(exported.APPLE_SIGNING_IDENTITY, NAME)
-  assert.ok(
-    NAME.includes(exported.APPLE_SIGNING_IDENTITY),
-    "the bundler checks that the certificate's name contains this value",
-  )
-  assert.equal(exported.NESSA_RUNTIME_SIGNING_IDENTITY, HASH)
-})
+test(
+  "the exported identity is the certificate's name, and the hash goes elsewhere",
+  shellFixture,
+  () => {
+    const { status, exported } = runImport()
+    assert.equal(status, 0)
+    assert.equal(exported.APPLE_SIGNING_IDENTITY, NAME)
+    assert.ok(
+      NAME.includes(exported.APPLE_SIGNING_IDENTITY),
+      "the bundler checks that the certificate's name contains this value",
+    )
+    assert.equal(exported.NESSA_RUNTIME_SIGNING_IDENTITY, HASH)
+  },
+)
 
 /** A name a person put in the repository's secrets is their decision. */
-test("an explicitly configured identity is left alone", () => {
+test("an explicitly configured identity is left alone", shellFixture, () => {
   const { status, exported, calls } = runImport({
     environment: { APPLE_SIGNING_IDENTITY: NAME },
   })
@@ -140,15 +161,19 @@ test("an explicitly configured identity is left alone", () => {
 })
 
 /** The keychain is named for cleanup before there is a private key in it. */
-test("the keychain is registered for cleanup before the key is imported", () => {
-  const { exported, calls } = runImport()
-  assert.match(exported.NESSA_SIGNING_KEYCHAIN, /^nessa-signing-\d+\.keychain-db$/)
-  assert.ok(
-    calls.findIndex((call) => call.startsWith("create-keychain")) <
-      calls.findIndex((call) => call.startsWith("import")),
-    "the key was imported before the keychain existed",
-  )
-})
+test(
+  "the keychain is registered for cleanup before the key is imported",
+  shellFixture,
+  () => {
+    const { exported, calls } = runImport()
+    assert.match(exported.NESSA_SIGNING_KEYCHAIN, /^nessa-signing-\d+\.keychain-db$/)
+    assert.ok(
+      calls.findIndex((call) => call.startsWith("create-keychain")) <
+        calls.findIndex((call) => call.startsWith("import")),
+      "the key was imported before the keychain existed",
+    )
+  },
+)
 
 /**
  * A failure after the private key is in the keychain deletes the keychain.
@@ -158,22 +183,29 @@ test("the keychain is registered for cleanup before the key is imported", () => 
  * `finally` removed only the PKCS#12 file.
  */
 for (const failAt of ["set-key-partition-list", "find-identity"])
-  test(`a failure at ${failAt} deletes the keychain and keeps its own error`, () => {
-    const { status, stderr, calls, exported } = runImport({ failAt })
-    assert.equal(status, 1)
-    assert.ok(
-      calls.some((call) => call.startsWith("delete-keychain")),
-      `a keychain holding the signing key was left on the runner:\n${calls.join("\n")}`,
-    )
-    assert.ok(
-      exported.NESSA_SIGNING_KEYCHAIN,
-      "the workflow's cleanup step has nothing to delete either",
-    )
-    assert.match(stderr, failAt === "find-identity" ? /Developer ID|stubbed/ : /stubbed/)
-  })
+  test(
+    `a failure at ${failAt} deletes the keychain and keeps its own error`,
+    shellFixture,
+    () => {
+      const { status, stderr, calls, exported } = runImport({ failAt })
+      assert.equal(status, 1)
+      assert.ok(
+        calls.some((call) => call.startsWith("delete-keychain")),
+        `a keychain holding the signing key was left on the runner:\n${calls.join("\n")}`,
+      )
+      assert.ok(
+        exported.NESSA_SIGNING_KEYCHAIN,
+        "the workflow's cleanup step has nothing to delete either",
+      )
+      assert.match(
+        stderr,
+        failAt === "find-identity" ? /Developer ID|stubbed/ : /stubbed/,
+      )
+    },
+  )
 
 /** No certificate is not a failure, and touches no keychain. */
-test("nothing configured imports nothing", () => {
+test("nothing configured imports nothing", shellFixture, () => {
   const { status, stdout, calls } = runImport({
     environment: { APPLE_CERTIFICATE: "" },
   })

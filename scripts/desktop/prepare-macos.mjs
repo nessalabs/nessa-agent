@@ -16,6 +16,7 @@ import {
   RUNTIME_EXECUTABLES,
   runtimeEntitlements,
   signingArguments,
+  signingIdentity,
   signingProblems,
 } from "./runtime-signing.mjs"
 const root = resolve(import.meta.dirname, "../..")
@@ -92,9 +93,8 @@ cpSync(join(root, "crates/nessa-sdk/data/models.json"), join(out, "models.json")
 // cannot be ambiguous. APPLE_SIGNING_IDENTITY is the bundler's variable and
 // holds a name; either signs, and the hash is preferred when both are there.
 const identity =
-  process.env.NESSA_RUNTIME_SIGNING_IDENTITY?.trim() ||
-  process.env.APPLE_SIGNING_IDENTITY?.trim() ||
-  undefined
+  signingIdentity(process.env.NESSA_RUNTIME_SIGNING_IDENTITY) ??
+  signingIdentity(process.env.APPLE_SIGNING_IDENTITY)
 for (const name of RUNTIME_EXECUTABLES) {
   const plist = runtimeEntitlements(name)
   execFileSync(
