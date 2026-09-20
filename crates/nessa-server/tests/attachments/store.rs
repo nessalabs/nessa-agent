@@ -515,6 +515,44 @@ async fn a_record_that_cannot_be_read_is_reported_kept_and_never_costs_the_other
 }
 
 #[tokio::test]
+async fn a_kept_record_that_describes_another_file_is_a_failure_not_an_answer() {
+    let root = tempfile::tempdir().unwrap();
+    let store = open(root.path());
+    let hold = hold_for("org", CONVERSATION, b"bytes", b"bytes");
+    keep_usable(&store, &hold, b"bytes").await;
+
+    // A record's name carries a digest and sixteen digits of the hash of a
+    // media type, which is not the whole file: the same name also fits a
+    // record claiming another length for those bytes. What is kept decides,
+    // not where it is filed, so this one is refused rather than handed back
+    // as a hold on bytes that cannot exist.
+    let impossible =
+        Attachment::new(digest_of(b"bytes"), MediaType::parse(PDF).unwrap(), 6).unwrap();
+    let disagreeing = Hold::from_upload(
+        &UploadTicket::new(
+            organization("org"),
+            conversation(CONVERSATION),
+            impossible.clone(),
+            Caller::new(principal("owner"), "panel", "begin-1").unwrap(),
+            TicketLifetime::starting(1_000).unwrap(),
+        ),
+        impossible,
+        2_000,
+    )
+    .unwrap();
+    let record = root.path().join("attachments").join(path_of(&hold));
+    let forged = encode(&disagreeing, RecordState::Kept, "forged");
+    fs::write(&record, &forged).unwrap();
+
+    let mut staged = store.stage().await.unwrap();
+    staged.write(b"bytes".to_vec()).await.unwrap();
+    staged.finish().await.unwrap();
+    assert_eq!(staged.keep(hold.clone()).await, Err(StoreUnavailable));
+    // Left exactly as it was found, for whoever investigates.
+    assert_eq!(fs::read(&record).unwrap(), forged);
+}
+
+#[tokio::test]
 async fn a_pending_hold_is_invisible_protects_its_bytes_and_answers_only_to_its_own_claim() {
     let root = tempfile::tempdir().unwrap();
     let store = open(root.path());

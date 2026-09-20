@@ -351,6 +351,13 @@ impl Files {
             ..
         }) = existing
         {
+            // A record's name says its digest and sixteen digits of the hash of
+            // its media type, so the name alone does not prove the record is
+            // about this file. What is kept decides, and a record that says
+            // otherwise is corrupt rather than an answer.
+            if kept.stored() != hold.stored() {
+                return Err(corrupt("kept hold record describes another stored file"));
+            }
             // A usable hold is never replaced. If its bytes had gone missing
             // they are back now, which is all that changed.
             return Ok(Kept::Existing(kept));
