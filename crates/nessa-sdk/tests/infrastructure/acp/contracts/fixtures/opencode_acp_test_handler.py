@@ -69,6 +69,10 @@ for allowed in ("grep", "glob"):
 for denied in ("bash", "edit", "webfetch", "websearch", "task", "skill"):
     assert policy.get(denied, "deny") == "deny", policy
 assert os.environ["OPENCODE_DISABLE_PROJECT_CONFIG"] == "1"
+# The other half of the same bound. A plugin's tools are not subject to the
+# permission policy at all, so the policy cannot be what stops them; this stops
+# them being loaded.
+assert os.environ["OPENCODE_PURE"] == "1"
 assert "CODEX_CONFIG" not in os.environ
 
 (root / "pid").write_text(str(os.getpid()))

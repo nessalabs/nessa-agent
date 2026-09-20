@@ -53,16 +53,34 @@ use tokio::process::Command;
 /// ripgrep with `--hidden` unconditionally, so an allowed `grep` returns
 /// matches from the very files `read` refuses to open. The `read` rules are
 /// kept because they still stop the direct path, and they are not claimed to
-/// be more than that.
+/// be more than that. `lsp` is allowed on the same footing and has the same
+/// shape — its permission carries no path either — and it is inert today only
+/// because the tool is registered behind an experimental flag this launch does
+/// not set. It is allowed because a read-and-plan session wants it if it ever
+/// ships, not because it is bounded.
 ///
-/// **Custom and plugin tools are not subject to permissions at all.** Opencode
-/// loads `{tool,tools}/*.{js,ts}` from every config directory and calls their
-/// `execute` with no permission evaluation of any kind, and plugin-supplied
-/// tools take the same route. `"*"` does not reach them because nothing asks.
-/// `OPENCODE_DISABLE_PROJECT_CONFIG` removes the opened checkout from that
-/// search, which is the case that matters — somebody else's repository cannot
-/// introduce one — but the person's own config directories remain, and this
-/// binding now passes `XDG_CONFIG_HOME` through, so theirs are found.
+/// **Custom tools are not subject to permissions at all.** Opencode loads
+/// `{tool,tools}/*.{js,ts}` from every config directory and calls their
+/// `execute` with no permission evaluation of any kind. `"*"` does not reach
+/// them because nothing asks. `OPENCODE_DISABLE_PROJECT_CONFIG` removes the
+/// opened checkout from that search, which is the case that matters — somebody
+/// else's repository cannot introduce one — but the person's own config
+/// directories remain, and this binding passes `XDG_CONFIG_HOME` through, so
+/// theirs are found. That scan is ungated and there is no switch for it.
+///
+/// Plugin-supplied tools took the same route and no longer do: `OPENCODE_PURE`
+/// makes the external plugin list empty, so none is loaded, none of its tools
+/// is registered, and none of its `tool.execute.before`, `auth` or `shell.env`
+/// hooks runs — the last of which could otherwise rewrite the arguments of a
+/// tool this policy did allow. Upstream's own word for it is "skip external
+/// plugins entirely". Opencode's *default* plugins are left alone: those ship
+/// inside the binary Nessa pinned and are part of the agent rather than
+/// something a machine brings to it.
+///
+/// **An MCP server in the person's config is started, not merely offered.**
+/// Opencode reads `mcp` from the merged config and spawns each stdio server's
+/// child process. `"*":"deny"` stops its tools being called; it does not stop
+/// the process being started, and nothing here does.
 ///
 /// **A per-agent override still outranks this.** Opencode merges
 /// `agent.plan.permission` after the top-level rules this variable feeds, so a
@@ -217,7 +235,13 @@ impl OpencodeAcpProvider {
             // checkout is somebody else's text. Without this, an
             // `opencode.json` committed to it is read as configuration and
             // merges into the agent it is about to run.
-            .env("OPENCODE_DISABLE_PROJECT_CONFIG", "1");
+            .env("OPENCODE_DISABLE_PROJECT_CONFIG", "1")
+            // A plugin's tools run without any permission being asked for, and
+            // its hooks can rewrite the arguments of a tool that was. Neither
+            // is reachable by a policy, so the loading is what has to go: this
+            // empties the external plugin list. Not the default plugins, which
+            // are part of the binary Nessa pinned.
+            .env("OPENCODE_PURE", "1");
         command
     }
 }
