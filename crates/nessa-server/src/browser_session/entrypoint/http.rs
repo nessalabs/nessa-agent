@@ -2,6 +2,7 @@ use crate::browser_session::{
     application::{invalidation_reason, BrowserSessionVerifier, ReadBrowserSession, SignIn},
     domain::value_objects::RemovalReason,
 };
+use crate::core::trusted_origin::is_trusted_origin_value;
 use crate::product::ProductRouteState;
 use axum::{
     extract::State,
@@ -54,7 +55,7 @@ pub(crate) fn origin(headers: &HeaderMap, allow_http: bool) -> Option<&str> {
                 || value == "http://127.0.0.1"
                 || value.starts_with("http://[::1]:")
                 || value == "http://[::1]")))
-        && crate::server::entrypoint::origin::is_trusted_origin_value(value))
+        && is_trusted_origin_value(value))
     .then_some(value)
 }
 pub(crate) fn cookie(headers: &HeaderMap) -> Option<&str> {
