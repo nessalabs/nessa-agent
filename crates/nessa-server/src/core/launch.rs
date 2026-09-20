@@ -117,7 +117,9 @@ impl Managed {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::entrypoint::{parse, LocalProvisioning};
+    #[cfg(unix)]
+    use crate::cli::entrypoint::parse;
+    use crate::cli::entrypoint::LocalProvisioning;
 
     const GENERATION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const RUNTIME: &str = "/Users/someone/Library/Application Support/Nessa/gateway-runtimes/x";
@@ -126,6 +128,7 @@ mod tests {
     /// puts in the plist, after the program itself. Written out rather than
     /// referenced because the two crates do not share a dependency; its own
     /// test there asserts the plist still holds these.
+    #[cfg(unix)]
     fn registered_arguments() -> Vec<String> {
         ["server", "--desktop-runtime", RUNTIME]
             .into_iter()
@@ -136,6 +139,12 @@ mod tests {
     /// The whole feature turns on this mapping: what launchd is configured to
     /// run has to arrive here as `Command::Desktop`, and with the generation
     /// the plist sets it has to be a managed launch.
+    ///
+    /// Unix only, because the argument is a real macOS runtime path and
+    /// `parse` requires an absolute one — a Windows build does not consider a
+    /// POSIX path absolute, and there is no plist there to hold one. The rule
+    /// itself is tested on every platform by the two below.
+    #[cfg(unix)]
     #[test]
     fn what_launchd_is_configured_to_run_resolves_to_a_managed_launch() {
         let command = parse(&registered_arguments()).expect("the plist's own arguments");
