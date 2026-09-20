@@ -935,6 +935,7 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 32,
+          "x-utf8MaxBytes": 32,
           "description": "Coding agent this conversation runs on for its whole life. Omitted takes the gateway's configured default. Ignored when the conversation already exists, which is reopened on the agent it was created with."
         }
       },

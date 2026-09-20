@@ -605,3 +605,48 @@ it("rejects reorder acknowledgements with wrong action or unknown outcome", asyn
     )
   }
 })
+it.each([
+  ["a blank name", ""],
+  ["a name over 32 bytes in ASCII", "x".repeat(33)],
+  ["a name over 32 bytes in emoji", "\u{1f600}".repeat(9)],
+])(
+  "hands %s to the gateway to refuse, rather than throwing out of the call",
+  async (_case, agent) => {
+    // The agent is usually remembered rather than typed, so a bad one used to
+    // throw a bare TypeError before `mutate` was entered and fail every command
+    // of the launch with no reason and no retry. The gateway refuses a name it
+    // does not run, and that refusal is what the caller gets.
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new NessaRpcError("agent_not_configured", "no runtime"))
+      .mockResolvedValueOnce({ conversationId })
+    const api = createConversationApi({ request }, () => "identity")
+    const error = await api.create({ conversationId, agent }).catch((error) => error)
+    expect(error).toBeInstanceOf(NessaConversationMutationError)
+    expect(error.uncertain).toBe(false)
+    expect(error.message).toContain("agents.runtimes")
+    expect(request.mock.calls[0][1]).toEqual({
+      conversationId,
+      requestId: "identity",
+      agent,
+    })
+    // The same command, unchanged, is what a retry sends.
+    expect(await error.retry()).toEqual({ conversationId })
+    expect(request.mock.calls[1]).toEqual(request.mock.calls[0])
+  },
+)
+it("sends a usable agent name as the creation's own parameter", async () => {
+  const request = vi.fn().mockResolvedValue({ conversationId })
+  const api = createConversationApi({ request }, () => "identity")
+  expect(await api.create({ conversationId, agent: "codex" })).toEqual({
+    conversationId,
+  })
+  expect(request.mock.calls[0][1]).toEqual({
+    conversationId,
+    requestId: "identity",
+    agent: "codex",
+  })
+  // Omitted stays omitted: the gateway's default is not a name the client invents.
+  await api.create({ conversationId })
+  expect(request.mock.calls[1][1]).toEqual({ conversationId, requestId: "identity" })
+})

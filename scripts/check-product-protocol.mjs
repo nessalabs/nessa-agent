@@ -65,6 +65,23 @@ for (const valid of [
       `Product conversation schema rejects exact UTF-8 bound: ${JSON.stringify(validateSend.errors)}`,
     )
 }
+// The agent a creation names is bounded like every other bounded string here:
+// in UTF-8 bytes, not code units. Without that, a name of nine emoji is 18 code
+// units and passes `maxLength`, while the gateway's own bound counts 36 bytes.
+const validateCreate = ajv.getSchema(`${schema.$id}#/$defs/ConversationCreateParams`)
+const create = read("fixtures.json").ConversationCreateParams
+for (const invalid of [
+  { ...create, agent: "" },
+  { ...create, agent: "x".repeat(33) },
+  { ...create, agent: "\u{1f600}".repeat(9) },
+]) {
+  if (validateCreate(invalid))
+    throw new Error("Product conversation schema accepts invalid agent")
+}
+if (!validateCreate({ ...create, agent: "\u{1f600}".repeat(8) }))
+  throw new Error(
+    `Product conversation schema rejects exact UTF-8 bound: ${JSON.stringify(validateCreate.errors)}`,
+  )
 const validateReorder = ajv.getSchema(`${schema.$id}#/$defs/ConversationReorderParams`)
 const reorder = read("fixtures.json").ConversationReorderParams
 for (const invalid of [
