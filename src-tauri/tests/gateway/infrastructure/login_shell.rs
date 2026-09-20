@@ -574,16 +574,27 @@ fn a_hanging_bash_profile_still_yields_the_login_shell_entries() {
         "the interactive shell's entries are missing from {}",
         resolved.as_str()
     );
+    // `.bash_profile` is read by a login shell and by nothing else, so its own
+    // entry being here is the evidence that the login files were reached — and
+    // it is the evidence that travels. Which *system* directories a login shell
+    // adds on top is the host's business: `path_helper` puts `/usr/local/bin`
+    // on for macOS, while Ubuntu leaves the inherited path alone and appends
+    // `/snap/bin` from `/etc/profile.d`. Asserting either would be asserting
+    // something about the machine rather than about this code.
     assert!(
         found.contains(&from_login),
         "the login shell's entries are missing from {}",
         resolved.as_str()
     );
-    // What a login shell reads and an interactive one does not: the system
-    // directories `/etc/profile` puts on, which is where Homebrew lives.
+    let at = |directory: &PathBuf| {
+        found
+            .iter()
+            .position(|entry| entry == directory)
+            .unwrap_or_else(|| panic!("{} is not on {}", directory.display(), resolved.as_str()))
+    };
     assert!(
-        found.iter().any(|entry| entry.ends_with("usr/local/bin")),
-        "nothing /etc/profile contributes is on {}",
+        at(&from_login) < at(&from_rc),
+        "the login shell's entries come first even when its own probe timed out: {}",
         resolved.as_str()
     );
     let _ = fs::remove_dir_all(&home);
