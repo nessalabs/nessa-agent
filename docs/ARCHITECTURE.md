@@ -190,6 +190,20 @@ are written here.
   health with the expected service generation, runtime-instance UUID and PID
   matching the exact launchd service.
   A generic HTTP 200 is insufficient.
+- launchd restarts the gateway when its process ended unsuccessfully, and only
+  then. A failure that starting again cannot fix exits zero on purpose — the one
+  status launchd reads as "do not start me again" — but only after the reason it
+  could not carry is durably recorded beside its log, because that record is the
+  only thing that authorizes the host's one fresh attempt. A record that could
+  not be published keeps its non-zero exit and its restarts. Crashes and failures
+  that can clear keep theirs too, and so does a managed gateway that merely
+  served and was asked to stop: being signalled is not being told to stay
+  stopped, and `launchctl bootout` — which unloads the job first — is how that
+  service is ended. Only the launch the host registered exits that way, or may
+  publish a record or forget one of its own generation; a server nobody
+  registered keeps the shared table's exit codes, exits zero when it is stopped,
+  and touches neither. The gateway log is bounded at every start, with one
+  previous file.
 - Gateway updates serialize by launchd service identity. Managed replacement
   requires correlated cleanup and audit acknowledgement; failed retirement never
   authorizes bootout. The pre-protocol gateway has one explicit legacy path.

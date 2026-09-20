@@ -151,6 +151,12 @@ fn published_runtime_is_private_reusable_immutable_and_definition_uses_staged_pa
     );
     // The service runs the staged copy, never the bundle it was staged from,
     // and it is addressed absolutely: no search path is derived from it.
+    //
+    // The other half of this is `what_launchd_is_configured_to_run_resolves_to
+    // _a_managed_launch` in `crates/nessa-server/src/core/launch.rs`: these
+    // arguments are what tells the server it is the service launchd supervises
+    // rather than something someone typed, and the two crates share no
+    // dependency to state it in one place.
     assert_eq!(
         launch_settings(&staged),
         json!([staged.join("nessa"), "server", "--desktop-runtime", staged])

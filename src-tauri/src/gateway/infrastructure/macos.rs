@@ -17,6 +17,7 @@ use std::{
 mod control;
 mod generation;
 mod install_attempt;
+mod pruning;
 mod staging;
 mod startup;
 use control::{
@@ -28,6 +29,7 @@ use generation::service_generation;
 use install_attempt::{
     authorizes_rebootstrap, clear as clear_install_attempt, publish as publish_install_attempt,
 };
+use pruning::{prune_runtimes, retained_runtimes};
 use staging::{launch_settings, stage_runtime};
 
 pub(super) struct Launchd;
@@ -140,7 +142,8 @@ fn register(
     let runtime_root = private_root.join("gateway-runtimes");
     nessa_local_storage::create_directory(&runtime_root).map_err(|error| error.to_string())?;
     nessa_local_storage::sync_directory(&private_root).map_err(|error| error.to_string())?;
-    let staged_runtime = stage_runtime(runtime, &runtime_root.join(&label), &fingerprint)?;
+    let installations = runtime_root.join(&label);
+    let staged_runtime = stage_runtime(runtime, &installations, &fingerprint)?;
     let runtime = staged_runtime.as_path();
     let arguments = launch_settings(runtime);
     let agents = home.join("Library/LaunchAgents");
@@ -178,9 +181,24 @@ fn register(
             environment.insert(key.into(), value.into());
         }
     }
+    // `KeepAlive: true` restarts the service whatever it did, so a server that
+    // could never start was relaunched every five seconds for as long as the
+    // user was logged in. `SuccessfulExit: false` restarts it only when the
+    // process ended unsuccessfully, which still covers every crash and every
+    // failure the server thinks retrying can fix — those keep their non-zero
+    // exit code from `protocol/defaults/gateway-exit-codes.json`. A failure
+    // retrying cannot fix exits zero on purpose and is left alone, with its
+    // reason in `logs/gateway-startup-failure.json` for this host to read.
+    //
+    // Verified against launchd on macOS 26 (Darwin 25.6) rather than assumed:
+    // a job exiting 0 under this dictionary runs once and stops, one exiting 1
+    // is respawned every ThrottleInterval, and one killed by SIGSEGV is
+    // respawned too — launchd prints no `last exit code` for that at all, only
+    // the terminating signal.
     let mut definition = serde_json::json!({
         "Label":label, "ProgramArguments":arguments,
-        "WorkingDirectory":data, "EnvironmentVariables": environment, "RunAtLoad":true,"KeepAlive":true,
+        "WorkingDirectory":data, "EnvironmentVariables": environment, "RunAtLoad":true,
+        "KeepAlive":{"SuccessfulExit":false},
         "ThrottleInterval":5,"ExitTimeOut":30,"ProcessType":"Background",
         "StandardOutPath":log,"StandardErrorPath":log
     });
@@ -190,6 +208,13 @@ fn register(
         .and_then(Value::as_str)
         .map(PathBuf::from)
         .filter(|path| path.is_absolute());
+    // Where the loaded registration writes its log, and beside it the record it
+    // leaves when it stops for good. A definition we cannot read leaves only
+    // this host's own namespace to look in.
+    let installed_logs = installed_data
+        .clone()
+        .unwrap_or_else(|| data.clone())
+        .join("logs");
     let fence = match installed_data.as_deref() {
         Some(data) => read_retirement_evidence(data)?,
         None => None,
@@ -231,6 +256,19 @@ fn register(
     match state {
         ServiceState::ManagedCurrent(running) => {
             clear_install_attempt(&lock_directory)?;
+            // The loaded service already advertises the staged runtime, so the
+            // versions nothing can be running are known here too. Collecting
+            // only after a replacement would leave an ordinary launch holding
+            // whatever the last update left behind until the next one.
+            prune_runtimes(
+                &installations,
+                &retained_runtimes(
+                    &fingerprint,
+                    &running.fingerprint,
+                    pending.as_ref(),
+                    fence.as_ref(),
+                ),
+            );
             return Ok(ReconciledGateway::new(
                 service,
                 running.fingerprint,
@@ -273,16 +311,36 @@ fn register(
             ))
         }
         ServiceState::UnavailableLoadedService => {
+            // A service that gave up is loaded with no process and will not be
+            // restarted by launchd, so nothing but this host will ever start it
+            // again — and whatever it gave up over may well have been fixed
+            // since. Its own record, for the registration that is actually
+            // installed, is what says so.
+            let recorded = startup::recorded_failure(&installed_logs).filter(|record| {
+                installed_generation(installed.as_ref())
+                    .is_some_and(|generation| record.belongs_to(generation))
+            });
             if !incomplete_install_retry(
                 loaded_pid,
                 process_identity_known,
                 authorizes_rebootstrap(&lock_directory, &service, &definition, installed.as_ref())?,
-            ) {
-                return Err(
-                    "Loaded gateway has no valid health response; service was preserved".into(),
+            ) && !gave_up_retry(loaded_pid, process_identity_known, recorded.is_some())
+            {
+                return Err(unavailable_service(recorded.as_ref(), port));
+            }
+            if let Some(recorded) = &recorded {
+                // What is being replaced, why, and on whose say-so, in the log
+                // of the process doing it. The registration has no running
+                // process to retire and no conversations to stop.
+                eprintln!(
+                    "[nessa] Replacing gateway {service}, which launchd will not start again: {}",
+                    recorded.describe()
                 );
             }
             launchctl(&["bootout", &service])?;
+            if recorded.is_some() {
+                startup::forget_recorded_failure(&installed_logs);
+            }
             clear_install_attempt(&lock_directory)?;
         }
         ServiceState::Unloaded => clear_install_attempt(&lock_directory)?,
@@ -343,6 +401,17 @@ fn register(
         Ok(running)
     })();
     let running = forward_recovery(installation)?;
+    // Only past `forward_recovery`: an installation that failed leaves the old
+    // registration, and possibly an old process, alive for a retry.
+    prune_runtimes(
+        &installations,
+        &retained_runtimes(
+            &fingerprint,
+            &running.fingerprint,
+            pending.as_ref(),
+            fence.as_ref(),
+        ),
+    );
     Ok(ReconciledGateway::new(
         service,
         running.fingerprint,
@@ -467,6 +536,44 @@ fn incomplete_install_retry(
 ) -> bool {
     process_identity_known && loaded_pid.is_none() && host_attempt_matches
 }
+
+/// Whether a loaded service that gave up may be replaced with a fresh attempt.
+///
+/// launchd will not start it again — that is what giving up means — so it would
+/// otherwise stay loaded and dead forever, including after someone has repaired
+/// the thing it gave up over. Booting out a registration with no process of its
+/// own destroys nothing; what has to be established is that there is no process,
+/// unambiguously, and that the record is this registration's own. The same
+/// shape as `incomplete_install_retry`, from different evidence.
+fn gave_up_retry(
+    loaded_pid: Option<u32>,
+    process_identity_known: bool,
+    recorded_for_this_registration: bool,
+) -> bool {
+    process_identity_known && loaded_pid.is_none() && recorded_for_this_registration
+}
+
+/// The generation the installed definition registered, if it names one.
+fn installed_generation(installed: Option<&Value>) -> Option<&str> {
+    installed?
+        .get("EnvironmentVariables")?
+        .get("NESSA_SERVICE_GENERATION")?
+        .as_str()
+}
+
+/// What a loaded service that is not answering is reported as. A gateway that
+/// said why it stopped is quoted; "no valid health response" is what is left
+/// when nothing said anything.
+fn unavailable_service(recorded: Option<&startup::RecordedFailure>, port: u16) -> String {
+    match recorded.and_then(|record| record.sentence(port)) {
+        Some(cause) => {
+            format!(
+                "Nessa's background service is not starting: {cause} The service was preserved."
+            )
+        }
+        None => "Loaded gateway has no valid health response; service was preserved".into(),
+    }
+}
 fn finish_bootstrap(
     bootstrap: Result<(), String>,
     loaded_after_failure: impl FnOnce() -> Result<bool, String>,
@@ -495,9 +602,9 @@ fn finish_bootstrap(
 #[cfg(test)]
 mod tests {
     use super::{
-        finish_bootstrap, incomplete_install_retry, matches_reconciled_gateway,
-        prepare_data_directory, registered_agent_path, runtime_fingerprint, service_matches,
-        SearchPath,
+        finish_bootstrap, gave_up_retry, incomplete_install_retry, installed_generation,
+        matches_reconciled_gateway, prepare_data_directory, registered_agent_path,
+        runtime_fingerprint, service_matches, startup, unavailable_service, SearchPath,
     };
     use crate::gateway::application::ReconciledGateway;
     use crate::gateway::infrastructure::macos::control::{Health, ManagedRuntime, ServiceStatus};
@@ -660,6 +767,70 @@ mod tests {
         assert!(!incomplete_install_retry(None, false, true));
         assert!(!incomplete_install_retry(Some(42), true, true));
         assert!(!incomplete_install_retry(Some(42), false, true));
+    }
+
+    /// A service that gave up is loaded, has no process, and launchd will
+    /// never start it again — so this host is the only thing that can, and the
+    /// cause may well have been repaired since. It may boot out only what it
+    /// can establish has no process of its own and wrote the record itself.
+    #[test]
+    fn a_service_that_gave_up_may_be_replaced_only_on_its_own_unambiguous_absence() {
+        assert!(gave_up_retry(None, true, true));
+        // No record, or one belonging to another registration.
+        assert!(!gave_up_retry(None, true, false));
+        // An answer we did not get is not absence.
+        assert!(!gave_up_retry(None, false, true));
+        // Something is running under this label; a record is not licence to
+        // boot it out.
+        assert!(!gave_up_retry(Some(42), true, true));
+        assert!(!gave_up_retry(Some(42), false, true));
+    }
+
+    /// The generation is read from the definition that is actually installed,
+    /// which is what makes a record this registration's own rather than
+    /// whatever ran in this directory before it.
+    #[test]
+    fn the_installed_generation_comes_from_the_installed_definition() {
+        let generation = "a".repeat(64);
+        let installed = json!({"EnvironmentVariables": {"NESSA_SERVICE_GENERATION": generation}});
+        assert_eq!(installed_generation(Some(&installed)), Some(&*generation));
+        assert_eq!(installed_generation(None), None);
+        for incomplete in [
+            json!({}),
+            json!({"EnvironmentVariables": {}}),
+            json!({"EnvironmentVariables": {"NESSA_SERVICE_GENERATION": 7}}),
+        ] {
+            assert_eq!(installed_generation(Some(&incomplete)), None);
+        }
+    }
+
+    /// The generic sentence said nothing about why. A gateway that recorded a
+    /// reason is quoted instead, and a service that recorded nothing still
+    /// gets the only honest answer there is.
+    #[test]
+    fn an_unavailable_service_says_why_when_the_gateway_said_why() {
+        let recorded = startup::parse_record(
+            json!({
+                "reason": "credentialRegistryInvalid",
+                "exitCode": 28,
+                "message": "authentication setup failed: credential registry is invalid",
+                "serviceGeneration": "a".repeat(64),
+                "processId": 4711,
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .expect("record");
+        let said = unavailable_service(Some(&recorded), 7420);
+        assert!(
+            said.contains("credential registry is not one this version of Nessa can read"),
+            "{said}"
+        );
+        assert!(said.contains("preserved"), "{said}");
+        assert_eq!(
+            unavailable_service(None, 7420),
+            "Loaded gateway has no valid health response; service was preserved"
+        );
     }
 
     #[test]
