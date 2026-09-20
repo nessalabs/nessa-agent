@@ -1,4 +1,5 @@
-import { LoaderCircle, RotateCw, X } from "lucide-react"
+import * as React from "react"
+import { RotateCw, X } from "lucide-react"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 import {
   isImageFile,
@@ -17,10 +18,13 @@ const cornerButton =
  * about it. Renders; the hooks above it decide.
  *
  * The upload state is on the tile because that is where somebody is looking
- * when they wonder why send is waiting. An image waiting its turn to upload
- * says so, an upload in flight marks the tile busy, and both dim it; a failed one says why, and offers the retry right there when
- * trying the same bytes again could end differently — not when the gateway has
- * said it cannot read or fit this image. Remove stays available throughout:
+ * when they wonder why send is waiting, and it is drawn on the tile's edge
+ * because the picture in the middle is what they are looking at. An image
+ * waiting its turn is dimmed, one in flight has a band of light going round it,
+ * and one the gateway has taken says so once, in green, and goes back to being
+ * an ordinary tile. A failed one says why, and offers the retry right there
+ * when trying the same bytes again could end differently — not when the gateway
+ * has said it cannot read or fit this image. Remove stays available throughout:
  * taking a tile away mid-upload is allowed, and the upload finding nothing to
  * report to is the design.
  */
@@ -35,10 +39,24 @@ export function AttachmentTile({
   onRemove: () => void
   onRetry: () => void
 }) {
-  const uploading = file.upload.status === "uploading"
+  const status = file.upload.status
+  const uploading = status === "uploading"
   // Only a few uploads run at once; an image that has not started is in line.
-  const waiting = file.upload.status === "not-started" && isImageFile(file.mimeType)
+  const waiting = status === "not-started" && isImageFile(file.mimeType)
   const failure = file.upload.status === "failed" ? file.upload.reason : undefined
+  // Green is for the moment an upload finishes, not for as long as the file is
+  // stored: a tile coming back on screen — a tab returned to, a draft restored
+  // — is a file that is ready, and says that by being plain. So the band is
+  // owned by the change from uploading to stored, which is a thing that
+  // happens rather than a thing that is true, and is read by comparing this
+  // render's status with the last one's.
+  const [seen, setSeen] = React.useState(status)
+  const [finished, setFinished] = React.useState(false)
+  if (seen !== status) {
+    setSeen(status)
+    setFinished(seen === "uploading" && status === "stored")
+  }
+  const ring = uploading ? "uploading" : finished ? "settled" : undefined
   return (
     <span
       className="relative m-1 inline-flex"
@@ -52,12 +70,10 @@ export function AttachmentTile({
         imageSrc={previewableImage(file.mimeType) ? file.previewUrl : undefined}
         icon={<AttachmentIcon name={file.name} mimeType={file.mimeType} />}
         onOpen={onOpen}
+        // Dimmed only while it waits its turn. An upload under way has the
+        // band, and dimming as well would hide the picture for the whole of it.
         className={
-          uploading || waiting
-            ? "opacity-60"
-            : failure
-              ? "ring-2 ring-destructive"
-              : undefined
+          waiting ? "opacity-60" : failure ? "ring-2 ring-destructive" : undefined
         }
       />
       {waiting && (
@@ -68,14 +84,18 @@ export function AttachmentTile({
           className="pointer-events-none absolute inset-0"
         />
       )}
-      {uploading && (
+      {ring && (
         <span
-          role="status"
-          aria-label={`Uploading ${file.name}`}
-          className="pointer-events-none absolute inset-0 flex items-center justify-center text-foreground [&_svg]:size-4"
-        >
-          <LoaderCircle aria-hidden="true" className="animate-spin" />
-        </span>
+          // The band's own removal: the green says its piece and ends, and the
+          // element goes when the animation that carried it is over, so what is
+          // painted and what this component holds cannot disagree. The sweep
+          // never ends, so it never removes itself.
+          data-state={ring}
+          onAnimationEnd={finished ? () => setFinished(false) : undefined}
+          role={uploading ? "status" : undefined}
+          aria-label={uploading ? `Uploading ${file.name}` : undefined}
+          className="nessa-upload-ring rounded-xl"
+        />
       )}
       {failure && !worthRetrying(failure) && (
         <span
