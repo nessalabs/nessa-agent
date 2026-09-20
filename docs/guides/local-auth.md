@@ -20,15 +20,19 @@ without serving.
 
 Credentials make the gateway reachable; they do not give it an agent. So the
 same two recipes first run `node scripts/dev-agent-config.mjs`, which writes the
-`agent` section of `$HOME/.nessa/dev/config.json` from this checkout — the
+`agents` section of `$HOME/.nessa/dev/config.json` from this checkout — the
 server is not allowed to know what a git checkout is, so the checkout is what
-says where its Claude ACP harness, model catalog, Node and `nessa-mcp` build
-are. It is a guard in exactly the same sense: an `agent` section that already
-exists is left untouched, and a `config.json` that does not parse is reported
-rather than replaced. Anything it cannot resolve — most often a clone where
+says where each ACP harness, the model catalog, Node and the `nessa-mcp` build
+are. Every agent whose harness is installed is configured, not Claude alone, so
+a checkout with only the Codex harness gets a Codex gateway. It is a guard in
+exactly the same sense: an `agents` section that already exists is left
+untouched, and a `config.json` that does not parse is reported rather than
+replaced. The `agent` section an earlier version of the script wrote is retired
+when the new one is written, because the server refuses to start on a file that
+still has it. Anything it cannot resolve — most often a clone where
 `(cd crates/nessa-sdk/harnesses/claude-acp && npm ci --omit=dev)` has not been
 run yet — is printed with the command that fixes it, and the gateway still
-starts, answering `agent_not_configured` for chat. See
+starts, answering `conversations_not_configured` for chat. See
 [gateway chat](gateway-chat.md) for the section's fields.
 
 Everything below is the deliberate path, and the only path for a server you
@@ -232,7 +236,7 @@ capacity or change a conflicting command deliberately rather than blindly retryi
 
 Create `config.json` beside the namespace's `auth` directory. For default local
 development this is `$HOME/.nessa/dev/config.json` — the same file the dev loop
-writes an `agent` section into; `registry` and `session` are never written there
+writes an `agents` section into; `registry` and `session` are never written there
 and are yours alone. For an explicit instance it is
 `<root>/<stage>/instances/<instance>/config.json`; omit the `prod` stage segment.
 Create this file with the same private permissions as credential files: current OS

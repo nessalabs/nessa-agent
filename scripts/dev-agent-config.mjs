@@ -477,14 +477,37 @@ function underLock({ configPath, agents, node, mcpBinary, interrupt }) {
   // the same courtesy an agent block already in the file gets.
   if (agentIsSettled(existing)) {
     checkExisting(existing.agents, configPath)
+    // Their block stands, but a leftover `agent` beside it still stops the
+    // gateway starting, and this script will not write into a file where the
+    // question is already answered. Naming the key is the most it can honestly
+    // do.
+    if (existing.agent !== undefined) {
+      say(`→ ${configPath} also still has the retired "agent" block`)
+      say('  the gateway refuses to start on it; delete the "agent" key and rerun')
+    }
     return false
   }
 
-  const merged = { ...existing, agents }
+  // The previous version of this script wrote an `agent` block, and the server
+  // reads its configuration with `deny_unknown_fields`. Left beside the `agents`
+  // written here, that old key is a gateway that refuses to start, reported as
+  // an unknown field rather than as anything to do with the dev loop — and
+  // produced by a run that has just said it succeeded.
+  //
+  // So it is retired here. This script owned that block, it is local
+  // development data, and bringing it to the current shape is what the standard
+  // asks of the tool that wrote it. Nothing reads it any more.
+  const { agent: retired, ...rest } = existing
+  const merged = { ...rest, agents }
   const text = `${JSON.stringify(merged, null, 2)}\n`
   // Parse it back before it can become the file the gateway reads. A config.json
   // that does not parse is not a missing agent, it is a server that will not start.
   const round = JSON.parse(text)
+  if (round.agent !== undefined)
+    skip(
+      "the generated configuration still holds the retired agent block",
+      "please report this",
+    )
   const survived = Object.entries(agents.runtimes).every(
     ([name, runtime]) =>
       round.agents.runtimes[name]?.command === node &&
@@ -515,6 +538,8 @@ function underLock({ configPath, agents, node, mcpBinary, interrupt }) {
   }
 
   say(`→ dev agents configured in ${configPath}`)
+  if (retired !== undefined)
+    say('    retired    the "agent" block an earlier version of this script wrote')
   say(`    node       ${node}`)
   for (const [name, runtime] of Object.entries(agents.runtimes))
     say(`    ${name.padEnd(10)} ${runtime.args[0]}`)
