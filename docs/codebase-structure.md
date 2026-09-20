@@ -238,6 +238,13 @@ identity providers remain future adapters.
 local auth, SDK session storage, and desktop credential adapters. It has no auth/domain policy
 or Tauri dependency; callers inject the resulting adapters through composition.
 
+`crates/nessa-images` fits one image to a consumer's limits: it reads the
+encoding from the bytes, turns the image upright, scales it down, and converts or
+compresses it to PNG or JPEG, or says by type why it could not. It knows nothing
+about agents, models, or conversations, does no I/O, and keeps no state. The
+numbers are the caller's: the gateway takes them from the selected model's
+`imageInput` entry in the SDK catalog, the one place image limits are recorded.
+
 ## Gateway conversation ownership
 
 `crates/nessa-server/src/conversation/` groups durable conversation identity/access

@@ -1,0 +1,13 @@
+[package]
+name = "nessa-images"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.89"
+publish = false
+description = "Fit an image to a consumer's limits: convert its encoding, scale it down, compress it."
+
+[dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
+
+[dev-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
