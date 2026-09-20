@@ -668,6 +668,54 @@ impl From<&str> for InstallFailure {
     }
 }
 
+/// What one look at the port and at launchd says about the service being
+/// started. Separated from the waiting so the judgement can be tested without
+/// a port, a subprocess or a clock, the way `classify` already is.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Step {
+    /// The expected runtime answered, owned by the exact process launchd runs.
+    Ready(ManagedRuntime),
+    /// launchd has positively established that the process is gone and that
+    /// its last exit failed.
+    Dead,
+    /// Anything else, including everything we could not establish.
+    Waiting,
+}
+
+/// Judge one observation.
+///
+/// Two things are deliberately not evidence of death. A health response from
+/// something that is not the service being started says nothing about that
+/// service — another gateway can hold this stage's port, and the per-label
+/// registration lock does not exclude it, so its answer must not stop us
+/// looking at our own. And a `launchctl print` whose process could not be read
+/// is an answer we did not get: `service_status` keeps "no process" and "could
+/// not tell" apart for exactly this reason, and only the first is absence.
+pub(super) fn assess(
+    running: Option<&Health>,
+    status: &ServiceStatus,
+    expected: (&str, &str),
+) -> Step {
+    if let Some(Health::Managed(runtime)) = running {
+        if status.loaded
+            && status.process_identity_known
+            && status.pid == Some(runtime.pid)
+            && runtime.fingerprint == expected.0
+            && runtime.generation == expected.1
+        {
+            return Step::Ready(runtime.clone());
+        }
+    }
+    if status.loaded
+        && status.process_identity_known
+        && status.pid.is_none()
+        && status.last_exit.is_failure()
+    {
+        return Step::Dead;
+    }
+    Step::Waiting
+}
+
 /// Wait for the expected runtime to answer, or for launchd to prove it cannot.
 ///
 /// The deadline is for a server that is starting slowly. A server that has
@@ -684,29 +732,29 @@ pub(super) fn wait_fingerprint(
     let mut next_liveness_check = Instant::now();
     let mut dead = 0u32;
     while Instant::now() < deadline {
-        if let Some(Health::Managed(runtime)) = health(port) {
+        let running = health(port);
+        // `launchctl print` is a subprocess, so it is asked when there is
+        // something to check against it or when a liveness check is due —
+        // never on every hundred-millisecond turn of the loop.
+        let due = Instant::now() >= next_liveness_check;
+        if matches!(running, Some(Health::Managed(_))) || due {
             let status = service_status(service)?;
-            if status.loaded
-                && status.pid == Some(runtime.pid)
-                && runtime.fingerprint == expected.0
-                && runtime.generation == expected.1
-            {
-                return Ok(runtime);
-            }
-        } else if Instant::now() >= next_liveness_check {
-            next_liveness_check = Instant::now() + LIVENESS_INTERVAL;
-            let status = service_status(service)?;
-            // A pid means something is running, whatever it has yet to say;
-            // only an absent process with a failed last exit is death.
-            dead = if status.pid.is_none() && status.last_exit.is_failure() {
-                dead + 1
-            } else {
-                0
-            };
-            if dead >= DEAD_OBSERVATIONS {
-                let failure = diagnose(&status.last_exit, &log_tail(log), port, READINESS_FAILURE);
-                eprintln!("[nessa] {}", failure.detail);
-                return Err(InstallFailure::Startup(failure.sentence));
+            match assess(running.as_ref(), &status, expected) {
+                Step::Ready(runtime) => return Ok(runtime),
+                // An observation that is not due still counts for nothing:
+                // the interval is what makes three of these a second and a
+                // half of agreement rather than three turns of the loop.
+                step if due => {
+                    next_liveness_check = Instant::now() + LIVENESS_INTERVAL;
+                    dead = if step == Step::Dead { dead + 1 } else { 0 };
+                    if dead >= DEAD_OBSERVATIONS {
+                        let failure =
+                            diagnose(&status.last_exit, &log_tail(log), port, READINESS_FAILURE);
+                        eprintln!("[nessa] {}", failure.detail);
+                        return Err(InstallFailure::Startup(failure.sentence));
+                    }
+                }
+                _ => {}
             }
         }
         std::thread::sleep(Duration::from_millis(100));

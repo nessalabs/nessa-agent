@@ -1,9 +1,11 @@
 use super::super::generation::service_generation;
+use super::super::startup::LastExit;
 use super::{
-    acknowledge, atomic_write, classify, forward_recovery, lock_namespace, parse_health,
+    acknowledge, assess, atomic_write, classify, forward_recovery, lock_namespace, parse_health,
     parse_listener_pid, parse_pending_retirement, parse_retirement_evidence, parse_service_process,
     prepare_request, read_acknowledgement, read_pending_retirement, read_retirement_evidence,
-    Health, InstallFailure, ManagedRuntime, Registration, ServiceState,
+    service_status, Health, InstallFailure, ManagedRuntime, Registration, ServiceState,
+    ServiceStatus, Step,
 };
 use nessa_local_storage::OpenMode;
 use serde_json::{json, Value};
@@ -438,6 +440,148 @@ fn installation_failures_preserve_primary_error_and_require_forward_recovery() {
         assert!(error.contains("loaded process were preserved for forward recovery"));
     }
 }
+const EXPECTED_FINGERPRINT: &str =
+    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+fn observed(pid: Option<u32>, identity_known: bool, last_exit: LastExit) -> ServiceStatus {
+    ServiceStatus {
+        loaded: true,
+        pid,
+        process_identity_known: identity_known,
+        last_exit,
+    }
+}
+
+#[test]
+fn readiness_requires_the_exact_runtime_owned_by_the_loaded_process() {
+    let runtime = ManagedRuntime {
+        fingerprint: EXPECTED_FINGERPRINT.into(),
+        generation: RUNNING_GENERATION.into(),
+        instance: INSTANCE.into(),
+        pid: 42,
+    };
+    let expected = (EXPECTED_FINGERPRINT, RUNNING_GENERATION);
+    assert_eq!(
+        assess(
+            Some(&Health::Managed(runtime.clone())),
+            &observed(Some(42), true, LastExit::NeverExited),
+            expected
+        ),
+        Step::Ready(runtime.clone())
+    );
+    // A process launchd did not report, or reported as something else, is not
+    // the one that answered, whatever it said about itself.
+    for status in [
+        observed(Some(43), true, LastExit::NeverExited),
+        observed(Some(42), false, LastExit::NeverExited),
+        observed(None, true, LastExit::NeverExited),
+    ] {
+        assert_ne!(
+            assess(Some(&Health::Managed(runtime.clone())), &status, expected),
+            Step::Ready(runtime.clone())
+        );
+    }
+}
+
+#[test]
+fn a_pid_we_could_not_read_is_not_a_process_that_is_gone() {
+    // `service_status` keeps "no process" apart from "could not tell", and
+    // the rejected PID syntax below is the parser's own. Counting an answer
+    // we did not get as death fails a service that is merely restarting,
+    // and blames it for whatever its previous process did.
+    for diagnostic in [
+        "gui/501/service = {\n state = not running\n pid = invalid\n}",
+        "gui/501/service = {\n pid = 42\n pid = 43\n}",
+    ] {
+        let parsed = parse_service_process(diagnostic);
+        assert!(parsed.is_err(), "{diagnostic}");
+        assert_eq!(
+            assess(
+                None,
+                &observed(parsed.ok().flatten(), false, LastExit::Code(1)),
+                (EXPECTED_FINGERPRINT, RUNNING_GENERATION)
+            ),
+            Step::Waiting
+        );
+    }
+    // Absence established, with a failed exit, is the case this exists for.
+    assert_eq!(
+        assess(
+            None,
+            &observed(None, true, LastExit::Code(1)),
+            (EXPECTED_FINGERPRINT, RUNNING_GENERATION)
+        ),
+        Step::Dead
+    );
+}
+
+#[test]
+fn another_gateway_on_the_port_never_answers_for_this_one() {
+    // This stage's port is not owned by this label: registration locks are
+    // per label and the port is per stage, so a second instance can hold it.
+    // Its health response says nothing about the service being started, and
+    // must not stop us reading launchd's answer about that service — which
+    // used to cost the full deadline and the generic readiness message, the
+    // exact outcome this change exists to remove.
+    let foreign = Health::Managed(ManagedRuntime {
+        fingerprint: "d".repeat(64),
+        generation: TARGET_GENERATION.into(),
+        instance: "660e8400-e29b-41d4-a716-446655440000".into(),
+        pid: 99,
+    });
+    assert_eq!(
+        assess(
+            Some(&foreign),
+            &observed(None, true, LastExit::Code(23)),
+            (EXPECTED_FINGERPRINT, RUNNING_GENERATION)
+        ),
+        Step::Dead
+    );
+    // A legacy listener on the same port is no different.
+    assert_eq!(
+        assess(
+            Some(&Health::Legacy),
+            &observed(None, true, LastExit::Code(23)),
+            (EXPECTED_FINGERPRINT, RUNNING_GENERATION)
+        ),
+        Step::Dead
+    );
+}
+
+#[test]
+fn a_process_that_is_running_or_has_not_failed_is_still_starting() {
+    let expected = (EXPECTED_FINGERPRINT, RUNNING_GENERATION);
+    for status in [
+        // Something is running, whatever it has yet to say.
+        observed(Some(42), true, LastExit::Code(1)),
+        // Gone, but nothing says it failed.
+        observed(None, true, LastExit::NeverExited),
+        observed(None, true, LastExit::Code(0)),
+        observed(None, true, LastExit::Unknown),
+        // Not loaded at all is not this function's failure to report.
+        ServiceStatus {
+            loaded: false,
+            pid: None,
+            process_identity_known: true,
+            last_exit: LastExit::Code(1),
+        },
+    ] {
+        assert_eq!(assess(None, &status, expected), Step::Waiting);
+    }
+}
+
+#[test]
+fn an_unloaded_service_reports_no_exit_of_its_own() {
+    // The unloaded answer must not carry a stale exit into the judgement
+    // above; it is the one `service_status` synthesises, not launchd's.
+    let status = service_status("gui/501/so.nessa.absent.invalid").unwrap();
+    assert!(!status.loaded);
+    assert_eq!(status.pid, None);
+    assert!(status.process_identity_known);
+    assert_eq!(status.last_exit, LastExit::Unknown);
+    assert!(!status.last_exit.is_failure());
+}
+
 #[test]
 fn a_service_that_will_not_start_keeps_the_sentence_written_for_the_person() {
     // Retrying reconciliation is advice about our own mechanism. It is not what
