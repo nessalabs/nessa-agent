@@ -253,3 +253,177 @@ async fn a_session_offers_only_the_modality_a_prompt_can_carry() {
         .unwrap();
     assert_gone(&root, "pid");
 }
+
+/// What the record says happened, not just that the session carried on.
+///
+/// The three shared contract files audit closure, finishing and cancellation
+/// against the Claude binding, because the runtime that writes those records is
+/// shared. The permission record is the one this adapter has a hand in: the
+/// name and the arguments in it come out of `opencode_acp::tools::wire`, and
+/// nothing else re-derives them. So this asserts the record, not the outcome —
+/// a translation that answered Opencode correctly while filing the decision
+/// under another session, another tool, or no attribution would pass every
+/// other test in this file.
+#[tokio::test]
+async fn an_answered_permission_is_recorded_against_the_session_and_the_tool_that_asked() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_opencode_binding_with_audit("edit-permission", 16, audit.clone());
+    let mut opened = binding.open(None).await.unwrap();
+    let session_id = opened.session.id().clone();
+    let running = start(&opened, "first").await;
+    let ExecutionUpdate::PermissionRequested { id, options, .. } = next(&mut opened).await else {
+        panic!("expected permission");
+    };
+    let allow = options
+        .choices()
+        .iter()
+        .find(|option| {
+            option.decision().clone()
+                == PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request())
+        })
+        .unwrap()
+        .id()
+        .clone();
+    opened
+        .session
+        .answer_permission(PermissionAnswer {
+            attribution: attribution(),
+            execution_id: ExecutionId::new("first").unwrap(),
+            id,
+            option_id: allow,
+        })
+        .await
+        .map_err(|failure| failure.into_error())
+        .unwrap();
+    assert_eq!(running.await.unwrap().unwrap(), ExecutionOutcome::Completed);
+    let answers = audit.answers.lock().unwrap().clone();
+    // Two records, in this order: the decision as it was taken, then the write
+    // that carried it. The order is the claim — a binding that told Opencode
+    // first and filed the decision afterwards would record `Written` before
+    // anything said what was chosen.
+    let [selected, written] = &answers[..] else {
+        panic!(
+            "expected a selected and a written record, got {}",
+            answers.len()
+        );
+    };
+    assert_eq!(selected.delivery(), &PermissionAnswerDelivery::Selected);
+    assert_eq!(written.delivery(), &PermissionAnswerDelivery::Written);
+    for answer in [selected, written] {
+        assert_eq!(answer.session_id(), &session_id);
+        let resolution = answer.resolution();
+        assert_eq!(resolution.session_id(), &session_id);
+        // The kind, and the arguments the request carried — the same pair the
+        // host was shown. A record naming `edit` over somebody else's
+        // arguments, or the request's own title over these, is not the
+        // decision that was taken.
+        assert_eq!(resolution.input().name, "edit");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&resolution.input().arguments_json).unwrap(),
+            serde_json::json!({"filePath": "src/main.rs", "newText": "fn main() {}"})
+        );
+        assert_eq!(
+            resolution.attribution().actor(),
+            attribution().actor(),
+            "the record credits somebody other than the actor that answered"
+        );
+    }
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
+}
+
+/// The audit is a precondition of the approval, not a report of it.
+///
+/// The same rule the Codex binding is held to, on the adapter that admits a
+/// second vendor's permission frames: if the decision cannot be written down,
+/// Opencode is never told to proceed on it. A binding that answered first and
+/// recorded afterwards would leave a tool run with no record of who allowed it.
+#[tokio::test]
+async fn an_approval_the_audit_cannot_record_is_never_given_to_opencode() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit {
+        reject: true,
+        ..Default::default()
+    });
+    let (root, binding) = test_opencode_binding_with_audit("edit-permission", 16, audit);
+    let mut opened = binding.open(None).await.unwrap();
+    let running = start(&opened, "first").await;
+    let ExecutionUpdate::PermissionRequested { id, options, .. } = next(&mut opened).await else {
+        panic!("expected permission");
+    };
+    let allow = options
+        .choices()
+        .iter()
+        .find(|option| {
+            option.decision().clone()
+                == PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request())
+        })
+        .unwrap()
+        .id()
+        .clone();
+    let failure = opened
+        .session
+        .answer_permission(PermissionAnswer {
+            attribution: attribution(),
+            execution_id: ExecutionId::new("first").unwrap(),
+            id,
+            option_id: allow,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error(), &AgentError::AuditFailure);
+    assert_eq!(running.await.unwrap(), Err(AgentError::AuditFailure));
+    // Opencode is never told to proceed. If it is told anything, it is that the
+    // request was cancelled, which is the session being torn down around it.
+    if let Ok(told) = std::fs::read_to_string(root.path().join("permission-outcome")) {
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&told).unwrap(),
+            serde_json::json!({"outcome": "cancelled"}),
+        );
+    }
+    assert_eq!(
+        opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await
+            .into_result(),
+        Err(AgentError::AuditFailure)
+    );
+    assert_gone(&root, "pid");
+}
+
+/// Opencode volunteers its command list the instant `session/new` is answered,
+/// before Nessa has configured anything, and the session has to survive it.
+///
+/// It arrives in the startup window, where the runtime is still reading frames
+/// against a session it may not have admitted yet and refusing execution output
+/// that has no prompt behind it. An advisory update mistaken for either of
+/// those fails `open()` outright, so the agent never starts at all — which is
+/// why this is worth a test of its own even though the handler now sends it in
+/// every mode.
+#[tokio::test]
+async fn the_command_list_opencode_volunteers_at_startup_does_not_stop_the_session() {
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_opencode_binding("echo", 16);
+    let mut opened = binding.open(None).await.unwrap();
+    // Configuration still completed underneath it: the session is prompted and
+    // answers, rather than merely having opened.
+    let running = start(&opened, "first").await;
+    let ExecutionUpdate::Message { .. } = next(&mut opened).await else {
+        panic!("expected the echoed message");
+    };
+    assert_eq!(running.await.unwrap().unwrap(), ExecutionOutcome::Completed);
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
+}

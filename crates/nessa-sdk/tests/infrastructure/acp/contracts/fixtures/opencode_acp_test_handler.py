@@ -9,7 +9,9 @@ keeping what it answered:
     steering or instruction capability;
   - `session/new`: it succeeds with no authentication challenge, and offers
     `model` and `mode` as config options, with `build` current;
-  - that unknown parameters on `session/new` are ignored rather than refused.
+  - that unknown parameters on `session/new` are ignored rather than refused;
+  - the `available_commands_update` it sends straight after the `session/new`
+    result, before any configuration.
 
 ASSUMED from the ACP specification, because observing them needs a model turn
 and this environment's network policy does not allow OpenCode Zen's host:
@@ -153,6 +155,14 @@ for line in sys.stdin:
         if method == "session/resume":
             session = params["sessionId"]
         result(msg["id"], {"sessionId": session, **configs()})
+        # Recorded: 1.18.31 sends this unprompted the moment it has answered
+        # `session/new`, before anything has been configured. It is sent in
+        # every mode here rather than behind one of them, because that is where
+        # the real binary sends it and a path every test crosses is a path no
+        # test can forget. An adapter that treated an advisory update as
+        # execution output, or checked it against a session it has not admitted
+        # yet, would fail `open()` on it — see the test named for it.
+        update({"sessionUpdate": "available_commands_update", "availableCommands": []})
     elif method == "session/set_config_option":
         params = msg["params"]
         assert params["sessionId"] == session

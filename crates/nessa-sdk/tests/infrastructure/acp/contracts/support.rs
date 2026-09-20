@@ -221,16 +221,25 @@ pub(super) fn opencode_configuration(
 }
 
 pub(super) fn test_opencode_binding(mode: &str, capacity: usize) -> (TempDir, OpencodeAcpProvider) {
+    test_opencode_binding_with_audit(mode, capacity, Arc::new(RecordingAudit::default()))
+}
+
+/// The same binding with the audit sink kept, for the tests that assert on
+/// what was recorded rather than on what the session did.
+///
+/// A binding that builds its own sink and drops the handle can only be checked
+/// through its effects, which is how a decision written against no record, or
+/// against the wrong one, stays invisible.
+pub(super) fn test_opencode_binding_with_audit(
+    mode: &str,
+    capacity: usize,
+    audit: Arc<RecordingAudit>,
+) -> (TempDir, OpencodeAcpProvider) {
     let (root, config, model) = opencode_configuration(mode, capacity);
     (
         root,
-        OpencodeAcpProvider::new(
-            config,
-            &model,
-            TokenLimits::new(900, 100).unwrap(),
-            Arc::new(RecordingAudit::default()),
-        )
-        .unwrap(),
+        OpencodeAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit)
+            .unwrap(),
     )
 }
 
