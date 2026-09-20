@@ -145,11 +145,39 @@ impl From<&Record> for StoredRecord {
         }
     }
 }
+/// The journal file, whose advisory lock is given up explicitly.
+///
+/// An `flock` belongs to the open file description, not to the descriptor. A
+/// subprocess forked while this one is open keeps a duplicate of that
+/// description until it execs — `O_CLOEXEC` closes the descriptor there, not
+/// at the fork — so closing ours alone would leave the journal locked by a
+/// child that has no interest in it, for as long as it takes to exec. Only
+/// unlocking releases the description itself, which is what every holder of
+/// it sees, so it happens here rather than being left to a close.
+struct Journal(File);
+impl std::ops::Deref for Journal {
+    type Target = File;
+    fn deref(&self) -> &File {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for Journal {
+    fn deref_mut(&mut self) -> &mut File {
+        &mut self.0
+    }
+}
+impl Drop for Journal {
+    fn drop(&mut self) {
+        if let Err(error) = self.0.unlock() {
+            tracing::error!(%error, "browser session journal unlock failed");
+        }
+    }
+}
 struct State {
     sessions: BTreeMap<String, BrowserSession>,
     login_replacements: BTreeMap<String, Option<(String, BrowserSession)>>,
     sequence: u64,
-    file: Option<File>,
+    file: Option<Journal>,
     max_journal_bytes: u64,
     healthy: bool,
 }
@@ -169,8 +197,11 @@ impl PersistentSessions {
         if max_journal_bytes == 0 {
             return Err(AccessError::Unavailable);
         }
-        let mut file = open(path, OpenMode::OpenOrCreate).map_err(|_| AccessError::Unavailable)?;
+        let file = open(path, OpenMode::OpenOrCreate).map_err(|_| AccessError::Unavailable)?;
         file.try_lock().map_err(|_| AccessError::Unavailable)?;
+        // Owned from the instant the lock is taken, so every path out of this
+        // function — including the refusals below — releases it.
+        let mut file = Journal(file);
         if file.metadata().map_err(|_| AccessError::Unavailable)?.len() > max_journal_bytes {
             return Err(AccessError::Unavailable);
         }
@@ -185,7 +216,7 @@ impl PersistentSessions {
             max_journal_bytes,
             healthy: true,
         };
-        let mut reader = BufReader::new(&mut file);
+        let mut reader = BufReader::new(&mut *file);
         let mut line = Vec::new();
         loop {
             line.clear();

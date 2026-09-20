@@ -187,11 +187,29 @@ struct Registry {
 }
 
 /// One-process owner of a local registry. Opening never bootstraps credentials.
+/// The registry's lifetime lock, given up explicitly.
+///
+/// An `flock` belongs to the open file description, not to the descriptor. A
+/// subprocess forked while this one is open keeps a duplicate of that
+/// description until it execs — `O_CLOEXEC` closes the descriptor there, not
+/// at the fork — so closing ours alone would leave the registry locked by a
+/// child that has no interest in it. Since this lock is what refuses a second
+/// gateway for a stage, leaving it held by an exec'ing child refuses one that
+/// should have been allowed to start.
+struct RegistryLock(File);
+impl Drop for RegistryLock {
+    fn drop(&mut self) {
+        // Nothing here can be reported: the store is going away. A failed
+        // unlock still closes, which releases it once no forked child holds
+        // the description either.
+        let _ = self.0.unlock();
+    }
+}
 pub struct LocalCredentialStore {
     config: LocalStoreConfig,
     root: PathBuf,
     path: PathBuf,
-    _lock: File,
+    _lock: RegistryLock,
     registry: Mutex<Option<Registry>>,
     published: RwLock<Option<Registry>>,
     subscribers: Mutex<Vec<mpsc::Sender<u64>>>,
@@ -259,7 +277,7 @@ impl LocalCredentialStore {
             config,
             root,
             path,
-            _lock: lock,
+            _lock: RegistryLock(lock),
             registry: Mutex::new(registry.clone()),
             published: RwLock::new(registry),
             subscribers: Mutex::new(Vec::new()),

@@ -12,7 +12,6 @@ use serde_json::{json, Value};
 use std::{
     fs,
     os::{fd::AsRawFd, unix::fs::PermissionsExt},
-    time::Duration,
 };
 const RUNNING_GENERATION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TARGET_GENERATION: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -584,6 +583,45 @@ fn an_unloaded_service_reports_no_exit_of_its_own() {
 }
 
 #[test]
+fn releasing_the_namespace_lock_releases_every_descriptor_sharing_it() {
+    // A `flock` belongs to the open file description. A subprocess forked
+    // while the lock is held inherits a descriptor onto that same
+    // description, and `O_CLOEXEC` closes it at exec rather than at the fork,
+    // so it outlives our own for as long as the child takes to exec.
+    //
+    // `dup` gives exactly that shape without a fork to race against: one more
+    // descriptor onto the one description. Closing ours leaves the lock held
+    // through the duplicate; unlocking releases the description itself, which
+    // is what every descriptor onto it sees. That is the difference between
+    // the next reconciliation waiting on a real holder and waiting on a
+    // `uuidgen` that has no interest in the lock.
+    let directory = std::env::temp_dir().join(format!(
+        "nessa-namespace-release-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = fs::remove_dir_all(&directory);
+    nessa_local_storage::create_directory(&directory).unwrap();
+
+    let lock = lock_namespace(&directory).unwrap();
+    let inherited = unsafe { libc::dup(lock.as_raw_fd()) };
+    assert!(inherited >= 0);
+    drop(lock);
+
+    let competing =
+        nessa_local_storage::open(&directory.join("gateway-upgrade.lock"), OpenMode::ReadWrite)
+            .unwrap();
+    assert_eq!(
+        unsafe { libc::flock(competing.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0,
+        "a descriptor that merely shares the description still holds the lock"
+    );
+    assert_eq!(unsafe { libc::close(inherited) }, 0);
+    drop(competing);
+    fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
 fn a_service_that_will_not_start_keeps_the_sentence_written_for_the_person() {
     // Retrying reconciliation is advice about our own mechanism. It is not what
     // someone whose service exits on startup should be told to do, and the
@@ -622,39 +660,18 @@ fn private_request_replacement_is_complete_and_exclusively_locked() {
         nessa_local_storage::open(&directory.join("gateway-upgrade.lock"), OpenMode::ReadWrite)
             .unwrap();
     let take = || unsafe { libc::flock(competing.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    // Held: our own descriptor has it, so this is refused with no waiting.
+    // Held: our own descriptor has it.
     assert_ne!(take(), 0);
     assert_eq!(
         std::io::Error::last_os_error().kind(),
         std::io::ErrorKind::WouldBlock
     );
+    // And released the instant the guard goes, with no waiting and no retry.
+    // `NamespaceLock` unlocks rather than only closing, so a subprocess this
+    // process forked before the drop cannot keep the description locked while
+    // it makes its way to exec.
     drop(lock);
-    // Released — but not necessarily in this instant. A `flock` belongs to the
-    // open file description, and `cargo test` runs these tests as threads of
-    // one process that spawns `uuidgen`, `plutil` and `launchctl`. Between
-    // another thread's fork and its exec, the child holds a duplicate of every
-    // descriptor this one has: `O_CLOEXEC` closes it at exec, not at fork, so
-    // a drop landing inside that window leaves the lock alive in the child for
-    // as long as it takes to exec. Demanding the first attempt succeed made
-    // this test fail under load. `lock_namespace` itself retries for two
-    // minutes for the same reason, so insisting on an instant here was the
-    // test asking for more than the code promises — or needs.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        if take() == 0 {
-            break;
-        }
-        // Still exclusion, never some other failure we would want to see.
-        assert_eq!(
-            std::io::Error::last_os_error().kind(),
-            std::io::ErrorKind::WouldBlock
-        );
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the namespace lock was never released"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    assert_eq!(take(), 0);
     drop(competing);
     fs::remove_dir_all(directory).unwrap();
 }

@@ -164,14 +164,38 @@ fn parse_listener_pid(text: &str) -> Option<u32> {
     pid
 }
 
-pub(super) fn lock_namespace(data: &Path) -> Result<File, String> {
+/// The reconciliation lock, given up explicitly.
+///
+/// An `flock` belongs to the open file description, not to the descriptor. A
+/// subprocess forked while this one is open — `uuidgen`, `plutil`, `launchctl`,
+/// any of the ones reconciliation runs — keeps a duplicate of that description
+/// until it execs, because `O_CLOEXEC` closes the descriptor there and not at
+/// the fork. Closing ours alone would leave the namespace locked by a child
+/// that has no interest in it, so the next reconciliation waits on nothing.
+pub(super) struct NamespaceLock(File);
+impl std::os::fd::AsRawFd for NamespaceLock {
+    fn as_raw_fd(&self) -> std::os::fd::RawFd {
+        self.0.as_raw_fd()
+    }
+}
+impl Drop for NamespaceLock {
+    fn drop(&mut self) {
+        if unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) } != 0 {
+            eprintln!(
+                "[nessa] could not release the gateway reconciliation lock: {}",
+                Error::last_os_error()
+            );
+        }
+    }
+}
+pub(super) fn lock_namespace(data: &Path) -> Result<NamespaceLock, String> {
     let file =
         nessa_local_storage::open(&data.join("gateway-upgrade.lock"), OpenMode::OpenOrCreate)
             .map_err(|e| e.to_string())?;
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-            return Ok(file);
+            return Ok(NamespaceLock(file));
         }
         let error = Error::last_os_error();
         if error.kind() != ErrorKind::WouldBlock || Instant::now() >= deadline {
