@@ -33,6 +33,8 @@ function beginFailure(refusal: AttachmentBeginRefusal | undefined) {
     case "agent_not_configured":
     case "conversation_not_found":
       return "unavailable" as const
+    case "image_input_unsupported":
+      return "image-input-unsupported" as const
     case "invalid_request":
     case "unexpected":
     case undefined:
@@ -63,12 +65,14 @@ function stagingFailure(error: unknown): AttachmentStagingError {
         return new AttachmentStagingError("image-input-unsupported", error)
       case "temporarily_unavailable":
         return new AttachmentStagingError("busy", error)
-      // `attachment_not_kept` belongs here too: the conversation let go of its
-      // files while this one was arriving. Nothing is wrong with the file, and
-      // uploading it again is the whole remedy.
+      // Two of these are the gateway's doing and not the file's:
+      // `attachment_not_kept` is a conversation that let go of its files while
+      // this one was arriving, and `upload_unresolved` is the gateway's own work
+      // stopping without an answer. Uploading again is the whole remedy for both.
       case "upload_interrupted":
       case "upload_timeout":
       case "attachment_not_kept":
+      case "upload_unresolved":
       case "aborted":
         return new AttachmentStagingError("interrupted", error)
       case "unreachable":

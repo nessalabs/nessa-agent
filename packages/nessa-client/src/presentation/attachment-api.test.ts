@@ -129,6 +129,7 @@ it.each([
   "audit_unavailable",
   "temporarily_unavailable",
   "agent_not_configured",
+  "image_input_unsupported",
 ] as const)("carries the gateway's reason for refusing to begin: %s", async (code) => {
   // The message says something else entirely: the reason is read from the code.
   const cause = new NessaRpcError(code, "attachment_capacity invalid_request")
@@ -245,6 +246,7 @@ it.each([
   [422, { code: "digest_mismatch" }, "digest_mismatch"],
   [400, { code: "upload_interrupted" }, "upload_interrupted"],
   [409, { code: "attachment_not_kept" }, "attachment_not_kept"],
+  [503, { code: "upload_unresolved" }, "upload_unresolved"],
   [408, { code: "upload_timeout" }, "upload_timeout"],
   [415, { code: "unsupported_image" }, "unsupported_image"],
   [413, { code: "image_too_large" }, "image_too_large"],

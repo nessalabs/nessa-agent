@@ -52,6 +52,8 @@ export const UPLOAD_DEADLINE_MS = 180_000
  * already say it:
  * - `ticket_invalid`: unknown, expired, or already used.
  * - `size_mismatch`, `digest_mismatch`: not the bytes the ticket was issued for.
+ * - `upload_unresolved`: the gateway's own work on the upload stopped without
+ *   an answer. The ticket is spent; beginning again stages the file.
  * - `attachment_not_kept`: the bytes were good, but the conversation let go of
  *   its files before they were kept. Beginning again stages them.
  * - `upload_timeout`: the transfer outlived the gateway's deadline — or this
@@ -71,6 +73,7 @@ export type AttachmentFailureCode =
   | "digest_mismatch"
   | "upload_interrupted"
   | "attachment_not_kept"
+  | "upload_unresolved"
   | "upload_timeout"
   | "unsupported_image"
   | "image_too_large"
@@ -90,6 +93,7 @@ const uploadRefusals: readonly AttachmentFailureCode[] = [
   "digest_mismatch",
   "upload_interrupted",
   "attachment_not_kept",
+  "upload_unresolved",
   "upload_timeout",
   "unsupported_image",
   "image_too_large",
@@ -115,10 +119,13 @@ export function uploadRefusal(body: unknown): AttachmentFailureCode {
  * code this client has not been taught. `attachment_capacity` and
  * `temporarily_unavailable` pass with time, so asking again later may work. The
  * upload route says `storage_unavailable` where the socket says
- * `attachment_storage_unavailable`; both are here.
+ * `attachment_storage_unavailable`; both are here. `image_input_unsupported` is
+ * an image begun on a gateway whose agent's model takes none: no ticket is
+ * issued for a file no message could ever name.
  */
 export type AttachmentBeginRefusal =
   | "invalid_request"
+  | "image_input_unsupported"
   | "conversation_not_found"
   | "attachment_capacity"
   | "attachment_storage_unavailable"
@@ -131,6 +138,7 @@ export type AttachmentBeginRefusal =
 /** The codes above that the gateway itself answers with; `unexpected` is not one. */
 const beginRefusals: readonly AttachmentBeginRefusal[] = [
   "invalid_request",
+  "image_input_unsupported",
   "conversation_not_found",
   "attachment_capacity",
   "attachment_storage_unavailable",

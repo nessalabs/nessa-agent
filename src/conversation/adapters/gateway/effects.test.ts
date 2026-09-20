@@ -300,6 +300,7 @@ it.each([
   ["image_input_unsupported", "image-input-unsupported"],
   ["upload_interrupted", "interrupted"],
   ["attachment_not_kept", "interrupted"],
+  ["upload_unresolved", "interrupted"],
   ["upload_timeout", "interrupted"],
   ["aborted", "interrupted"],
   ["ticket_invalid", "unavailable"],
@@ -414,6 +415,7 @@ it.each([
   ["audit_unavailable", "unavailable"],
   ["agent_not_configured", "unavailable"],
   ["conversation_not_found", "unavailable"],
+  ["image_input_unsupported", "image-input-unsupported"],
   ["invalid_request", "rejected"],
   ["unexpected", "rejected"],
 ] as const)("maps a begin the gateway refused as %s to %s", async (refusal, reason) => {

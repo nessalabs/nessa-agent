@@ -250,6 +250,7 @@ Staging failures are a `NessaAttachmentError` with a `code`:
 | `size_mismatch`, `digest_mismatch` | Not the bytes the ticket was issued for (400, 422). | Spent. |
 | `upload_interrupted` | The body stopped arriving (400). | Spent. |
 | `attachment_not_kept` | The bytes were good, but the conversation let go of its files before they were kept (409). | Spent; begin again. |
+| `upload_unresolved` | The gateway's own work on the upload stopped without an answer (503). | Spent; begin again. |
 | `upload_timeout` | The transfer outlived the gateway's deadline (408), or no answer came within this client's own three-minute deadline (then `status` is undefined). | Spent, or unknown. |
 | `unsupported_image` | Not an image format the gateway can read (415). | Spent. |
 | `image_too_large` | It could not be brought under the model's limits (413). | Spent. |
