@@ -92,9 +92,10 @@ use tokio::process::Command;
 /// `auth.json` is resolved from `XDG_DATA_HOME`, not from the config variable,
 /// so it would survive — but because redirecting it does not work.
 ///
-/// So the line all three draw is the same one, and it is drawn at somebody
-/// else's repository rather than at the person running Nessa on their own
-/// machine.
+/// So the line the three that remain draw is the same one — custom tools, an
+/// MCP server in the person's config, a per-agent override — and it is drawn
+/// at somebody else's repository rather than at the person running Nessa on
+/// their own machine.
 ///
 /// One rule is appended after this policy: Opencode gives every agent
 /// `external_directory` access to its own `tool-output` directory unless the
