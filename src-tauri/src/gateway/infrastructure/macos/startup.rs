@@ -203,6 +203,7 @@ fn sentence_for(reason: &str, port: u16) -> Option<String> {
             Some("its credential registry is not one this version of Nessa can read.".into())
         }
         "credentialRegistry" => Some("its credential registry could not be read.".into()),
+        "alreadyRunning" => Some("another Nessa is already running for this stage.".into()),
         "portInUse" => Some(format!("port {port} is already in use.")),
         "configuration" => Some("its configuration is not one it can start with.".into()),
         _ => None,

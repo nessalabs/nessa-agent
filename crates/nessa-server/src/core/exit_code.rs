@@ -33,11 +33,17 @@ static CODES: LazyLock<GatewayExitCodes> = LazyLock::new(|| {
 fn reason(error: &RunError) -> &'static str {
     match error {
         RunError::Environment(_) => "configuration",
+        // The registry lock is held for the lifetime of the store, and the
+        // registry is per stage and instance. So a registry another process
+        // is already holding is not a registry problem at all: it is the
+        // second gateway for this stage being refused, which is the whole
+        // point of that lock, and it deserves to be said as such.
+        RunError::Registry(LocalStoreError::Locked) => "alreadyRunning",
         // "Invalid" is contents this build cannot make sense of — the schema
         // version among them — which is a different thing to tell someone
-        // than a registry another process is holding or one that would not
-        // open. Anything new in that family says the general thing, which
-        // stays true, rather than blaming a version.
+        // than a registry that would not open. Anything new in that family
+        // says the general thing, which stays true, rather than blaming a
+        // version.
         RunError::Registry(LocalStoreError::Corrupt | LocalStoreError::Capacity) => {
             "credentialRegistryInvalid"
         }
@@ -88,6 +94,9 @@ mod tests {
             }),
             RunError::Registry(LocalStoreError::Corrupt),
             RunError::Registry(LocalStoreError::Locked),
+            RunError::Registry(LocalStoreError::Io(Error::from(
+                ErrorKind::PermissionDenied,
+            ))),
             RunError::Authentication("setup".into()),
             RunError::Agent("provider".into()),
             RunError::Bind {

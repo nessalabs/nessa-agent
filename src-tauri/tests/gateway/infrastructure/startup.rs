@@ -129,6 +129,19 @@ fn a_taken_port_names_the_port_the_service_was_registered_for() {
 }
 
 #[test]
+fn a_second_gateway_for_this_stage_is_told_that_and_not_blamed_on_the_registry() {
+    // The registry lock is per stage and instance and held for the life of
+    // the store, so it is what refuses a second gateway for a stage. Reported
+    // as a registry fault it reads as corruption; it is the exclusion working.
+    let failure = diagnose(&LastExit::Code(code("alreadyRunning")), "", PORT, READINESS);
+    assert_eq!(
+        failure.sentence,
+        "Nessa's background service is not starting: another Nessa is already running for this stage."
+    );
+    assert!(!failure.sentence.contains("registry"));
+}
+
+#[test]
 fn what_the_log_says_never_decides_what_the_panel_says() {
     // One append-only log covers every one of launchd's restarts, a healthy
     // launch writes about the same subsystems a failing one does, and every

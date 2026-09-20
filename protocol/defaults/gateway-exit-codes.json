@@ -4,6 +4,7 @@
     "configuration": 20,
     "credentialRegistry": 21,
     "credentialRegistryInvalid": 28,
+    "alreadyRunning": 29,
     "authentication": 22,
     "portInUse": 23,
     "bind": 24,
