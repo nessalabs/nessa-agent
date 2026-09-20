@@ -1,4 +1,5 @@
 use super::*;
+use std::ffi::OsStr;
 
 /// The shared part of the configuration, with one agent under it.
 fn one_agent() -> &'static str {
@@ -166,4 +167,55 @@ fn no_agent_is_told_how_to_sign_itself_in() {
             agent.name(),
         );
     }
+}
+
+/// The packaged case: the host resolved a path at registration, and that is the
+/// one the agent gets — not the service's own, which has none of the user's
+/// tools on it.
+#[test]
+fn the_agent_takes_the_hosts_resolved_path_over_the_services_own() {
+    assert_eq!(
+        agent_search_path(
+            Some("/opt/homebrew/bin:/usr/bin:/bin".into()),
+            Some("/usr/bin:/bin:/usr/sbin:/sbin".into()),
+        ),
+        Some("/opt/homebrew/bin:/usr/bin:/bin".into())
+    );
+}
+
+/// The developer loop: `just server` is started from a terminal, there is no
+/// host to resolve anything, and that terminal's path is already the right one.
+#[test]
+fn without_a_resolved_path_the_process_keeps_its_own() {
+    assert_eq!(
+        agent_search_path(None, Some("/Users/me/.cargo/bin:/usr/bin".into())),
+        Some("/Users/me/.cargo/bin:/usr/bin".into())
+    );
+}
+
+/// An empty variable is not a path. Treating it as one gives the agent an empty
+/// `PATH`, which searches the working directory it writes to.
+#[test]
+fn an_empty_variable_is_not_a_path() {
+    assert_eq!(
+        agent_search_path(Some("".into()), Some("/usr/bin:/bin".into())),
+        Some("/usr/bin:/bin".into())
+    );
+    assert_eq!(agent_search_path(Some("".into()), Some("".into())), None);
+    assert_eq!(agent_search_path(None, None), None);
+}
+
+/// The rule above decides nothing unless the launched environment uses it. The
+/// two were wired together separately, and a merge that kept one and dropped
+/// the other would still compile and still pass every test above.
+#[test]
+fn the_agent_is_launched_with_the_path_that_rule_chose() {
+    let launched = inherited_environment(AgentId::Codex, Some("/opt/homebrew/bin".into()));
+    assert_eq!(
+        launched.get(OsStr::new("PATH")),
+        Some(&OsString::from("/opt/homebrew/bin"))
+    );
+    // No path to hand over means none is named, rather than an empty one, which
+    // would search the working directory the agent writes to.
+    assert!(!inherited_environment(AgentId::Codex, None).contains_key(OsStr::new("PATH")));
 }

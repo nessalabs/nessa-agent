@@ -224,6 +224,26 @@ impl AgentsConfig {
         Ok(())
     }
 }
+/// The `PATH` the agent's process tree gets: Claude Code, its Bash tool, and
+/// the Nessa MCP shell tool all inherit this one.
+///
+/// It is deliberately not this process's own. A packaged gateway is a launchd
+/// service, and the `PATH` launchd gives it is the system one — nothing the user
+/// installed is on it, which is how "run the tests" became `command not found:
+/// pnpm` on a machine where every terminal has `pnpm`. The desktop host resolves
+/// the user's login-shell path once, when it registers the service, and hands it
+/// over as `NESSA_AGENT_PATH`: a variable of Nessa's own, so widening what the
+/// agent can reach never widens what the service itself can.
+///
+/// A developer loop has no host and no such variable, and there the process
+/// `PATH` *is* the developer's own shell path, which is the right answer.
+fn agent_search_path(resolved: Option<OsString>, inherited: Option<OsString>) -> Option<OsString> {
+    resolved
+        .filter(|path| !path.is_empty())
+        .or(inherited)
+        .filter(|path| !path.is_empty())
+}
+
 fn context_tokens() -> u32 {
     100_000
 }
@@ -248,15 +268,36 @@ fn output_tokens() -> u32 {
 /// `cli_auth_credentials_store = "ephemeral"` does not avoid the write, which
 /// was checked against the pinned adapter rather than assumed.
 fn process_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
+    // `PATH` is the one entry that is not simply inherited: under launchd this
+    // process's own `PATH` is launchd's, not the user's, and an agent given it
+    // cannot find the tools every terminal on that machine can.
+    // `agent_search_path` decides which of the two is handed over; this reads
+    // the two it decides between, and nothing else here knows the rule.
+    inherited_environment(
+        agent,
+        agent_search_path(
+            std::env::var_os("NESSA_AGENT_PATH"),
+            std::env::var_os("PATH"),
+        ),
+    )
+}
+
+/// `process_environment` with the search path already decided, so what the
+/// agent is actually launched with can be read back without writing to this
+/// process's own environment.
+fn inherited_environment(agent: AgentId, path: Option<OsString>) -> BTreeMap<OsString, OsString> {
     let mut environment = BTreeMap::new();
     let vendor = match agent {
         AgentId::Claude => "CLAUDE_CONFIG_DIR",
         AgentId::Codex => "CODEX_HOME",
     };
-    for key in ["PATH", "HOME", "USER", "LOGNAME", "TMPDIR", vendor] {
+    for key in ["HOME", "USER", "LOGNAME", "TMPDIR", vendor] {
         if let Some(value) = std::env::var_os(key) {
             environment.insert(key.into(), value);
         }
+    }
+    if let Some(path) = path {
+        environment.insert("PATH".into(), path);
     }
     environment
 }

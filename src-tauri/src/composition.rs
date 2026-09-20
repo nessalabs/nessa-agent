@@ -95,6 +95,7 @@ impl HostDependencies {
             let runtime = app.path().resource_dir()?.join("runtime");
             Some(Arc::new(Gateway::bootstrap(
                 gateway::infrastructure::current(),
+                gateway::infrastructure::login_shell_path(),
                 runtime,
                 stage.clone(),
             )))
