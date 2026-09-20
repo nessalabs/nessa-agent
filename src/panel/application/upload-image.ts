@@ -1,4 +1,8 @@
-import { uploadFailureText, worthRetrying, type UploadFailure } from "../../conversation"
+import {
+  uploadFailureSummary,
+  worthRetrying,
+  type UploadFailure,
+} from "../../conversation"
 
 /**
  * Everything one upload touches, handed in.
@@ -111,6 +115,7 @@ export function nextUploads<T extends { id: string }>(
 
 /** A draft file, as much of it as the notice needs: its upload state keeps its union. */
 export type NoticedFile = {
+  id: string
   name: string
   image: boolean
   upload:
@@ -121,33 +126,54 @@ export type NoticedFile = {
       }
 }
 
+/** A short notification about the draft's files, and the uploads worth retrying. */
+export type AttachmentNotice = {
+  title: string
+  description: string
+  /** Failed uploads that trying again could change; empty when there are none. */
+  retry: readonly string[]
+}
+
 /**
- * The one line about the draft's files that belongs above the composer, or null.
+ * What the notification over the composer says about the draft's files, or null.
  *
- * Said at attach time rather than saved for send: a failed upload names itself,
- * an agent that takes no images is reported as soon as the gateway has said so,
- * and a file no message can carry is called that while it can still be swapped.
- * `imageInput` undefined means the gateway has not answered yet, which is not a
- * no. Uploads in flight or waiting are shown on their tiles and need no sentence.
+ * Short on purpose. A failed upload is already marked on its tile, which also
+ * carries the full reason and its own retry, so this only says that something
+ * went wrong and offers the retry in one place. It is said at attach time rather
+ * than saved for send: an agent that takes no images is reported as soon as the
+ * gateway has said so, and a file no message can carry while it can still be
+ * swapped. `imageInput` undefined means the gateway has not answered yet, which
+ * is not a no. Uploads in flight or waiting are shown on their tiles.
  */
 export function attachmentNotice(input: {
   files: readonly NoticedFile[]
   imageInput: boolean | undefined
-}): string | null {
-  for (const file of input.files) {
-    if (file.upload.status !== "failed") continue
-    const reason = file.upload.reason
-    return `"${file.name}" did not upload: ${uploadFailureText(reason)}. ${
-      worthRetrying(reason)
-        ? "Retry it from its tile, or remove it."
-        : "Remove it to send."
-    }`
-  }
-  const unsupported = input.files.find((file) => !file.image)
-  if (unsupported)
-    return `"${unsupported.name}" can be previewed but not sent: messages carry images, and no other files yet.`
+}): AttachmentNotice | null {
+  const failed = input.files.flatMap((file) =>
+    file.upload.status === "failed" ? [{ id: file.id, reason: file.upload.reason }] : [],
+  )
+  const [first] = failed
+  if (first)
+    return {
+      title:
+        failed.length === 1
+          ? "Image didn't upload"
+          : `${failed.length} images didn't upload`,
+      description: uploadFailureSummary(first.reason),
+      retry: failed.filter((file) => worthRetrying(file.reason)).map((file) => file.id),
+    }
+  if (input.files.some((file) => !file.image))
+    return {
+      title: "File can't be sent",
+      description: "Only images can be sent for now.",
+      retry: [],
+    }
   if (input.files.length > 0 && input.imageInput === false)
-    return "This agent does not take images. They will stay in the draft until removed."
+    return {
+      title: "Images not supported",
+      description: "This agent doesn't take images.",
+      retry: [],
+    }
   return null
 }
 

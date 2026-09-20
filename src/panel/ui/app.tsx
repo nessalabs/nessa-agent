@@ -117,6 +117,7 @@ export function App({
   // What the draft's files need said about them now, rather than at send.
   const fileNotice = attachmentNotice({
     files: attachments.files.map((file) => ({
+      id: file.id,
       name: file.name,
       image: isImageFile(file.mimeType),
       upload: file.upload,
@@ -495,6 +496,23 @@ export function App({
                 onDismiss={update.dismiss}
               />
             )}
+            {/* One short line about the draft's files. The tile already marks a
+                failed upload and carries the full reason, so this does not repeat
+                it; it offers the retry once for every upload worth retrying. */}
+            {fileNotice && !attachments.error && (
+              <AgentNotification
+                className="mb-2"
+                state="disconnected"
+                title={fileNotice.title}
+                description={fileNotice.description}
+                retryLabel="Retry"
+                onRetry={
+                  fileNotice.retry.length > 0
+                    ? () => fileNotice.retry.forEach(uploads.retry)
+                    : undefined
+                }
+              />
+            )}
             <ConversationNotification
               conversation={chat.active}
               connection={session}
@@ -521,11 +539,6 @@ export function App({
             {attachments.error && (
               <p role="alert" className="px-3 nessa-text-4 text-destructive">
                 {attachments.error}
-              </p>
-            )}
-            {fileNotice && !attachments.error && (
-              <p role="status" className="px-3 nessa-text-4 text-muted-foreground">
-                {fileNotice}
               </p>
             )}
             {attachments.reading && (

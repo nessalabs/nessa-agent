@@ -4,7 +4,7 @@ import type { UploadFailure } from "../../model"
  * What to tell somebody about an upload that did not finish, and whether to
  * offer them a retry.
  *
- * One owner for both: the tile, the line above the composer, and anything else
+ * One owner for both: the tile, the notification above the composer, and anything else
  * that reports a failed upload read the same sentence for the same reason, so
  * two surfaces cannot drift into saying different things about the same fact.
  * The reasons themselves are {@link UploadFailure}, which is where they are
@@ -28,6 +28,31 @@ export function uploadFailureText(reason: UploadFailure): string {
       return "the gateway could not be reached"
     case "rejected":
       return "the gateway refused it"
+  }
+}
+
+/**
+ * The same reasons as a whole short sentence, for a notification that has room
+ * for one. The tile's tooltip keeps the longer clause above.
+ */
+export function uploadFailureSummary(reason: UploadFailure): string {
+  switch (reason) {
+    case "unreadable":
+      return "The file couldn't be read."
+    case "unsupported-image":
+      return "That image format isn't supported."
+    case "too-large":
+      return "The image is too large for this model."
+    case "image-input-unsupported":
+      return "This agent's model doesn't take images."
+    case "busy":
+      return "The gateway is busy. Try again in a moment."
+    case "interrupted":
+      return "The upload was interrupted."
+    case "unavailable":
+      return "Couldn't reach the gateway."
+    case "rejected":
+      return "The gateway refused the image."
   }
 }
 

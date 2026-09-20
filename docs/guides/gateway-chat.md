@@ -157,6 +157,12 @@ send   -> conversation.send { text, attachments: [the returned references] }
   route still answers `temporarily_unavailable` — the one refusal that does not
   spend the ticket — the same ticket is offered again after 1, 2, then 4
   seconds, and after that the tile fails as `busy` with its retry.
+- **A failed upload is marked on its tile, and said once, briefly.** The tile
+  shows the failure and carries the full reason and its own retry. Above the
+  composer the Nessa UI notification says only that an image did not upload and
+  why, in one short sentence, with one Retry for every upload worth retrying. A
+  file no message can carry, and an agent that takes no images, are said the same
+  way. Nothing there names a file or quotes a limit.
 - **Upload state is on the file.** Each draft file is `not-started`, `uploading`,
   `stored` (with the whole returned reference), or `failed` with a typed reason:
 

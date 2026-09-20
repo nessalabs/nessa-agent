@@ -35,7 +35,11 @@ export {
 
 // Why an upload failed, in words, and whether to offer a retry. The reasons are
 // this vertical's, so the sentences for them are too; the panel says them.
-export { uploadFailureText, worthRetrying } from "./application/usecases/upload-failure"
+export {
+  uploadFailureSummary,
+  uploadFailureText,
+  worthRetrying,
+} from "./application/usecases/upload-failure"
 
 export { ConversationTabMenu, ConversationDetails } from "./ui/conversation-details"
 export { restoreConversations } from "./adapters/store/slice"

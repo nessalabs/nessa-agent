@@ -16,6 +16,7 @@ import {
   setActive,
   setDraft,
   beginSend,
+  uploadFailureSummary,
   uploadFailureText,
   worthRetrying,
 } from "./index"
@@ -381,6 +382,18 @@ describe("why an upload failed, in words", () => {
     expect(uploadFailureText("unsupported-image")).toMatch(/could not read this image/)
     // Never a byte or pixel limit: those are the gateway's, and per model.
     for (const text of texts) expect(text).not.toMatch(/\d\s?(MB|MiB|px)/)
+  })
+
+  it("has a short whole sentence for each reason, for a notification with room for one", () => {
+    const summaries = reasons.map(uploadFailureSummary)
+    expect(new Set(summaries).size).toBe(reasons.length)
+    for (const summary of summaries) {
+      // A sentence, short enough for one line, and never a byte or pixel limit.
+      expect(summary).toMatch(/^[A-Z].*\.$/)
+      expect(summary.length).toBeLessThanOrEqual(48)
+      expect(summary).not.toMatch(/\d\s?(MB|MiB|px)/)
+    }
+    expect(uploadFailureSummary("unavailable")).toBe("Couldn't reach the gateway.")
   })
 
   it("offers a retry for everything but a verdict on the image or the agent", () => {

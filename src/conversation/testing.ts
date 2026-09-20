@@ -46,4 +46,8 @@ export {
   previewableImage,
   validDraftAttachments,
 } from "./model"
-export { uploadFailureText, worthRetrying } from "./application/usecases/upload-failure"
+export {
+  uploadFailureSummary,
+  uploadFailureText,
+  worthRetrying,
+} from "./application/usecases/upload-failure"

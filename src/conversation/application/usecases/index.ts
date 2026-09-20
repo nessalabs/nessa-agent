@@ -8,4 +8,4 @@ export { moveActive } from "./move-active"
 
 export { attachFiles, changeUpload, removeFile } from "./attachments"
 export { boundSentPreviews, forgetStoredUploads } from "./release-uploads"
-export { uploadFailureText, worthRetrying } from "./upload-failure"
+export { uploadFailureSummary, uploadFailureText, worthRetrying } from "./upload-failure"

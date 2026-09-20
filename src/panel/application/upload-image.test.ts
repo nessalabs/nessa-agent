@@ -12,7 +12,7 @@ import { describe, expect, it, vi } from "vitest"
 // component among them, so the barrel is mocked with that: one definition.
 vi.mock("../../conversation", () => import("../../conversation/testing"))
 
-import { uploadFailureText, worthRetrying } from "../../conversation/testing"
+import { uploadFailureSummary } from "../../conversation/testing"
 import {
   attachmentNotice,
   MAX_UPLOADS_IN_FLIGHT,
@@ -142,7 +142,12 @@ it("fails as unreadable, and never rejects, when hashing throws", async () => {
 })
 
 describe("what the composer says about a draft's files", () => {
-  const stored: NoticedFile = { name: "a.png", image: true, upload: { status: "stored" } }
+  const stored: NoticedFile = {
+    id: "a",
+    name: "a.png",
+    image: true,
+    upload: { status: "stored" },
+  }
   it("says nothing when there is nothing to say", () => {
     expect(attachmentNotice({ files: [], imageInput: false })).toBeNull()
     expect(attachmentNotice({ files: [stored], imageInput: true })).toBeNull()
@@ -157,34 +162,64 @@ describe("what the composer says about a draft's files", () => {
   })
 
   // What each reason says is the conversation's, and tested there. This is the
-  // composing: the failed file is named, its reason is quoted whole, and the
-  // advice follows from whether trying the same bytes again could go differently.
-  it.each(["unavailable", "too-large"] as const)(
-    "names the failed file, why, and what to do about it: %s",
-    (reason) => {
-      const notice = attachmentNotice({
-        files: [
-          stored,
-          { name: "b.heic", image: true, upload: { status: "failed", reason } },
-        ],
-        imageInput: true,
-      })
-      expect(notice).toMatch(/"b\.heic" did not upload/)
-      expect(notice).toContain(uploadFailureText(reason))
-      expect(notice).toMatch(worthRetrying(reason) ? /Retry/ : /Remove it to send/)
-    },
-  )
-
-  it("says at attach time that a file cannot be sent, or that the agent takes no images", () => {
+  // composing: short, the reason's own sentence, and a retry only for uploads
+  // that trying again could change.
+  it("says a failed upload briefly, and offers the retry only where it can help", () => {
+    const failed = (id: string, reason: "unavailable" | "too-large"): NoticedFile => ({
+      id,
+      name: `${id}.heic`,
+      image: true,
+      upload: { status: "failed", reason },
+    })
+    expect(
+      attachmentNotice({ files: [stored, failed("b", "unavailable")], imageInput: true }),
+    ).toEqual({
+      title: "Image didn't upload",
+      description: uploadFailureSummary("unavailable"),
+      retry: ["b"],
+    })
+    // The gateway's verdict on the image itself would be the same next time.
+    expect(
+      attachmentNotice({ files: [failed("b", "too-large")], imageInput: true }),
+    ).toEqual({
+      title: "Image didn't upload",
+      description: uploadFailureSummary("too-large"),
+      retry: [],
+    })
+    // Several failures are one notification: counted, the first one's reason,
+    // and only the retryable ones behind the action.
     expect(
       attachmentNotice({
-        files: [{ name: "notes.pdf", image: false, upload: { status: "not-started" } }],
+        files: [failed("b", "too-large"), failed("c", "unavailable")],
         imageInput: true,
       }),
-    ).toMatch(/"notes\.pdf" can be previewed but not sent/)
-    expect(attachmentNotice({ files: [stored], imageInput: false })).toMatch(
-      /does not take images/,
-    )
+    ).toEqual({
+      title: "2 images didn't upload",
+      description: uploadFailureSummary("too-large"),
+      retry: ["c"],
+    })
+    // Nothing here names a file or quotes a limit: the tile does that.
+    expect(uploadFailureSummary("unavailable").length).toBeLessThan(40)
+  })
+
+  it("says briefly that a file cannot be sent, or that the agent takes no images", () => {
+    expect(
+      attachmentNotice({
+        files: [
+          { id: "n", name: "notes.pdf", image: false, upload: { status: "not-started" } },
+        ],
+        imageInput: true,
+      }),
+    ).toEqual({
+      title: "File can't be sent",
+      description: "Only images can be sent for now.",
+      retry: [],
+    })
+    expect(attachmentNotice({ files: [stored], imageInput: false })).toEqual({
+      title: "Images not supported",
+      description: "This agent doesn't take images.",
+      retry: [],
+    })
   })
 })
 
