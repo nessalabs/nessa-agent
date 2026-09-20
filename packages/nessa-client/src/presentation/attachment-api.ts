@@ -131,14 +131,14 @@ function putWithin(
   return new Promise((resolve, reject) => {
     const request = new AbortController()
     let settled = false
-    // Assigned after the timer is armed, and a timer is free to spend its whole
-    // budget before returning, so the deadline may settle this before there is
-    // anything to cancel. Cancelled below in that case.
-    let stopTimer: (() => void) | undefined
+    // Replaced the moment the timer is armed. A timer may spend its whole budget
+    // before returning a handle, and then the deadline settles this while there
+    // is still nothing to stop; the handle is used below instead.
+    let stopTimer = () => {}
     const finish = (settle: () => void) => {
       if (settled) return
       settled = true
-      stopTimer?.()
+      stopTimer()
       caller?.removeEventListener("abort", onCallerAbort)
       settle()
     }

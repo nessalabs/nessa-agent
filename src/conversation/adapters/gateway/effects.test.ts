@@ -1,5 +1,9 @@
 import {
   IMAGE_ATTACHMENT_TYPES,
+  MAX_IMAGE_ATTACHMENT_BYTES,
+  MAX_MESSAGE_IMAGE_BYTES,
+  MAX_MESSAGE_IMAGES,
+  MAX_UPLOAD_BYTES,
   NessaAttachmentError,
   NessaConversationMutationError,
   NessaRpcError,
@@ -8,7 +12,12 @@ import {
 } from "@nessa/client"
 import { expect, it, vi } from "vitest"
 import { AttachmentStagingError, SubmissionRefusedError } from "../../application/ports"
-import { STORED_IMAGE_TYPES } from "../../model"
+import {
+  MAX_ATTACHMENT_BYTES,
+  MAX_SEND_IMAGES,
+  MAX_SEND_TOTAL_IMAGE_BYTES,
+  STORED_IMAGE_TYPES,
+} from "../../model"
 import { BUSY_RETRY_DELAYS_MS, gatewayEffects } from "./effects"
 
 /** A backoff nothing in the test should reach: waiting here is the failure. */
@@ -88,10 +97,17 @@ function staging(
   )
 }
 
-it("names a message's images the way the client's protocol list does", () => {
-  // Two lists on purpose — the conversation model does not import a client SDK —
-  // and this adapter, which sees both, is where they are held to each other.
+it("holds every message bound the model keeps to the one the protocol generated", () => {
+  // Two sets of constants on purpose — the conversation model does not import a
+  // client SDK — and this adapter, which sees both, is where they are held to
+  // each other. The client's side of each is generated from
+  // `protocol/product/v1.json`, so a schema change that nobody carried into the
+  // model fails here rather than at the gateway.
   expect([...STORED_IMAGE_TYPES]).toEqual([...IMAGE_ATTACHMENT_TYPES])
+  expect(MAX_SEND_IMAGES).toBe(MAX_MESSAGE_IMAGES)
+  expect(MAX_SEND_TOTAL_IMAGE_BYTES).toBe(MAX_MESSAGE_IMAGE_BYTES)
+  // What one file may weigh to be attached at all is the upload path's bound.
+  expect(MAX_ATTACHMENT_BYTES).toBe(MAX_UPLOAD_BYTES)
 })
 
 it("forwards a message's images with its text, for send and steer alike", async () => {
@@ -155,6 +171,33 @@ it.each([
   },
 )
 
+it("reports the client refusing a message's images as a certain refusal, for send and steer", async () => {
+  // The client validates a message's images before anything reaches the wire —
+  // one boundary — and answers a bad argument with a TypeError. Nothing was
+  // sent, so this is as certain as a refusal gets: not "delivery unknown".
+  const refuse = () => {
+    throw new TypeError(
+      `Invalid message attachments: an image must contain 1-${MAX_IMAGE_ATTACHMENT_BYTES} bytes`,
+    )
+  }
+  const effects = effectsOf(
+    () => ({ conversation: { send: refuse, steer: refuse } }) as unknown as NessaClient,
+  )
+  for (const submit of [effects.send, effects.steer]) {
+    const error = await submit({
+      conversationId: "server",
+      executionId: "execution",
+      actionId: "action",
+      text: "look",
+      attachments: [{ ...stored, size: MAX_IMAGE_ATTACHMENT_BYTES + 1 }],
+    }).catch((error: unknown) => error)
+    expect(error).toBeInstanceOf(SubmissionRefusedError)
+    expect(error).toMatchObject({ reason: "invalid-request" })
+    // The client's sentence names what is wrong with the message; keep it.
+    expect((error as Error).message).toMatch(/an image must contain/)
+  }
+})
+
 it("passes an uncertain send failure on untouched: a lost answer is not a refusal", async () => {
   const lost = new NessaConversationMutationError(
     "server",
@@ -209,20 +252,46 @@ it("uploads the original bytes under the ticket and answers with what was stored
 })
 
 it.each([
-  ["a file that is not an image", { ...stored, mimeType: "application/pdf" }],
+  ["a file that is not an image", { mimeType: "application/pdf" }, "unsupported-image"],
   [
     "an image the gateway left in an encoding no message names",
-    { ...stored, mimeType: "image/heic" },
+    { mimeType: "image/heic" },
+    "unsupported-image",
   ],
-  ["an image over the protocol's image bound", { ...stored, size: 5_242_881 }],
-])("does not hand a message %s, however validly it was stored", async (_name, kept) => {
-  for (const attachments of [
-    { begin: async () => ({ requestId: "r", state: "stored", stored: kept }) },
-    { begin: async () => owed, upload: async () => kept },
-  ])
-    await expect(
-      staging(attachments).stageAttachment("server", file, bytes, live()),
-    ).rejects.toMatchObject({ reason: "unsupported-image" })
+  // Two different facts, and the tile offers a retry for neither — but it says
+  // something different for each, so a readable 6 MiB PNG is not reported as a
+  // format the gateway could not read.
+  [
+    "a readable image over the protocol's image bound",
+    { size: MAX_IMAGE_ATTACHMENT_BYTES + 1 },
+    "too-large",
+  ],
+  // Neither fact: the gateway answered something this window cannot use at all.
+  ["a reference that is malformed", { digest: "sha256:NOPE" }, "rejected"],
+] as const)(
+  "does not hand a message %s, however validly it was stored",
+  async (_name, change, reason) => {
+    const kept = { ...stored, ...change }
+    for (const attachments of [
+      { begin: async () => ({ requestId: "r", state: "stored", stored: kept }) },
+      { begin: async () => owed, upload: async () => kept },
+    ])
+      await expect(
+        staging(attachments).stageAttachment("server", file, bytes, live()),
+      ).rejects.toMatchObject({ reason })
+  },
+)
+
+it("keeps an image at exactly the protocol's bound", async () => {
+  const kept = { ...stored, size: MAX_IMAGE_ATTACHMENT_BYTES }
+  expect(
+    await staging({ begin: async () => owed, upload: async () => kept }).stageAttachment(
+      "server",
+      file,
+      bytes,
+      live(),
+    ),
+  ).toEqual(kept)
 })
 
 it.each([

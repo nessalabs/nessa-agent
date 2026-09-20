@@ -362,6 +362,26 @@ it.each(["attachment-not-found", "attachment-unavailable"] as const)(
   },
 )
 
+it("knows a message the client would not put on the wire was never sent", async () => {
+  // The model puts no per-image byte bound on a stored reference: how heavy one
+  // image may be is the protocol's rule, enforced by the client, which refuses
+  // the arguments before anything is sent. A refusal there used to escape as a
+  // plain TypeError and be read as a lost acknowledgement — "delivery unknown",
+  // with the draft gone. It is a refusal, so the draft comes back.
+  const context = await readyToSend({
+    stageAttachment: vi.fn(async () => ({ ...stored, size: 6 * 1024 * 1024 })),
+  })
+  const before = context.draft()
+  await context.store
+    .dispatch(sendDraft({ content: [{ type: "text", text: "look" }], id: "c0" }))
+    .unwrap()
+    .catch(() => undefined)
+  // "failed", not "unknown": nothing was sent, so delivery is not in question.
+  expect(context.current().turns[0]).toMatchObject({ receipt: "failed" })
+  expect(context.current().error).toMatch(/an image must contain/)
+  expect(context.draft()).toEqual([{ type: "text", text: "look" }, ...before])
+})
+
 it("forgets a draft's stored images when Stop closes the conversation that held them", async () => {
   // The trigger: attach while the agent runs, the upload finishes, press Stop.
   // The gateway releases every hold on close, so `stored` would now be a lie

@@ -1,30 +1,26 @@
-import type { ImageAttachment } from "../generated/product.js"
+import { bounds, type ImageAttachment } from "../generated/product.js"
 
 /**
- * Bounds the protocol schema puts on these values. They are the contract's, not
- * any model's: what a particular model takes is the gateway's knowledge, applied
- * when it stores an upload, and is written nowhere in this package.
+ * Bounds the protocol schema puts on these values, named here for what they
+ * mean and generated from the schema, so no number is copied. They are the
+ * contract's, not any model's: what a particular model takes is the gateway's
+ * knowledge, applied when it stores an upload, and is written nowhere here.
  */
 /** `ImageAttachment.size` maximum. */
-export const MAX_IMAGE_ATTACHMENT_BYTES = 5_242_880
+export const MAX_IMAGE_ATTACHMENT_BYTES = bounds.maxImageBytes
 /** `attachments` maxItems on send, steer, messages, and pending input. */
-export const MAX_MESSAGE_IMAGES = 10
+export const MAX_MESSAGE_IMAGES = bounds.maxMessageImages
 /** Total image bytes one message may refer to: base64 of it must fit one 16 MiB agent frame. */
-export const MAX_MESSAGE_IMAGE_BYTES = 10 * 1024 * 1024
+export const MAX_MESSAGE_IMAGE_BYTES = bounds.maxMessageImageBytes
 /** `AttachmentBeginParams.size` maximum: what the upload path takes, whatever it becomes. */
-export const MAX_UPLOAD_BYTES = 67_108_864
+export const MAX_UPLOAD_BYTES = bounds.maxUploadBytes
 
 /**
  * The four encodings a message's image may be in — `ImageAttachment.mimeType`.
  * Exported once from this package. Storage is wider than this: see
  * {@link StoredAttachment}.
  */
-export const IMAGE_ATTACHMENT_TYPES = [
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-] as const
+export const IMAGE_ATTACHMENT_TYPES = bounds.imageMimeTypes
 
 const digestPattern = /^sha256:[0-9a-f]{64}$/
 const ticketPattern = /^[0-9a-f]{64}$/

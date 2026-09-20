@@ -762,6 +762,7 @@
         "attachments": {
           "type": "array",
           "maxItems": 10,
+          "x-maxTotalBytes": 10485760,
           "items": {
             "$ref": "#/$defs/ImageAttachment"
           },
@@ -824,6 +825,7 @@
         "attachments": {
           "type": "array",
           "maxItems": 10,
+          "x-maxTotalBytes": 10485760,
           "items": {
             "$ref": "#/$defs/ImageAttachment"
           },
@@ -1146,6 +1148,7 @@
         "attachments": {
           "type": "array",
           "maxItems": 10,
+          "x-maxTotalBytes": 10485760,
           "items": {
             "$ref": "#/$defs/ImageAttachment"
           },

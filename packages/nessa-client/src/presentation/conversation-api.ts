@@ -169,7 +169,7 @@ export function createConversationApi(
     const executionId = boundedText(options.executionId ?? newId(), "Execution ID", 256)
     const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
     const problem = imageAttachmentsProblem(attachments)
-    if (problem) throw new TypeError(`Message ${problem}`)
+    if (problem) throw new TypeError(`Invalid message attachments: ${problem}`)
     // Text may be blank only beside an image: the message has to say something.
     if (attachments.length === 0) boundedText(text, "Message", 8192)
     else if (typeof text !== "string" || utf8.encode(text).byteLength > 8192)

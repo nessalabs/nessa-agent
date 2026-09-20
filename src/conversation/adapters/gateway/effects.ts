@@ -1,10 +1,13 @@
 import {
   asImageAttachment,
+  IMAGE_ATTACHMENT_TYPES,
+  MAX_IMAGE_ATTACHMENT_BYTES,
   NessaAttachmentError,
   NessaConversationMutationError,
   type AttachmentBeginRefusal,
   type ConversationRejection,
   type NessaClient,
+  type StoredAttachment,
 } from "@nessa/client"
 import type { ConversationView } from "../../application/view"
 import {
@@ -92,6 +95,24 @@ function stagingFailure(error: unknown): AttachmentStagingError {
   return new AttachmentStagingError("unavailable", error)
 }
 
+/**
+ * Why a file the conversation now holds is not an image a message may name.
+ *
+ * Three separate facts, told apart because the tile offers a retry for one of
+ * them and says something different for each: an encoding no message names
+ * (`unsupported-image` — a stored PDF, or an image the gateway left as HEIC),
+ * one of the four encodings over the protocol's per-image bound (`too-large`),
+ * and a reference malformed in some other way, which is the gateway answering
+ * something this window cannot use (`rejected`).
+ */
+function storedImageRefusal(stored: StoredAttachment): AttachmentStagingError {
+  if (!(IMAGE_ATTACHMENT_TYPES as readonly string[]).includes(stored.mimeType))
+    return new AttachmentStagingError("unsupported-image")
+  if (stored.size > MAX_IMAGE_ATTACHMENT_BYTES)
+    return new AttachmentStagingError("too-large")
+  return new AttachmentStagingError("rejected")
+}
+
 const refusals: Record<ConversationRejection, SubmissionRefusal> = {
   image_input_unsupported: "image-input-unsupported",
   attachment_not_found: "attachment-not-found",
@@ -103,15 +124,25 @@ const refusals: Record<ConversationRejection, SubmissionRefusal> = {
 }
 
 /**
- * A send the gateway refused before admitting it, as the application's own typed
+ * A send that was refused rather than lost, as the application's own typed
  * refusal. Anything else is passed on untouched: a lost acknowledgement is not a
  * refusal, and the store already knows what to do with one.
+ *
+ * Two things are refusals. The gateway's own pre-admission rejection, and the
+ * client refusing the arguments — the client is the one boundary that validates
+ * a message's images, and it does so before anything reaches the wire, so that
+ * is as certain as a refusal gets: nothing was sent, and the draft comes back.
+ * Either way the client's own sentence is kept, because it names what is wrong.
  */
 function submissionFailure(error: unknown): unknown {
-  if (!(error instanceof NessaConversationMutationError) || !error.rejection) return error
-  const refused = new SubmissionRefusedError(refusals[error.rejection], error)
-  // The client's message for a gateway with no agent names the remedy. Keep it.
-  refused.message = error.message
+  const refused =
+    error instanceof TypeError
+      ? new SubmissionRefusedError("invalid-request", error)
+      : error instanceof NessaConversationMutationError && error.rejection
+        ? new SubmissionRefusedError(refusals[error.rejection], error)
+        : undefined
+  if (!refused) return error
+  refused.message = (error as Error).message
   return refused
 }
 
@@ -224,9 +255,11 @@ export function gatewayEffects(
           }
         }
         // Storage keeps any file. A message names only the four image
-        // encodings, and this is where that is decided.
+        // encodings, within the protocol's bound, and this is where that is
+        // decided — separately for each of those, because a readable 6 MiB PNG
+        // and a stored PDF are not the same news for the tile.
         const image = asImageAttachment(stored)
-        if (!image) throw new AttachmentStagingError("unsupported-image")
+        if (!image) throw storedImageRefusal(stored)
         return image
       } catch (error) {
         throw error instanceof AttachmentStagingError ? error : stagingFailure(error)

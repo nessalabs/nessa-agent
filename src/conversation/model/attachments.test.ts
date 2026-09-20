@@ -95,8 +95,8 @@ describe("which parts of a message can go as images", () => {
   })
 
   it("counts the message budgets over stored references, not over attached files", () => {
-    expect(MAX_SEND_IMAGES).toBe(10)
-    expect(MAX_SEND_TOTAL_IMAGE_BYTES).toBe(10 * 1024 * 1024)
+    // What those budgets are is the protocol's; the gateway adapter, which sees
+    // both, is where they are held to the generated bound.
     // Three 18 MB originals the gateway brought down to 1 MB each: they fit.
     const shrunk = Array.from({ length: 3 }, (_, index) =>
       image(
@@ -306,8 +306,9 @@ describe("a file the browser could not name", () => {
       expect(previewableImage(type)).toBe(false)
   })
 
-  it("lets a camera RAW file be attached at all: 64 MiB a file, 128 MiB a draft", () => {
-    expect(MAX_ATTACHMENT_BYTES).toBe(64 * 1024 * 1024)
-    expect(MAX_DRAFT_ATTACHMENT_BYTES).toBe(128 * 1024 * 1024)
+  it("lets a camera RAW file be attached at all: one file's worth of a draft's budget", () => {
+    // A single file may be as heavy as the upload path takes, and a draft holds
+    // two of those. The file bound itself is the protocol's, checked there.
+    expect(MAX_DRAFT_ATTACHMENT_BYTES).toBe(2 * MAX_ATTACHMENT_BYTES)
   })
 })

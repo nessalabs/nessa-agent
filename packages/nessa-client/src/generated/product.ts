@@ -522,6 +522,14 @@ export interface ConversationPart {
   /** Opaque provider message identity; only fragments with the same identity may be combined. */
   messageId?: string
 }
+/** Bounds the product schema puts on attachments, generated from it so no copy of a number can drift. */
+export const bounds = {
+  maxImageBytes: 5242880,
+  imageMimeTypes: ["image/png", "image/jpeg", "image/gif", "image/webp"],
+  maxMessageImages: 10,
+  maxMessageImageBytes: 10485760,
+  maxUploadBytes: 67108864,
+} as const
 export const ProductMethod = {
   SessionAuthenticate: "session.authenticate",
   AuthSession: "auth.session",

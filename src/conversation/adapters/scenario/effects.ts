@@ -1,4 +1,9 @@
-import { AttachmentStagingError, type ConversationEffects } from "../../application/ports"
+import { imageAttachmentsProblem } from "@nessa/client"
+import {
+  AttachmentStagingError,
+  SubmissionRefusedError,
+  type ConversationEffects,
+} from "../../application/ports"
 import type { ConversationView, Submission } from "../../application/view"
 import { STORED_IMAGE_TYPES } from "../../model"
 
@@ -12,6 +17,15 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
     return view
   }
   const send = async (input: Submission) => {
+    // A substitute that cannot refuse is a substitute that proves nothing. The
+    // gateway adapter is held to the client's verdict on a message's images, so
+    // this one asks the client the same question and refuses the same way.
+    const problem = imageAttachmentsProblem(input.attachments)
+    if (problem) {
+      const refused = new SubmissionRefusedError("invalid-request")
+      refused.message = `Invalid message attachments: ${problem}`
+      throw refused
+    }
     const view = get(input.conversationId)
     if (!view.messages.some((message) => message.executionId === input.executionId)) {
       view.messages.push({
