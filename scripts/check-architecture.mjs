@@ -135,6 +135,16 @@ for (const file of walk(src)) {
     ) {
       fail(file, `${feature} model imports nothing outward`)
     }
+    // For the conversation, a client SDK is outward too: its model states
+    // product rules in its own terms, and the gateway adapter is where they meet
+    // the wire's. The session model is the wire session, so it is not held to this.
+    if (
+      feature === "conversation" &&
+      imports.some(
+        (item) => item === "@nessa/client" || item.startsWith("@nessa/client/"),
+      )
+    )
+      fail(file, "conversation model does not import the client SDK")
   }
 
   if (inLayerRules && layer === "application") {
