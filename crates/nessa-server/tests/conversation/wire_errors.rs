@@ -1,7 +1,11 @@
 //! Opening failures retain their actionable meaning at the product boundary.
 use super::{
-    error_code, permission_answer_failure, AgentError, ConversationError, OutgoingMessage,
-    PermissionSelectionState, StorageError,
+    error_code, permission_answer_failure, AgentError, ConversationError, ImageInputRefusal,
+    OutgoingMessage, PermissionSelectionState, StorageError,
+};
+use nessa_sdk::{
+    application::agent_execution::providers::UserImageError,
+    domain::common::value_objects::ImageMediaType,
 };
 
 #[test]
@@ -67,4 +71,45 @@ fn a_close_that_failed_twice_is_named_for_the_conversation_that_did_not_close() 
         };
         assert_eq!(error_code(&both), code);
     }
+}
+
+#[test]
+fn an_image_message_refused_before_acceptance_says_which_kind_of_refusal_it_was() {
+    // Every one of these is decided before the message is accepted, and the
+    // client recovers the draft for exactly these codes. `agent_operation_failed`
+    // would tell it delivery is unknown.
+    for (error, code) in [
+        (
+            AgentError::ImageInputRefused(ImageInputRefusal::AgentDoesNotAccept),
+            "image_input_unsupported",
+        ),
+        (
+            AgentError::ImageInputRefused(ImageInputRefusal::MediaType(ImageMediaType::Webp)),
+            "invalid_request",
+        ),
+        (
+            AgentError::ImageInputRefused(ImageInputRefusal::ImageTooLarge {
+                size: 9,
+                max_bytes: 6,
+            }),
+            "invalid_request",
+        ),
+        (
+            AgentError::MessageTooLarge {
+                encoded_bytes: 17,
+                max_bytes: 16,
+            },
+            "invalid_request",
+        ),
+        (
+            AgentError::UserImage(UserImageError::Missing),
+            "attachment_unavailable",
+        ),
+    ] {
+        assert_eq!(error_code(&ConversationError::Agent(error)), code);
+    }
+    assert_eq!(
+        error_code(&ConversationError::ImagesUnsupported),
+        "image_input_unsupported"
+    );
 }

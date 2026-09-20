@@ -20,7 +20,8 @@ use crate::{
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_sdk::application::agent_execution::{
-    agents::AgentError, permissions::PermissionSelectionState, sessions::StorageError,
+    agents::AgentError, permissions::PermissionSelectionState, providers::ImageInputRefusal,
+    sessions::StorageError,
 };
 
 pub(super) async fn dispatch(
@@ -249,6 +250,17 @@ fn error_code(error: &ConversationError) -> &'static str {
             AgentError::Closed => "conversation_closed",
             AgentError::StalePermission => "stale_permission",
             AgentError::InvalidInput(_) => "invalid_request",
+            // Refused before the message was accepted, so the caller still has it.
+            // An agent that takes no images is the same fact whether this service
+            // or the SDK's admission noticed it. An image outside the model's
+            // limits, or a message too large for one frame, is a request this
+            // gateway could never have delivered as it stands.
+            AgentError::ImageInputRefused(ImageInputRefusal::AgentDoesNotAccept) => {
+                "image_input_unsupported"
+            }
+            AgentError::ImageInputRefused(_) | AgentError::MessageTooLarge { .. } => {
+                "invalid_request"
+            }
             AgentError::UserImage(_) => "attachment_unavailable",
             AgentError::AuditFailure => "audit_unavailable",
             _ => "agent_operation_failed",
