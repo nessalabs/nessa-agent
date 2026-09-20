@@ -1,13 +1,17 @@
 use super::super::control::RetirementEvidence;
 use super::super::generation::random_generation;
 use super::{
-    collect, removable, retained_runtimes, Collected, LabelDirectory, RetainedRuntimes,
-    RuntimeVersions,
+    collect, listing, removable, retained_runtimes, Collected, LabelDirectory, Listing,
+    RetainedRuntimes, RuntimeVersions,
 };
 use std::{
     cell::RefCell,
+    ffi::OsString,
     fs::{self, DirBuilder},
-    os::unix::fs::{symlink, DirBuilderExt},
+    os::unix::{
+        ffi::OsStringExt,
+        fs::{symlink, DirBuilderExt},
+    },
     path::PathBuf,
 };
 
@@ -22,21 +26,25 @@ fn only_current() -> RetainedRuntimes {
 /// Records what was asked of the directory, and fails whichever removals a test
 /// names, so a failing removal can be told apart from one never attempted.
 struct FakeVersions {
-    names: Result<Vec<String>, String>,
+    listing: Result<Listing, String>,
     refuse: Vec<String>,
     attempted: RefCell<Vec<String>>,
 }
 impl FakeVersions {
-    fn holding(names: &[String]) -> Self {
+    /// Goes through the real split, so a fake directory reads like a real one.
+    fn holding_entries(entries: Vec<OsString>) -> Self {
         Self {
-            names: Ok(names.to_vec()),
+            listing: Ok(listing(entries)),
             refuse: Vec::new(),
             attempted: RefCell::new(Vec::new()),
         }
     }
+    fn holding(names: &[String]) -> Self {
+        Self::holding_entries(names.iter().map(OsString::from).collect())
+    }
     fn unreadable(error: &str) -> Self {
         Self {
-            names: Err(error.into()),
+            listing: Err(error.into()),
             refuse: Vec::new(),
             attempted: RefCell::new(Vec::new()),
         }
@@ -47,8 +55,8 @@ impl FakeVersions {
     }
 }
 impl RuntimeVersions for FakeVersions {
-    fn names(&self) -> Result<Vec<String>, String> {
-        self.names.clone()
+    fn list(&self) -> Result<Listing, String> {
+        self.listing.clone()
     }
     fn remove(&self, name: &str) -> Result<(), String> {
         self.attempted.borrow_mut().push(name.into());
@@ -165,25 +173,20 @@ fn an_update_leaves_the_current_version_and_collects_the_generations_behind_it()
         format!(".staging-{}", fingerprint("d")),
         "unexpected".to_owned(),
     ]);
+    // A listing is read in one stable order, whatever the directory returned.
+    let expected = vec![
+        format!(".staging-{}", fingerprint("d")),
+        fingerprint("b"),
+        fingerprint("c"),
+    ];
     assert_eq!(
         collect(&versions, &only_current()),
         Collected {
-            removed: vec![
-                fingerprint("b"),
-                fingerprint("c"),
-                format!(".staging-{}", fingerprint("d")),
-            ],
+            removed: expected.clone(),
             failures: Vec::new(),
         }
     );
-    assert_eq!(
-        *versions.attempted.borrow(),
-        vec![
-            fingerprint("b"),
-            fingerprint("c"),
-            format!(".staging-{}", fingerprint("d")),
-        ]
-    );
+    assert_eq!(*versions.attempted.borrow(), expected);
 }
 
 #[test]
@@ -212,6 +215,48 @@ fn a_refused_removal_is_reported_and_does_not_stop_the_others() {
             failures: vec![(fingerprint("b"), "permission denied".into())],
         }
     );
+}
+
+/// APFS accepts only valid UTF-8, so no test on this machine can create such an
+/// entry; the split is exercised through `listing`, the way `staging.rs` tests
+/// its own rejection of a name it cannot create either.
+#[test]
+fn an_entry_with_no_name_is_reported_and_the_obsolete_version_beside_it_still_goes() {
+    let odd = OsString::from_vec(vec![0xff]);
+    let versions = FakeVersions::holding_entries(vec![
+        OsString::from(fingerprint("a")),
+        OsString::from(fingerprint("b")),
+        odd.clone(),
+    ]);
+    let collected = collect(&versions, &only_current());
+
+    assert_eq!(collected.removed, vec![fingerprint("b")]);
+    assert_eq!(*versions.attempted.borrow(), vec![fingerprint("b")]);
+    assert_eq!(collected.failures.len(), 1);
+    assert_eq!(collected.failures[0].0, odd.to_string_lossy());
+    assert!(collected.failures[0].1.contains("left in place"));
+}
+
+#[test]
+fn a_failed_retirement_keeps_its_runtime_until_a_later_reconciliation_sees_it_through() {
+    let current = fingerprint("a");
+    let old = fingerprint("b");
+
+    // The retry's own reconciliation reads the failed attempt's fence before it
+    // asks the old gateway again, so it still describes an unfinished
+    // retirement even once the replacement is up.
+    let during_retry = retained_runtimes(&current, &current, None, Some(&evidence("b", false)));
+    let versions = FakeVersions::holding(&[current.clone(), old.clone()]);
+    assert_eq!(
+        collect(&versions, &during_retry).removed,
+        Vec::<String>::new()
+    );
+    assert!(versions.attempted.borrow().is_empty());
+
+    // The next reconciliation reads the acknowledgement the retry wrote.
+    let afterwards = retained_runtimes(&current, &current, None, Some(&evidence("b", true)));
+    let versions = FakeVersions::holding(&[current, old.clone()]);
+    assert_eq!(collect(&versions, &afterwards).removed, vec![old]);
 }
 
 #[test]
@@ -263,10 +308,10 @@ fn the_real_directory_removes_a_published_tree_and_keeps_the_current_one() {
     let attempt = fixture.version(&format!(".staging-{}", fingerprint("c")));
     let directory = LabelDirectory::at(&fixture.0);
 
-    let mut names = directory.names().unwrap();
-    names.sort();
+    let listed = directory.list().unwrap();
+    assert_eq!(listed.passed_over, Vec::new());
     assert_eq!(
-        names,
+        listed.names,
         vec![
             format!(".staging-{}", fingerprint("c")),
             fingerprint("a"),

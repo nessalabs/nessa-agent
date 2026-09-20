@@ -16,9 +16,12 @@
 //!                            -> RuntimeVersions    (effect: read and remove)
 //! ```
 //! Arrows mean calls. Nothing here returns a failure to `register`: a gateway
-//! that is up matters more than disk that was not reclaimed.
+//! that is up matters more than disk that was not reclaimed. Nothing that one
+//! entry does stops the pass either — a refused removal, or an entry that
+//! cannot even be named, is reported and stepped over.
 use super::control::RetirementEvidence;
 use std::{
+    ffi::OsString,
     fs,
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
@@ -113,10 +116,49 @@ fn sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
+/// One reading of a label's runtime directory.
+///
+/// An entry whose name is not text is still an entry: it is not a name this
+/// host writes, so the rule would leave it alone anyway, and it must not take
+/// the recognised versions beside it down with it. It is kept apart from the
+/// names rather than dropped, so that what was passed over is still said.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct Listing {
+    /// Every entry that has a name, in a stable order.
+    pub names: Vec<String>,
+    /// Entries that could not be named, as lossy text, and why they were
+    /// passed over.
+    pub passed_over: Vec<(String, String)>,
+}
+
+/// Splits what a directory holds into names and entries that have none.
+///
+/// Separate from the reading so the non-UTF-8 case can be tested at all: APFS
+/// accepts only valid UTF-8, so no test on this machine can create such an
+/// entry, and `staging.rs` keeps its own representation test for the same
+/// reason.
+fn listing(entries: Vec<OsString>) -> Listing {
+    let mut listing = Listing::default();
+    for entry in entries {
+        match entry.into_string() {
+            Ok(name) => listing.names.push(name),
+            Err(raw) => listing.passed_over.push((
+                raw.to_string_lossy().into_owned(),
+                "Staged runtime entry has no valid UTF-8 name and was left in place".into(),
+            )),
+        }
+    }
+    // Directory order is whatever the filesystem says; a stable order keeps
+    // what this reports, and what its tests observe, the same every time.
+    listing.names.sort();
+    listing.passed_over.sort();
+    listing
+}
+
 /// A label's runtime directory, as collection needs it.
 pub(super) trait RuntimeVersions {
-    /// The names of every entry, published or not.
-    fn names(&self) -> Result<Vec<String>, String>;
+    /// Everything the directory holds, published or not.
+    fn list(&self) -> Result<Listing, String>;
     /// Removes one entry and everything below it.
     fn remove(&self, name: &str) -> Result<(), String>;
 }
@@ -125,25 +167,28 @@ pub(super) trait RuntimeVersions {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct Collected {
     pub removed: Vec<String>,
-    /// Entry name and why it could not be removed, with an empty name when the
-    /// directory itself could not be read.
+    /// Entry name and why it was not removed: a removal that failed, an entry
+    /// that could not be named, or an empty name when the directory itself
+    /// could not be read.
     pub failures: Vec<(String, String)>,
 }
 
 /// Removes every entry the rule allows, and keeps going past the ones it cannot.
 ///
 /// One failed removal says nothing about the next: a version whose permissions
-/// were changed by hand does not make the version beside it unremovable.
+/// were changed by hand does not make the version beside it unremovable. The
+/// same holds one level up — an entry that cannot even be named is reported and
+/// stepped over, never a reason to collect nothing.
 pub(super) fn collect(versions: &impl RuntimeVersions, retained: &RetainedRuntimes) -> Collected {
     let mut collected = Collected::default();
-    let names = match versions.names() {
-        Ok(names) => names,
+    let listing = match versions.list() {
+        Ok(listing) => listing,
         Err(error) => {
             collected.failures.push((String::new(), error));
             return collected;
         }
     };
-    for name in names {
+    for name in listing.names {
         if !removable(&name, retained) {
             continue;
         }
@@ -152,6 +197,7 @@ pub(super) fn collect(versions: &impl RuntimeVersions, retained: &RetainedRuntim
             Err(error) => collected.failures.push((name, error)),
         }
     }
+    collected.failures.extend(listing.passed_over);
     collected
 }
 
@@ -165,21 +211,12 @@ impl LabelDirectory {
 }
 
 impl RuntimeVersions for LabelDirectory {
-    fn names(&self) -> Result<Vec<String>, String> {
-        let mut names = Vec::new();
+    fn list(&self) -> Result<Listing, String> {
+        let mut entries = Vec::new();
         for entry in fs::read_dir(&self.0).map_err(|error| error.to_string())? {
-            let entry = entry.map_err(|error| error.to_string())?;
-            names.push(
-                entry
-                    .file_name()
-                    .into_string()
-                    .map_err(|_| "Runtime names must be valid UTF-8".to_owned())?,
-            );
+            entries.push(entry.map_err(|error| error.to_string())?.file_name());
         }
-        // Directory order is whatever the filesystem says; a stable order keeps
-        // what this reports, and what its tests observe, the same every time.
-        names.sort();
-        Ok(names)
+        Ok(listing(entries))
     }
     fn remove(&self, name: &str) -> Result<(), String> {
         let path = self.0.join(name);
