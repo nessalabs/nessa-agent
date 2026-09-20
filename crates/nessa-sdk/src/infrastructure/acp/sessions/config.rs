@@ -60,8 +60,20 @@ pub struct AcpConfig {
     /// restricted to this policy; the selected profile must support every configured scope. An
     /// answer still requires verified caller attribution and audit delivery.
     pub permissions: PermissionOfferPolicy,
-    /// Total deadline for ACP initialization and session creation or restoration. Must be
-    /// positive and fit the runtime clock; represented as a Duration, not an integer number of
+    /// Deadline for the child to answer `initialize`, measured from the moment the process is
+    /// spawned. This interval is the operating system's rather than the provider's: it covers
+    /// `exec`, any first-execution scan of a newly written executable, and the runtime's own
+    /// boot. A freshly installed or updated runtime is scanned on first use and can take tens of
+    /// seconds longer than the same executable a second time, so size this for the cold case.
+    /// Expiry fails with [`AgentError::StartupDeadline`] naming
+    /// [`AgentStartupPhase::Initialize`](crate::application::agent_execution::agents::AgentStartupPhase::Initialize).
+    /// Must be positive and fit the runtime clock.
+    pub first_frame_timeout: Duration,
+    /// Deadline for protocol work after the child has answered `initialize`: session creation or
+    /// restoration, and session configuration. It starts when that answer arrives, so it is not
+    /// reduced by a slow launch, and it does not need to allow for one. Expiry fails with
+    /// [`AgentError::StartupDeadline`] naming the step that was still waiting. Must be positive
+    /// and fit the runtime clock; represented as a Duration, not an integer number of
     /// milliseconds.
     pub startup_timeout: Duration,
     /// None leaves execution unbounded in time (the default policy).
@@ -145,13 +157,17 @@ impl AcpConfig {
                 "ACP workspace must be valid UTF-8".into(),
             ));
         }
-        if [self.startup_timeout, self.shutdown_grace, self.kill_timeout]
-            .iter()
-            .chain(self.execution_timeout.iter())
-            .any(|duration| {
-                duration.is_zero() || tokio::time::Instant::now().checked_add(*duration).is_none()
-            })
-            || !(1..=4096).contains(&self.event_capacity)
+        if [
+            self.first_frame_timeout,
+            self.startup_timeout,
+            self.shutdown_grace,
+            self.kill_timeout,
+        ]
+        .iter()
+        .chain(self.execution_timeout.iter())
+        .any(|duration| {
+            duration.is_zero() || tokio::time::Instant::now().checked_add(*duration).is_none()
+        }) || !(1..=4096).contains(&self.event_capacity)
             || !(1024..=16 * 1024 * 1024).contains(&self.max_frame_bytes)
         {
             return Err(AgentError::Configuration(

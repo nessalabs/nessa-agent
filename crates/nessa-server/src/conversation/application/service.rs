@@ -5,7 +5,7 @@ use super::{
         ConversationPendingMode, ConversationReorderOutcome, ConversationRuntime, ConversationView,
         SubmissionReceipt,
     },
-    ConversationError, ConversationRepository,
+    ConversationError, ConversationRepository, RuntimeReadiness,
 };
 use crate::conversation::domain::{Conversation, ConversationId};
 use futures_util::{future::join_all, FutureExt};
@@ -112,6 +112,9 @@ struct Inner {
     creation: Mutex<()>,
     retirement: OnceLock<ActionContext>,
     admission: RwLock<()>,
+    // None when nothing prepares the runtime, which is an explicit no-op rather
+    // than a wrapper that always returns immediately.
+    readiness: Option<Arc<dyn RuntimeReadiness>>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -209,8 +212,20 @@ impl ConversationService {
                 creation: Mutex::new(()),
                 retirement: OnceLock::new(),
                 admission: RwLock::new(()),
+                readiness: None,
             }),
         })
+    }
+    /// Join one-time runtime preparation instead of racing it.
+    ///
+    /// Without this the first conversation on a cold runtime pays the operating
+    /// system's first-execution scan itself, inside the caller's request, even
+    /// when something else is already paying it.
+    pub fn with_runtime_readiness(mut self, readiness: Arc<dyn RuntimeReadiness>) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("runtime readiness is set before the service is shared")
+            .readiness = Some(readiness);
+        self
     }
     /// Persist ownership before opening a provider. Repeating the same UUID never changes its owner.
     pub async fn create(
@@ -461,6 +476,14 @@ impl ConversationService {
                                 let retryable = matches!(error, StorageError::Busy | StorageError::Io(_));
                                 OpeningFailure { cause: ConversationError::Storage(error), _cleanup: None, retryable }
                             })?;
+                            // Join any one-time preparation already paying for
+                            // the operating system's first-execution scan. This
+                            // is after the storage lease is held and before the
+                            // provider is launched, so the conversation neither
+                            // starts a second cold launch nor loses its place.
+                            if let Some(readiness) = &service.inner.readiness {
+                                readiness.wait().await;
+                            }
                             let agent = Agent::new(service.inner.provider.clone(), manager)
                                 .await
                                 .map_err(|error| {

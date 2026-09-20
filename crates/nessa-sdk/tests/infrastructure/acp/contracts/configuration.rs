@@ -197,6 +197,7 @@ fn native_configuration_cannot_enable_model_false_tools_or_extended_limits() {
 async fn startup_deadline_cleans_up_an_initialized_process_that_never_replies() {
     let _process_slot = process_test_slot().await;
     let (root, mut config, model) = test_acp_configuration("startup-stall", 16);
+    config.first_frame_timeout = Duration::from_secs(30);
     config.startup_timeout = Duration::from_secs(30);
     let binding = ClaudeAcpProvider::new(
         config,
@@ -222,6 +223,79 @@ async fn startup_deadline_cleans_up_an_initialized_process_that_never_replies() 
         AgentStartupPhase::Initialize,
         AgentStartupContext::New,
     ))));
+    assert_gone(&root, "pid");
+}
+
+/// A slow launch must not eat the protocol budget, and a generous launch budget
+/// must not become a generous protocol budget. The two are separate intervals:
+/// the second starts when the child answers `initialize`.
+#[tokio::test]
+async fn the_launch_budget_and_the_protocol_budget_are_spent_separately() {
+    let _process_slot = process_test_slot().await;
+    // A launch allowance far larger than the protocol allowance, as a cold
+    // runtime needs. The session step must still be held to the small one.
+    let (root, mut config, model) = test_acp_configuration("new-session-stall", 16);
+    config.first_frame_timeout = Duration::from_secs(600);
+    config.startup_timeout = Duration::from_secs(30);
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(RecordingAudit::default()),
+    )
+    .unwrap();
+    let opening = tokio::spawn(async move { binding.open(None).await });
+    wait_for_file(&root, "new-session-wait").await;
+    tokio::time::pause();
+    // Past the protocol budget but nowhere near the launch budget. A single
+    // shared deadline, or one carried over from the launch, would not fire.
+    tokio::time::advance(Duration::from_secs(31)).await;
+    tokio::time::resume();
+    let error = timeout(Duration::from_secs(5), opening)
+        .await
+        .unwrap()
+        .unwrap()
+        .err()
+        .expect("the session step is held to the protocol budget");
+    assert_eq!(
+        error.cause(),
+        &AgentError::StartupDeadline(AgentStartupStep::new(
+            AgentStartupPhase::Session,
+            AgentStartupContext::New,
+        ))
+    );
+    assert_gone(&root, "pid");
+}
+
+/// The other direction: a launch slower than the protocol budget is not a
+/// failure, because the time before the child's first answer is the operating
+/// system's. The child here sleeps well past `startup_timeout` before reading
+/// anything, and startup still completes.
+#[tokio::test]
+async fn a_launch_slower_than_the_protocol_budget_still_starts() {
+    let _process_slot = process_test_slot().await;
+    let (root, mut config, model) = test_acp_configuration("slow-launch", 16);
+    config.first_frame_timeout = Duration::from_secs(30);
+    // Smaller than the child's own launch delay. Charging the launch against
+    // this budget is exactly the reported failure.
+    config.startup_timeout = Duration::from_millis(1500);
+    let binding = ClaudeAcpProvider::new(
+        config,
+        &model,
+        TokenLimits::new(900, 100).unwrap(),
+        Arc::new(RecordingAudit::default()),
+    )
+    .unwrap();
+    let opened = timeout(Duration::from_secs(20), binding.open(None))
+        .await
+        .unwrap()
+        .expect("a slow launch is not a protocol failure");
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
     assert_gone(&root, "pid");
 }
 
@@ -280,6 +354,7 @@ async fn startup_deadline_names_the_step_that_ran_out_of_budget() {
     ] {
         let restored = context.restores_saved_session();
         let (root, mut config, model) = test_acp_configuration(mode, 16);
+        config.first_frame_timeout = Duration::from_secs(30);
         config.startup_timeout = Duration::from_secs(30);
         let restore = restored.then(|| ExecutionSessionId::new("restored-context").unwrap());
         if let Some(id) = &restore {
@@ -409,6 +484,7 @@ async fn configuration_deadline_closes_the_known_context_with_deadline_evidence(
     let _slot = process_test_slot().await;
     let audit = Arc::new(RecordingAudit::default());
     let (root, mut config, model) = test_acp_configuration("configuration-stall", 16);
+    config.first_frame_timeout = Duration::from_secs(30);
     config.startup_timeout = Duration::from_secs(30);
     let binding = ClaudeAcpProvider::new(
         config,

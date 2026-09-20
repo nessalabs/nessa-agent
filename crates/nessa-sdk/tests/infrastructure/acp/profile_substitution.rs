@@ -275,6 +275,7 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
         tools_enabled: true,
         mcp_servers: Vec::new(),
         permissions: PermissionOfferPolicy::once_only(),
+        first_frame_timeout: Duration::from_secs(10),
         startup_timeout: Duration::from_secs(10),
         execution_timeout: Some(Duration::from_secs(2)),
         shutdown_grace: Duration::from_millis(100),

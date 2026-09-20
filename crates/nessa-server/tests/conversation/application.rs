@@ -3,7 +3,7 @@ use super::{
     ConversationCaller, ConversationCreation, ConversationCreationAudit,
     ConversationCreationAuditRecord, ConversationDisposition, ConversationError,
     ConversationFuture, ConversationLimits, ConversationMessageStatus, ConversationOwnershipState,
-    ConversationRepository, ConversationService, SubmissionMode,
+    ConversationRepository, ConversationService, RuntimeReadiness, SubmissionMode,
 };
 use crate::{
     conversation::domain::{Conversation, ConversationId},
@@ -1022,6 +1022,67 @@ impl AgentProvider for UncertainOpenProvider {
         })
     }
 }
+/// Preparation the conversation must wait for, and which records whether the
+/// conversation reached the provider before that wait finished.
+struct GatedReadiness {
+    release: Mutex<Option<oneshot::Receiver<()>>>,
+    waited: AtomicBool,
+}
+impl RuntimeReadiness for GatedReadiness {
+    fn wait(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            self.waited.store(true, Ordering::SeqCst);
+            let release = self.release.lock().unwrap().take();
+            if let Some(release) = release {
+                let _ = release.await;
+            }
+        })
+    }
+}
+
+/// A first message arriving while the runtime is still being prepared waits for
+/// that work instead of launching a second cold provider of its own.
+#[tokio::test]
+async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let (release, gate) = oneshot::channel();
+    let readiness = Arc::new(GatedReadiness {
+        release: Mutex::new(Some(gate)),
+        waited: AtomicBool::new(false),
+    });
+    let service = ConversationService::new(
+        Arc::new(Provider(provider.clone())),
+        storage,
+        repository,
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap()
+    .with_runtime_readiness(readiness.clone());
+    let id = id();
+    let creating = tokio::spawn({
+        let service = service.clone();
+        let id = id.clone();
+        async move { service.create(id, caller("panel", "first")).await }
+    });
+    // The conversation is held at the gate, so it has not launched a provider:
+    // the preparation already in flight is the only launch.
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while !readiness.waited.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the opening gate waits for preparation");
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+    release.send(()).unwrap();
+    creating.await.unwrap().unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    service.shutdown().await.unwrap();
+}
+
 fn startup_deadline() -> AgentError {
     AgentError::StartupDeadline(AgentStartupStep::new(
         AgentStartupPhase::Session,

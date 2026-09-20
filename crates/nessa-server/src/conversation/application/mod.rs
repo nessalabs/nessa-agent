@@ -10,7 +10,7 @@ pub use error::ConversationError;
 pub use ports::{
     ConversationCreation, ConversationCreationAudit, ConversationCreationAuditRecord,
     ConversationCreationCause, ConversationCreationDisposition, ConversationFuture,
-    ConversationOwnershipState, ConversationRepository,
+    ConversationOwnershipState, ConversationRepository, RuntimeReadiness,
 };
 pub use service::{ConversationCaller, ConversationLimits, ConversationService, SubmissionMode};
 pub use view::{

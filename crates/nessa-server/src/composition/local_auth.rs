@@ -1,5 +1,10 @@
 //! Local product dependency factory. Provider choices stay outside route handlers.
 use crate::{
+    agent_warm_up::{
+        application::AgentWarmUp,
+        domain::RuntimeFingerprint,
+        infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
+    },
     agents::infrastructure::{AgentLaunchFiles, LocalAgentProbe},
     app::ports::Clock as ServerClock,
     browser_session::adapters::PersistentSessions,
@@ -41,12 +46,20 @@ impl Clock for SystemClock {
     }
 }
 
+/// Everything composition built that the server lifecycle, rather than a route,
+/// has to own. The warm-up is started once the gateway is listening, so it
+/// cannot be started here.
+pub(super) struct LocalProduct {
+    pub(super) routes: ProductRouteState,
+    pub(super) warm_up: Option<AgentWarmUp>,
+}
+
 /// Construct the guarded product route from a previously initialized local registry.
 pub(super) fn product_state(
     config: &Environment,
     uptime: Arc<dyn ServerClock>,
     bundle: Option<&std::path::Path>,
-) -> Result<ProductRouteState, RunError> {
+) -> Result<LocalProduct, RunError> {
     let directory = config
         .auth_directory
         .as_ref()
@@ -118,6 +131,7 @@ pub(super) fn product_state(
         .map_err(setup_error)?,
     ));
     product.browser_http_allowed = config.browser_http_allowed();
+    let mut warm_up = None;
     if let Some(agent) = &settings.agent {
         let root = directory
             .parent()
@@ -139,6 +153,33 @@ pub(super) fn product_state(
             DurableConversationCreationAudit::new(root.join("audit").join("creation"))
                 .map_err(|error| RunError::Agent(error.to_string()))?,
         );
+        // What a first-execution scan is paid for is the files that would be
+        // run. The desktop host stages each runtime under its own directory,
+        // so an install or an update changes these paths, which is exactly when
+        // the scan happens again.
+        let runtime = RuntimeFingerprint::new(
+            &agent.node.to_string_lossy(),
+            &agent.acp_entry.to_string_lossy(),
+            &agent.model,
+        )
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+        let prepared = AgentWarmUp::new(
+            provider.clone(),
+            // A throwaway context: the warm-up must not leave a snapshot on
+            // disk and must not take an exclusive lease on a conversation a
+            // user owns.
+            Arc::new(nessa_sdk::infrastructure::session_storage::InMemoryStorage::new()),
+            Arc::new(
+                FileWarmUpRecords::new(root.join("warm-up"))
+                    .map_err(|error| RunError::Agent(error.to_string()))?,
+            ),
+            Arc::new(
+                DurableWarmUpAudit::new(root.join("audit").join("warm-up"))
+                    .map_err(|error| RunError::Agent(error.to_string()))?,
+            ),
+            clock.clone(),
+            runtime,
+        );
         let service = ConversationService::new(
             provider,
             storage,
@@ -151,10 +192,15 @@ pub(super) fn product_state(
             },
             Some(agent.workspace.to_string_lossy().into_owned()),
         )
-        .map_err(|error| RunError::Agent(error.to_string()))?;
+        .map_err(|error| RunError::Agent(error.to_string()))?
+        .with_runtime_readiness(Arc::new(super::warm_up::PreparedRuntime(prepared.clone())));
+        warm_up = Some(prepared);
         product = product.with_conversations(Arc::new(service));
     }
-    Ok(product)
+    Ok(LocalProduct {
+        routes: product,
+        warm_up,
+    })
 }
 
 fn setup_error(error: impl std::fmt::Display) -> RunError {

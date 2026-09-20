@@ -63,6 +63,11 @@ def tool(name="Write"):
 if mode == "startup-stall":
     time.sleep(20)
     sys.exit(0)
+if mode == "slow-launch":
+    # Stands in for the operating system scanning a freshly written runtime on
+    # its first execution: nothing is read or written until this passes, so the
+    # delay lands entirely before the child's first frame.
+    time.sleep(3)
 if mode == "ignore-stop":
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     def reap(_signal, _frame):

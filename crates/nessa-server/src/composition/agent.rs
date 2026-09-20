@@ -125,6 +125,7 @@ mod build {
         fs::File,
         path::{Path, PathBuf},
         sync::Arc,
+        time::Duration,
     };
     /// The launch configuration composition injects, separated from resolving
     /// what goes into it so a test can read back the values actually used.
@@ -144,6 +145,11 @@ mod build {
             tools_enabled: config.tools_enabled,
             mcp_servers: config.mcp_servers.clone(),
             permissions: PermissionOfferPolicy::once_only(),
+            // Spawning is the operating system's work: a runtime staged by
+            // a fresh install or an update is scanned on its first
+            // execution, which on a slow disk takes far longer than any
+            // protocol step. Protocol work keeps the tighter budget.
+            first_frame_timeout: Duration::from_secs(120),
             // From protocol/defaults/agent-startup-budgets.json, which the
             // client compiles in too: a client that gives up before the gateway
             // has finished failing never sees the typed answer.
