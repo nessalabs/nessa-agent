@@ -538,8 +538,9 @@ its messages can refer to them. `domain/value_objects/` describe a file
 `Caller` behind an action, and one `UploadTicket` with its five-minute
 `TicketLifetime`; `domain/entities/` owns the `Hold`, one conversation keeping
 one stored file and remembering the file that was uploaded to produce it;
-`domain/aggregates/` owns the `TicketBook`, where single use, expiry, withdrawal
-and the bound on outstanding tickets are decided together. `application/` owns
+`domain/aggregates/` owns the `TicketBook`, where single use, expiry, replacement
+by the same request made again, withdrawal, and the bounds on outstanding
+tickets (in all, per organization, per conversation) are decided together. `application/` owns
 `AttachmentService` and its ports: `AttachmentStore` and `StagedUpload` for
 bytes, `AttachmentAudit` for evidence, `ImageNormalizer` for turning an uploaded
 image into the one that is kept, `ConversationOwnership` for asking who owns a

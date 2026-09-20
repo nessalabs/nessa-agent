@@ -338,7 +338,11 @@ path, so the 64 KiB product socket never carries them.
    `digest`, `mimeType` and `size`, and nothing needs sending. Otherwise it is
    `state: "upload_required"` with a `ticket` and `expiresAtMs`. The fields that do
    not apply are `null`: a stored answer never carries a ticket, and a ticket never
-   carries a reference.
+   carries a reference. One request holds one ticket: repeating `attachment.begin`
+   with the same `requestId`, conversation and file replaces the earlier ticket,
+   which stops working. The gateway keeps only a fingerprint of a ticket, so it
+   cannot hand the first one out again; a caller repeats a `begin` because the
+   answer never reached it, and then nobody ever knew the first ticket.
 2. `PUT /attachments` sends the bytes as the request body with the ticket in the
    `x-nessa-upload-ticket` header. The route authenticates nobody: the ticket is
    the whole authority. It is single use and is spent the moment it is presented,
@@ -353,13 +357,24 @@ path, so the 64 KiB product socket never carries them.
    under the byte limit. An image already inside every limit is kept byte for
    byte. The encoding is read from the bytes, not from `mimeType`. HEIC, AVIF and
    camera RAW are read where the operating system provides a decoder, which today
-   is macOS. `unsupported_image` (415) means the bytes are not a readable image,
-   or the model has no recorded image limits; `image_too_large` (413) means no
-   legible version fits.
+   is macOS; a client may declare them as `image/x-adobe-dng`, `image/x-canon-cr3`
+   and the like, and anything declared `image/*` is normalized.
+   `unsupported_image` (415) means the bytes are not a readable image;
+   `image_input_unsupported` (415) means nothing is wrong with the image, but the
+   selected model records no image limits and so is offered no images, which is
+   the same code `conversation.send` gives for the same fact; `image_too_large`
+   (413) means no legible version fits. What the normalizer answers is kept only
+   if a message could name it: one of the four encodings below, at most 5 MiB.
 
 Limits: a ticket lives five minutes and is refused after `expiresAtMs`; at most 64
-are outstanding at once; a file is 1 byte to 20 MiB; four uploads run at once;
-one transfer has 120 seconds. Storage takes any media type. What a message may
+are outstanding at once, 32 for one organization and 16 for one conversation,
+and tickets whose time has passed are cleared out by every `begin` and every
+upload, whoever makes it; a file is 1 byte to 64 MiB, which is what the image
+library reads, so a camera's raw file fits; four transfers run at once, across
+every caller (this gateway serves one organization, and a caller refused for
+want of a slot keeps its ticket); two images are normalized at once, because
+each holds a whole upload and its pixels in memory while transfers stream to
+disk; one transfer has 120 seconds. Storage takes any media type. What a message may
 refer to is narrower: PNG, JPEG, GIF or WebP, at most 5 MiB each, 10 images and
 10 MiB in one message.
 
@@ -374,28 +389,64 @@ or `agent_not_configured`. The upload fails with `{"code": …}`:
 
 | Status | `code` | Meaning |
 | --- | --- | --- |
-| 401 | `ticket_invalid` | Missing, malformed, repeated, unknown, used, expired, or withdrawn ticket. |
+| 401 | `ticket_invalid` | Missing, malformed, repeated, unknown, used, expired, replaced, or withdrawn ticket. |
 | 400 | `size_mismatch` | More or fewer bytes than described, or a `Content-Length` that already disagrees. A long body is cut off at the first byte too many. |
 | 422 | `digest_mismatch` | The right number of bytes, hashing to something else. |
 | 400 | `upload_interrupted` | The body ended early. |
 | 408 | `upload_timeout` | The transfer did not finish in time. |
 | 415 | `unsupported_image` | Declared an image, but not one the gateway can decode. |
+| 415 | `image_input_unsupported` | The selected model is offered no images. Nothing is wrong with the upload. |
 | 413 | `image_too_large` | An image that cannot be brought under the selected model's limits. |
 | 503 | `storage_unavailable` | Storing or normalizing failed, or no agent is configured. |
 | 503 | `audit_unavailable` | The upload was good but could not be recorded, so it was not kept. |
+| 409 | `attachment_not_kept` | The upload was good, but its conversation let go of its files before it was kept. Begin again. |
 | 503 | `temporarily_unavailable` | Too many uploads in progress. The ticket was **not** spent; retry with it. |
 
 Every row except the last and the unknown-ticket cases spends the ticket. A refusal
 that could not itself be recorded adds `"audit": "unavailable"` beside its `code`.
 
+Every answer, a refused origin included, carries `Vary: origin`. The audit trail
+names a refusal by the same word as its `code` above.
+
+A hold is one conversation keeping one stored file, digest and media type
+together. The same bytes kept as two types are two holds on one copy, so
+declaring a file again as something else never takes away an image a sent turn
+names; uploading a file the conversation already keeps changes nothing and is
+recorded as already held. A hold is written pending, its creation is recorded,
+and only then does it become usable: `attachment.begin` never answers `stored`,
+and `conversation.send` never accepts a reference, for a hold whose evidence is
+not committed. An upload that fails after that point takes back its own pending
+hold and no other, and the trail says so (`attachment_hold_reverted`).
+
 A conversation holds what was uploaded into it until it closes. Closing withdraws
-its unused tickets, releases its holds, and removes bytes nothing else holds; if
-that cleanup or its audit record fails, `conversation.close` answers
-`attachment_cleanup_unavailable` and the conversation is still closed. An upload
-that was never sent is not expired on its own. Every transition (hold created,
-upload refused, ticket expired or withdrawn, hold released, bytes removed) is
-committed to private audit storage under `attachments/audit/` with its target,
-both digests, cause, initiator and correlation.
+its unused tickets, releases its holds, pending ones included, and removes bytes
+nothing else holds. It does this from the ownership record, so it happens even
+when the agent cannot be opened or closed (no room for another live
+conversation, a provider that will not start); the close then reports the
+agent's failure, and the files are still let go. If the cleanup or its audit
+record fails, `conversation.close` answers `attachment_cleanup_unavailable` and
+the conversation is still closed; if the agent failed as well, the agent's code
+is the one answered and both failures are kept in the gateway's own error and
+log. Closing is not final: a conversation can be reopened and nothing in its
+ownership record says it was closed, so uploads after a close are held like any
+others until the next close. A retry of a turn the agent already has does not
+depend on its upload still being held: the same images recover the original
+delivery and any others are `submission_conflict`. An upload that was never sent
+is not expired on its own. Every transition (ticket issued, replaced, expired or
+withdrawn; upload refused; hold created, already held, reverted or released;
+bytes removed) is committed to private audit storage under `attachments/audit/`
+with its target, both digests, cause, initiator and correlation.
+
+Known limits. A ticket outlives the revocation of the credential that was given
+it, for at most its five minutes: the upload route authenticates nobody, and
+re-deciding access there would be a second, weaker copy of the socket's
+authorization rather than the same one. What such a ticket can do is fixed when
+it is issued: put one described file into one conversation of its own caller.
+The provider limits one request to 32 MB, and an agent that resends earlier
+turns' images can reach that in a long, image-heavy conversation. Stored images
+are typically a few hundred KB at the 2000 px target, which is why this is a
+limitation today and not a guard. A pending hold left by a crash stays invisible
+until the same file is uploaded again or its conversation closes.
 
 ## Reorder waiting messages
 
