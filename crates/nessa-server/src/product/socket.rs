@@ -331,17 +331,24 @@ async fn run_authenticated<S>(
                 // Admission authorizes one operation against committed state.
                 // Its response may finish after revocation; the next request
                 // and idle liveness check observe the new revision.
-                let control = matches!(frame.method.as_str(), "conversation.close" | "conversation.answer" | "conversation.cancel" | "conversation.remove" | "conversation.reorder" | "attachment.begin");
+                let control = matches!(frame.method.as_str(), "conversation.close" | "conversation.answer" | "conversation.cancel" | "conversation.remove" | "conversation.reorder");
                 if requests.len() >= if control { 20 } else { 16 } {
                     if send_error(state.settings.write_timeout(), &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
                     continue;
                 }
                 // Detached commands retain a shared permit through completion,
                 // so reconnecting cannot accumulate unlimited admitted tasks.
-                // Controls have separate capacity from reads and provider opens.
-                // Beginning an upload is one: it opens no provider, and staging
-                // a file must not wait behind a conversation that is starting.
-                let capacity = if control { &state.controls } else { &state.requests };
+                // Controls have separate capacity from reads and provider opens,
+                // and so does beginning an upload: it opens no provider, so it
+                // does not wait behind a conversation that is starting, and its
+                // own storage and audit work never takes a control's place.
+                let capacity = if control {
+                    &state.controls
+                } else if frame.method == "attachment.begin" {
+                    &state.upload_begins
+                } else {
+                    &state.requests
+                };
                 let Ok(permit) = capacity.clone().try_acquire_owned() else {
                     if send_error(state.settings.write_timeout(), &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
                     continue;

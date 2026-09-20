@@ -208,6 +208,47 @@ mod attachment_gateway {
         drop(held);
     }
 
+    #[tokio::test]
+    async fn beginning_uploads_and_controls_never_take_each_others_place() {
+        let fixture = Fixture::new(AttachmentLimits::default());
+        let state = attachment_state(&fixture);
+        let session = chat_session(&state, "owner-phone").await;
+        let (socket, mut peer) = test_socket(None);
+        let task = tokio::spawn(run_authenticated(socket, state.clone(), session));
+        let close = || json!({"conversationId": CONVERSATION, "requestId": "close-1"});
+
+        // Every begin slot taken, as a stalled audit sink would leave them: a
+        // begin is turned away, and a close is still admitted and answered by
+        // its own service rather than by capacity.
+        let begins = state.upload_begins.clone().acquire_many_owned(16).await;
+        send_command(&peer, "begin", "attachment.begin", begin(BYTES, "text/plain"));
+        assert_eq!(
+            response(&mut peer).await["error"]["code"],
+            "temporarily_unavailable"
+        );
+        assert_eq!(state.controls.available_permits(), 32);
+        send_command(&peer, "close", "conversation.close", close());
+        assert_eq!(
+            response(&mut peer).await["error"]["code"],
+            "agent_not_configured"
+        );
+        drop(begins);
+
+        // And the other way about: with every control slot taken, a begin is
+        // still admitted.
+        let controls = state.controls.clone().acquire_many_owned(32).await;
+        send_command(&peer, "close-2", "conversation.close", close());
+        assert_eq!(
+            response(&mut peer).await["error"]["code"],
+            "temporarily_unavailable"
+        );
+        send_command(&peer, "begin-2", "attachment.begin", begin(BYTES, "text/plain"));
+        assert_eq!(response(&mut peer).await["payload"]["state"], "upload_required");
+        drop(controls);
+        drop(peer.input);
+        task.await.unwrap();
+    }
+
     /// One HTTP/1.1 exchange over a real connection to the real router.
     async fn exchange(address: std::net::SocketAddr, head: String, body: &[u8]) -> String {
         let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();

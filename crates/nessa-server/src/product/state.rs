@@ -26,6 +26,11 @@ pub struct ProductRouteState {
     pub(crate) browser_session_origin: Option<String>,
     pub(crate) requests: Arc<Semaphore>,
     pub(crate) controls: Arc<Semaphore>,
+    /// Beginning an upload has capacity of its own. It opens no provider, so it
+    /// does not belong behind reads and opens; and it sweeps tickets, reads
+    /// holds, and writes audit records, so it must never be what keeps a
+    /// permission answer or a close from being admitted.
+    pub(crate) upload_begins: Arc<Semaphore>,
     pub(crate) settings: SessionSettings,
     pub(crate) gateway: Resource,
     pub(crate) audience: AudienceId,
@@ -97,6 +102,7 @@ impl ProductRouteState {
             settings: SessionSettings::default(),
             requests: Arc::new(Semaphore::new(128)),
             controls: Arc::new(Semaphore::new(32)),
+            upload_begins: Arc::new(Semaphore::new(16)),
             gateway: Resource::new(gateway_organization_id, gateway_id),
             audience,
             verifier: dependencies.verifier,
