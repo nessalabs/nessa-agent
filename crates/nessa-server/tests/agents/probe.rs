@@ -385,4 +385,3 @@ fn an_agent_composition_resolved_nothing_for_is_one_with_nothing_to_launch() {
     assert!(!configured.configured(AgentId::Codex));
     assert!(!probe(None, None, None).configured(AgentId::Claude));
 }
-
