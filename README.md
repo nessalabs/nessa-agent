@@ -184,6 +184,7 @@ and `just release` there.
 | `pnpm sdk:check` | Run SDK formatting, Clippy, tests, and warnings-denied Rustdoc |
 | `pnpm check` | Run the same frontend, Rust crate, SDK, MCP, and desktop checks composed in CI |
 | `pnpm typecheck` | `tsc --noEmit` |
+| `pnpm ui:check` | Confirm the vendored UI matches `nessa-ui-revision` (offline, runs before `typecheck`, `dev`, `build`, `test`) |
 | `pnpm ui:types` | Reconcile the vendored UI with `nessa-ui-revision` |
 
 ### Settings
@@ -441,8 +442,17 @@ The chat kit lives in [`nessalabs/nessa_ui`](https://github.com/nessalabs/nessa_
 `.vendor/nessa_ui`. That directory is filled by `scripts/ensure-nessa-ui.mjs`
 before install: a sibling `nessa_ui` (or the original imessage worktree) is
 symlinked when it contains the commit in `nessa-ui-revision`; otherwise the repo
-is cloned at that reviewed commit. Existing linked checkouts are never switched
-automatically. Update the revision file deliberately when adopting UI changes.
+is cloned at that reviewed commit. When the pin moves, the script advances a managed
+clone on its own, as long as it carries no local edits. A symlinked sibling checkout
+is never switched: the script stops and says so. Update the revision file
+deliberately when adopting UI changes.
+
+pnpm skips `preinstall` when the lockfile is already satisfied, so a pull that only
+moves the pin leaves `pnpm install` doing nothing. `pnpm ui:types` is the reliable
+way to advance. To make a stale clone impossible to miss, `typecheck`, `dev`,
+`build`, and `test` each start with `pnpm ui:check`, a single offline `git rev-parse`
+against the pin. A stale or missing `.vendor` then fails with one message naming
+`pnpm ui:types` instead of type errors in files nobody touched.
 
 ```
 "@nessa-ui/react": "link:.vendor/nessa_ui/packages/react"
