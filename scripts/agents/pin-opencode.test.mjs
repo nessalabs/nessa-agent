@@ -11,6 +11,16 @@ import {
   sameBinaryUnderDifferentClaims,
 } from "./pin-opencode.mjs"
 
+/**
+ * Bytes that begin the way a program does, which pinning now requires.
+ *
+ * ELF, because these fixtures stand in for the Linux packages and one magic
+ * number is enough to be the thing rather than merely the right length.
+ */
+function program(tail = "") {
+  return Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46]), Buffer.from(tail)])
+}
+
 /** What the executable entry's bytes hash to, which is now what pinning returns. */
 function sha256(contents) {
   return createHash("sha256").update(contents).digest("hex")
@@ -30,9 +40,9 @@ function archive(t, build) {
 
 test("a package holding the executable as a file is pinnable", (t) => {
   const tarball = archive(t, (contents) => {
-    writeFileSync(join(contents, "package/bin/opencode"), "binary")
+    writeFileSync(join(contents, "package/bin/opencode"), program("binary"))
   })
-  assert.equal(executableDigest(tarball), sha256("binary"))
+  assert.equal(executableDigest(tarball), sha256(program("binary")))
 })
 
 test("a package holding it as a symbolic link is not", (t) => {
@@ -89,11 +99,41 @@ test("a package whose entries are written with a leading ./ is pinnable", (t) =>
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const contents = join(root, "contents")
   mkdirSync(join(contents, "package/bin"), { recursive: true })
-  writeFileSync(join(contents, "package/bin/opencode"), "binary")
+  writeFileSync(join(contents, "package/bin/opencode"), program("binary"))
   const tarball = join(root, "archive.tgz")
   execFileSync("tar", ["-czf", tarball, "-C", contents, "./package"])
 
-  assert.equal(executableDigest(tarball), sha256("binary"))
+  assert.equal(executableDigest(tarball), sha256(program("binary")))
+})
+
+test("a package holding a file that is not a program is not pinnable", (t) => {
+  // The failure that succeeds. Every one of these archives holds a
+  // `package.json`, and an entry naming it would pass every other check here
+  // and then be installed and reported as the tested Opencode runtime.
+  const tarball = archive(t, (contents) => {
+    writeFileSync(
+      join(contents, "package/bin/opencode"),
+      JSON.stringify({ name: "opencode", bin: { opencode: "./bin/opencode" } }),
+    )
+  })
+  assert.equal(executableDigest(tarball), null)
+})
+
+test("a program in any of the shapes these platforms ship is pinnable", (t) => {
+  // Mach-O, thin in either byte order and fat. Linux is covered by every other
+  // test in this file; these are the ones a macOS package would arrive as, and
+  // refusing one of them would refuse a real release.
+  for (const magic of [
+    [0xcf, 0xfa, 0xed, 0xfe],
+    [0xfe, 0xed, 0xfa, 0xcf],
+    [0xca, 0xfe, 0xba, 0xbe],
+  ]) {
+    const bytes = Buffer.from([...magic, 0x00])
+    const tarball = archive(t, (contents) => {
+      writeFileSync(join(contents, "package/bin/opencode"), bytes)
+    })
+    assert.equal(executableDigest(tarball), sha256(bytes), `${magic}`)
+  }
 })
 
 /** An archive on disk, with npm's own checksums for exactly those bytes. */

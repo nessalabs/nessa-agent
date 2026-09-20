@@ -191,6 +191,42 @@ fn every_pin_names_one_version() {
     }
 }
 
+/// Where Opencode keeps its executable inside every one of its packages.
+///
+/// The generator's own constant, written here as well rather than shared:
+/// this test exists to catch a file that no longer agrees with the generator,
+/// so reading the value from the thing under suspicion would prove nothing.
+const OPENCODE_EXECUTABLE: &str = "package/bin/opencode";
+
+/// The entry each pin names is Opencode's executable and not some other file in
+/// the same archive.
+///
+/// The worst of the three claims an archive URL is checked against, because it
+/// is the one that fails by succeeding. A wrong version is offered to a machine
+/// that then installs the wrong thing loudly; a wrong entry passes the digest
+/// check untouched — the *archive* is still the pinned one — and unpacks,
+/// records and reports a file that is not a program. `package/package.json` is
+/// a real entry of every one of these archives, and pinning it would have
+/// `install-agent` announce a hundred and forty bytes of JSON as the tested
+/// Opencode runtime.
+///
+/// The generator writes one constant into all nine entries, so this is the
+/// same kind of witness as the `libc` and `avx2` ones above: it catches a
+/// hand-edited pin file, which is what it is for. What it cannot catch is a
+/// release that moved its executable — for that the generator refuses at
+/// generation time, where the bytes are in hand.
+#[test]
+fn every_pin_names_opencodes_own_executable() {
+    for release in releases_for(&opencode()).expect("the pinned releases parse") {
+        let package = package_named_by(release.archive_url().as_str());
+        assert_eq!(
+            release.executable().as_str(),
+            OPENCODE_EXECUTABLE,
+            "{package} pins an entry that is not opencode's executable"
+        );
+    }
+}
+
 #[test]
 fn each_build_is_pinned_once() {
     // Two pins a single machine could not tell apart would make which archive

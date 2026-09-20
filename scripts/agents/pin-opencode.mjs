@@ -144,6 +144,27 @@ const PLATFORMS = [
 // of writing a pin that installs nothing.
 const EXECUTABLE = "package/bin/opencode"
 
+// What the first bytes of a program look like on the platforms this script
+// pins. ELF for Linux; Mach-O for macOS, thin in either byte order and fat,
+// because a universal binary is a legal thing for a vendor to ship even where
+// Opencode currently does not.
+//
+// Deliberately no PE: no Windows build is pinned, and listing a magic number
+// for a platform nothing has ever generated would read as support that does
+// not exist.
+const PROGRAM_MAGIC = [
+  [0x7f, 0x45, 0x4c, 0x46],
+  [0xcf, 0xfa, 0xed, 0xfe],
+  [0xfe, 0xed, 0xfa, 0xcf],
+  [0xca, 0xfe, 0xba, 0xbe],
+  [0xbe, 0xba, 0xfe, 0xca],
+]
+
+// Whether `bytes` begins the way a program does.
+function isProgram(bytes) {
+  return PROGRAM_MAGIC.some((magic) => magic.every((byte, at) => bytes[at] === byte))
+}
+
 async function json(url) {
   const response = await fetch(url)
   if (!response.ok) throw new Error(`${url} answered ${response.status}`)
@@ -188,6 +209,14 @@ async function digestOf(url, scratch) {
 // every platform — which is the exact failure this function exists to make
 // impossible. The maintainer running this script is the only person who can
 // still do something about it.
+//
+// And the bytes are checked to be a program, because the worst version of this
+// failure is the one that succeeds. Every one of these archives holds a
+// `package/package.json`; an entry naming that passes the mode check, passes
+// the size check, unpacks, records and gets reported as the installed runtime
+// — a hundred and forty bytes of JSON announced as the tested Opencode. Four
+// magic bytes are the whole of the check and they are already in hand here,
+// which is the only moment in this script they are.
 export function executableDigest(archive) {
   // Listed with the platform's own tar rather than a dependency: this script
   // runs on a maintainer's machine, not in the app.
@@ -220,7 +249,9 @@ export function executableDigest(archive) {
     // nothing about them: two archives can differ in a `package.json` field and
     // hold the same binary, which is the case [`sameBinaryUnderDifferentClaims`]
     // exists to catch.
-    return createHash("sha256").update(readFileSync(entry)).digest("hex")
+    const bytes = readFileSync(entry)
+    if (!isProgram(bytes)) return null
+    return createHash("sha256").update(bytes).digest("hex")
   } finally {
     // The entry is a hundred megabytes, and this runs once per platform.
     rmSync(extracted, { recursive: true, force: true })
