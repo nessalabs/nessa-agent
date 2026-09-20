@@ -314,6 +314,34 @@ fn the_probe_this_server_really_builds_asks_codex_about_its_own_store() {
 }
 
 #[test]
+fn the_probe_this_server_really_builds_offers_codex_no_environment_sign_in() {
+    // Readiness has to describe the machine the launch would produce. Codex's
+    // app-server builds its authentication with the environment key switched
+    // off, so a key sitting in this server's environment signs nothing in —
+    // `codex login status` answers "not logged in" on a machine where one is
+    // the only thing set. Counting it made setup report ready and the launch
+    // then refuse.
+    //
+    // So the source is not merely unset here, it does not exist: composition
+    // resolves Codex's sign-in from its own file and its own store, and from
+    // nothing this process was started with. Nothing is read to check that —
+    // building the probe stats nothing and reads no credential.
+    let probe = LocalAgentProbe::from_environment(HashMap::new());
+    let codex = probe
+        .sign_in
+        .get(&AgentId::Codex)
+        .expect("this server is configured for Codex");
+    assert!(
+        codex.environment.is_none(),
+        "an environment key is a Codex sign-in the launch cannot reproduce"
+    );
+    // And the two sources that do answer for Codex are both still there, so
+    // this is a source removed rather than an agent left with nowhere to look.
+    assert!(codex.credentials.is_some() || std::env::var_os("HOME").is_none());
+    assert!(codex.vendor_store.is_some());
+}
+
+#[test]
 fn an_adapter_that_is_not_there_is_never_read_as_a_signed_out_account() {
     // Codex answers "nothing is signed in" with exit status 1, and its launcher
     // answers "I could not start" with the same one. Running it anyway would

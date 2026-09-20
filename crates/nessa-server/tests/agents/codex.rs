@@ -8,18 +8,6 @@
 use super::*;
 
 #[test]
-fn both_variables_the_launcher_passes_through_count_as_a_sign_in() {
-    // Codex reads CODEX_API_KEY first and falls back to OPENAI_API_KEY, and the
-    // binding passes both through. A machine holding only the second one is
-    // signed in and must not be sent to authenticate again.
-    assert_eq!(
-        CREDENTIAL_VARIABLES,
-        ["CODEX_API_KEY", "OPENAI_API_KEY"],
-        "the launcher passes both of these through; the probe must read both"
-    );
-}
-
-#[test]
 fn the_file_asked_about_is_the_one_codex_writes_a_chatgpt_login_into() {
     // Codex has no keychain item: an API key and the tokens from a ChatGPT
     // login both land in this one file, which is why asking about it is the

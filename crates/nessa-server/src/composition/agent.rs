@@ -237,6 +237,16 @@ fn output_tokens() -> u32 {
 /// has to be named. The vendor-specific entries are each agent's own
 /// directory variable: naming both for both agents would be shorter and
 /// would also hand each agent a pointer into the other's configuration.
+///
+/// Nothing here tells an agent *how* to sign in. Codex's adapter will take a
+/// `DEFAULT_AUTH_REQUEST` and sign itself in from the environment key at
+/// startup, which makes an environment-only key work — and does it by writing
+/// that key, in plaintext, into the user's own `auth.json` under `CODEX_HOME`,
+/// where it then outlives the variable and is used in preference to it. A
+/// gateway starting an agent must not move the operator's credential onto the
+/// user's disk, so it is not asked for. Setting
+/// `cli_auth_credentials_store = "ephemeral"` does not avoid the write, which
+/// was checked against the pinned adapter rather than assumed.
 fn process_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
     let mut environment = BTreeMap::new();
     let vendor = match agent {
@@ -248,57 +258,6 @@ fn process_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
             environment.insert(key.into(), value);
         }
     }
-    if let Some((key, value)) = sign_in_instruction(agent, &credential_environment(agent)) {
-        environment.insert(key.into(), value.into());
-    }
-    environment
-}
-
-/// What an agent has to be *told* about the credential it was handed, beyond
-/// being handed it.
-///
-/// Codex only reaches for a key in its environment when it is asked to sign in
-/// that way. Its adapter takes that request from the client's ACP
-/// `authenticate` or from this variable at startup, and Nessa's shared worker
-/// sends no `authenticate` — the protocol layer is one runtime for every vendor
-/// and signing in is not something it does. So without this, a machine whose
-/// only Codex credential is `OPENAI_API_KEY` starts the agent, is offered as
-/// signed in by setup, and then refuses every `session/new` with
-/// "Authentication required": the readiness answer and the launch describing
-/// different machines.
-///
-/// `api-key` is the only method that works unattended. The others open a
-/// browser or print a device code, which is not something a gateway starting an
-/// agent can complete.
-///
-/// No key travels in this value. The adapter reads the key itself out of the
-/// environment it was started with, which is the one this is added to.
-fn sign_in_instruction(
-    agent: AgentId,
-    credentials: &BTreeMap<OsString, OsString>,
-) -> Option<(&'static str, &'static str)> {
-    match agent {
-        AgentId::Codex if !credentials.is_empty() => {
-            Some(("DEFAULT_AUTH_REQUEST", r#"{"methodId":"api-key"}"#))
-        }
-        // Claude's harness reads its own credential without being asked, and an
-        // agent handed no credential at all has nothing to be told.
-        AgentId::Claude | AgentId::Codex => None,
-    }
-}
-
-/// Exactly what a launched agent's environment is, for anything that has to
-/// ask about the agent rather than start it.
-///
-/// The readiness probe runs the agent's own tool to ask whether it is
-/// signed in, and an answer from a different environment is an answer about
-/// a different installation: `CODEX_HOME` decides which account it reads,
-/// and the session-bus variables decide whether a keyring can be opened at
-/// all. Inheriting this server's whole environment would let the probe find
-/// a sign-in the launch then cannot use.
-pub(super) fn launch_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
-    let mut environment = process_environment(agent);
-    environment.extend(credential_environment(agent));
     environment
 }
 
@@ -315,6 +274,21 @@ fn credential_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
             environment.insert((*key).into(), value);
         }
     }
+    environment
+}
+
+/// Exactly what a launched agent's environment is, for anything that has to
+/// ask about the agent rather than start it.
+///
+/// The readiness probe runs the agent's own tool to ask whether it is signed
+/// in, and an answer from a different environment is an answer about a
+/// different installation: `CODEX_HOME` decides which account it reads, and the
+/// session-bus variables decide whether a keyring can be opened at all.
+/// Inheriting this server's whole environment would let the probe find a
+/// sign-in the launch then cannot use.
+pub(super) fn launch_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
+    let mut environment = process_environment(agent);
+    environment.extend(credential_environment(agent));
     environment
 }
 

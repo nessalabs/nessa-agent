@@ -90,6 +90,19 @@ context selector; `credential_environment` carries `CODEX_API_KEY` and
 browser and nobody watching it, and signing in is the desktop's business, done
 before an agent is offered at all.
 
+Those two variables are passed through because they are the operator's to set,
+not because they sign Codex in. The app-server the adapter runs builds its
+authentication with the environment key switched off, so `codex login status`
+answers "not logged in" on a machine where one of them is the only thing set,
+and Nessa's readiness answers the same. The adapter will take a
+`DEFAULT_AUTH_REQUEST` and sign itself in from that key at startup, which is why
+this binding does not set one: that login writes the key, in plaintext, into the
+user's own `auth.json` under `CODEX_HOME`, where it outlives the variable and is
+then preferred to it. Setting `cli_auth_credentials_store` to `ephemeral` does
+not avoid the write — checked against the pinned adapter rather than assumed. A
+gateway starting an agent must not move an operator's credential onto the user's
+disk, so signing Codex in remains `codex login`.
+
 ## Install and run
 
 The local harness manifest and lockfile pin `@agentclientprotocol/codex-acp`

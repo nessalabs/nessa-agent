@@ -52,6 +52,11 @@ type VendorStore = fn(Option<&AgentLaunchFiles>) -> Result<bool, ProbeFailure>;
 struct SignIn {
     /// A non-empty credential in this process's environment, which is what a
     /// machine account signs in with. Held only to know that it is there.
+    ///
+    /// `None` for an agent whose own launch would not accept one. A variable
+    /// this server holds and the agent then refuses is not a sign-in, and
+    /// reporting it as one is the readiness answer and the launch describing
+    /// different machines.
     environment: Option<String>,
     /// The agent's own credentials file, when this host has somewhere to look.
     credentials: Option<PathBuf>,
@@ -112,7 +117,14 @@ impl LocalAgentProbe {
                 (
                     AgentId::Codex,
                     SignIn {
-                        environment: codex::environment_credential(),
+                        // Deliberately none. Codex's app-server builds its
+                        // authentication with the environment key switched off,
+                        // so a key in this server's environment is not a Codex
+                        // sign-in however it got there — `codex login status`
+                        // says "not logged in" with one set and nothing else.
+                        // Counting it here would be readiness describing a
+                        // machine the launch cannot reproduce.
+                        environment: None,
                         credentials: codex::credentials_path(),
                         vendor_store: Some(codex_sign_in),
                     },
