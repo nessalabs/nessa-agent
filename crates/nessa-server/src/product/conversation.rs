@@ -223,6 +223,12 @@ fn error_code(error: &ConversationError) -> &'static str {
         ConversationError::InvalidInput => "invalid_request",
         ConversationError::ImagesUnsupported => "image_input_unsupported",
         ConversationError::AttachmentNotFound => "attachment_not_found",
+        // Everything was let go and only the evidence of it was lost, so there
+        // is no cleanup left to retry: the answer is the lost record.
+        ConversationError::AttachmentCleanup {
+            storage_failures: 0,
+            ..
+        } => "audit_unavailable",
         // The conversation did close; what failed is cleanup the caller can retry.
         ConversationError::AttachmentRelease(_) | ConversationError::AttachmentCleanup { .. } => {
             "attachment_cleanup_unavailable"

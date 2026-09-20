@@ -46,226 +46,243 @@ fn target(stored: bool) -> Value {
     })
 }
 
+/// Who did it: the caller a ticket was issued to, and the caller who closed.
+fn uploader() -> Value {
+    json!({"kind": "caller", "principalId": "owner", "surfaceId": "panel"})
+}
+fn closer() -> Value {
+    json!({"kind": "caller", "principalId": "closer", "surfaceId": "phone"})
+}
+/// The file was already kept: the target pairs what this ticket uploaded with
+/// what the conversation holds.
+fn already_held_target() -> Value {
+    let mut paired = target(true);
+    paired["uploaded"] = target(false)["uploaded"].clone();
+    paired
+}
+
 #[test]
 fn every_record_names_its_target_transition_cause_initiator_and_request() {
-    let uploader = json!({"kind": "caller", "principalId": "owner", "surfaceId": "panel"});
-    let closer = json!({"kind": "caller", "principalId": "closer", "surfaceId": "phone"});
-    assert_eq!(
-        record_value(&AttachmentAuditRecord::HoldCreated { hold: hold() }),
-        json!({
-            "kind": "attachment_hold_created",
-            "target": target(true),
-            "transition": {"before": "absent", "after": "held"},
-            "cause": "uploaded",
-            "initiator": uploader,
-            "correlationId": "begin-1",
-            "requestedAtMs": 1_000,
-            "uploadedAtMs": 2_000,
-        })
-    );
-    // Permission to upload is itself recorded, with when it runs out.
-    assert_eq!(
-        record_value(&AttachmentAuditRecord::TicketIssued { ticket: ticket() }),
-        json!({
-            "kind": "attachment_ticket_issued",
-            "target": target(false),
-            "transition": {"before": "absent", "after": "ticket_outstanding"},
-            "cause": "upload_requested",
-            "initiator": uploader,
-            "correlationId": "begin-1",
-            "requestedAtMs": 1_000,
-            "expiresAtMs": 301_000,
-        })
-    );
-    assert_eq!(
-        record_value(&AttachmentAuditRecord::TicketReplaced { ticket: ticket() }),
-        json!({
-            "kind": "attachment_ticket_replaced",
-            "target": target(false),
-            "transition": {"before": "ticket_outstanding", "after": "ticket_replaced"},
-            "cause": "upload_requested_again",
-            "initiator": uploader,
-            "correlationId": "begin-1",
-            "requestedAtMs": 1_000,
-            "expiresAtMs": 301_000,
-        })
-    );
-    // The file was already kept: the target pairs what this ticket uploaded
-    // with what the conversation holds, and nothing changed.
-    let mut already = target(true);
-    already["uploaded"] = target(false)["uploaded"].clone();
-    assert_eq!(
-        record_value(&AttachmentAuditRecord::AlreadyHeld {
-            ticket: ticket(),
-            hold: hold(),
-        }),
-        json!({
-            "kind": "attachment_already_held",
-            "target": already,
-            "transition": {"before": "held", "after": "held"},
-            "cause": "uploaded",
-            "initiator": uploader,
-            "correlationId": "begin-1",
-            "requestedAtMs": 1_000,
-            "heldSinceMs": 2_000,
-        })
-    );
-    // Nobody asked for a hold to be taken back, and the record does not say so.
-    assert_eq!(
-        record_value(&AttachmentAuditRecord::HoldReverted {
-            hold: hold(),
-            cause: RevertCause::AuditUnconfirmed,
-        }),
-        json!({
-            "kind": "attachment_hold_reverted",
-            "target": target(true),
-            "transition": {"before": "pending", "after": "absent"},
-            "cause": "audit_unconfirmed",
-            "initiator": {"kind": "automatic"},
-            "uploadedBy": uploader,
-            "correlationId": "begin-1",
-            "requestedAtMs": 1_000,
-        })
-    );
+    for (record, expected) in [
+        (
+            AttachmentAuditRecord::HoldCreated { hold: hold() },
+            json!({
+                "kind": "attachment_hold_created",
+                "target": target(true),
+                "transition": {"before": "absent", "after": "held"},
+                "cause": "uploaded",
+                "initiator": uploader(),
+                "correlationId": "begin-1",
+                "requestedAtMs": 1_000,
+                "uploadedAtMs": 2_000,
+            }),
+        ),
+        // Permission to upload is itself recorded, with when it runs out.
+        (
+            AttachmentAuditRecord::TicketIssued { ticket: ticket() },
+            json!({
+                "kind": "attachment_ticket_issued",
+                "target": target(false),
+                "transition": {"before": "absent", "after": "ticket_outstanding"},
+                "cause": "upload_requested",
+                "initiator": uploader(),
+                "correlationId": "begin-1",
+                "requestedAtMs": 1_000,
+                "expiresAtMs": 301_000,
+            }),
+        ),
+        (
+            AttachmentAuditRecord::TicketReplaced { ticket: ticket() },
+            json!({
+                "kind": "attachment_ticket_replaced",
+                "target": target(false),
+                "transition": {"before": "ticket_outstanding", "after": "ticket_replaced"},
+                "cause": "upload_requested_again",
+                "initiator": uploader(),
+                "correlationId": "begin-1",
+                "requestedAtMs": 1_000,
+                "expiresAtMs": 301_000,
+            }),
+        ),
+        // Nothing changed, and the record says so.
+        (
+            AttachmentAuditRecord::AlreadyHeld {
+                ticket: ticket(),
+                hold: hold(),
+            },
+            json!({
+                "kind": "attachment_already_held",
+                "target": already_held_target(),
+                "transition": {"before": "held", "after": "held"},
+                "cause": "uploaded",
+                "initiator": uploader(),
+                "correlationId": "begin-1",
+                "requestedAtMs": 1_000,
+                "heldSinceMs": 2_000,
+            }),
+        ),
+        // Nobody asked for a hold to be taken back, and none of these say so.
+        (
+            AttachmentAuditRecord::HoldReverted {
+                hold: hold(),
+                cause: RevertCause::AuditUnconfirmed,
+            },
+            json!({
+                "kind": "attachment_hold_reverted",
+                "target": target(true),
+                "transition": {"before": "pending", "after": "absent"},
+                "cause": "audit_unconfirmed",
+                "initiator": {"kind": "automatic"},
+                "uploadedBy": uploader(),
+                "correlationId": "begin-1",
+                "requestedAtMs": 1_000,
+            }),
+        ),
+        (
+            AttachmentAuditRecord::UploadRejected {
+                ticket: ticket(),
+                reason: UploadRejection::DigestMismatch,
+            },
+            json!({
+                "kind": "attachment_upload_rejected",
+                "target": target(false),
+                "transition": {"before": "ticket_outstanding", "after": "ticket_used_without_hold"},
+                "cause": "digest_mismatch",
+                "initiator": uploader(),
+                "correlationId": "begin-1",
+                "requestedAtMs": 1_000,
+                "expiresAtMs": 301_000,
+            }),
+        ),
+        // Nobody expires a ticket, and the record does not pretend somebody did.
+        (
+            AttachmentAuditRecord::TicketExpired { ticket: ticket() },
+            json!({
+                "kind": "attachment_ticket_expired",
+                "target": target(false),
+                "transition": {"before": "ticket_outstanding", "after": "ticket_expired"},
+                "cause": "ticket_lifetime_elapsed",
+                "initiator": {"kind": "automatic"},
+                "issuedTo": uploader(),
+                "correlationId": "begin-1",
+                "requestedAtMs": 1_000,
+                "expiresAtMs": 301_000,
+            }),
+        ),
+        // Withdrawn by the closer, from the caller it had been issued to.
+        (
+            AttachmentAuditRecord::TicketWithdrawn {
+                ticket: ticket(),
+                release: release(),
+            },
+            json!({
+                "kind": "attachment_ticket_withdrawn",
+                "target": target(false),
+                "transition": {"before": "ticket_outstanding", "after": "ticket_withdrawn"},
+                "cause": "conversation_closed",
+                "initiator": closer(),
+                "issuedTo": uploader(),
+                "correlationId": "close-1",
+                "ticketCorrelationId": "begin-1",
+                "requestedAtMs": 3_000,
+            }),
+        ),
+        // The closer released it; whoever uploaded it did not.
+        (
+            AttachmentAuditRecord::HoldReleased {
+                hold: hold(),
+                was: HoldState::Held,
+                release: release(),
+            },
+            json!({
+                "kind": "attachment_hold_released",
+                "target": target(true),
+                "transition": {"before": "held", "after": "absent"},
+                "cause": "conversation_closed",
+                "initiator": closer(),
+                "correlationId": "close-1",
+                "requestedAtMs": 3_000,
+            }),
+        ),
+        // A hold released before its upload finished recording it says so.
+        (
+            AttachmentAuditRecord::HoldReleased {
+                hold: hold(),
+                was: HoldState::Pending,
+                release: release(),
+            },
+            json!({
+                "kind": "attachment_hold_released",
+                "target": target(true),
+                "transition": {"before": "pending", "after": "absent"},
+                "cause": "conversation_closed",
+                "initiator": closer(),
+                "correlationId": "close-1",
+                "requestedAtMs": 3_000,
+            }),
+        ),
+        (
+            AttachmentAuditRecord::BlobRemoved {
+                hold: hold(),
+                release: release(),
+            },
+            json!({
+                "kind": "attachment_bytes_removed",
+                "target": target(true),
+                "transition": {"before": "stored", "after": "absent"},
+                "cause": "last_hold_released",
+                "releaseCause": "conversation_closed",
+                "initiator": closer(),
+                "correlationId": "close-1",
+                "requestedAtMs": 3_000,
+            }),
+        ),
+    ] {
+        assert_eq!(record_value(&record), expected, "{record:?}");
+    }
+
+    // Every reason a hold is taken back has its own word, and none of them
+    // names an initiator: no caller asks for any of this.
     for (cause, name) in [
+        (RevertCause::AuditUnconfirmed, "audit_unconfirmed"),
         (RevertCause::ConfirmationFailed, "confirmation_failed"),
         (RevertCause::RemovedBeforeUsable, "removed_before_usable"),
+        (RevertCause::UploadUnresolved, "upload_unresolved"),
     ] {
-        assert_eq!(
-            record_value(&AttachmentAuditRecord::HoldReverted {
-                hold: hold(),
-                cause,
-            })["cause"],
-            name
-        );
+        let value = record_value(&AttachmentAuditRecord::HoldReverted {
+            hold: hold(),
+            cause,
+        });
+        assert_eq!(value["cause"], name);
+        assert_eq!(value["initiator"], json!({"kind": "automatic"}));
     }
-    assert_eq!(
-        record_value(&AttachmentAuditRecord::UploadRejected {
-            ticket: ticket(),
-            reason: UploadRejection::DigestMismatch,
-        }),
-        json!({
-            "kind": "attachment_upload_rejected",
-            "target": target(false),
-            "transition": {"before": "ticket_outstanding", "after": "ticket_used_without_hold"},
-            "cause": "digest_mismatch",
-            "initiator": uploader,
-            "correlationId": "begin-1",
-            "requestedAtMs": 1_000,
-            "expiresAtMs": 301_000,
-        })
-    );
-    // Nobody expires a ticket, and the record does not pretend somebody did.
-    assert_eq!(
-        record_value(&AttachmentAuditRecord::TicketExpired { ticket: ticket() }),
-        json!({
-            "kind": "attachment_ticket_expired",
-            "target": target(false),
-            "transition": {"before": "ticket_outstanding", "after": "ticket_expired"},
-            "cause": "ticket_lifetime_elapsed",
-            "initiator": {"kind": "automatic"},
-            "issuedTo": uploader,
-            "correlationId": "begin-1",
-            "requestedAtMs": 1_000,
-            "expiresAtMs": 301_000,
-        })
-    );
-    // Withdrawn by the closer, from the caller it had been issued to.
-    assert_eq!(
-        record_value(&AttachmentAuditRecord::TicketWithdrawn {
-            ticket: ticket(),
-            release: release(),
-        }),
-        json!({
-            "kind": "attachment_ticket_withdrawn",
-            "target": target(false),
-            "transition": {"before": "ticket_outstanding", "after": "ticket_withdrawn"},
-            "cause": "conversation_closed",
-            "initiator": closer,
-            "issuedTo": uploader,
-            "correlationId": "close-1",
-            "ticketCorrelationId": "begin-1",
-            "requestedAtMs": 3_000,
-        })
-    );
-    // The closer released it; whoever uploaded it did not.
-    assert_eq!(
-        record_value(&AttachmentAuditRecord::HoldReleased {
-            hold: hold(),
-            was: HoldState::Held,
-            release: release(),
-        }),
-        json!({
-            "kind": "attachment_hold_released",
-            "target": target(true),
-            "transition": {"before": "held", "after": "absent"},
-            "cause": "conversation_closed",
-            "initiator": closer,
-            "correlationId": "close-1",
-            "requestedAtMs": 3_000,
-        })
-    );
-    // A hold released before its upload finished recording it says so.
-    assert_eq!(
-        record_value(&AttachmentAuditRecord::HoldReleased {
-            hold: hold(),
-            was: HoldState::Pending,
-            release: release(),
-        })["transition"],
-        json!({"before": "pending", "after": "absent"})
-    );
-    assert_eq!(
-        record_value(&AttachmentAuditRecord::BlobRemoved {
-            hold: hold(),
-            release: release(),
-        }),
-        json!({
-            "kind": "attachment_bytes_removed",
-            "target": target(true),
-            "transition": {"before": "stored", "after": "absent"},
-            "cause": "last_hold_released",
-            "releaseCause": "conversation_closed",
-            "initiator": closer,
-            "correlationId": "close-1",
-            "requestedAtMs": 3_000,
-        })
-    );
 }
 
 #[test]
 fn every_refusal_has_its_own_name_and_it_is_the_routes_name_for_it() {
     // One word per fact: what the upload route answers is what the trail says.
-    for (reason, wire) in [
+    // `normalization_failed` is the one the route says less about, answering
+    // it as `storage_unavailable`.
+    let named = [
         (UploadRejection::SizeMismatch, "size_mismatch"),
         (UploadRejection::DigestMismatch, "digest_mismatch"),
         (UploadRejection::UploadInterrupted, "upload_interrupted"),
         (UploadRejection::UploadTimeout, "upload_timeout"),
         (UploadRejection::StorageUnavailable, "storage_unavailable"),
+        (UploadRejection::Unresolved, "upload_unresolved"),
         (
             UploadRejection::ImageInputUnsupported,
             "image_input_unsupported",
         ),
         (UploadRejection::UnsupportedImage, "unsupported_image"),
         (UploadRejection::ImageTooLarge, "image_too_large"),
-    ] {
+        (UploadRejection::NormalizationFailed, "normalization_failed"),
+    ];
+    for (reason, wire) in named {
         assert_eq!(rejection(reason), wire);
     }
-    let names: Vec<_> = [
-        UploadRejection::SizeMismatch,
-        UploadRejection::DigestMismatch,
-        UploadRejection::UploadInterrupted,
-        UploadRejection::UploadTimeout,
-        UploadRejection::StorageUnavailable,
-        UploadRejection::ImageInputUnsupported,
-        UploadRejection::UnsupportedImage,
-        UploadRejection::ImageTooLarge,
-        UploadRejection::NormalizationFailed,
-    ]
-    .into_iter()
-    .map(rejection)
-    .collect();
-    let distinct: std::collections::BTreeSet<_> = names.iter().collect();
-    assert_eq!(distinct.len(), names.len());
+    let distinct: std::collections::BTreeSet<_> = named.iter().map(|(_, wire)| *wire).collect();
+    assert_eq!(distinct.len(), named.len());
 }
 
 #[tokio::test]

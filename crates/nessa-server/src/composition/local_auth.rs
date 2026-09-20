@@ -143,9 +143,11 @@ pub(super) fn product_state(
                 .join("attachments"),
             metadata.clone(),
             // The model's own image limits, from the catalog: the one place
-            // they are recorded. Every uploaded image is fitted to them.
+            // they are recorded. Every uploaded image is fitted to them, using
+            // the running system's decoder for the encodings the image library
+            // does not read itself.
             Arc::new(
-                ModelImageNormalizer::new(model.image_input())
+                ModelImageNormalizer::new(model.image_input(), nessa_images::platform_decoder())
                     .map_err(|error| RunError::Agent(format!("model image limits: {error}")))?,
             ),
             clock.clone(),

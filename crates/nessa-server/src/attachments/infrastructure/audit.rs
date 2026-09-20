@@ -78,6 +78,7 @@ fn rejection(reason: UploadRejection) -> &'static str {
         UploadRejection::UploadInterrupted => "upload_interrupted",
         UploadRejection::UploadTimeout => "upload_timeout",
         UploadRejection::StorageUnavailable => "storage_unavailable",
+        UploadRejection::Unresolved => "upload_unresolved",
         UploadRejection::ImageInputUnsupported => "image_input_unsupported",
         UploadRejection::UnsupportedImage => "unsupported_image",
         UploadRejection::ImageTooLarge => "image_too_large",
@@ -96,6 +97,7 @@ fn revert_cause(cause: RevertCause) -> &'static str {
         RevertCause::AuditUnconfirmed => "audit_unconfirmed",
         RevertCause::ConfirmationFailed => "confirmation_failed",
         RevertCause::RemovedBeforeUsable => "removed_before_usable",
+        RevertCause::UploadUnresolved => "upload_unresolved",
     }
 }
 

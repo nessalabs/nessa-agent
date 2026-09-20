@@ -8,6 +8,10 @@ pub enum BeginError {
     /// No such conversation for this caller. Another owner's conversation and
     /// one that does not exist are deliberately the same answer.
     ConversationNotFound,
+    /// The upload says it is an image, and the selected model is offered none,
+    /// so no image is prepared for it. Nothing is wrong with the file; there is
+    /// simply no message that could ever name it.
+    ImagesUnsupported,
     /// As many tickets are outstanding as this gateway allows: in all, for
     /// this organization, or for this conversation.
     Capacity,
@@ -44,11 +48,12 @@ pub enum UploadError {
         reason: UploadRejection,
         evidence: AuditDelivery,
     },
-    /// The upload was good, but it could not be recorded in the audit trail, so
-    /// its hold never became usable and was taken back. `reverted` is false
-    /// when taking it back failed as well; the hold then stays pending, which
-    /// nothing can use.
-    AuditUnavailable { reverted: bool },
+    /// The upload was good and could not be recorded in the audit trail, so it
+    /// is not kept: a hold this upload wrote is taken back, and a file the
+    /// conversation already kept is left exactly as it was. Which of the two
+    /// happened, and how far taking back got, is in the trail and the log; the
+    /// caller's remedy is the same either way, which is to begin again.
+    AuditUnavailable,
     /// The upload's hold was removed before it became usable: its conversation
     /// let go of its files meanwhile, or a concurrent upload of the same file
     /// that had taken the hold over took it back. The creation on record is
@@ -62,12 +67,16 @@ pub enum ReleaseError {
     /// The caller cannot be written down, so nothing was done: letting go of
     /// files in a name no record can carry is not something this context does.
     Unattributable,
-    /// Every part was tried. These did not complete.
+    /// Every part was tried. These did not complete. The two counts answer
+    /// different questions, and the close route answers each with its own code:
+    /// files still in place are a cleanup the caller retries, while files that
+    /// went without evidence are a lost record.
     Incomplete {
         /// Holds or bytes that could not be read or removed. A store that
         /// could not be asked at all counts as one.
         storage_failures: usize,
-        /// Transitions that happened but whose evidence was not acknowledged.
+        /// Transitions that happened but whose evidence was not acknowledged,
+        /// including records the release's audit budget did not reach.
         audit_failures: usize,
     },
 }

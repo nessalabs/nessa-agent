@@ -86,22 +86,22 @@ impl Clock for ManualClock {
 }
 
 /// One record held at the sink until the test lets it go.
-pub(crate) struct AuditGate {
+struct AuditGate {
     /// Which attempt waits, counting from zero.
-    pub(crate) attempt: usize,
-    pub(crate) open: oneshot::Receiver<()>,
+    attempt: usize,
+    open: oneshot::Receiver<()>,
     /// Whether the record is refused once let go, or kept.
-    pub(crate) then_refuse: bool,
+    then_refuse: bool,
 }
 
 /// Keeps every record it acknowledged. Can refuse, can never answer, and can
 /// hold one chosen record at the door while the test does something else.
 #[derive(Default)]
 pub(crate) struct RecordingAudit {
-    pub(crate) gate: Mutex<Option<AuditGate>>,
+    gate: Mutex<Option<AuditGate>>,
     /// Signalled when the gated record has arrived and is waiting.
     pub(crate) entered: Notify,
-    pub(crate) records: Mutex<Vec<AttachmentAuditRecord>>,
+    records: Mutex<Vec<AttachmentAuditRecord>>,
     pub(crate) refusing: AtomicBool,
     pub(crate) stalled: AtomicBool,
     pub(crate) attempts: AtomicUsize,
@@ -110,20 +110,16 @@ pub(crate) struct RecordingAudit {
     pub(crate) recorded: Notify,
 }
 impl RecordingAudit {
-    /// Hold the record of the given attempt (counting every attempt so far
-    /// and from zero) until the returned sender fires or drops.
-    pub(crate) fn hold_attempt(&self, attempt: usize, then_refuse: bool) -> oneshot::Sender<()> {
+    /// Hold the record `skip` records after the next one until the returned
+    /// sender fires or drops, then refuse it or keep it.
+    pub(crate) fn hold_after(&self, skip: usize, then_refuse: bool) -> oneshot::Sender<()> {
         let (release, open) = oneshot::channel();
         *self.gate.lock().unwrap() = Some(AuditGate {
-            attempt,
+            attempt: self.attempts.load(Ordering::SeqCst) + skip,
             open,
             then_refuse,
         });
         release
-    }
-    /// Hold the record `skip` records after the next one.
-    pub(crate) fn hold_after(&self, skip: usize, then_refuse: bool) -> oneshot::Sender<()> {
-        self.hold_attempt(self.attempts.load(Ordering::SeqCst) + skip, then_refuse)
     }
     /// Every record so far, in order, emptying the list.
     pub(crate) fn taken_all(&self) -> Vec<AttachmentAuditRecord> {
@@ -223,37 +219,44 @@ impl TicketSecrets for CountingSecrets {
 
 /// Answers every image the same way, and remembers what it was shown.
 pub(crate) struct StubNormalizer {
-    pub(crate) answer: Mutex<Result<NormalizedImage, NormalizeError>>,
-    pub(crate) seen: Mutex<Vec<(Vec<u8>, String)>>,
+    answer: Mutex<Result<NormalizedImage, NormalizeError>>,
+    offers: bool,
+    pub(crate) seen: Mutex<Vec<Vec<u8>>>,
 }
 impl StubNormalizer {
     pub(crate) fn producing(bytes: &[u8], media_type: &str) -> Self {
+        Self::offering(Ok(NormalizedImage {
+            bytes: bytes.to_vec(),
+            media_type: media_type.into(),
+        }))
+    }
+    pub(crate) fn failing(error: NormalizeError) -> Self {
+        Self::offering(Err(error))
+    }
+    fn offering(answer: Result<NormalizedImage, NormalizeError>) -> Self {
         Self {
-            answer: Mutex::new(Ok(NormalizedImage {
-                bytes: bytes.to_vec(),
-                media_type: media_type.into(),
-            })),
+            answer: Mutex::new(answer),
+            offers: true,
             seen: Mutex::default(),
         }
     }
-    pub(crate) fn failing(error: NormalizeError) -> Self {
+    /// A model with no recorded image limits: it is offered no images, so
+    /// nothing is prepared for it and it is never asked to prepare anything.
+    pub(crate) fn offering_nothing() -> Self {
         Self {
-            answer: Mutex::new(Err(error)),
+            answer: Mutex::new(Err(NormalizeError::NotOffered)),
+            offers: false,
             seen: Mutex::default(),
         }
     }
 }
 impl ImageNormalizer for StubNormalizer {
-    fn normalize<'a>(
-        &'a self,
-        original: Vec<u8>,
-        declared_media_type: &'a str,
-    ) -> NormalizeFuture<'a> {
+    fn offers_images(&self) -> bool {
+        self.offers
+    }
+    fn normalize(&self, original: Vec<u8>) -> NormalizeFuture<'_> {
         Box::pin(async move {
-            self.seen
-                .lock()
-                .unwrap()
-                .push((original, declared_media_type.to_owned()));
+            self.seen.lock().unwrap().push(original);
             self.answer.lock().unwrap().clone()
         })
     }
@@ -262,6 +265,8 @@ impl ImageNormalizer for StubNormalizer {
 /// A body fed by the test: send chunks, send an interruption, drop the sender
 /// to finish, or hold it to stall.
 pub(crate) struct ChannelBody(mpsc::UnboundedReceiver<Result<Vec<u8>, UploadInterrupted>>);
+/// The end a test writes to. Named, because the chunk type is a mouthful and
+/// appears in every signature that hands one over.
 pub(crate) type BodySender = mpsc::UnboundedSender<Result<Vec<u8>, UploadInterrupted>>;
 impl ChannelBody {
     pub(crate) fn open() -> (BodySender, Box<dyn UploadBody>) {
@@ -290,11 +295,18 @@ pub(crate) struct MemoryStore {
     pub(crate) unavailable: AtomicBool,
     pub(crate) keep_fails: Arc<AtomicBool>,
     pub(crate) confirm_fails: AtomicBool,
+    /// Stops the work of an upload dead, after its ticket is spent and its
+    /// pending hold is written: the one thing no failure path of the store can
+    /// report, because nothing is left to report it.
+    pub(crate) confirm_panics: AtomicBool,
     pub(crate) discard_fails: AtomicBool,
     /// Transfers staged and not yet kept or dropped.
     pub(crate) staged: Arc<AtomicUsize>,
     /// Bytes written to staged transfers, ever.
     pub(crate) written: Arc<AtomicU64>,
+    /// Signalled after each write, so a test waits for a transfer to reach a
+    /// point instead of guessing how many turns that takes.
+    wrote: Arc<Notify>,
 }
 struct MemoryRecord {
     hold: Hold,
@@ -329,6 +341,16 @@ impl MemoryStore {
     }
     pub(crate) fn stick(&self, stored: Sha256Digest) {
         self.state.lock().unwrap().stuck.push(stored);
+    }
+    /// Wait until transfers have written at least this many bytes in all.
+    pub(crate) async fn wrote(&self, bytes: u64) {
+        loop {
+            let next = self.wrote.notified();
+            if self.written.load(Ordering::SeqCst) >= bytes {
+                return;
+            }
+            next.await;
+        }
     }
     fn check(&self) -> Result<(), StoreUnavailable> {
         if self.unavailable.load(Ordering::SeqCst) {
@@ -405,6 +427,7 @@ impl AttachmentStore for MemoryStore {
                 keep_fails: self.keep_fails.clone(),
                 staged: self.staged.clone(),
                 written: self.written.clone(),
+                wrote: self.wrote.clone(),
                 bytes: Vec::new(),
                 finished: false,
             }) as Box<dyn StagedUpload>)
@@ -416,6 +439,10 @@ impl AttachmentStore for MemoryStore {
         claim: &'a HoldClaim,
     ) -> PortFuture<'a, Confirmation, StoreUnavailable> {
         Box::pin(async move {
+            assert!(
+                !self.confirm_panics.load(Ordering::SeqCst),
+                "the store stopped while making a hold usable"
+            );
             if self.confirm_fails.load(Ordering::SeqCst) {
                 return Err(StoreUnavailable);
             }
@@ -524,6 +551,7 @@ struct MemoryStaged {
     keep_fails: Arc<AtomicBool>,
     staged: Arc<AtomicUsize>,
     written: Arc<AtomicU64>,
+    wrote: Arc<Notify>,
     bytes: Vec<u8>,
     finished: bool,
 }
@@ -537,6 +565,7 @@ impl StagedUpload for MemoryStaged {
         Box::pin(async move {
             self.written.fetch_add(chunk.len() as u64, Ordering::SeqCst);
             self.bytes.extend_from_slice(&chunk);
+            self.wrote.notify_one();
             Ok(())
         })
     }

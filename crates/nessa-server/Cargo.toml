@@ -34,3 +34,6 @@ subtle = "2.6"
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["test-util", "io-util"] }
+# Only to build the pixels a substitute system decoder hands back. The image
+# library this workspace already compiles; nothing new is built.
+image = { version = "0.25.10", default-features = false }

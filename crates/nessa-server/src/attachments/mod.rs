@@ -93,3 +93,7 @@ pub mod application;
 pub mod domain;
 pub mod entrypoint;
 pub mod infrastructure;
+
+#[cfg(test)]
+#[path = "../../tests/attachments/agreement.rs"]
+mod agreement_tests;

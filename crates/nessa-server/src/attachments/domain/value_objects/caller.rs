@@ -10,6 +10,10 @@ use nessa_auth::domain::PrincipalId;
 /// A caller the conversation accepts must be one this context can write down,
 /// or a close would let go of files in a name no record could carry. Evidence
 /// is stored as JSON, which can spell any character.
+///
+/// The domain does not read the SDK's application layer, so it states its own
+/// bound; the application layer, which sees both, refuses to compile if the two
+/// ever stop agreeing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Caller {
     principal_id: PrincipalId,
@@ -17,7 +21,8 @@ pub struct Caller {
     action_id: Box<str>,
 }
 impl Caller {
-    const MAX_BYTES: usize = 256;
+    /// Longest surface or action identifier, in bytes.
+    pub(crate) const MAX_BYTES: usize = 256;
 
     pub fn new(
         principal_id: PrincipalId,

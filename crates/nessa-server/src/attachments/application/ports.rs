@@ -184,11 +184,14 @@ pub type NormalizeFuture<'a> = PortFuture<'a, NormalizedImage, NormalizeError>;
 /// work; it is called with the whole verified upload, once. What it returns is
 /// checked by the caller: it must be an image a message can name.
 pub trait ImageNormalizer: Send + Sync {
-    fn normalize<'a>(
-        &'a self,
-        original: Vec<u8>,
-        declared_media_type: &'a str,
-    ) -> NormalizeFuture<'a>;
+    /// Whether any image is prepared for the selected model. `false` is a model
+    /// with no recorded image limits: it is offered none, so an upload that
+    /// says it is an image is refused before a ticket is issued rather than
+    /// normalized into something no message could ever name.
+    fn offers_images(&self) -> bool;
+    /// Fit `original` to the selected model. What the bytes are is read from
+    /// the bytes; the client's declared media type is not an input.
+    fn normalize(&self, original: Vec<u8>) -> NormalizeFuture<'_>;
 }
 
 /// The conversation's owner could not be looked up.
@@ -233,6 +236,9 @@ pub enum UploadRejection {
     UploadTimeout,
     /// The bytes could not be written, published, or held.
     StorageUnavailable,
+    /// The work of this upload stopped without an answer, so what the bytes
+    /// were is unknown. Nothing is claimed about them either way.
+    Unresolved,
     /// The selected model is offered no images, so none is prepared for it.
     ImageInputUnsupported,
     /// Declared an image, but not one this gateway can decode.
@@ -270,6 +276,9 @@ pub enum RevertCause {
     /// made usable: released with its conversation, or taken back by another
     /// upload of the same file.
     RemovedBeforeUsable,
+    /// The work of the upload that wrote it stopped without an answer, so
+    /// nobody was left to finish or undo it.
+    UploadUnresolved,
 }
 
 /// One consequential transition. Each variant carries the whole value it

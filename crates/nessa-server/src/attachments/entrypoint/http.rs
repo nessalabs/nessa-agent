@@ -108,7 +108,7 @@ fn rejected(error: UploadError) -> Response {
             "temporarily_unavailable",
             None,
         ),
-        UploadError::AuditUnavailable { .. } => {
+        UploadError::AuditUnavailable => {
             (StatusCode::SERVICE_UNAVAILABLE, "audit_unavailable", None)
         }
         // The upload was fine and is not kept: its conversation let go of its
@@ -137,6 +137,11 @@ fn rejected(error: UploadError) -> Response {
                 }
                 UploadRejection::StorageUnavailable | UploadRejection::NormalizationFailed => {
                     (StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable")
+                }
+                // The ticket is spent and what became of the bytes is unknown,
+                // which is a different thing to say than that storage failed.
+                UploadRejection::Unresolved => {
+                    (StatusCode::SERVICE_UNAVAILABLE, "upload_unresolved")
                 }
             };
             (status, code, Some(evidence))

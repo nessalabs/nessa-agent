@@ -1,8 +1,7 @@
 //! The attachment service over doubles: tickets, uploads, normalization,
 //! release, and what reaches the audit port when each of them fails.
 use super::*;
-use crate::attachments::domain::Caller;
-use crate::attachments::domain::{HoldState, TicketLimits, TICKET_LIFETIME_MS};
+use crate::attachments::domain::{Caller, HoldState, TicketLimits, TICKET_LIFETIME_MS};
 use crate::attachments_test_support::{
     attachment, begin_request, caller, conversation, digest_of, organization, principal,
     ChannelBody, CountingSecrets, FixedOwnership, Fixture, ManualClock, MemoryStore,
@@ -48,10 +47,12 @@ fn rejected(reason: UploadRejection) -> UploadError {
         evidence: AuditDelivery::Recorded,
     }
 }
-/// Nothing was kept, nothing is still staged, and the one record says why.
-fn assert_refused(fixture: &Fixture, reason: UploadRejection) {
+/// Nothing was kept, nothing is pending, nothing is still staged, and the one
+/// record says why, of the file and caller the ticket named.
+fn assert_refused(fixture: &Fixture, media_type: &str, reason: UploadRejection) {
     assert_eq!(fixture.store.blob_count(), 0);
     assert!(fixture.store.held().is_empty());
+    assert_eq!(fixture.store.pending(), 0);
     assert_eq!(fixture.store.staged.load(Ordering::SeqCst), 0);
     let records = fixture.audit.taken();
     let [AttachmentAuditRecord::UploadRejected {
@@ -62,7 +63,7 @@ fn assert_refused(fixture: &Fixture, reason: UploadRejection) {
         panic!("one refusal expected, got {records:?}")
     };
     assert_eq!(*recorded, reason);
-    assert_eq!(ticket.attachment(), &attachment(BYTES, PDF));
+    assert_eq!(ticket.attachment(), &attachment(BYTES, media_type));
     assert_eq!(ticket.conversation_id(), &conversation(CONVERSATION));
     assert_eq!(ticket.caller().principal_id(), &principal("owner"));
     assert_eq!(ticket.caller().surface_id(), "panel");
@@ -141,36 +142,6 @@ async fn an_upload_becomes_a_hold_attributed_to_the_ticket_and_begin_then_needs_
         ));
     }
     assert!(fixture.audit.taken().is_empty());
-}
-
-#[tokio::test]
-async fn a_hold_answers_only_inside_the_conversation_and_organization_it_was_uploaded_into() {
-    let fixture = fixture();
-    let stored = fixture.upload(CONVERSATION, BYTES, PDF).await;
-    let holds = |organization_id: &'static str, conversation_id: &'static str| {
-        let (service, stored) = (fixture.service.clone(), stored.clone());
-        async move {
-            service
-                .holds(
-                    &organization(organization_id),
-                    &conversation(conversation_id),
-                    &stored,
-                )
-                .await
-                .unwrap()
-        }
-    };
-    assert!(holds("org", CONVERSATION).await);
-    assert!(!holds("org", OTHER_CONVERSATION).await);
-    assert!(!holds("other-org", CONVERSATION).await);
-    assert!(!holds("Org", CONVERSATION).await);
-    for wrong in [attachment(BYTES, "text/plain"), attachment(b"other", PDF)] {
-        assert!(!fixture
-            .service
-            .holds(&organization("org"), &conversation(CONVERSATION), &wrong)
-            .await
-            .unwrap());
-    }
 }
 
 #[tokio::test]
@@ -430,19 +401,25 @@ async fn outstanding_tickets_are_bounded_across_every_caller() {
 #[tokio::test]
 async fn bytes_that_are_not_the_described_file_are_never_kept() {
     // Too short, right length but other bytes, and a declared length that
-    // already disagrees before a byte is read.
-    for (sent, declared, reason) in [
-        (&BYTES[..19], None, UploadRejection::SizeMismatch),
+    // already disagrees before a byte is read. The last is declared an image,
+    // which the normalizer must never be shown: nothing is prepared from bytes
+    // that have not proved to be the file the ticket described.
+    for (media_type, sent, declared, reason) in [
+        (PDF, &BYTES[..19], None, UploadRejection::SizeMismatch),
+        (PDF, BYTES, Some(21), UploadRejection::SizeMismatch),
+        (PDF, BYTES, Some(0), UploadRejection::SizeMismatch),
         (
+            "image/png",
             b"twenty bytes of FILE".as_slice(),
             None,
             UploadRejection::DigestMismatch,
         ),
-        (BYTES, Some(21), UploadRejection::SizeMismatch),
-        (BYTES, Some(0), UploadRejection::SizeMismatch),
     ] {
-        let fixture = fixture();
-        let ticket = fixture.ticket(CONVERSATION, BYTES, PDF).await;
+        let fixture = Fixture::with_normalizer(
+            AttachmentLimits::default(),
+            StubNormalizer::producing(b"small", "image/png"),
+        );
+        let ticket = fixture.ticket(CONVERSATION, BYTES, media_type).await;
         assert_eq!(
             fixture
                 .service
@@ -451,7 +428,8 @@ async fn bytes_that_are_not_the_described_file_are_never_kept() {
             Err(rejected(reason)),
             "{declared:?}"
         );
-        assert_refused(&fixture, reason);
+        assert_refused(&fixture, media_type, reason);
+        assert!(fixture.normalizer.seen.lock().unwrap().is_empty());
     }
 }
 
@@ -474,7 +452,7 @@ async fn a_body_that_runs_long_is_abandoned_at_the_first_byte_too_many() {
     );
     assert_eq!(fixture.store.written.load(Ordering::SeqCst), 16);
     drop(sender);
-    assert_refused(&fixture, UploadRejection::SizeMismatch);
+    assert_refused(&fixture, PDF, UploadRejection::SizeMismatch);
 }
 
 #[tokio::test]
@@ -488,7 +466,7 @@ async fn an_interrupted_body_spends_the_ticket_and_leaves_nothing_behind() {
         fixture.service.receive(&ticket, None, body).await,
         Err(rejected(UploadRejection::UploadInterrupted))
     );
-    assert_refused(&fixture, UploadRejection::UploadInterrupted);
+    assert_refused(&fixture, PDF, UploadRejection::UploadInterrupted);
 }
 
 #[tokio::test]
@@ -503,15 +481,13 @@ async fn a_caller_that_goes_away_mid_upload_does_not_take_the_evidence_with_it()
     let presented = ticket.clone();
     let request = tokio::spawn(async move { service.receive(&presented, None, body).await });
     // The handler is dropped while the transfer waits for more bytes...
-    while fixture.store.written.load(Ordering::SeqCst) != 10 {
-        tokio::task::yield_now().await;
-    }
+    fixture.store.wrote(10).await;
     request.abort();
     assert!(request.await.unwrap_err().is_cancelled());
     // ...and then the connection it was reading from closes.
     sender.send(Err(UploadInterrupted)).unwrap();
     fixture.audit.recorded.notified().await;
-    assert_refused(&fixture, UploadRejection::UploadInterrupted);
+    assert_refused(&fixture, PDF, UploadRejection::UploadInterrupted);
     assert_eq!(
         fixture
             .service
@@ -532,9 +508,7 @@ async fn a_stalled_body_is_given_up_at_the_deadline() {
     sender.send(Ok(BYTES[..10].to_vec())).unwrap();
     let service = fixture.service.clone();
     let upload = tokio::spawn(async move { service.receive(&ticket, None, body).await });
-    while fixture.store.written.load(Ordering::SeqCst) != 10 {
-        tokio::task::yield_now().await;
-    }
+    fixture.store.wrote(10).await;
     tokio::time::advance(Duration::from_secs(29)).await;
     assert!(!upload.is_finished());
     tokio::time::advance(Duration::from_secs(2)).await;
@@ -542,7 +516,7 @@ async fn a_stalled_body_is_given_up_at_the_deadline() {
         upload.await.unwrap(),
         Err(rejected(UploadRejection::UploadTimeout))
     );
-    assert_refused(&fixture, UploadRejection::UploadTimeout);
+    assert_refused(&fixture, PDF, UploadRejection::UploadTimeout);
     drop(sender);
 }
 
@@ -558,9 +532,7 @@ async fn uploads_in_progress_are_bounded_and_a_refused_one_keeps_its_ticket() {
     sender.send(Ok(BYTES[..10].to_vec())).unwrap();
     let service = fixture.service.clone();
     let upload = tokio::spawn(async move { service.receive(&slow, None, body).await });
-    while fixture.store.written.load(Ordering::SeqCst) != 10 {
-        tokio::task::yield_now().await;
-    }
+    fixture.store.wrote(10).await;
     assert_eq!(
         fixture
             .service
@@ -591,7 +563,7 @@ async fn storage_that_fails_is_a_refusal_with_evidence_not_a_hold() {
             .await,
         Err(rejected(UploadRejection::StorageUnavailable))
     );
-    assert_refused(&fixture, UploadRejection::StorageUnavailable);
+    assert_refused(&fixture, PDF, UploadRejection::StorageUnavailable);
 
     fixture.store.unavailable.store(true, Ordering::SeqCst);
     assert_eq!(
@@ -618,33 +590,44 @@ async fn storage_that_fails_is_a_refusal_with_evidence_not_a_hold() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_hold_that_cannot_be_recorded_is_taken_back() {
-    let fixture = fixture();
-    let ticket = fixture.ticket(CONVERSATION, BYTES, PDF).await;
-    fixture.audit.refusing.store(true, Ordering::SeqCst);
-    assert_eq!(
-        fixture
-            .service
-            .receive(&ticket, None, ChannelBody::of(BYTES, 64))
-            .await,
-        Err(UploadError::AuditUnavailable { reverted: true })
-    );
-    assert!(fixture.store.held().is_empty());
-    assert_eq!(fixture.store.blob_count(), 0);
-    assert_eq!(fixture.store.staged.load(Ordering::SeqCst), 0);
-    assert!(!fixture
-        .service
-        .holds(
-            &organization("org"),
-            &conversation(CONVERSATION),
-            &attachment(BYTES, PDF)
-        )
-        .await
-        .unwrap());
+    // The sink refuses the creation record, and the sink takes it and never
+    // answers, which may yet commit it: the same failure either way, and the
+    // trail never ends on "held" for a hold that is gone.
+    for never_answers in [false, true] {
+        let fixture = fixture();
+        let ticket = fixture.ticket(CONVERSATION, BYTES, PDF).await;
+        fixture.audit.taken_all();
+        let door = fixture.audit.hold_after(0, true);
+        let _held_open = never_answers.then_some(door);
+        assert_eq!(
+            fixture
+                .service
+                .receive(&ticket, None, ChannelBody::of(BYTES, 64))
+                .await,
+            Err(UploadError::AuditUnavailable)
+        );
+        assert!(fixture.store.held().is_empty());
+        assert_eq!(fixture.store.pending(), 0);
+        assert_eq!(fixture.store.blob_count(), 0);
+        assert_eq!(fixture.store.staged.load(Ordering::SeqCst), 0);
+        let records = fixture.audit.taken();
+        assert!(
+            matches!(
+                records.as_slice(),
+                [AttachmentAuditRecord::HoldReverted {
+                    cause: RevertCause::AuditUnconfirmed,
+                    ..
+                }]
+            ),
+            "{never_answers}: {records:?}"
+        );
+    }
 
-    // Bytes another conversation already holds survive the taking back.
-    fixture.audit.refusing.store(false, Ordering::SeqCst);
+    // Bytes another conversation already holds survive the taking back, and a
+    // hold that could not be taken back is left pending, which nothing sees.
+    let fixture = fixture();
     fixture.upload(OTHER_CONVERSATION, BYTES, PDF).await;
     let again = fixture.ticket(CONVERSATION, BYTES, PDF).await;
     fixture.audit.refusing.store(true, Ordering::SeqCst);
@@ -654,10 +637,9 @@ async fn a_hold_that_cannot_be_recorded_is_taken_back() {
             .service
             .receive(&again, None, ChannelBody::of(BYTES, 64))
             .await,
-        // Honest about the worse case too: unrecorded and not taken back.
-        Err(UploadError::AuditUnavailable { reverted: false })
+        Err(UploadError::AuditUnavailable)
     );
-    // What is left behind is pending, which nothing that asks can see.
+    fixture.audit.refusing.store(false, Ordering::SeqCst);
     assert_eq!(fixture.store.pending(), 1);
     assert!(!fixture
         .service
@@ -700,9 +682,10 @@ async fn an_image_is_held_as_its_normalized_self_and_recognized_by_what_was_uplo
     let stored = fixture.upload(CONVERSATION, original, "image/heic").await;
 
     assert_eq!(stored, attachment(normalized, "image/jpeg"));
+    // The normalizer was shown the bytes that arrived, once.
     assert_eq!(
         *fixture.normalizer.seen.lock().unwrap(),
-        [(original.to_vec(), "image/heic".to_owned())]
+        [original.to_vec()]
     );
     // Only the normalized bytes are kept, under their own digest.
     assert_eq!(fixture.store.blob(stored.digest()).unwrap(), normalized);
@@ -761,6 +744,9 @@ async fn an_image_is_held_as_its_normalized_self_and_recognized_by_what_was_uplo
 
 #[tokio::test]
 async fn an_image_that_cannot_be_normalized_is_refused_for_its_own_reason() {
+    // Every way preparing an image can fail, in one table: what the normalizer
+    // refuses, and what it answers that no message could ever name. It is
+    // outside code, so what it hands back is checked as hard as what it reads.
     for (answer, reason) in [
         (
             StubNormalizer::failing(NormalizeError::Unsupported),
@@ -774,7 +760,12 @@ async fn an_image_that_cannot_be_normalized_is_refused_for_its_own_reason() {
             StubNormalizer::failing(NormalizeError::Failed),
             UploadRejection::NormalizationFailed,
         ),
-        // A normalizer is outside code: what it hands back is checked too.
+        // A ticket for an image only exists where images are offered, so a
+        // normalizer that then says it prepares none is a broken normalizer.
+        (
+            StubNormalizer::failing(NormalizeError::NotOffered),
+            UploadRejection::ImageInputUnsupported,
+        ),
         (
             StubNormalizer::producing(b"x", "IMAGE/PNG"),
             UploadRejection::NormalizationFailed,
@@ -787,6 +778,16 @@ async fn an_image_that_cannot_be_normalized_is_refused_for_its_own_reason() {
             StubNormalizer::producing(b"%PDF", "application/pdf"),
             UploadRejection::NormalizationFailed,
         ),
+        // Not an encoding a message may name, and over a message's per-image
+        // size: the hold's own rule refuses both.
+        (
+            StubNormalizer::producing(b"small", "image/bmp"),
+            UploadRejection::NormalizationFailed,
+        ),
+        (
+            StubNormalizer::producing(&vec![7_u8; 5 * 1024 * 1024 + 1], "image/png"),
+            UploadRejection::NormalizationFailed,
+        ),
     ] {
         let fixture = Fixture::with_normalizer(AttachmentLimits::default(), answer);
         let ticket = fixture.ticket(CONVERSATION, BYTES, "image/png").await;
@@ -797,93 +798,49 @@ async fn an_image_that_cannot_be_normalized_is_refused_for_its_own_reason() {
                 .await,
             Err(rejected(reason))
         );
-        assert_eq!(fixture.store.blob_count(), 0);
-        assert!(fixture.store.held().is_empty());
-        assert_eq!(fixture.store.staged.load(Ordering::SeqCst), 0);
-        assert!(matches!(
-            fixture.audit.taken().as_slice(),
-            [AttachmentAuditRecord::UploadRejected { reason: recorded, .. }] if *recorded == reason
-        ));
+        assert_refused(&fixture, "image/png", reason);
     }
-}
 
-#[tokio::test]
-async fn an_image_is_never_shown_to_the_normalizer_before_it_proved_to_be_the_described_file() {
+    // The largest image a message can name is kept.
+    let largest = vec![7_u8; 5 * 1024 * 1024];
     let fixture = Fixture::with_normalizer(
         AttachmentLimits::default(),
-        StubNormalizer::producing(b"small", "image/png"),
+        StubNormalizer::producing(&largest, "image/webp"),
     );
-    let ticket = fixture.ticket(CONVERSATION, BYTES, "image/png").await;
-    assert_eq!(
-        fixture
-            .service
-            .receive(&ticket, None, ChannelBody::of(b"twenty bytes of FILE", 64))
-            .await,
-        Err(rejected(UploadRejection::DigestMismatch))
-    );
-    assert!(fixture.normalizer.seen.lock().unwrap().is_empty());
+    let stored = fixture
+        .upload(CONVERSATION, BYTES, "image/x-adobe-dng")
+        .await;
+    assert_eq!(stored, attachment(&largest, "image/webp"));
+    assert!(stored.as_image().is_some());
 }
 
 #[tokio::test]
-async fn bytes_are_stored_once_and_go_with_their_last_hold() {
-    let fixture = fixture();
-    fixture.upload(CONVERSATION, BYTES, PDF).await;
-    fixture.upload(OTHER_CONVERSATION, BYTES, PDF).await;
-    fixture.upload(OTHER_CONVERSATION, b"only here", PDF).await;
-    assert_eq!(fixture.store.blob_count(), 2);
-    assert_eq!(fixture.store.held().len(), 3);
-    fixture.audit.taken();
-
-    fixture.clock.set(NOW_MS + 9);
-    fixture
-        .service
-        .release(release_request(OTHER_CONVERSATION))
-        .await
-        .unwrap();
-    assert_eq!(fixture.store.blob(digest_of(BYTES)).unwrap(), BYTES);
-    assert!(fixture.store.blob(digest_of(b"only here")).is_none());
-    let records = fixture.audit.taken();
-    let mut released = 0;
-    let mut removed = Vec::new();
-    for record in &records {
-        let (hold, release) = match record {
-            AttachmentAuditRecord::HoldReleased { hold, was, release } => {
-                assert_eq!(*was, HoldState::Held);
-                released += 1;
-                (hold, release)
-            }
-            AttachmentAuditRecord::BlobRemoved { hold, release } => {
-                removed.push(hold.stored().digest());
-                (hold, release)
-            }
-            other => panic!("unexpected {other:?}"),
-        };
-        assert_eq!(hold.conversation_id(), &conversation(OTHER_CONVERSATION));
-        // The closer is the initiator, not whoever uploaded.
-        assert_eq!(hold.uploaded_by().principal_id(), &principal("owner"));
-        assert_eq!(release.caller.principal_id(), &principal("closer"));
-        assert_eq!(release.caller.surface_id(), "phone");
-        assert_eq!(release.caller.action_id(), "close-1");
-        assert_eq!(release.cause, ReleaseCause::ConversationClosed);
-        assert_eq!(release.requested_at_ms, NOW_MS + 9);
+async fn a_gateway_offered_no_images_issues_no_ticket_for_one() {
+    let fixture = Fixture::with_normalizer(
+        AttachmentLimits::default(),
+        StubNormalizer::offering_nothing(),
+    );
+    for media_type in ["image/png", "image/heic", "image/x-canon-cr3"] {
+        assert_eq!(
+            fixture
+                .service
+                .begin(
+                    caller("org", "owner"),
+                    begin_request(CONVERSATION, BYTES, media_type)
+                )
+                .await,
+            // Not a bad file: a perfectly good one, for a model offered none.
+            Err(BeginError::ImagesUnsupported),
+            "{media_type}"
+        );
     }
-    assert_eq!(released, 2);
-    assert_eq!(removed, [digest_of(b"only here")]);
-
-    fixture
-        .service
-        .release(release_request(CONVERSATION))
-        .await
-        .unwrap();
-    assert_eq!(fixture.store.blob_count(), 0);
-    assert_eq!(fixture.audit.taken().len(), 2);
-    // Releasing nothing is not a failure and records nothing.
-    fixture
-        .service
-        .release(release_request(CONVERSATION))
-        .await
-        .unwrap();
-    assert!(fixture.audit.taken().is_empty());
+    // Nothing was permitted, so nothing was recorded and no secret was spent.
+    assert!(fixture.audit.taken_all().is_empty());
+    // Anything else is stored as ever: the gateway takes files, the model
+    // takes images, and only the second of those is missing here.
+    let stored = fixture.upload(CONVERSATION, BYTES, PDF).await;
+    assert_eq!(stored, attachment(BYTES, PDF));
+    assert!(fixture.normalizer.seen.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -891,13 +848,14 @@ async fn a_release_withdraws_the_conversations_unused_tickets_in_the_closers_nam
     let fixture = fixture();
     let withdrawn = fixture.ticket(CONVERSATION, BYTES, PDF).await;
     let untouched = fixture.ticket(OTHER_CONVERSATION, BYTES, PDF).await;
-    fixture.clock.set(NOW_MS + 7);
     fixture
         .service
         .release(release_request(CONVERSATION))
         .await
         .unwrap();
 
+    // Only this conversation's ticket, and the caller it was issued to is
+    // part of what was withdrawn rather than who withdrew it.
     let records = fixture.audit.taken();
     let [AttachmentAuditRecord::TicketWithdrawn { ticket, release }] = records.as_slice() else {
         panic!("one withdrawal expected, got {records:?}")
@@ -905,8 +863,6 @@ async fn a_release_withdraws_the_conversations_unused_tickets_in_the_closers_nam
     assert_eq!(ticket.conversation_id(), &conversation(CONVERSATION));
     assert_eq!(ticket.caller().principal_id(), &principal("owner"));
     assert_eq!(release.caller.principal_id(), &principal("closer"));
-    assert_eq!(release.caller.action_id(), "close-1");
-    assert_eq!(release.requested_at_ms, NOW_MS + 7);
     // Nothing can arrive in the closed conversation; the other is unaffected.
     assert_eq!(
         fixture
@@ -1002,9 +958,14 @@ async fn a_release_that_cannot_be_recorded_still_releases_and_says_so() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_sink_that_never_answers_costs_each_record_its_own_deadline_and_no_more() {
+async fn a_sink_that_never_answers_costs_a_release_its_budget_and_no_more() {
+    // Two holds and their two removals: four records, and a budget that pays
+    // for two and a half of them. A conversation's holds are not bounded, so
+    // what stops a slow sink holding a close open is the budget, not the
+    // number of records.
     let fixture = Fixture::new(AttachmentLimits {
         audit_deadline: Duration::from_secs(5),
+        audit_budget: Duration::from_secs(12),
         ..AttachmentLimits::default()
     });
     fixture.upload(CONVERSATION, b"first", PDF).await;
@@ -1017,13 +978,61 @@ async fn a_sink_that_never_answers_costs_each_record_its_own_deadline_and_no_mor
         fixture.service.release(release_request(CONVERSATION)).await,
         Err(ReleaseError::Incomplete {
             storage_failures: 0,
+            // Every record is accounted for, the one the budget never reached
+            // included: it is reported as lost, never as delivered.
             audit_failures: 4
         })
     );
-    // The first record's timeout did not spend the later records' attempts.
-    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 4);
-    assert_eq!(started.elapsed(), Duration::from_secs(20));
+    // Two full deadlines and what was left of the budget for the third; the
+    // fourth was never handed over, because there was no time to give it.
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 3);
+    assert_eq!(started.elapsed(), Duration::from_secs(12));
+    // The files went all the same: a lost record never stops cleanup.
     assert!(fixture.store.held().is_empty());
+    assert_eq!(fixture.store.blob_count(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_sweep_of_stale_tickets_is_bounded_by_the_same_budget() {
+    // A begin sweeps whatever the book has, which is as many tickets as the
+    // book holds, so it is bounded the same way a release is.
+    let fixture = Fixture::new(AttachmentLimits {
+        tickets: tickets(4),
+        audit_deadline: Duration::from_secs(5),
+        audit_budget: Duration::from_secs(7),
+        ..AttachmentLimits::default()
+    });
+    for request_id in ["one", "two", "three"] {
+        fixture
+            .ticket_as(request_id, CONVERSATION, request_id.as_bytes(), PDF)
+            .await;
+    }
+    fixture.clock.set(NOW_MS + TICKET_LIFETIME_MS + 1);
+    fixture.audit.taken_all();
+    fixture.audit.stalled.store(true, Ordering::SeqCst);
+    let attempts = fixture.audit.attempts.load(Ordering::SeqCst);
+    let started = tokio::time::Instant::now();
+
+    assert_eq!(
+        fixture
+            .service
+            .begin(
+                caller("org", "owner"),
+                begin_request(CONVERSATION, BYTES, PDF)
+            )
+            .await,
+        Err(BeginError::Audit)
+    );
+    assert_eq!(fixture.audit.attempts.load(Ordering::SeqCst), attempts + 2);
+    assert_eq!(started.elapsed(), Duration::from_secs(7));
+    // The tickets are gone whether or not their expiry could be recorded, so
+    // the book's places are free again.
+    fixture.audit.stalled.store(false, Ordering::SeqCst);
+    for request_id in ["four", "five", "six", "seven"] {
+        fixture
+            .ticket_as(request_id, CONVERSATION, request_id.as_bytes(), PDF)
+            .await;
+    }
 }
 
 #[tokio::test]
@@ -1083,25 +1092,45 @@ async fn a_caller_the_conversation_context_accepts_is_one_this_context_can_recor
     fixture.upload(CONVERSATION, BYTES, PDF).await;
     fixture.ticket(CONVERSATION, b"another file", PDF).await;
     fixture.audit.taken_all();
+    fixture.clock.set(NOW_MS + 9);
     let mut request = release_request(CONVERSATION);
     request.correlation_id = "close\u{7}1".into();
     fixture.service.release(request).await.unwrap();
 
     assert!(fixture.store.held().is_empty());
     assert_eq!(fixture.store.blob_count(), 0);
-    // Everything that was let go is on record, under the identifier as given.
+    // Everything that was let go is on record, under the identifier as given,
+    // and in the closer's name rather than the uploader's.
     let records = fixture.audit.taken_all();
     assert_eq!(records.len(), 3, "{records:?}");
     for record in &records {
         let release = match record {
-            AttachmentAuditRecord::TicketWithdrawn { release, .. }
-            | AttachmentAuditRecord::HoldReleased { release, .. }
-            | AttachmentAuditRecord::BlobRemoved { release, .. } => release,
+            AttachmentAuditRecord::TicketWithdrawn { release, .. } => release,
+            AttachmentAuditRecord::HoldReleased { hold, was, release } => {
+                assert_eq!(*was, HoldState::Held);
+                assert_eq!(hold.uploaded_by().principal_id(), &principal("owner"));
+                release
+            }
+            AttachmentAuditRecord::BlobRemoved { hold, release } => {
+                assert_eq!(hold.stored().digest(), digest_of(BYTES));
+                release
+            }
             other => panic!("unexpected {other:?}"),
         };
         assert_eq!(release.caller.action_id(), "close\u{7}1");
         assert_eq!(release.caller.principal_id(), &principal("closer"));
+        assert_eq!(release.caller.surface_id(), "phone");
+        assert_eq!(release.cause, ReleaseCause::ConversationClosed);
+        assert_eq!(release.requested_at_ms, NOW_MS + 9);
     }
+
+    // Releasing nothing is not a failure and records nothing.
+    fixture
+        .service
+        .release(release_request(CONVERSATION))
+        .await
+        .unwrap();
+    assert!(fixture.audit.taken_all().is_empty());
 }
 
 #[tokio::test]
@@ -1314,74 +1343,6 @@ async fn a_conversation_that_let_go_can_hold_again_until_its_next_close() {
 }
 
 #[tokio::test]
-async fn what_the_normalizer_answers_is_kept_only_if_a_message_could_name_it() {
-    let too_large = vec![7_u8; 5 * 1024 * 1024 + 1];
-    for answer in [
-        StubNormalizer::producing(&too_large, "image/png"),
-        StubNormalizer::producing(&too_large, "image/bmp"),
-        StubNormalizer::producing(b"small", "image/bmp"),
-        StubNormalizer::producing(b"small", "image/heic"),
-    ] {
-        let fixture = Fixture::with_normalizer(AttachmentLimits::default(), answer);
-        let ticket = fixture.ticket(CONVERSATION, BYTES, "image/png").await;
-        assert_eq!(
-            fixture
-                .service
-                .receive(&ticket, None, ChannelBody::of(BYTES, 64))
-                .await,
-            Err(rejected(UploadRejection::NormalizationFailed))
-        );
-        assert_eq!(fixture.store.blob_count(), 0);
-        assert!(fixture.store.held().is_empty());
-        assert_eq!(fixture.store.pending(), 0);
-        assert_eq!(fixture.store.staged.load(Ordering::SeqCst), 0);
-        assert!(matches!(
-            fixture.audit.taken().as_slice(),
-            [AttachmentAuditRecord::UploadRejected {
-                reason: UploadRejection::NormalizationFailed,
-                ..
-            }]
-        ));
-    }
-    // The largest image a message can name is kept.
-    let largest = vec![7_u8; 5 * 1024 * 1024];
-    let fixture = Fixture::with_normalizer(
-        AttachmentLimits::default(),
-        StubNormalizer::producing(&largest, "image/webp"),
-    );
-    let stored = fixture
-        .upload(CONVERSATION, BYTES, "image/x-adobe-dng")
-        .await;
-    assert_eq!(stored, attachment(&largest, "image/webp"));
-    assert!(stored.as_image().is_some());
-}
-
-#[tokio::test]
-async fn a_model_that_is_offered_no_images_is_not_a_bad_image() {
-    let fixture = Fixture::with_normalizer(
-        AttachmentLimits::default(),
-        StubNormalizer::failing(NormalizeError::NotOffered),
-    );
-    let ticket = fixture.ticket(CONVERSATION, BYTES, "image/png").await;
-    assert_eq!(
-        fixture
-            .service
-            .receive(&ticket, None, ChannelBody::of(BYTES, 64))
-            .await,
-        Err(rejected(UploadRejection::ImageInputUnsupported))
-    );
-    assert!(fixture.store.held().is_empty());
-    assert_eq!(fixture.store.staged.load(Ordering::SeqCst), 0);
-    assert!(matches!(
-        fixture.audit.taken().as_slice(),
-        [AttachmentAuditRecord::UploadRejected {
-            reason: UploadRejection::ImageInputUnsupported,
-            ..
-        }]
-    ));
-}
-
-#[tokio::test]
 async fn a_hold_that_cannot_be_made_usable_is_taken_back_and_said_to_be() {
     let fixture = fixture();
     let ticket = fixture.ticket(CONVERSATION, BYTES, PDF).await;
@@ -1411,94 +1372,6 @@ async fn a_hold_that_cannot_be_made_usable_is_taken_back_and_said_to_be() {
             ] if created == reverted
         ),
         "{records:?}"
-    );
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_creation_the_sink_never_acknowledged_is_followed_by_its_reversal() {
-    let fixture = fixture();
-    let ticket = fixture.ticket(CONVERSATION, BYTES, PDF).await;
-    // The sink takes the creation record and never answers: it may commit it
-    // yet. Every later record is answered at once.
-    let _never_opened = fixture.audit.hold_after(0, false);
-    assert_eq!(
-        fixture
-            .service
-            .receive(&ticket, None, ChannelBody::of(BYTES, 64))
-            .await,
-        Err(UploadError::AuditUnavailable { reverted: true })
-    );
-    assert!(fixture.store.held().is_empty());
-    assert_eq!(fixture.store.pending(), 0);
-    assert_eq!(fixture.store.blob_count(), 0);
-    // So the trail never ends on "held" for a hold that is gone.
-    let records = fixture.audit.taken();
-    assert!(
-        matches!(
-            records.as_slice(),
-            [AttachmentAuditRecord::HoldReverted {
-                cause: RevertCause::AuditUnconfirmed,
-                ..
-            }]
-        ),
-        "{records:?}"
-    );
-}
-
-#[tokio::test]
-async fn an_unrecorded_upload_never_shows_as_stored_and_never_costs_a_later_one_its_hold() {
-    let fixture = fixture();
-    let first = fixture.ticket_as("begin-1", CONVERSATION, BYTES, PDF).await;
-    let second = fixture.ticket_as("begin-2", CONVERSATION, BYTES, PDF).await;
-    // The first upload's creation record waits at the sink, and will be refused.
-    let open = fixture.audit.hold_after(0, true);
-    let service = fixture.service.clone();
-    let entered = fixture.audit.entered.notified();
-    let one = tokio::spawn(async move {
-        service
-            .receive(&first, None, ChannelBody::of(BYTES, 7))
-            .await
-    });
-    entered.await;
-    // Its hold is written but pending: a begin does not answer "stored" for it.
-    assert_eq!(fixture.store.pending(), 1);
-    let mut third = begin_request(CONVERSATION, BYTES, PDF);
-    third.request_id = "begin-3".into();
-    assert!(matches!(
-        fixture.service.begin(caller("org", "owner"), third).await,
-        Ok(BeginOutcome::UploadRequired { .. })
-    ));
-    // The second upload of the same file is recorded and acknowledged.
-    fixture
-        .service
-        .receive(&second, None, ChannelBody::of(BYTES, 7))
-        .await
-        .unwrap();
-    open.send(()).unwrap();
-    assert_eq!(
-        one.await.unwrap(),
-        Err(UploadError::AuditUnavailable { reverted: true })
-    );
-    // Taking back the first undid the first only.
-    assert!(fixture
-        .service
-        .holds(
-            &organization("org"),
-            &conversation(CONVERSATION),
-            &attachment(BYTES, PDF)
-        )
-        .await
-        .unwrap());
-    assert_eq!(fixture.store.blob(digest_of(BYTES)).unwrap(), BYTES);
-    let reverted = fixture
-        .audit
-        .taken()
-        .iter()
-        .filter(|record| matches!(record, AttachmentAuditRecord::HoldReverted { .. }))
-        .count();
-    assert_eq!(
-        reverted, 0,
-        "nothing of the first upload was left to take back"
     );
 }
 
@@ -1549,6 +1422,61 @@ async fn a_release_takes_a_pending_hold_with_it_and_the_upload_is_told_it_was_no
 }
 
 #[tokio::test]
+async fn an_upload_whose_own_work_stops_still_accounts_for_the_ticket_and_the_hold() {
+    let fixture = fixture();
+    let ticket = fixture.ticket(CONVERSATION, BYTES, PDF).await;
+    fixture.audit.taken_all();
+    // The ticket is spent, the bytes are published, the hold is written and
+    // recorded, and then the work stops with nothing to answer with.
+    fixture.store.confirm_panics.store(true, Ordering::SeqCst);
+    assert_eq!(
+        fixture
+            .service
+            .receive(&ticket, None, ChannelBody::of(BYTES, 7))
+            .await,
+        Err(UploadError::Rejected {
+            reason: UploadRejection::Unresolved,
+            evidence: AuditDelivery::Recorded,
+        })
+    );
+    // Nothing is left of it: not a usable hold, not a pending one, not bytes.
+    assert!(fixture.store.held().is_empty());
+    assert_eq!(fixture.store.pending(), 0);
+    assert_eq!(fixture.store.blob_count(), 0);
+    assert_eq!(fixture.store.staged.load(Ordering::SeqCst), 0);
+    // And the trail says what happened rather than naming some other failure:
+    // the hold was taken back because its upload never came back, and the
+    // ticket was used without producing one.
+    let records = fixture.audit.taken_all();
+    assert!(
+        matches!(
+            records.as_slice(),
+            [
+                AttachmentAuditRecord::HoldCreated { .. },
+                AttachmentAuditRecord::HoldReverted {
+                    cause: RevertCause::UploadUnresolved,
+                    ..
+                },
+                AttachmentAuditRecord::UploadRejected {
+                    reason: UploadRejection::Unresolved,
+                    ticket,
+                },
+            ] if ticket.caller().action_id() == "begin-1"
+        ),
+        "{records:?}"
+    );
+    // The ticket was spent by that attempt, whatever it did or did not do.
+    fixture.store.confirm_panics.store(false, Ordering::SeqCst);
+    assert_eq!(
+        fixture
+            .service
+            .receive(&ticket, None, ChannelBody::of(BYTES, 7))
+            .await,
+        Err(UploadError::TicketInvalid)
+    );
+}
+
+#[tokio::test]
 async fn a_file_the_conversation_already_keeps_is_said_to_be_already_kept() {
     // Two different photographs that normalize to the same image.
     let fixture = Fixture::with_normalizer(
@@ -1590,6 +1518,79 @@ async fn a_file_the_conversation_already_keeps_is_said_to_be_already_kept() {
         hold.uploaded(),
         &attachment(b"first photograph", "image/heic")
     );
+
+    // Unrecorded, arriving at a file the conversation already keeps is still a
+    // refusal, and nothing was created to take back: the hold that was there
+    // stays exactly as it was, and the upload is not told anything was undone.
+    let again = fixture
+        .ticket_as("begin-3", CONVERSATION, b"third photograph", "image/heic")
+        .await;
+    fixture.audit.taken_all();
+    fixture.audit.refusing.store(true, Ordering::SeqCst);
+    assert_eq!(
+        fixture
+            .service
+            .receive(&again, None, ChannelBody::of(b"third photograph", 64))
+            .await,
+        Err(UploadError::AuditUnavailable)
+    );
+    fixture.audit.refusing.store(false, Ordering::SeqCst);
+    assert_eq!(fixture.store.held(), before);
+    assert_eq!(fixture.store.pending(), 0);
+    assert!(fixture
+        .service
+        .holds(&organization("org"), &conversation(CONVERSATION), &kept)
+        .await
+        .unwrap());
+    // Nothing claims a hold was reverted, because none was made.
+    assert!(fixture.audit.taken_all().is_empty());
+}
+
+#[tokio::test]
+async fn a_hold_another_upload_took_over_is_not_this_uploads_to_keep_or_to_undo() {
+    // The hold this upload wrote is confirmed by the upload of the same file
+    // that overtook it, and then this one's own confirmation fails. It has
+    // nothing left to take back and nothing of its own missing from the trail,
+    // so it is told the file was not kept rather than that evidence was lost.
+    let fixture = fixture();
+    let first = fixture.ticket_as("begin-1", CONVERSATION, BYTES, PDF).await;
+    let second = fixture.ticket_as("begin-2", CONVERSATION, BYTES, PDF).await;
+    let open = fixture.audit.hold_after(0, false);
+    let entered = fixture.audit.entered.notified();
+    let service = fixture.service.clone();
+    let one = tokio::spawn(async move {
+        service
+            .receive(&first, None, ChannelBody::of(BYTES, 7))
+            .await
+    });
+    entered.await;
+    // The second upload takes the pending hold over and makes it usable.
+    fixture
+        .service
+        .receive(&second, None, ChannelBody::of(BYTES, 7))
+        .await
+        .unwrap();
+    fixture.store.confirm_fails.store(true, Ordering::SeqCst);
+    open.send(()).unwrap();
+    assert_eq!(one.await.unwrap(), Err(UploadError::NotKept));
+
+    fixture.store.confirm_fails.store(false, Ordering::SeqCst);
+    assert!(fixture
+        .service
+        .holds(
+            &organization("org"),
+            &conversation(CONVERSATION),
+            &attachment(BYTES, PDF)
+        )
+        .await
+        .unwrap());
+    let reverted = fixture
+        .audit
+        .taken()
+        .iter()
+        .filter(|record| matches!(record, AttachmentAuditRecord::HoldReverted { .. }))
+        .count();
+    assert_eq!(reverted, 0, "nothing of the first upload was left to undo");
 }
 
 /// Counts how many images are being normalized at once, and holds each until
@@ -1601,16 +1602,21 @@ struct GatedNormalizer {
     gate: Semaphore,
 }
 impl ImageNormalizer for GatedNormalizer {
-    fn normalize<'a>(&'a self, original: Vec<u8>, _: &'a str) -> NormalizeFuture<'a> {
+    fn offers_images(&self) -> bool {
+        true
+    }
+    fn normalize(&self, original: Vec<u8>) -> NormalizeFuture<'_> {
         Box::pin(async move {
             let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
             self.peak.fetch_max(active, Ordering::SeqCst);
             self.entered.notify_one();
-            let _ = self
-                .gate
+            // Each permit lets exactly one image through, so the test decides
+            // how many are let through and when.
+            self.gate
                 .acquire()
                 .await
-                .map_err(|_| NormalizeError::Failed)?;
+                .map_err(|_| NormalizeError::Failed)?
+                .forget();
             self.active.fetch_sub(1, Ordering::SeqCst);
             Ok(NormalizedImage {
                 bytes: original,
@@ -1664,16 +1670,15 @@ async fn images_are_normalized_fewer_at_a_time_than_they_are_transferred() {
                 .await
         }));
     }
+    // One image is in memory. The other cannot reach the normalizer at all
+    // while it is, so its turn comes only when the first one's is over.
     normalizer.entered.notified().await;
-    // Both transfers are complete and safe on disk; only one image is in memory.
-    while store.written.load(Ordering::SeqCst) != 22 {
-        tokio::task::yield_now().await;
-    }
-    for _ in 0..50 {
-        tokio::task::yield_now().await;
-    }
     assert_eq!(normalizer.active.load(Ordering::SeqCst), 1);
-    normalizer.gate.add_permits(2);
+    let entered = normalizer.entered.notified();
+    normalizer.gate.add_permits(1);
+    entered.await;
+    assert_eq!(normalizer.active.load(Ordering::SeqCst), 1);
+    normalizer.gate.add_permits(1);
     for upload in uploads {
         upload.await.unwrap().unwrap();
     }

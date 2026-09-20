@@ -2,7 +2,7 @@
 use crate::attachments::application::{
     ImageNormalizer, NormalizeError, NormalizeFuture, NormalizedImage,
 };
-use nessa_images::{normalize, Encoding, Error, Limits, LimitsError};
+use nessa_images::{normalize_with, Encoding, Error, Limits, LimitsError, PlatformDecoder};
 use nessa_sdk::domain::{
     agent_execution::prompts::ImageReference, common::value_objects::ImageMediaType,
     model_metadata::value_objects::ImageInputLimits,
@@ -16,13 +16,26 @@ use nessa_sdk::domain::{
 /// library counts stored bytes; and the edge worth sending is the smaller of
 /// what the model sees and what a long conversation's images are held to. A
 /// message's own per-image ceiling stays absolute whatever a model allows.
+///
+/// The system decoder is the one thing here that reads from outside this
+/// process — HEIC, AVIF and camera RAW go to the operating system — so it
+/// arrives from composition rather than being reached for, and a test can put
+/// a decoder that refuses, stalls, or answers nonsense in its place.
 pub struct ModelImageNormalizer {
     limits: Option<Limits>,
+    platform: Option<&'static dyn PlatformDecoder>,
 }
 impl ModelImageNormalizer {
-    /// `None` is a model with no recorded image limits. It is offered no images,
-    /// so none is prepared for it: every image upload is refused.
-    pub fn new(model: Option<&ImageInputLimits>) -> Result<Self, LimitsError> {
+    /// Fit uploads to `model`, reading what this process cannot read itself
+    /// through `platform`.
+    ///
+    /// A `model` of `None` records no image limits, so it is offered no images
+    /// and none is prepared for it. A `platform` of `None` reads only the
+    /// encodings the image library reads itself.
+    pub fn new(
+        model: Option<&ImageInputLimits>,
+        platform: Option<&'static dyn PlatformDecoder>,
+    ) -> Result<Self, LimitsError> {
         let limits = model
             .map(|model| {
                 Limits::new(
@@ -41,26 +54,31 @@ impl ModelImageNormalizer {
                 )
             })
             .transpose()?;
-        Ok(Self { limits })
+        Ok(Self { limits, platform })
     }
 }
 impl ImageNormalizer for ModelImageNormalizer {
-    // The declared media type is deliberately unused: what an upload is gets
-    // read from its bytes, never from what the client called it.
-    fn normalize<'a>(&'a self, original: Vec<u8>, _: &'a str) -> NormalizeFuture<'a> {
+    fn offers_images(&self) -> bool {
+        self.limits.is_some()
+    }
+    fn normalize(&self, original: Vec<u8>) -> NormalizeFuture<'_> {
         Box::pin(async move {
             // Nothing is wrong with the upload: this model is offered no
             // images, and saying the image could not be read would be false.
             let limits = self.limits.clone().ok_or(NormalizeError::NotOffered)?;
+            let platform = self.platform;
             // Decoding and encoding are CPU work measured in hundreds of
             // milliseconds. A panic in a decoder is this upload's failure only.
-            let fitted = tokio::task::spawn_blocking(move || normalize(&original, &limits))
-                .await
-                .map_err(|_| NormalizeError::Failed)?
-                .map_err(|error| match error {
-                    Error::UnsupportedEncoding | Error::Undecodable => NormalizeError::Unsupported,
-                    Error::TooLargeToDecode | Error::CannotFit => NormalizeError::TooLarge,
-                })?;
+            let fitted =
+                tokio::task::spawn_blocking(move || normalize_with(&original, &limits, platform))
+                    .await
+                    .map_err(|_| NormalizeError::Failed)?
+                    .map_err(|error| match error {
+                        Error::UnsupportedEncoding | Error::Undecodable => {
+                            NormalizeError::Unsupported
+                        }
+                        Error::TooLargeToDecode | Error::CannotFit => NormalizeError::TooLarge,
+                    })?;
             Ok(NormalizedImage {
                 media_type: fitted.encoding.media_type().into(),
                 bytes: fitted.bytes,

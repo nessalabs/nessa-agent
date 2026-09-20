@@ -21,9 +21,6 @@ pub(super) async fn dispatch(
     let Some(attachments) = state.attachments.as_ref() else {
         return failure(&frame.id, "agent_not_configured");
     };
-    if frame.method != "attachment.begin" {
-        return failure(&frame.id, "unknown_method");
-    }
     let Ok(params) = serde_json::from_value::<AttachmentBeginParams>(frame.params) else {
         return failure(&frame.id, error_code(BeginError::InvalidRequest));
     };
@@ -86,6 +83,9 @@ fn error_code(error: BeginError) -> &'static str {
     match error {
         BeginError::InvalidRequest => "invalid_request",
         BeginError::ConversationNotFound => "conversation_not_found",
+        // The same word `conversation.send` and the upload route give for the
+        // same fact: this gateway's model is offered no images.
+        BeginError::ImagesUnsupported => "image_input_unsupported",
         BeginError::Capacity => "attachment_capacity",
         BeginError::Storage => "attachment_storage_unavailable",
         BeginError::Audit => "audit_unavailable",
