@@ -256,6 +256,11 @@ numbers are the caller's: the gateway takes them from the selected model's
 metadata/audit adapters (infrastructure). `product/conversation.rs` maps the
 canonical product wire contract; composition supplies provider, storage and audit.
 Tests follow those responsibilities under `crates/nessa-server/tests/conversation/`.
+A message refers to images by digest, never by bytes: the service asks its
+`ConversationAttachments` port whether this conversation holds each one before it
+accepts the message, and `close` releases what the conversation holds in the
+closer's name, reporting a failed release without hiding a failed agent close.
+The [attachments context](#attachments) implements that port.
 The floating panel uses injected conversation effects and NessaClient; neither
 owns SDK scheduling. See [gateway chat](guides/gateway-chat.md).
 
@@ -521,6 +526,41 @@ handler receives the shared reader over it alone via `FromRef`. Tests under
 `tests/agents/` split domain rules, application orchestration, the shared
 reader's bounds, the HTTP boundary, the local probe's failure modes, and
 Claude's own sign-in conventions.
+
+## Attachments
+
+`crates/nessa-server/src/attachments/` owns the files a conversation uploads so
+its messages can refer to them. `domain/value_objects/` describe a file
+(`Attachment`: digest, `MediaType`, size, which must all agree), the verified
+`Caller` behind an action, and one `UploadTicket` with its five-minute
+`TicketLifetime`; `domain/entities/` owns the `Hold`, one conversation keeping
+one stored file and remembering the file that was uploaded to produce it;
+`domain/aggregates/` owns the `TicketBook`, where single use, expiry, withdrawal
+and the bound on outstanding tickets are decided together. `application/` owns
+`AttachmentService` and its ports: `AttachmentStore` and `StagedUpload` for
+bytes, `AttachmentAudit` for evidence, `ImageNormalizer` for turning an uploaded
+image into the one that is kept, `ConversationOwnership` for asking who owns a
+conversation without opening an agent, `TicketSecrets` for randomness, and
+`UploadBody` for a transfer however it arrives. `infrastructure/store.rs` keeps
+bytes once per digest under `attachments/blobs/` and one record per hold under
+`attachments/holds/<sha256(organization)>/<conversation>/`, private, with every
+name derived rather than copied from input and one lock ordering every change;
+`audit.rs` commits one private record per transition; `conversation.rs` and
+`images.rs` implement the conversation context's `ConversationAttachments` and
+the SDK's `UserImageSource` on top of this context. `entrypoint/http.rs` is
+`PUT /attachments` and its preflight: it authenticates nobody, acts only on a
+ticket the authenticated socket issued, streams the body, and answers with the
+stored reference. `product/attachment.rs` maps `attachment.begin`.
+Composition builds the store once in `composition/attachments.rs` and hands out
+the service (shared by the socket and the route through a narrow `FromRef`), the
+conversation port, and the image source; it is composed only when an agent is.
+The normalizer is an argument of that factory. Until the image adapter is wired
+in, `local_auth.rs` passes `UnconfiguredNormalizer`, which refuses every image
+upload as `storage_unavailable` rather than keep one nobody normalized.
+Holds live until their conversation closes; what expires on its own is an unused
+ticket. Tests under `tests/attachments/` split domain rules, the service over
+doubles, the real store on a real filesystem, audit records, the adapters, the
+HTTP boundary, the wire mapping, and the socket and router.
 
 ## Command-line surface
 

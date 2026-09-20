@@ -290,9 +290,21 @@ boundaries and mandatory audit records independently. Unfinished streaming text
 can be lost on crash. Reads are bounded current views, not a durable cursor stream.
 No second event database is required for this initial integration.
 
+A message refers to an image by digest, media type and size; its bytes never
+ride the product socket. `attachment.begin` on the authenticated socket answers
+with a single-use, five-minute ticket bound to one file, conversation and caller,
+and `PUT /attachments` streams the bytes under it. The gateway verifies the
+transfer against the ticket, normalizes an image through an injected port, stores
+bytes once per digest, and records that the conversation holds them. The
+conversation service accepts only references its conversation holds; the ACP
+adapter reads bytes by content through the SDK's image port, and its frame bound
+is derived from the message's image budget. Closing a conversation releases its
+holds, with audit evidence for every transition. See the
+[attachments module map](../crates/nessa-server/src/attachments/mod.rs).
+
 ADRs 0009 and 0011's exact replay and broader collaboration remain proposed work.
-Remote TLS/device provisioning, non-image file uploads, and more provider adapters
-remain separate features. Existing design proposals do not replace the implemented Agent contract.
+Remote TLS/device provisioning, files other than images in a message, and more
+provider adapters remain separate features. Existing design proposals do not replace the implemented Agent contract.
 
 **Identity/access contracts** (`crates/nessa-auth`) — reusable library, no binary.
 Owns domain identities/memberships/credential metadata, boundary DTO validation,

@@ -254,6 +254,70 @@ cleanup is uncertain. No automatic retry is exposed for permission/close control
 an unknown control acknowledgement requires a refreshed view and a deliberate new
 action, so an old Close cannot stop newer work.
 
+## Uploading attachments
+
+A message names an image by reference; the bytes are uploaded first, on their own
+path, so the 64 KiB product socket never carries them.
+
+1. `attachment.begin` over the authenticated socket (grant `conversation.write`)
+   describes the file: `conversationId`, `requestId`, `digest`
+   (`sha256:<64 lowercase hex>`), `mimeType`, `size`. If this conversation already
+   uploaded exactly that file the answer is `state: "stored"` with the stored
+   `digest`, `mimeType` and `size`, and nothing needs sending. Otherwise it is
+   `state: "upload_required"` with a `ticket` and `expiresAtMs`. The fields that do
+   not apply are `null`: a stored answer never carries a ticket, and a ticket never
+   carries a reference.
+2. `PUT /attachments` sends the bytes as the request body with the ticket in the
+   `x-nessa-upload-ticket` header. The route authenticates nobody: the ticket is
+   the whole authority. It is single use and is spent the moment it is presented,
+   whatever happens next, so a failed upload begins again with `attachment.begin`.
+3. `200` answers `{"digest", "mimeType", "size"}`: the **stored** reference, which
+   is what `conversation.send` and `conversation.steer` must name. The gateway
+   normalizes an image after verifying the transfer, so the stored digest, type
+   and size can all differ from what was sent. Any other file is kept as sent.
+   Until the image normalizer adapter is composed, every image upload answers
+   `storage_unavailable`; the gateway does not keep an image nobody normalized.
+
+Limits: a ticket lives five minutes and is refused after `expiresAtMs`; at most 64
+are outstanding at once; a file is 1 byte to 20 MiB; four uploads run at once;
+one transfer has 120 seconds. Storage takes any media type. What a message may
+refer to is narrower: PNG, JPEG, GIF or WebP, at most 5 MiB each, 10 images and
+10 MiB in one message.
+
+A present `Origin` must be one the gateway trusts for `/session`, and is echoed in
+`Access-Control-Allow-Origin` (never `*`); `OPTIONS /attachments` allows `PUT` with
+`content-type` and `x-nessa-upload-ticket`. Any other origin is `403`.
+
+`attachment.begin` fails with `invalid_request`, `conversation_not_found` (also
+for another owner's conversation), `attachment_capacity`,
+`attachment_storage_unavailable`, `audit_unavailable`, `temporarily_unavailable`,
+or `agent_not_configured`. The upload fails with `{"code": …}`:
+
+| Status | `code` | Meaning |
+| --- | --- | --- |
+| 401 | `ticket_invalid` | Missing, malformed, repeated, unknown, used, expired, or withdrawn ticket. |
+| 400 | `size_mismatch` | More or fewer bytes than described, or a `Content-Length` that already disagrees. A long body is cut off at the first byte too many. |
+| 422 | `digest_mismatch` | The right number of bytes, hashing to something else. |
+| 400 | `upload_interrupted` | The body ended early. |
+| 408 | `upload_timeout` | The transfer did not finish in time. |
+| 415 | `unsupported_image` | Declared an image, but not one the gateway can decode. |
+| 413 | `image_too_large` | An image that cannot be brought under the selected model's limits. |
+| 503 | `storage_unavailable` | Storing or normalizing failed, or no agent is configured. |
+| 503 | `audit_unavailable` | The upload was good but could not be recorded, so it was not kept. |
+| 503 | `temporarily_unavailable` | Too many uploads in progress. The ticket was **not** spent; retry with it. |
+
+Every row except the last and the unknown-ticket cases spends the ticket. A refusal
+that could not itself be recorded adds `"audit": "unavailable"` beside its `code`.
+
+A conversation holds what was uploaded into it until it closes. Closing withdraws
+its unused tickets, releases its holds, and removes bytes nothing else holds; if
+that cleanup or its audit record fails, `conversation.close` answers
+`attachment_cleanup_unavailable` and the conversation is still closed. An upload
+that was never sent is not expired on its own. Every transition (hold created,
+upload refused, ticket expired or withdrawn, hold released, bytes removed) is
+committed to private audit storage under `attachments/audit/` with its target,
+both digests, cause, initiator and correlation.
+
 ## Reorder waiting messages
 
 Drag a waiting message using its queue handle, or focus the handle and use
