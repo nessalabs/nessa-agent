@@ -28,6 +28,9 @@ fn write_private_log(path: &Path, contents: &str) {
     file.write_all(contents.as_bytes()).unwrap();
 }
 
+/// Every string below was taken from `launchctl print` on macOS 26, against
+/// agents bootstrapped to produce each outcome, rather than written to match
+/// the parser.
 #[test]
 fn launchd_exit_lines_are_read_across_the_forms_macos_has_printed() {
     assert_eq!(
@@ -39,6 +42,27 @@ fn launchd_exit_lines_are_read_across_the_forms_macos_has_printed() {
         LastExit::NeverExited
     );
     assert_eq!(parse_last_exit("\tlast exit code = 0"), LastExit::Code(0));
+    // launchd annotates the sysexits values and leaves the rest bare. `exit 78`
+    // and a plist naming a program that is not there both come back this way.
+    assert_eq!(
+        parse_last_exit("\tlast exit code = 78: EX_CONFIG"),
+        LastExit::Code(78)
+    );
+    assert_eq!(
+        parse_last_exit("\tlast exit code = 64: EX_USAGE"),
+        LastExit::Code(64)
+    );
+    assert_eq!(
+        parse_last_exit("\tlast exit code = 127"),
+        LastExit::Code(127)
+    );
+    // A signalled process has no exit code line at all.
+    assert_eq!(
+        parse_last_exit(
+            "\tstate = spawn scheduled\n\tlast terminating signal = Segmentation fault: 11"
+        ),
+        LastExit::Signal("Segmentation fault: 11".into())
+    );
     // Older releases print the wait(2) encoding, whose high byte is the code.
     assert_eq!(
         parse_last_exit("\tlast exit status = 256"),
@@ -52,6 +76,24 @@ fn launchd_exit_lines_are_read_across_the_forms_macos_has_printed() {
 }
 
 #[test]
+fn a_signal_outranks_an_exit_code_and_an_unreadable_one_outranks_nothing() {
+    // A process that was signalled did not choose a code. If launchd ever
+    // prints both, the signal is what happened to it.
+    assert_eq!(
+        parse_last_exit("\tlast exit code = 0\n\tlast terminating signal = Killed: 9"),
+        LastExit::Signal("Killed: 9".into())
+    );
+    // But a signal line we cannot read must not fall through to an exit code
+    // it contradicts, or a killed process reads as a clean one.
+    for text in [
+        "\tlast exit code = 0\n\tlast terminating signal = ",
+        "\tlast exit code = 0\n\tlast terminating signal = Killed: 9\n\tlast terminating signal = Segmentation fault: 11",
+    ] {
+        assert_eq!(parse_last_exit(text), LastExit::Unknown, "{text}");
+    }
+}
+
+#[test]
 fn an_output_we_cannot_read_reports_nothing_rather_than_death() {
     // Nothing here accelerates a failure: `Unknown` is what keeps the caller
     // waiting for the deadline it was given.
@@ -59,6 +101,8 @@ fn an_output_we_cannot_read_reports_nothing_rather_than_death() {
         "gui/501/so.nessa.gateway.prod = {\n\tstate = running\n}",
         "\tlast exit code = not a number",
         "\tlast exit code = ",
+        "\tlast exit code = : EX_CONFIG",
+        "\tlast exit code = EX_CONFIG: 78",
         // Two answers in one output is no answer.
         "\tlast exit code = 1\n\tlast exit code = 0",
         "\tlast exit code = 1\n\tlast exit reason = JETSAM_REASON_MEMORY_IDLE_EXIT",
@@ -77,6 +121,7 @@ fn an_output_we_cannot_read_reports_nothing_rather_than_death() {
 fn only_an_unsuccessful_exit_counts_as_one() {
     assert!(LastExit::Code(1).is_failure());
     assert!(LastExit::Code(127).is_failure());
+    assert!(LastExit::Signal("Segmentation fault: 11".into()).is_failure());
     assert!(LastExit::Reason("JETSAM_REASON_MEMORY_IDLE_EXIT".into()).is_failure());
     assert!(!LastExit::Code(0).is_failure());
     assert!(!LastExit::NeverExited.is_failure());
@@ -195,14 +240,43 @@ fn what_the_log_says_never_decides_what_the_panel_says() {
 
 #[test]
 fn a_program_that_never_ran_is_not_reported_as_something_it_said() {
-    // A shell reports 126 for a program it cannot execute and 127 for one it
-    // cannot find, and launchd's spawn failures surface the same way. These
-    // are not the server's codes: nothing of ours ran to choose one.
-    for exit in [LastExit::Code(126), LastExit::Code(127)] {
+    // launchd answers a plist whose program is missing with EX_CONFIG, not
+    // with the 126 or 127 a shell would use. This is the case the issue asked
+    // for by name, and it is the one that used to wait out the whole deadline.
+    for exit in [LastExit::Code(78), LastExit::Code(126), LastExit::Code(127)] {
         assert_eq!(
             diagnose(&exit, "", PORT, READINESS).sentence,
             "Nessa's background service is not starting: its background program could not be launched."
         );
+    }
+    // Killed rather than exited: the signal is named in the log, not on screen.
+    let killed = diagnose(
+        &LastExit::Signal("Segmentation fault: 11".into()),
+        "",
+        PORT,
+        READINESS,
+    );
+    assert_eq!(
+        killed.sentence,
+        "Nessa's background service is not starting: its background program stopped abruptly."
+    );
+    assert!(killed.detail.contains("Segmentation fault: 11"));
+}
+
+#[test]
+fn the_formats_that_used_to_wait_out_the_deadline_now_fail_fast() {
+    // Each of these is a real `launchctl print` fragment for a service that is
+    // gone. Every one of them must be a failure, or readiness sits for thirty
+    // seconds and then blames the runtime identity.
+    for text in [
+        "\tlast exit code = 78: EX_CONFIG",
+        "\tlast terminating signal = Segmentation fault: 11",
+        "\tlast terminating signal = Killed: 9",
+        "\tlast exit code = 1",
+    ] {
+        let exit = parse_last_exit(text);
+        assert!(exit.is_failure(), "{text}");
+        assert_ne!(exit, LastExit::Unknown, "{text}");
     }
 }
 

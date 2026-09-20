@@ -4,7 +4,7 @@ use super::{
     acknowledge, assess, atomic_write, classify, forward_recovery, lock_namespace, parse_health,
     parse_listener_pid, parse_pending_retirement, parse_retirement_evidence, parse_service_process,
     prepare_request, read_acknowledgement, read_pending_retirement, read_retirement_evidence,
-    service_status, Health, InstallFailure, ManagedRuntime, Registration, ServiceState,
+    service_status, DeadCount, Health, InstallFailure, ManagedRuntime, Registration, ServiceState,
     ServiceStatus, Step,
 };
 use nessa_local_storage::OpenMode;
@@ -580,6 +580,34 @@ fn an_unloaded_service_reports_no_exit_of_its_own() {
     assert!(status.process_identity_known);
     assert_eq!(status.last_exit, LastExit::Unknown);
     assert!(!status.last_exit.is_failure());
+}
+
+#[test]
+fn giving_up_needs_three_deaths_in_a_row_and_nothing_in_between() {
+    let dead = || Step::Dead;
+    let alive = || Step::Waiting;
+
+    let mut count = DeadCount::default();
+    assert!(!count.observe(&dead()));
+    assert!(!count.observe(&dead()));
+    assert!(count.observe(&dead()));
+
+    // A service that exits and is restarted between two looks is not a service
+    // that is failing to start, however often it is seen mid-restart.
+    let mut count = DeadCount::default();
+    for _ in 0..10 {
+        assert!(!count.observe(&dead()));
+        assert!(!count.observe(&dead()));
+        assert!(!count.observe(&alive()));
+    }
+    // And readiness itself resets it, so a late answer is never overruled.
+    let mut count = DeadCount::default();
+    assert!(!count.observe(&dead()));
+    assert!(!count.observe(&dead()));
+    assert!(!count.observe(&Step::Ready(runtime("new", 42))));
+    assert!(!count.observe(&dead()));
+    assert!(!count.observe(&dead()));
+    assert!(count.observe(&dead()));
 }
 
 #[test]

@@ -740,6 +740,26 @@ pub(super) fn assess(
     Step::Waiting
 }
 
+/// Consecutive `Dead` observations, and the rule for giving up on them.
+///
+/// Kept apart from the waiting so the reset is testable without a clock: one
+/// observation can land in the gap between a clean exit and the next spawn,
+/// and anything that is not death has to start the count again or a service
+/// that is restarting normally would eventually accumulate three.
+#[derive(Default)]
+pub(super) struct DeadCount(u32);
+impl DeadCount {
+    /// Records one observation and says whether the service should be given up.
+    pub(super) fn observe(&mut self, step: &Step) -> bool {
+        self.0 = if matches!(step, Step::Dead) {
+            self.0 + 1
+        } else {
+            0
+        };
+        self.0 >= DEAD_OBSERVATIONS
+    }
+}
+
 /// Wait for the expected runtime to answer, or for launchd to prove it cannot.
 ///
 /// The deadline is for a server that is starting slowly. A server that has
@@ -754,7 +774,7 @@ pub(super) fn wait_fingerprint(
 ) -> Result<ManagedRuntime, InstallFailure> {
     let deadline = Instant::now() + READINESS_DEADLINE;
     let mut next_liveness_check = Instant::now();
-    let mut dead = 0u32;
+    let mut dead = DeadCount::default();
     while Instant::now() < deadline {
         let running = health(port);
         // `launchctl print` is a subprocess, so it is asked when there is
@@ -770,8 +790,7 @@ pub(super) fn wait_fingerprint(
                 // half of agreement rather than three turns of the loop.
                 step if due => {
                     next_liveness_check = Instant::now() + LIVENESS_INTERVAL;
-                    dead = if step == Step::Dead { dead + 1 } else { 0 };
-                    if dead >= DEAD_OBSERVATIONS {
+                    if dead.observe(&step) {
                         let failure =
                             diagnose(&status.last_exit, &log_tail(log), port, READINESS_FAILURE);
                         eprintln!("[nessa] {}", failure.detail);

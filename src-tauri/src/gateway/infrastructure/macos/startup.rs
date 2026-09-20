@@ -42,6 +42,9 @@ pub(super) enum LastExit {
     Unknown,
     NeverExited,
     Code(i32),
+    /// A process that was signalled did not choose a code, and launchd prints
+    /// no exit code for it at all — only the signal that ended it.
+    Signal(String),
     Reason(String),
 }
 impl LastExit {
@@ -49,7 +52,7 @@ impl LastExit {
     pub(super) fn is_failure(&self) -> bool {
         match self {
             Self::Code(code) => *code != 0,
-            Self::Reason(_) => true,
+            Self::Signal(_) | Self::Reason(_) => true,
             Self::Unknown | Self::NeverExited => false,
         }
     }
@@ -58,44 +61,81 @@ impl LastExit {
             Self::Unknown => "unknown".into(),
             Self::NeverExited => "never exited".into(),
             Self::Code(code) => format!("exit code {code}"),
+            Self::Signal(signal) => format!("terminating signal {signal}"),
             Self::Reason(reason) => format!("exit reason {reason}"),
         }
     }
 }
 
-/// `launchctl print` is diagnostic output, and its keys have changed across
-/// releases: current macOS prints `last exit code`, older ones the wait(2)
-/// encoded `last exit status`, and a kernel-initiated exit prints
-/// `last exit reason`. Disagreeing or unparsable lines resolve to `Unknown`,
+/// `launchctl print` is diagnostic output, and what it prints for a process
+/// that is gone takes several shapes. Verified against launchd on macOS 26:
+///
+/// ```text
+/// last exit code = 0
+/// last exit code = (never exited)
+/// last exit code = 1
+/// last exit code = 78: EX_CONFIG          // sysexits values are annotated
+/// last terminating signal = Segmentation fault: 11
+/// last exit reason = JETSAM_REASON_MEMORY_IDLE_EXIT
+/// ```
+///
+/// A signalled process has no exit code line at all, so the two are read
+/// separately and the signal wins: a process that was killed did not choose a
+/// code, and if launchd ever prints both, the signal is the later fact.
+/// Disagreeing or unparsable lines of one kind still resolve to `Unknown`,
 /// which never accelerates a failure.
 pub(super) fn parse_last_exit(text: &str) -> LastExit {
-    let mut seen: Option<LastExit> = None;
+    let mut exit: Option<LastExit> = None;
+    let mut signal: Option<LastExit> = None;
+    // Lines are trimmed, so a key whose value is empty has no trailing space
+    // left to match: the prefixes stop at the `=` and the value is trimmed
+    // after, which is what lets an empty value be seen as one.
     for line in text.lines().map(str::trim) {
-        let parsed = if let Some(value) = line.strip_prefix("last exit code = ") {
-            parse_exit_value(value.trim(), false)
-        } else if let Some(value) = line.strip_prefix("last exit status = ") {
-            parse_exit_value(value.trim(), true)
-        } else if let Some(value) = line.strip_prefix("last exit reason = ") {
-            let reason = value.trim();
-            if reason.is_empty() || reason.len() > 128 {
-                LastExit::Unknown
-            } else {
-                LastExit::Reason(reason.to_owned())
-            }
+        let (slot, parsed) = if let Some(value) = line.strip_prefix("last exit code =") {
+            (&mut exit, parse_exit_value(value.trim(), false))
+        } else if let Some(value) = line.strip_prefix("last exit status =") {
+            (&mut exit, parse_exit_value(value.trim(), true))
+        } else if let Some(value) = line.strip_prefix("last terminating signal =") {
+            (
+                &mut signal,
+                parse_label(value.trim()).map_or(LastExit::Unknown, LastExit::Signal),
+            )
+        } else if let Some(value) = line.strip_prefix("last exit reason =") {
+            (
+                &mut exit,
+                parse_label(value.trim()).map_or(LastExit::Unknown, LastExit::Reason),
+            )
         } else {
             continue;
         };
-        if seen.get_or_insert_with(|| parsed.clone()) != &parsed {
-            return LastExit::Unknown;
+        if slot.get_or_insert_with(|| parsed.clone()) != &parsed {
+            *slot = Some(LastExit::Unknown);
         }
     }
-    seen.unwrap_or(LastExit::Unknown)
+    match signal {
+        // An unreadable signal line is not licence to fall back to an exit
+        // code it contradicts.
+        Some(LastExit::Unknown) => LastExit::Unknown,
+        Some(signal) => signal,
+        None => exit.unwrap_or(LastExit::Unknown),
+    }
+}
+fn parse_label(value: &str) -> Option<String> {
+    (!value.is_empty() && value.len() <= 128).then(|| value.to_owned())
 }
 fn parse_exit_value(value: &str, wait_encoded: bool) -> LastExit {
     if value == "(never exited)" {
         return LastExit::NeverExited;
     }
-    let Ok(raw) = value.parse::<i32>() else {
+    // launchd annotates the sysexits values — `78: EX_CONFIG` — and prints a
+    // bare number otherwise. The number is the fact; the symbol after it is a
+    // courtesy, and demanding the whole string be an integer threw away the
+    // most common real failure there is.
+    let digits = value
+        .split_once(':')
+        .map_or(value, |(number, _)| number)
+        .trim();
+    let Ok(raw) = digits.parse::<i32>() else {
         return LastExit::Unknown;
     };
     // A wait(2) status carries the exit code in its high byte; a status that is
@@ -210,21 +250,31 @@ fn sentence_for(reason: &str, port: u16) -> Option<String> {
     }
 }
 
+/// launchd's own report of a spawn it could not complete, verified against it:
+/// a plist naming a program that is not there comes back as
+/// `last exit code = 78: EX_CONFIG`, not as the 126 or 127 a shell would use.
+/// The server never exits 78 — its own codes come from the shared table — so
+/// seeing it means launchd never got our program running.
+const SPAWN_FAILED: i32 = 78;
+
 /// What the service's own exit code says, or what launchd says when the
 /// program never ran to have an opinion.
 fn recognise(last_exit: &LastExit, port: u16) -> Option<String> {
-    let LastExit::Code(code) = last_exit else {
-        // A signal or a kernel-initiated exit: the process was ended, it did
-        // not choose a code, and there is nothing of its own to report.
-        return None;
+    let code = match last_exit {
+        LastExit::Code(code) => *code,
+        // Killed rather than exited: by the code-signing enforcement that
+        // refuses a runtime, by the kernel under memory pressure, or by its
+        // own fault. Which of those it was belongs in the log with the signal
+        // name; none of them is the program choosing to stop.
+        LastExit::Signal(_) => return Some("its background program stopped abruptly.".into()),
+        LastExit::Unknown | LastExit::NeverExited | LastExit::Reason(_) => return None,
     };
-    let code = u8::try_from(*code).ok()?;
-    // A shell reports 126 for a program it cannot execute and 127 for one it
-    // cannot find, and launchd's own spawn failures surface the same way.
-    // These are not the server's codes; nothing of ours ran to emit one.
-    if matches!(code, 126 | 127) {
+    // 126 and 127 are what a shell in front of the program would report; they
+    // are kept because a wrapper can still produce them.
+    if matches!(code, SPAWN_FAILED | 126 | 127) {
         return Some(UNLAUNCHABLE.into());
     }
+    let code = u8::try_from(code).ok()?;
     CODES
         .codes
         .iter()
