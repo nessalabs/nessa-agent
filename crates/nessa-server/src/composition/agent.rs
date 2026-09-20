@@ -165,6 +165,7 @@ mod build {
                 kill_timeout: Duration::from_secs(2),
                 event_capacity: 256,
                 max_frame_bytes: 1024 * 1024,
+                images: None,
             },
             &model,
             limits,

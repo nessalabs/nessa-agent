@@ -1123,7 +1123,7 @@
           "items": {
             "$ref": "#/$defs/ImageAttachment"
           },
-          "description": "Images already uploaded into this conversation, in attachment order; at most 20 MiB in total. Empty for a message of text alone."
+          "description": "Images already uploaded into this conversation, in attachment order; at most 10 MiB in total. Empty for a message of text alone."
         }
       },
       "required": ["conversationId", "requestId", "executionId", "text", "attachments"]

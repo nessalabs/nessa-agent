@@ -397,7 +397,7 @@ export interface ConversationSendParams {
   executionId: string
   /** User message, at most 8 KiB UTF-8; gateway enforces the byte bound. May be blank only when attachments are present. */
   text: string
-  /** Images already uploaded into this conversation, in attachment order; at most 20 MiB in total. Empty for a message of text alone. */
+  /** Images already uploaded into this conversation, in attachment order; at most 10 MiB in total. Empty for a message of text alone. */
   attachments: ImageAttachment[]
 }
 /** Remove an input that has not dispatched. */

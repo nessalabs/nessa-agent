@@ -315,10 +315,16 @@ mod gateway {
             .ok
         );
         for params in [
-            json!({"conversationId":"00000000-0000-4000-8000-00000000000A","requestId":"send","executionId":"execution","text":"hello"}),
-            json!({"conversationId":id,"requestId":"😀".repeat(65),"executionId":"execution","text":"hello"}),
-            json!({"conversationId":id,"requestId":"send","executionId":"😀".repeat(65),"text":"hello"}),
-            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"😀".repeat(2049)}),
+            json!({"conversationId":"00000000-0000-4000-8000-00000000000A","requestId":"send","executionId":"execution","text":"hello","attachments":[]}),
+            json!({"conversationId":id,"requestId":"😀".repeat(65),"executionId":"execution","text":"hello","attachments":[]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"😀".repeat(65),"text":"hello","attachments":[]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"😀".repeat(2049),"attachments":[]}),
+            // One contract: the attachment list is always present, and a message is never empty.
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello"}),
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":" \n","attachments":[]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[{"digest":"sha256:00","mimeType":"image/png","size":1}]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[{"digest":format!("sha256:{}", "0".repeat(64)),"mimeType":"image/svg+xml","size":1}]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[{"digest":format!("sha256:{}", "0".repeat(64)),"mimeType":"image/png","size":0}]}),
         ] {
             let response =
                 chat_request(&state, &session, "conversation.send", params).await;
@@ -330,7 +336,7 @@ mod gateway {
                 &state,
                 &session,
                 "conversation.send",
-                json!({"conversationId":id,"requestId":"😀".repeat(64),"executionId":"😀".repeat(64),"text":"😀".repeat(2048)}),
+                json!({"conversationId":id,"requestId":"😀".repeat(64),"executionId":"😀".repeat(64),"text":"😀".repeat(2048),"attachments":[]}),
             )
             .await
             .ok
@@ -481,7 +487,7 @@ mod gateway {
                 &peer,
                 execution,
                 "conversation.send",
-                json!({"conversationId":id,"requestId":execution,"executionId":execution,"text":execution}),
+                json!({"conversationId":id,"requestId":execution,"executionId":execution,"text":execution,"attachments":[]}),
             );
             assert_eq!(response(&mut peer).await["ok"], true);
             if execution == "running" {

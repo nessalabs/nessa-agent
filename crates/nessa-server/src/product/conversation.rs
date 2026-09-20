@@ -13,7 +13,7 @@ use super::{
 };
 use crate::{
     conversation::{
-        application::{ConversationCaller, ConversationError, SubmissionMode},
+        application::{ConversationCaller, ConversationError, SubmissionMode, SubmittedImage},
         domain::ConversationId,
     },
     protocol::{OutgoingMessage, RequestFrame},
@@ -88,6 +88,15 @@ pub(super) async fn dispatch(
                         caller(params.request_id),
                         params.execution_id,
                         params.text,
+                        params
+                            .attachments
+                            .into_iter()
+                            .map(|image| SubmittedImage {
+                                digest: image.digest,
+                                media_type: image.mime_type,
+                                size: image.size,
+                            })
+                            .collect(),
                         mode,
                     )
                     .await?;
@@ -211,6 +220,10 @@ fn permission_answer_failure(
 fn error_code(error: &ConversationError) -> &'static str {
     match error {
         ConversationError::InvalidInput => "invalid_request",
+        ConversationError::ImagesUnsupported => "image_input_unsupported",
+        ConversationError::AttachmentNotFound => "attachment_not_found",
+        // The conversation did close; what failed is cleanup the caller can retry.
+        ConversationError::AttachmentRelease(_) => "attachment_cleanup_unavailable",
         ConversationError::NotFound => "conversation_not_found",
         ConversationError::Capacity => "conversation_capacity",
         ConversationError::Unavailable
@@ -230,6 +243,7 @@ fn error_code(error: &ConversationError) -> &'static str {
             AgentError::Closed => "conversation_closed",
             AgentError::StalePermission => "stale_permission",
             AgentError::InvalidInput(_) => "invalid_request",
+            AgentError::UserImage(_) => "attachment_unavailable",
             AgentError::AuditFailure => "audit_unavailable",
             _ => "agent_operation_failed",
         },

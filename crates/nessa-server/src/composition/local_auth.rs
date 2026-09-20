@@ -4,7 +4,7 @@ use crate::{
     app::ports::Clock as ServerClock,
     browser_session::adapters::PersistentSessions,
     conversation::{
-        application::{ConversationLimits, ConversationService},
+        application::{ConversationDependencies, ConversationLimits, ConversationService},
         infrastructure::{DurableConversationCreationAudit, LocalConversationRepository},
     },
     core::RunError,
@@ -140,11 +140,14 @@ pub(super) fn product_state(
                 .map_err(|error| RunError::Agent(error.to_string()))?,
         );
         let service = ConversationService::new(
-            provider,
-            storage,
-            metadata,
-            creation_audit,
-            clock,
+            ConversationDependencies {
+                provider,
+                storage,
+                metadata,
+                creation_audit,
+                attachments: None,
+                clock,
+            },
             ConversationLimits {
                 reserved_output_tokens: agent.output_tokens,
                 ..ConversationLimits::default()

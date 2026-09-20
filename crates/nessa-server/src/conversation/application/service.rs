@@ -5,7 +5,8 @@ use super::{
         ConversationPendingMode, ConversationReorderOutcome, ConversationRuntime, ConversationView,
         SubmissionReceipt,
     },
-    ConversationError, ConversationRepository,
+    AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationError,
+    ConversationRepository, SubmittedImage,
 };
 use crate::conversation::domain::{Conversation, ConversationId};
 use futures_util::{future::join_all, FutureExt};
@@ -30,9 +31,10 @@ use nessa_sdk::domain::agent_execution::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionId,
         PermissionOptionId,
     },
-    prompts::PromptText,
+    prompts::{ImageMediaType, ImageReference, PromptText, UserMessage},
     sessions::SessionId,
 };
+use nessa_sdk::domain::common::value_objects::Sha256Digest;
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -106,6 +108,7 @@ struct Inner {
     storage: Arc<dyn SessionStorage>,
     metadata: Arc<dyn ConversationRepository>,
     creation_audit: Arc<dyn super::ConversationCreationAudit>,
+    attachments: Option<Arc<dyn ConversationAttachments>>,
     clock: Arc<dyn Clock>,
     limits: ConversationLimits,
     conversations: Mutex<HashMap<ConversationId, Arc<Slot>>>,
@@ -134,16 +137,30 @@ fn retryable_agent_open(error: &AgentError) -> bool {
             | AgentError::Storage(StorageError::Corrupt(_) | StorageError::IdentityMismatch)
     )
 }
+/// Every port the service calls, constructed by composition and substituted in tests.
+pub struct ConversationDependencies {
+    pub provider: Arc<dyn AgentProvider>,
+    pub storage: Arc<dyn SessionStorage>,
+    pub metadata: Arc<dyn ConversationRepository>,
+    pub creation_audit: Arc<dyn super::ConversationCreationAudit>,
+    /// `None` when this gateway keeps no uploads: every image is then refused.
+    pub attachments: Option<Arc<dyn ConversationAttachments>>,
+    pub clock: Arc<dyn Clock>,
+}
 impl ConversationService {
     pub fn new(
-        provider: Arc<dyn AgentProvider>,
-        storage: Arc<dyn SessionStorage>,
-        metadata: Arc<dyn ConversationRepository>,
-        creation_audit: Arc<dyn super::ConversationCreationAudit>,
-        clock: Arc<dyn Clock>,
+        dependencies: ConversationDependencies,
         limits: ConversationLimits,
         workspace: Option<String>,
     ) -> Result<Self, ConversationError> {
+        let ConversationDependencies {
+            provider,
+            storage,
+            metadata,
+            creation_audit,
+            attachments,
+            clock,
+        } = dependencies;
         if workspace.as_ref().is_some_and(|value| value.len() > 4096)
             || limits.max_conversations == 0
             || limits.max_input_bytes == 0
@@ -159,6 +176,7 @@ impl ConversationService {
                 storage,
                 metadata,
                 creation_audit,
+                attachments,
                 clock,
                 limits,
                 conversations: Mutex::new(HashMap::new()),
@@ -435,6 +453,8 @@ impl ConversationService {
                                 steer: true,
                                 resume: agent.operation_capabilities().session_resume,
                                 permissions: agent.capabilities().features().tool_use(),
+                                image_input: service.inner.attachments.is_some()
+                                    && agent.operation_capabilities().image_input,
                             };
                             let mut projection =
                                 Projection::new(id.to_string(), capabilities, snapshot.as_ref());
@@ -542,20 +562,58 @@ impl ConversationService {
         caller: ConversationCaller,
         execution_id: String,
         text: String,
+        images: Vec<SubmittedImage>,
         mode: SubmissionMode,
     ) -> Result<SubmissionReceipt, ConversationError> {
         let service = self.clone();
         supervised(async move {
             let _admission = service.admit().await?;
             let actor = caller.actor()?;
-            if text.trim().is_empty() || text.len() > service.inner.limits.max_input_bytes {
+            if text.len() > service.inner.limits.max_input_bytes {
                 return Err(ConversationError::InvalidInput);
             }
             let execution =
                 ExecutionId::new(&execution_id).map_err(|_| ConversationError::InvalidInput)?;
-            let prompt =
-                PromptText::new(text.clone()).map_err(|_| ConversationError::InvalidInput)?;
+            // Blank text is no text. The message's own rules then decide whether
+            // what remains is a message: some text, some images, or both.
+            let prompt = (!text.trim().is_empty())
+                .then(|| PromptText::new(text))
+                .transpose()
+                .map_err(|_| ConversationError::InvalidInput)?;
+            let images = images
+                .into_iter()
+                .map(|image| {
+                    ImageReference::new(
+                        Sha256Digest::parse(&image.digest)
+                            .map_err(|_| ConversationError::InvalidInput)?,
+                        ImageMediaType::parse(&image.media_type)
+                            .map_err(|_| ConversationError::InvalidInput)?,
+                        image.size,
+                    )
+                    .map_err(|_| ConversationError::InvalidInput)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let message =
+                UserMessage::new(prompt, images).map_err(|_| ConversationError::InvalidInput)?;
             let live = service.resolve(&id, &caller).await?;
+            if !message.images().is_empty() {
+                // Refuse before acceptance what the agent would refuse at dispatch,
+                // and any digest this conversation did not upload itself.
+                let attachments = service
+                    .inner
+                    .attachments
+                    .as_ref()
+                    .filter(|_| live.agent.operation_capabilities().image_input)
+                    .ok_or(ConversationError::ImagesUnsupported)?;
+                for image in message.images() {
+                    if !attachments
+                        .holds(&caller.organization_id, &id, image)
+                        .await?
+                    {
+                        return Err(ConversationError::AttachmentNotFound);
+                    }
+                }
+            }
             // Reserve the full effective context budget consistently across retries.
             // ACP owns hidden context/tokenization; this is a conservative admission
             // reservation, not a claim about actual token usage or provider billing.
@@ -567,7 +625,7 @@ impl ConversationService {
             }
             let request = ExecutionRequest {
                 execution_id: execution,
-                user_message: prompt,
+                user_message: message.clone(),
                 estimated_input_tokens: u64::from(
                     limits.max_context_window() - service.inner.limits.reserved_output_tokens,
                 ),
@@ -585,7 +643,7 @@ impl ConversationService {
             };
             live.projection.lock().await.admitted(
                 &execution_id,
-                &text,
+                &message,
                 if matches!(mode, SubmissionMode::Queue) {
                     ConversationPendingMode::Queued
                 } else {
@@ -819,7 +877,26 @@ impl ConversationService {
             // retains its live observation state; there is no second closed flag.
             let snapshot = live.agent.session_manager().snapshot().await;
             live.projection.lock().await.settled_all(snapshot.as_ref());
-            result.map(|_| ()).map_err(ConversationError::Agent)
+            // Uploads are let go whether or not the agent closed cleanly: the
+            // caller asked for this conversation to end, and nothing queued can
+            // still need them. Both failures are kept; neither hides the other.
+            let released = match &service.inner.attachments {
+                Some(attachments) => {
+                    attachments
+                        .release(AttachmentRelease {
+                            organization_id: caller.organization_id.clone(),
+                            conversation_id: id.clone(),
+                            cause: AttachmentReleaseCause::ConversationClosed,
+                            initiator_principal_id: caller.principal_id.clone(),
+                            initiator_surface_id: caller.surface_id.clone(),
+                            correlation_id: caller.action_id.clone(),
+                        })
+                        .await
+                }
+                None => Ok(()),
+            };
+            result.map(|_| ()).map_err(ConversationError::Agent)?;
+            released.map_err(|error| ConversationError::AttachmentRelease(Box::new(error)))
         })
         .await
     }

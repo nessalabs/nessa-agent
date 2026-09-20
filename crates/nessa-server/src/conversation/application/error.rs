@@ -7,6 +7,12 @@ use std::{error::Error, fmt};
 #[derive(Clone, Debug)]
 pub enum ConversationError {
     InvalidInput,
+    /// The connected agent, or this gateway's configuration, takes no images.
+    ImagesUnsupported,
+    /// The message refers to an image this conversation has not uploaded.
+    AttachmentNotFound,
+    /// The conversation closed, but letting go of its uploads did not complete.
+    AttachmentRelease(Box<ConversationError>),
     NotFound,
     Capacity,
     Unavailable,
