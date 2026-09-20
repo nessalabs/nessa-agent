@@ -21,13 +21,21 @@ pub(super) const HARNESS: &str = "OpenCode";
 
 /// The version this profile was written against, checked at `initialize`.
 ///
-/// Nothing enforces that it agrees with a version anyone installs, and it is
-/// worth being plain about that rather than implying otherwise. The intended
-/// pin lives in `crates/nessa-server/data/agent-releases.json` on the branch
-/// that adds `nessa install-agent`, which is not an ancestor of this one — so
-/// at this commit there is no second place for this string to agree with, and
-/// when the two branches meet, a test tying them together is what would make
-/// "one version installed, one version driven" true instead of hoped for.
+/// **The pin file is the source of truth and this string follows it**, not the
+/// other way round. `crates/nessa-server/data/agent-releases.json` is what
+/// decides which Opencode lands on a machine; this only decides which one the
+/// adapter will drive. A bump starts there, by re-running the pin script
+/// against a new release, and ends here.
+///
+/// Nothing enforces the agreement at this commit, and it is worth being plain
+/// about that rather than implying otherwise: the pin file lives on the branch
+/// that adds `nessa install-agent`, which is not an ancestor of this one, so
+/// there is no second place for this string to disagree with yet. When the two
+/// branches meet, the test is one assertion — every `opencode` entry in that
+/// file carries a `version` equal to this constant — and it is what makes "one
+/// version installed, one version driven" true rather than hoped for. Until
+/// then a bump has to touch both by hand, which is exactly the state that test
+/// is for ending.
 pub(super) const VERSION: &str = "1.18.31";
 
 /// The session mode this binding runs Opencode in.
