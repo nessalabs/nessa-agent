@@ -88,6 +88,7 @@ pub(super) fn test_acp_configuration(
         model_id: "exact-fixture-model".into(),
         display_name: "Fixture".into(),
         input: text,
+        image_input: None,
         output: text,
         tool_use: true,
         reasoning: true,
@@ -118,6 +119,8 @@ pub(super) fn test_acp_configuration(
         kill_timeout: Duration::from_secs(2),
         event_capacity: capacity,
         max_frame_bytes: 8192,
+        max_incoming_frame_bytes: 8192,
+        images: None,
     };
     (root, config, model)
 }
@@ -137,7 +140,7 @@ pub(super) fn test_acp_binding(mode: &str, capacity: usize) -> (TempDir, ClaudeA
 pub(super) fn prompt(text: &str) -> ExecutionRequest {
     ExecutionRequest {
         execution_id: ExecutionId::new(text).unwrap(),
-        user_message: PromptText::new(text).unwrap(),
+        user_message: UserMessage::text_only(PromptText::new(text).unwrap()),
         estimated_input_tokens: 10,
         reserved_output_tokens: 100,
     }

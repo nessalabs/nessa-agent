@@ -13,7 +13,7 @@ import {
   ComposerQueue,
   ComposerQueueItem,
 } from "@nessa-ui/react/composer-queue"
-import { type Conversation } from "../model"
+import { messageLabel, type Conversation } from "../model"
 import { useConversationDispatch } from "../adapters/store/hooks"
 import { controlConversation } from "../adapters/store/slice"
 
@@ -72,7 +72,9 @@ export function ConversationQueue({
                 <ComposerQueueItem
                   key={turn.executionId}
                   id={turn.executionId}
-                  itemLabel={turn.text}
+                  // A waiting message of images alone still needs a name to be
+                  // reordered or removed by.
+                  itemLabel={messageLabel(turn.text, turn.attachments.length)}
                   showHandle={
                     gatewayAvailable &&
                     !conversation.controlPending &&
@@ -120,7 +122,7 @@ export function ConversationQueue({
                   }
                 >
                   <span>
-                    {turn.text}
+                    {messageLabel(turn.text, turn.attachments.length)}
                     {turn.mode === "steering" && (
                       <span className="block text-xs text-muted-foreground">
                         Steering

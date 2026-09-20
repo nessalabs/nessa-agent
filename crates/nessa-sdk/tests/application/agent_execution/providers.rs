@@ -19,7 +19,7 @@ async fn capability_admission_is_independent_of_provider_or_transport() {
     );
     let input = ExecutionRequest {
         execution_id: ExecutionId::new("execution").unwrap(),
-        user_message: PromptText::new("hello").unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("hello").unwrap()),
         estimated_input_tokens: 900,
         reserved_output_tokens: 100,
     };
@@ -59,7 +59,7 @@ async fn adapter_substitution_keeps_instances_and_controls_isolated() {
     let offline = provider_agent(Arc::new(OfflineSession)).await;
     let input = ExecutionRequest {
         execution_id: ExecutionId::new("execution").unwrap(),
-        user_message: PromptText::new("hello").unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("hello").unwrap()),
         estimated_input_tokens: 1,
         reserved_output_tokens: 100,
     };
@@ -162,7 +162,9 @@ pub(super) async fn provider_agent_with_review(
                 submission: SubmissionMode::Immediate,
                 request: ExecutionRequest {
                     execution_id: review.execution_id().clone(),
-                    user_message: PromptText::new("reviewed input").unwrap(),
+                    user_message: UserMessage::text_only(
+                        PromptText::new("reviewed input").unwrap(),
+                    ),
                     estimated_input_tokens: 1,
                     reserved_output_tokens: 1,
                 },

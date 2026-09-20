@@ -1,7 +1,7 @@
 use crate::domain::common::value_objects::TokenLimits;
 use crate::domain::model_metadata::{
     entities::ModelMetadata,
-    value_objects::{Modalities, ModelFeatures, ModelKey},
+    value_objects::{ImageInputLimits, Modalities, ModelFeatures, ModelKey},
 };
 use std::{error::Error, fmt};
 
@@ -72,6 +72,7 @@ pub struct EffectiveCapabilities {
     model: ModelKey,
     features: ModelFeatures,
     limits: TokenLimits,
+    image_input: Option<ImageInputLimits>,
 }
 impl EffectiveCapabilities {
     /// Binding and model ceilings intersect; explicit configuration must fit.
@@ -81,7 +82,20 @@ impl EffectiveCapabilities {
         configured_limits: TokenLimits,
     ) -> Result<Self, CapabilityError> {
         let published = model.features();
+        // Images are offered only when the model's image limits are recorded:
+        // without them nothing can prepare an image the model will accept.
+        let image_input = (published.input().image() && binding.features.input().image())
+            .then(|| model.image_input().cloned())
+            .flatten();
         let input = intersect(published.input(), binding.features.input())
+            .and_then(|shared| {
+                Modalities::new(
+                    shared.text(),
+                    shared.image() && image_input.is_some(),
+                    shared.audio(),
+                )
+                .ok()
+            })
             .ok_or(CapabilityError::NoInputModality)?;
         let output = intersect(published.output(), binding.features.output())
             .ok_or(CapabilityError::NoOutputModality)?;
@@ -117,6 +131,7 @@ impl EffectiveCapabilities {
                 published.reasoning() && binding.features.reasoning(),
             ),
             limits: configured_limits,
+            image_input,
         })
     }
     pub fn model(&self) -> &ModelKey {
@@ -127,6 +142,10 @@ impl EffectiveCapabilities {
     }
     pub fn limits(&self) -> TokenLimits {
         self.limits
+    }
+    /// The model's image limits, present exactly when image input is offered.
+    pub fn image_input(&self) -> Option<&ImageInputLimits> {
+        self.image_input.as_ref()
     }
     pub fn supports(&self, requirement: CapabilityRequirement) -> bool {
         match requirement {

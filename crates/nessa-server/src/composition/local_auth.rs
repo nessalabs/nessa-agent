@@ -8,6 +8,7 @@ use crate::{
     },
     agents::infrastructure::{AgentLaunchFiles, LocalAgentProbe},
     app::ports::Clock as ServerClock,
+    attachments::infrastructure::ModelImageNormalizer,
     browser_session::adapters::PersistentSessions,
     conversation::{
         application::{ConversationDependencies, ConversationLimits, ConversationService},
@@ -141,13 +142,40 @@ pub(super) fn product_state(
         nessa_local_storage::create_directory(&root)
             .map_err(|error| RunError::Agent(error.to_string()))?;
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-        let provider = super::agent::provider(agent, &root, clock.clone())?;
-        let storage = Arc::new(
-            LocalFileStorage::new(root.join("sessions"))
-                .map_err(|error| RunError::Agent(error.to_string()))?,
-        );
+        let model = super::agent::model(agent)?;
+        // Ownership records come first. The provider needs somewhere to read
+        // image bytes, reading them needs the attachment store, and beginning
+        // an upload needs to ask who owns a conversation: so the repository is
+        // built, then attachments over it, and only then the provider.
         let metadata = Arc::new(
             LocalConversationRepository::new(root.join("metadata"))
+                .map_err(|error| RunError::Agent(error.to_string()))?,
+        );
+        let attachments = super::attachments::attachments(
+            &directory
+                .parent()
+                .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
+                .join("attachments"),
+            metadata.clone(),
+            // The model's own image limits, from the catalog: the one place
+            // they are recorded. Every uploaded image is fitted to them, using
+            // the running system's decoder for the encodings the image library
+            // does not read itself.
+            Arc::new(
+                ModelImageNormalizer::new(model.image_input(), nessa_images::platform_decoder())
+                    .map_err(|error| RunError::Agent(format!("model image limits: {error}")))?,
+            ),
+            clock.clone(),
+        )?;
+        let provider = super::agent::provider(
+            agent,
+            &model,
+            &root,
+            clock.clone(),
+            attachments.images.clone(),
+        )?;
+        let storage = Arc::new(
+            LocalFileStorage::new(root.join("sessions"))
                 .map_err(|error| RunError::Agent(error.to_string()))?,
         );
         let creation_audit = Arc::new(
@@ -188,6 +216,7 @@ pub(super) fn product_state(
                 storage,
                 metadata,
                 creation_audit,
+                attachments: Some(attachments.conversations),
                 clock,
                 readiness: Some(Arc::new(PreparedRuntime(prepared.clone()))),
             },
@@ -199,7 +228,9 @@ pub(super) fn product_state(
         )
         .map_err(|error| RunError::Agent(error.to_string()))?;
         warm_up = Some(prepared);
-        product = product.with_conversations(Arc::new(service));
+        product = product
+            .with_conversations(Arc::new(service))
+            .with_attachments(attachments.service);
     }
     Ok(LocalProduct {
         routes: product,

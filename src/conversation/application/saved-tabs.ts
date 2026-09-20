@@ -42,9 +42,25 @@ export function parseConversationTabSnapshot(
   }
 }
 
+/**
+ * Attaching an image creates a gateway conversation before anything is said in
+ * it. One that a view has shown to hold nothing, with nothing drafted here, is
+ * not a conversation worth coming back to: saved, it would return after a reload
+ * as an empty tab nobody opened. A tab whose view has not arrived is kept — it
+ * may be a restored conversation that has simply not been read yet.
+ */
+function knownEmpty(item: LocalTabs["conversations"][number]): boolean {
+  return (
+    item.remote !== undefined &&
+    !item.remote.truncated &&
+    item.turns.length === 0 &&
+    item.draft.length === 0
+  )
+}
+
 export function conversationTabSnapshot(tabs: LocalTabs): SavedConversationTabs {
   const saved = tabs.conversations.slice(0, 64).flatMap((item) =>
-    item.serverConversationId
+    item.serverConversationId && !knownEmpty(item)
       ? [
           {
             conversationId: item.serverConversationId,

@@ -1,5 +1,6 @@
 //! Stable submission identities recover receipts without repeating provider effects.
 use super::*;
+use nessa_sdk::domain::common::value_objects::{ImageMediaType, Sha256Digest};
 
 #[tokio::test]
 async fn scheduling_concurrent_retries_share_dispatch_and_settlement() {
@@ -60,7 +61,20 @@ async fn scheduling_retry_rejects_changed_content_attribution_or_delivery_mode()
     let first = agent.enqueue(request("same"), actor()).await.unwrap();
     let running = started(&mut calls, "same").await;
     let mut different = request("same");
-    different.user_message = PromptText::new("different message").unwrap();
+    different.user_message = UserMessage::text_only(PromptText::new("different message").unwrap());
+    assert!(matches!(
+        agent.enqueue(different, actor()).await,
+        Err(AgentError::SubmissionConflict)
+    ));
+    // The same words with an image attached are a different message.
+    let mut different = request("same");
+    different.user_message = UserMessage::new(
+        different.user_message.text().cloned(),
+        vec![
+            ImageReference::new(Sha256Digest::from_bytes([1; 32]), ImageMediaType::Png, 1).unwrap(),
+        ],
+    )
+    .unwrap();
     assert!(matches!(
         agent.enqueue(different, actor()).await,
         Err(AgentError::SubmissionConflict)

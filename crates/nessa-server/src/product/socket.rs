@@ -45,6 +45,7 @@ const PRODUCT_METHODS: &[&str] = &[
     "conversation.answer",
     "conversation.cancel",
     "conversation.close",
+    "attachment.begin",
 ];
 
 /// Run one mandatory-authentication product session.
@@ -337,8 +338,17 @@ async fn run_authenticated<S>(
                 }
                 // Detached commands retain a shared permit through completion,
                 // so reconnecting cannot accumulate unlimited admitted tasks.
-                // Controls have separate capacity from reads and provider opens.
-                let capacity = if control { &state.controls } else { &state.requests };
+                // Controls have separate capacity from reads and provider opens,
+                // and so does beginning an upload: it opens no provider, so it
+                // does not wait behind a conversation that is starting, and its
+                // own storage and audit work never takes a control's place.
+                let capacity = if control {
+                    &state.controls
+                } else if frame.method == "attachment.begin" {
+                    &state.upload_begins
+                } else {
+                    &state.requests
+                };
                 let Ok(permit) = capacity.clone().try_acquire_owned() else {
                     if send_error(state.settings.write_timeout(), &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
                     continue;
@@ -428,6 +438,9 @@ async fn dispatch_authorized(
     match frame.method.as_str() {
         method if method.starts_with("conversation.") => {
             super::conversation::dispatch(state, session, frame).await
+        }
+        method if method.starts_with("attachment.") => {
+            super::attachment::dispatch(state, session, frame).await
         }
         "server.health" => {
             if frame.params != json!({}) {
@@ -593,7 +606,9 @@ fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.reorder"
         | "conversation.answer"
         | "conversation.cancel"
-        | "conversation.close" => Some("conversation.write"),
+        | "conversation.close"
+        // Uploading into a conversation is writing to it.
+        | "attachment.begin" => Some("conversation.write"),
         "credential.issue" | "credential.list" | "credential.revoke" => Some("credential.manage"),
         _ => None,
     }
@@ -1851,4 +1866,5 @@ mod tests {
             .unwrap();
     }
     include!("../../tests/conversation/gateway.rs");
+    include!("../../tests/attachments/gateway.rs");
 }

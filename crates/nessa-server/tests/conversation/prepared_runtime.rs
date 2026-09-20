@@ -85,6 +85,7 @@ async fn a_first_message_joins_the_warm_up_rather_than_launching_beside_it() {
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
             clock: Arc::new(TestClock),
             readiness: Some(Arc::new(PreparedRuntime(warm_up.clone()))),
         },

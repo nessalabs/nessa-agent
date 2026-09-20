@@ -129,7 +129,28 @@ export type {
   ConversationSubmission,
 } from "./presentation/conversation-api.js"
 export type {
+  AttachmentApi,
+  AttachmentBeginning,
+  AttachmentDescription,
+} from "./presentation/attachment-api.js"
+export {
+  NessaAttachmentError,
+  type AttachmentBeginRefusal,
+  type AttachmentFailureCode,
+} from "./application/attachment-upload.js"
+export {
+  asImageAttachment,
+  imageAttachmentsProblem,
+  IMAGE_ATTACHMENT_TYPES,
+  MAX_IMAGE_ATTACHMENT_BYTES,
+  MAX_MESSAGE_IMAGE_BYTES,
+  MAX_MESSAGE_IMAGES,
+  MAX_UPLOAD_BYTES,
+  type StoredAttachment,
+} from "./protocol/attachment-validate.js"
+export type {
   ConversationView,
+  ImageAttachment,
   ConversationMessage,
   ConversationPart,
   ConversationRuntime,

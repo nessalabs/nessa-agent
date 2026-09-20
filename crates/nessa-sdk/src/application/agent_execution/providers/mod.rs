@@ -18,9 +18,18 @@
 //! Diagnostic errors never determine admission or resource ownership.
 //! OperationCapabilities flows from the live backend through ProviderSession to
 //! Agent; immutable model capabilities remain a separate admission contract.
+//! Admission reads one negotiated fact from it: an image message is refused when
+//! the agent is known not to take images, and admitted while that is not yet known.
+//! A backend's `validate_input` adds what it could never deliver, such as a
+//! message too large for one frame. Every refusal of a message's images is an
+//! ImageInputRefusal, the same value at admission and at dispatch.
+//! UserImageSource is how an adapter turns a message's image references into
+//! bytes just before dispatch, off the task that owns the provider connection;
+//! requests, queues, and snapshots only ever hold references.
 
 mod close;
 mod identity;
+mod images;
 mod open;
 mod operations;
 mod ports;
@@ -29,6 +38,7 @@ mod session;
 mod steering;
 pub use close::SessionCloseRequest;
 pub use identity::ProviderIdentity;
+pub use images::{ImageInputRefusal, UserImageError, UserImageFuture, UserImageSource};
 pub use open::{ProviderCleanup, ProviderOpenError, ProviderOpenFuture};
 pub use operations::OperationCapabilities;
 pub use ports::{

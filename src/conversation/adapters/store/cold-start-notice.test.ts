@@ -11,6 +11,9 @@ import { createConversationApi } from "../../../../packages/nessa-client/src/pre
 import { makeStore } from "../../../store"
 import { createDependencies } from "../../../composition/dependencies"
 import { gatewayEffects } from "../gateway/effects"
+
+/** No upload backoff belongs in a text-only send: waiting here is the failure. */
+const unexpectedWait = () => Promise.reject(new Error("no wait expected"))
 import { textContent } from "../../model"
 import { conversationNotice } from "../../ui/notification"
 import { sendDraft } from "./slice"
@@ -82,7 +85,7 @@ it("tells the user the agent was still starting, after the gateway takes its ful
     conversation: createConversationApi(wire, () => `id-${next++}`),
   } as unknown as NessaClient
   const store = makeStore(
-    createDependencies({ conversation: gatewayEffects(() => client) }),
+    createDependencies({ conversation: gatewayEffects(() => client, unexpectedWait) }),
   )
 
   const sending = store.dispatch(sendDraft({ content: textContent("first message") }))
@@ -134,7 +137,7 @@ it("reports unknown delivery when the gateway never answers, inventing no reason
     conversation: createConversationApi(wire, () => `id-${next++}`),
   } as unknown as NessaClient
   const store = makeStore(
-    createDependencies({ conversation: gatewayEffects(() => client) }),
+    createDependencies({ conversation: gatewayEffects(() => client, unexpectedWait) }),
   )
 
   const sending = store.dispatch(sendDraft({ content: textContent("first message") }))

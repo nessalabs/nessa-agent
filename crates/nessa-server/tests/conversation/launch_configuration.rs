@@ -41,6 +41,7 @@ fn the_budgets_injected_are_the_ones_the_shared_table_states() {
         PathBuf::from("/workspace"),
         BTreeMap::new(),
         BTreeMap::new(),
+        None,
     );
     // The largest of the four, and the one the warm-up turns on: 120 s of the
     // 170 s one-launch worst case the client's deadline is derived from.
@@ -59,6 +60,7 @@ fn every_injected_budget_is_a_positive_interval() {
         PathBuf::from("/workspace"),
         BTreeMap::new(),
         BTreeMap::new(),
+        None,
     );
     for budget in [
         injected.launch_timeout,

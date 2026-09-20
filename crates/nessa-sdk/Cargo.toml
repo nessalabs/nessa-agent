@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 data-encoding = "2.11"
 sha2 = "0.10"
+base64 = "0.22"
 nessa-local-storage = { path = "../nessa-local-storage" }
 tracing = "0.1"
 event-stream = { git = "https://github.com/nessalabs/event-stream", rev = "66ba7525260040d6265276692088dca6dae0737e", default-features = false, features = ["codec"] }

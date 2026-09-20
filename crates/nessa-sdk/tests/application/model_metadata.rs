@@ -17,6 +17,7 @@ fn dto() -> ModelMetadataDto {
             image: true,
             audio: false,
         },
+        image_input: None,
         output: ModalitiesDto {
             text: true,
             image: false,

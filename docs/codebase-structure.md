@@ -238,6 +238,25 @@ identity providers remain future adapters.
 local auth, SDK session storage, and desktop credential adapters. It has no auth/domain policy
 or Tauri dependency; callers inject the resulting adapters through composition.
 
+`crates/nessa-images` fits one image to a consumer's limits: it reads the
+encoding from the bytes, turns the image upright, scales it down, and converts or
+compresses it to PNG or JPEG, or says by type why it could not. It knows nothing
+about agents, models, or conversations, does no I/O, and keeps no state. It reads
+the common encodings with its own decoders and hands what only an operating
+system reads well (HEIC, AVIF, JPEG XL, PSD, camera RAW) to a `PlatformDecoder`:
+ImageIO on macOS under `src/platform/`, none yet elsewhere, where those are
+refused by type. Two gates stand in front of a system decoder: `src/sniff.rs`
+puts to it only bytes that begin like one of those encodings, on every system
+and in front of a test's substitute, and the macOS adapter decodes only what
+ImageIO itself names as one of them, so a PDF is refused rather than rendered.
+`src/budget.rs` holds the one pixel and memory budget every decoder is held to
+before a pixel is read, and an image that would pass through unchanged is
+decoded whole first (`src/jpeg.rs` reads a JPEG strictly). Tests substitute the
+decoder; `tests/memory.rs` covers the budget from headers alone and
+`tests/macos.rs` runs the real decoder. The
+numbers are the caller's: the gateway takes them from the selected model's
+`imageInput` entry in the SDK catalog, the one place image limits are recorded.
+
 ## Gateway conversation ownership
 
 `crates/nessa-server/src/conversation/` groups durable conversation identity/access
@@ -245,8 +264,25 @@ or Tauri dependency; callers inject the resulting adapters through composition.
 metadata/audit adapters (infrastructure). `product/conversation.rs` maps the
 canonical product wire contract; composition supplies provider, storage and audit.
 Tests follow those responsibilities under `crates/nessa-server/tests/conversation/`.
+A message refers to images by digest, never by bytes: the service asks its
+`ConversationAttachments` port whether this conversation holds each one before it
+accepts the message, and `close` releases what the conversation holds in the
+closer's name, reporting a failed release without hiding a failed agent close.
+The [attachments context](#attachments) implements that port.
 The floating panel uses injected conversation effects and NessaClient; neither
 owns SDK scheduling. See [gateway chat](guides/gateway-chat.md).
+
+Image input follows the same split. `@nessa/client` owns the wire: the
+`AttachmentUploadTransport` port in `application/attachment-upload.ts`, its
+`fetch` adapter in `transport/`, and `presentation/attachment-api.ts`. The
+conversation vertical owns a draft file's upload state and the
+`stageAttachment` effect, which answers with the reference the gateway stored;
+the panel owns the original bytes and the order of one upload. Image conversion
+and its limits belong to the gateway, so no TypeScript module scales, converts,
+or compresses an image. A test outside a context imports that context's
+`testing.ts` — the store's commands, the scenario substitute, typed errors, and
+the pure parts of the barrel — rather than its internals, and mocks the barrel
+with it when the barrel's components cannot be resolved.
 
 ## Agent runtime warm-up
 
@@ -519,6 +555,51 @@ handler receives the shared reader over it alone via `FromRef`. Tests under
 `tests/agents/` split domain rules, application orchestration, the shared
 reader's bounds, the HTTP boundary, the local probe's failure modes, and
 Claude's own sign-in conventions.
+
+## Attachments
+
+`crates/nessa-server/src/attachments/` owns the files a conversation uploads so
+its messages can refer to them. `domain/value_objects/` describe a file
+(`Attachment`: digest, `MediaType`, size, which must all agree), the verified
+`Caller` behind an action, and one `UploadTicket` with its five-minute
+`TicketLifetime`; `domain/entities/` owns the `Hold`, one conversation keeping
+one stored file and remembering the file that was uploaded to produce it;
+`domain/aggregates/` owns the `TicketBook`, where single use, expiry, replacement
+by the same request made again, withdrawal, and the bounds on outstanding
+tickets (in all, per organization, per conversation) are decided together. `application/` owns
+`AttachmentService` and its ports: `AttachmentStore` and `StagedUpload` for
+bytes, `AttachmentAudit` for evidence, `ImageNormalizer` for turning an uploaded
+image into the one that is kept, `ConversationOwnership` for asking who owns a
+conversation without opening an agent, `TicketSecrets` for randomness, and
+`UploadBody` for a transfer however it arrives. `infrastructure/store.rs` keeps
+bytes once per digest under `attachments/blobs/` and one record per hold under
+`attachments/holds/<sha256(organization)>/<conversation>/`, private, with every
+name derived rather than copied from input and one lock ordering every change;
+`audit.rs` commits one private record per transition; `conversation.rs` and
+`images.rs` implement the conversation context's `ConversationAttachments` and
+the SDK's `UserImageSource` on top of this context. `entrypoint/http.rs` is
+`PUT /attachments` and its preflight: it authenticates nobody, acts only on a
+ticket the authenticated socket issued, streams the body, and answers with the
+stored reference. `product/attachment.rs` maps `attachment.begin`.
+Composition builds the store once in `composition/attachments.rs` and hands out
+the service (shared by the socket and the route through a narrow `FromRef`), the
+conversation port, and the image source; it is composed only when an agent is.
+The normalizer is an argument of that factory: `infrastructure/normalizer.rs`
+fits every upload that says it is an image to the selected model's `imageInput`
+limits from the SDK catalog, through `crates/nessa-images`, reading the encoding
+from the bytes and never from the declared type. Composition also hands it the
+running system's image decoder, which is the one thing here that reads outside
+this process, so a test can put a decoder that refuses, answers nonsense, or
+stops dead in its place. A model with no recorded limits has no image prepared
+for it, and `ImageNormalizer::offers_images` says so before a ticket is issued:
+an `image/*` `attachment.begin` on such a gateway is refused with
+`image_input_unsupported` rather than answered with a ticket for bytes no
+message could name.
+Holds live until their conversation closes; what expires on its own is an unused
+ticket. Tests under `tests/attachments/` split domain rules, the service over
+doubles, the real store on a real filesystem, audit records, the adapters, the
+HTTP boundary, the wire mapping, the socket and router, and the facts this
+context and the published protocol schema must agree on (`agreement.rs`).
 
 ## Command-line surface
 
