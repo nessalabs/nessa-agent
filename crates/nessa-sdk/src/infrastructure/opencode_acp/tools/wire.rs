@@ -9,10 +9,11 @@ use std::collections::HashMap;
 
 /// The most tool calls one execution keeps an identity for.
 ///
-/// The same bound the other profiles use. With 256-byte identifiers and
-/// [`MAX_NAME_BYTES`] names it bounds this map's payload independently of how
-/// large the frames arriving are, so a provider that keeps announcing tool calls
-/// cannot decide how much memory the adapter spends.
+/// The same bound the other profiles use. With 256-byte identifiers and the
+/// protocol's ten kinds — the only two things this map holds — it bounds the
+/// payload independently of how large the frames arriving are, so a provider
+/// that keeps announcing tool calls cannot decide how much memory the adapter
+/// spends.
 const MAX_TOOLS: usize = 4096;
 
 /// What one observed Opencode tool call is known by.
@@ -38,51 +39,19 @@ const MAX_TOOLS: usize = 4096;
 /// Retained rather than read from the request, because a permission request can
 /// arrive naming nothing but the tool call it belongs to.
 ///
-/// There is one case where a kind is not enough and [`permission_input`] reads
-/// the title after all. It is documented there, with why it is the lesser of
-/// the two bad records rather than a softening of the rule above.
+/// [`permission_input`] read the title for one case and no longer does. Why
+/// that case cannot be rescued is documented there, and it is the rule above
+/// holding rather than bending.
 #[derive(Clone)]
 pub(in crate::infrastructure::opencode_acp) struct ObservedTool {
     kind: Option<String>,
 }
 
-/// The longest provider-supplied name this profile will record.
-///
-/// The same bound the Codex profile uses, and for the same reason: a name is
-/// what a person approves under and what the audit record keeps, so it has to
-/// be a name and not a payload that happened to arrive in a name's place.
-const MAX_NAME_BYTES: usize = 128;
-
-/// The ACP kind that says nothing, and the only one that lets a title through.
+/// The ACP kind that says nothing.
 ///
 /// One of the protocol's ten, so the shared mapper accepts it, and the one
 /// Opencode maps everything it has no case for to. See [`permission_input`].
 const UNINFORMATIVE_KIND: &str = "other";
-
-/// Whether a provider-supplied name is small enough and plain enough to keep.
-///
-/// Graphic ASCII rather than an allowlist of characters: what matters is that a
-/// name is a name — bounded, printable, and on one line — not that it
-/// matches
-/// a shape this repository invented.
-fn bounded_name(name: &str) -> bool {
-    !name.is_empty() && name.len() <= MAX_NAME_BYTES && name.bytes().all(|b| b.is_ascii_graphic())
-}
-
-/// This frame's title, when it is usable as a name at all.
-///
-/// [`bounded_name`] admits no spaces, which does more work here than the bound
-/// suggests: a title Opencode composed for a person to read is a phrase, and a
-/// phrase does not survive it. What does is key-shaped — `nessa_shell`,
-/// `todowrite` — which is the only thing [`permission_input`] wants from a
-/// title in the first place.
-fn bounded_title(value: &Value) -> Option<String> {
-    value
-        .get("title")
-        .and_then(Value::as_str)
-        .filter(|title| bounded_name(title))
-        .map(str::to_owned)
-}
 
 /// The ACP kind on this frame, as a string, once the shared mapper has accepted
 /// it. Safe to keep only in that order: `acp_tool_call` has already refused
@@ -133,35 +102,34 @@ pub(in crate::infrastructure::opencode_acp) fn tool_call(
 /// decision recorded against "Edit" with nothing saying what would be edited is
 /// not a reviewed decision, and the audit would carry it as though it were.
 ///
-/// The name is the request's own kind, or the one the announcement gave —
-/// except where that kind is `other`.
+/// The name is the request's own kind, or the one the announcement gave. A
+/// request whose kind is `other`, or which names no kind at all, is refused
+/// rather than reviewed under something that is not an identity.
 ///
-/// Opencode derives the kind from the permission's *category* and maps
-/// everything it has no case for to `other`: `skill`, `lsp`, `todowrite`,
-/// `question`, and every MCP tool, which is to say Nessa's own shell. Those
-/// requests carry `{}` for arguments, because a permission's metadata is all
-/// there is to carry. So an approval recorded as `other` says a thing was
-/// approved and nothing whatever about which thing, which is the same record as
-/// one recorded under `tc_01H9` — and refusing to write that record is the
-/// rule this function is built on.
+/// `other` is what Opencode maps every permission category it has no case for
+/// to: `skill`, `lsp`, `todowrite`, `question`, `websearch`,
+/// `external_directory`, and every MCP tool, which is to say Nessa's own
+/// shell. An approval recorded as `other` says a thing was approved and
+/// nothing about which thing, which is the same record as one recorded under
+/// `tc_01H9` — so it is refused for the reason that one always was.
 ///
-/// The title is what is left, and it is read only there. That is a weaker
-/// identity than a kind and it is not claimed to be more: Opencode composes a
-/// title from the arguments only for the categories it has a case for, so in
-/// the `other` cases what arrives is the announcement's own title or, failing
-/// that, upstream's word for the permission. Both are better than `other` and
-/// neither is guaranteed, so it is put through the same bound as any other
-/// provider-supplied name. The choice here is not between a trustworthy name
-/// and an untrustworthy one. It is between a record naming something that may
-/// be described loosely and a record naming nothing at all, and the audit is
-/// worth more with the first.
+/// The title cannot stand in, and the reason is worth keeping because it is
+/// not obvious. On a *permission* request the title is not the announcement's:
+/// upstream builds the frame with `state.title = permissionTitle(toolName,
+/// metadata)`, and the ACP title is then that value or, when it is absent, the
+/// permission key. For most of the `other` set `permissionTitle` has no case
+/// and returns nothing, so the title is the key — `nessa_shell`, `skill` —
+/// which would be a real identity. For two of them it has a case and builds
+/// the title out of the model's own arguments: `websearch` from the query,
+/// `external_directory` from the description, command or target path. Nothing
+/// on the frame says which of the two happened. A search for `read` is one
+/// short graphic-ASCII word, so any bound a name can carry admits it, and the
+/// record would read `read` for a web search — a name the model chose the
+/// meaning of, which is worse than one that means nothing.
 ///
-/// Read only there, and deliberately: a kind of `edit` with a title that says
-/// "Read the README" is still reviewed as an edit. The title displaces nothing.
-///
-/// A request that names no kind, or names `other` with no usable title, is
-/// refused, for the reason it always was: recording an approval nobody could
-/// have understood is worse than refusing to record one.
+/// What would rescue it is the permission's category, which upstream knows and
+/// ACP does not carry. Until something does, `other` has no reviewable
+/// identity and saying so is the honest answer.
 pub(in crate::infrastructure::opencode_acp) fn permission_input(
     request: &Value,
     tools: &HashMap<String, ObservedTool>,
@@ -179,20 +147,10 @@ pub(in crate::infrastructure::opencode_acp) fn permission_input(
     // permission request. `acp_tool_call` refuses anything outside the
     // protocol's ten, which is what makes reading the string back safe.
     acp_tool_call(tool)?;
-    let kind =
-        accepted_kind(tool).or_else(|| tools.get(id).and_then(|observed| observed.kind.clone()));
-    let name = match kind.as_deref() {
-        Some(kind) if kind != UNINFORMATIVE_KIND => kind.to_owned(),
-        // Upstream had no case for this one, so its own word for it is the best
-        // identity there is. Bounded, because that word is still text arriving
-        // from the provider.
-        Some(_) => bounded_title(tool)
-            .ok_or_else(|| protocol("permission request names no reviewable tool"))?,
-        // No kind at all is not the same case: nothing says the title was
-        // upstream's word rather than one composed for a person to read, so it
-        // is not a fallback here.
-        None => return Err(protocol("permission request names no tool")),
-    };
+    let name = accepted_kind(tool)
+        .or_else(|| tools.get(id).and_then(|observed| observed.kind.clone()))
+        .filter(|kind| kind != UNINFORMATIVE_KIND)
+        .ok_or_else(|| protocol("permission request names no reviewable tool"))?;
     Ok(ToolReviewInput {
         name,
         arguments_json: arguments.to_string(),

@@ -139,56 +139,50 @@ fn a_call_that_was_never_named_is_refused_rather_than_reviewed_under_its_identif
     assert!(refused.is_err());
 }
 
-/// `other` is the kind Opencode maps everything it has no case for to, and its
-/// requests carry `{}` for arguments, so the kind and the arguments together
-/// say nothing at all. The title is the only thing left that names what is
-/// being asked, so that is the one case it is read in.
-#[test]
-fn a_request_upstream_had_no_kind_for_is_named_by_the_word_upstream_did_use() {
-    let mut tools = HashMap::new();
-    tool_call(&call("shell-1", Some("other")), &mut tools).unwrap();
-
-    let input = permission_input(
-        &permission(json!({
-            "toolCallId": "shell-1",
-            "kind": "other",
-            "title": "nessa_shell",
-            "rawInput": {},
-        })),
-        &tools,
-    )
-    .unwrap();
-    assert_eq!(input.name, "nessa_shell");
-}
-
-/// And `other` on its own is refused, rather than recorded as `other`.
+/// `other` is the kind Opencode maps everything it has no case for to, and it
+/// is refused rather than recorded.
 ///
-/// An approval recorded under a kind that says nothing, against `{}` for
-/// arguments, is the same record as one recorded under `tc_01H9`: it says a
-/// thing was approved and nothing about which thing.
+/// An approval recorded under a kind that says nothing is the same record as
+/// one recorded under `tc_01H9`: it says a thing was approved and nothing about
+/// which thing.
 #[test]
 fn a_request_naming_nothing_but_the_kind_that_says_nothing_is_refused() {
     let mut tools = HashMap::new();
     tool_call(&call("shell-1", Some("other")), &mut tools).unwrap();
 
-    assert!(permission_input(
-        &permission(json!({"toolCallId": "shell-1", "rawInput": {}})),
-        &tools,
-    )
-    .is_err());
+    for request in [
+        // Retained from the announcement.
+        json!({"toolCallId": "shell-1", "rawInput": {}}),
+        // And on the request's own frame.
+        json!({"toolCallId": "shell-1", "kind": "other", "rawInput": {}}),
+    ] {
+        assert!(
+            permission_input(&permission(request.clone()), &tools).is_err(),
+            "{request} was reviewed under a kind that names nothing"
+        );
+    }
 }
 
-/// The title standing in for a kind is still provider text, and bounded as
-/// such. "Upstream chose this word" is a fact about one version of Opencode,
-/// not a guarantee about what arrives.
+/// And the title does not rescue it, however much it looks like a name.
+///
+/// On a permission request the title is `permissionTitle(toolName, metadata)`
+/// or, failing that, the permission key. For `websearch` and
+/// `external_directory` — both `other` — upstream has a case, and it builds
+/// that title out of the model's own arguments. Nothing on the frame says
+/// which of the two happened, so a title that is short, graphic and on one
+/// line is exactly what a one-word search query looks like.
 #[test]
-fn a_title_standing_in_for_a_kind_is_still_held_to_a_name() {
+fn a_title_that_could_be_the_models_own_words_is_not_a_name() {
     let tools = HashMap::new();
     for title in [
-        json!("a sentence about what\nis being asked"),
-        json!("x".repeat(MAX_NAME_BYTES + 1)),
-        json!(""),
-        json!(7),
+        // What upstream would send for a `websearch` permission whose query is
+        // one word. Indistinguishable, on this frame, from a permission key.
+        "read",
+        // And for `external_directory`, whose title is the target path.
+        "/etc",
+        // A key-shaped one is refused too: the rule is the kind, not the shape
+        // of the string beside it.
+        "nessa_shell",
     ] {
         let refused = permission_input(
             &permission(json!({
@@ -203,10 +197,7 @@ fn a_title_standing_in_for_a_kind_is_still_held_to_a_name() {
     }
 }
 
-/// A request that names no kind is not the `other` case, and the title is not a
-/// fallback for it. Nothing says a title arriving here is upstream's own word
-/// rather than display text composed from arguments the model supplied, which
-/// is the whole reason this profile keeps kinds and not titles.
+/// A request that names no kind is refused for the same reason it always was.
 #[test]
 fn a_title_does_not_stand_in_where_upstream_named_no_kind_at_all() {
     let mut tools = HashMap::new();
