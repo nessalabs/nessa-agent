@@ -20,7 +20,10 @@ mod runtime_config;
 
 mod agent;
 
-#[cfg(any(unix, test))]
+// Where its only consumer is: the provider it configures needs Unix process
+// supervision, so elsewhere this is code nothing can reach, which -D warnings
+// rejects — including in a test build, where `mod build` is still absent.
+#[cfg(unix)]
 mod agent_budgets;
 
 mod desktop;
