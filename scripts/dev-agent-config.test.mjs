@@ -312,13 +312,17 @@ test(
   "a repair that cannot be written fails the caller instead of reporting success",
   {
     ...unixOnly,
-    // Root writes through a read-only directory, so there is no way to make the
-    // write fail here. It fails on an ordinary user, which is what CI runs as.
-    skip: process.getuid?.() === 0 ? "run as root; cannot make a write fail" : false,
+    // Root writes through a read-only directory, so the write cannot be made to
+    // fail here. It fails for an ordinary user, which is what CI runs as.
+    skip: process.getuid?.() === 0 ? "run as root; a write here cannot fail" : false,
   },
   async () => {
-    // The one path left that reports a configuration the gateway will refuse.
-    // It throws rather than exiting, for the reason the test above gives.
+    // The one path left that reports a configuration the gateway will refuse,
+    // and it throws rather than exiting, for the reason the test above gives.
+    //
+    // The directory is closed from `interrupt`, which runs with the lock
+    // already held — closing it before `publish` is called would only stop the
+    // lock being taken, and that is a different answer entirely.
     const { publish } = await import("./dev-agent-config.mjs")
     const data = temporaryRoot()
     const directory = join(data, "dev")
@@ -328,13 +332,20 @@ test(
     writeFileSync(path, JSON.stringify({ agent: { node: "/old/node" }, agents }), {
       mode: 0o600,
     })
-    chmodSync(directory, 0o500)
 
     try {
       assert.throws(
-        () => publish({ configPath: path, agents, node: agents.runtimes.claude.command }),
+        () =>
+          publish({
+            configPath: path,
+            agents,
+            node: agents.runtimes.claude.command,
+            interrupt: () => chmodSync(directory, 0o500),
+          }),
         /could not be repaired/,
       )
+      // Said, and not half done: the key is still there for the next run.
+      assert.notEqual(JSON.parse(readFileSync(path, "utf8")).agent, undefined)
     } finally {
       chmodSync(directory, 0o700)
     }
