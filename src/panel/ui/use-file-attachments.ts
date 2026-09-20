@@ -16,6 +16,23 @@ import { windowBudgetMessage } from "../application/upload-image"
 const MIB = 1024 * 1024
 
 /** Coordinates local file selection and preview against the originating conversation. */
+/**
+ * Fetch the preview's own chunk before anybody asks for it.
+ *
+ * Opening a file is one click with nothing before it, and the preview arrives
+ * with the design system's whole set of renderers behind it — Markdown, JSON,
+ * PDF, video — because the one that draws a picture is registered beside them.
+ * Waiting for all that after the click is a sheet that says "Loading preview…"
+ * for as long as the fetch takes.
+ *
+ * Attaching a file is the moment somebody might open one, and it is a moment
+ * with nothing else going on, so the chunk is fetched then and the click has
+ * nothing left to wait for. Repeat calls cost nothing: the same specifier
+ * resolves to the module already in hand, which is also what lets this and the
+ * panel's `React.lazy` of it agree.
+ */
+const warmPreview = () => void import("./attachment-preview")
+
 export function useFileAttachments(
   chat: ReturnType<typeof useConversation>,
   resources: AttachmentResources,
@@ -59,6 +76,13 @@ export function useFileAttachments(
     )
       setViewed(null)
   }, [chat.conversations, viewed])
+  // Somebody with a file attached is somebody who may open it.
+  const anyFiles = chat.conversations.some((conversation) =>
+    conversation.draft.some((part) => part.type === "file"),
+  )
+  React.useEffect(() => {
+    if (anyFiles) warmPreview()
+  }, [anyFiles])
   const files = chat.active.draft.filter(
     (part): part is FileAttachment => part.type === "file",
   )
