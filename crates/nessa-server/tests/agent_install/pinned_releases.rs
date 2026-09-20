@@ -171,6 +171,24 @@ fn every_pin_names_one_version() {
         1,
         "the pinned platforms disagree about the version: {versions:?}"
     );
+    // And that the one answer is the one being downloaded. `version` is a
+    // separate field from `archiveUrl`, so agreeing with the other pins says
+    // nothing about agreeing with the tarball: a bump that edited every
+    // `version` and no URL would leave the whole file consistent and every
+    // entry wrong, and `1.18.31` is what a person reads to know what Nessa
+    // tested. npm's own path carries the version, so the two can be compared
+    // without fetching anything.
+    for release in &releases {
+        let package = package_named_by(release.archive_url().as_str());
+        let version = release.version();
+        assert!(
+            release
+                .archive_url()
+                .as_str()
+                .ends_with(&format!("{package}-{version}.tgz")),
+            "{package} is pinned as {version} but its archive is not that version"
+        );
+    }
 }
 
 #[test]

@@ -626,6 +626,27 @@ impl ManagedRuntimes {
             self.withdraw(agent, release, &destination);
             return Err(failure);
         }
+        // Nothing reclaims the artifact this one supersedes, and that is a
+        // decision rather than an oversight.
+        //
+        // A pin bump leaves `versions/<old>/<digest>/` on disk with no record
+        // naming it, around a hundred and fifty megabytes for Opencode, and
+        // nothing will ever look at it again. The place to remove it is here:
+        // this method already holds the publication lock, and this line is the
+        // only moment at which the record has just become true, so it is the
+        // only moment at which "every artifact the record does not name" is a
+        // safe thing to say. Anywhere else would be reading a record another
+        // install is in the middle of replacing.
+        //
+        // What stops it being written today is not where it goes but what it
+        // owes. Removing an installed runtime is a consequential state
+        // transition, so the hard audit rule asks it to carry its target, its
+        // before and after, its cause, and who caused it — and this store has
+        // no audit port to carry any of that. Adding the removal without one
+        // would delete a runtime and leave nothing saying it happened, which
+        // is worse than the disk. The same port is what the install path is
+        // waiting on, so the two land together or not at all.
+        //
         // The one path that leaves this type, so the one that is spelled in
         // full: everything above is relative because everything above is
         // reached through the root rather than resolved from the outside.
