@@ -16,7 +16,13 @@ const view: ConversationView = {
   pending: [],
   permissions: [],
   tools: [],
-  capabilities: { queue: true, steer: true, resume: true, permissions: true },
+  capabilities: {
+    queue: true,
+    steer: true,
+    resume: true,
+    permissions: true,
+    imageInput: false,
+  },
   truncated: false,
   queueComplete: true,
 }
@@ -27,7 +33,9 @@ it("owns immutable message and action identities through an uncertain retry", as
     .mockResolvedValueOnce({ executionId: "execution", disposition: "queued" })
   const api = createConversationApi({ request }, () => "unused")
   const options = { executionId: "execution", requestId: "action" }
-  const error = await api.send(conversationId, "hello", options).catch((error) => error)
+  const error = await api
+    .send(conversationId, "hello", [], options)
+    .catch((error) => error)
   options.executionId = "edited-id"
   options.requestId = "edited-action"
   expect(error).toBeInstanceOf(NessaConversationMutationError)
@@ -48,6 +56,7 @@ it("owns immutable message and action identities through an uncertain retry", as
     executionId: "execution",
     requestId: "action",
     text: "hello",
+    attachments: [],
   })
 })
 it("generates distinct identities per intentional message, retaining each on retry", async () => {
@@ -57,11 +66,11 @@ it("generates distinct identities per intentional message, retaining each on ret
     disposition: "queued",
   }))
   const api = createConversationApi({ request }, () => `id-${++next}`)
-  expect(await api.send(conversationId, "same text")).toMatchObject({
+  expect(await api.send(conversationId, "same text", [])).toMatchObject({
     executionId: "id-1",
     requestId: "id-2",
   })
-  expect(await api.send(conversationId, "same text")).toMatchObject({
+  expect(await api.send(conversationId, "same text", [])).toMatchObject({
     executionId: "id-3",
     requestId: "id-4",
   })
@@ -84,6 +93,7 @@ it("rejects terminal executions that remain pending or actionable", async () => 
   const terminal = {
     executionId: "finished",
     userText: "done",
+    attachments: [],
     parts: [],
     status: "completed",
   } as const
@@ -102,7 +112,9 @@ it("rejects terminal executions that remain pending or actionable", async () => 
     {
       ...view,
       messages: [terminal],
-      pending: [{ executionId: "finished", text: "done", mode: "queued" }],
+      pending: [
+        { executionId: "finished", text: "done", attachments: [], mode: "queued" },
+      ],
     },
     { ...view, messages: [terminal], permissions: [permission] },
   ]) {
@@ -147,6 +159,7 @@ it("accepts bounded full replacement views and rejects mismatched identities or 
         {
           executionId: "e",
           userText: "hi",
+          attachments: [],
           parts: [
             { offset: 0, kind: "thought", text: "", toolId: "" },
             { offset: 1, kind: "text", text: "", toolId: "" },
@@ -181,6 +194,7 @@ it("rejects duplicate identities and impossible steering order at the response b
   const message = {
     executionId: "first",
     userText: "hello",
+    attachments: [],
     parts: [],
     status: "completed",
   } as const
@@ -208,8 +222,8 @@ it("rejects duplicate identities and impossible steering order at the response b
     {
       ...view,
       pending: [
-        { executionId: "waiting", text: "one", mode: "queued" },
-        { executionId: "waiting", text: "two", mode: "steering" },
+        { executionId: "waiting", text: "one", attachments: [], mode: "queued" },
+        { executionId: "waiting", text: "two", attachments: [], mode: "steering" },
       ],
     },
     { ...view, permissions: [permission, permission] },
@@ -220,6 +234,7 @@ it("rejects duplicate identities and impossible steering order at the response b
         {
           executionId: "steer",
           userText: "correction",
+          attachments: [],
           parts: [],
           status: "injected",
           steeringTarget: "later",
@@ -234,6 +249,7 @@ it("rejects duplicate identities and impossible steering order at the response b
         {
           executionId: "self",
           userText: "correction",
+          attachments: [],
           parts: [],
           status: "injected",
           steeringTarget: "self",
@@ -247,6 +263,7 @@ it("rejects duplicate identities and impossible steering order at the response b
         {
           executionId: "steer",
           userText: "correction",
+          attachments: [],
           parts: [],
           status: "injected",
         },
@@ -278,6 +295,7 @@ it("accepts bounded omissions and the intentional pending-message overlap", asyn
       {
         executionId: "steer",
         userText: "correction",
+        attachments: [],
         parts: [],
         status: "injected",
         steeringTarget: "omitted-target",
@@ -286,11 +304,12 @@ it("accepts bounded omissions and the intentional pending-message overlap", asyn
       {
         executionId: "waiting",
         userText: "next",
+        attachments: [],
         parts: [],
         status: "queued",
       },
     ],
-    pending: [{ executionId: "waiting", text: "next", mode: "queued" }],
+    pending: [{ executionId: "waiting", text: "next", attachments: [], mode: "queued" }],
     permissions: [
       {
         executionId: "omitted-execution",
@@ -325,7 +344,7 @@ it("rejects a response acknowledging a different execution or action", async () 
     .mockResolvedValue({ executionId: "other", disposition: "queued" })
   const api = createConversationApi({ request }, () => "id")
   await expect(
-    api.steer(conversationId, "correction", { executionId: "expected" }),
+    api.steer(conversationId, "correction", [], { executionId: "expected" }),
   ).rejects.toBeInstanceOf(NessaConversationMutationError)
   request.mockResolvedValue({ requestId: "other", applied: true })
   await expect(
@@ -427,7 +446,7 @@ it("reports invalid requests as known pre-admission rejections", async () => {
     .fn()
     .mockRejectedValue(new NessaRpcError("invalid_request", "invalid_request"))
   const api = createConversationApi({ request }, () => "identity")
-  const sendError = await api.send(conversationId, "hello").catch((error) => error)
+  const sendError = await api.send(conversationId, "hello", []).catch((error) => error)
   const closeError = await api.close(conversationId).catch((error) => error)
   expect(sendError).toMatchObject({ uncertain: false })
   expect(closeError).toMatchObject({ uncertain: false })
@@ -441,16 +460,16 @@ it("enforces canonical conversation and UTF-8 byte limits before admission", asy
     }),
   )
   const api = createConversationApi({ request }, () => "request")
-  expect(() => api.send("conversation", "hello")).toThrow(TypeError)
-  expect(() => api.send(conversationId, "😀".repeat(2049))).toThrow(TypeError)
+  expect(() => api.send("conversation", "hello", [])).toThrow(TypeError)
+  expect(() => api.send(conversationId, "😀".repeat(2049), [])).toThrow(TypeError)
   expect(() =>
-    api.send(conversationId, "hello", { executionId: "😀".repeat(65) }),
+    api.send(conversationId, "hello", [], { executionId: "😀".repeat(65) }),
   ).toThrow(TypeError)
-  expect(() => api.send(conversationId, "hello", { requestId: "😀".repeat(65) })).toThrow(
-    TypeError,
-  )
+  expect(() =>
+    api.send(conversationId, "hello", [], { requestId: "😀".repeat(65) }),
+  ).toThrow(TypeError)
   await expect(
-    api.send(conversationId, "😀".repeat(2048), {
+    api.send(conversationId, "😀".repeat(2048), [], {
       executionId: "😀".repeat(64),
       requestId: "😀".repeat(64),
     }),
@@ -465,6 +484,7 @@ it("enforces UTF-8 byte limits on server response identities", async () => {
       {
         executionId: "😀".repeat(65),
         userText: "hello",
+        attachments: [],
         parts: [],
         status: "completed",
       },
@@ -534,4 +554,71 @@ it("rejects reorder acknowledgements with wrong action or unknown outcome", asyn
       NessaConversationControlError,
     )
   }
+})
+
+const image = {
+  digest: `sha256:${"ab".repeat(32)}`,
+  mimeType: "image/png",
+  size: 3,
+} as const
+function queued() {
+  return vi.fn(async (_method: string, params: unknown) => ({
+    executionId: (params as { executionId: string }).executionId,
+    disposition: "queued",
+  }))
+}
+it("sends an image-only message, and steers with images the same way", async () => {
+  const request = queued()
+  const api = createConversationApi({ request }, () => "id")
+  await api.send(conversationId, "", [image])
+  await api.steer(conversationId, "  ", [image])
+  const command = { conversationId, executionId: "id", requestId: "id" }
+  expect(request.mock.calls).toEqual([
+    ["conversation.send", { ...command, text: "", attachments: [image] }],
+    ["conversation.steer", { ...command, text: "  ", attachments: [image] }],
+  ])
+})
+it("retries with the images it was given, whatever the caller did to its list since", async () => {
+  const request = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("connection lost"))
+    .mockResolvedValueOnce({ executionId: "execution", disposition: "queued" })
+  const api = createConversationApi({ request }, () => "unused")
+  const attachments: { digest: string; mimeType: "image/png"; size: number }[] = [
+    { ...image },
+  ]
+  const error = await api
+    .send(conversationId, "look", attachments, { executionId: "execution" })
+    .catch((error) => error)
+  attachments[0]!.size = 4
+  attachments.push({ ...image })
+  await error.retry()
+  expect(request.mock.calls[1]).toEqual(request.mock.calls[0])
+  expect(request.mock.calls[1][1].attachments).toEqual([image])
+})
+it("refuses a message the gateway would refuse, before admission", async () => {
+  const request = queued()
+  const api = createConversationApi({ request }, () => "id")
+  const refused: [string, unknown][] = [
+    ["", []],
+    ["   ", []],
+    ["😀".repeat(2049), [image]],
+    ["hello", [{ ...image, digest: image.digest.toUpperCase() }]],
+    ["hello", [{ ...image, mimeType: "image/svg+xml" }]],
+    ["hello", [{ ...image, size: 0 }]],
+    ["hello", [{ ...image, size: 10 * 1024 * 1024 + 1 }]],
+    ["hello", [{ ...image, bytes: "AAAA" }]],
+    ["hello", Array.from({ length: 11 }, () => image)],
+    ["hello", Array.from({ length: 3 }, () => ({ ...image, size: 4 * 1024 * 1024 }))],
+    ["hello", undefined],
+  ]
+  for (const [text, attachments] of refused)
+    expect(() => api.send(conversationId, text, attachments as never)).toThrow(TypeError)
+  expect(request).not.toHaveBeenCalled()
+  await api.send(
+    conversationId,
+    "hello",
+    Array.from({ length: 10 }, () => ({ ...image, size: 1024 * 1024 })),
+  )
+  expect(request).toHaveBeenCalledOnce()
 })

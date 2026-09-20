@@ -46,12 +46,12 @@ export function gatewayEffects(client: () => NessaClient | null): ConversationEf
       return request
     },
     send: (input) =>
-      api().send(input.conversationId, input.text, {
+      api().send(input.conversationId, input.text, [], {
         executionId: input.executionId,
         requestId: input.actionId,
       }),
     steer: (input) =>
-      api().steer(input.conversationId, input.text, {
+      api().steer(input.conversationId, input.text, [], {
         executionId: input.executionId,
         requestId: input.actionId,
       }),

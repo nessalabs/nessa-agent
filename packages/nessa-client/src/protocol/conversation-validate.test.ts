@@ -8,6 +8,11 @@ import {
   conversationView,
 } from "./conversation-validate.js"
 
+const DIGEST = `sha256:${"0".repeat(64)}`
+function image(change: { size?: number } = {}) {
+  return { digest: DIGEST, mimeType: "image/png", size: 3, ...change }
+}
+
 function view() {
   return {
     conversationId: "conversation",
@@ -18,17 +23,19 @@ function view() {
       {
         executionId: "queued",
         userText: "hello",
+        attachments: [],
         status: "queued",
         parts: [],
       },
       {
         executionId: "running",
         userText: "run",
+        attachments: [],
         status: "running",
         parts: [{ offset: 0, kind: "tool", text: "", toolId: "tool" }],
       },
     ],
-    pending: [{ executionId: "queued", text: "hello", mode: "queued" }],
+    pending: [{ executionId: "queued", text: "hello", attachments: [], mode: "queued" }],
     permissions: [],
     tools: [
       {
@@ -40,7 +47,13 @@ function view() {
         input: "{}",
       },
     ],
-    capabilities: { queue: true, steer: true, resume: true, permissions: true },
+    capabilities: {
+      queue: true,
+      steer: true,
+      resume: true,
+      permissions: true,
+      imageInput: false,
+    },
   }
 }
 
@@ -121,6 +134,92 @@ describe("conversation view agreement", () => {
       ],
     })
     expect(() => conversationView(permission, "conversation")).toThrow("unknown fields")
+  })
+
+  it("accepts an image-only message whose waiting input names the same images", () => {
+    const value = view()
+    value.messages[0]!.userText = ""
+    value.pending[0]!.text = ""
+    Object.assign(value.messages[0]!, { attachments: [image()] })
+    // Field order belongs to the serializer; the same image is the same image.
+    Object.assign(value.pending[0]!, {
+      attachments: [{ size: 3, mimeType: "image/png", digest: DIGEST }],
+    })
+    const checked = conversationView(value, "conversation")
+    expect(checked.messages[0]!.attachments).toEqual([image()])
+  })
+
+  it("rejects waiting images that contradict their queued message", () => {
+    const value = view()
+    Object.assign(value.messages[0]!, { attachments: [image()] })
+    Object.assign(value.pending[0]!, { attachments: [image({ size: 4 })] })
+    expect(() => conversationView(value, "conversation")).toThrow(
+      "Pending execution contradicts",
+    )
+    const bounded = view()
+    bounded.truncated = true
+    Object.assign(bounded.pending[0]!, { attachments: [image()] })
+    expect(() => conversationView(bounded, "conversation")).not.toThrow()
+  })
+
+  it.each([
+    ["an uppercase digest", { digest: `sha256:${"A".repeat(64)}` }],
+    ["a bare hex digest", { digest: "0".repeat(64) }],
+    ["a short digest", { digest: "sha256:00" }],
+    ["a media type no message may carry", { mimeType: "image/svg+xml" }],
+    ["a non-image media type", { mimeType: "application/pdf" }],
+    ["an empty image", { size: 0 }],
+    ["a fractional size", { size: 1.5 }],
+    ["an image heavier than a whole message may be", { size: 10 * 1024 * 1024 + 1 }],
+    ["an unknown field", { bytes: "AAAA" }],
+  ])("rejects a message image with %s", (_name, change) => {
+    for (const where of ["messages", "pending"] as const) {
+      const value = view()
+      value.truncated = true
+      Object.assign(value[where][0]!, { attachments: [{ ...image(), ...change }] })
+      expect(() => conversationView(value, "conversation")).toThrow("attachments")
+    }
+  })
+
+  it("rejects more images, or more image bytes, than one message may carry", () => {
+    const eleven = view()
+    eleven.truncated = true
+    Object.assign(eleven.messages[0]!, {
+      attachments: Array.from({ length: 11 }, () => image()),
+    })
+    expect(() => conversationView(eleven, "conversation")).toThrow("at most 10")
+
+    const heavy = view()
+    heavy.truncated = true
+    Object.assign(heavy.messages[0]!, {
+      attachments: Array.from({ length: 3 }, () => image({ size: 4 * 1024 * 1024 })),
+    })
+    expect(() => conversationView(heavy, "conversation")).toThrow("bytes of images")
+
+    const exact = view()
+    exact.truncated = true
+    Object.assign(exact.messages[0]!, {
+      attachments: Array.from({ length: 2 }, () => image({ size: 5 * 1024 * 1024 })),
+    })
+    expect(() => conversationView(exact, "conversation")).not.toThrow()
+  })
+
+  it("requires attachments and the image capability rather than assuming them", () => {
+    const message = view()
+    delete (message.messages[0] as { attachments?: unknown }).attachments
+    expect(() => conversationView(message, "conversation")).toThrow("attachments")
+
+    const pending = view()
+    delete (pending.pending[0] as { attachments?: unknown }).attachments
+    expect(() => conversationView(pending, "conversation")).toThrow("attachments")
+
+    const capability = view()
+    delete (capability.capabilities as { imageInput?: boolean }).imageInput
+    expect(() => conversationView(capability, "conversation")).toThrow("imageInput")
+
+    const truthy = view()
+    Object.assign(truthy.capabilities, { imageInput: "true" })
+    expect(() => conversationView(truthy, "conversation")).toThrow("imageInput")
   })
 
   it("rejects unknown fields in receipts and control results", () => {

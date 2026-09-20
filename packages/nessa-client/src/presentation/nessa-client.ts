@@ -3,6 +3,8 @@ import type { ManagedSession, ConnectionState } from "../application/managed-ses
 import type { EventHandler, NessaClientEvents } from "../application/events.js"
 import type { NessaClientConnectOptions } from "../application/options.js"
 import { establishManagedSession } from "../composition/root.js"
+import type { AttachmentUploadTransport } from "../application/attachment-upload.js"
+import { createAttachmentApi, type AttachmentApi } from "./attachment-api.js"
 import { createConversationApi, type ConversationApi } from "./conversation-api.js"
 import { createServerApi, type ServerApi } from "./server-api.js"
 import { createCredentialApi, type CredentialApi } from "./credential-api.js"
@@ -50,6 +52,8 @@ export class NessaClient {
   readonly server: ServerApi
   /** Authorized agent conversations, live views, and lifecycle controls. */
   readonly conversation: ConversationApi
+  /** Stage files into a conversation so a message can refer to them by digest. */
+  readonly attachments: AttachmentApi
   /** Issue, list, and revoke scoped product credentials, subject to server authorization. */
   readonly credentials: CredentialApi
   /** Fetch a fresh snapshot of the authenticated product identity and restrictions. */
@@ -60,9 +64,11 @@ export class NessaClient {
     /** Authenticated connection profile. */
     readonly profile: "product",
     newRequestId: () => string,
+    upload: AttachmentUploadTransport,
   ) {
     this.server = createServerApi(wire)
     this.conversation = createConversationApi(wire, newRequestId)
+    this.attachments = createAttachmentApi(wire, upload, newRequestId)
     this.credentials = createCredentialApi(wire, newRequestId)
     this.auth = createAuthApi(wire)
   }
@@ -75,11 +81,11 @@ export class NessaClient {
    * @throws StageConfigError for invalid options, NessaProtocolCompatibilityError for
    * incompatible versions, or an RPC/transport error when setup fails. */
   static async connect(options: NessaClientConnectOptions): Promise<NessaClient> {
-    const { managed, profile, newRequestId } = await establishManagedSession(
+    const { managed, profile, newRequestId, upload } = await establishManagedSession(
       options,
       NessaClient.defaultUrl,
     )
-    return new NessaClient(managed, profile, newRequestId)
+    return new NessaClient(managed, profile, newRequestId, upload)
   }
 
   /** Current authenticated handshake snapshot; available only while connected. */

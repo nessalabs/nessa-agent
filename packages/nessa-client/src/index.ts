@@ -129,7 +129,17 @@ export type {
   ConversationSubmission,
 } from "./presentation/conversation-api.js"
 export type {
+  AttachmentApi,
+  AttachmentBeginning,
+  AttachmentDescription,
+} from "./presentation/attachment-api.js"
+export {
+  NessaAttachmentError,
+  type AttachmentFailureCode,
+} from "./application/attachment-upload.js"
+export type {
   ConversationView,
+  ImageAttachment,
   ConversationMessage,
   ConversationPart,
   ConversationRuntime,

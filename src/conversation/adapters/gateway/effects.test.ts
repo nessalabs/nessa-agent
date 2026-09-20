@@ -30,7 +30,7 @@ it("joins concurrent creation and forwards exact stable submission IDs", async (
     actionId: "action",
     text: "exact",
   })
-  expect(send).toHaveBeenCalledWith("server", "exact", {
+  expect(send).toHaveBeenCalledWith("server", "exact", [], {
     executionId: "execution",
     requestId: "action",
   })

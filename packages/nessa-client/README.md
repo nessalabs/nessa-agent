@@ -140,7 +140,8 @@ requests, and releases subscriptions. It is safe to call repeatedly.
 
 - `client.server.health()` reads authorized gateway health.
 - `client.conversation.create({ conversationId? })` creates or reopens an agent conversation.
-- `client.conversation.send(id, text)` queues input; `steer(id, text)` uses supported steering.
+- `client.conversation.send(id, text, attachments)` queues a message of text, images, or both; `steer(id, text, attachments)` uses supported steering. Pass `[]` for text alone.
+- `client.attachments.begin(id, file)` and `client.attachments.upload(ticket, file)` stage bytes so a message can refer to them by digest.
 - `client.conversation.read(id)` returns a bounded replacement view of live output, waiting input, tools, and permissions.
 - `remove`, `answer`, `cancel`, and `close` control waiting input, permission reviews, and the live context.
 - `client.auth.session()` reads the current authenticated session.
@@ -157,7 +158,7 @@ credential is sent. Transport errors do not imply a mutation was rolled back.
 
 ```ts
 const { conversationId } = await client.conversation.create()
-const receipt = await client.conversation.send(conversationId, "Hello")
+const receipt = await client.conversation.send(conversationId, "Hello", [])
 const view = await client.conversation.read(conversationId)
 ```
 
@@ -169,12 +170,78 @@ shown safely. Permission controls must use its exact offered IDs and original in
 The client generates separate execution and action IDs once per message. A
 conversation ID is a canonical lowercase hyphenated UUID. Message text is limited
 to 8 KiB of UTF-8, and execution and action IDs are limited to 256 UTF-8 bytes.
+Text may be blank only when the message carries at least one image.
 The client enforces these limits before sending a request. A
 `NessaConversationMutationError` retains them and exposes `retry()` for the same
 immutable creation or message-admission command after recovery. No mutation automatically replays. If retry state
 must survive a process restart, save the input and the error's `conversationId`,
 `executionId`, and `requestId`, then pass the IDs in the command options. An
 intentional new send generates a new execution ID even when its text is identical.
+
+### Images
+
+A message refers to images; it never contains them. One socket message is capped
+at 64 KiB, so bytes travel on their own HTTP request. Upload the original file,
+and send the reference the gateway gives back:
+
+```ts
+const bytes: Blob = await readImage()
+const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", await bytes.arrayBuffer()))
+const digest = `sha256:${[...hash].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`
+
+// The conversation must exist first; `create` is idempotent.
+await client.conversation.create({ conversationId })
+const beginning = await client.attachments.begin(conversationId, {
+  digest,
+  mimeType: "image/heic",
+  size: bytes.size,
+})
+const image =
+  beginning.state === "stored"
+    ? beginning.image
+    : await client.attachments.upload(beginning.ticket, { mimeType: "image/heic", bytes })
+
+await client.conversation.send(conversationId, "What is in this picture?", [image])
+```
+
+**Send the returned reference, never the digest you computed.** The gateway
+converts, scales, and compresses each image to what the selected model takes, so
+a HEIC, BMP, or very large PNG is stored as a smaller PNG or JPEG under a
+different digest, media type, and size. Those limits live on the gateway and
+nowhere in this client: the digest you compute only identifies the upload.
+
+`begin` answers `stored` with that reference when the conversation already holds
+the bytes, and otherwise a ticket: secret, single-use, short-lived, and bound to
+exactly that digest, size, and conversation. Do not log it. The stored reference
+is present exactly when the state is `stored`, and the ticket exactly when it is
+`upload_required`; a reply that mixes them is refused. `upload` sends one
+`PUT /attachments` to the gateway's own HTTP origin — the session URL's host and
+port with `ws`/`wss` read as `http`/`https` — carrying the ticket and nothing
+else: no cookies, and a redirect is an error rather than a second origin being
+handed the ticket. It resolves with the stored reference.
+
+`begin` accepts any lowercase media type up to 20 MiB; that upload cap is the
+only byte limit this client puts on a single file. A message may refer to at
+most 10 images and 10 MiB of them in total, counted over the stored references.
+`send` and `steer` check this before anything is sent and throw `TypeError`;
+replies are held to the same bounds. Check `view.capabilities.imageInput` before
+offering images: it is `false` until an agent has been opened for the
+conversation and whenever that agent advertised no image input.
+
+Staging failures are a `NessaAttachmentError` whose `code` is one of
+`ticket_invalid` (unknown, expired, or already used), `size_mismatch`,
+`digest_mismatch`, `unsupported_image` (not an image format the gateway can
+read), `image_too_large` (it could not be brought under the model's limits),
+`storage_unavailable`, `audit_unavailable`, `begin_refused` (the gateway declined
+to issue a ticket; the RPC error is the `cause`), `unreachable` (no answer
+arrived), or `unexpected_response` — which includes a success whose stored
+reference is malformed. Nothing is retried for you. A ticket is spent by its
+upload whether or not the upload succeeded, so to try again, begin again: bytes
+that did arrive answer `stored`. A retried `send` re-sends the same references,
+so one execution ID always names one message.
+
+Views echo each message's and each waiting input's `attachments` as references.
+This client does not read image bytes back from the gateway.
 
 Controls (reorder, remove, answer, cancel, and close) instead expose `NessaConversationControlError` with `uncertain: true` when no trustworthy acknowledgement arrives. They do not offer `retry()`: read the current view, then deliberately choose a new action if needed. Replaying an earlier close could stop newer work from another surface.
 
