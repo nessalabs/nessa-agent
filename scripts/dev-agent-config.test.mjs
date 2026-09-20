@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -235,65 +236,108 @@ test(
 )
 
 test(
-  "a config carrying both the retired key and the new one fails rather than reporting success",
+  "a config carrying both the retired key and the new one has the retired one taken out",
   unixOnly,
   () => {
     // What a developer who ran the dev loop on this branch before the retirement
     // landed now has on disk. The `agents` block answers the question this
-    // script asks, so it stands down — and used to stand down saying it was
-    // fine, while `deny_unknown_fields` refused to start the gateway on the
-    // `agent` key still sitting beside it.
+    // script asks, so it writes no block of its own — and used to stand down
+    // saying the file was fine, while `deny_unknown_fields` refused to start
+    // the gateway on the `agent` key still sitting beside it.
+    //
+    // That key is this script's own and nothing reads it, so it is removed
+    // rather than reported as a chore. The `agents` answer beside it belongs to
+    // whoever wrote it and comes back exactly as it went in.
     const data = temporaryRoot()
     mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
     const path = join(data, "dev/config.json")
-    const both = JSON.stringify({
-      agent: { node: "/old/node", acpEntry: "/old/entry.js" },
-      agents: agentsLaunching("/checkout/dist/index.js"),
-    })
-    writeFileSync(path, both, { mode: 0o600 })
+    const agents = agentsLaunching("/checkout/dist/index.js")
+    writeFileSync(
+      path,
+      JSON.stringify({
+        agent: { node: "/old/node", acpEntry: "/old/entry.js" },
+        agents,
+        session: { writeTimeoutMs: 75 },
+      }),
+      { mode: 0o600 },
+    )
 
-    let status = 0
-    let output = ""
-    try {
-      output = run(data)
-    } catch (failure) {
-      status = failure.status
-      output = String(failure.stdout)
-    }
-    assert.equal(status, 1, output)
+    const output = run(data)
+
     assert.match(output, /retired "agent" block/)
-    assert.match(output, /delete the "agent" key/)
-    // Said, not done: somebody else's `agents` block is not this script's to
-    // rewrite, so the file is exactly as it was.
-    assert.equal(readFileSync(path, "utf8"), both)
+    const saved = JSON.parse(readFileSync(path, "utf8"))
+    assert.equal(saved.agent, undefined, "the gateway still refuses to start on this")
+    assert.deepEqual(saved.agents, agents, "somebody else's answer was rewritten")
+    // Only the key this script owned. Another setting in the same file is not
+    // its to tidy either.
+    assert.equal(saved.session.writeTimeoutMs, 75)
+
+    // And a second run has nothing left to say about it.
+    assert.doesNotMatch(run(data), /retired "agent" block/)
   },
 )
 
 test(
-  "publishing onto that config fails in the caller's process rather than ending it",
+  "publishing onto that config repairs it in the caller's process rather than ending it",
   unixOnly,
   async () => {
     // `publish` asks the same question again under the lock, and this suite
-    // calls it here, in the process running the tests. If that guard ended the
-    // process the way the stand-down path does, a regression in it would stop
-    // this file at whichever test reached it first and report the tests that
-    // did run as a pass. So it throws, and the caller sees a failure.
+    // calls it here, in the process running the tests. Whatever that path
+    // decides, it must not end the process the way the stand-down path does: a
+    // regression there would stop this file at whichever test reached it first
+    // and report the tests that did run as a pass.
     const { publish } = await import("./dev-agent-config.mjs")
     const data = temporaryRoot()
     mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
     const path = join(data, "dev/config.json")
     const agents = agentsLaunching("/checkout/dist/index.js")
-    const both = JSON.stringify({
-      agent: { node: "/old/node", acpEntry: "/old/entry.js" },
-      agents,
+    writeFileSync(path, JSON.stringify({ agent: { node: "/old/node" }, agents }), {
+      mode: 0o600,
     })
-    writeFileSync(path, both, { mode: 0o600 })
 
-    assert.throws(
-      () => publish({ configPath: path, agents, node: agents.runtimes.claude.command }),
-      /retired "agent" block/,
-    )
-    assert.equal(readFileSync(path, "utf8"), both)
+    const wrote = publish({
+      configPath: path,
+      agents,
+      node: agents.runtimes.claude.command,
+    })
+
+    assert.equal(wrote, false, "somebody else's answer was replaced")
+    const saved = JSON.parse(readFileSync(path, "utf8"))
+    assert.equal(saved.agent, undefined)
+    assert.deepEqual(saved.agents, agents)
+  },
+)
+
+test(
+  "a repair that cannot be written fails the caller instead of reporting success",
+  {
+    ...unixOnly,
+    // Root writes through a read-only directory, so there is no way to make the
+    // write fail here. It fails on an ordinary user, which is what CI runs as.
+    skip: process.getuid?.() === 0 ? "run as root; cannot make a write fail" : false,
+  },
+  async () => {
+    // The one path left that reports a configuration the gateway will refuse.
+    // It throws rather than exiting, for the reason the test above gives.
+    const { publish } = await import("./dev-agent-config.mjs")
+    const data = temporaryRoot()
+    const directory = join(data, "dev")
+    mkdirSync(directory, { recursive: true, mode: 0o700 })
+    const path = join(directory, "config.json")
+    const agents = agentsLaunching("/checkout/dist/index.js")
+    writeFileSync(path, JSON.stringify({ agent: { node: "/old/node" }, agents }), {
+      mode: 0o600,
+    })
+    chmodSync(directory, 0o500)
+
+    try {
+      assert.throws(
+        () => publish({ configPath: path, agents, node: agents.runtimes.claude.command }),
+        /could not be repaired/,
+      )
+    } finally {
+      chmodSync(directory, 0o700)
+    }
   },
 )
 

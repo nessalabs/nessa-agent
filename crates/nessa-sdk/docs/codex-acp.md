@@ -153,6 +153,14 @@ rather than inferred from one profile, so these are named here rather than left
 to be assumed. Running them across a profile and fixture pair, instead of
 writing Codex copies, is what closes the gap.
 
+Queue ordering is the narrowest of the three, and worth saying exactly. The
+server routes a steer on the capability rather than on the agent — it queues
+whenever `native_steering` is false — and the backend its own suites run
+against leaves that at the conservative default, so the branch Codex takes is
+already the branch those suites exercise. What is missing there is the name on
+the fixture, not the behaviour. The gap that remains is in this crate's
+suites, where the ordering is driven through a profile's own binding.
+
 They are adapter and process tests. They establish that this binding speaks the
 protocol it claims to and fails closed where it says it does; they establish
 nothing about the real provider's behaviour.
