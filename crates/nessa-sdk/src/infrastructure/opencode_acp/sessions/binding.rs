@@ -87,7 +87,10 @@ use tokio::process::Command;
 /// config file that names the mode by name wins. As above, the workspace
 /// cannot be that file and the person's own global config still can, and
 /// deliberately still does: `OPENCODE_CONFIG_DIR` would not close it either,
-/// because `$HOME/.opencode` is read whatever that variable says.
+/// because `$HOME/.opencode` is read whatever that variable says. Not closed
+/// because redirecting the config would cost the person their sign-in —
+/// `auth.json` is resolved from `XDG_DATA_HOME`, not from the config variable,
+/// so it would survive — but because redirecting it does not work.
 ///
 /// So the line all three draw is the same one, and it is drawn at somebody
 /// else's repository rather than at the person running Nessa on their own
