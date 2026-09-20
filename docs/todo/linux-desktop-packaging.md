@@ -14,3 +14,6 @@ macOS cannot validate this flow.
 
 The implemented macOS runtime, retirement, readiness, and shutdown behavior is
 documented in [Gateway chat](../guides/gateway-chat.md#installed-macos-runtime).
+
+The step-by-step plan, with diagrams and the Windows track, is in
+[Ship the desktop app on Linux and Windows](desktop-linux-windows-plan.md).

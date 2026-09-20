@@ -16,7 +16,7 @@ use nessa_auth::{
     application::{
         credential_admin::{
             CredentialAdmin, CredentialAdminError, IssueCredentialOutcome, IssueCredentialRequest,
-            ListCredentialsRequest, RevokeCredentialRequest,
+            ListCredentialsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
         },
         dto::CredentialMetadataDto,
         ports::{Clock, PortFuture},
@@ -63,7 +63,7 @@ pub(super) fn product_state(
     }
     let store = Arc::new(
         LocalCredentialStore::open_with_config(directory, "credentials.v1.json", settings.registry)
-            .map_err(setup_error)?,
+            .map_err(RunError::Registry)?,
     );
     let identity = store.identity().map_err(|_| {
         RunError::Authentication(
@@ -111,7 +111,11 @@ pub(super) fn product_state(
     .with_admin(admin)
     .with_settings(settings.session()?)
     .with_browser_sessions(Arc::new(
-        PersistentSessions::open(&directory.join("browser-sessions.jsonl")).map_err(setup_error)?,
+        PersistentSessions::open(
+            &directory.join("browser-sessions.jsonl"),
+            SystemClock.unix_seconds(),
+        )
+        .map_err(setup_error)?,
     ));
     product.browser_http_allowed = config.browser_http_allowed();
     if let Some(agent) = &settings.agent {
@@ -190,7 +194,7 @@ impl CredentialAdmin for LocalAdmin {
     fn revoke<'a>(
         &'a self,
         request: RevokeCredentialRequest,
-    ) -> PortFuture<'a, u64, CredentialAdminError> {
+    ) -> PortFuture<'a, RevokeCredentialOutcome, CredentialAdminError> {
         let store = self.store.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || store.revoke_sync(request))

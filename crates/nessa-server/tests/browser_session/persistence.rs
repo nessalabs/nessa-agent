@@ -1,7 +1,7 @@
 use super::*;
 use crate::browser_session::{
     application::{invalidation_reason, ReadBrowserSession},
-    domain::value_objects::{RemovalReason, IDLE_SECONDS},
+    domain::value_objects::{RemovalReason, FUTURE_TOLERANCE_SECONDS, IDLE_SECONDS},
 };
 use nessa_auth::{
     application::{
@@ -47,6 +47,16 @@ impl Clock for Authority {
     fn unix_milliseconds(&self) -> u64 {
         100_000
     }
+}
+/// A clock reading later than any instant these tests journal, so reopening a
+/// store exercises replay rather than the implausible-state sweep. Tests about
+/// the sweep itself call `PersistentSessions::open` with their own reading.
+const REPLAY_NOW: u64 = 100 + 2 * IDLE_SECONDS;
+fn reopen(path: &std::path::Path) -> Result<PersistentSessions, AccessError> {
+    PersistentSessions::open(path, REPLAY_NOW)
+}
+fn reopen_bounded(path: &std::path::Path, bound: u64) -> Result<PersistentSessions, AccessError> {
+    PersistentSessions::open_bounded(path, bound, REPLAY_NOW)
 }
 fn credential_id() -> CredentialId {
     CredentialId::new("credential").unwrap()
@@ -101,8 +111,8 @@ async fn renewal_crosses_original_deadline_and_restart_then_logout_is_durable() 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("sessions.jsonl");
     let id = "a".repeat(64);
-    let store = PersistentSessions::open(&path).unwrap();
-    assert!(PersistentSessions::open(&path).is_err());
+    let store = reopen(&path).unwrap();
+    assert!(reopen(&path).is_err());
     store
         .insert(id.clone(), session(None).await, None, 100)
         .await
@@ -113,7 +123,7 @@ async fn renewal_crosses_original_deadline_and_restart_then_logout_is_durable() 
         .unwrap();
     assert_eq!(renewed.idle_expires_at(), 100 + 50 * 86400);
     drop(store);
-    let store = PersistentSessions::open(&path).unwrap();
+    let store = reopen(&path).unwrap();
     assert_eq!(store.get(id.clone()).await.unwrap().unwrap(), renewed);
     store
         .remove(
@@ -129,7 +139,7 @@ async fn renewal_crosses_original_deadline_and_restart_then_logout_is_durable() 
         .await
         .is_err());
     drop(store);
-    let store = PersistentSessions::open(&path).unwrap();
+    let store = reopen(&path).unwrap();
     assert!(store.get(id).await.unwrap().is_none());
     // Durable bytes are inspected only after releasing exclusive journal ownership.
     drop(store);
@@ -149,7 +159,7 @@ async fn transitions_cannot_precede_the_session_state_they_replace_live_or_on_re
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("causal-time.jsonl");
     let id = "9".repeat(64);
-    let store = PersistentSessions::open(&path).unwrap();
+    let store = reopen(&path).unwrap();
     store
         .insert(id.clone(), session(None).await, None, 100)
         .await
@@ -187,13 +197,13 @@ async fn transitions_cannot_precede_the_session_state_they_replace_live_or_on_re
         .map(|record| format!("{record}\n"))
         .collect::<String>();
     std::fs::write(&path, corrupted).unwrap();
-    assert!(PersistentSessions::open(&path).is_err());
+    assert!(reopen(&path).is_err());
 }
 
 #[tokio::test]
 async fn explicit_transitions_require_the_verified_matching_credential() {
     let directory = tempfile::tempdir().unwrap();
-    let store = PersistentSessions::open(&directory.path().join("initiator.jsonl")).unwrap();
+    let store = reopen(&directory.path().join("initiator.jsonl")).unwrap();
     let id = "6".repeat(64);
     store
         .insert(id.clone(), session(None).await, None, 100)
@@ -242,7 +252,7 @@ async fn abandoned_replacement_restores_prior_session_in_one_durable_audit_recor
     let prior_id = "1".repeat(64);
     let replacement_id = "2".repeat(64);
     let prior = session(None).await;
-    let store = PersistentSessions::open(&path).unwrap();
+    let store = reopen(&path).unwrap();
     store
         .insert(prior_id.clone(), prior.clone(), None, 100)
         .await
@@ -268,7 +278,7 @@ async fn abandoned_replacement_restores_prior_session_in_one_durable_audit_recor
     assert!(store.get(replacement_id.clone()).await.unwrap().is_none());
     drop(store);
 
-    let store = PersistentSessions::open(&path).unwrap();
+    let store = reopen(&path).unwrap();
     assert!(store.get(prior_id).await.unwrap().is_some());
     assert!(store.get(replacement_id).await.unwrap().is_none());
     // Durable bytes are inspected only after releasing exclusive journal ownership.
@@ -290,7 +300,7 @@ async fn abandoned_replacement_restores_prior_session_in_one_durable_audit_recor
 #[tokio::test]
 async fn abandoned_replacement_restores_the_exact_prior_state_removed_by_insert() {
     let directory = tempfile::tempdir().unwrap();
-    let store = PersistentSessions::open(&directory.path().join("renewed-prior.jsonl")).unwrap();
+    let store = reopen(&directory.path().join("renewed-prior.jsonl")).unwrap();
     let prior_id = "4".repeat(64);
     let replacement_id = "5".repeat(64);
     store
@@ -331,7 +341,7 @@ async fn abandoned_replacement_is_reclaimed_after_its_prior_expires() {
     let path = directory.path().join("expired-prior.jsonl");
     let prior_id = "6".repeat(64);
     let replacement_id = "7".repeat(64);
-    let store = PersistentSessions::open(&path).unwrap();
+    let store = reopen(&path).unwrap();
     store
         .insert(prior_id.clone(), session(None).await, None, 100)
         .await
@@ -366,7 +376,7 @@ async fn abandoned_replacement_is_reclaimed_after_its_prior_expires() {
     assert!(store.get(prior_id.clone()).await.unwrap().is_none());
     drop(store);
 
-    let store = PersistentSessions::open(&path).unwrap();
+    let store = reopen(&path).unwrap();
     assert!(store.get(replacement_id).await.unwrap().is_none());
     assert!(store.get(prior_id).await.unwrap().is_none());
     drop(store);
@@ -381,8 +391,7 @@ async fn abandoned_replacement_is_reclaimed_after_its_prior_expires() {
 async fn abandoned_replacement_restores_a_prior_active_for_one_more_second() {
     // The moment before the case above: still restorable, so it is restored.
     let directory = tempfile::tempdir().unwrap();
-    let store =
-        PersistentSessions::open(&directory.path().join("just-active-prior.jsonl")).unwrap();
+    let store = reopen(&directory.path().join("just-active-prior.jsonl")).unwrap();
     let prior_id = "8".repeat(64);
     let replacement_id = "9".repeat(64);
     store
@@ -418,7 +427,7 @@ async fn abandoned_replacement_restores_a_prior_active_for_one_more_second() {
 #[tokio::test]
 async fn abandoned_replacement_leaves_a_prior_id_a_later_login_now_owns() {
     let directory = tempfile::tempdir().unwrap();
-    let store = PersistentSessions::open(&directory.path().join("competing-prior.jsonl")).unwrap();
+    let store = reopen(&directory.path().join("competing-prior.jsonl")).unwrap();
     let prior_id = "a".repeat(64);
     let replacement_id = "b".repeat(64);
     store
@@ -457,7 +466,7 @@ async fn abandoned_replacement_must_still_restore_a_prior_that_can_be_restored()
     // The caller's own check refuses a cleanup that does not name the prior it
     // replaced, before any record is built.
     let directory = tempfile::tempdir().unwrap();
-    let store = PersistentSessions::open(&directory.path().join("omitted-caller.jsonl")).unwrap();
+    let store = reopen(&directory.path().join("omitted-caller.jsonl")).unwrap();
     let prior_id = "c".repeat(64);
     let replacement_id = "d".repeat(64);
     store
@@ -490,7 +499,7 @@ async fn replay_rejects_dropping_a_prior_that_was_still_restorable() {
     // A prior that was active at the record's own instant must be restored by it.
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("dropped-restorable-prior.jsonl");
-    let store = PersistentSessions::open(&path).unwrap();
+    let store = reopen(&path).unwrap();
     let prior_id = "4".repeat(64);
     let replacement_id = "5".repeat(64);
     store
@@ -529,7 +538,7 @@ async fn replay_rejects_dropping_a_prior_that_was_still_restorable() {
         + "\n";
     std::fs::write(&path, corrupted).unwrap();
 
-    assert!(PersistentSessions::open(&path).is_err());
+    assert!(reopen(&path).is_err());
 }
 
 #[tokio::test]
@@ -538,7 +547,7 @@ async fn replay_accepts_dropping_a_prior_that_had_expired_by_the_record() {
     // record that legitimately omits an expired prior must still reopen.
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("dropped-expired-prior.jsonl");
-    let store = PersistentSessions::open(&path).unwrap();
+    let store = reopen(&path).unwrap();
     let prior_id = "6".repeat(64);
     let replacement_id = "7".repeat(64);
     store
@@ -566,7 +575,7 @@ async fn replay_accepts_dropping_a_prior_that_had_expired_by_the_record() {
         .unwrap();
     drop(store);
 
-    let store = PersistentSessions::open(&path).unwrap();
+    let store = reopen(&path).unwrap();
     assert!(store.get(replacement_id).await.unwrap().is_none());
     assert!(store.get(prior_id).await.unwrap().is_none());
 }
@@ -574,7 +583,7 @@ async fn replay_accepts_dropping_a_prior_that_had_expired_by_the_record() {
 #[tokio::test]
 async fn abandoned_replacement_rejects_a_fabricated_same_origin_prior() {
     let directory = tempfile::tempdir().unwrap();
-    let store = PersistentSessions::open(&directory.path().join("fabricated-prior.jsonl")).unwrap();
+    let store = reopen(&directory.path().join("fabricated-prior.jsonl")).unwrap();
     let prior_id = "4".repeat(64);
     let replacement_id = "5".repeat(64);
     store
@@ -621,7 +630,7 @@ async fn replay_rejects_restoration_that_does_not_match_the_replaced_prior() {
         let path = directory
             .path()
             .join(format!("wrong-restored-{tamper}.jsonl"));
-        let store = PersistentSessions::open(&path).unwrap();
+        let store = reopen(&path).unwrap();
         let prior_id = "4".repeat(64);
         let replacement_id = "5".repeat(64);
         store
@@ -665,7 +674,7 @@ async fn replay_rejects_restoration_that_does_not_match_the_replaced_prior() {
             .join("\n")
             + "\n";
         std::fs::write(&path, corrupted).unwrap();
-        assert!(PersistentSessions::open(&path).is_err());
+        assert!(reopen(&path).is_err());
     }
 }
 
@@ -673,7 +682,7 @@ async fn replay_rejects_restoration_that_does_not_match_the_replaced_prior() {
 async fn replay_rejects_replacing_a_session_with_the_same_id() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("same-id-replacement.jsonl");
-    let store = PersistentSessions::open(&path).unwrap();
+    let store = reopen(&path).unwrap();
     let prior_id = "4".repeat(64);
     store
         .insert(prior_id.clone(), session(None).await, None, 100)
@@ -709,7 +718,7 @@ async fn replay_rejects_replacing_a_session_with_the_same_id() {
         .join("\n")
         + "\n";
     std::fs::write(&path, corrupted).unwrap();
-    assert!(PersistentSessions::open(&path).is_err());
+    assert!(reopen(&path).is_err());
 }
 
 #[tokio::test]
@@ -720,7 +729,7 @@ async fn competing_replacements_admit_one_owner_and_restore_prior_only_when_it_i
     let first_id = "2".repeat(64);
     let second_id = "3".repeat(64);
     let prior = session(None).await;
-    let store = PersistentSessions::open(&path).unwrap();
+    let store = reopen(&path).unwrap();
     store
         .insert(prior_id.clone(), prior.clone(), None, 100)
         .await
@@ -761,7 +770,7 @@ async fn competing_replacements_admit_one_owner_and_restore_prior_only_when_it_i
     assert!(store.get(second_id).await.unwrap().is_none());
     assert_eq!(store.get(prior_id.clone()).await.unwrap(), Some(prior));
     drop(store);
-    let reopened = PersistentSessions::open(&path).unwrap();
+    let reopened = reopen(&path).unwrap();
     assert!(reopened.get(prior_id).await.unwrap().is_some());
 }
 #[tokio::test]
@@ -769,7 +778,7 @@ async fn expiry_and_failed_audit_writes_never_report_success_or_resurrect_sessio
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("sessions.jsonl");
     let id = "b".repeat(64);
-    let store = PersistentSessions::open(&path).unwrap();
+    let store = reopen(&path).unwrap();
     store
         .insert(id.clone(), session(None).await, None, 100)
         .await
@@ -797,13 +806,15 @@ async fn expiry_and_failed_audit_writes_never_report_success_or_resurrect_sessio
     assert!(record.changes[0].initiator.is_none());
     for operation in ["insert", "renew", "remove"] {
         let path = dir.path().join(format!("{operation}.jsonl"));
-        let store = PersistentSessions::open(&path).unwrap();
+        let store = reopen(&path).unwrap();
         store
             .insert(id.clone(), session(None).await, None, 100)
             .await
             .unwrap();
         // Replace only this test instance's sink with a real read-only file.
-        store.0.lock().unwrap().file = Some(open(&path, OpenMode::Read).unwrap());
+        // Unlocked, and `Journal` only ever unlocks, which a file holding no
+        // lock accepts.
+        store.0.lock().unwrap().file = Some(Journal(open(&path, OpenMode::Read).unwrap()));
         let result = match operation {
             "insert" => store
                 .insert("c".repeat(64), session(None).await, Some(id.clone()), 100)
@@ -834,7 +845,7 @@ async fn invalid_journal_correlations_fail_closed() {
     let dir = tempfile::tempdir().unwrap();
     for field in ["sequence", "initiator", "deadline"] {
         let path = dir.path().join(format!("{field}.jsonl"));
-        let store = PersistentSessions::open(&path).unwrap();
+        let store = reopen(&path).unwrap();
         store
             .insert("a".repeat(64), session(None).await, None, 100)
             .await
@@ -848,7 +859,7 @@ async fn invalid_journal_correlations_fail_closed() {
             _ => record["changes"][0]["after"]["idle_expires_at"] = serde_json::json!(99999999),
         }
         std::fs::write(&path, format!("{record}\n")).unwrap();
-        assert!(PersistentSessions::open(&path).is_err());
+        assert!(reopen(&path).is_err());
     }
 }
 
@@ -856,7 +867,7 @@ async fn invalid_journal_correlations_fail_closed() {
 async fn journal_total_byte_bound_is_exact_durable_and_checked_before_replay() {
     let directory = tempfile::tempdir().unwrap();
     let sample_path = directory.path().join("sample-bound.jsonl");
-    let sample = PersistentSessions::open(&sample_path).unwrap();
+    let sample = reopen(&sample_path).unwrap();
     sample
         .insert("a".repeat(64), session(None).await, None, 100)
         .await
@@ -865,7 +876,7 @@ async fn journal_total_byte_bound_is_exact_durable_and_checked_before_replay() {
     let exact_bound = std::fs::metadata(&sample_path).unwrap().len();
 
     let path = directory.path().join("bounded.jsonl");
-    let store = PersistentSessions::open_bounded(&path, exact_bound).unwrap();
+    let store = reopen_bounded(&path, exact_bound).unwrap();
     let id = "b".repeat(64);
     let original = session(None).await;
     store
@@ -880,10 +891,10 @@ async fn journal_total_byte_bound_is_exact_durable_and_checked_before_replay() {
     assert_eq!(store.get(id.clone()).await.unwrap(), Some(original.clone()));
     drop(store);
 
-    let reopened = PersistentSessions::open_bounded(&path, exact_bound).unwrap();
+    let reopened = reopen_bounded(&path, exact_bound).unwrap();
     assert_eq!(reopened.get(id).await.unwrap(), Some(original));
     drop(reopened);
-    assert!(PersistentSessions::open_bounded(&path, exact_bound - 1).is_err());
+    assert!(reopen_bounded(&path, exact_bound - 1).is_err());
 }
 
 #[tokio::test]
@@ -897,7 +908,7 @@ async fn every_automatic_invalidation_retains_its_typed_cause_without_an_initiat
         (AccessError::InvalidCredential, Reason::InvalidCredential),
     ] {
         let path = dir.path().join(format!("{error:?}.jsonl"));
-        let store = PersistentSessions::open(&path).unwrap();
+        let store = reopen(&path).unwrap();
         let id = "d".repeat(64);
         store
             .insert(id.clone(), session(None).await, None, 100)
@@ -962,4 +973,165 @@ async fn blocked_journal_work_does_not_block_the_async_runtime() {
     release_tx.send(()).unwrap();
     holder.join().unwrap();
     assert!(blocked.await.unwrap().unwrap().is_none());
+}
+
+fn origin_session(now: u64) -> BrowserSession {
+    BrowserSession::new(credential_id(), "https://127.0.0.1:1443".into(), now).unwrap()
+}
+fn last_record(path: &std::path::Path) -> StoredRecord {
+    serde_json::from_str(
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .last()
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_renewal_no_clock_can_vouch_for_is_retired_at_the_next_open() {
+    // The journal never constrains a record's own instant, so a renewal written
+    // with a forged `at` is indistinguishable from one written honestly. Passing
+    // that instant to `renew` produces the exact bytes the forgery would, and
+    // chaining it is what would otherwise keep a session alive indefinitely.
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("forged-renewal.jsonl");
+    let store = reopen(&path).unwrap();
+    let id = "a".repeat(64);
+    store
+        .insert(id.clone(), origin_session(100), None, 100)
+        .await
+        .unwrap();
+    let forged_at = 100 + IDLE_SECONDS - 1;
+    let extended = store
+        .renew(id.clone(), forged_at, credential_id())
+        .await
+        .unwrap();
+    assert_eq!(extended.idle_expires_at(), forged_at + IDLE_SECONDS);
+    drop(store);
+
+    let store = PersistentSessions::open(&path, 200).unwrap();
+    assert!(store.get(id.clone()).await.unwrap().is_none());
+    drop(store);
+    let record = last_record(&path);
+    assert_eq!(record.at, 200);
+    assert_eq!(record.changes.len(), 1);
+    assert_eq!(record.changes[0].reason, Reason::FutureRenewal);
+    assert!(record.changes[0].initiator.is_none());
+    assert!(record.changes[0].before.is_some());
+    assert!(record.changes[0].after.is_none());
+
+    // The retirement is a fact about the record, not about the clock that wrote
+    // it: replaying it under the forged reading reaches the same verdict.
+    let store = PersistentSessions::open(&path, forged_at + IDLE_SECONDS).unwrap();
+    assert!(store.get(id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_forward_clock_excursion_costs_a_sign_in_and_never_wedges_the_store() {
+    // The failure the reverted ordering guard introduced: an instant the clock
+    // later disagrees with must not leave the store unable to write. Sign-out
+    // in particular has to keep working.
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("clock-excursion.jsonl");
+    let excursion = 10_000_000;
+    let store = reopen(&path).unwrap();
+    let stranded = "b".repeat(64);
+    store
+        .insert(stranded.clone(), origin_session(excursion), None, excursion)
+        .await
+        .unwrap();
+    drop(store);
+
+    let store = PersistentSessions::open(&path, 100).unwrap();
+    assert!(store.get(stranded).await.unwrap().is_none());
+    let fresh = "c".repeat(64);
+    store
+        .insert(fresh.clone(), origin_session(100), None, 100)
+        .await
+        .unwrap();
+    store
+        .remove(
+            fresh.clone(),
+            101,
+            RemovalReason::SignOut,
+            Some(credential_id()),
+        )
+        .await
+        .unwrap();
+    assert!(store.get(fresh).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn renewals_within_the_tolerance_survive_and_the_next_second_does_not() {
+    let directory = tempfile::tempdir().unwrap();
+    let renewed_at = 100_000;
+    for (now, survives) in [
+        (renewed_at - FUTURE_TOLERANCE_SECONDS, true),
+        (renewed_at - FUTURE_TOLERANCE_SECONDS - 1, false),
+    ] {
+        let path = directory.path().join(format!("tolerance-{now}.jsonl"));
+        let store = reopen(&path).unwrap();
+        let id = "e".repeat(64);
+        store
+            .insert(id.clone(), origin_session(renewed_at), None, renewed_at)
+            .await
+            .unwrap();
+        drop(store);
+        let store = PersistentSessions::open(&path, now).unwrap();
+        assert_eq!(store.get(id).await.unwrap().is_some(), survives);
+    }
+}
+
+#[tokio::test]
+async fn a_login_cannot_replace_a_prior_whose_renewal_the_record_precedes() {
+    // Why restoration needs no plausibility rule of its own. A prior can only
+    // be remembered by the record that replaced it, and that record carried it
+    // as a `before`, so it could not precede the prior's own renewal. Any later
+    // record restoring it cannot precede that one either. The sweep at `open`
+    // is therefore the only place a clock has to be consulted.
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("preceded-prior.jsonl");
+    let store = reopen(&path).unwrap();
+    let prior_id = "f".repeat(64);
+    let excursion = 10_000_000;
+    store
+        .insert(prior_id.clone(), origin_session(excursion), None, excursion)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .insert(
+                "9".repeat(64),
+                origin_session(100),
+                Some(prior_id.clone()),
+                100,
+            )
+            .await,
+        Err(AccessError::Unavailable)
+    );
+    drop(store);
+
+    // And the prior itself does not survive a clock that disagrees with it.
+    let store = PersistentSessions::open(&path, 100).unwrap();
+    assert!(store.get(prior_id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_journal_at_its_bound_cannot_retire_implausible_state_and_fails_closed() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("bounded-sweep.jsonl");
+    let excursion = 10_000_000;
+    let store = reopen(&path).unwrap();
+    store
+        .insert("7".repeat(64), origin_session(excursion), None, excursion)
+        .await
+        .unwrap();
+    drop(store);
+    let exact_bound = std::fs::metadata(&path).unwrap().len();
+
+    assert!(PersistentSessions::open_bounded(&path, exact_bound, 100).is_err());
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), exact_bound);
+    assert!(PersistentSessions::open_bounded(&path, exact_bound, excursion).is_ok());
 }

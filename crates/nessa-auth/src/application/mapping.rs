@@ -69,9 +69,110 @@ impl TryFrom<CredentialMetadataDto> for Credential {
             grants,
         )?;
         if let Some(at) = dto.revoked_at {
-            credential.revoke(at)?;
+            credential.restore_revoked_at(at)?;
         }
         Ok(credential)
+    }
+}
+
+impl TryFrom<CredentialTransitionDto> for CredentialTransition {
+    type Error = DomainError;
+    /// Validate recorded evidence under the same rule a live change satisfies.
+    /// Storage-assigned `sequence`, `revision`, and `correlation` are not part
+    /// of the domain record and are checked by the adapter that owns them.
+    fn try_from(dto: CredentialTransitionDto) -> Result<Self, Self::Error> {
+        let lifecycle = |value: CredentialLifecycleDto| CredentialLifecycle {
+            issued_at: value.issued_at,
+            expires_at: value.expires_at,
+            revoked_at: value.revoked_at,
+        };
+        let cause = match dto.cause {
+            TransitionCauseDto::Issued { cause } => TransitionCause::Issued(match cause {
+                IssuanceCauseDto::Bootstrap => IssuanceCause::Bootstrap,
+                IssuanceCauseDto::AdminIssue => IssuanceCause::AdminIssue,
+                IssuanceCauseDto::SurfaceProvision => IssuanceCause::SurfaceProvision,
+                IssuanceCauseDto::OwnerRecovery => IssuanceCause::OwnerRecovery,
+            }),
+            TransitionCauseDto::Revoked { cause } => TransitionCause::Revoked(match cause {
+                RevocationCauseDto::Explicit => RevocationCause::Explicit,
+                RevocationCauseDto::Superseded { by, supersession } => {
+                    RevocationCause::Superseded {
+                        by: CredentialId::new(by)?,
+                        kind: match supersession {
+                            SupersessionDto::Provision => Supersession::Provision,
+                            SupersessionDto::OwnerRecovery => Supersession::OwnerRecovery,
+                        },
+                    }
+                }
+            }),
+        };
+        let initiator = match dto.initiator {
+            InitiatorDto::Principal { id } => Initiator::Principal(PrincipalId::new(id)?),
+            InitiatorDto::LocalOperator => Initiator::LocalOperator,
+        };
+        Self::new(
+            CredentialId::new(dto.credential_id)?,
+            dto.before.map(lifecycle),
+            lifecycle(dto.after),
+            cause,
+            initiator,
+            dto.at,
+        )
+    }
+}
+
+impl CredentialTransitionDto {
+    /// Record domain evidence under the identity its committing adapter assigns.
+    pub fn record(
+        transition: &CredentialTransition,
+        sequence: u64,
+        revision: u64,
+        correlation: Option<String>,
+    ) -> Self {
+        let lifecycle = |value: &CredentialLifecycle| CredentialLifecycleDto {
+            issued_at: value.issued_at,
+            expires_at: value.expires_at,
+            revoked_at: value.revoked_at,
+        };
+        Self {
+            sequence,
+            revision,
+            correlation,
+            credential_id: transition.credential_id().as_str().to_owned(),
+            before: transition.before().map(lifecycle),
+            after: lifecycle(transition.after()),
+            cause: match transition.cause() {
+                TransitionCause::Issued(cause) => TransitionCauseDto::Issued {
+                    cause: match cause {
+                        IssuanceCause::Bootstrap => IssuanceCauseDto::Bootstrap,
+                        IssuanceCause::AdminIssue => IssuanceCauseDto::AdminIssue,
+                        IssuanceCause::SurfaceProvision => IssuanceCauseDto::SurfaceProvision,
+                        IssuanceCause::OwnerRecovery => IssuanceCauseDto::OwnerRecovery,
+                    },
+                },
+                TransitionCause::Revoked(cause) => TransitionCauseDto::Revoked {
+                    cause: match cause {
+                        RevocationCause::Explicit => RevocationCauseDto::Explicit,
+                        RevocationCause::Superseded { by, kind } => {
+                            RevocationCauseDto::Superseded {
+                                by: by.as_str().to_owned(),
+                                supersession: match kind {
+                                    Supersession::Provision => SupersessionDto::Provision,
+                                    Supersession::OwnerRecovery => SupersessionDto::OwnerRecovery,
+                                },
+                            }
+                        }
+                    },
+                },
+            },
+            initiator: match transition.initiator() {
+                Initiator::Principal(id) => InitiatorDto::Principal {
+                    id: id.as_str().to_owned(),
+                },
+                Initiator::LocalOperator => InitiatorDto::LocalOperator,
+            },
+            at: transition.at(),
+        }
     }
 }
 
@@ -102,5 +203,49 @@ mod tests {
             }],
         };
         assert!(Credential::try_from(dto).is_err());
+    }
+
+    #[test]
+    fn transition_evidence_round_trips_through_its_record() {
+        let mut credential = Credential::new(
+            CredentialId::new("credential-1").unwrap(),
+            PrincipalId::new("principal-1").unwrap(),
+            OrganizationId::new("organization-1").unwrap(),
+            AudienceId::new("gateway").unwrap(),
+            100,
+            None,
+            vec![Grant::new(
+                Action::new("server.read").unwrap(),
+                Resource::new(
+                    OrganizationId::new("organization-1").unwrap(),
+                    ResourceId::new("gateway").unwrap(),
+                ),
+            )],
+        )
+        .unwrap();
+        let issued = credential
+            .issued(
+                IssuanceCause::AdminIssue,
+                Initiator::Principal(PrincipalId::new("owner").unwrap()),
+            )
+            .unwrap();
+        let mut forged = CredentialTransitionDto::record(&issued, 1, 1, None);
+        forged.before = Some(forged.after);
+        assert!(CredentialTransition::try_from(forged).is_err());
+        let superseded = credential
+            .supersede(
+                50,
+                CredentialId::new("credential-2").unwrap(),
+                Supersession::OwnerRecovery,
+                Initiator::LocalOperator,
+            )
+            .unwrap();
+        for transition in [issued, superseded] {
+            let record = CredentialTransitionDto::record(&transition, 1, 2, Some("r".into()));
+            assert_eq!(CredentialTransition::try_from(record), Ok(transition));
+        }
+        assert!(credential
+            .issued(IssuanceCause::Bootstrap, Initiator::LocalOperator)
+            .is_err());
     }
 }

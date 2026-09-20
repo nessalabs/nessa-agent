@@ -1,7 +1,7 @@
 {
   "version": 1,
   "transport": "websocket",
-  "defaultUrl": "ws://127.0.0.1:7420",
+  "defaultUrl": "ws://127.0.0.1:7421",
   "phase": "authenticated-sessions",
   "note": "Authenticated session methods are defined in product/manifest.json.",
   "schemas": {

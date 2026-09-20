@@ -4,6 +4,21 @@ import { WebSocket, WebSocketServer } from "ws"
 
 import { NessaClient } from "./nessa-client.js"
 import { NessaRpcError } from "../application/rpc-error.js"
+import gatewayPorts from "../../../../protocol/defaults/gateway-ports.json"
+
+describe("NessaClient.defaultUrl", () => {
+  /**
+   * The package keeps its own literal so its source stays self-contained, and
+   * this is what stops that literal drifting from the one table. It named 7420
+   * for a while — the port an installed Nessa holds through its background
+   * service — so a client that omitted `url` reached the product gateway, or
+   * nothing, instead of the dev one.
+   */
+  it("is the dev gateway in protocol/defaults/gateway-ports.json", () => {
+    expect(NessaClient.defaultUrl).toBe(`ws://127.0.0.1:${gatewayPorts.stages.dev}`)
+    expect(gatewayPorts.stages.dev).not.toBe(gatewayPorts.stages.prod)
+  })
+})
 
 if (typeof globalThis.WebSocket === "undefined") {
   ;(globalThis as typeof globalThis & { WebSocket: typeof WebSocket }).WebSocket =

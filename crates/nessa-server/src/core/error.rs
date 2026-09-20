@@ -7,6 +7,7 @@
 
 use crate::conversation::application::ConversationError;
 use crate::env::EnvironmentError;
+use nessa_auth::adapters::local::LocalStoreError;
 use std::fmt;
 use std::io::{self, ErrorKind};
 
@@ -18,6 +19,11 @@ pub enum RunError {
     /// Every command is parsed before it is dispatched, so this is the one
     /// failure any invocation can end in, whatever it was trying to do.
     Usage(String),
+    /// The credential registry on disk could not be opened. Kept typed rather
+    /// than flattened into `Authentication`, because it is the one setup
+    /// failure the desktop host reports in its own words, and it learns which
+    /// failure this was from the exit code this variant chooses.
+    Registry(LocalStoreError),
     /// Product authentication failed to initialize; contains no credential material.
     Authentication(String),
     /// Invalid or unavailable configured agent provider.
@@ -42,6 +48,9 @@ impl fmt::Display for RunError {
             // the command, and the help text is one of the things it can be, so
             // there is no failing subsystem to announce in front of it.
             Self::Usage(message) => write!(f, "{message}"),
+            // Same sentence a flattened registry error used to produce: this
+            // is still what authentication setup failed on.
+            Self::Registry(error) => write!(f, "authentication setup failed: {error}"),
             Self::Authentication(message) => write!(f, "authentication setup failed: {message}"),
             Self::Environment(error) => write!(f, "invalid configuration: {error}"),
             Self::Bind { addr, source } => match source.kind() {
@@ -66,6 +75,7 @@ impl std::error::Error for RunError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Environment(error) => Some(error),
+            Self::Registry(error) => Some(error),
             Self::Usage(_) | Self::Authentication(_) | Self::Agent(_) => None,
             Self::Bind { source, .. } => Some(source),
             Self::Serve(source) => Some(source),
@@ -88,8 +98,12 @@ impl From<io::Error> for RunError {
 
 impl std::process::Termination for RunError {
     fn report(self) -> std::process::ExitCode {
-        tracing::error!(%self, "nessa failed");
-        std::process::ExitCode::FAILURE
+        // The log line is for a person reading it later. The exit code is for
+        // launchd, and through it for the desktop host, which has no other way
+        // to learn why this process stopped.
+        let code = super::exit_code::exit_code(&self);
+        tracing::error!(%self, exit_code = code, "nessa failed");
+        std::process::ExitCode::from(code)
     }
 }
 
