@@ -132,6 +132,41 @@ fn a_directory_that_is_not_utf8_removes_nothing() {
     );
 }
 
+/// One shell, asked two ways, answers twice; the agent gets both. bash is the
+/// case — no single invocation of it reads both of its startup files.
+#[test]
+fn one_path_followed_by_another_keeps_order_and_adds_what_is_new() {
+    let login = SearchPath::parse("/from-bash-profile:/usr/bin:/bin").unwrap();
+    let interactive = SearchPath::parse("/from-bashrc:/usr/bin:/bin").unwrap();
+    assert_eq!(
+        login.followed_by(&interactive).as_str(),
+        "/from-bash-profile:/usr/bin:/bin:/from-bashrc"
+    );
+    // The other way round is a different path, which is why which answer comes
+    // first is a decision and not an accident.
+    assert_eq!(
+        interactive.followed_by(&login).as_str(),
+        "/from-bashrc:/usr/bin:/bin:/from-bash-profile"
+    );
+}
+
+#[test]
+fn following_a_path_with_itself_changes_nothing() {
+    let reported = SearchPath::parse("/opt/homebrew/bin:/usr/bin").unwrap();
+    assert_eq!(reported.followed_by(&reported), reported);
+    // And the original is untouched: this is a replacement value.
+    assert_eq!(reported.as_str(), "/opt/homebrew/bin:/usr/bin");
+}
+
+/// A directory named twice is searched twice, and this value gets compared for
+/// equality against the one a service is registered with.
+#[test]
+fn what_is_added_is_added_once() {
+    let first = SearchPath::parse("/a:/b").unwrap();
+    let second = SearchPath::parse("/b:/c:/c:/a").unwrap();
+    assert_eq!(first.followed_by(&second).as_str(), "/a:/b:/c");
+}
+
 #[test]
 fn every_rejection_says_which_rule_it_broke() {
     for (error, wording) in [

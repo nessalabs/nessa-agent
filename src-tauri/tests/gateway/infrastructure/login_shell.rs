@@ -3,7 +3,7 @@
 //! misbehave — the ones that never return, and the ones that never stop talking.
 use super::unix::{between, carried_environment, LoginShell};
 use crate::gateway::application::{LoginShellError, LoginShellPath};
-use crate::gateway::domain::value_objects::SearchPathError;
+use crate::gateway::domain::value_objects::{SearchPath, SearchPathError};
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -49,7 +49,13 @@ fn temporary_directory(name: &str) -> PathBuf {
 /// which is what keeps that warm-up from failing with `ETXTBSY` on Linux; the
 /// reasoning is there.
 fn write_shell(directory: &Path, body: &str) -> PathBuf {
-    let script = directory.join("login-shell");
+    write_shell_named(directory, "login-shell", body)
+}
+
+/// The same, under a name of the test's choosing: what a stand-in is called is
+/// what decides how many ways it is asked.
+fn write_shell_named(directory: &Path, name: &str, body: &str) -> PathBuf {
+    let script = directory.join(name);
     let text = directory.join("login-shell.text");
     fs::write(
         &text,
@@ -128,12 +134,18 @@ fn shell_script(directory: &Path, prelude: &str) -> PathBuf {
     // The pid goes to a path decided here, so what the test reads afterwards
     // does not depend on how the shell was invoked or what it has on its own
     // `PATH` — which is deliberately almost nothing.
-    write_shell(
-        directory,
-        &format!(
-            "echo \"$$\" > '{}'\n{prelude}\neval \"$3\"",
-            directory.join("pid").display()
-        ),
+    write_shell(directory, &shell_body(directory, prelude))
+}
+
+/// What a stand-in shell does: record that it started, run its profile, then run
+/// the command it was given.
+///
+/// The command is the last argument rather than `$3`, because how many flags
+/// come before it depends on which way the shell is being asked.
+fn shell_body(directory: &Path, prelude: &str) -> String {
+    format!(
+        "echo \"$$\" > '{}'\n{prelude}\nfor command in \"$@\"; do :; done\neval \"$command\"",
+        directory.join("pid").display()
     )
 }
 
@@ -376,10 +388,7 @@ fn a_real_zsh_reports_the_tools_its_zshrc_adds() {
         .resolve()
         .expect("zsh reports a path");
     assert!(
-        resolved
-            .as_str()
-            .split(':')
-            .any(|entry| Path::new(entry) == tools),
+        entries(&resolved).contains(&tools),
         "{} is not on {}",
         tools.display(),
         resolved.as_str()
@@ -416,10 +425,7 @@ fn a_real_bash_gets_past_the_interactivity_guard_in_a_sourced_bashrc() {
             .resolve()
             .expect("bash reports a path");
     assert!(
-        resolved
-            .as_str()
-            .split(':')
-            .any(|entry| Path::new(entry) == tools),
+        entries(&resolved).contains(&tools),
         "{} is not on {}",
         tools.display(),
         resolved.as_str()
@@ -427,13 +433,13 @@ fn a_real_bash_gets_past_the_interactivity_guard_in_a_sourced_bashrc() {
     let _ = fs::remove_dir_all(&home);
 }
 
-/// The gap that leaves, written down as a test rather than only as a sentence:
-/// a `.bashrc` nothing sources is not reached, because an interactive *login*
-/// shell does not read it. A user in that position does not have those tools in
-/// their macOS terminal either. If this ever starts passing — a new probe, a
-/// different host — the documentation above it is what needs revisiting.
+/// The case #78 stayed open for: a bash user whose tools are in `.bashrc` with
+/// nothing sourcing it. No login shell reads that file, so asking bash only the
+/// way a terminal starts it on this platform *succeeded* with a `PATH` missing
+/// their tools — nothing failed, so nothing fell back and nothing was logged.
+/// The interactive probe is what reaches it.
 #[test]
-fn a_bashrc_that_nothing_sources_is_knowingly_not_reached() {
+fn a_real_bash_reports_the_tools_an_unsourced_bashrc_adds() {
     let Some(bash) = real_shell("bash") else {
         return;
     };
@@ -451,13 +457,96 @@ fn a_bashrc_that_nothing_sources_is_knowingly_not_reached() {
             .resolve()
             .expect("bash reports a path");
     assert!(
-        !resolved
-            .as_str()
-            .split(':')
-            .any(|entry| Path::new(entry) == tools),
-        "an unsourced .bashrc is now reached; the module's account of bash needs revisiting"
+        entries(&resolved).contains(&tools),
+        "{} is not on {}",
+        tools.display(),
+        resolved.as_str()
     );
     let _ = fs::remove_dir_all(&home);
+}
+
+/// Both bash files at once, neither sourcing the other: what each adds is
+/// reachable, and the login shell's entries come first, because that is the
+/// shell a terminal opens here and the two should agree about which directory
+/// wins.
+#[test]
+fn a_real_bash_combines_what_each_of_its_startup_files_adds() {
+    let Some(bash) = real_shell("bash") else {
+        return;
+    };
+    let home = temporary_directory("bash-both");
+    let from_bashrc = home.join("from-bashrc");
+    let from_profile = home.join("from-bash-profile");
+    fs::create_dir_all(&from_bashrc).unwrap();
+    fs::create_dir_all(&from_profile).unwrap();
+    fs::write(
+        home.join(".bashrc"),
+        format!("export PATH=\"{}:$PATH\"\n", from_bashrc.display()),
+    )
+    .unwrap();
+    fs::write(
+        home.join(".bash_profile"),
+        format!("export PATH=\"{}:$PATH\"\n", from_profile.display()),
+    )
+    .unwrap();
+
+    let resolved =
+        LoginShell::probing(bash, vec![("HOME", home.clone().into_os_string())], PATIENT)
+            .resolve()
+            .expect("bash reports a path");
+    let found = entries(&resolved);
+    let at = |directory: &PathBuf| {
+        found
+            .iter()
+            .position(|entry| entry == directory)
+            .unwrap_or_else(|| panic!("{} is not on {}", directory.display(), resolved.as_str()))
+    };
+    assert!(
+        at(&from_profile) < at(&from_bashrc),
+        "the login shell's own entries come first: {}",
+        resolved.as_str()
+    );
+    // Nothing is searched twice: the two answers share every system entry.
+    let mut once = found.clone();
+    once.sort();
+    once.dedup();
+    assert_eq!(once.len(), found.len(), "{}", resolved.as_str());
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// Asking a shell more ways must not mean waiting longer: every attempt shares
+/// one budget, and what is left of it bounds each one.
+#[test]
+fn every_attempt_together_is_bounded_by_one_budget() {
+    let directory = temporary_directory("budget");
+    // Called `bash`, so it is asked every way any shell here is asked: two
+    // questions whose answers combine, and then the fallback.
+    let script = write_shell_named(&directory, "bash", &shell_body(&directory, "sleep 600"));
+    let started = Instant::now();
+    let resolved = LoginShell::probing_within(
+        script,
+        vec![],
+        Duration::from_millis(2_000),
+        Duration::from_millis(1_000),
+    )
+    .resolve();
+    assert_eq!(resolved, Err(LoginShellError::TimedOut));
+    // Three attempts at the per-attempt deadline would be six seconds; the
+    // budget is what makes it one.
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+    // The pid is the last attempt's; the ones before it were killed as they
+    // timed out, the same way.
+    assert!(!still_running(shell_pid(&directory)));
+    let _ = fs::remove_dir_all(&directory);
+}
+
+/// The directories on a resolved path, in order.
+fn entries(resolved: &SearchPath) -> Vec<PathBuf> {
+    resolved.as_str().split(':').map(PathBuf::from).collect()
 }
 
 #[test]
