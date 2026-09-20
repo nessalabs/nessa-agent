@@ -144,23 +144,28 @@ fn shell_script(directory: &Path, prelude: &str) -> PathBuf {
 /// come before it depends on which way the shell is being asked.
 fn shell_body(directory: &Path, prelude: &str) -> String {
     format!(
-        "echo \"$$\" > '{}'\n{prelude}\nfor command in \"$@\"; do :; done\neval \"$command\"",
-        directory.join("pid").display()
+        "echo \"$$\" >> '{}'\n{prelude}\nfor command in \"$@\"; do :; done\neval \"$command\"",
+        directory.join("pids").display()
     )
 }
 
-/// The pid the stand-in shell wrote down for itself, which it does before its
-/// profile runs.
+/// Every pid a stand-in shell wrote down, one per time it was run — which it
+/// does before its profile runs, so one line means one shell that started.
 ///
 /// A missing one is not a stricter test, it is a broken one: it means the shell
 /// was killed before it started, so what the deadline ended was a process that
 /// had not yet begun doing the thing the test is about.
-fn shell_pid(directory: &Path) -> i32 {
-    fs::read_to_string(directory.join("pid"))
+fn shell_pids(directory: &Path) -> Vec<i32> {
+    fs::read_to_string(directory.join("pids"))
         .expect("the stand-in shell started and recorded its pid")
-        .trim()
-        .parse()
-        .expect("a pid")
+        .lines()
+        .map(|pid| pid.trim().parse().expect("a pid"))
+        .collect()
+}
+
+/// The last of them, for a test that runs the shell once.
+fn shell_pid(directory: &Path) -> i32 {
+    *shell_pids(directory).last().expect("a pid")
 }
 
 /// Whether that process is still there. Gone means killed *and* reaped: a
@@ -506,41 +511,144 @@ fn a_real_bash_combines_what_each_of_its_startup_files_adds() {
         "the login shell's own entries come first: {}",
         resolved.as_str()
     );
-    // Nothing is searched twice: the two answers share every system entry.
-    let mut once = found.clone();
-    once.sort();
-    once.dedup();
-    assert_eq!(once.len(), found.len(), "{}", resolved.as_str());
+    // Combining does not repeat what both answers had: each of these is on
+    // both, since each shell prepends its own to the same system path.
+    for directory in [&from_profile, &from_bashrc] {
+        assert_eq!(
+            found.iter().filter(|entry| *entry == directory).count(),
+            1,
+            "{} appears more than once on {}",
+            directory.display(),
+            resolved.as_str()
+        );
+    }
     let _ = fs::remove_dir_all(&home);
 }
 
-/// Asking a shell more ways must not mean waiting longer: every attempt shares
-/// one budget, and what is left of it bounds each one.
+/// A `.bash_profile` that hangs when it is interactive — the `ssh-agent` or
+/// `exec tmux` shape the fallback exists for — with the user's tools in
+/// `.bashrc`.
+///
+/// The interactive login shell never answers, the interactive one does, and the
+/// answer it gives on its own has read neither `/etc/profile` nor
+/// `.bash_profile`: no `path_helper`, so no Homebrew, and none of the user's
+/// login entries. Returning that as a success would be the thing this whole
+/// change calls the one that hurts, and it would make the registered `PATH`
+/// depend on whether a profile happened to hang — two very different values for
+/// a definition that is compared for equality, so a healthy gateway would be
+/// retired for it.
 #[test]
-fn every_attempt_together_is_bounded_by_one_budget() {
-    let directory = temporary_directory("budget");
-    // Called `bash`, so it is asked every way any shell here is asked: two
-    // questions whose answers combine, and then the fallback.
+fn a_hanging_bash_profile_still_yields_the_login_shell_entries() {
+    let Some(bash) = real_shell("bash") else {
+        return;
+    };
+    let home = temporary_directory("bash-hanging-profile");
+    let from_login = home.join("from-login");
+    let from_rc = home.join("from-rc");
+    fs::create_dir_all(&from_login).unwrap();
+    fs::create_dir_all(&from_rc).unwrap();
+    fs::write(
+        home.join(".bash_profile"),
+        format!(
+            "export PATH=\"{}:$PATH\"\ncase $- in *i*) sleep 600;; esac\n",
+            from_login.display()
+        ),
+    )
+    .unwrap();
+    fs::write(
+        home.join(".bashrc"),
+        format!("export PATH=\"{}:$PATH\"\n", from_rc.display()),
+    )
+    .unwrap();
+
+    let resolved = LoginShell::probing(
+        bash,
+        vec![("HOME", home.clone().into_os_string())],
+        Duration::from_millis(1_500),
+    )
+    .resolve()
+    .expect("bash reports a path");
+    let found = entries(&resolved);
+    assert!(
+        found.contains(&from_rc),
+        "the interactive shell's entries are missing from {}",
+        resolved.as_str()
+    );
+    assert!(
+        found.contains(&from_login),
+        "the login shell's entries are missing from {}",
+        resolved.as_str()
+    );
+    // What a login shell reads and an interactive one does not: the system
+    // directories `/etc/profile` puts on, which is where Homebrew lives.
+    assert!(
+        found.iter().any(|entry| entry.ends_with("usr/local/bin")),
+        "nothing /etc/profile contributes is on {}",
+        resolved.as_str()
+    );
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// The budget bounds every attempt together, and it bounds each one: an attempt
+/// gets what is left of it, not its own deadline over again.
+///
+/// The per-attempt clamp is what this measures. With a deadline well past the
+/// budget, an unclamped first attempt would run for the deadline; a clamped one
+/// stops when the budget does.
+#[test]
+fn an_attempt_gets_only_what_is_left_of_the_budget() {
+    let directory = temporary_directory("budget-clamp");
     let script = write_shell_named(&directory, "bash", &shell_body(&directory, "sleep 600"));
     let started = Instant::now();
     let resolved = LoginShell::probing_within(
         script,
         vec![],
-        Duration::from_millis(2_000),
+        Duration::from_millis(5_000),
         Duration::from_millis(1_000),
     )
     .resolve();
     assert_eq!(resolved, Err(LoginShellError::TimedOut));
-    // Three attempts at the per-attempt deadline would be six seconds; the
-    // budget is what makes it one.
+    // Unclamped, the first attempt alone would be five seconds.
     assert!(
         started.elapsed() < Duration::from_secs(3),
         "{:?}",
         started.elapsed()
     );
-    // The pid is the last attempt's; the ones before it were killed as they
-    // timed out, the same way.
-    assert!(!still_running(shell_pid(&directory)));
+    let _ = fs::remove_dir_all(&directory);
+}
+
+/// Every question a shell is asked is a chance to leave a process behind, so
+/// this is the case where all three are asked and all three hang: each shell
+/// starts, each is killed, and each is reaped.
+#[test]
+fn every_attempt_a_shell_is_asked_is_killed_and_reaped() {
+    let directory = temporary_directory("budget-every-attempt");
+    // Called `bash`, so it is asked every way any shell here is asked: two
+    // questions whose answers combine, and then the fallback for the login
+    // files neither of them brought.
+    let script = write_shell_named(&directory, "bash", &shell_body(&directory, "sleep 600"));
+    let started = Instant::now();
+    let resolved = LoginShell::probing_within(
+        script,
+        vec![],
+        Duration::from_millis(300),
+        Duration::from_millis(5_000),
+    )
+    .resolve();
+    assert_eq!(resolved, Err(LoginShellError::TimedOut));
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    let started_shells = shell_pids(&directory);
+    assert_eq!(started_shells.len(), 3, "{started_shells:?}");
+    for pid in started_shells {
+        assert!(
+            !still_running(pid),
+            "{pid} outlived the attempt that ran it"
+        );
+    }
     let _ = fs::remove_dir_all(&directory);
 }
 

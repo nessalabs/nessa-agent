@@ -58,6 +58,15 @@
 //! is between them is read — a profile cannot print a convincing answer because
 //! it cannot know what to print, and noise around it does not matter.
 //!
+//! One thing to know before a second host arrives: an entry only the
+//! interactive non-login shell reports lands last, after `/usr/bin` and
+//! `/opt/homebrew/bin`. On this platform that is right — a terminal opens a
+//! login shell, so the agent agrees with what the user sees — but the whole
+//! reason `-i -c` exists is the arrangement a Linux terminal starts, where the
+//! same user's `node` would come from the nvm block in `.bashrc` rather than
+//! from Homebrew. Whoever brings up the Linux host (#70) should decide
+//! precedence for it rather than inherit this one.
+//!
 //! Two things an interactive profile makes likelier, and what is done about
 //! them. It may background something — `ssh-agent`, `gpg-agent`, occasionally an
 //! `exec tmux` — and a backgrounded process that inherits the shell's stdout
@@ -138,6 +147,14 @@ mod unix {
     /// for the last kill to be confirmed: 10 + 2 = 12 seconds, once per run of
     /// the app, and only for profiles that hang. That is below the 14 seconds
     /// two attempts could reach before this budget existed.
+    ///
+    /// What it costs: an attempt after one that timed out no longer gets a full
+    /// [`DEADLINE`]. A first attempt that hangs spends 5 seconds and 2 more
+    /// being reaped, so the next gets 3, and a slow-but-answering profile that
+    /// needed 4 is now missed where it used to be reached. That is the trade for
+    /// a ceiling that does not grow with the number of questions, and the
+    /// profile it costs — slow enough to need four seconds, fast enough to
+    /// answer at all — is rarer than the one it protects.
     const BUDGET: Duration = Duration::from_secs(10);
 
     /// How long to wait for a killed shell to be reaped before reporting the
@@ -186,6 +203,29 @@ mod unix {
                 Self::InteractiveLogin => "interactive login shell",
                 Self::Interactive => "interactive shell",
                 Self::Login => "login shell",
+            }
+        }
+
+        /// Whether this reads what a login shell reads: `/etc/profile` and the
+        /// account's own login file, which is where `path_helper` and Homebrew
+        /// arrive from. The fallback exists to supply exactly that, so it is
+        /// worth asking whenever nothing else has.
+        fn reads_login_files(self) -> bool {
+            matches!(self, Self::InteractiveLogin | Self::Login)
+        }
+
+        /// Where this probe's entries belong in a combined answer.
+        ///
+        /// What a login shell reported comes first, because that is the shell a
+        /// terminal opens on this platform; what only an interactive non-login
+        /// shell reported comes last. Between the two login-reading probes the
+        /// interactive one is preferred, since it read everything the other
+        /// did and more.
+        fn precedence(self) -> u8 {
+            match self {
+                Self::InteractiveLogin => 0,
+                Self::Login => 1,
+                Self::Interactive => 2,
             }
         }
     }
@@ -452,54 +492,89 @@ mod unix {
         /// Asks this shell everything its plan says it is worth asking, and
         /// combines what comes back.
         ///
-        /// Every combined answer contributes, earliest first, because for bash
-        /// the two invocations read different files and a user's tools may be in
-        /// either. Only if none of them answered at all does the fallback run,
-        /// and then the first answer is the answer. Each failure says which
-        /// question it was; the whole thing is bounded by one [`BUDGET`], so a
-        /// shell that is asked more is not a shell that waits longer.
+        /// Every answer contributes, in [`Probe::precedence`] order rather than
+        /// in the order asked, because for bash the invocations read different
+        /// files and a user's tools may be in either.
+        ///
+        /// The fallback is not "what to do if everything failed" — it is where
+        /// the login files come from, so it runs whenever no answer has brought
+        /// them. That matters for the case it was written for: a `.bash_profile`
+        /// that hangs when it is interactive leaves the interactive non-login
+        /// probe answering on its own, and that answer has read neither
+        /// `/etc/profile` nor `.bash_profile` — no `path_helper`, so no
+        /// Homebrew, and none of the user's login entries. Returning it as a
+        /// success would be the failure this module exists to prevent, and it
+        /// would make the registered path depend on whether a profile happened
+        /// to hang, which a definition compared for equality answers by retiring
+        /// a healthy gateway.
+        ///
+        /// Each failure says which question it was, a partial answer says what
+        /// is missing from it, and the whole thing is bounded by one [`BUDGET`],
+        /// so a shell that is asked more is not a shell that waits longer.
         fn resolve(&self) -> Result<SearchPath, LoginShellError> {
             let until = Instant::now() + self.budget;
             let plan = self.plan();
-            let mut combined: Option<SearchPath> = None;
+            let mut answers: Vec<(Probe, SearchPath)> = Vec::new();
+            let mut failed: Vec<Probe> = Vec::new();
             let mut last = None;
-            for probe in plan.combined {
+            let mut attempt = |probe: Probe, answers: &mut Vec<(Probe, SearchPath)>| {
                 if Instant::now() >= until {
-                    report_exhausted(*probe);
-                    break;
+                    report_exhausted(probe);
+                    failed.push(probe);
+                    return false;
                 }
-                match self.ask(*probe, until) {
+                match self.ask(probe, until) {
                     Ok(path) => {
-                        combined = Some(match combined {
-                            Some(reported) => reported.followed_by(&path),
-                            None => path,
-                        })
+                        answers.push((probe, path));
+                        true
                     }
                     Err(error) => {
-                        report_failure(*probe, &error);
+                        report_failure(probe, &error);
+                        failed.push(probe);
                         last = Some(error);
+                        false
+                    }
+                }
+            };
+            for probe in plan.combined {
+                attempt(*probe, &mut answers);
+            }
+            if !answers.iter().any(|(probe, _)| probe.reads_login_files()) {
+                for probe in plan.fallback {
+                    if attempt(*probe, &mut answers) {
+                        break;
                     }
                 }
             }
-            if let Some(combined) = combined {
-                return Ok(combined);
+            if answers.is_empty() {
+                // Nothing to report happens only when the budget was gone
+                // before the first question, which is running out of it.
+                return Err(last.unwrap_or(LoginShellError::TimedOut));
             }
-            for probe in plan.fallback {
-                if Instant::now() >= until {
-                    report_exhausted(*probe);
-                    break;
-                }
-                match self.ask(*probe, until) {
-                    Ok(path) => return Ok(path),
-                    Err(error) => {
-                        report_failure(*probe, &error);
-                        last = Some(error);
-                    }
-                }
+            answers.sort_by_key(|(probe, _)| probe.precedence());
+            let mut combined: Option<SearchPath> = None;
+            for (probe, answer) in answers {
+                combined = Some(match combined {
+                    None => answer,
+                    Some(reported) => match reported.followed_by(&answer) {
+                        Ok(both) => both,
+                        Err(error) => {
+                            // Keeping what is already there is the safe half:
+                            // it is the higher-precedence answer, and it is a
+                            // value the service definition can be read back out
+                            // of on the next launch.
+                            eprintln!(
+                                "[nessa] What the {} added to the agent's PATH did not fit ({error})",
+                                probe.describe()
+                            );
+                            reported
+                        }
+                    },
+                });
             }
-            // Nothing to report happens only when the budget was gone before
-            // the first question, which is the same thing as running out of it.
-            Err(last.unwrap_or(LoginShellError::TimedOut))
+            let combined = combined.expect("an answer was kept");
+            report_partial(&failed, &combined);
+            Ok(combined)
         }
     }
 
@@ -517,6 +592,24 @@ mod unix {
         eprintln!(
             "[nessa] No time left to read the {} for the agent's PATH",
             probe.describe()
+        );
+    }
+
+    /// Says that an answer was returned but is not the whole one.
+    ///
+    /// Without this a partial success reads like a complete one: the per-probe
+    /// line above says a question did not work, and nothing says the answer
+    /// that came back is missing what that question would have added. A user
+    /// whose tools are absent needs the second sentence, not the first.
+    fn report_partial(failed: &[Probe], combined: &SearchPath) {
+        if failed.is_empty() {
+            return;
+        }
+        let missing: Vec<&str> = failed.iter().map(|probe| probe.describe()).collect();
+        eprintln!(
+            "[nessa] The agent's PATH is {}; anything only the {} would have added is missing from it",
+            combined.as_str(),
+            missing.join(" or the ")
         );
     }
 

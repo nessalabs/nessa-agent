@@ -136,14 +136,26 @@ impl SearchPath {
     /// Entries already present are not repeated: a `PATH` that names the same
     /// directory twice searches it twice, which is noise in a value that gets
     /// compared for equality against a registered one.
-    pub fn followed_by(&self, other: &Self) -> Self {
+    ///
+    /// Refused with [`SearchPathError::TooLong`] if the two together would
+    /// exceed [`SearchPath::LIMIT`], because a value that leaves here has been
+    /// through every rule [`SearchPath::parse`] applies — including that one.
+    /// Two answers each inside the limit can combine to twice it, and a path
+    /// that can be written into a service definition but not read back out of
+    /// it is worse than one that was never widened: the next launch would find
+    /// nothing it recognises and re-register, retiring a healthy gateway.
+    pub fn followed_by(&self, other: &Self) -> Result<Self, SearchPathError> {
         let mut entries: Vec<&str> = self.0.split(':').collect();
         for entry in other.0.split(':') {
             if !entries.contains(&entry) {
                 entries.push(entry);
             }
         }
-        Self(entries.join(":"))
+        let combined = entries.join(":");
+        if combined.len() > Self::LIMIT {
+            return Err(SearchPathError::TooLong);
+        }
+        Ok(Self(combined))
     }
 
     /// The colon-separated form, for the child's environment.
