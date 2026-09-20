@@ -1,5 +1,6 @@
 //! launchd registration and loopback readiness. Service lifetime belongs to launchd.
 use crate::gateway::application::{GatewayError, GatewayHost, ReconciledGateway};
+use crate::gateway::domain::value_objects::SearchPath;
 use nessa_local_storage::OpenMode;
 use serde::Deserialize;
 use serde_json::Value;
@@ -31,8 +32,13 @@ use staging::{launch_settings, stage_runtime};
 
 pub(super) struct Launchd;
 impl GatewayHost for Launchd {
-    fn register(&self, runtime: &Path, stage: &str) -> Result<ReconciledGateway, GatewayError> {
-        register(runtime, stage).map_err(GatewayError::Registration)
+    fn register(
+        &self,
+        runtime: &Path,
+        stage: &str,
+        agent_path: Option<&SearchPath>,
+    ) -> Result<ReconciledGateway, GatewayError> {
+        register(runtime, stage, agent_path).map_err(GatewayError::Registration)
     }
     fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError> {
         let status = service_status(gateway.service()).map_err(GatewayError::Stop)?;
@@ -74,7 +80,11 @@ fn matches_reconciled_gateway(
                 && runtime.generation == gateway.service_generation()
     )
 }
-fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
+fn register(
+    runtime: &Path,
+    stage: &str,
+    agent_path: Option<&SearchPath>,
+) -> Result<ReconciledGateway, String> {
     let location = runtime.to_string_lossy();
     if location.starts_with("/Volumes/") || location.contains("/AppTranslocation/") {
         return Err("Move Nessa to Applications before starting its background service".into());
@@ -132,16 +142,26 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
     nessa_local_storage::sync_directory(&private_root).map_err(|error| error.to_string())?;
     let staged_runtime = stage_runtime(runtime, &runtime_root.join(&label), &fingerprint)?;
     let runtime = staged_runtime.as_path();
-    let (arguments, executable_path) = launch_settings(runtime);
+    let arguments = launch_settings(runtime);
     let agents = home.join("Library/LaunchAgents");
     let path = agents.join(format!("{label}.plist"));
+    let installed = read_definition(&path).ok();
+    let agent_path = registered_agent_path(agent_path, installed.as_ref(), runtime);
     let mut environment = serde_json::Map::new();
     for (key, value) in [
         ("HOME", home.to_string_lossy().into_owned()),
         ("NESSA_STAGE", stage.into()),
         ("NESSA_HOST", "127.0.0.1".into()),
         ("NESSA_PORT", port.to_string()),
-        ("PATH", executable_path),
+        // The gateway's own path: the system tools and nothing else, because
+        // everything else it runs it addresses absolutely.
+        ("PATH", SearchPath::system().as_str().to_owned()),
+        // The agent's, which is a different question with a different answer —
+        // see `registered_agent_path`. It is deliberately not the service
+        // `PATH`: what the gateway can reach and what the user's agent can
+        // reach are not the same decision, and nothing should be able to widen
+        // one by widening the other.
+        ("NESSA_AGENT_PATH", agent_path.as_str().to_owned()),
         ("NESSA_RUNTIME_FINGERPRINT", fingerprint.clone()),
     ] {
         environment.insert(key.into(), value.into());
@@ -164,7 +184,6 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
         "ThrottleInterval":5,"ExitTimeOut":30,"ProcessType":"Background",
         "StandardOutPath":log,"StandardErrorPath":log
     });
-    let installed = read_definition(&path).ok();
     let installed_data = installed
         .as_ref()
         .and_then(|definition| definition.get("WorkingDirectory"))
@@ -390,6 +409,39 @@ fn runtime_fingerprint(runtime: &Path) -> Result<String, String> {
     }
     Ok(manifest.fingerprint)
 }
+/// The search path this registration will give the agent.
+///
+/// Three sources, in order of authority:
+///
+/// 1. what the login shell said this launch;
+/// 2. failing that, what the installed service definition already says — the
+///    same answer this host wrote the last time a login shell answered. This is
+///    the case the equality check cares about: a definition that changed is a
+///    definition that retires the running gateway and bootstraps a replacement,
+///    so a profile that was slow once must not be a reason to restart a healthy
+///    service with a narrower path than it already had;
+/// 3. failing that — no shell, no prior registration — the system path, which
+///    is a working `PATH` with none of the user's tools on it.
+///
+/// The staged runtime comes out of all three. It is where Nessa's own `node`
+/// lives, and an agent that finds that one by name is running a Node the user
+/// did not choose.
+fn registered_agent_path(
+    resolved: Option<&SearchPath>,
+    installed: Option<&Value>,
+    runtime: &Path,
+) -> SearchPath {
+    let registered = installed
+        .and_then(|definition| definition.get("EnvironmentVariables"))
+        .and_then(|environment| environment.get("NESSA_AGENT_PATH"))
+        .and_then(Value::as_str)
+        .and_then(|path| SearchPath::parse(path).ok());
+    resolved
+        .cloned()
+        .or(registered)
+        .and_then(|path| path.excluding(runtime))
+        .unwrap_or_else(SearchPath::system)
+}
 fn service_matches(path: &Path, expected: &Value) -> bool {
     read_definition(path).is_ok_and(|actual| actual == *expected)
 }
@@ -444,13 +496,18 @@ fn finish_bootstrap(
 mod tests {
     use super::{
         finish_bootstrap, incomplete_install_retry, matches_reconciled_gateway,
-        prepare_data_directory, runtime_fingerprint, service_matches,
+        prepare_data_directory, registered_agent_path, runtime_fingerprint, service_matches,
+        SearchPath,
     };
     use crate::gateway::application::ReconciledGateway;
     use crate::gateway::infrastructure::macos::control::{Health, ManagedRuntime, ServiceStatus};
     use crate::gateway::infrastructure::macos::startup::LastExit;
     use serde_json::{json, Value};
-    use std::{cell::Cell, fs, path::PathBuf};
+    use std::{
+        cell::Cell,
+        fs,
+        path::{Path, PathBuf},
+    };
 
     fn temporary_directory(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("nessa-gateway-{name}-{}", std::process::id()))
@@ -664,7 +721,7 @@ mod tests {
         let plist = directory.join("gateway.plist");
         fs::write(
             &plist,
-            r#"{"ProgramArguments":["/Applications/Nessa.app/runtime/nessa","server","--desktop-runtime","/Applications/Nessa.app/runtime"],"WorkingDirectory":"/Users/me/.nessa","EnvironmentVariables":{"NESSA_RUNTIME_FINGERPRINT":"current","HOME":"/Users/me","NESSA_STAGE":"prod","NESSA_HOST":"127.0.0.1","NESSA_PORT":"7420","PATH":"/runtime:/usr/bin"}}"#,
+            r#"{"ProgramArguments":["/Applications/Nessa.app/runtime/nessa","server","--desktop-runtime","/Applications/Nessa.app/runtime"],"WorkingDirectory":"/Users/me/.nessa","EnvironmentVariables":{"NESSA_RUNTIME_FINGERPRINT":"current","HOME":"/Users/me","NESSA_STAGE":"prod","NESSA_HOST":"127.0.0.1","NESSA_PORT":"7420","PATH":"/usr/bin:/bin:/usr/sbin:/sbin","NESSA_AGENT_PATH":"/opt/homebrew/bin:/usr/bin:/bin"}}"#,
         )
         .unwrap();
         let expected: Value = serde_json::from_slice(&fs::read(&plist).unwrap()).unwrap();
@@ -684,6 +741,90 @@ mod tests {
         let mut changed = expected.clone();
         changed["EnvironmentVariables"]["CLAUDE_CONFIG_DIR"] = json!("/new/provider");
         assert!(!service_matches(&plist, &changed));
+        // The agent's path is part of the service definition, so changing it is
+        // a re-registration and not something that quietly takes effect.
+        let mut changed = expected.clone();
+        changed["EnvironmentVariables"]["NESSA_AGENT_PATH"] = json!("/opt/homebrew/bin:/usr/bin");
+        assert!(!service_matches(&plist, &changed));
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// The two ends of one variable, which no type connects: this host writes
+    /// it into the service definition and the gateway reads it out of its own
+    /// environment. Renaming it on one side alone leaves an agent quietly back
+    /// on the system path, which is the failure this whole change is about.
+    #[test]
+    fn the_gateway_reads_the_agent_path_variable_this_host_writes() {
+        let gateway = include_str!("../../../../crates/nessa-server/src/composition/agent.rs");
+        assert!(
+            include_str!("macos.rs").contains(r#"("NESSA_AGENT_PATH", agent_path"#),
+            "this host no longer registers NESSA_AGENT_PATH"
+        );
+        assert!(
+            gateway.contains(r#"var_os("NESSA_AGENT_PATH")"#),
+            "crates/nessa-server/src/composition/agent.rs does not read NESSA_AGENT_PATH"
+        );
+    }
+
+    /// The whole point of the retained path: two launches of the same app, the
+    /// second with a login shell that did not answer, produce the same service
+    /// definition — so the equality check above holds and the running gateway
+    /// is left alone.
+    #[test]
+    fn an_unread_login_shell_keeps_the_registered_agent_path() {
+        let runtime = Path::new("/Users/me/Library/Application Support/Nessa/runtimes/abc");
+        let installed = json!({
+            "EnvironmentVariables": {"NESSA_AGENT_PATH": "/opt/homebrew/bin:/usr/bin:/bin"}
+        });
+        let resolved = SearchPath::parse("/opt/homebrew/bin:/usr/bin:/bin").unwrap();
+        assert_eq!(
+            registered_agent_path(Some(&resolved), None, runtime),
+            resolved
+        );
+        assert_eq!(
+            registered_agent_path(None, Some(&installed), runtime),
+            resolved
+        );
+    }
+
+    /// A first launch with no login shell to read, and a definition that has
+    /// nothing usable to keep, still leaves the agent a working path.
+    #[test]
+    fn nothing_to_resolve_and_nothing_registered_falls_back_to_the_system_path() {
+        let runtime = Path::new("/staged/runtime");
+        for installed in [
+            None,
+            Some(json!({})),
+            Some(json!({"EnvironmentVariables": {}})),
+            Some(json!({"EnvironmentVariables": {"NESSA_AGENT_PATH": ""}})),
+            Some(json!({"EnvironmentVariables": {"NESSA_AGENT_PATH": "relative:./bin"}})),
+            Some(json!({"EnvironmentVariables": {"NESSA_AGENT_PATH": 7}})),
+            Some(json!({"EnvironmentVariables": {"NESSA_AGENT_PATH": "/staged/runtime"}})),
+        ] {
+            assert_eq!(
+                registered_agent_path(None, installed.as_ref(), runtime),
+                SearchPath::system(),
+                "{installed:?}"
+            );
+        }
+    }
+
+    /// Nessa's own `node`, `nessa` and `nessa-mcp` live in the staged runtime.
+    /// Whichever source the path came from, that directory is not on it.
+    #[test]
+    fn the_staged_runtime_never_reaches_the_agents_path() {
+        let runtime = Path::new("/staged/runtime");
+        let resolved = SearchPath::parse("/staged/runtime:/opt/homebrew/bin:/usr/bin").unwrap();
+        assert_eq!(
+            registered_agent_path(Some(&resolved), None, runtime).as_str(),
+            "/opt/homebrew/bin:/usr/bin"
+        );
+        let installed = json!({
+            "EnvironmentVariables": {"NESSA_AGENT_PATH": "/usr/bin:/staged/runtime"}
+        });
+        assert_eq!(
+            registered_agent_path(None, Some(&installed), runtime).as_str(),
+            "/usr/bin"
+        );
     }
 }

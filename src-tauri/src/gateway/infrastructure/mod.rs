@@ -8,14 +8,19 @@
 //! `staging` verifies and publishes private immutable runtime versions before any
 //! service mutation. Existing versions remain available across app replacement.
 //!
+//! `login_shell` is the other native read here and belongs to no service: it asks
+//! the account's own login shell for the search path the agent will be given.
+//!
 //! ```text
 //! Gateway -> Launchd -> staging -> verified immutable runtime
 //!                    -> control -> launchd / existing gateway
+//!         -> LoginShell -------> the account's login shell
 //! ```
 //! Arrows mean calls; only launchd owns the background process lifetime.
+mod login_shell;
 #[cfg(target_os = "macos")]
 mod macos;
 mod selection;
 #[cfg(not(target_os = "macos"))]
 mod unsupported;
-pub use selection::current;
+pub use selection::{current, login_shell_path};

@@ -39,7 +39,7 @@ opinion rather than the product's.
 | `surface_credential.rs` | The bundled panel's token: where it lives for a stage, and `CredentialRefusal` for why there is not one. Only the bundled window may ask. |
 | `local_data.rs` | The stage-scoped data root this process reads, mirroring the server's own path rules. |
 | `stage_port.rs` | The loopback port the gateway registers for a stage, from `protocol/defaults/gateway-ports.json`. macOS-only, like the registration that reads it. |
-| `gateway/application/`, `gateway/infrastructure/` | Retryable background-service reconciliation and native launchd adapters, injected from `main.rs`. The adapter verifies the running runtime fingerprint and owns acknowledged update replacement; gateway lifetime remains independent of the desktop. |
+| `gateway/domain/`, `gateway/application/`, `gateway/infrastructure/` | Retryable background-service reconciliation and native launchd adapters, injected from `main.rs`. The adapter verifies the running runtime fingerprint and owns acknowledged update replacement; gateway lifetime remains independent of the desktop. The domain holds `SearchPath`, the validated `PATH` value; `LoginShellPath` is the port behind which the account's own login shell is read, once per registration, for the path the agent will be given. |
 | `host.rs` | The host/shell seam: event names and the `PanelSize` payload. The frontend lists the same names in `src/host/window.ts`; a test fails if they drift. |
 | `panel.rs` | The panel frame: opening size, lower-right placement, show/hide. The tray and the shortcut request a toggle; they do not fit the frame. |
 | `tray.rs` | The menu bar extra (macOS) or StatusNotifierItem (Linux), and the surface-toggle request. Creating it is survivable: a desktop with no tray still launches. |
@@ -131,8 +131,10 @@ get an ADR explaining why not.
 **Desktop host ↔ gateway runtime.** The prepared runtime tree has one fingerprint.
 Under its service-label lock, the host copies and verifies the bundle into a
 private version directory outside the app before any service mutation. Exclusive
-atomic publication prevents replacing an existing version; launchd arguments and
-runtime PATH use only the staged directory. Published versions are retained,
+atomic publication prevents replacing an existing version; launchd arguments name
+only the staged directory, and no search path derives from it — the service runs
+everything in that directory by absolute path, so neither the gateway's `PATH`
+nor the agent's contains it. Published versions are retained,
 validated on reuse, and never repaired or garbage-collected automatically.
 The desktop compares it with health's fingerprint, persisted service generation,
 and canonical runtime-instance UUID, requiring the advertised process ID to match

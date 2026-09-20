@@ -149,13 +149,15 @@ fn published_runtime_is_private_reusable_immutable_and_definition_uses_staged_pa
         fs::read_link(staged.join("gateway-link")).unwrap(),
         Path::new("nessa")
     );
-    let (arguments, path) = launch_settings(&staged);
+    // The service runs the staged copy, never the bundle it was staged from,
+    // and it is addressed absolutely: no search path is derived from it.
     assert_eq!(
-        arguments,
+        launch_settings(&staged),
         json!([staged.join("nessa"), "server", "--desktop-runtime", staged])
     );
-    assert!(path.starts_with(staged.to_str().unwrap()));
-    assert!(!path.contains(source.to_str().unwrap()));
+    assert!(!launch_settings(&staged)
+        .to_string()
+        .contains(source.to_str().unwrap()));
     assert_eq!(
         stage_runtime(&source, &versions, &fingerprint).unwrap(),
         staged

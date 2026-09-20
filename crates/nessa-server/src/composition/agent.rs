@@ -7,6 +7,7 @@ use nessa_sdk::{
 };
 use serde::Deserialize;
 use std::{
+    ffi::OsString,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -42,6 +43,29 @@ impl AgentConfig {
         Ok(())
     }
 }
+/// The `PATH` the agent's process tree gets: Claude Code, its Bash tool, and
+/// the Nessa MCP shell tool all inherit this one.
+///
+/// It is deliberately not this process's own. A packaged gateway is a launchd
+/// service, and the `PATH` launchd gives it is the system one — nothing the user
+/// installed is on it, which is how "run the tests" became `command not found:
+/// pnpm` on a machine where every terminal has `pnpm`. The desktop host resolves
+/// the user's login-shell path once, when it registers the service, and hands it
+/// over as `NESSA_AGENT_PATH`: a variable of Nessa's own, so widening what the
+/// agent can reach never widens what the service itself can.
+///
+/// A developer loop has no host and no such variable, and there the process
+/// `PATH` *is* the developer's own shell path, which is the right answer.
+// Only a Unix build supervises an agent process; the rule is still decided and
+// tested here rather than inside that target's branch.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn agent_search_path(resolved: Option<OsString>, inherited: Option<OsString>) -> Option<OsString> {
+    resolved
+        .filter(|path| !path.is_empty())
+        .or(inherited)
+        .filter(|path| !path.is_empty())
+}
+
 fn context_tokens() -> u32 {
     100_000
 }
@@ -129,17 +153,16 @@ mod build {
         let limits = TokenLimits::new(config.context_tokens, config.output_tokens)
             .map_err(|e| RunError::Agent(e.to_string()))?;
         let mut environment = BTreeMap::new();
-        for key in [
-            "PATH",
-            "HOME",
-            "USER",
-            "LOGNAME",
-            "TMPDIR",
-            "CLAUDE_CONFIG_DIR",
-        ] {
+        for key in ["HOME", "USER", "LOGNAME", "TMPDIR", "CLAUDE_CONFIG_DIR"] {
             if let Some(value) = std::env::var_os(key) {
                 environment.insert(key.into(), value);
             }
+        }
+        if let Some(path) = super::agent_search_path(
+            std::env::var_os("NESSA_AGENT_PATH"),
+            std::env::var_os("PATH"),
+        ) {
+            environment.insert("PATH".into(), path);
         }
         let mut credential_environment = BTreeMap::new();
         for key in ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] {

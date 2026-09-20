@@ -276,14 +276,28 @@ other filesystems use the durable byte-copy fallback. It copies relative interna
 symlinks, preserves bytes and executable bits, removes removable bundle-supplied
 extended attributes, syncs every file after either copy path and then its directories, verifies
 the same full-tree SHA-256 used by packaging, then publishes with an exclusive
-atomic rename. The service's executable, `--desktop-runtime` argument and runtime
-`PATH` point exclusively at that retained version, so replacing `Nessa.app` cannot
-replace files under a running gateway. Corrupt existing versions cause an error;
+atomic rename. The service's executable and `--desktop-runtime` argument point
+exclusively at that retained version, so replacing `Nessa.app` cannot replace
+files under a running gateway. No search path is derived from it: the gateway
+runs `nessa`, `node`, the ACP entry and `nessa-mcp` by absolute path, so the
+staged directory appears on nobody's `PATH`. Corrupt existing versions cause an error;
 they are never repaired in place. All published versions are retained; automatic
 runtime garbage collection is not implemented. Failed attempts remove only their
 own temporary directory. macOS may retain its protected `com.apple.provenance`
 marker on both copy paths; runtime identity and policy do not derive from that
 platform-managed attribute.
+
+The service runs with the system `PATH` and nothing more. What the *agent* gets
+is a separate variable, `NESSA_AGENT_PATH`: the desktop host asks the account's
+login shell for its path once, while registering, and writes the answer into the
+launchd definition. That makes it part of the service's identity — changing it is
+a deliberate re-registration, not something that shifts under a running gateway —
+and it is resolved from a clean login shell, so launching Nessa from a terminal
+with an unusual path does not rewrite the service. A login shell that hangs,
+fails, or answers with something that is not a path costs the registration
+nothing: it keeps the path already registered, or falls back to the system path
+on a first run, and says so on stderr. The staged runtime is never on it, so the
+agent's `node` is the user's or none at all.
 
 The desktop bootstrap registers `so.nessa.gateway.prod` in the user's launchd
 GUI domain. launchd starts the gateway on login and restarts unexpected exits.
