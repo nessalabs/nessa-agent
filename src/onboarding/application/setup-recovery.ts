@@ -16,7 +16,8 @@
  * It is a function rather than branches inside the surface for the reason
  * `readiness-check.ts` and `dismiss-shortcut.ts` are: the decision is the part
  * worth testing, and a React effect that ends in a destroyed window is not
- * something a test can drive.
+ * something a test can drive against the real host. The effects around this are
+ * driven against a fake one in `ui/use-setup-handoff.test.ts`.
  */
 
 import type { SetupHandoff } from "../../host"
