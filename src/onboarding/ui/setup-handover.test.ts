@@ -44,6 +44,7 @@ vi.mock("./sound", async (importOriginal) => ({
 }))
 
 import { SetupGate } from "./setup-gate"
+import { BrowserSetupGate } from "../../composition/browser-gate"
 
 /** Both agents ready, so the choice is a real one between two options. */
 const bothReady: AgentReadinessSource = {
@@ -138,6 +139,32 @@ describe("setup on a surface that becomes the panel in place", () => {
     expect(handedOver).toHaveBeenCalledWith("codex")
     // And the panel is what is on screen now, which is the whole reason this
     // surface has no window to read the choice back in.
+    expect(container.textContent).toContain("the panel")
+  })
+
+  it("is wired that way by the composition that has no host, not only in principle", async () => {
+    // Both halves of this were already covered and the join between them was
+    // not: the gate hands the choice to whoever asked for it, the dependencies
+    // keep what they are told, and nothing said the browser connects the two.
+    // Removing that one prop left every suite green and the picker deciding
+    // nothing again.
+    const rememberChosenAgent = vi.fn()
+    await React.act(async () => {
+      root.render(
+        React.createElement(BrowserSetupGate, {
+          dependencies: { agents: bothReady, rememberChosenAgent },
+          children: React.createElement("p", null, "the panel"),
+        }),
+      )
+    })
+    await flush()
+
+    await press("Get started")
+    await press("Codex")
+    await press("Continue")
+    await press("Skip this step")
+
+    expect(rememberChosenAgent).toHaveBeenCalledWith("codex")
     expect(container.textContent).toContain("the panel")
   })
 

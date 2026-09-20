@@ -96,6 +96,37 @@ describe("the agent every conversation is created on", () => {
     expect(invoke).not.toHaveBeenCalled()
   })
 
+  it("keeps a choice handed over while a host read was still in flight", async () => {
+    // The surface with no host to ask is exactly the one that hands the choice
+    // over in place, so the two can overlap. An answer that lands afterwards
+    // must not erase what it knows nothing about.
+    const { createDependencies } = await import("./dependencies")
+    const create = vi.fn(async ({ conversationId }: { conversationId: string }) => ({
+      conversationId,
+    }))
+    const dependencies = createDependencies()
+    dependencies.session.set({ conversation: { create } } as unknown as NessaClient)
+
+    let answer!: (value: null) => void
+    invoke.mockReturnValueOnce(
+      new Promise<null>((resolve) => {
+        answer = resolve
+      }),
+    )
+    const asking = dependencies.conversation.create("during-setup")
+    dependencies.rememberChosenAgent("codex")
+    answer(null)
+    await asking
+
+    await dependencies.conversation.create("after-handover")
+    expect(create).toHaveBeenLastCalledWith({
+      conversationId: "after-handover",
+      agent: "codex",
+    })
+    // And the host is not asked again: the choice was handed over, not read.
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+
   it("is asked for again after a host that could not answer, not settled for good", async () => {
     // Driven through the real lookup rather than a stand-in, because the trap
     // is in the real one: it survives a failed host by resolving to nothing, so

@@ -46,17 +46,36 @@ export function createDependencies(
   //
   // The cost of asking again is one local host round trip per `create`, on a
   // path that already awaits the gateway, and only until somebody has chosen.
+  // Creations in the same tick share one call: the assignment below happens
+  // synchronously and the clearing only in a later microtask.
+  //
+  // What this does not fix, and cannot from here: a conversation created
+  // during that window is on record with the gateway's default for the rest of
+  // its life, because the server reopens an existing conversation on the agent
+  // its own record names and nothing in the panel renames one. The choice takes
+  // effect from the next conversation.
   let chosen: Promise<string | undefined> | undefined
-  const chosenAgent = () =>
-    (chosen ??= loadChosenAgent()
+  const ask = (): Promise<string | undefined> => {
+    // Each ask clears only what it put there. Without the identity check an
+    // answer still in flight when a choice is handed over in place would erase
+    // that choice on landing, and the surface that has no host to ask again is
+    // exactly the one that hands it over.
+    const asking: Promise<string | undefined> = loadChosenAgent()
       .then((answer) => {
-        if (answer.outcome !== "chosen") chosen = undefined
+        if (answer.outcome !== "chosen" && chosen === asking) chosen = undefined
         return answer.outcome === "chosen" ? answer.agent : undefined
       })
+      // Unreachable through `loadChosenAgent`, which answers rather than
+      // rejecting. Kept because the cost of being wrong about that is a memo
+      // holding a rejected promise, which is a panel that cannot start, send,
+      // close or answer a permission until it is restarted.
       .catch((cause: unknown) => {
-        chosen = undefined
+        if (chosen === asking) chosen = undefined
         throw cause
-      }))
+      })
+    return asking
+  }
+  const chosenAgent = () => (chosen ??= ask())
   return {
     session,
     attachments: createAttachmentResources(),
