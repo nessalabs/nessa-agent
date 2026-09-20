@@ -339,6 +339,24 @@ impl ManagedRuntimes {
     /// that names an executable the disk does not have. The directory is synced
     /// afterwards so the rename itself survives, which also makes durable the
     /// version directory created a moment earlier.
+    ///
+    /// The rename is before that sync, and the sync can fail, so a failed
+    /// install consumes the record of whatever was installed before it. The
+    /// caller withdraws the new executable and reports the failure, which is
+    /// honest about this call; what it cannot undo is the previous record,
+    /// which this rename replaced. What is left is the previous runtime's
+    /// bytes — around a hundred and fifty megabytes for Opencode — named by
+    /// nothing. Nothing afterwards misbehaves: `installed` derives the path
+    /// from the pin and answers "not installed" either way, and the next
+    /// install unpacks it again over the same directory.
+    ///
+    /// It is written down rather than fixed because fixing it is the same
+    /// decision as the audit port. Reading the prior record before the rename
+    /// and putting it back in the rollback would restore the before-state; it
+    /// would also make "replaced" and "rolled back" two things the store knows
+    /// and has nowhere to say, which is what that port is for. Whichever way
+    /// that goes, the prior record has to be read before this rename rather
+    /// than after it, so it is the same edit either way.
     fn record(
         &self,
         agent: &AgentName,
