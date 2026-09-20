@@ -65,10 +65,11 @@ function stagingFailure(error: unknown): AttachmentStagingError {
         return new AttachmentStagingError("image-input-unsupported", error)
       case "temporarily_unavailable":
         return new AttachmentStagingError("busy", error)
+      // `attachment_not_kept` belongs here too: the conversation let go of its
+      // files while this one was arriving. Nothing is wrong with the file, and
+      // uploading it again is the whole remedy.
       case "upload_interrupted":
       case "upload_timeout":
-      // Let go of while it was arriving: nothing is wrong with the file, and
-      // uploading it again is the whole remedy.
       case "attachment_not_kept":
       case "aborted":
         return new AttachmentStagingError("interrupted", error)
