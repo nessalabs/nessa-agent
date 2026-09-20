@@ -74,16 +74,24 @@ fn write_shell(directory: &Path, body: &str) -> PathBuf {
 /// about to execute.
 ///
 /// Linux refuses to `execve` a file that any process has open for writing:
-/// `ETXTBSY`, "Text file busy". Writing the file here and running it here looks
-/// safe, because the write's descriptor is closed before the write call returns
-/// — but this is a test binary with many threads, and while one of them holds
-/// that descriptor another thread's `Command::spawn` forks. The child inherits a
-/// copy of the whole descriptor table, and the open file description it refers
-/// to stays alive until that child reaches its own `execve`, where close-on-exec
-/// finally drops it. For that window the file is open for writing in a process
-/// nobody was thinking about, and any attempt to run it fails. That is what took
-/// down `a_profile_that_closes_its_output_and_hangs_still_times_out` on
-/// ubuntu-latest after #83 merged, on code that had passed on the same runner.
+/// `ETXTBSY`, "Text file busy". The deadline test that closes its output and
+/// hangs failed that way on ubuntu-latest after #83 merged, on code that had
+/// passed on the same runner.
+///
+/// What is certain from that error: the file had a writer, and the only writer
+/// that inode ever had was this process's own `fs::write`. What cannot be shown
+/// from here is *which* process was holding a copy of that descriptor at the
+/// moment of the `execve`, because macOS does not enforce the rule at all —
+/// neither the failure nor its absence reproduces on this machine. The
+/// explanation, reasoned rather than reproduced: writing the file and running it
+/// from the same process looks safe, since the write's descriptor is closed
+/// before the write call returns, but this is a test binary with many threads,
+/// and while one of them holds that descriptor another thread's `Command::spawn`
+/// forks. The child inherits a copy of the whole descriptor table, and the open
+/// file description it refers to stays alive until that child reaches its own
+/// `execve`, where close-on-exec finally drops it. For that window the file is
+/// open for writing in a process nobody was thinking about. It is the shape Go
+/// carries `ForkLock` for.
 ///
 /// Retrying the failed exec would have made it rarer. This makes it
 /// unreachable: `cp` opens the destination, and `cp` is the only thing that ever
