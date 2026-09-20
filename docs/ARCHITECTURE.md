@@ -188,6 +188,12 @@ are written here.
   health with the expected service generation, runtime-instance UUID and PID
   matching the exact launchd service.
   A generic HTTP 200 is insufficient.
+- launchd restarts the gateway when its process ended unsuccessfully, and only
+  then. A failure that starting again cannot fix exits zero on purpose — the one
+  status launchd reads as "do not start me again" — and records the reason it
+  could not carry beside its log, for the host to read and to authorize one fresh
+  attempt. Crashes and failures that can clear keep their exit code and their
+  restart. The gateway log is bounded at every start, with one previous file.
 - Gateway updates serialize by launchd service identity. Managed replacement
   requires correlated cleanup and audit acknowledgement; failed retirement never
   authorizes bootout. The pre-protocol gateway has one explicit legacy path.

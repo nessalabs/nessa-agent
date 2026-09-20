@@ -1,4 +1,4 @@
-use super::{diagnose, log_tail, parse_last_exit, LastExit};
+use super::{diagnose, log_tail, parse_last_exit, parse_record, recorded_failure, LastExit};
 use nessa_local_storage::OpenMode;
 use std::{fs, io::Write, os::unix::fs::PermissionsExt, path::Path};
 
@@ -145,6 +145,7 @@ fn the_registry_case_reads_as_a_registry_problem() {
     // there was; nothing reads it for meaning any more.
     let failure = diagnose(
         &LastExit::Code(code("credentialRegistryInvalid")),
+        None,
         REGISTRY_LOG,
         PORT,
         READINESS,
@@ -166,7 +167,13 @@ fn the_registry_case_reads_as_a_registry_problem() {
 
 #[test]
 fn a_taken_port_names_the_port_the_service_was_registered_for() {
-    let failure = diagnose(&LastExit::Code(code("portInUse")), "", PORT, READINESS);
+    let failure = diagnose(
+        &LastExit::Code(code("portInUse")),
+        None,
+        "",
+        PORT,
+        READINESS,
+    );
     assert_eq!(
         failure.sentence,
         "Nessa's background service is not starting: port 7420 is already in use."
@@ -178,7 +185,13 @@ fn a_second_gateway_for_this_stage_is_told_that_and_not_blamed_on_the_registry()
     // The registry lock is per stage and instance and held for the life of
     // the store, so it is what refuses a second gateway for a stage. Reported
     // as a registry fault it reads as corruption; it is the exclusion working.
-    let failure = diagnose(&LastExit::Code(code("alreadyRunning")), "", PORT, READINESS);
+    let failure = diagnose(
+        &LastExit::Code(code("alreadyRunning")),
+        None,
+        "",
+        PORT,
+        READINESS,
+    );
     assert_eq!(
         failure.sentence,
         "Nessa's background service is not starting: another Nessa is already running for this stage."
@@ -200,6 +213,7 @@ fn what_the_log_says_never_decides_what_the_panel_says() {
     .join("\n");
     let failure = diagnose(
         &LastExit::Code(code("portInUse")),
+        None,
         &misleading,
         PORT,
         READINESS,
@@ -215,6 +229,7 @@ fn what_the_log_says_never_decides_what_the_panel_says() {
     // stop the registry being named when that is the code we were given.
     let quiet = diagnose(
         &LastExit::Code(code("credentialRegistryInvalid")),
+        None,
         " INFO nessa_server: nessa server listening",
         PORT,
         READINESS,
@@ -229,6 +244,7 @@ fn what_the_log_says_never_decides_what_the_panel_says() {
     assert_eq!(
         diagnose(
             &LastExit::Code(code("credentialRegistry")),
+            None,
             REGISTRY_LOG,
             PORT,
             READINESS
@@ -245,13 +261,14 @@ fn a_program_that_never_ran_is_not_reported_as_something_it_said() {
     // for by name, and it is the one that used to wait out the whole deadline.
     for exit in [LastExit::Code(78), LastExit::Code(126), LastExit::Code(127)] {
         assert_eq!(
-            diagnose(&exit, "", PORT, READINESS).sentence,
+            diagnose(&exit, None, "", PORT, READINESS).sentence,
             "Nessa's background service is not starting: its background program could not be launched."
         );
     }
     // Killed rather than exited: the signal is named in the log, not on screen.
     let killed = diagnose(
         &LastExit::Signal("Segmentation fault: 11".into()),
+        None,
         "",
         PORT,
         READINESS,
@@ -302,7 +319,7 @@ fn a_reason_we_were_not_given_still_says_less_than_the_readiness_contract_did() 
             "Nessa's background service is not starting.",
         ),
     ] {
-        let failure = diagnose(&exit, tail, PORT, READINESS);
+        let failure = diagnose(&exit, None, tail, PORT, READINESS);
         assert_eq!(failure.sentence, expected);
         assert!(failure.detail.contains("none reported"));
         if tail.is_empty() {
@@ -344,5 +361,136 @@ fn the_log_tail_is_the_end_of_the_log_and_never_the_whole_of_it() {
     write_private_log(&shared, "line\nsecond line\n");
     fs::set_permissions(&shared, fs::Permissions::from_mode(0o644)).unwrap();
     assert_eq!(log_tail(&shared), "");
+    fs::remove_dir_all(&directory).unwrap();
+}
+
+const GENERATION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+/// Exactly what `crates/nessa-server/src/core/startup_failure.rs` serializes.
+fn record_json(reason: &str, generation: Option<&str>) -> String {
+    let mut record = serde_json::json!({
+        "reason": reason,
+        "exitCode": code(reason),
+        "message": "authentication setup failed: credential registry is invalid",
+        "processId": 4711u32,
+    });
+    if let Some(generation) = generation {
+        record["serviceGeneration"] = serde_json::Value::String(generation.into());
+    }
+    record.to_string()
+}
+
+/// A server that gave up exits successfully, so launchd has nothing to report
+/// and the exit status names no cause. The record it left is where the reason
+/// comes from then — and only then.
+#[test]
+fn the_reason_a_gateway_recorded_is_read_when_its_exit_status_says_nothing() {
+    let recorded =
+        parse_record(record_json("credentialRegistryInvalid", Some(GENERATION)).as_bytes())
+            .expect("record");
+    let failure = diagnose(&LastExit::Code(0), Some(&recorded), "", PORT, READINESS);
+    assert_eq!(
+        failure.sentence,
+        "Nessa's background service is not starting: its credential registry is not one this version of Nessa can read."
+    );
+    // The record's own words go to the app's log, and are never the sentence.
+    assert!(failure.detail.contains("pid 4711"), "{}", failure.detail);
+
+    // An exit code that does name a cause is launchd's own observation of this
+    // service's process, and outranks a file in a directory.
+    let taken = diagnose(
+        &LastExit::Code(code("portInUse")),
+        Some(&recorded),
+        "",
+        PORT,
+        READINESS,
+    );
+    assert_eq!(
+        taken.sentence,
+        "Nessa's background service is not starting: port 7420 is already in use."
+    );
+    // So does a process that was killed: it did not choose to stop at all.
+    assert_eq!(
+        diagnose(
+            &LastExit::Signal("Killed: 9".into()),
+            Some(&recorded),
+            "",
+            PORT,
+            READINESS
+        )
+        .sentence,
+        "Nessa's background service is not starting: its background program stopped abruptly."
+    );
+}
+
+/// The record authorizes nothing unless it is about the registration being
+/// reconciled, and a reason this host has no words for is not shown as one.
+#[test]
+fn a_record_is_only_evidence_about_the_registration_that_wrote_it() {
+    let recorded =
+        parse_record(record_json("credentialRegistryInvalid", Some(GENERATION)).as_bytes())
+            .expect("record");
+    assert!(recorded.belongs_to(GENERATION));
+    assert!(!recorded.belongs_to(&"b".repeat(64)));
+    assert_eq!(
+        recorded.sentence(PORT).as_deref(),
+        Some("its credential registry is not one this version of Nessa can read.")
+    );
+
+    // A server nobody registered wrote no generation, so it answers for no
+    // registration at all.
+    let unregistered = parse_record(record_json("configuration", None).as_bytes()).expect("record");
+    assert!(!unregistered.belongs_to(GENERATION));
+
+    // A name out of a JSON file is not a sentence to show someone.
+    let unknown = parse_record(
+        serde_json::json!({
+            "reason": "somethingThisHostHasNeverHeardOf",
+            "exitCode": 99u8,
+            "message": "",
+            "serviceGeneration": GENERATION,
+            "processId": 1u32,
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .expect("record");
+    assert_eq!(unknown.sentence(PORT), None);
+    assert_eq!(
+        diagnose(&LastExit::Code(0), Some(&unknown), "", PORT, READINESS).sentence,
+        "Nessa's background service is not starting, and it exited without reporting why."
+    );
+}
+
+/// The record is read through the same private-file rules as everything else
+/// this host reads, and anything it cannot make sense of is no evidence.
+#[test]
+fn an_unreadable_or_malformed_record_says_nothing_at_all() {
+    let directory = scratch("record");
+    assert_eq!(recorded_failure(&directory), None);
+
+    let path = directory.join("gateway-startup-failure.json");
+    write_private_log(
+        &path,
+        &record_json("credentialRegistryInvalid", Some(GENERATION)),
+    );
+    assert!(recorded_failure(&directory).is_some_and(|record| record.belongs_to(GENERATION)));
+
+    // A file anyone could have written is not one this host reads.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(recorded_failure(&directory), None);
+
+    for contents in [
+        "",
+        "not json",
+        "{}",
+        // A field this host does not know is a shape it does not know.
+        "{\"reason\":\"configuration\",\"exitCode\":20,\"message\":\"\",\"processId\":1,\"extra\":true}",
+    ] {
+        write_private_log(&path, contents);
+        assert_eq!(recorded_failure(&directory), None, "{contents}");
+    }
+    // Nor is something far larger than a record.
+    assert_eq!(parse_record(&vec![b'x'; 65_537]), None);
     fs::remove_dir_all(&directory).unwrap();
 }

@@ -8,10 +8,18 @@
 //! The reason comes from the server, deliberately. `RunError` chooses a process
 //! exit code from `protocol/defaults/gateway-exit-codes.json`, launchd records
 //! the exit code of the service it supervises, and `launchctl print` reports it
-//! back. This module reads that number and nothing else for meaning. The log is
-//! prose written for a person and is never parsed: a message can be reworded,
-//! a line can belong to an earlier run in the same append-only file, and a
-//! healthy launch mentions the same subsystems a failing one does.
+//! back. The log is prose written for a person and is never parsed: a message
+//! can be reworded, a line can belong to an earlier run in the same append-only
+//! file, and a healthy launch mentions the same subsystems a failing one does.
+//!
+//! There is one ending the exit code cannot carry. A server that would fail the
+//! same way on every restart exits *successfully*, because
+//! `KeepAlive: { SuccessfulExit: false }` is launchd's only exit condition and
+//! zero is the only thing it reads as "stop" — so that status names nothing by
+//! design. For that one case the server writes the reason down beside its log,
+//! in the same table's vocabulary, and [`RecordedFailure`] reads it. It is
+//! still a file rather than launchd's word, so it is corroborated against the
+//! registration being reconciled before it decides anything.
 //!
 //! The sentence is for the panel. The exit status, the tail of the log the
 //! plist already redirects the process's stderr to, and the readiness message
@@ -179,6 +187,87 @@ pub(super) fn log_tail(path: &Path) -> String {
     lines[lines.len().saturating_sub(TAIL_LINES)..].join("\n")
 }
 
+/// The gateway's own account of a run it gave up on, written beside its log.
+///
+/// There is one failure the exit code cannot carry. launchd's only exit
+/// condition is `KeepAlive: { SuccessfulExit: false }`, so a server that would
+/// fail identically on every restart has to exit *successfully* to stop being
+/// relaunched — and a zero status says nothing about why. The server writes
+/// this file instead, in the vocabulary of
+/// `protocol/defaults/gateway-exit-codes.json`: the same reason names the exit
+/// code would have carried, chosen deliberately rather than scraped out of prose.
+///
+/// It is still a file on disk and not launchd's word, so it is corroborated
+/// before it authorizes anything: [`RecordedFailure::belongs_to`] is what makes
+/// a record evidence about *this* registration rather than about whatever ran
+/// here last month. Showing someone a sentence is not authorizing anything, and
+/// needs no such corroboration.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct RecordedFailure {
+    /// The reason's name in the shared exit-code table.
+    reason: String,
+    /// The code the run would have exited with, had exiting non-zero not meant
+    /// "start me again". Carried for the app log; the reason is what is read.
+    exit_code: u8,
+    /// The failure in the server's own words, for the app log. Never parsed.
+    message: String,
+    /// The launchd service generation that run was registered under. A record
+    /// with none was written by a server no host registered.
+    #[serde(default)]
+    service_generation: Option<String>,
+    /// The process that wrote it, for finding its lines in the log beside it.
+    process_id: u32,
+}
+impl RecordedFailure {
+    /// Whether this record is about the registration being reconciled.
+    pub(super) fn belongs_to(&self, generation: &str) -> bool {
+        self.service_generation.as_deref() == Some(generation)
+    }
+    /// The sentence this reason becomes, or nothing when it is a name this
+    /// host has no words for.
+    pub(super) fn sentence(&self, port: u16) -> Option<String> {
+        sentence_for(&self.reason, port)
+    }
+    fn describe(&self) -> String {
+        format!(
+            "gateway recorded a startup failure it will not retry: {} (reason {}, code {}, pid {})",
+            self.message, self.reason, self.exit_code, self.process_id
+        )
+    }
+}
+
+/// The record's name, beside `gateway.log` in the stage's log directory. The
+/// server writes this same name; `crates/nessa-server/src/core/startup_failure.rs`
+/// is the other half of it.
+const RECORD_FILE: &str = "gateway-startup-failure.json";
+/// A record is a handful of fields. Anything larger is not one.
+const RECORD_MAX_BYTES: u64 = 65_536;
+
+/// What the gateway wrote down in `logs` about giving up, if anything.
+///
+/// A missing, unreadable, oversized or malformed record is not a diagnosis and
+/// not an error: the caller still has the exit status, and says less rather
+/// than blaming the file.
+pub(super) fn recorded_failure(logs: &Path) -> Option<RecordedFailure> {
+    let file =
+        nessa_local_storage::open(&logs.join(RECORD_FILE), OpenMode::ReadNonblocking).ok()?;
+    let mut bytes = Vec::new();
+    file.take(RECORD_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    parse_record(&bytes)
+}
+
+/// The record's bytes, read apart from the file they came out of, so that what
+/// the server writes can be checked against what this reads.
+pub(super) fn parse_record(bytes: &[u8]) -> Option<RecordedFailure> {
+    if bytes.len() as u64 > RECORD_MAX_BYTES {
+        return None;
+    }
+    serde_json::from_slice(bytes).ok()
+}
+
 /// One sentence for the panel, and the evidence behind it for the app log.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct StartupFailure {
@@ -192,11 +281,12 @@ pub(super) struct StartupFailure {
 /// contract.
 pub(super) fn diagnose(
     last_exit: &LastExit,
+    recorded: Option<&RecordedFailure>,
     tail: &str,
     port: u16,
     readiness: &str,
 ) -> StartupFailure {
-    let cause = recognise(last_exit, port);
+    let cause = recognise(last_exit, recorded, port);
     let sentence = match &cause {
         Some(cause) => format!("Nessa's background service is not starting: {cause}"),
         None if tail.is_empty() => {
@@ -210,6 +300,10 @@ pub(super) fn diagnose(
         last_exit.describe(),
         cause.as_deref().unwrap_or("none reported")
     );
+    if let Some(recorded) = recorded {
+        detail.push('\n');
+        detail.push_str(&recorded.describe());
+    }
     if !tail.is_empty() {
         detail.push_str("\ngateway log tail:\n");
         detail.push_str(tail);
@@ -246,6 +340,10 @@ fn sentence_for(reason: &str, port: u16) -> Option<String> {
         "alreadyRunning" => Some("another Nessa is already running for this stage.".into()),
         "portInUse" => Some(format!("port {port} is already in use.")),
         "configuration" => Some("its configuration is not one it can start with.".into()),
+        "runtime" => Some(
+            "the prepared runtime it was registered with is missing or is not the one it expects."
+                .into(),
+        ),
         _ => None,
     }
 }
@@ -257,9 +355,23 @@ fn sentence_for(reason: &str, port: u16) -> Option<String> {
 /// seeing it means launchd never got our program running.
 const SPAWN_FAILED: i32 = 78;
 
-/// What the service's own exit code says, or what launchd says when the
-/// program never ran to have an opinion.
-fn recognise(last_exit: &LastExit, port: u16) -> Option<String> {
+/// What the service's own exit code says, what launchd says when the program
+/// never ran to have an opinion, or — when neither names a cause — what the
+/// gateway wrote down on its way out.
+///
+/// The record is consulted last and only then, because an exit code is
+/// launchd's own observation of this service's process while the file is
+/// whatever was last left in a directory. It is the answer for exactly one
+/// ending: the zero status a server exits with to stop being relaunched, which
+/// names nothing by design.
+fn recognise(
+    last_exit: &LastExit,
+    recorded: Option<&RecordedFailure>,
+    port: u16,
+) -> Option<String> {
+    let named = |recorded: Option<&RecordedFailure>| {
+        recorded.and_then(|recorded| sentence_for(&recorded.reason, port))
+    };
     let code = match last_exit {
         LastExit::Code(code) => *code,
         // Killed rather than exited: by the code-signing enforcement that
@@ -267,19 +379,18 @@ fn recognise(last_exit: &LastExit, port: u16) -> Option<String> {
         // own fault. Which of those it was belongs in the log with the signal
         // name; none of them is the program choosing to stop.
         LastExit::Signal(_) => return Some("its background program stopped abruptly.".into()),
-        LastExit::Unknown | LastExit::NeverExited | LastExit::Reason(_) => return None,
+        LastExit::Unknown | LastExit::NeverExited | LastExit::Reason(_) => return named(recorded),
     };
     // 126 and 127 are what a shell in front of the program would report; they
     // are kept because a wrapper can still produce them.
     if matches!(code, SPAWN_FAILED | 126 | 127) {
         return Some(UNLAUNCHABLE.into());
     }
-    let code = u8::try_from(code).ok()?;
-    CODES
-        .codes
-        .iter()
-        .find(|(_, value)| **value == code)
+    u8::try_from(code)
+        .ok()
+        .and_then(|code| CODES.codes.iter().find(|(_, value)| **value == code))
         .and_then(|(reason, _)| sentence_for(reason, port))
+        .or_else(|| named(recorded))
 }
 
 #[cfg(test)]
