@@ -1,8 +1,9 @@
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { bundleArchitecture, includesDiskImage } from "./bundle-architecture.mjs"
 import { verifyRuntimeFingerprint } from "./runtime-fingerprint.mjs"
+import { RUNTIME_EXECUTABLES, signingProblems } from "./runtime-signing.mjs"
 
 const root = resolve(import.meta.dirname, "../..")
 const metadata = JSON.parse(
@@ -47,6 +48,35 @@ if (signedForReal)
   execFileSync("spctl", ["--assess", "--type", "execute", "--verbose=2", app], {
     stdio: "inherit",
   })
+
+/**
+ * The nested runtime executables, checked the way Apple checks them.
+ *
+ * `codesign --verify --deep` above passes on an ad-hoc signature, and passed
+ * on the one that failed v0.1.0's notarization: three binaries under
+ * `Resources/runtime` with no Developer ID, no timestamp and no hardened
+ * runtime. The bundler does not sign a resource, so nothing before this point
+ * would have noticed. Only when the build claims a real signature — an ad-hoc
+ * build is supposed to look like this.
+ */
+if (signedForReal) {
+  const problems = RUNTIME_EXECUTABLES.flatMap((name) => {
+    // codesign writes the display to stderr and nothing to stdout, so this
+    // cannot be an execFileSync like every other call here.
+    const shown = spawnSync(
+      "codesign",
+      ["--display", "--verbose=2", resolve(runtime, name)],
+      { encoding: "utf8" },
+    )
+    if (shown.status !== 0)
+      throw new Error(`Could not read the signature of runtime/${name}:\n${shown.stderr}`)
+    return signingProblems(name, shown.stderr)
+  })
+  if (problems.length > 0)
+    throw new Error(
+      `The bundled runtime is not signed for distribution:\n- ${problems.join("\n- ")}`,
+    )
+}
 
 /**
  * A notarized build must carry its ticket.
