@@ -1,7 +1,9 @@
 //! Decode-pass read counts distinguish early bounds from post-allocation validation.
 use super::{read, Loaded};
 use crate::application::agent_execution::sessions::StorageError;
-use crate::domain::agent_execution::{sessions::SessionId, tools::ToolContent};
+use crate::domain::agent_execution::{
+    prompts::UserMessage, sessions::SessionId, tools::ToolContent,
+};
 use serde_json::{json, Value};
 use std::{
     cell::Cell,
@@ -243,4 +245,93 @@ fn tool_collection_slots_are_bounded_before_reading_the_excess_element() {
         decoded <= prefix + 8192,
         "excess collection element was decoded: {decoded}, prefix={prefix}"
     );
+}
+
+fn saved_image(digest: &str, media_type: &str) -> Value {
+    json!({"digest": digest, "media_type": media_type, "size": 1})
+}
+fn digest() -> String {
+    format!("sha256:{}", "ab".repeat(32))
+}
+/// The record with `user_images` first in its metadata and two mebibytes of
+/// valid user message after it, so that a bound applied only after the whole
+/// metadata was decoded shows up in the decoded-byte count.
+fn images_first(images: &Value) -> Vec<u8> {
+    let mut value = record();
+    value["invocations"][0]["metadata"]["user_message"] = json!("p".repeat(2 * 1024 * 1024));
+    let metadata = value["invocations"][0]["metadata"].as_object_mut().unwrap();
+    metadata.remove("user_images");
+    let remaining = serde_json::to_string(metadata).unwrap();
+    let ordered = format!("{{\"user_images\":{images},{}", &remaining[1..]);
+    value["invocations"][0]["metadata"] = json!("ordered-metadata");
+    String::from_utf8(encoded(&value))
+        .unwrap()
+        .replace("\"ordered-metadata\"", &ordered)
+        .into_bytes()
+}
+
+#[test]
+fn a_saved_message_holds_at_most_the_live_number_of_images() {
+    let one = saved_image(&digest(), "image/png");
+    let most = Value::Array(vec![one.clone(); UserMessage::MAX_IMAGES]);
+    let loaded = load(images_first(&most)).0.expect("the exact bound loads");
+    assert_eq!(
+        loaded.snapshot.unwrap().invocations[0]
+            .request
+            .user_message
+            .images()
+            .len(),
+        UserMessage::MAX_IMAGES
+    );
+
+    // One more, and two hundred thousand more, stop at the eleventh element.
+    for count in [UserMessage::MAX_IMAGES + 1, 200_000] {
+        let bytes = images_first(&Value::Array(vec![one.clone(); count]));
+        let length = bytes.len();
+        let (result, decoded) = load(bytes);
+        assert!(matches!(result, Err(StorageError::Corrupt(_))), "{count}");
+        assert!(
+            decoded <= 64 * 1024,
+            "{count} saved images were decoded before their bound: {decoded}/{length}"
+        );
+    }
+}
+
+#[test]
+fn saved_image_fields_are_bounded_before_their_text_is_built() {
+    let exact = json!([saved_image(&digest(), "image/jpeg")]);
+    assert!(load(images_first(&exact)).0.is_ok());
+    assert_eq!(digest().len(), 71);
+
+    for (field, image) in [
+        // One byte past the only digest form, and eight mebibytes past it.
+        (
+            "digest",
+            saved_image(&format!("{}0", digest()), "image/png"),
+        ),
+        (
+            "digest",
+            saved_image(&"d".repeat(8 * 1024 * 1024), "image/png"),
+        ),
+        (
+            "media_type",
+            saved_image(&digest(), &"m".repeat(8 * 1024 * 1024)),
+        ),
+        ("media_type", saved_image(&digest(), "image/x-seventeen")),
+        // Nothing but a digest, a media type, and a size belongs in an image.
+        (
+            "unknown",
+            json!({"digest": digest(), "media_type": "image/png", "size": 1,
+                "bytes": "b".repeat(8 * 1024 * 1024)}),
+        ),
+    ] {
+        let bytes = images_first(&json!([image]));
+        let length = bytes.len();
+        let (result, decoded) = load(bytes);
+        assert!(matches!(result, Err(StorageError::Corrupt(_))), "{field}");
+        assert!(
+            decoded <= 64 * 1024,
+            "saved image {field} was decoded before its bound: {decoded}/{length}"
+        );
+    }
 }
