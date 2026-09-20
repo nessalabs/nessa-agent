@@ -1556,6 +1556,106 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
 }
 
 #[tokio::test]
+async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_was_given() {
+    // The same operator, one step further on. Every panel tab for the dropped
+    // agent is read once on reconnect, and each of those reads is refused
+    // instantly, having acquired nothing: no lease, no provider, nothing to
+    // clean up. A refusal like that must give its `max_conversations` slot
+    // back, or the panel's own reconnect exhausts the server — at the default
+    // limit, thirty-two dead tabs and no new conversation can be created on the
+    // agent that is still configured.
+    //
+    // "Do not retry this" and "this attempt still owns something" were one flag
+    // when that was true of every permanent failure. It is not true of this one.
+    let codex = Arc::new(ProviderFactory::default());
+    let claude = Arc::new(ProviderFactory::default());
+    let repository = Arc::new(MemoryRepository::default());
+    let storage = Arc::new(InMemoryStorage::new());
+    let agent = |id, factory: &Arc<ProviderFactory>| {
+        (
+            id,
+            ConversationAgent {
+                provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+                reserved_output_tokens: 4096,
+            },
+        )
+    };
+    // One slot, so the leak is one refusal away rather than thirty-two.
+    let limits = ConversationLimits {
+        max_conversations: 1,
+        ..ConversationLimits::default()
+    };
+    let stranded = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    {
+        let service = ConversationService::new(
+            ConversationAgents::new(
+                HashMap::from([
+                    agent(AgentId::Claude, &claude),
+                    agent(AgentId::Codex, &codex),
+                ]),
+                AgentId::Claude,
+            )
+            .unwrap(),
+            storage.clone(),
+            repository.clone(),
+            Arc::new(AcceptingCreationAudit),
+            Arc::new(TestClock),
+            limits,
+            None,
+        )
+        .unwrap();
+        service
+            .create(
+                stranded.clone(),
+                caller("panel", "create"),
+                Some(AgentId::Codex),
+            )
+            .await
+            .unwrap();
+        service.shutdown().await.unwrap();
+    }
+    tokio::task::yield_now().await;
+
+    let without_codex = ConversationService::new(
+        ConversationAgents::new(
+            HashMap::from([agent(AgentId::Claude, &claude)]),
+            AgentId::Claude,
+        )
+        .unwrap(),
+        storage,
+        repository,
+        Arc::new(AcceptingCreationAudit),
+        Arc::new(TestClock),
+        limits,
+        None,
+    )
+    .unwrap();
+    assert!(matches!(
+        without_codex
+            .read(stranded.clone(), caller("panel", "reopen"))
+            .await,
+        Err(ConversationError::AgentNotConfigured)
+    ));
+    // Refused the same way however many times it is asked: the slot going back
+    // is not a retry reaching a different answer.
+    assert!(matches!(
+        without_codex
+            .read(stranded, caller("panel", "reopen"))
+            .await,
+        Err(ConversationError::AgentNotConfigured)
+    ));
+    // And the one slot is still free for the agent that is still here.
+    let fresh = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    assert!(
+        without_codex
+            .create(fresh, caller("panel", "create"), None)
+            .await
+            .is_ok(),
+        "a refusal that acquired nothing still held its slot",
+    );
+}
+
+#[tokio::test]
 async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_leased() {
     // Held by someone else, this conversation's storage would answer `Busy` to
     // anyone who opened it. So a refusal that still says `AgentNotConfigured` is
