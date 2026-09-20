@@ -67,13 +67,13 @@ fn an_image_that_fits_at_its_own_size_is_not_charged_for_a_scaling_it_never_does
         (8000, 8000, false)
     );
 
-    // Re-encoded at its own size, the same holds: BMP is not accepted, so it is
+    // Re-encoded at its own size, the same holds: QOI is not accepted, so it is
     // decoded and written as PNG without being made smaller.
-    let bitmap = encoded(
+    let qoi = encoded(
         RgbImage::from_pixel(8000, 8000, Rgb([9, 9, 9])),
-        ImageFormat::Bmp,
+        ImageFormat::Qoi,
     );
-    let fitted = normalize_with(&bitmap, &limits(&ALL, 1 << 20, 8000), None).unwrap();
+    let fitted = normalize_with(&qoi, &limits(&ALL, 1 << 20, 8000), None).unwrap();
     assert_eq!((fitted.width, fitted.encoding), (8000, Encoding::Png));
 }
 
@@ -82,12 +82,12 @@ fn a_smaller_size_is_counted_when_it_is_about_to_be_made() {
     // The same image, but nothing this size fits 2 000 bytes, so it must be made
     // smaller, and making 64 megapixels smaller is over the memory budget. That
     // is a refusal to do the work, not a claim that nothing could ever fit.
-    let bitmap = encoded(
+    let qoi = encoded(
         RgbImage::from_pixel(8000, 8000, Rgb([9, 9, 9])),
-        ImageFormat::Bmp,
+        ImageFormat::Qoi,
     );
     assert_eq!(
-        normalize_with(&bitmap, &limits(&[Encoding::Jpeg], 2_000, 8000), None),
+        normalize_with(&qoi, &limits(&[Encoding::Png], 2_000, 8000), None),
         Err(Error::TooLargeToDecode)
     );
 }
