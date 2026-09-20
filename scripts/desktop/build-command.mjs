@@ -59,6 +59,17 @@ export function runDesktopBuild({ args, environment, platform, spawn }) {
   delete verificationEnvironment.NESSA_BUILD_BUNDLES
   if (target) verificationEnvironment.NESSA_BUILD_TARGET = target
   if (bundles) verificationEnvironment.NESSA_BUILD_BUNDLES = bundles
+  // Between the build and the verification, because the bundler notarizes the
+  // app and then builds the disk image around it: the image itself has no
+  // ticket, and it is the artifact a person downloads. Does nothing when the
+  // build did not notarize, or produced no disk image.
+  const staple = spawn("node", ["scripts/desktop/notarize-disk-image.mjs"], {
+    env: verificationEnvironment,
+    stdio: "inherit",
+  })
+  if (staple.error) throw staple.error
+  if (staple.status !== 0) return staple.status ?? 1
+
   const verify = spawn("node", ["scripts/desktop/verify-bundle.mjs"], {
     env: verificationEnvironment,
     stdio: "inherit",
