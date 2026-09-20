@@ -14,6 +14,15 @@ pub enum ExecutionError {
         /// Maximum permitted UTF-8 byte length.
         max_bytes: usize,
     },
+    /// A bounded collection holds more entries than it permits.
+    TooManyValues {
+        /// Collection whose length was rejected.
+        field: &'static str,
+        /// Maximum permitted number of entries.
+        max: usize,
+    },
+    /// The image encoding is outside the supported closed set.
+    UnsupportedImageMediaType,
     /// A path description is empty or contains a NUL byte.
     InvalidPath,
     /// The local storage key is not a portable session identity.

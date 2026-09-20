@@ -14,3 +14,4 @@ mod session_identity;
 mod sessions;
 mod support;
 mod tools;
+mod user_messages;
