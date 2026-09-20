@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { sep } from "node:path"
 import { test } from "node:test"
 import { diskImageToNotarize, submissionArguments } from "./notarize-disk-image.mjs"
 
@@ -59,7 +60,14 @@ test("a build of only the app has no disk image", () => {
   )
 })
 
-/** The path is the one the bundler wrote, per architecture. */
+/**
+ * The path is the one the bundler wrote, per architecture.
+ *
+ * Compared as path segments, not as a string with slashes in it. This file
+ * runs on the Windows CI job too, where `resolve` separates with backslashes,
+ * and a regex full of `/` fails there for a reason that has nothing to do with
+ * notarization.
+ */
 test("the disk image is found where the bundler put it", () => {
   const image = diskImageToNotarize({
     environment: {
@@ -70,8 +78,12 @@ test("the disk image is found where the bundler put it", () => {
     root: process.cwd(),
     architecture: "arm64",
   })
-  assert.match(
-    image,
-    /x86_64-apple-darwin\/release\/bundle\/dmg\/Nessa_\d+\.\d+\.\d+_x64\.dmg$/,
-  )
+  const segments = image.split(sep)
+  assert.deepEqual(segments.slice(-5, -1), [
+    "x86_64-apple-darwin",
+    "release",
+    "bundle",
+    "dmg",
+  ])
+  assert.match(segments.at(-1), /^Nessa_\d+\.\d+\.\d+_x64\.dmg$/)
 })
