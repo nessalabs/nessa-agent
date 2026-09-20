@@ -1,3 +1,9 @@
+//! Why fitting an image failed.
+//!
+//! One enum, returned by everything in this crate that reads bytes. Its variants
+//! keep apart what the caller could act on, an encoding nothing here reads or
+//! limits nothing readable fits, and what they could not: a file that is damaged
+//! or larger than this crate will ever decode.
 use std::{error, fmt};
 
 /// Why an image could not be fitted. Nothing is returned alongside an error:

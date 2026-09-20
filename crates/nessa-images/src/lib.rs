@@ -13,10 +13,17 @@
 //! HEIC and HEIF, AVIF, JPEG XL, PSD, and camera RAW have no permissively
 //! licensed Rust decoder, and operating systems ship good ones, so those go to a
 //! [`PlatformDecoder`]: ImageIO on macOS, none yet elsewhere, where they are
-//! refused by type. What a system decoder returns is that system's rendering.
-//! Only bytes that begin like one of those encodings are ever put to a system
-//! decoder, and the macOS adapter decodes only what ImageIO itself names as one
-//! of them: a PDF, an archive, or text is refused by type, never rendered.
+//! refused by type. What such a decoder returns is that system's rendering, and
+//! it is treated as a photograph.
+//!
+//! Two gates stand in front of one, and this is the only account of them. The
+//! first reads the first bytes and runs on every system, a test's substitute
+//! included: anything that does not begin like one of those encodings is refused
+//! without asking. The second is the adapter's own: the macOS one asks ImageIO
+//! what it takes the bytes for and decodes only the types named above, because
+//! ImageIO also renders PDF pages, icons, and everything this crate reads itself.
+//! A system with no wrapped decoder refuses those encodings by type; nothing is
+//! guessed.
 //!
 //! ```text
 //! bytes ──► sniff encoding ──► (begins like a system encoding? ──► platform

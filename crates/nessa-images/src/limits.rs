@@ -1,3 +1,10 @@
+//! What the consumer of an image accepts.
+//!
+//! [`Limits`] is the caller's half of the bargain, and this crate invents none
+//! of it: the encodings the consumer takes, the largest result in bytes, and the
+//! longest edge worth sending. [`Encoding`] names the four encodings that can be
+//! accepted; only PNG and JPEG are ever produced, which is why [`Limits::new`]
+//! insists that one of those two is among them.
 use std::{error, fmt};
 
 /// An image encoding a consumer may accept unchanged.

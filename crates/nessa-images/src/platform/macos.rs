@@ -1,13 +1,12 @@
 //! ImageIO: the decoder macOS itself uses. It reads HEIC and HEIF, AVIF, JPEG XL,
-//! PSD, and camera RAW from several hundred cameras, under the system's own
-//! codec licences.
+//! PSD, and camera RAW from several hundred cameras, under the system's own codec
+//! licences.
 //!
-//! ImageIO reads far more than that: PDF pages, icons, every encoding this crate
-//! already decodes itself. So this adapter asks ImageIO what it takes the bytes
-//! for and goes on only for the types the crate documentation names. Camera RAW
-//! is several hundred vendor types, all declared by the system as kinds of
-//! `public.camera-raw-image`, so that one is asked of the system rather than
-//! listed here.
+//! This file holds the second of the two gates the crate documentation describes:
+//! it asks ImageIO what it takes the bytes for and goes on only for the types
+//! listed below. Camera RAW is several hundred vendor types, all declared by the
+//! system as kinds of `public.camera-raw-image`, so that one is asked of the
+//! system rather than listed.
 use crate::{
     budget::{check_pixels, MAX_PLATFORM_LONG_EDGE_PX},
     DecodedImage, Error, PlatformDecoder,
@@ -150,6 +149,8 @@ impl PlatformDecoder for ImageIo {
         straighten_alpha(&mut buffer);
         let pixels =
             RgbaImage::from_raw(pixel_width, pixel_height, buffer).ok_or(Error::Undecodable)?;
+        // Everything ImageIO is asked about here is a photograph or a rendering
+        // of one, so the result is treated as one and fitted as JPEG first.
         Ok(DecodedImage {
             pixels,
             lossless: false,
@@ -190,13 +191,27 @@ fn pixel_size(source: &CGImageSource) -> Option<(u32, u32)> {
 /// Core Graphics draws premultiplied alpha; everything after this works in
 /// straight alpha. Opaque pixels, which is nearly all of them, are untouched.
 fn straighten_alpha(buffer: &mut [u8]) {
-    for [red, green, blue, alpha] in buffer.as_chunks_mut::<4>().0 {
-        let alpha = u32::from(*alpha);
-        if alpha == 0 || alpha == 255 {
-            continue;
-        }
-        for channel in [red, green, blue] {
-            *channel = ((u32::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8;
-        }
+    for pixel in buffer.as_chunks_mut::<4>().0 {
+        *pixel = straightened(*pixel);
     }
 }
+
+/// One premultiplied RGBA pixel as straight alpha: each colour channel divided
+/// by the alpha it was multiplied by, rounded to nearest, and held to full
+/// intensity where rounding or a channel brighter than its own alpha would pass
+/// it. Fully opaque and fully transparent pixels are their own answer: there is
+/// nothing to undo, and nothing to divide by.
+fn straightened(pixel: [u8; 4]) -> [u8; 4] {
+    let [red, green, blue, alpha] = pixel;
+    if alpha == 0 || alpha == u8::MAX {
+        return pixel;
+    }
+    let divisor = u32::from(alpha);
+    let straighten =
+        |channel: u8| ((u32::from(channel) * 255 + divisor / 2) / divisor).min(255) as u8;
+    [straighten(red), straighten(green), straighten(blue), alpha]
+}
+
+#[cfg(test)]
+#[path = "../../tests/unit/platform/macos.rs"]
+mod tests;
