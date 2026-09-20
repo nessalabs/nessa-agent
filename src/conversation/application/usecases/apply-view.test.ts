@@ -14,6 +14,7 @@ const view: ConversationView = {
     {
       executionId: "run",
       userText: "read",
+      attachments: [],
       parts: [
         { offset: 0, kind: "thought", text: "reasoning", toolId: "" },
         { offset: 1, kind: "text", text: "streaming text", toolId: "" },
@@ -21,7 +22,7 @@ const view: ConversationView = {
       status: "running",
     },
   ],
-  pending: [{ executionId: "next", text: "follow up", mode: "queued" }],
+  pending: [{ executionId: "next", text: "follow up", attachments: [], mode: "queued" }],
   permissions: [
     {
       executionId: "run",
@@ -46,7 +47,13 @@ const view: ConversationView = {
       status: "pending",
     },
   ],
-  capabilities: { queue: true, steer: true, resume: true, permissions: true },
+  capabilities: {
+    queue: true,
+    steer: true,
+    resume: true,
+    permissions: true,
+    imageInput: false,
+  },
 }
 it("projects exact review and tool targets while preserving the next unsent draft", () => {
   const current = {
@@ -109,7 +116,7 @@ it("replaces server-only queue rows when the next complete view removes them", (
 it("labels confirmed waiting work as queued without inventing an assistant message", () => {
   const projected = applyView(conversation("tab"), {
     ...view,
-    pending: [{ executionId: "run", text: "read", mode: "queued" }],
+    pending: [{ executionId: "run", text: "read", attachments: [], mode: "queued" }],
     messages: [{ ...view.messages[0]!, parts: [], status: "queued" }],
   })
   expect(projected.turns).toHaveLength(1)
@@ -147,6 +154,7 @@ function stoppedQueue(queueComplete: boolean) {
     pending: identities.map((executionId) => ({
       executionId,
       text: executionId,
+      attachments: [],
       mode: "queued" as const,
     })),
   })
@@ -163,7 +171,13 @@ function stoppedQueue(queueComplete: boolean) {
     tools: [],
     queueComplete,
     messages: [
-      { executionId: "three", userText: "three", parts: [], status: "cancelled" },
+      {
+        executionId: "three",
+        userText: "three",
+        attachments: [],
+        parts: [],
+        status: "cancelled",
+      },
     ],
   })
   return { tabs: { ...tabs, conversations: [stopped] }, stopped }
@@ -240,6 +254,7 @@ it("a complete queue still keeps unacknowledged local sends and local failures",
     "c0",
     "uncertain",
     "offline",
+    { kind: "uncertain" },
   )
   const projected = applyView(uncertain.conversations[0]!, {
     ...view,
@@ -255,6 +270,9 @@ it("a complete queue still keeps unacknowledged local sends and local failures",
   ])
 })
 
+/** A send refused before admission: the message was not taken, so the draft is back. */
+const refused = { kind: "refused", reupload: false } as const
+
 it("stale queued rows no longer hold the conversation in thinking after an offline rejection", () => {
   const { tabs } = stoppedQueue(true)
   const sending = beginSend(tabs, {
@@ -264,7 +282,100 @@ it("stale queued rows no longer hold the conversation in thinking after an offli
     mode: "queued",
     content: textContent("next"),
   })
-  const rejected = failSend(sending, "c0", "next", "Agent not configured", false)
+  const rejected = failSend(sending, "c0", "next", "Agent not configured", refused)
   expect(rejected.conversations[0]!.phase).toBe("idle")
   expect(rejected.conversations[0]!.draft).toEqual(textContent("next"))
+})
+
+const DIGEST = `sha256:${"ab".repeat(32)}`
+it("shows a turn it never held the bytes for as text plus image references", () => {
+  const picture = { digest: DIGEST, mimeType: "image/png" as const, size: 2048 }
+  const applied = applyView(emptyLocalTabs().conversations[0]!, {
+    ...view,
+    tools: [],
+    permissions: [],
+    messages: [
+      {
+        executionId: "captioned",
+        userText: "what is this?",
+        attachments: [picture],
+        parts: [],
+        status: "completed",
+      },
+      // An image-only turn still has content, so the transcript has something to paint.
+      {
+        executionId: "bare",
+        userText: "",
+        attachments: [picture, { ...picture, mimeType: "image/jpeg" }],
+        parts: [],
+        status: "queued",
+      },
+    ],
+    pending: [
+      {
+        executionId: "bare",
+        text: "",
+        attachments: [picture, { ...picture, mimeType: "image/jpeg" }],
+        mode: "queued",
+      },
+      { executionId: "waiting", text: "", attachments: [picture], mode: "queued" },
+    ],
+  })
+  const users = applied.turns.filter((turn) => turn.from === "user")
+  expect(users.map((turn) => turn.content)).toEqual([
+    [
+      { type: "text", text: "what is this?" },
+      { type: "image-reference", ...picture },
+    ],
+    [
+      { type: "image-reference", ...picture },
+      { type: "image-reference", ...picture, mimeType: "image/jpeg" },
+    ],
+    [{ type: "image-reference", ...picture }],
+  ])
+  expect(applied.remote?.pending[1]?.attachments).toEqual([picture])
+  expect(applied.remote?.capabilities.imageInput).toBe(false)
+})
+
+it("keeps a sent turn's local previews when the gateway echoes it by reference", () => {
+  const file = {
+    type: "file" as const,
+    id: "f",
+    name: "finder.png",
+    mimeType: "image/png",
+    size: 2048,
+    previewUrl: "blob:finder",
+    upload: {
+      status: "stored" as const,
+      image: { digest: DIGEST, mimeType: "image/png" as const, size: 2048 },
+    },
+  }
+  const base = emptyLocalTabs()
+  const tabs = {
+    ...base,
+    conversations: [{ ...base.conversations[0]!, draft: [file] }],
+  }
+  const sent = beginSend(tabs, {
+    conversationId: "c0",
+    executionId: "mine",
+    actionId: "action",
+    mode: "queued",
+    content: [file],
+  })
+  const applied = applyView(sent.conversations[0]!, {
+    ...view,
+    tools: [],
+    permissions: [],
+    pending: [],
+    messages: [
+      {
+        executionId: "mine",
+        userText: "",
+        attachments: [{ digest: DIGEST, mimeType: "image/png", size: 2048 }],
+        parts: [],
+        status: "running",
+      },
+    ],
+  })
+  expect(applied.turns[0]).toMatchObject({ from: "user", content: [file] })
 })

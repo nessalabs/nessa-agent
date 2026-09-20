@@ -4,6 +4,7 @@
 //! ```text
 //! Environment -> private runtime config -> auth + ConversationService
 //!                                         -> provider / storage / audit
+//!                                         -> attachments (one store, shared)
 //! ProductRouteState -> authenticated HTTP/WebSocket router
 //! ```
 //! Arrows show construction and injection. Conversations share the service across
@@ -25,6 +26,7 @@ mod agent;
 // rejects — including in a test build, where `mod build` is still absent.
 #[cfg(unix)]
 mod agent_budgets;
+mod attachments;
 
 mod desktop;
 

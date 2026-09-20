@@ -41,19 +41,22 @@ describe("local submission evidence", () => {
       ...identity,
       content: textContent("hello"),
     })
-    const failed = failSend(pending, "c0", "execution", "offline")
+    const failed = failSend(pending, "c0", "execution", "offline", { kind: "uncertain" })
     expect(failed.conversations[0]!.turns).toHaveLength(1)
     expect(failed.conversations[0]!.turns[0]).toMatchObject({
       receipt: "unknown",
       error: "offline",
     })
   })
+  /** A send refused before admission: the message was not taken, so the draft is back. */
+  const refused = { kind: "refused", reupload: false } as const
+
   it("returns to idle after confirmed rejection without offering unknown-delivery retry", () => {
     const pending = beginSend(emptyLocalTabs(), {
       ...identity,
       content: textContent("hello"),
     })
-    const failed = failSend(pending, "c0", "execution", "Agent not configured", false)
+    const failed = failSend(pending, "c0", "execution", "Agent not configured", refused)
     expect(failed.conversations[0]!.phase).toBe("idle")
     expect(failed.conversations[0]!.turns[0]).toMatchObject({
       receipt: "failed",

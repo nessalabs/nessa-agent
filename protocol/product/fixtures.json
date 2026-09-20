@@ -44,7 +44,30 @@
     "conversationId": "00000000-0000-4000-8000-000000000001",
     "requestId": "send",
     "executionId": "execution",
-    "text": "Hello"
+    "text": "Hello",
+    "attachments": [
+      {
+        "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "mimeType": "image/png",
+        "size": 1
+      }
+    ]
+  },
+  "AttachmentBeginParams": {
+    "conversationId": "00000000-0000-4000-8000-000000000001",
+    "requestId": "attach",
+    "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "mimeType": "image/png",
+    "size": 1
+  },
+  "AttachmentBeginResult": {
+    "requestId": "attach",
+    "state": "upload_required",
+    "ticket": "0000000000000000000000000000000000000000000000000000000000000000",
+    "expiresAtMs": 1,
+    "digest": null,
+    "mimeType": null,
+    "size": null
   },
   "ConversationView": {
     "conversationId": "00000000-0000-4000-8000-000000000001",
@@ -57,7 +80,8 @@
       "queue": true,
       "steer": false,
       "resume": true,
-      "permissions": true
+      "permissions": true,
+      "imageInput": false
     },
     "truncated": false,
     "queueComplete": true

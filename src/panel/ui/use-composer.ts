@@ -11,7 +11,8 @@ import { takesExpansion } from "../application/composer-expansion"
 /** Own editor lifecycle and pasted-viewer state; App only composes the surfaces. */
 export function useComposer(
   chat: ReturnType<typeof useConversation>,
-  isAttachmentPending: (conversationId: string) => boolean,
+  /** Says so in the panel, and answers true, while an attachment is still being read. */
+  declinesPendingAttachment: (conversationId: string) => boolean,
 ) {
   const composerRef = React.useRef<ChatComposerEditorHandle>(null)
   const setComposerRef = React.useCallback((editor: ChatComposerEditorHandle | null) => {
@@ -42,10 +43,22 @@ export function useComposer(
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const content = composerRef.current?.getContent()
-    if (isAttachmentPending(chat.active.id)) return
-    if (chat.active.draft.some((part) => part.type === "file")) return
-    if (!content) return
+    // The editor's own content when it is there. When it is not — a submit
+    // raised while the editor is between mounts — the draft is the same prose,
+    // kept in step by `changeContent`, so the submit still goes to `sendDraft`
+    // and still ends in a message sent or a reason shown. Returning here instead
+    // was a send that did nothing and said nothing.
+    const editor = composerRef.current?.getContent()
+    const content = editor
+      ? fromEditor(editor)
+      : chat.active.draft.filter(
+          (part) => part.type === "text" || part.type === "pasted-text",
+        )
+    // A submit that goes nowhere still says why. Only a read in flight is
+    // declined here, because only this side knows about it; a draft holding
+    // files goes on to `sendDraft`, which refuses it with its reason on the
+    // conversation. Returning early for those left the panel looking broken.
+    if (declinesPendingAttachment(chat.active.id)) return
     // The pane closes on the draft having gone, not on this handler having run.
     // Calling `submit` proves nothing: the gateway may be away, the text may be
     // over the size the gateway takes, and in both the draft is still here and
@@ -59,7 +72,7 @@ export function useComposer(
     // empty, for a whole round trip, and for good against a gateway that
     // accepts the connection and then answers nothing.
     awaitingDraft.current = true
-    void chat.submit(fromEditor(content)).then((taken) => {
+    void chat.submit(content).then((taken) => {
       // Turned away: the draft is still here, so nothing is waiting for it to
       // go. Left set, the next unrelated emptying of the draft would close a
       // pane nobody asked to close.

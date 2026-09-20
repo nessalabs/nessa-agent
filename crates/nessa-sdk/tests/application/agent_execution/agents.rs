@@ -272,7 +272,7 @@ impl ProviderSessionBackend for TestBackend {
                         .send(ExecutionEvent::new(
                             input.execution_id.clone(),
                             ExecutionUpdate::Message(MessageChunk::text(
-                                input.user_message.as_str(),
+                                input.user_message.text_str(),
                             )),
                         ))
                         .map_err(|_| AgentError::Backpressure)?;
@@ -349,7 +349,7 @@ impl ProviderSessionBackend for TestBackend {
 fn request(id: &str) -> ExecutionRequest {
     ExecutionRequest {
         execution_id: ExecutionId::new(id).unwrap(),
-        user_message: PromptText::new(format!("message {id}")).unwrap(),
+        user_message: UserMessage::text_only(PromptText::new(format!("message {id}")).unwrap()),
         estimated_input_tokens: 1,
         reserved_output_tokens: 100,
     }

@@ -17,11 +17,14 @@ use nessa_sdk::{
             PermissionDecision, PermissionEffect, PermissionId, PermissionOfferPolicy,
             PermissionOption, PermissionOptionId, PermissionOptions, PermissionScope,
         },
-        prompts::PromptText,
+        prompts::{PromptText, UserMessage},
         sessions::{ExecutionSessionId, SessionId},
         tools::{ToolCallId, ToolCallUpdate, ToolContent, ToolObservation, ToolStatus},
     },
 };
+fn said(text: &str) -> UserMessage {
+    UserMessage::text_only(PromptText::new(text).unwrap())
+}
 fn projection() -> Projection {
     Projection::new(
         "conversation".into(),
@@ -30,6 +33,7 @@ fn projection() -> Projection {
             steer: true,
             resume: false,
             permissions: true,
+            image_input: false,
         },
         None,
     )
@@ -69,7 +73,7 @@ fn review_snapshot(events: Vec<ExecutionEvent>) -> SessionSnapshot {
             submission: SubmissionMode::Immediate,
             request: ExecutionRequest {
                 execution_id: ExecutionId::new("execution").unwrap(),
-                user_message: PromptText::new("message").unwrap(),
+                user_message: said("message"),
                 estimated_input_tokens: 10,
                 reserved_output_tokens: 10,
             },
@@ -91,7 +95,7 @@ fn encoded_view_is_bounded_even_when_json_escaping_expands_text() {
         let id = format!("execution-{i}");
         projection.admitted(
             &id,
-            &"\u{0001}".repeat(8192),
+            &said(&"\u{0001}".repeat(8192)),
             ConversationPendingMode::Queued,
         );
         projection.event(&ExecutionEvent::new(
@@ -115,7 +119,11 @@ fn terminal_projection_does_not_reappend_buffered_output_or_reset_on_admission()
     projection.event(&event(ExecutionUpdate::Message(MessageChunk::text(
         "complete",
     ))));
-    projection.admitted("execution", "question", ConversationPendingMode::Queued);
+    projection.admitted(
+        "execution",
+        &said("question"),
+        ConversationPendingMode::Queued,
+    );
     let view = projection.read();
     assert_eq!(
         view.messages[0]
@@ -267,7 +275,7 @@ fn lagged_projection_rebuilds_saved_text_from_a_terminal_snapshot_exactly_once()
         later.clone(),
         ExecutionUpdate::Message(MessageChunk::text("later answer")),
     );
-    projection.admitted("later", "question", ConversationPendingMode::Queued);
+    projection.admitted("later", &said("question"), ConversationPendingMode::Queued);
     projection.event(&chunk);
     assert!(text_parts(&projection.read(), "later").is_empty());
     projection.settled(
@@ -310,7 +318,11 @@ fn transcript_truncation_does_not_hide_complete_queue_but_queue_trimming_does() 
     let mut order = Vec::new();
     for index in 0..64 {
         let id = format!("waiting-{index}");
-        projection.admitted(&id, &"x".repeat(1024), ConversationPendingMode::Queued);
+        projection.admitted(
+            &id,
+            &said(&"x".repeat(1024)),
+            ConversationPendingMode::Queued,
+        );
         order.push(ExecutionId::new(id).unwrap());
     }
     projection.queue_order(&order);
@@ -324,7 +336,7 @@ fn pending_and_message_text_agree_through_the_eight_kibibyte_contract() {
     let mut projection = projection();
     let text = "😀".repeat(2048);
 
-    projection.admitted("execution", &text, ConversationPendingMode::Queued);
+    projection.admitted("execution", &said(&text), ConversationPendingMode::Queued);
 
     let view = projection.read();
     assert_eq!(text.len(), 8192);
@@ -376,12 +388,12 @@ fn steering_during_review_keeps_permission_and_shared_response_target() {
     let mut projection = projection();
     projection.admitted(
         "execution",
-        "Inspect desktop",
+        &said("Inspect desktop"),
         ConversationPendingMode::Queued,
     );
     projection.event(&review("{}".into()));
     for id in ["steer-one", "steer-two"] {
-        projection.admitted(id, "Hello", ConversationPendingMode::Steering);
+        projection.admitted(id, &said("Hello"), ConversationPendingMode::Steering);
         projection.injected(id, "execution");
     }
     let pending = projection.read();

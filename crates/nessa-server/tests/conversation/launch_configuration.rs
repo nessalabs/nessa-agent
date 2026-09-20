@@ -41,6 +41,7 @@ fn the_budgets_injected_are_the_ones_the_shared_table_states() {
         PathBuf::from("/workspace"),
         BTreeMap::new(),
         BTreeMap::new(),
+        None,
     );
     assert_eq!(injected.startup_timeout, millis(&table, "startupMs"));
     assert_eq!(injected.shutdown_grace, millis(&table, "shutdownGraceMs"));
@@ -56,6 +57,7 @@ fn every_injected_budget_is_a_positive_interval() {
         PathBuf::from("/workspace"),
         BTreeMap::new(),
         BTreeMap::new(),
+        None,
     );
     for budget in [
         injected.startup_timeout,

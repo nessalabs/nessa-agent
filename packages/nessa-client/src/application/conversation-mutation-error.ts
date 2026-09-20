@@ -30,12 +30,22 @@ const knownCode = (code: string): ConversationErrorCode | undefined =>
 
 // Codes the gateway only returns after refusing the command outright. A startup
 // deadline belongs here: startup ends before any input reaches the provider.
+// Closed on purpose, and each entry checked against the gateway: in `submit`
+// the image codes are all raised before `enqueue` returns a receipt. A code
+// that is not here — `temporarily_unavailable` among them, which a supervising
+// task also reports when work it had already admitted was lost — leaves the
+// outcome uncertain, which is the safe reading.
 const rejectedBeforeAdmission = (code: string): boolean =>
   (
     [
       ConversationErrorCode.AgentNotConfigured,
       ConversationErrorCode.InvalidRequest,
       ConversationErrorCode.AgentStartupDeadline,
+      ConversationErrorCode.ConversationNotFound,
+      ConversationErrorCode.ConversationCapacity,
+      ConversationErrorCode.ImageInputUnsupported,
+      ConversationErrorCode.AttachmentNotFound,
+      ConversationErrorCode.AttachmentUnavailable,
     ] as string[]
   ).includes(code)
 

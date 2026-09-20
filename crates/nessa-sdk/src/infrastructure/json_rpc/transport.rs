@@ -223,6 +223,37 @@ pub(crate) fn encode(value: Value, limit: usize) -> Result<Vec<u8>, AgentError> 
     Ok(bytes)
 }
 
+/// Time allowed to write any frame, however small.
+const WRITE_BASE: Duration = Duration::from_secs(1);
+/// Extra time allowed for each whole mebibyte of a frame.
+const WRITE_PER_MIB: Duration = Duration::from_secs(1);
+
+/// How long writing a frame of `frame_bytes` may take before it is a
+/// [`AgentError::Deadline`]: one second, plus what [`large_frame_allowance`]
+/// adds. Nothing under a mebibyte gets more than the one second every frame
+/// always had.
+///
+/// A pipe holds tens of kibibytes, so writing a frame means waiting for the
+/// peer to read it. One second is ample for the small frames that were the
+/// only kind until a message could carry images; it is not an honest bound
+/// for sixteen mebibytes read by an agent that parses as it goes. A peer
+/// slower than one mebibyte a second is still treated as stalled. The
+/// operation deadline passed to [`send_encoded`] still applies on top.
+pub(crate) fn write_allowance(frame_bytes: usize) -> Duration {
+    WRITE_BASE + large_frame_allowance(frame_bytes)
+}
+
+/// The part of [`write_allowance`] that grows with the frame: a second for
+/// each whole mebibyte, and nothing below one. A fixed acknowledgement
+/// deadline that has to cover the write as well is extended by this much.
+///
+/// Total for any length: a frame larger than a configured limit can ever be
+/// still answers a duration rather than overflowing.
+pub(crate) fn large_frame_allowance(frame_bytes: usize) -> Duration {
+    let mebibytes = u32::try_from(frame_bytes / (1024 * 1024)).unwrap_or(u32::MAX);
+    WRITE_PER_MIB.saturating_mul(mebibytes)
+}
+
 /// Write a frame already encoded and validated by `encode`, preserving its bytes.
 pub(crate) async fn send_encoded<W: AsyncWrite + Unpin>(
     output: &mut W,

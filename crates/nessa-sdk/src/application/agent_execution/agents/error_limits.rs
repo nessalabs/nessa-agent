@@ -60,6 +60,9 @@ impl AgentError {
                 | Self::MultipleOperationFailures { .. }
                 | Self::OperationAndCleanupFailure { .. }
                 | Self::Scheduling(_)
+                | Self::UserImage(_)
+                | Self::ImageInputRefused(_)
+                | Self::MessageTooLarge { .. }
                 | Self::Busy
                 | Self::Closed
                 | Self::StalePermission

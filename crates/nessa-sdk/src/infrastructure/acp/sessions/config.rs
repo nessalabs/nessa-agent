@@ -1,13 +1,14 @@
 //! Trusted host configuration for launching and supervising an ACP process.
 #![deny(missing_docs)]
 
-use crate::application::agent_execution::agents::AgentError;
+use crate::application::agent_execution::{agents::AgentError, providers::UserImageSource};
 use crate::domain::agent_execution::permissions::PermissionOfferPolicy;
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashSet},
     ffi::OsString,
     path::PathBuf,
+    sync::Arc,
     time::Duration,
 };
 
@@ -66,8 +67,11 @@ pub struct AcpConfig {
     pub startup_timeout: Duration,
     /// None leaves execution unbounded in time (the default policy).
     /// Some sets an explicit total runtime limit, not a stuck-agent detector.
-    /// It starts when the worker selects the request to check ready policy updates
-    /// and continues through prompt writing and execution without restarting.
+    /// It starts when the request is submitted and runs without restarting
+    /// through reading the message's images, prompt writing, and execution:
+    /// time spent on a slow image source is time the agent does not get. The
+    /// read also has a bound of its own that this value can only shorten; see
+    /// `images`.
     /// The duration must be positive and fit the runtime clock; expiry cancels
     /// the execution and starts process cleanup.
     pub execution_timeout: Option<Duration>,
@@ -87,11 +91,51 @@ pub struct AcpConfig {
     /// Dequeue/drop releases its charge; consumer-retained events, domain state, decoding,
     /// audit copies, and allocator/channel overhead are outside this queue budget.
     pub event_capacity: usize,
-    /// Maximum JSON-RPC frame size in bytes, from 1024 through 16 MiB inclusive. Oversized
-    /// incoming or outgoing frames fail transport processing. Incoming frames also share a
-    /// fixed limit of 65,536 JSON values and object keys, including ignored fields, to bound
-    /// collection allocation before envelope validation.
+    /// Maximum size in bytes of a frame this host writes, from 1024 through 16 MiB
+    /// inclusive. An oversized outgoing frame fails transport processing. A user message
+    /// that cannot fit one frame once encoded is refused when it is submitted, before it is
+    /// accepted, with `AgentError::MessageTooLarge`; about 2 KiB of every frame is reserved
+    /// for the request around the message. Writing a frame may take one second, plus one
+    /// more for each whole mebibyte of it. What the agent may send is bounded separately by
+    /// `max_incoming_frame_bytes`.
     pub max_frame_bytes: usize,
+    /// Maximum size in bytes of a frame this host accepts from the agent process, from 1024
+    /// through 16 MiB inclusive. An oversized incoming frame fails transport processing.
+    ///
+    /// This is the buffer the agent subprocess can make the host allocate for one frame, so
+    /// it is set from the largest answer an agent is expected to send rather than from the
+    /// largest prompt this host writes: raising `max_frame_bytes` to carry images does not
+    /// have to raise what an agent can demand. Incoming frames also share a fixed limit of
+    /// 65,536 JSON values and object keys, including ignored fields, to bound collection
+    /// allocation before envelope validation.
+    pub max_incoming_frame_bytes: usize,
+    /// Where the bytes of a user message's images come from. `None` means this
+    /// process cannot deliver images, so its binding offers no image input. With
+    /// a source, an image is still sent only to an agent that advertised
+    /// `promptCapabilities.image`, and one encoded message must fit
+    /// `max_frame_bytes`: base64 grows image bytes by a third.
+    ///
+    /// The source is read on the task that submitted the message, never on the
+    /// task that owns the agent process, so a slow source delays that one
+    /// message and nothing else: the active execution, permission answers, and
+    /// close all go on. All the images of one message are given ten seconds
+    /// together, less when `execution_timeout` (or, for native steering, the
+    /// five-second steering deadline) is shorter, and ten seconds even when
+    /// `execution_timeout` is `None`. Past that, or when the source panics, the
+    /// message fails with `UserImageError::Unavailable`, nothing is sent, and
+    /// the context stays usable. Closing the context abandons the read.
+    ///
+    /// Reading is not free of the operation's own deadline: it spends that
+    /// deadline rather than adding to it, so an execution bounded by
+    /// `execution_timeout`, and a native steering, are finished or failed
+    /// within the interval they were promised. Writing the frame may still take
+    /// the extra time its size is allowed.
+    ///
+    /// Encoded bytes wait in the session's command queue until the worker turns
+    /// them into a frame, so one session holds at most twice `max_frame_bytes`
+    /// of them at a time. A message whose images would exceed that waits behind
+    /// nothing and is refused with `AgentError::Busy` before a byte is read.
+    pub images: Option<Arc<dyn UserImageSource>>,
 }
 impl AcpConfig {
     pub(crate) fn validate(&self) -> Result<(), AgentError> {
@@ -153,6 +197,7 @@ impl AcpConfig {
             })
             || !(1..=4096).contains(&self.event_capacity)
             || !(1024..=16 * 1024 * 1024).contains(&self.max_frame_bytes)
+            || !(1024..=16 * 1024 * 1024).contains(&self.max_incoming_frame_bytes)
         {
             return Err(AgentError::Configuration(
                 "positive deadlines and bounded frame/event capacities are required".into(),

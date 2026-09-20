@@ -24,9 +24,16 @@ function view(ids: string[]): ConversationView {
     pending: ids.map((executionId) => ({
       executionId,
       text: executionId,
+      attachments: [],
       mode: "queued",
     })),
-    capabilities: { queue: true, steer: true, resume: true, permissions: true },
+    capabilities: {
+      queue: true,
+      steer: true,
+      resume: true,
+      permissions: true,
+      imageInput: false,
+    },
   }
 }
 for (const outcome of [

@@ -1,7 +1,8 @@
 import { ComposerDeliveryMode } from "@nessa-ui/react/composer-queue"
 import type { AttachmentResources } from "../adapters/attachment-resources"
+import { attachmentNotice } from "../application/upload-image"
 import * as React from "react"
-import { CircleArrowUp, Download, Link2Off, Square, X } from "lucide-react"
+import { CircleArrowUp, Download, Link2Off, Square } from "lucide-react"
 import { AgentNotification } from "@nessa-ui/react/agent-notification"
 import {
   ChatComposerAction,
@@ -31,6 +32,9 @@ import {
   Transcript,
   useConversation,
   toEditor,
+  isImageFile,
+  MAX_ATTACHMENT_BYTES,
+  MAX_DRAFT_ATTACHMENTS,
 } from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
 import { useSession } from "../../session"
@@ -47,12 +51,14 @@ import { tabAfter, tabAt } from "../application/tab-navigation"
 import { UpdateTab } from "./update-tab"
 import { useComposer } from "./use-composer"
 import { useFileAttachments } from "./use-file-attachments"
+import { useAttachmentUploads } from "./use-attachment-uploads"
 import { useFolderDrop } from "./use-folder-drop"
 import { useContentDrop } from "./use-content-drop"
 import { FileDropZone } from "@nessa-ui/react/file-drop-zone"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 
 import { AddAttachmentMenu } from "./add-attachment-menu"
+import { AttachmentTile } from "./attachment-tile"
 import { AttachmentIcon } from "./attachment-icon"
 import { WaveformIcon } from "./waveform-icon"
 
@@ -85,10 +91,13 @@ function panelClass(surface: Surface, compositor: CompositorKind): string {
 
 export function App({
   attachmentResources,
+  digest,
   onSignOut,
   sessionError,
 }: {
   attachmentResources: AttachmentResources
+  /** How an upload's bytes are identified. Composition owns the Web Crypto one. */
+  digest: (bytes: Blob) => Promise<string>
   onSignOut?: () => void
   sessionError?: string
 }) {
@@ -105,6 +114,17 @@ export function App({
     (item) => item.id === tabDetails?.id,
   )
   const attachments = useFileAttachments(chat, attachmentResources)
+  const uploads = useAttachmentUploads(chat, attachmentResources, digest)
+  // What the draft's files need said about them now, rather than at send.
+  const fileNotice = attachmentNotice({
+    files: attachments.files.map((file) => ({
+      id: file.id,
+      name: file.name,
+      image: isImageFile(file.mimeType),
+      upload: file.upload,
+    })),
+    imageInput: chat.active.remote?.capabilities.imageInput,
+  })
   const folderDrop = useFolderDrop(
     chat.active.id,
     attachments.addFiles,
@@ -132,7 +152,11 @@ export function App({
     changeContent,
     pressChip,
     pasteAttachment,
-  } = useComposer(chat, (id) => attachments.isPending(id) || folderDrop.isPending(id))
+  } = useComposer(chat, (id) => {
+    if (!attachments.isPending(id) && !folderDrop.isPending(id)) return false
+    attachments.setError("Attachments are still loading. Send again once they finish.")
+    return true
+  })
   const contentDrop = useContentDrop({
     addFolderEntries: folderDrop.addFolderEntries,
     addImageUrl: attachments.addImageUrl,
@@ -144,10 +168,10 @@ export function App({
    *
    * Selecting a conversation is also leaving the update tab and closing the
    * pasted-text viewer: the strip is one strip, and a selection that left the
-   * update on screen would be selecting nothing. That used to be three calls
-   * remembered at each of eight places — a shortcut, a click, the tab menu, a
-   * new tab — and the ninth way to select a conversation would have forgotten
-   * one. This is the one door; `show` is only which conversation.
+   * update on screen would be selecting nothing. That is three calls, and there
+   * are eight ways to select a conversation — a shortcut, a click, the tab
+   * menu, a new tab — so they go through one door rather than being remembered
+   * at each; `show` is only which conversation.
    */
   const showConversation = React.useEffectEvent((show: () => void) => {
     closePaste()
@@ -281,8 +305,8 @@ export function App({
             "Some dropped files could not be attached. Try selecting them with +.",
           )
         }
-        maxFiles={20}
-        maxSize={20 * 1024 * 1024}
+        maxFiles={MAX_DRAFT_ATTACHMENTS}
+        maxSize={MAX_ATTACHMENT_BYTES}
       >
         <div
           ref={edge.panelRef}
@@ -487,6 +511,23 @@ export function App({
                 onDismiss={update.dismiss}
               />
             )}
+            {/* One short line about the draft's files. The tile already marks a
+                failed upload and carries the full reason, so this does not repeat
+                it; it offers the retry once for every upload worth retrying. */}
+            {fileNotice && !attachments.error && (
+              <AgentNotification
+                className="mb-2"
+                state="disconnected"
+                title={fileNotice.title}
+                description={fileNotice.description}
+                retryLabel="Retry"
+                onRetry={
+                  fileNotice.retry.length > 0
+                    ? () => fileNotice.retry.forEach(uploads.retry)
+                    : undefined
+                }
+              />
+            )}
             <ConversationNotification
               conversation={chat.active}
               connection={session}
@@ -547,25 +588,13 @@ export function App({
                   </span>
                 ))}
                 {attachments.files.map((file) => (
-                  <span key={file.id} className="relative m-1 inline-flex">
-                    <ChatAttachmentTile
-                      label={file.name}
-                      imageSrc={
-                        file.mimeType.startsWith("image/") ? file.previewUrl : undefined
-                      }
-                      icon={<AttachmentIcon name={file.name} mimeType={file.mimeType} />}
-                      onOpen={() => attachments.open(file)}
-                    />
-                    <button
-                      type="button"
-                      aria-label={`Remove ${file.name}`}
-                      title={`Remove ${file.name}`}
-                      onClick={() => attachments.remove(file.id)}
-                      className="absolute -right-1.5 -top-1.5 inline-flex size-5 items-center justify-center rounded-full bg-background text-foreground shadow-sm outline-none focus-visible:[outline-style:solid] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [&_svg]:size-3"
-                    >
-                      <X aria-hidden="true" />
-                    </button>
-                  </span>
+                  <AttachmentTile
+                    key={file.id}
+                    file={file}
+                    onOpen={() => attachments.open(file)}
+                    onRemove={() => attachments.remove(file.id)}
+                    onRetry={() => uploads.retry(file.id)}
+                  />
                 ))}
               </ChatComposerAttachments>
               <PillComposerRow>

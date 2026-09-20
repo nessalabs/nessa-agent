@@ -217,7 +217,7 @@ async fn fixture(
 fn request(id: &str) -> ExecutionRequest {
     ExecutionRequest {
         execution_id: ExecutionId::new(id).unwrap(),
-        user_message: PromptText::new(format!("input {id}")).unwrap(),
+        user_message: UserMessage::text_only(PromptText::new(format!("input {id}")).unwrap()),
         estimated_input_tokens: 1,
         reserved_output_tokens: 10,
     }
