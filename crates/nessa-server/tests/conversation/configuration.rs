@@ -1,4 +1,8 @@
 use super::*;
+// `providers` exists on Unix only, and so does everything that needs a clock
+// to call it.
+#[cfg(unix)]
+use crate::composition::local_auth::SystemClock;
 
 /// The shared part of the configuration, with one agent under it.
 fn one_agent() -> &'static str {
@@ -220,4 +224,127 @@ fn each_agent_inherits_the_directory_variables_it_resolves_its_own_configuration
             assert!(shared.contains(&key.to_owned()), "{agent:?}: {shared:?}");
         }
     }
+}
+
+/// A model catalog entry a provider can be built on, for one vendor.
+#[cfg(unix)]
+fn catalog_entry(provider: &str, model: &str) -> serde_json::Value {
+    serde_json::json!({
+        "provider": provider,
+        "modelId": model,
+        "displayName": model,
+        "input": {"text": true, "image": false, "audio": false},
+        "output": {"text": true, "image": false, "audio": false},
+        "toolUse": true,
+        "reasoning": false,
+        "maxContextWindowTokens": 128000,
+        "maxOutputTokens": 32000,
+        "knowledgeCutoff": "2026-04-30",
+        "documentationUrl": "https://example.invalid/model",
+    })
+}
+
+/// Two agents configured, one of which cannot be built, and the workspace and
+/// catalog they are pointed at. `missing` names the agent whose command is not
+/// written to disk, which is what `build::provider` refuses on.
+#[cfg(unix)]
+fn two_agents(root: &Path, selected: &str, missing: AgentId) -> (AgentsConfig, std::path::PathBuf) {
+    let catalog = root.join("catalog.json");
+    std::fs::write(
+        &catalog,
+        serde_json::json!({
+            "verifiedOn": "2026-09-11",
+            "models": [
+                catalog_entry("anthropic", "configured-model"),
+                catalog_entry("opencode", "configured-model"),
+            ],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let workspace = root.join("workspace");
+    nessa_local_storage::create_directory(&workspace).unwrap();
+    let mut runtimes = serde_json::Map::new();
+    for agent in [AgentId::Claude, AgentId::Opencode] {
+        let command = root.join(agent.name());
+        if agent != missing {
+            std::fs::write(&command, "fixture").unwrap();
+        }
+        runtimes.insert(
+            agent.name().to_owned(),
+            serde_json::json!({
+                "command": command,
+                "args": [],
+                "model": "configured-model",
+                "toolsEnabled": true,
+            }),
+        );
+    }
+    let config = serde_json::from_value(serde_json::json!({
+        "catalog": catalog,
+        "workspace": workspace,
+        "selected": selected,
+        "runtimes": runtimes,
+    }))
+    .unwrap();
+    (config, root.join("conversations"))
+}
+
+/// One agent that cannot be built does not take the others down with it.
+///
+/// What `build::provider` refuses on is local to one agent — a command that is
+/// not there, a model its vendor does not serve — and none of it says anything
+/// about the rest. Before this, a person with Claude installed and Opencode
+/// merely configured got a gateway that would not start, with a message about
+/// Opencode and no way to reach the page that would have installed it.
+// `providers` is Unix-only; on other platforms it refuses outright.
+#[cfg(unix)]
+#[test]
+fn an_agent_that_cannot_be_built_does_not_take_the_others_with_it() {
+    let root = tempfile::tempdir().unwrap();
+    let (config, conversations) = two_agents(root.path(), "claude", AgentId::Opencode);
+    nessa_local_storage::create_directory(&conversations).unwrap();
+
+    let built = providers(&config, &conversations, Arc::new(SystemClock)).unwrap();
+    // Absent rather than present-and-broken: the conversation service answers a
+    // missing agent with `AgentNotConfigured`, which reaches the one client that
+    // asked for it and leaves every other conversation alone.
+    assert!(built.contains_key(&AgentId::Claude));
+    assert!(!built.contains_key(&AgentId::Opencode));
+}
+
+/// And Opencode is a provider composition can actually build, which nothing
+/// asserted before: every other test on this path stops at the configuration.
+// `providers` is Unix-only; on other platforms it refuses outright.
+#[cfg(unix)]
+#[test]
+fn every_configured_agent_that_can_be_built_is() {
+    let root = tempfile::tempdir().unwrap();
+    // No agent left out, so nothing is missing: `AgentId::Claude` names an
+    // agent that is configured here, which is what makes this the both-built
+    // case rather than a second copy of the one above.
+    let (config, conversations) = two_agents(root.path(), "claude", AgentId::Claude);
+    std::fs::write(root.path().join(AgentId::Claude.name()), "fixture").unwrap();
+    nessa_local_storage::create_directory(&conversations).unwrap();
+
+    let built = providers(&config, &conversations, Arc::new(SystemClock)).unwrap();
+    assert_eq!(built.len(), 2);
+    assert!(built.contains_key(&AgentId::Opencode));
+}
+
+/// The agent the installation is set to use is the exception.
+///
+/// A server that cannot start a conversation on the agent it is set to is not a
+/// degraded server, so that one is still fatal — and saying so at startup is
+/// the only place it can be said, since the alternative is a gateway that
+/// refuses the first conversation anybody opens.
+// `providers` is Unix-only; on other platforms it refuses outright.
+#[cfg(unix)]
+#[test]
+fn the_selected_agent_failing_to_build_is_still_fatal() {
+    let root = tempfile::tempdir().unwrap();
+    let (config, conversations) = two_agents(root.path(), "opencode", AgentId::Opencode);
+    nessa_local_storage::create_directory(&conversations).unwrap();
+
+    assert!(providers(&config, &conversations, Arc::new(SystemClock)).is_err());
 }

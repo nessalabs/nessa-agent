@@ -327,12 +327,36 @@ pub(super) fn launch_environment(agent: AgentId) -> BTreeMap<OsString, OsString>
     environment
 }
 
-/// Build a provider for every configured agent.
+/// Build a provider for every configured agent that can be built.
 ///
 /// All of them, not only the selected one: a conversation records the agent it
 /// was created on and is reopened on that same agent afterwards, so a server
 /// that had only built the selected one could not reopen the conversations
 /// already on disk.
+///
+/// Every one that can be, and not every one: an agent whose provider cannot be
+/// built is left out of the map rather than ending the build of the rest. What
+/// [`build::provider`] refuses on is ordinary and local to one agent — a model
+/// the catalog does not serve under that agent's vendor, a command that is not
+/// an existing file, token limits the pair will not take — and none of that is
+/// a statement about the other agents. Failing all of them together meant a
+/// person with Claude installed and Codex merely configured got a gateway that
+/// would not start, with a message about Codex and no way to reach the setup
+/// page that would have fixed it.
+///
+/// Left out is a real answer downstream rather than a silence: the conversation
+/// service refuses an agent it has no provider for with
+/// `ConversationError::AgentNotConfigured`, which reaches a client as
+/// `agent_not_configured` on the one conversation that asked for it. What is
+/// *not* downgraded is the agent the installation is set to use. That one is
+/// still fatal, because a server that cannot start a conversation on the agent
+/// it is set to is not a degraded server.
+///
+/// Readiness is answered somewhere else and deliberately stays that way:
+/// `LocalAgentProbe` stats each agent's command on every ask, so an agent
+/// missing here because it is not installed yet still reports `not-installed`
+/// now and `ready` the moment a person installs it. Narrowing the probe to
+/// what was built at startup would freeze that answer to what was true once.
 #[cfg(unix)]
 pub(super) fn providers(
     config: &AgentsConfig,
@@ -340,12 +364,29 @@ pub(super) fn providers(
     clock: Arc<dyn Clock>,
 ) -> Result<HashMap<AgentId, ConversationAgent>, RunError> {
     config.validate()?;
+    let selected = config.selected()?;
     let mut agents = HashMap::new();
     for (agent, runtime) in config.agents() {
+        let provider = match build::provider(agent, config, runtime, directory, clock.clone()) {
+            Ok(provider) => provider,
+            Err(failure) if agent == selected => return Err(failure),
+            Err(failure) => {
+                // Loud, because it is the only place this is said. A person who
+                // never opens a conversation on this agent will see nothing
+                // else, and the reason is here rather than in the refusal
+                // downstream, which knows only that there is no provider.
+                tracing::error!(
+                    agent = agent.name(),
+                    %failure,
+                    "configured agent is unavailable this run; the others are unaffected"
+                );
+                continue;
+            }
+        };
         agents.insert(
             agent,
             ConversationAgent {
-                provider: build::provider(agent, config, runtime, directory, clock.clone())?,
+                provider,
                 reserved_output_tokens: runtime.output_tokens,
             },
         );
