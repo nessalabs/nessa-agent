@@ -101,6 +101,9 @@ for line in sys.stdin:
         assert params["mcpServers"] == []
         if method == "session/resume":
             session = params["sessionId"]
+            # Named so a test can tell a resumed session from a second new one:
+            # both answer a prompt, and only one of them is the restart path.
+            (root / "resumed").write_text(session)
         result(msg["id"], {"sessionId": session, **configs()})
     elif method == "session/set_config_option":
         params = msg["params"]
@@ -122,6 +125,13 @@ for line in sys.stdin:
             # a session that has been put into its approval mode anyway.
             assert configured_steps == ["model", "mode"], configured_steps
             assert params["value"] == "read-only"
+            # One line per process that got this far. A resumed session is a
+            # fresh process, so the count is how many times this binding
+            # configured a session — which is the only way a test can see that
+            # a restored session was configured again rather than used as
+            # Codex left it.
+            with (root / "configured").open("a") as log:
+                log.write(json.dumps(configured_steps) + "\n")
         result(msg["id"], configs())
     elif method == "session/prompt":
         pending = msg["id"]
