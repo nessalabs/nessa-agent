@@ -1,4 +1,5 @@
 //! Local product dependency factory. Provider choices stay outside route handlers.
+use super::warm_up::PreparedRuntime;
 use crate::{
     agent_warm_up::{
         application::AgentWarmUp,
@@ -188,7 +189,7 @@ pub(super) fn product_state(
                 metadata,
                 creation_audit,
                 clock,
-                readiness: Some(Arc::new(super::warm_up::PreparedRuntime(prepared.clone()))),
+                readiness: Some(Arc::new(PreparedRuntime(prepared.clone()))),
             },
             ConversationLimits {
                 reserved_output_tokens: agent.output_tokens,

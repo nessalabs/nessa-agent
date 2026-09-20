@@ -5,4 +5,4 @@
 //! either been done for a given runtime or it has not, and the runtime is named
 //! by a value.
 pub mod value_objects;
-pub use value_objects::{RuntimeFingerprint, RuntimeFingerprintError, WarmUpState};
+pub use value_objects::{RuntimeFingerprint, RuntimeFingerprintError, WarmUpCause, WarmUpState};

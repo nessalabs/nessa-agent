@@ -1,5 +1,5 @@
 use super::ports::{ProviderFailure, WarmUpAudit, WarmUpAuditRecord, WarmUpError, WarmUpRecords};
-use crate::agent_warm_up::domain::{RuntimeFingerprint, WarmUpState};
+use crate::agent_warm_up::domain::{RuntimeFingerprint, WarmUpCause, WarmUpState};
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::application::agent_execution::{
     agents::{Agent, AgentError},
@@ -7,8 +7,11 @@ use nessa_sdk::application::agent_execution::{
     providers::AgentProvider,
     sessions::{SessionManager, SessionStorage},
 };
-use std::sync::Arc;
-use tokio::sync::OnceCell;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use tokio::sync::watch;
 use uuid::Uuid;
 
 /// Surface recorded as the initiator of a warm-up. The gateway acts as its own
@@ -19,9 +22,14 @@ const GATEWAY_PRINCIPAL: &str = "gateway";
 /// Runs the configured runtime through a full open and close, once, so the
 /// operating system's first-execution scan is paid before anyone is waiting.
 ///
-/// Cloning shares the single run. Whoever asks first performs it; everyone else
-/// waits for the same one, which is the whole point — a first message arriving
-/// mid-warm-up must not start a second cold launch.
+/// Cloning shares the single run. Whoever asks first starts it, everyone else
+/// waits for that one — a first message arriving mid-warm-up must not start a
+/// second cold launch.
+///
+/// The run belongs to a task of its own rather than to whoever triggered it,
+/// because the conversation that waits here is cancellable by design: a caller
+/// giving up must not abandon a launch half-finished, nor let the next caller
+/// start a second one.
 #[derive(Clone)]
 pub struct AgentWarmUp {
     inner: Arc<Inner>,
@@ -33,7 +41,8 @@ struct Inner {
     audit: Arc<dyn WarmUpAudit>,
     clock: Arc<dyn Clock>,
     runtime: RuntimeFingerprint,
-    settled: OnceCell<()>,
+    started: AtomicBool,
+    settled: watch::Sender<bool>,
 }
 
 impl AgentWarmUp {
@@ -55,7 +64,8 @@ impl AgentWarmUp {
                 audit,
                 clock,
                 runtime,
-                settled: OnceCell::new(),
+                started: AtomicBool::new(false),
+                settled: watch::channel(false).0,
             }),
         }
     }
@@ -65,51 +75,71 @@ impl AgentWarmUp {
     /// Called once the gateway is listening, so the scan happens while the user
     /// is still looking at the window rather than inside their first request.
     pub fn start(&self) {
+        self.begin();
+    }
+
+    /// Start the one run, if nobody has. Returns without waiting for it.
+    fn begin(&self) {
+        if self.inner.started.swap(true, Ordering::SeqCst) {
+            return;
+        }
         let warm_up = self.clone();
-        tokio::spawn(async move { warm_up.wait_until_settled().await });
+        tokio::spawn(async move {
+            // Supervised, so a panic in an adapter is this task's problem and
+            // not a waiter's: a waiter is promised a wait, not an unwind from
+            // work it did not start, and must not be parked forever either.
+            let running = tokio::spawn({
+                let warm_up = warm_up.clone();
+                async move { warm_up.run().await }
+            });
+            let outcome = running.await.unwrap_or_else(|_| {
+                Err(WarmUpError::Provider(ProviderFailure {
+                    error: AgentError::Protocol("warm-up task did not finish".into()),
+                    cleanup_unconfirmed: true,
+                }))
+            });
+            warm_up.report(&outcome);
+            warm_up.inner.settled.send_replace(true);
+        });
+    }
+
+    fn report(&self, outcome: &Result<Outcome, WarmUpError>) {
+        match outcome {
+            Ok(Outcome::AlreadyWarm) => tracing::debug!(
+                model = self.inner.runtime.model(),
+                "runtime already warmed; skipping"
+            ),
+            Ok(Outcome::Warmed) => tracing::info!(
+                model = self.inner.runtime.model(),
+                "runtime warmed off the request path"
+            ),
+            // A failed warm-up is survivable: the next request opens its own
+            // provider and reports its own outcome. It is not recorded as
+            // complete, so the next start tries again.
+            Err(error) => tracing::warn!(
+                model = self.inner.runtime.model(),
+                %error,
+                "runtime warm-up did not complete"
+            ),
+        }
     }
 
     /// Wait for the single run to finish, starting it if nobody has yet.
     ///
     /// Every caller joins the same run, which is the point: a first message
     /// arriving mid-warm-up must not start a second cold launch. Returns when
-    /// the run has settled, successfully or not.
+    /// the run has settled, successfully or not. Cancelling this wait abandons
+    /// only the wait — the run keeps going and the next caller joins it.
     pub async fn wait_until_settled(&self) {
-        self.inner
-            .settled
-            .get_or_init(|| async {
-                // Supervised, so a panic in a provider adapter is this task's
-                // problem and not the caller's. A conversation waiting here is
-                // promised a wait, not a failure, and must not be handed an
-                // unwind from work it did not start.
-                let warm_up = self.clone();
-                let outcome = match tokio::spawn(async move { warm_up.run().await }).await {
-                    Ok(outcome) => outcome,
-                    Err(_) => Err(WarmUpError::Provider(ProviderFailure {
-                        error: AgentError::Protocol("warm-up task did not finish".into()),
-                        cleanup_unconfirmed: true,
-                    })),
-                };
-                match outcome {
-                    Ok(Outcome::AlreadyWarm) => tracing::debug!(
-                        model = self.inner.runtime.model(),
-                        "runtime already warmed; skipping"
-                    ),
-                    Ok(Outcome::Warmed) => tracing::info!(
-                        model = self.inner.runtime.model(),
-                        "runtime warmed off the request path"
-                    ),
-                    // A failed warm-up is survivable: the next request opens its
-                    // own provider and reports its own outcome. It is not
-                    // recorded as complete, so the next start tries again.
-                    Err(error) => tracing::warn!(
-                        model = self.inner.runtime.model(),
-                        %error,
-                        "runtime warm-up did not complete"
-                    ),
-                }
-            })
-            .await;
+        self.begin();
+        let mut settled = self.inner.settled.subscribe();
+        // The sender lives in the shared `Inner` this clone holds, so the
+        // channel cannot close while anyone is still waiting on it.
+        while !*settled.borrow_and_update() {
+            if settled.changed().await.is_err() {
+                return;
+            }
+        }
     }
 
     async fn run(&self) -> Result<Outcome, WarmUpError> {
@@ -141,6 +171,8 @@ impl AgentWarmUp {
                 } else {
                     WarmUpState::Warmed
                 },
+                cause: WarmUpCause::AutomaticPreparation,
+                initiator: actor.clone(),
                 session_id: session_id.clone(),
                 failure: failure.clone(),
                 correlation_id,

@@ -26,9 +26,13 @@ use nessa_sdk::{
     domain::agent_execution::sessions::{ExecutionSessionId, SessionId},
     infrastructure::session_storage::InMemoryStorage,
 };
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc, Mutex,
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 use tokio::sync::{oneshot, Notify};
 
@@ -1060,7 +1064,7 @@ struct GatedReadiness {
     waited: AtomicBool,
 }
 impl RuntimeReadiness for GatedReadiness {
-    fn wait(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+    fn wait(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             self.waited.store(true, Ordering::SeqCst);
             let release = self.release.lock().unwrap().take();
@@ -1112,6 +1116,76 @@ async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider(
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
     release.send(()).unwrap();
     creating.await.unwrap().unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    service.shutdown().await.unwrap();
+}
+
+/// The desktop quit path is the same guarantee in another delivery mode.
+///
+/// It stops agents without fencing admission, so it never set the signal a
+/// parked opening watches: quit spent its whole per-owner budget waiting for an
+/// opening that was itself waiting for the runtime, reported the owner as
+/// uncleaned, and then let that opening launch a provider the pass had already
+/// walked past — a Claude Code process tree left behind by quitting.
+#[tokio::test]
+async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparation() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    // Never released: this stands in for a cold launch still in progress.
+    let (_release, gate) = oneshot::channel();
+    let readiness = Arc::new(GatedReadiness {
+        release: Mutex::new(Some(gate)),
+        waited: AtomicBool::new(false),
+    });
+    let service = ConversationService::new(
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider.clone())),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            clock: Arc::new(TestClock),
+            readiness: Some(readiness.clone()),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let creating = tokio::spawn({
+        let service = service.clone();
+        async move { service.create(id(), caller("panel", "first")).await }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while !readiness.waited.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the opening gate waits for preparation");
+    // Well inside the 10s per-owner budget, so passing is not that timeout
+    // expiring and reporting success by another name.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        service.stop_active_agents(),
+    )
+    .await
+    .expect("quit must not wait out a preparation with no deadline")
+    .unwrap();
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), creating)
+            .await
+            .expect("the parked request is released")
+            .unwrap(),
+        Err(ConversationError::Unavailable)
+    ));
+    // Nothing was launched past the stop, so quit leaves no provider behind.
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+
+    // And admission is untouched: stopping the agents is not retirement, so the
+    // conversation this released can be opened again afterwards.
+    *readiness.release.lock().unwrap() = None;
+    service
+        .create(id(), caller("panel", "after-quit"))
+        .await
+        .unwrap();
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
     service.shutdown().await.unwrap();
 }

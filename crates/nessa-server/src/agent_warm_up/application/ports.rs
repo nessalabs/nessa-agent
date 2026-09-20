@@ -1,5 +1,6 @@
-use crate::agent_warm_up::domain::{RuntimeFingerprint, WarmUpState};
+use crate::agent_warm_up::domain::{RuntimeFingerprint, WarmUpCause, WarmUpState};
 use nessa_sdk::application::agent_execution::agents::AgentError;
+use nessa_sdk::application::agent_execution::permissions::ActionContext;
 use std::{
     error::Error,
     fmt::{self, Display, Formatter},
@@ -74,7 +75,9 @@ pub trait WarmUpRecords: Send + Sync {
 ///
 /// The initiator is the gateway itself. There is no human to attribute this to
 /// and none is invented: nobody asked for a warm-up, the gateway decided to run
-/// one because a runtime it had never launched was configured.
+/// one because a runtime it had never launched was configured. Both that cause
+/// and that initiator are supplied by the application, not composed by the
+/// adapter that writes them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WarmUpAuditRecord {
     /// Runtime this warm-up prepared.
@@ -83,6 +86,12 @@ pub struct WarmUpAuditRecord {
     pub before: WarmUpState,
     /// State after it. Unchanged when the warm-up failed.
     pub after: WarmUpState,
+    /// Why this happened. Automatic, and labelled as such.
+    pub cause: WarmUpCause,
+    /// Who the gateway acted as. The same context the provider session was
+    /// closed with, so the SDK's own closure evidence and this record cannot
+    /// disagree about the initiator.
+    pub initiator: ActionContext,
     /// Provider session the warm-up opened. None when no session was
     /// established, or when the provider did not name one; it is never an empty
     /// identity standing in for an unknown one.

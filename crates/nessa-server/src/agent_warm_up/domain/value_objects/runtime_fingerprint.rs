@@ -117,6 +117,31 @@ impl fmt::Display for WarmUpState {
     }
 }
 
+/// Why a warm-up happened.
+///
+/// There is one reason and it is not a person: the gateway launched a runtime
+/// it had never launched before. The audit gate wants that carried from the
+/// application through its own port, so this is a value the service supplies
+/// rather than a label the writer adds on the way to disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WarmUpCause {
+    /// The gateway prepared a configured runtime nobody had asked it to.
+    AutomaticPreparation,
+}
+impl WarmUpCause {
+    /// Stable lowercase identifier for audit records.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AutomaticPreparation => "automatic_runtime_warm_up",
+        }
+    }
+}
+impl fmt::Display for WarmUpCause {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 #[cfg(test)]
 #[path = "../../../../tests/agent_warm_up/runtime_fingerprint.rs"]
 mod tests;

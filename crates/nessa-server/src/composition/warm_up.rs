@@ -13,3 +13,7 @@ impl RuntimeReadiness for PreparedRuntime {
         Box::pin(self.0.wait_until_settled())
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/conversation/prepared_runtime.rs"]
+mod tests;

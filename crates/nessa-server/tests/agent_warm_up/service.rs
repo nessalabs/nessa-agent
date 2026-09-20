@@ -1,5 +1,5 @@
 //! The warm-up runs once, off the request path, and leaves evidence behind.
-use super::{AgentWarmUp, RuntimeFingerprint, WarmUpState};
+use super::{AgentWarmUp, RuntimeFingerprint, WarmUpCause, WarmUpState};
 use crate::agent_warm_up::application::{
     ProviderFailure, WarmUpAudit, WarmUpAuditRecord, WarmUpError, WarmUpFuture, WarmUpRecords,
 };
@@ -7,9 +7,10 @@ use crate::conversation_test_support::{Provider, ProviderFactory, TestClock};
 use nessa_sdk::application::agent_execution::agents::{
     AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
 };
+use nessa_sdk::application::agent_execution::providers::SessionCloseRequest;
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc, Mutex,
 };
 use tokio::sync::{oneshot, Barrier};
@@ -23,11 +24,16 @@ struct MemoryRecords {
     completed: Mutex<Vec<RuntimeFingerprint>>,
     reads: AtomicUsize,
     read_failure: Mutex<Option<String>>,
+    read_panic: AtomicBool,
     write_failure: Mutex<Option<String>>,
 }
 impl WarmUpRecords for MemoryRecords {
     fn completed(&self, runtime: &RuntimeFingerprint) -> WarmUpFuture<'_, bool> {
         self.reads.fetch_add(1, Ordering::SeqCst);
+        assert!(
+            !self.read_panic.load(Ordering::SeqCst),
+            "record store panicked"
+        );
         if let Some(failure) = self.read_failure.lock().unwrap().clone() {
             return Box::pin(async move { Err(WarmUpError::Records(failure)) });
         }
@@ -113,6 +119,18 @@ async fn warming_opens_and_closes_one_real_session_and_records_it() {
     );
     assert!(!record.correlation_id.is_empty());
     assert!(record.observed_at_ms >= record.requested_at_ms);
+    assert_eq!(record.cause, WarmUpCause::AutomaticPreparation);
+    // The same context the provider session was closed with, so the SDK's own
+    // closure evidence and this record cannot name different initiators — two
+    // sets of constants drifting apart is exactly what that would look like.
+    let closes = fixture.provider.close_requests.lock().unwrap();
+    let [SessionCloseRequest::Explicit(closed_by)] = closes.as_slice() else {
+        panic!("the warm-up closes its session explicitly")
+    };
+    assert_eq!(&record.initiator, closed_by);
+    assert_eq!(record.initiator.principal_id(), "gateway");
+    assert_eq!(record.initiator.surface_id(), "runtime_warm_up");
+    assert_eq!(record.initiator.request_id(), record.correlation_id);
 }
 
 #[tokio::test]
@@ -234,4 +252,54 @@ async fn the_run_is_not_repeated_after_it_has_settled() {
     fixture.warm_up.wait_until_settled().await;
     assert_eq!(fixture.provider.open_calls.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.records.reads.load(Ordering::SeqCst), 1);
+}
+
+/// A panic inside the run belongs to the run's own task.
+///
+/// The conversation that waits here was promised a wait, not an unwind from
+/// work it did not start — and it must not be parked forever either, so the
+/// run still settles and the waiter still returns.
+#[tokio::test]
+async fn a_panicking_run_settles_the_waiters_instead_of_unwinding_into_them() {
+    let fixture = fixture();
+    fixture.records.read_panic.store(true, Ordering::SeqCst);
+    fixture.warm_up.wait_until_settled().await;
+    // Nothing was warmed and nothing claimed it was.
+    assert!(fixture.records.completed.lock().unwrap().is_empty());
+    assert!(fixture.audit.records.lock().unwrap().is_empty());
+    // And the run is settled, so a later waiter returns rather than starting
+    // a second one on top of a panic.
+    fixture.warm_up.wait_until_settled().await;
+    assert_eq!(fixture.records.reads.load(Ordering::SeqCst), 1);
+}
+
+/// Cancelling a wait abandons the wait, not the launch.
+///
+/// The conversation waiter is cancellable by design — the caller disconnects,
+/// or teardown supersedes it — and tokio's `OnceCell` would hand the next
+/// caller a fresh initializer, so two cold launches would race. The run owns
+/// its own task instead.
+#[tokio::test]
+async fn cancelling_a_wait_neither_abandons_the_run_nor_starts_a_second() {
+    let fixture = fixture();
+    let (release, gate) = oneshot::channel();
+    *fixture.provider.open_gate.lock().unwrap() = Some(gate);
+
+    let abandoned = tokio::spawn({
+        let warm_up = fixture.warm_up.clone();
+        async move { warm_up.wait_until_settled().await }
+    });
+    fixture.provider.opening.notified().await;
+    abandoned.abort();
+    let _ = abandoned.await;
+
+    // The launch the abandoned waiter started is still the only one.
+    release.send(()).unwrap();
+    fixture.warm_up.wait_until_settled().await;
+    assert_eq!(fixture.provider.open_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.audit.records.lock().unwrap().len(), 1);
+    assert_eq!(
+        fixture.records.completed.lock().unwrap().as_slice(),
+        [runtime()]
+    );
 }

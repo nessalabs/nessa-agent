@@ -1,9 +1,11 @@
 //! Durable warm-up evidence, committed before a completion record is written.
 use crate::agent_warm_up::application::{
-    WarmUpAudit, WarmUpAuditRecord, WarmUpError, WarmUpFuture,
+    ProviderFailure, WarmUpAudit, WarmUpAuditRecord, WarmUpError, WarmUpFuture,
 };
 use nessa_local_storage::{create_directory, sync_directory, PrivateTempFile};
+use nessa_sdk::application::agent_execution::{agents::AgentError, permissions::ActionContext};
 use serde_json::json;
+use serde_json::Value;
 use std::{fmt::Display, io::Write, path::PathBuf};
 use uuid::Uuid;
 
@@ -23,6 +25,49 @@ impl DurableWarmUpAudit {
     }
 }
 
+fn actor(actor: &ActionContext) -> Value {
+    json!({
+        "principalId": actor.principal_id(),
+        "surfaceId": actor.surface_id(),
+        "requestId": actor.request_id(),
+    })
+}
+
+/// Discriminated, like every other audit record in this repository: a reader
+/// branches on `kind` rather than parsing a rendering of a Rust enum. The
+/// startup step is the part a failed warm-up is usually read for, so it is a
+/// field rather than prose.
+fn failure(failure: &ProviderFailure) -> Value {
+    let error = match &failure.error {
+        AgentError::StartupDeadline(step) => json!({
+            "kind": "startup_deadline",
+            "step": step.as_str(),
+            "context": step.context().as_str(),
+        }),
+        AgentError::Deadline => json!({"kind": "deadline"}),
+        AgentError::Closed => json!({"kind": "closed"}),
+        AgentError::CleanupUncertain => json!({"kind": "cleanup_uncertain"}),
+        AgentError::AuditFailure => json!({"kind": "audit_failure"}),
+        AgentError::Provider { code } => json!({"kind": "provider", "code": code}),
+        AgentError::Storage(error) => {
+            json!({"kind": "storage", "diagnostic": error.to_string()})
+        }
+        AgentError::Transport(detail) => json!({"kind": "transport", "diagnostic": detail}),
+        AgentError::Protocol(detail) => json!({"kind": "protocol", "diagnostic": detail}),
+        AgentError::Configuration(detail) => {
+            json!({"kind": "configuration", "diagnostic": detail})
+        }
+        AgentError::Unsupported(detail) => json!({"kind": "unsupported", "diagnostic": detail}),
+        AgentError::InvalidInput(detail) => {
+            json!({"kind": "invalid_input", "diagnostic": detail})
+        }
+        // Reachable only if the SDK grows a failure a warm-up can hit; labelled
+        // as unclassified rather than silently rendered as one of the above.
+        other => json!({"kind": "other", "diagnostic": other.to_string()}),
+    };
+    json!({"error": error, "cleanupUnconfirmed": failure.cleanup_unconfirmed})
+}
+
 impl WarmUpAudit for DurableWarmUpAudit {
     fn record(&self, record: WarmUpAuditRecord) -> WarmUpFuture<'_, ()> {
         let id = Uuid::new_v4().to_string();
@@ -39,19 +84,12 @@ impl WarmUpAudit for DurableWarmUpAudit {
                 "before": record.before.as_str(),
                 "after": record.after.as_str(),
             },
-            // Nobody asked for this. The gateway launched a runtime it had
-            // never launched before, and says so rather than naming a person.
-            "cause": "automatic_runtime_warm_up",
-            "initiator": {
-                "principalId": "gateway",
-                "surfaceId": "runtime_warm_up",
-            },
-            "failure": record.failure.as_ref().map(|failure| json!({
-                // The SDK's typed failure, rendered here at the boundary that
-                // writes it rather than flattened where it was produced.
-                "error": format!("{:?}", failure.error),
-                "cleanupUnconfirmed": failure.cleanup_unconfirmed,
-            })),
+            // Both supplied by the application. Nobody asked for this, and the
+            // initiator is the same context the provider session was closed
+            // with, so the SDK's closure evidence cannot name someone else.
+            "cause": record.cause.as_str(),
+            "initiator": actor(&record.initiator),
+            "failure": record.failure.as_ref().map(failure),
             "correlationId": record.correlation_id,
             "requestedAtMs": record.requested_at_ms,
             "observedAtMs": record.observed_at_ms,
@@ -77,3 +115,7 @@ impl WarmUpAudit for DurableWarmUpAudit {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../../../tests/agent_warm_up/audit.rs"]
+mod tests;
