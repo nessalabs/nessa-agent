@@ -68,6 +68,24 @@ impl Environment {
         ))
     }
 
+    /// This stage's log directory, resolved from the process environment alone.
+    ///
+    /// Read before the rest of the configuration is parsed, because what lives
+    /// in there — the log this process is writing into, and what the last run
+    /// wrote down about giving up — has to be dealt with even when the reason
+    /// this run is ending is that its configuration would not parse. `None` is
+    /// a process with no data root at all, which has no such directory.
+    pub fn log_directory_from_system() -> Result<Option<std::path::PathBuf>, EnvironmentError> {
+        let source = super::source::SystemEnv;
+        let stage = load_stage(&source)?;
+        super::paths::log_directory(
+            read_optional(&source, key::DATA_DIR)?.as_deref(),
+            read_optional(&source, home_variable())?.as_deref(),
+            stage.as_str(),
+            read_optional(&source, key::INSTANCE)?.as_deref(),
+        )
+    }
+
     /// Plain browser HTTP is confined to numeric loopback in development and CI.
     pub fn browser_http_allowed(&self) -> bool {
         matches!(self.stage, Stage::Dev | Stage::Ci) && is_loopback(&self.bind_host)
@@ -84,18 +102,19 @@ fn load_auth_directory(
 ) -> Result<Option<std::path::PathBuf>, EnvironmentError> {
     super::paths::auth_directory(
         read_optional(source, key::DATA_DIR)?.as_deref(),
-        read_optional(
-            source,
-            if cfg!(windows) {
-                "USERPROFILE"
-            } else {
-                key::HOME
-            },
-        )?
-        .as_deref(),
+        read_optional(source, home_variable())?.as_deref(),
         stage.as_str(),
         read_optional(source, key::INSTANCE)?.as_deref(),
     )
+}
+
+/// The OS variable holding the user's home directory on this target.
+fn home_variable() -> &'static str {
+    if cfg!(windows) {
+        "USERPROFILE"
+    } else {
+        key::HOME
+    }
 }
 
 fn format_socket_addr(host: &str, port: u16) -> String {

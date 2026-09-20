@@ -6,6 +6,7 @@
 //!
 //! ```text
 //! main ──► core::run ──► logging::init
+//!                    └──► log_file::bound (gateway.log, size)
 //!                    └──► composition::CompositionRoot::serve
 //!                              │
 //!                         RunError ──► Termination (exit code + log)
@@ -14,6 +15,8 @@
 mod bootstrap;
 mod error;
 mod exit_code;
+#[cfg(unix)]
+mod log_file;
 pub mod logging;
 pub mod trusted_origin;
 
