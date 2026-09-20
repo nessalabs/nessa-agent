@@ -18,6 +18,7 @@ const HOST_EVENTS = {
   updateAvailable: "nessa://update-available",
   updateProgress: "nessa://update-progress",
   updateFailed: "nessa://update-failed",
+  linkNotOpened: "nessa://link-not-opened",
 } as const
 
 /**
@@ -235,6 +236,33 @@ export async function installUpdate(): Promise<void> {
   if (!inTauri) return
   const { invoke } = await import("@tauri-apps/api/core")
   await invoke("install_update")
+}
+
+/** Why a clicked link did nothing. Matches `host::NotOpened`. */
+export type NotOpenedReason = "refused" | "opener-failed"
+
+/** Which link did nothing, and why. Matches `host::LinkNotOpened`. */
+export interface LinkNotOpened {
+  url: string
+  reason: NotOpenedReason
+  /** The opener's own error, for the diagnostics rather than the screen. */
+  detail: string | null
+}
+
+/**
+ * Subscribes to a clicked link that did not open.
+ *
+ * Links leave the app rather than navigating this window, which has no address
+ * bar to get back from. When one goes nowhere — a scheme the host refuses, or a
+ * browser it could not start — the click is otherwise indistinguishable from a
+ * dead page, so the host says so and the panel puts it on screen.
+ */
+export async function onLinkNotOpened(handler: (link: LinkNotOpened) => void) {
+  if (!inTauri) return () => undefined
+  const { listen } = await import("@tauri-apps/api/event")
+  return listen<LinkNotOpened>(HOST_EVENTS.linkNotOpened, ({ payload }) =>
+    handler(payload),
+  )
 }
 
 export { inTauri }

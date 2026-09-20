@@ -5,7 +5,7 @@ mod overlay;
 mod vibrancy;
 mod viewport;
 
-use std::process::Command;
+use std::{process::Command, thread};
 
 use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
 use tauri::{AppHandle, WebviewWindow};
@@ -82,10 +82,18 @@ impl Host for Macos {
     /// the same habit as the rest of this crate's tool calls; the host's
     /// `PATH` is not this app's business.
     fn open_externally(&self, url: &str) -> Result<(), String> {
-        Command::new("/usr/bin/open")
+        let mut child = Command::new("/usr/bin/open")
             .arg(url)
             .spawn()
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        // Reaped on a thread of its own. The opener returns as soon as it has
+        // told the other app, but waiting here would hold the navigation
+        // decision — and so the window — while a cold browser starts. Left
+        // unwaited it would be a zombie per click, for the life of a menu bar
+        // app that runs for days.
+        thread::spawn(move || {
+            let _ = child.wait();
+        });
+        Ok(())
     }
 }
