@@ -236,7 +236,8 @@ export const stageAttachment = createAsyncThunk<
  * and closing a tab never stops that.
  *
  * The tab closes first and whatever the gateway says. A release that fails is
- * survivable — staged bytes expire on their own — and is reported, not shown.
+ * survivable — what the conversation still holds is the gateway's to account
+ * for, and nothing here depends on it being gone — and is reported, not shown.
  */
 export const closeTab = createAsyncThunk<void, string, ThunkConfig>(
   "conversation/closeTab",

@@ -126,13 +126,19 @@ send   -> conversation.send { text, attachments: [the returned references] }
   per-image byte or pixel limit. The only byte limit it puts on a single file is
   the 64 MiB a file may be to attach and upload at all — enough for a camera RAW
   file. (The client also holds a message's images to the protocol schema's
-  5242880-byte `ImageAttachment` bound; that is the contract's, not a model's.)
+  5242880-byte `ImageAttachment` bound; that is the contract's, not a model's.
+  Every such bound — that one, the 10 images and 10 MiB a message carries, the
+  64 MiB the upload path takes — is generated into the client from
+  `protocol/product/v1.json`. The conversation model keeps its own constants,
+  because it may not import a client SDK, and the gateway adapter's tests hold
+  them to the generated ones.)
 - **The returned reference is what a message names.** Both `begin` (when the
   conversation already holds the bytes) and the upload answer with the stored
   reference, which may differ from the file in digest, media type, and size — a
   HEIC, camera RAW, BMP, or very large PNG comes back as a smaller PNG or JPEG.
   The digest the panel computes only identifies the upload and is never sent in
-  a message. Storage is media-agnostic and the client's `StoredAttachment` type
+  a message; hashing reads Web Crypto, so the function that does it is injected
+  from composition like any other read from outside the process. Storage is media-agnostic and the client's `StoredAttachment` type
   says so; narrowing one to an image a message may name (`asImageAttachment`) is
   a separate step, taken in the panel's gateway adapter.
 - **Any `image/*` file is uploaded**; whether the gateway can read it is the
@@ -157,13 +163,18 @@ send   -> conversation.send { text, attachments: [the returned references] }
   | Reason | From | Retry offered |
   | --- | --- | --- |
   | `unreadable` | This window could not read or hash the bytes. | yes |
-  | `unsupported-image` | `unsupported_image`, or a stored reference that is not one of the four image encodings. | no |
-  | `too-large` | `image_too_large`: it could not be brought under the model's limits. | no |
+  | `unsupported-image` | `unsupported_image`, or a stored reference in an encoding no message names. | no |
+  | `too-large` | `image_too_large` (it could not be brought under the model's limits), or a stored reference over the protocol's 5 MiB image bound. | no |
   | `image-input-unsupported` | `image_input_unsupported`: the agent's model takes no images. | no |
   | `busy` | `temporarily_unavailable` after the bounded retries; a refused `begin` as `attachment_capacity` or `temporarily_unavailable`. | yes |
   | `interrupted` | `upload_interrupted`, `attachment_not_kept`, `upload_timeout` (the gateway's 408, or the client's own three-minute deadline for a PUT that never answers), or an aborted request. | yes |
   | `unavailable` | No connection or answer; `ticket_invalid`; `storage_unavailable` / `attachment_storage_unavailable`; `audit_unavailable`; a refused `begin` as `agent_not_configured` or `conversation_not_found`. | yes |
-  | `rejected` | `size_mismatch`, `digest_mismatch`, a `begin` refused as `invalid_request` or with a code the client was not taught, an unrecognised answer. | yes |
+  | `rejected` | `size_mismatch`, `digest_mismatch`, a `begin` refused as `invalid_request` or with a code the client was not taught, an unrecognised answer, a stored reference malformed in some other way. | yes |
+
+  A stored file that is no image a message can name is told apart by which fact
+  made it one, because the tile says something different for each: the encoding
+  (`unsupported-image`) and the size (`too-large`) are separate questions, so a
+  readable 6 MiB PNG is not reported as a format the gateway could not read.
 
   The tile shows the state and says why. Removing a tile mid-upload is allowed;
   the late result finds no file and changes nothing. The composer's own copy of
@@ -196,6 +207,14 @@ send   -> conversation.send { text, attachments: [the returned references] }
   marks the turn not sent, says why in a sentence chosen by that type, and puts
   the message back in the draft with its images. Any other failure after
   admission was attempted stays uncertain and keeps its explicit retry.
+- **Nor is a message the client would not put on the wire.** The client is the
+  one boundary that validates a message's images — the panel's model puts no
+  byte bound on a stored reference, because how heavy one image may be is the
+  protocol's rule — and it refuses the arguments before anything is sent. That
+  is as certain as a refusal gets, so it arrives as `invalid-request` with the
+  client's own sentence rather than as a lost acknowledgement; the draft comes
+  back. The scenario backend asks the client the same question, so a local
+  session refuses what the gateway would.
 - **A dead reference is uploaded again.** Closing a conversation on the gateway
   — which is what Stop does — releases every file it held, sent or not. So after
   Stop, every `stored` image still in that conversation's draft goes back to

@@ -77,6 +77,8 @@ opinion rather than the product's.
 | `model/attachments.ts` | File parts with their upload state (a stored file carries the gateway's whole returned reference), reference-only image parts, the preview budgets, and the message rules counted over stored references (10 images, 10 MiB together). No per-image byte or pixel limit lives here: that is the gateway's, per model. `messageImages` decides which parts of a message go as image references, or the one reason none can. `declaredMediaType` names a file the browser gave no type (camera RAW, some HEIC) by its extension, and `previewableImage` says which images a webview can paint. |
 | `application/usecases/attachments.ts` | Attach to the originating conversation, remove individual draft files, and own every step of a draft file's upload state; a result for a removed file changes nothing. |
 | `application/usecases/release-uploads.ts` | Forget a draft's stored images once the gateway conversation that held them has been closed, and bound how many already-sent originals are kept to paint the transcript. |
+| `application/usecases/upload-failure.ts` | Why an upload failed, in words, and whether a retry could end differently. One owner for both, so the tile and the composer's notice cannot drift apart; exported through the barrel for the panel. |
+| `application/usecases/send-draft.ts` | Every local reason a draft is declined, as a pure `declineReason` the store shows and rejects in one place; what a refusal says; and how a submission's outcome lands on its turn. |
 | `testing.ts` | What another context's tests may import instead of reaching into `adapters/` or mocking the barrel with a copy of a rule. No component, and not for product code. `src/session/testing.ts` is the session's. |
 | `model/identity.ts` | The agent's name, seed, and hue wheel. |
 
@@ -100,8 +102,8 @@ Chat adapters receive the composition-owned session handle; they do not open ano
 | `adapters/` | Host subscriptions: colour scheme, edge reveal, panel frame, frost, remembered surface, compositor flush, config-driven tab shortcuts. |
 | `ui/app.tsx` | The chrome: stage, glow, resize handle, tab strip, composer. Renders; no effects. |
 | `adapters/attachment-resources.ts`, `adapters/dropped-image.ts`, `adapters/dropped-text.ts` | Bounded object-URL resources that also hold each file's original bytes for upload and stop counting a file once its message has been taken, remote image reads, and external drop representations. |
-| `application/upload-image.ts` | The order of one upload — hash the original, then stage it, checking after the wait that the tile is still there — which waiting images start next (three in flight per window), and what the composer says about a draft's files. No image processing: that is the gateway's. |
-| `adapters/sha256.ts` | The SHA-256 that identifies an upload to the gateway. |
+| `application/upload-image.ts` | The order of one upload — hash the original, then stage it, checking after the wait that the tile is still there — which waiting images start next (three in flight per window), and what the composer says about a draft's files. The words for a failed upload are the conversation's; no image processing, which is the gateway's. |
+| `adapters/sha256.ts` | The SHA-256 that identifies an upload to the gateway. It reads Web Crypto, so composition injects it and tests substitute their own. |
 | `ui/use-attachment-uploads.ts`, `ui/attachment-tile.tsx` | Start an upload for every draft image that has not had one; paint a tile's upload state with its retry. |
 | `adapters/use-drop-navigation-guard.ts` | Prevent dropped URLs from navigating the webview. |
 | `ui/use-file-attachments.ts` | Remote pending previews, originating conversation, and viewer state. Local files use synchronous object URLs. Uploading is not its job. |

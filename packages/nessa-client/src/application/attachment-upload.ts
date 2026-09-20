@@ -46,27 +46,6 @@ export type UploadTimer = (ms: number, elapsed: () => void) => () => void
 export const UPLOAD_DEADLINE_MS = 180_000
 
 /**
- * The refusals the upload route is known to give, and the only ones read from
- * its answer: a code that is not here stays `unexpected_response` until
- * somebody decides what it means. The list is also half of
- * {@link AttachmentFailureCode}, so neither can grow without the other.
- */
-const uploadRefusals = [
-  "ticket_invalid",
-  "size_mismatch",
-  "digest_mismatch",
-  "upload_interrupted",
-  "attachment_not_kept",
-  "upload_timeout",
-  "unsupported_image",
-  "image_too_large",
-  "image_input_unsupported",
-  "storage_unavailable",
-  "audit_unavailable",
-  "temporarily_unavailable",
-] as const
-
-/**
  * Why an attachment was not staged.
  *
  * Upload-route refusals, as the gateway names them, where the name does not
@@ -87,11 +66,38 @@ const uploadRefusals = [
  * code it has not been taught — a code is never passed through as if known).
  */
 export type AttachmentFailureCode =
-  | (typeof uploadRefusals)[number]
+  | "ticket_invalid"
+  | "size_mismatch"
+  | "digest_mismatch"
+  | "upload_interrupted"
+  | "attachment_not_kept"
+  | "upload_timeout"
+  | "unsupported_image"
+  | "image_too_large"
+  | "image_input_unsupported"
+  | "storage_unavailable"
+  | "audit_unavailable"
+  | "temporarily_unavailable"
   | "begin_refused"
   | "aborted"
   | "unreachable"
   | "unexpected_response"
+
+/** The codes above that the route itself answers with; the rest are this client's. */
+const uploadRefusals: readonly AttachmentFailureCode[] = [
+  "ticket_invalid",
+  "size_mismatch",
+  "digest_mismatch",
+  "upload_interrupted",
+  "attachment_not_kept",
+  "upload_timeout",
+  "unsupported_image",
+  "image_too_large",
+  "image_input_unsupported",
+  "storage_unavailable",
+  "audit_unavailable",
+  "temporarily_unavailable",
+]
 
 /** A refusal code the upload route is known to give, or `unexpected_response`. */
 export function uploadRefusal(body: unknown): AttachmentFailureCode {
@@ -104,8 +110,26 @@ export function uploadRefusal(body: unknown): AttachmentFailureCode {
   )
 }
 
-/** The reasons `attachment.begin` is known to give, and the only ones read. */
-const beginRefusals = [
+/**
+ * Why the gateway declined `attachment.begin`, as it named it. `unexpected` is a
+ * code this client has not been taught. `attachment_capacity` and
+ * `temporarily_unavailable` pass with time, so asking again later may work. The
+ * upload route says `storage_unavailable` where the socket says
+ * `attachment_storage_unavailable`; both are here.
+ */
+export type AttachmentBeginRefusal =
+  | "invalid_request"
+  | "conversation_not_found"
+  | "attachment_capacity"
+  | "attachment_storage_unavailable"
+  | "storage_unavailable"
+  | "audit_unavailable"
+  | "temporarily_unavailable"
+  | "agent_not_configured"
+  | "unexpected"
+
+/** The codes above that the gateway itself answers with; `unexpected` is not one. */
+const beginRefusals: readonly AttachmentBeginRefusal[] = [
   "invalid_request",
   "conversation_not_found",
   "attachment_capacity",
@@ -114,16 +138,7 @@ const beginRefusals = [
   "audit_unavailable",
   "temporarily_unavailable",
   "agent_not_configured",
-] as const
-
-/**
- * Why the gateway declined `attachment.begin`, as it named it. `unexpected` is a
- * code this client has not been taught. `attachment_capacity` and
- * `temporarily_unavailable` pass with time, so asking again later may work. The
- * upload route says `storage_unavailable` where the socket says
- * `attachment_storage_unavailable`; both are here.
- */
-export type AttachmentBeginRefusal = (typeof beginRefusals)[number] | "unexpected"
+]
 
 /** The gateway's reason for refusing `begin`, read from the RPC error's code and nothing else. */
 export function beginRefusal(cause: NessaRpcError): AttachmentBeginRefusal {
