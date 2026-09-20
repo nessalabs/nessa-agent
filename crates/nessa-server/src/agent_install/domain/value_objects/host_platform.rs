@@ -59,16 +59,22 @@ impl fmt::Display for Libc {
 pub struct ReleaseRequirements {
     /// The C library this build needs, where that is a distinction at all.
     ///
-    /// `None` means the build does not name one, which is what macOS builds
-    /// do: there is one C library there and nothing to choose between.
+    /// `None` means the platform has only one *that Nessa can tell apart*, and
+    /// the only platform that is true of is macOS: `target_env` is empty on
+    /// every Apple target, so a macOS host has nothing to compare a named C
+    /// library against and a macOS release that names one is refused.
     ///
-    /// Windows is not that case, however much it looks like it.
+    /// Windows is the open case, however much it looks like macOS here.
     /// `*-pc-windows-gnu` and `*-pc-windows-msvc` are different builds and a
     /// Rust host reports `gnu` or `msvc` for them, so `Some` is a legitimate
     /// thing for a Windows build to say and
-    /// [`super::pinned_release::PinnedRelease::new`] accepts it.
-    /// What it would mean for a *vendor's* Windows archive is a question no
-    /// pin has had to answer yet, since none of them ships one.
+    /// [`super::pinned_release::PinnedRelease::new`] accepts it. What a
+    /// *vendor's* Windows archive should put here — whether MinGW and MSVC are
+    /// a distinction its builds make at all — is for whoever pins the first
+    /// Windows release to settle. Writing `null` on the strength of "Windows
+    /// is like macOS" would offer one build to both kinds of host, which is
+    /// the Linux fault the rule above exists to prevent, with nothing
+    /// refusing it.
     libc: Option<Libc>,
     /// Whether the processor must support AVX2. Only ever true for x86-64;
     /// nothing else in the instruction sets Nessa pins for is optional.
