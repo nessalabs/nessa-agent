@@ -56,6 +56,20 @@ fn install(agent: &AgentName, root: &Path) -> Result<InstalledRuntime, RunError>
         source: &source,
         store: &store,
     }
+    // Flattening the typed failure into prose is this surface's limitation,
+    // not the design. `explain` already knows which failures are worth trying
+    // again; a caller of the command — `scripts/smoke-install-agent.mjs` is
+    // one — sees exit 25 and a sentence either way, which is one bit where the
+    // use case has six.
+    //
+    // The decided direction is to carry `InstallFailure` to a surface that can
+    // act on it, and that surface is a gateway mutation rather than a second
+    // copy of this process: the desktop bootstraps the gateway under launchd
+    // and talks to it over the protocol, so in-process composition is not
+    // available to it. That is a protocol change, the client, the panel and
+    // the check scripts, so it is not done here — and the machine-readable
+    // half of this command is deliberately left to be shaped against that
+    // mutation rather than given a second vocabulary now.
     .execute(agent, &release, &host)
     .map_err(|failure| RunError::Agent(explain(&failure)))?;
     tracing::info!(

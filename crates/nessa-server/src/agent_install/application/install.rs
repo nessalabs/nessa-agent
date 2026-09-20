@@ -95,6 +95,26 @@ impl InstallAgentRuntime<'_> {
     /// Installing something already installed is not an error and not a
     /// download: the surface that offers this cannot know whether an earlier
     /// attempt finished, and a user who presses it twice should not wait twice.
+    ///
+    /// **There is no audit port here yet, and there is owed to be one.** This
+    /// writes an executable Nessa later launches under the person's own
+    /// account, replaces a previous one, and can reject an archive whose bytes
+    /// were not the pinned ones — a consequential transition by the hard audit
+    /// rule, and a `tracing::info!` and a line of stdout are not a durable
+    /// record of it. What that port covers is decided: started, verified,
+    /// digest rejected, replaced, rolled back, and the removal of a superseded
+    /// artifact, with a test on a failing sink, modelled on `RetirementAudit`
+    /// in `desktop_runtime`. Reclaiming those superseded artifacts, and the
+    /// ordering [`ManagedRuntimes::record`] documents — the new record replaces
+    /// the previous one before the last thing that can fail, so a failure
+    /// leaves the previous runtime's bytes named by nothing — belong to the
+    /// same change.
+    ///
+    /// It is deliberately not in the change that added this module: a port, a
+    /// durable sink and artifact reclamation are a subsystem, and adding one
+    /// to the first install path while it is under review is how the rest of
+    /// it stops being reviewable. Saying so here is the alternative to a
+    /// silence that reads like nobody noticed.
     pub fn execute(
         &self,
         agent: &AgentName,
