@@ -38,3 +38,33 @@ fn permission_answer_failure_preserves_selection_separately_from_diagnostic_code
         );
     }
 }
+
+#[test]
+fn a_close_that_failed_twice_is_named_for_the_conversation_that_did_not_close() {
+    let cleanup = || ConversationError::AttachmentCleanup {
+        storage_failures: 1,
+        audit_failures: 2,
+    };
+    // Closed, but its uploads were not all let go: cleanup the caller can retry.
+    for closed in [
+        cleanup(),
+        ConversationError::AttachmentRelease(Box::new(cleanup())),
+    ] {
+        assert_eq!(error_code(&closed), "attachment_cleanup_unavailable");
+    }
+    // Not closed and not cleaned up: what the caller must act on is the close,
+    // and closing again lets go of the uploads again.
+    for (agent, code) in [
+        (ConversationError::Capacity, "conversation_capacity"),
+        (
+            ConversationError::Agent(AgentError::Deadline),
+            "agent_operation_failed",
+        ),
+    ] {
+        let both = ConversationError::CloseIncomplete {
+            agent: Box::new(agent),
+            release: Box::new(cleanup()),
+        };
+        assert_eq!(error_code(&both), code);
+    }
+}

@@ -223,7 +223,13 @@ fn error_code(error: &ConversationError) -> &'static str {
         ConversationError::ImagesUnsupported => "image_input_unsupported",
         ConversationError::AttachmentNotFound => "attachment_not_found",
         // The conversation did close; what failed is cleanup the caller can retry.
-        ConversationError::AttachmentRelease(_) => "attachment_cleanup_unavailable",
+        ConversationError::AttachmentRelease(_) | ConversationError::AttachmentCleanup { .. } => {
+            "attachment_cleanup_unavailable"
+        }
+        // The conversation did not close, which is what a caller must act on;
+        // closing again also lets go of the uploads again. The release failure
+        // stays in the typed error and the log, not in a second wire code.
+        ConversationError::CloseIncomplete { agent, .. } => error_code(agent),
         ConversationError::NotFound => "conversation_not_found",
         ConversationError::Capacity => "conversation_capacity",
         ConversationError::Unavailable

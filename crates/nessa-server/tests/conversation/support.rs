@@ -131,6 +131,10 @@ pub(crate) struct ProviderFactory {
     pub(crate) close_requests: Mutex<Vec<SessionCloseRequest>>,
     /// Whether the agent agreed to take images, and its model can see them.
     pub(crate) image_input: AtomicBool,
+    /// Whether the selected model is offered images: it records image limits
+    /// and the binding passes them on. A separate fact from what the agent
+    /// advertised, and the two can disagree.
+    pub(crate) model_images: AtomicBool,
     /// Every image a dispatched request referred to, in order.
     pub(crate) images: Mutex<Vec<ImageReference>>,
 }
@@ -183,6 +187,7 @@ pub(crate) fn image_fixture(
 ) {
     let provider = Arc::new(ProviderFactory::default());
     provider.image_input.store(image_input, Ordering::SeqCst);
+    provider.model_images.store(image_input, Ordering::SeqCst);
     let repository = Arc::new(MemoryRepository::default());
     let storage = Arc::new(InMemoryStorage::new());
     let service = ConversationService::new(
@@ -249,7 +254,7 @@ impl AgentProvider for Provider {
                         factory: self.0.clone(),
                         sender,
                     }),
-                    capabilities(self.0.image_input.load(Ordering::SeqCst)),
+                    capabilities(self.0.model_images.load(Ordering::SeqCst)),
                     Arc::new(AcceptingAudit),
                 ),
                 events: Box::new(Events(receiver)),

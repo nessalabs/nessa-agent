@@ -453,8 +453,7 @@ impl ConversationService {
                                 steer: true,
                                 resume: agent.operation_capabilities().session_resume,
                                 permissions: agent.capabilities().features().tool_use(),
-                                image_input: service.inner.attachments.is_some()
-                                    && agent.operation_capabilities().image_input,
+                                image_input: service.takes_images(&agent),
                             };
                             let mut projection =
                                 Projection::new(id.to_string(), capabilities, snapshot.as_ref());
@@ -596,14 +595,31 @@ impl ConversationService {
             let message =
                 UserMessage::new(prompt, images).map_err(|_| ConversationError::InvalidInput)?;
             let live = service.resolve(&id, &caller).await?;
-            if !message.images().is_empty() {
+            // A submission the agent already has is the agent's to answer: the
+            // same message recovers its original delivery and any other is a
+            // conflict, whatever this conversation holds today. Its images were
+            // checked when it was first accepted. Asking again would turn a
+            // retry of a delivered turn into "not found" once its upload was
+            // let go, where the same retry of a text turn succeeds.
+            let known = live
+                .agent
+                .session_manager()
+                .snapshot()
+                .await
+                .is_some_and(|snapshot| {
+                    snapshot
+                        .invocations
+                        .iter()
+                        .any(|record| record.request.execution_id == execution)
+                });
+            if !message.images().is_empty() && !known {
                 // Refuse before acceptance what the agent would refuse at dispatch,
                 // and any digest this conversation did not upload itself.
                 let attachments = service
                     .inner
                     .attachments
                     .as_ref()
-                    .filter(|_| live.agent.operation_capabilities().image_input)
+                    .filter(|_| service.takes_images(&live.agent))
                     .ok_or(ConversationError::ImagesUnsupported)?;
                 for image in message.images() {
                     if !attachments
@@ -871,14 +887,34 @@ impl ConversationService {
         supervised(async move {
             let _admission = service.admit().await?;
             let actor = caller.actor()?;
-            let live = service.resolve(&id, &caller).await?;
-            let result = live.agent.close(actor).await;
-            // Refresh only terminal records. A concurrently accepted new turn
-            // retains its live observation state; there is no second closed flag.
-            let snapshot = live.agent.session_manager().snapshot().await;
-            live.projection.lock().await.settled_all(snapshot.as_ref());
+            // Whose conversation this is comes from the ownership record, before
+            // anything else. Letting go of files must not depend on being able
+            // to start a provider, so it cannot depend on `resolve` for this.
+            let record = service
+                .inner
+                .metadata
+                .load(&id)
+                .await?
+                .ok_or(ConversationError::NotFound)?;
+            if !record.allows(&caller.organization_id, &caller.principal_id) {
+                return Err(ConversationError::NotFound);
+            }
+            let closed = match service.resolve(&id, &caller).await {
+                Ok(live) => {
+                    let result = live.agent.close(actor).await;
+                    // Refresh only terminal records. A concurrently accepted new turn
+                    // retains its live observation state; there is no second closed flag.
+                    let snapshot = live.agent.session_manager().snapshot().await;
+                    live.projection.lock().await.settled_all(snapshot.as_ref());
+                    result.map(|_| ()).map_err(ConversationError::Agent)
+                }
+                // No room for another live conversation, a provider that will
+                // not start, storage that will not open: the agent was not
+                // closed, and that is reported. The files are still let go.
+                Err(error) => Err(error),
+            };
             // Uploads are let go whether or not the agent closed cleanly: the
-            // caller asked for this conversation to end, and nothing queued can
+            // owner asked for this conversation to end, and nothing queued can
             // still need them. Both failures are kept; neither hides the other.
             let released = match &service.inner.attachments {
                 Some(attachments) => {
@@ -895,10 +931,29 @@ impl ConversationService {
                 }
                 None => Ok(()),
             };
-            result.map(|_| ()).map_err(ConversationError::Agent)?;
-            released.map_err(|error| ConversationError::AttachmentRelease(Box::new(error)))
+            match (closed, released) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Ok(()), Err(release)) => {
+                    Err(ConversationError::AttachmentRelease(Box::new(release)))
+                }
+                (Err(agent), Ok(())) => Err(agent),
+                (Err(agent), Err(release)) => Err(ConversationError::CloseIncomplete {
+                    agent: Box::new(agent),
+                    release: Box::new(release),
+                }),
+            }
         })
         .await
+    }
+    /// Whether a message to this agent may carry images. Three facts must
+    /// agree: this gateway keeps uploads, the connected agent agreed to
+    /// receive images, and the selected model is offered them, which it is
+    /// only with recorded image limits. An agent that advertises images in
+    /// front of a model that is offered none takes no images.
+    fn takes_images(&self, agent: &Agent) -> bool {
+        self.inner.attachments.is_some()
+            && agent.operation_capabilities().image_input
+            && agent.capabilities().features().input().image()
     }
     async fn admit(&self) -> Result<RwLockReadGuard<'_, ()>, ConversationError> {
         let permit = self.inner.admission.read().await;

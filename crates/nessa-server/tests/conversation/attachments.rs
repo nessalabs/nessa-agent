@@ -2,14 +2,14 @@
 //! before acceptance, what a view echoes, and what closing lets go of.
 use super::{
     AttachmentReleaseCause, ConversationAttachment, ConversationCaller, ConversationDependencies,
-    ConversationError, ConversationLimits, ConversationMessageStatus, ConversationService,
-    SubmissionMode, SubmittedImage,
+    ConversationError, ConversationLimits, ConversationMessageStatus, ConversationRepository,
+    ConversationService, SubmissionMode, SubmittedImage,
 };
 use crate::{
-    conversation::domain::ConversationId,
+    conversation::domain::{Conversation, ConversationId},
     conversation_test_support::{
-        image_fixture, AcceptingCreationAudit, MemoryAttachments, Provider, ProviderFactory,
-        TestClock,
+        image_fixture, AcceptingCreationAudit, MemoryAttachments, MemoryRepository, Provider,
+        ProviderFactory, TestClock,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -19,6 +19,7 @@ use nessa_sdk::{
         agent_execution::prompts::ImageReference,
         common::value_objects::{ImageMediaType, Sha256Digest},
     },
+    infrastructure::session_storage::InMemoryStorage,
 };
 use std::sync::{atomic::Ordering, Arc};
 use tokio::sync::oneshot;
@@ -327,10 +328,9 @@ async fn a_release_that_fails_is_reported_without_hiding_an_agent_that_did_not_c
     assert!(matches!(*cause, ConversationError::Audit));
     assert_eq!(attachments.releases.lock().unwrap().len(), 1);
 
-    // Both failed. The agent's failure is the one named, and the uploads were
-    // still let go rather than waiting on an agent that will not close.
+    // Only the agent failed: that failure, alone, and the uploads were still
+    // let go rather than waiting on an agent that will not close.
     let (service, provider, attachments, id) = conversation_holding(&[image(1)]).await;
-    attachments.release_fails.store(true, Ordering::SeqCst);
     *provider.close_failure.lock().unwrap() = Some(AgentError::Deadline);
     assert!(matches!(
         service.close(id.clone(), caller("panel", "close-1")).await,
@@ -338,4 +338,166 @@ async fn a_release_that_fails_is_reported_without_hiding_an_agent_that_did_not_c
     ));
     assert_eq!(attachments.releases.lock().unwrap().len(), 1);
     assert!(attachments.held.lock().unwrap().is_empty());
+
+    // Both failed, and both are kept: neither is returned in place of the other.
+    let (service, provider, attachments, id) = conversation_holding(&[image(1)]).await;
+    attachments.release_fails.store(true, Ordering::SeqCst);
+    *provider.close_failure.lock().unwrap() = Some(AgentError::Deadline);
+    let closed = service.close(id.clone(), caller("panel", "close-1")).await;
+    let Err(ConversationError::CloseIncomplete { agent, release }) = closed else {
+        panic!("both failures must be reported, got {closed:?}")
+    };
+    assert!(matches!(*agent, ConversationError::Agent(_)));
+    assert!(matches!(*release, ConversationError::Audit));
+    assert_eq!(attachments.releases.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn closing_lets_go_of_uploads_even_when_the_agent_cannot_be_reached() {
+    // Room for one live conversation, and it is taken. The second conversation
+    // exists and is owned, but no agent can be opened for it.
+    let attachments = Arc::new(MemoryAttachments::default());
+    let provider = Arc::new(ProviderFactory::default());
+    let repository = Arc::new(MemoryRepository::default());
+    let service = ConversationService::new(
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider.clone())),
+            storage: Arc::new(InMemoryStorage::new()),
+            metadata: repository.clone(),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: Some(attachments.clone()),
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits {
+            max_conversations: 1,
+            ..ConversationLimits::default()
+        },
+        None,
+    )
+    .unwrap();
+    service
+        .create(new_id(), caller("panel", "create"))
+        .await
+        .unwrap();
+    let unreachable = new_id();
+    repository
+        .create(
+            Conversation::new(
+                unreachable.clone(),
+                OrganizationId::new("org").unwrap(),
+                PrincipalId::new("person").unwrap(),
+                "panel".into(),
+                "create-2".into(),
+                1,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    attachments.held.lock().unwrap().push((
+        OrganizationId::new("org").unwrap(),
+        unreachable.clone(),
+        image(1),
+    ));
+
+    // The agent was not closed, and that is what is reported...
+    assert!(matches!(
+        service
+            .close(unreachable.clone(), caller("phone", "close-1"))
+            .await,
+        Err(ConversationError::Capacity)
+    ));
+    // ...but its files were let go, in the closer's name, without a provider.
+    {
+        let releases = attachments.releases.lock().unwrap();
+        assert_eq!(releases.len(), 1);
+        assert_eq!(releases[0].conversation_id, unreachable);
+        assert_eq!(releases[0].initiator_surface_id, "phone");
+    }
+    assert!(attachments.held.lock().unwrap().is_empty());
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+
+    // The ownership check did not go anywhere: somebody else's close, and a
+    // close of nothing, let go of nothing.
+    attachments.held.lock().unwrap().push((
+        OrganizationId::new("org").unwrap(),
+        unreachable.clone(),
+        image(2),
+    ));
+    let mut stranger = caller("phone", "close-2");
+    stranger.principal_id = PrincipalId::new("stranger").unwrap();
+    for (id, who) in [
+        (unreachable.clone(), stranger),
+        (new_id(), caller("phone", "close-3")),
+    ] {
+        assert!(matches!(
+            service.close(id, who).await,
+            Err(ConversationError::NotFound)
+        ));
+    }
+    assert_eq!(attachments.releases.lock().unwrap().len(), 1);
+    assert_eq!(attachments.held.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_retry_of_a_delivered_image_turn_does_not_depend_on_its_upload_still_being_held() {
+    let (service, provider, attachments, id) = conversation_holding(&[image(1)]).await;
+    send(&service, &id, "text-turn", "look", &[]).await.unwrap();
+    send(&service, &id, "image-turn", "look", &[image(1)])
+        .await
+        .unwrap();
+    completed(&service, &id, 2).await;
+    // The hold goes while the conversation lives.
+    attachments.held.lock().unwrap().clear();
+
+    // The image turn recovers exactly as the text turn does...
+    send(&service, &id, "text-turn", "look", &[]).await.unwrap();
+    send(&service, &id, "image-turn", "look", &[image(1)])
+        .await
+        .unwrap();
+    // ...and other images under its identifier are a conflict, not "not found".
+    for different in [vec![image(2)], vec![image(1), image(2)], vec![]] {
+        assert!(matches!(
+            send(&service, &id, "image-turn", "look", &different).await,
+            Err(ConversationError::Agent(AgentError::SubmissionConflict))
+        ));
+    }
+    // A new turn still has to hold what it names.
+    assert!(matches!(
+        send(&service, &id, "new-turn", "look", &[image(1)]).await,
+        Err(ConversationError::AttachmentNotFound)
+    ));
+    assert_eq!(provider.executions.lock().unwrap().len(), 2);
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_agent_that_advertises_images_in_front_of_a_model_offered_none_takes_no_images() {
+    // Each fact is valid alone; together they describe an image nobody can see.
+    let attachments = Arc::new(MemoryAttachments::default());
+    let (service, provider, _, _) = image_fixture(true, Some(attachments.clone()));
+    provider.model_images.store(false, Ordering::SeqCst);
+    let id = new_id();
+    service
+        .create(id.clone(), caller("panel", "create"))
+        .await
+        .unwrap();
+    attachments.held.lock().unwrap().push((
+        OrganizationId::new("org").unwrap(),
+        id.clone(),
+        image(1),
+    ));
+    let view = service
+        .read(id.clone(), caller("panel", "read"))
+        .await
+        .unwrap();
+    assert!(!view.capabilities.image_input);
+    // Refused for what it is, before acceptance, not as a malformed request.
+    assert!(matches!(
+        send(&service, &id, "first", "look", &[image(1)]).await,
+        Err(ConversationError::ImagesUnsupported)
+    ));
+    assert_eq!(attachments.asked.load(Ordering::SeqCst), 0);
+    assert!(provider.executions.lock().unwrap().is_empty());
+    service.shutdown().await.unwrap();
 }
