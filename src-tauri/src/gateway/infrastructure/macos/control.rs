@@ -277,6 +277,12 @@ struct RetirementCause {
 pub(super) struct RetirementEvidence {
     pub fingerprint: String,
     pub generation: String,
+    /// Whether this is the retirement that completed: the old gateway cleaned
+    /// up, audited, and said so. A request that has not been answered, and an
+    /// admitted retirement whose cleanup or audit failed, are both false.
+    /// Admission fencing does not read it — that is what a recorded cause
+    /// alone decides — but whether the named runtime can still be in use does.
+    pub retired: bool,
 }
 impl RetirementEvidence {
     pub fn matches(&self, fingerprint: &str, generation: &str) -> bool {
@@ -334,6 +340,7 @@ fn parse_pending_retirement(
         .then_some(RetirementEvidence {
             fingerprint: running.fingerprint.clone(),
             generation: running.generation.clone(),
+            retired: false,
         }))
 }
 pub(super) fn read_retirement_evidence(data: &Path) -> Result<Option<RetirementEvidence>, String> {
@@ -399,6 +406,7 @@ fn parse_retirement_evidence(bytes: &[u8]) -> Result<Option<RetirementEvidence>,
         .then_some(RetirementEvidence {
             fingerprint: result.running_fingerprint,
             generation: result.running_generation,
+            retired: result.retired,
         }))
 }
 fn required_nullable_error<'de, D: Deserializer<'de>>(
