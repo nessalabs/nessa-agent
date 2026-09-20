@@ -18,7 +18,10 @@ export function fromEditor(content: ChatComposerContent): MessageContent {
 
 /** Restore a draft with the original pasted payloads, not their display labels. */
 export function toEditor(content: MessageContent): ChatComposerContent {
-  const editable = content.filter((part) => part.type !== "file")
+  // Only what the editor can hold. File tiles live beside it, in the draft.
+  const editable = content.filter(
+    (part) => part.type === "text" || part.type === "pasted-text",
+  )
   return {
     text: contentText(content),
     parts: editable.map((part) =>

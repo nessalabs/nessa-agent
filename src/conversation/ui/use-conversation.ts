@@ -1,11 +1,14 @@
 import { pollConversation } from "../adapters/gateway/polling"
 import { useEffect, useEffectEvent, useState } from "react"
 import { type FileAttachment, type MessageContent } from "../model"
+import type { UploadChange, UploadedFile } from "../application/ports"
 import { activeConversation } from "../application/queries/active-conversation"
 import {
   renameConversation,
   attachFiles,
   removeFile,
+  uploadChanged,
+  stageAttachment,
   closeConversation,
   openConversation,
   sendDraft,
@@ -50,6 +53,27 @@ export function useConversation() {
     attachFiles: (files: FileAttachment[], conversationId: string) =>
       dispatch(attachFiles({ files, conversationId })),
     removeFile: (id: string) => dispatch(removeFile(id)),
+    /** Ask for one step in a draft file's upload. Steps that do not follow are ignored. */
+    changeUpload: (change: UploadChange) => dispatch(uploadChanged(change)),
+    /**
+     * Upload a draft image's original bytes. Settles when the file's upload
+     * state says how it went; it never rejects.
+     */
+    stageAttachment: async (input: {
+      conversationId: string
+      fileId: string
+      file: UploadedFile
+      bytes: Blob
+    }): Promise<void> => {
+      await dispatch(
+        stageAttachment({
+          id: input.conversationId,
+          fileId: input.fileId,
+          file: input.file,
+          bytes: input.bytes,
+        }),
+      )
+    },
     conversations,
     active,
     gatewayAvailable,

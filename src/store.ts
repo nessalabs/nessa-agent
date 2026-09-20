@@ -25,12 +25,23 @@ export function makeStore(dependencies: AppDependencies = createDependencies()) 
   })
   // The store lifetime owns resources; React remounts must not invalidate previews.
   // Every command reconciles, including rejected attachment admissions.
+  //
+  // A sent turn keeps its images' previews for as long as the turn is on
+  // screen: the transcript paints them from the same object URLs, and a send
+  // the gateway refuses puts the turn's files back into the draft, where an
+  // already-revoked URL would be a broken tile. They count against the same
+  // session budget as drafts, and closing the conversation releases them.
   store.subscribe(() => {
     const ids = new Set(
       store
         .getState()
         .conversation.conversations.flatMap((conversation) =>
-          conversation.draft.flatMap((part) => (part.type === "file" ? [part.id] : [])),
+          [
+            ...conversation.draft,
+            ...conversation.turns.flatMap((turn) =>
+              turn.from === "user" ? turn.content : [],
+            ),
+          ].flatMap((part) => (part.type === "file" ? [part.id] : [])),
         ),
     )
     dependencies.attachments.retain(ids)

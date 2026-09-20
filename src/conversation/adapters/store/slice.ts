@@ -1,18 +1,26 @@
 import { NessaConversationMutationError } from "@nessa/client"
 import {
   contentText,
-  hasFileAttachments,
+  messageImages,
   type FileAttachment,
   type MessageContent,
+  type UploadFailure,
 } from "../../model"
 import { createAsyncThunk, createSlice, type PayloadAction } from "@reduxjs/toolkit"
 import type { LocalTabs } from "../../application/local-tabs"
 import { emptyLocalTabs } from "../../application/local-tabs"
-import { beginSend, failSend } from "../../application/usecases/send-draft"
+import {
+  beginSend,
+  failSend,
+  imageRefusalMessage,
+} from "../../application/usecases/send-draft"
 import { applyView } from "../../application/usecases/apply-view"
 import {
+  AttachmentStagingError,
   ConversationUnavailableError,
   type ConversationEffects,
+  type UploadChange,
+  type UploadedFile,
 } from "../../application/ports"
 import type { ConversationView } from "../../application/view"
 import {
@@ -41,23 +49,40 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
     // reason like every other decline, so "was this draft taken" has one answer
     // and not two — the composer's full-pane editor rests on it.
     if (!current) return rejectWithValue({ kind: "no-such-conversation" })
-    if (hasFileAttachments(input.content) || hasFileAttachments(current.draft)) {
+    // Files are the draft's. Their upload state lives there and nowhere else,
+    // so a caller's copy of a file part is never what gets sent — and one the
+    // draft does not hold is refused rather than dropped from the message.
+    const files = current.draft.filter((part) => part.type === "file")
+    const held = new Set(files.map((file) => file.id))
+    if (input.content.some((part) => part.type === "file" && !held.has(part.id))) {
       dispatch(
         showError({
           id,
-          message:
-            "File attachments are preview-only. Remove them before sending; this provider accepts text.",
+          message: "An attachment is no longer in this draft. Attach it again.",
         }),
       )
-      return rejectWithValue({ kind: "preview-only-files" })
+      return rejectWithValue({ kind: "unknown-attachment" })
     }
-    const text = contentText(input.content)
+    const content: MessageContent = [
+      ...input.content.filter(
+        (part) => part.type === "text" || part.type === "pasted-text",
+      ),
+      ...files,
+    ]
+    const sendable = messageImages(content)
+    if (!sendable.ok) {
+      dispatch(showError({ id, message: imageRefusalMessage(sendable.refusal) }))
+      return rejectWithValue({ kind: sendable.refusal.kind })
+    }
+    const text = contentText(content)
     // Refused rather than silently fulfilled, so every way this can decline a
     // draft looks the same from outside: a rejection carrying a reason. A
     // caller that has to know whether the draft left — the composer deciding
     // whether its full-pane editor is finished with — cannot tell "nothing to
     // send" from "sent" otherwise.
-    if (!text.trim()) return rejectWithValue({ kind: "empty-draft" })
+    // An image is something to say: only a draft with neither is empty.
+    if (!text.trim() && sendable.images.length === 0)
+      return rejectWithValue({ kind: "empty-draft" })
     if (new TextEncoder().encode(text).length > 8192) {
       dispatch(
         showError({
@@ -68,13 +93,43 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
       )
       return rejectWithValue({ kind: "message-too-large" })
     }
+    if (sendable.images.length > 0) {
+      // Whether the agent takes images is the gateway's fact, reported in a
+      // view, and false until an agent is open. Staging the images created the
+      // conversation and started its reads, so the answer is normally here by
+      // now. When it is not, it is asked for and the draft waits: guessing yes
+      // would hand the gateway a message it must refuse, and guessing no would
+      // refuse images an agent can take.
+      const imageInput = current.remote?.capabilities.imageInput
+      if (imageInput === undefined) {
+        void dispatch(refreshConversation(id))
+        dispatch(
+          showError({
+            id,
+            message:
+              "Still checking whether this agent takes images. Send again in a moment.",
+          }),
+        )
+        return rejectWithValue({ kind: "image-input-unknown" })
+      }
+      if (!imageInput) {
+        dispatch(
+          showError({
+            id,
+            message:
+              "This agent does not take images. Remove them to send; your draft has been kept.",
+          }),
+        )
+        return rejectWithValue({ kind: "image-input-unsupported" })
+      }
+    }
     const serverId = current.serverConversationId ?? crypto.randomUUID()
     const executionId = crypto.randomUUID()
     const actionId = crypto.randomUUID()
     dispatch(bindConversation({ id, serverId }))
     dispatch(
       submissionStarted({
-        content: input.content,
+        content,
         conversationId: id,
         executionId,
         actionId,
@@ -87,7 +142,13 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
       if (created.conversationId !== serverId)
         throw new Error("Gateway returned a different conversation identity.")
       dispatch(conversationReady(id))
-      const submission = { conversationId: serverId, executionId, actionId, text }
+      const submission = {
+        conversationId: serverId,
+        executionId,
+        actionId,
+        text,
+        attachments: sendable.images,
+      }
       admissionAttempted = true
       const receipt = await (input.steering
         ? extra.conversation.steer(submission)
@@ -112,6 +173,50 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
     }
   },
 )
+
+/**
+ * Put one draft image's original bytes on the gateway, and record how that went
+ * on the file itself — including what the gateway stored them as, which is what
+ * a message will name and may be nothing like the file.
+ *
+ * Runs at attach time, so it is also what first creates the gateway conversation
+ * for a new tab: `attachment.begin` needs one to upload into. It never throws —
+ * every ending is an upload state on the tile — and it changes only a file
+ * still in a draft, so an upload that settles after its tile was removed
+ * changes nothing.
+ */
+export const stageAttachment = createAsyncThunk<
+  void,
+  { id: string; fileId: string; file: UploadedFile; bytes: Blob },
+  ThunkConfig
+>("conversation/stageAttachment", async (input, { dispatch, getState, extra }) => {
+  const current = getState().conversation.conversations.find(
+    (item) => item.id === input.id,
+  )
+  if (!current?.draft.some((part) => part.type === "file" && part.id === input.fileId))
+    return
+  const serverId = current.serverConversationId ?? crypto.randomUUID()
+  dispatch(bindConversation({ id: input.id, serverId }))
+  try {
+    const created = await extra.conversation.create(serverId)
+    if (created.conversationId !== serverId)
+      throw new Error("Gateway returned a different conversation identity.")
+    dispatch(conversationReady(input.id))
+    const image = await extra.conversation.stageAttachment(
+      serverId,
+      input.file,
+      input.bytes,
+    )
+    dispatch(uploadChanged({ fileId: input.fileId, to: "stored", image }))
+  } catch (error) {
+    // Only a staging refusal says the gateway looked at these bytes and said
+    // no. Anything else — not connected, conversation not created, no answer —
+    // is the gateway being away, and may work if tried again.
+    const reason: UploadFailure =
+      error instanceof AttachmentStagingError ? error.reason : "unavailable"
+    dispatch(uploadChanged({ fileId: input.fileId, to: "failed", reason }))
+  }
+})
 
 /** Read once. Callers control polling lifetime; reducers reject older in-flight reads. */
 export const refreshConversation = createAsyncThunk<void, string, ThunkConfig>(
@@ -204,11 +309,21 @@ export const controlConversation = createAsyncThunk<
         )
         if (!turn || turn.from !== "user" || !turn.actionId || turn.receipt !== "unknown")
           return
+        // The turn's content has not changed since it was sent, so this names
+        // the same images: one execution ID stays one message.
+        const images = messageImages(turn.content)
+        if (!images.ok) {
+          // Not reachable from a turn this window sent — it only became a turn
+          // because its images could go. Said rather than skipped all the same.
+          dispatch(showError({ id, message: imageRefusalMessage(images.refusal) }))
+          return
+        }
         const input = {
           conversationId: serverId,
           executionId: control.executionId,
           actionId: turn.actionId,
           text: contentText(turn.content),
+          attachments: images.images,
         }
         const receipt = await (turn.mode === "steering"
           ? extra.conversation.steer(input)
@@ -278,6 +393,9 @@ const conversationSlice = createSlice({
     },
     removeFile(state, action: PayloadAction<string>) {
       return gateway.removeFile(state, action.payload)
+    },
+    uploadChanged(state, action: PayloadAction<UploadChange>) {
+      return gateway.changeUpload(state, action.payload)
     },
     moveActive(state, action: PayloadAction<-1 | 1>) {
       return gateway.moveActive(state, action.payload)
@@ -403,6 +521,7 @@ export const {
   renameConversation,
   attachFiles,
   removeFile,
+  uploadChanged,
   setActive,
   moveActive,
   setDraft,

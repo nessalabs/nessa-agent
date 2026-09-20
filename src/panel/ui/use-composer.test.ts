@@ -2,10 +2,11 @@
 /**
  * What pressing send does when the draft cannot go, driven through the form.
  *
- * `sendDraft` refusing a file-bearing draft with a reason is tested against the
- * store in `attachments.test.ts`. This is the half that test cannot see: that
- * the composer's submit reaches it. It once returned early for a draft holding
- * files, so the reason was never shown and the panel looked broken.
+ * `sendDraft` refusing a draft whose files cannot go, each with its reason, is
+ * tested against the store in `attachments.test.ts`. This is the half that test
+ * cannot see: that the composer's submit reaches it. It once returned early for
+ * a draft holding files, so the reason was never shown and the panel looked
+ * broken.
  */
 import * as React from "react"
 import { createRoot, type Root } from "react-dom/client"
@@ -32,6 +33,7 @@ const file = {
   mimeType: "image/png",
   size: 1,
   previewUrl: "blob:test-file",
+  upload: { status: "not-started" as const },
 }
 
 /** An editor holding "hello"; file tiles live in the draft, never in the editor. */
@@ -99,11 +101,11 @@ afterEach(async () => {
   container.remove()
 })
 
-it("shows why a draft holding files did not send, and keeps the draft", async () => {
+it("shows why a draft whose image has not uploaded did not send, and keeps the draft", async () => {
   const { send, store } = storeWithAttachedFile()
   await pressSend(store, () => false)
   const conversation = store.getState().conversation.conversations[0]!
-  expect(conversation.error).toMatch(/preview-only/)
+  expect(conversation.error).toMatch(/still uploading/)
   expect(conversation.draft).toContainEqual(file)
   expect(conversation.turns).toEqual([])
   expect(send).not.toHaveBeenCalled()
@@ -116,5 +118,17 @@ it("asks the panel to explain a read still in flight, and submits nothing", asyn
   expect(declines).toHaveBeenCalledWith("c0")
   // Declined here, so the conversation carries no refusal of its own.
   expect(store.getState().conversation.conversations[0]!.error).toBeUndefined()
+  expect(send).not.toHaveBeenCalled()
+})
+
+it("shows why a draft holding a file that is not an image did not send", async () => {
+  const { send, store } = storeWithAttachedFile()
+  const notes = { ...file, id: "n", name: "notes.pdf", mimeType: "application/pdf" }
+  store.dispatch(attachFiles({ files: [notes], conversationId: "c0" }))
+  await pressSend(store, () => false)
+  const conversation = store.getState().conversation.conversations[0]!
+  expect(conversation.error).toMatch(/notes\.pdf.*cannot be sent/)
+  expect(conversation.draft).toContainEqual(notes)
+  expect(conversation.turns).toEqual([])
   expect(send).not.toHaveBeenCalled()
 })

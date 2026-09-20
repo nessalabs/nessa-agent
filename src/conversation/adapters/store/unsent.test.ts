@@ -68,11 +68,18 @@ it("known-unsent follow-up does not settle the earlier running invocation before
           pending: [],
           permissions: [],
           tools: [],
-          capabilities: { queue: true, steer: true, resume: true, permissions: true },
+          capabilities: {
+            queue: true,
+            steer: true,
+            resume: true,
+            permissions: true,
+            imageInput: false,
+          },
           messages: [
             {
               executionId: "active",
               userText: "first",
+              attachments: [],
               parts: [
                 { offset: 0, kind: "thought", text: "", toolId: "" },
                 { offset: 1, kind: "text", text: "", toolId: "" },
@@ -107,6 +114,7 @@ it("a reconnecting client rejects locally without attempting a message RPC", asy
         executionId: "e",
         actionId: "a",
         text: "unsent",
+        attachments: [],
       }),
     ),
   ).rejects.toThrow("was not sent")

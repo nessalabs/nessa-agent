@@ -14,6 +14,7 @@ export {
 
 export {
   contentText,
+  referencedContent,
   textContent,
   type MessageContent,
   type MessagePart,
@@ -21,9 +22,23 @@ export {
 
 export {
   type FileAttachment,
+  type ImageReference,
+  type ImageReferencePart,
+  type ImageRefusal,
+  type StoredImageType,
+  type UploadFailure,
+  type UploadState,
   MAX_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENTS,
+  MAX_SEND_IMAGES,
+  MAX_SEND_TOTAL_IMAGE_BYTES,
+  STORED_IMAGE_TYPES,
+  humanSize,
+  imageReferenceLabel,
+  isImageFile,
+  messageImages,
+  messageLabel,
   validDraftAttachments,
-  hasFileAttachments,
+  validImageReference,
 } from "./attachments"

@@ -1,3 +1,4 @@
+import type { ImageReference } from "./attachments"
 import type { MessageContent } from "./content"
 
 export type Receipt =
@@ -74,12 +75,18 @@ type ConversationState = {
       input: string
       details: string
     }[]
-    pending: { executionId: string; text: string; mode: "queued" | "steering" }[]
+    pending: {
+      executionId: string
+      text: string
+      attachments: ImageReference[]
+      mode: "queued" | "steering"
+    }[]
     capabilities: {
       queue: boolean
       steer: boolean
       resume: boolean
       permissions: boolean
+      imageInput: boolean
     }
     queueComplete: boolean
     truncated: boolean

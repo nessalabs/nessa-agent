@@ -76,3 +76,67 @@ it.each([
   expect(html).not.toContain("<a ")
   expect(html).not.toContain("<img")
 })
+
+describe("a sent turn's images", () => {
+  const digest = `sha256:${"ab".repeat(32)}`
+  const local = {
+    type: "file" as const,
+    id: "f",
+    name: "finder.png",
+    mimeType: "image/png",
+    size: 2048,
+    previewUrl: "blob:finder",
+    upload: {
+      status: "stored" as const,
+      image: { digest, mimeType: "image/png" as const, size: 2048 },
+    },
+  }
+  const render = (content: React.ComponentProps<typeof MessageContentView>["content"]) =>
+    renderToStaticMarkup(
+      React.createElement(MessageContentView, { content, onOpenPaste: () => {} }),
+    )
+
+  it("paints an image-only turn from its local preview, with a name to reach it by", () => {
+    const html = render([local])
+    // The original as attached; the stored copy's digest is not something to show.
+    expect(html).not.toContain(digest)
+    expect(html).toContain('src="blob:finder"')
+    expect(html).toContain('alt="finder.png"')
+    expect(html).toContain('aria-label="1 image"')
+    // No text, so no empty Markdown block ahead of the tile.
+    expect(html).not.toMatch(/<(p|div)\b/)
+  })
+
+  it("paints a labelled placeholder for an image known only by reference", () => {
+    const html = render([
+      { type: "image-reference", digest, mimeType: "image/jpeg", size: 812 * 1024 },
+    ])
+    expect(html).toContain("JPEG image, 812 KB")
+    expect(html).toContain("data-image-reference")
+    expect(html).not.toContain("<img")
+    // The digest names bytes on the gateway; it is not something to show anybody.
+    expect(html).not.toContain(digest)
+  })
+
+  it("keeps the text and shows every image after it, local and referenced alike", () => {
+    const html = render([
+      { type: "text", text: "compare **these**" },
+      local,
+      { type: "image-reference", digest, mimeType: "image/webp", size: 3 },
+    ])
+    expect(html).toContain("<strong>these</strong>")
+    expect(html).toContain('aria-label="2 images"')
+    expect(html.indexOf("<strong>")).toBeLessThan(html.indexOf("<ul"))
+    expect(html).toContain("WebP image, 3 B")
+  })
+
+  it("adds nothing to a turn without images, and paints no tile for a file that is not one", () => {
+    expect(render([{ type: "text", text: "plain" }])).not.toContain("<ul")
+    const html = render([
+      { type: "text", text: "see notes" },
+      { ...local, name: "notes.pdf", mimeType: "application/pdf" },
+    ])
+    expect(html).not.toContain("<img")
+    expect(html).not.toContain("nessa-message-images")
+  })
+})

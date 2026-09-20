@@ -6,4 +6,4 @@ export { setDraft } from "./set-draft"
 
 export { moveActive } from "./move-active"
 
-export { attachFiles, removeFile } from "./attachments"
+export { attachFiles, changeUpload, removeFile } from "./attachments"

@@ -56,3 +56,15 @@ it("rolls back a partial URL allocation failure while preserving existing previe
   expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:rollback")
   expect(resources.canAdd(MAX_SESSION_ATTACHMENT_BYTES - 1)).toBe(true)
 })
+
+it("hands back the bytes it retains, and nothing once they are released", () => {
+  vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:held")
+  vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {})
+  const resources = createAttachmentResources()
+  const file = new File(["contents"], "note.txt", { type: "text/plain" })
+  const [attachment] = resources.add([file])
+  expect(attachment!.upload).toEqual({ status: "not-started" })
+  expect(resources.bytes(attachment!.id)).toBe(file)
+  resources.retain(new Set())
+  expect(resources.bytes(attachment!.id)).toBeUndefined()
+})

@@ -1,5 +1,5 @@
 import {
-  textContent,
+  referencedContent,
   type Conversation,
   type Receipt,
   type Turn,
@@ -21,7 +21,9 @@ export function applyView(current: Conversation, view: ConversationView): Conver
     projected.push({
       id: local?.id ?? `${message.executionId}:user`,
       from: "user",
-      content: local?.content ?? textContent(message.userText),
+      // Local content keeps its previews. Without it — another surface's turn,
+      // or this one after a reload — the images are known only by reference.
+      content: local?.content ?? referencedContent(message.userText, message.attachments),
       receipt: waiting.has(message.executionId)
         ? "queued"
         : message.status === "queued"
@@ -71,7 +73,7 @@ export function applyView(current: Conversation, view: ConversationView): Conver
     projected.push({
       id: local?.id ?? `${pending.executionId}:user`,
       from: "user",
-      content: local?.content ?? textContent(pending.text),
+      content: local?.content ?? referencedContent(pending.text, pending.attachments),
       receipt: "queued",
       executionId: pending.executionId,
       actionId: local?.actionId,
