@@ -1,11 +1,13 @@
 /**
- * What the composer says about the draft's files, and what it offers to do.
+ * What the composer says about attachments, and what it offers to do.
  *
- * All of it is one pure function over two facts — the draft's files and the
- * last refusal — because the defect this replaced was two mechanisms deciding
- * separately: a refusal rendered as red text, a notification gated on that
- * refusal being absent, and so a failed upload's Retry removed from the screen
- * by a limits line left over from a drop.
+ * One function over two facts — the draft's files and the last refusal — and it
+ * answers with a list, because they are two subjects and saying one was never a
+ * reason to stop saying the other. The defect this replaced was two mechanisms
+ * deciding separately: a refusal rendered as red text, a notification gated on
+ * that refusal being absent, and so a failed upload's Retry taken off the
+ * screen by a limits line left over from a drop. Ranking them into one slot
+ * would only have reversed the arrow, so nothing here ranks.
  */
 import { describe, expect, it, vi } from "vitest"
 
@@ -20,7 +22,7 @@ import {
   uploadFailureSummary,
 } from "../../conversation/testing"
 import {
-  attachmentNotice,
+  attachmentNotices,
   droppedFilesRefusal,
   refusalNotice,
   windowBudgetMessage,
@@ -44,42 +46,48 @@ const failed = (id: string, reason: "unavailable" | "too-large"): NoticedFile =>
 
 /** The draft's files alone, with nothing having been turned away. */
 const draft = (files: readonly NoticedFile[], imageInput: boolean | undefined = true) =>
-  attachmentNotice({ refusal: null, files, imageInput })
+  attachmentNotices({ refusal: null, files, imageInput })
 
 describe("what the composer says about a draft's files", () => {
   it("says nothing when there is nothing to say", () => {
-    expect(draft([], false)).toBeNull()
-    expect(draft([stored])).toBeNull()
+    expect(draft([], false)).toEqual([])
+    expect(draft([stored])).toEqual([])
     // Not yet answered is not a no.
-    expect(draft([stored], undefined)).toBeNull()
-    expect(draft([{ ...stored, upload: { status: "uploading" } }])).toBeNull()
+    expect(draft([stored], undefined)).toEqual([])
+    expect(draft([{ ...stored, upload: { status: "uploading" } }])).toEqual([])
   })
 
   // What each reason says is the conversation's, and tested there. This is the
   // composing: short, the reason's own sentence, and a retry only for uploads
   // that trying again could change.
   it("says a failed upload briefly, and offers the retry only where it can help", () => {
-    expect(draft([stored, failed("b", "unavailable")])).toEqual({
-      title: "Image didn't upload",
-      description: uploadFailureSummary("unavailable"),
-      action: { kind: "retry-uploads", files: ["b"] },
-      dismissible: false,
-    })
+    expect(draft([stored, failed("b", "unavailable")])).toEqual([
+      {
+        kind: "draft-files",
+        title: "Image didn't upload",
+        description: uploadFailureSummary("unavailable"),
+        action: { kind: "retry-uploads", files: ["b"] },
+      },
+    ])
     // The gateway's verdict on the image itself would be the same next time.
-    expect(draft([failed("b", "too-large")])).toEqual({
-      title: "Image didn't upload",
-      description: uploadFailureSummary("too-large"),
-      action: null,
-      dismissible: false,
-    })
+    expect(draft([failed("b", "too-large")])).toEqual([
+      {
+        kind: "draft-files",
+        title: "Image didn't upload",
+        description: uploadFailureSummary("too-large"),
+        action: null,
+      },
+    ])
     // Several failures are one notification: counted, the first one's reason,
     // and only the retryable ones behind the action.
-    expect(draft([failed("b", "too-large"), failed("c", "unavailable")])).toEqual({
-      title: "2 images didn't upload",
-      description: uploadFailureSummary("too-large"),
-      action: { kind: "retry-uploads", files: ["c"] },
-      dismissible: false,
-    })
+    expect(draft([failed("b", "too-large"), failed("c", "unavailable")])).toEqual([
+      {
+        kind: "draft-files",
+        title: "2 images didn't upload",
+        description: uploadFailureSummary("too-large"),
+        action: { kind: "retry-uploads", files: ["c"] },
+      },
+    ])
     // Nothing here names a file or quotes a limit: the tile does that.
     expect(uploadFailureSummary("unavailable").length).toBeLessThan(40)
   })
@@ -89,65 +97,79 @@ describe("what the composer says about a draft's files", () => {
       draft([
         { id: "n", name: "notes.pdf", image: false, upload: { status: "not-started" } },
       ]),
-    ).toEqual({
-      title: "File can't be sent",
-      description: "Only images can be sent for now.",
-      action: null,
-      dismissible: false,
-    })
-    expect(draft([stored], false)).toEqual({
-      title: "Images not supported",
-      description: "This agent doesn't take images.",
-      action: null,
-      dismissible: false,
-    })
+    ).toEqual([
+      {
+        kind: "draft-files",
+        title: "File can't be sent",
+        description: "Only images can be sent for now.",
+        action: null,
+      },
+    ])
+    expect(draft([stored], false)).toEqual([
+      {
+        kind: "draft-files",
+        title: "Images not supported",
+        description: "This agent doesn't take images.",
+        action: null,
+      },
+    ])
   })
 
-  it("does not let a file the draft is holding be put away", () => {
-    // The notice is the state. Dismissing it would leave a failed upload with
-    // nothing above the composer saying so.
-    for (const notice of [
-      draft([failed("b", "unavailable")]),
-      draft([{ ...stored, image: false }]),
-      draft([stored], false),
-    ])
-      expect(notice?.dismissible).toBe(false)
+  it("never says more than one thing about the draft at a time", () => {
+    // A draft can break several of these at once; there is one notice for it.
+    const notices = draft(
+      [failed("b", "unavailable"), { ...stored, image: false }],
+      false,
+    )
+    expect(notices).toHaveLength(1)
+    expect(notices[0]?.title).toBe("Image didn't upload")
   })
 })
 
-describe("a refusal and a failed upload at the same time", () => {
-  const refusal: AttachmentRefusal = { reason: "too-many-files" }
+describe("a refusal and the draft's files at the same time", () => {
+  const refusal: AttachmentRefusal = {
+    reason: "file-too-large",
+    names: ["holiday.mp4"],
+  }
 
-  it("keeps the failed upload's notice, and its retry, while a refusal is set", () => {
-    // The regression. A limits line used to be rendered as its own paragraph and
-    // to suppress this notification outright, taking the Retry with it.
-    const notice = attachmentNotice({
+  it("says both, and neither can take the other off the screen", () => {
+    // The regression, both ways round. A limits line used to suppress the
+    // failed upload's notification outright, taking its Retry with it; ranking
+    // the other way would have thrown the refusal away at the moment somebody
+    // dropped the file.
+    const notices = attachmentNotices({
       refusal,
       files: [stored, failed("b", "unavailable")],
       imageInput: true,
     })
-    expect(notice).toEqual({
+    expect(notices.map((notice) => notice.kind)).toEqual(["draft-files", "refusal"])
+    expect(notices[0]).toEqual({
+      kind: "draft-files",
       title: "Image didn't upload",
       description: uploadFailureSummary("unavailable"),
       action: { kind: "retry-uploads", files: ["b"] },
-      dismissible: false,
     })
-    // Setting the refusal changed nothing about it at all.
-    expect(notice).toEqual(draft([stored, failed("b", "unavailable")]))
+    expect(notices[1]).toEqual(refusalNotice(refusal))
+    // The draft's notice is word for word the one it would be with no refusal
+    // set at all, action included.
+    expect(notices[0]).toEqual(draft([stored, failed("b", "unavailable")])[0])
   })
 
-  it("says the refusal once nothing in the draft has failed", () => {
-    expect(attachmentNotice({ refusal, files: [stored], imageInput: true })).toEqual(
+  it("says the refusal on its own when the draft has nothing wrong with it", () => {
+    expect(attachmentNotices({ refusal, files: [stored], imageInput: true })).toEqual([
       refusalNotice(refusal),
-    )
-    // And ahead of the quieter facts about the draft, which are not news.
-    expect(
-      attachmentNotice({
-        refusal,
-        files: [{ ...stored, image: false }],
-        imageInput: false,
-      }),
-    ).toEqual(refusalNotice(refusal))
+    ])
+  })
+
+  it("puts the refusal last, nearest the composer, wherever it appears", () => {
+    for (const files of [
+      [stored],
+      [failed("b", "unavailable")],
+      [{ ...stored, image: false }],
+    ])
+      expect(attachmentNotices({ refusal, files, imageInput: true }).at(-1)).toEqual(
+        refusalNotice(refusal),
+      )
   })
 })
 
@@ -194,7 +216,10 @@ describe("why something was not attached", () => {
     ).toContain(bound)
   })
 
-  it("advises removing files only when there are files to remove", () => {
+  it("does not advise removing files that may not be there", () => {
+    // Twenty-one files dropped into an empty draft breaks the count rule, and
+    // "remove some" would then be about nothing.
+    expect(refusalNotice({ reason: "too-many-files" }).description).not.toMatch(/remove/i)
     const holding = refusalNotice({
       reason: "window-budget",
       maxMiB: 256,
@@ -220,14 +245,12 @@ describe("why something was not attached", () => {
       { reason: "unreadable-folder" },
       { reason: "unreadable-files" },
       { reason: "unreadable-image-url" },
-      { reason: "unsupported-type" },
     ]
     for (const refusal of every) {
       const notice = refusalNotice(refusal)
+      expect(notice.kind, refusal.reason).toBe("refusal")
       expect(notice.title.length, refusal.reason).toBeGreaterThan(0)
       expect(notice.description.length, refusal.reason).toBeGreaterThan(0)
-      // Every one of them is the panel's own memory, so every one can go away.
-      expect(notice.dismissible, refusal.reason).toBe(true)
       // Retrying an upload is never what a refusal is about: nothing was
       // attached, so there is no file to retry.
       expect(notice.action?.kind, refusal.reason).not.toBe("retry-uploads")
@@ -260,15 +283,17 @@ describe("what a drop was refused for", () => {
     expect(droppedFilesRefusal([rejected("twenty-first.png", "count")])).toEqual({
       reason: "too-many-files",
     })
-    expect(droppedFilesRefusal([rejected("notes.txt", "type")])).toEqual({
-      reason: "unsupported-type",
-    })
     expect(droppedFilesRefusal([rejected("empty", "folder")])).toEqual({
       reason: "empty-folder",
     })
   })
 
-  it("says nothing about a drop nothing was refused from", () => {
+  it("says nothing about a drop nothing was refused from, or refused only by kind", () => {
     expect(droppedFilesRefusal([])).toBeNull()
+    // This panel gives the zone no `accept` list, so it has no kind rule to
+    // apply and nothing can arrive here as `type`. It stays in the parameter so
+    // that adding one is a compile error away from being noticed — and when
+    // that happens it needs words, not this.
+    expect(droppedFilesRefusal([rejected("notes.txt", "type")])).toBeNull()
   })
 })

@@ -1,8 +1,7 @@
 import { ComposerDeliveryMode } from "@nessa-ui/react/composer-queue"
 import type { AttachmentResources } from "../adapters/attachment-resources"
-import { attachmentNotice, droppedFilesRefusal } from "../application/attachment-notice"
 import * as React from "react"
-import { CircleArrowUp, Download, Square } from "lucide-react"
+import { CircleArrowUp, Download, KeyRound, Square } from "lucide-react"
 import { AgentNotification } from "@nessa-ui/react/agent-notification"
 import {
   ChatComposerAction,
@@ -32,9 +31,6 @@ import {
   Transcript,
   useConversation,
   toEditor,
-  isImageFile,
-  MAX_ATTACHMENT_BYTES,
-  MAX_DRAFT_ATTACHMENTS,
 } from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
 import { useSession } from "../../session"
@@ -53,11 +49,11 @@ import { useFileAttachments } from "./use-file-attachments"
 import { useAttachmentUploads } from "./use-attachment-uploads"
 import { useFolderDrop } from "./use-folder-drop"
 import { useContentDrop } from "./use-content-drop"
-import { FileDropZone } from "@nessa-ui/react/file-drop-zone"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 
 import { AddAttachmentMenu } from "./add-attachment-menu"
-import { AttachmentNotification } from "./attachment-notification"
+import { AttachmentDropZone } from "./attachment-drop-zone"
+import { AttachmentNotices, AttachmentReadingStatus } from "./attachment-notices"
 import { AttachmentTile } from "./attachment-tile"
 import { AttachmentIcon } from "./attachment-icon"
 import { WaveformIcon } from "./waveform-icon"
@@ -115,19 +111,6 @@ export function App({
   )
   const attachments = useFileAttachments(chat, attachmentResources)
   const uploads = useAttachmentUploads(chat, attachmentResources, digest)
-  // What the draft's files need said about them now, rather than at send, and
-  // why the last thing offered was turned away. One notice, one order, decided
-  // in one place — see `attachmentNotice`.
-  const fileNotice = attachmentNotice({
-    refusal: attachments.refusal,
-    files: attachments.files.map((file) => ({
-      id: file.id,
-      name: file.name,
-      image: isImageFile(file.mimeType),
-      upload: file.upload,
-    })),
-    imageInput: chat.active.remote?.capabilities.imageInput,
-  })
   const folderDrop = useFolderDrop(
     chat.active.id,
     attachments.addFiles,
@@ -297,20 +280,7 @@ export function App({
         onPointerUp={edge.releaseResize}
         className={host.westHandleClass}
       />
-      <FileDropZone
-        asChild
-        onFiles={attachments.addFiles}
-        // The zone says which rule refused each file, so the panel can say why
-        // rather than guessing at one sentence for all of them — and, for the
-        // file that is simply too heavy, can avoid offering the + picker, which
-        // holds it to this same `maxSize` and would refuse it again.
-        onRejectedFiles={(rejections) => {
-          const refusal = droppedFilesRefusal(rejections)
-          if (refusal) attachments.refuse(refusal)
-        }}
-        maxFiles={MAX_DRAFT_ATTACHMENTS}
-        maxSize={MAX_ATTACHMENT_BYTES}
-      >
+      <AttachmentDropZone onFiles={attachments.addFiles} onRefused={attachments.refuse}>
         <div
           ref={edge.panelRef}
           data-nessa-root
@@ -503,19 +473,19 @@ export function App({
                 onDismiss={update.dismiss}
               />
             )}
-            {/* One short line about the draft's files, whether it is a failed
-                upload or something this panel would not take. The tile already
-                marks a failed upload and carries the full reason, so this does
-                not repeat it; it offers the retry once for every upload worth
-                retrying. */}
-            {fileNotice && (
-              <AttachmentNotification
-                notice={fileNotice}
-                onRetryUploads={(files) => files.forEach(uploads.retry)}
-                onChooseFiles={attachments.chooseFiles}
-                onDismiss={attachments.clearRefusal}
-              />
-            )}
+            {/* What the draft's files need said about them, and why the last
+                thing offered was turned away — both, when both are true. The
+                tile already marks a failed upload and carries the full reason,
+                so this does not repeat it; it offers the retry once for every
+                upload worth retrying. */}
+            <AttachmentNotices
+              refusal={attachments.refusal}
+              files={attachments.files}
+              imageInput={chat.active.remote?.capabilities.imageInput}
+              onRetryUploads={(files) => files.forEach(uploads.retry)}
+              onChooseFiles={attachments.chooseFiles}
+              onDismissRefusal={attachments.clearRefusal}
+            />
             {/* Not the connection's own notice below, which the session's phase
                 owns: this is what the surface around the session could not do —
                 restoring a sign-in, ending one — and it is said on the same
@@ -524,6 +494,9 @@ export function App({
               <AgentNotification
                 className="mb-2"
                 state="disconnected"
+                // Not the state's own aerial: nothing here is a connection.
+                // These are sign-ins that could not be restored or ended.
+                icon={KeyRound}
                 title="Session needs attention"
                 description={sessionError}
               />
@@ -557,17 +530,11 @@ export function App({
               generating={false}
               onSubmit={submit}
             >
+              {/* Transient, and not a problem, so it is neither a notice nor a
+                  paragraph beside one: the visible half is the busy tile below,
+                  and this is the same thing for somebody who cannot see it. */}
+              <AttachmentReadingStatus reading={attachments.pendingFiles.length > 0} />
               <ChatComposerAttachments>
-                {/* Reading a file is transient and it is not a problem, so it
-                    belongs with the tiles that are doing it rather than beside
-                    a notice about something going wrong. The placeholder tiles
-                    are what it looks like; this is the same thing said once,
-                    politely, to somebody who cannot see them. */}
-                {attachments.pendingFiles.length > 0 && (
-                  <span key="reading" role="status" className="sr-only">
-                    Reading files…
-                  </span>
-                )}
                 {attachments.pendingFiles.map((file, index) => (
                   <span
                     key={index}
@@ -636,7 +603,7 @@ export function App({
             </PillComposer>
           </div>
         </div>
-      </FileDropZone>
+      </AttachmentDropZone>
     </div>
   )
 }

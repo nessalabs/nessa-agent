@@ -10,7 +10,8 @@ import type { AttachmentRefusal } from "../application/attachment-notice"
 export function useFolderDrop(
   conversationId: string,
   addFiles: (files: readonly File[], conversationId: string) => void,
-  refuse: (refusal: AttachmentRefusal) => void,
+  /** Named, not assumed: a walk can finish after somebody has changed tabs. */
+  refuse: (refusal: AttachmentRefusal, conversationId: string) => void,
 ) {
   const pending = React.useRef<{
     controller: AbortController
@@ -19,7 +20,7 @@ export function useFolderDrop(
   React.useEffect(() => () => pending.current?.controller.abort(), [])
   function addFolderEntries(entries: FileSystemEntry[]) {
     if (pending.current) {
-      refuse({ reason: "reading-folder" })
+      refuse({ reason: "reading-folder" }, conversationId)
       return
     }
     const controller = new AbortController()
@@ -30,14 +31,17 @@ export function useFolderDrop(
       })
       .catch((error: unknown) => {
         if (!controller.signal.aborted)
-          refuse({
-            reason:
-              error instanceof FolderDropEmptyError
-                ? "empty-folder"
-                : error instanceof FolderDropLimitError
-                  ? "folder-too-large"
-                  : "unreadable-folder",
-          })
+          refuse(
+            {
+              reason:
+                error instanceof FolderDropEmptyError
+                  ? "empty-folder"
+                  : error instanceof FolderDropLimitError
+                    ? "folder-too-large"
+                    : "unreadable-folder",
+            },
+            conversationId,
+          )
       })
       .finally(() => {
         pending.current = null
