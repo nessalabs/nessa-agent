@@ -1836,13 +1836,38 @@ async fn a_caller_context_too_damaged_to_record_is_refused_on_a_reopen_too() {
     // which the conversation entity does not. So the same context was refused
     // for a new conversation and accepted for a reopen, where it landed
     // unvalidated in a durable `correlation_id`.
-    let (service, provider, _, _) = fixture(ConversationLimits::default());
+    //
+    // Built on a recording audit rather than the fixture's accepting one,
+    // because the refusal is not the whole claim. A check that sat after the
+    // reopen's own `record` would still answer `InvalidInput`, and would have
+    // handed the damaged context to the audit port on the way — refused, and
+    // written down anyway. Only the port can say which happened.
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let audit = Arc::new(RecordingCreationAudit {
+        records: Mutex::new(Vec::new()),
+        reject: false,
+        started: Notify::new(),
+        gate: Mutex::new(None),
+    });
+    let service = ConversationService::new(
+        only(Arc::new(Provider(provider.clone()))),
+        storage,
+        repository,
+        audit.clone(),
+        Arc::new(TestClock),
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
     let existing = id();
     let fresh = id();
     service
         .create(existing.clone(), caller("panel", "create"), None)
         .await
         .unwrap();
+    // Whatever an accepted creation writes is the baseline; the claim is that a
+    // refused caller adds nothing to it.
+    let before = audit.records.lock().unwrap().len();
     let wiped = "reopen\u{0}\u{1b}[2Jwiped";
     assert!(matches!(
         service.create(existing, caller("panel", wiped), None).await,
@@ -1855,6 +1880,74 @@ async fn a_caller_context_too_damaged_to_record_is_refused_on_a_reopen_too() {
         service.create(fresh, caller("panel", wiped), None).await,
         Err(ConversationError::InvalidInput)
     ));
+    // The evidence the finding was actually about: prior evidence unchanged,
+    // and nothing of this caller's written down. Only the first creation's
+    // record is there, and no correlation id carries what it sent.
+    {
+        let records = audit.records.lock().unwrap();
+        assert_eq!(
+            records.len(),
+            before,
+            "a refused caller reached the audit port"
+        );
+        assert!(
+            !records
+                .iter()
+                .any(|record| record.correlation_id.contains('\u{0}')),
+            "a control character was written into durable correlation evidence"
+        );
+    }
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_caller_context_too_damaged_to_record_is_refused_by_every_command() {
+    // The rule belongs to the attribution, not to one command. Every command on
+    // this service writes the caller's surface and action into a durable record
+    // — the execution audit carries the action as `requestId` — so a context
+    // that cannot be written down honestly is refused wherever it arrives, not
+    // only where a conversation happens to be constructed.
+    //
+    // `submit` and `close` stand for the rest: they share the one function that
+    // builds the attribution, so a command that stopped asking would have to
+    // stop calling it.
+    let (service, _, _, _) = fixture(ConversationLimits::default());
+    let id = id();
+    service
+        .create(id.clone(), caller("panel", "create"), None)
+        .await
+        .unwrap();
+    let wiped = "send\u{0}\u{1b}[2Jwiped";
+    assert!(matches!(
+        service
+            .submit(
+                id.clone(),
+                caller("panel", wiped),
+                "execution".into(),
+                "Hello".into(),
+                SubmissionMode::Queue,
+            )
+            .await,
+        Err(ConversationError::InvalidInput)
+    ));
+    assert!(matches!(
+        service.close(id.clone(), caller("panel", wiped)).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    // And an ordinary context still gets through both, so the rule refuses the
+    // damage rather than the command.
+    service
+        .submit(
+            id.clone(),
+            caller("panel", "send"),
+            "execution".into(),
+            "Hello".into(),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    completed(&service, &id, 1).await;
+    service.close(id, caller("panel", "close")).await.unwrap();
     service.shutdown().await.unwrap();
 }
 

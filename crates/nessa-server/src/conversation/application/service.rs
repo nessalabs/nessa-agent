@@ -56,7 +56,20 @@ pub struct ConversationCaller {
     pub action_id: String,
 }
 impl ConversationCaller {
+    /// The attribution every command on this service records, validated once.
+    ///
+    /// `ActionContext` bounds the length and refuses a blank, and permits
+    /// control characters; `Conversation::check_creator_context` does not. Both
+    /// rules are asked here rather than only where a conversation is
+    /// constructed, because every one of these commands writes this surface and
+    /// action into a durable record — `audit_mapping` carries the action as
+    /// `requestId` — and what gets written down must not rewrite a terminal or
+    /// split a log line whichever command wrote it. The conversation entity
+    /// still asks the same question of its own fields, through the same
+    /// function, so there is one rule and not two that have to agree.
     fn actor(&self) -> Result<ActionContext, ConversationError> {
+        Conversation::check_creator_context(&self.surface_id, &self.action_id)
+            .map_err(|_| ConversationError::InvalidInput)?;
         ActionContext::new(
             self.principal_id.as_str(),
             &self.surface_id,
@@ -287,17 +300,12 @@ impl ConversationService {
         let service = self.clone();
         supervised(async move {
             let _admission = service.admit().await?;
-            caller.actor()?;
             // Asked of every creation, not only the ones that build a
-            // conversation. A reopen writes this caller's surface and action
-            // into its own audit record, so the same context has to be fit to
-            // record on both branches — and `ActionContext` bounds the length
-            // and refuses blanks but allows control characters, which
-            // `Conversation::new` does not. Checking it only where a
-            // conversation is constructed left a reopen's `correlation_id`
-            // carrying whatever the caller sent.
-            Conversation::check_creator_context(&caller.surface_id, &caller.action_id)
-                .map_err(|_| ConversationError::InvalidInput)?;
+            // conversation, and before the record is loaded so neither branch
+            // can record a caller nobody validated. A reopen writes this
+            // caller's surface and action into its own audit record, so the
+            // same context has to be fit to record on both branches.
+            caller.actor()?;
             if service.inner.retirement.get().is_some() {
                 return Err(ConversationError::Unavailable);
             }
