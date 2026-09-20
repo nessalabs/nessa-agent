@@ -65,6 +65,7 @@ impl AgentError {
                 | Self::StalePermission
                 | Self::Provider { .. }
                 | Self::Deadline
+                | Self::StartupDeadline(_)
                 | Self::Backpressure
                 | Self::CleanupUncertain
                 | Self::AuditFailure

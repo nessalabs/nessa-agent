@@ -4,8 +4,19 @@ import { createDependencies } from "../../../composition/dependencies"
 import { scenarioEffects } from "../scenario/effects"
 import { gatewayEffects } from "../gateway/effects"
 import { textContent } from "../../model"
-import { bindConversation, refreshConversation, sendDraft, setDraft } from "./slice"
-import type { NessaClient } from "@nessa/client"
+import {
+  bindConversation,
+  refreshConversation,
+  sendDraft,
+  setDraft,
+  submissionStarted,
+} from "./slice"
+import {
+  ConversationErrorCode,
+  NessaConversationMutationError,
+  NessaRpcError,
+  type NessaClient,
+} from "@nessa/client"
 import { conversationNotice } from "../../ui/notification"
 
 it("a failed creation cannot make an unattempted message admission uncertain", async () => {
@@ -33,6 +44,50 @@ it("a failed creation cannot make an unattempted message admission uncertain", a
   expect(tab.draft).toEqual(textContent("unsent"))
   expect(tab.draftReset).toBe(1)
   expect(conversationNotice(tab)?.retry).toEqual({ kind: "draft" })
+})
+it("carries the gateway startup-deadline code into the notice, not just its text", async () => {
+  const effects = scenarioEffects("echo")
+  const store = makeStore(
+    createDependencies({
+      conversation: {
+        ...effects,
+        create: async () => {
+          throw new NessaConversationMutationError(
+            "server",
+            "action",
+            undefined,
+            new NessaRpcError(
+              ConversationErrorCode.AgentStartupDeadline,
+              "agent_startup_deadline",
+            ),
+            async () => undefined,
+          )
+        },
+      },
+    }),
+  )
+  await store.dispatch(sendDraft({ content: textContent("first message") }))
+  const tab = store.getState().conversation.conversations[0]!
+  expect(tab.errorCode).toBe(ConversationErrorCode.AgentStartupDeadline)
+  expect(tab.turns[0]).toMatchObject({ receipt: "failed" })
+  expect(conversationNotice(tab)).toMatchObject({
+    title: "Agent was still starting",
+    retry: { kind: "draft" },
+  })
+  // A retried send clears the rejection it described, code and message together.
+  store.dispatch(setDraft({ id: tab.id, draft: textContent("retry") }))
+  store.dispatch(
+    submissionStarted({
+      conversationId: tab.id,
+      executionId: "execution",
+      actionId: "action",
+      content: textContent("retry"),
+      mode: "queued",
+    }),
+  )
+  const retried = store.getState().conversation.conversations[0]!
+  expect(retried.error).toBeUndefined()
+  expect(retried.errorCode).toBeUndefined()
 })
 it("client loss after cached creation is known unsent rather than an uncertain admission", async () => {
   let client: NessaClient | null = {

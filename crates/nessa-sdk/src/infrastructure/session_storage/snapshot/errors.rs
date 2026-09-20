@@ -1,4 +1,4 @@
-use crate::application::agent_execution::agents::AgentError;
+use crate::application::agent_execution::agents::{AgentError, AgentStartupPhase};
 use crate::application::agent_execution::hooks::{HookError, HookFailure};
 use crate::application::agent_execution::providers::CloseOutcome;
 use crate::application::agent_execution::sessions::storage::StorageError;
@@ -128,6 +128,7 @@ pub(super) enum SavedError {
     Closed,
     StalePermission,
     Deadline,
+    StartupDeadline(StartupPhase),
     Backpressure,
     CleanupUncertain,
     AuditFailure,
@@ -153,6 +154,35 @@ pub(super) enum SavedError {
         error: StorageFailure,
         execution_result: Box<Result<Outcome, SavedError>>,
     },
+}
+/// Saved counterpart of the startup step named by a startup deadline.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) enum StartupPhase {
+    Initialize,
+    SessionNew,
+    SessionResume,
+    SessionConfigure,
+}
+impl From<AgentStartupPhase> for StartupPhase {
+    fn from(value: AgentStartupPhase) -> Self {
+        match value {
+            AgentStartupPhase::Initialize => Self::Initialize,
+            AgentStartupPhase::SessionNew => Self::SessionNew,
+            AgentStartupPhase::SessionResume => Self::SessionResume,
+            AgentStartupPhase::SessionConfigure => Self::SessionConfigure,
+        }
+    }
+}
+impl From<StartupPhase> for AgentStartupPhase {
+    fn from(value: StartupPhase) -> Self {
+        match value {
+            StartupPhase::Initialize => Self::Initialize,
+            StartupPhase::SessionNew => Self::SessionNew,
+            StartupPhase::SessionResume => Self::SessionResume,
+            StartupPhase::SessionConfigure => Self::SessionConfigure,
+        }
+    }
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -219,6 +249,7 @@ impl From<SavedError> for AgentError {
             SavedError::Closed => Self::Closed,
             SavedError::StalePermission => Self::StalePermission,
             SavedError::Deadline => Self::Deadline,
+            SavedError::StartupDeadline(phase) => Self::StartupDeadline(phase.into()),
             SavedError::Backpressure => Self::Backpressure,
             SavedError::CleanupUncertain => Self::CleanupUncertain,
             SavedError::AuditFailure => Self::AuditFailure,
@@ -303,6 +334,7 @@ impl From<AgentError> for SavedError {
             AgentError::Closed => Self::Closed,
             AgentError::StalePermission => Self::StalePermission,
             AgentError::Deadline => Self::Deadline,
+            AgentError::StartupDeadline(phase) => Self::StartupDeadline(phase.into()),
             AgentError::Backpressure => Self::Backpressure,
             AgentError::CleanupUncertain => Self::CleanupUncertain,
             AgentError::AuditFailure => Self::AuditFailure,

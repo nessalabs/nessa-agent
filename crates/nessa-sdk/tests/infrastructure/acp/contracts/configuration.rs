@@ -217,8 +217,76 @@ async fn startup_deadline_cleans_up_an_initialized_process_that_never_replies() 
         .await
         .unwrap()
         .unwrap();
-    assert!(matches!(result, Err(error) if error.cause() == &AgentError::Deadline));
+    assert!(matches!(result, Err(error) if error.cause()
+            == &AgentError::StartupDeadline(AgentStartupPhase::Initialize)));
     assert_gone(&root, "pid");
+}
+
+/// The startup budget is shared, so only the step still waiting identifies what
+/// expired. A reader of the gateway log otherwise cannot tell a first
+/// `session/new` from a `session/resume` of saved context.
+#[tokio::test]
+async fn startup_deadline_names_the_step_that_ran_out_of_budget() {
+    let _process_slot = process_test_slot().await;
+    for (mode, marker, restored, expected) in [
+        ("startup-stall", "pid", false, AgentStartupPhase::Initialize),
+        (
+            "new-session-stall",
+            "new-session-wait",
+            false,
+            AgentStartupPhase::SessionNew,
+        ),
+        (
+            "resume-stall",
+            "resume-observed",
+            true,
+            AgentStartupPhase::SessionResume,
+        ),
+        (
+            "configuration-stall",
+            "configuration-wait",
+            false,
+            AgentStartupPhase::SessionConfigure,
+        ),
+    ] {
+        let (root, mut config, model) = test_acp_configuration(mode, 16);
+        config.startup_timeout = Duration::from_secs(30);
+        let restore = restored.then(|| ExecutionSessionId::new("restored-context").unwrap());
+        if let Some(id) = &restore {
+            std::fs::write(
+                root.path().join("saved-session"),
+                json!({"id": id.as_str(), "history": []}).to_string(),
+            )
+            .unwrap();
+        }
+        let binding = ClaudeAcpProvider::new(
+            config,
+            &model,
+            TokenLimits::new(900, 100).unwrap(),
+            Arc::new(RecordingAudit::default()),
+        )
+        .unwrap();
+        let opening = tokio::spawn(async move { binding.open(restore).await });
+        // Advance only after the child has reached the stalling step, so the
+        // simulated deadline cannot overtake real process launch.
+        wait_for_file(&root, marker).await;
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(31)).await;
+        tokio::time::resume();
+        let error = timeout(Duration::from_secs(5), opening)
+            .await
+            .unwrap()
+            .unwrap()
+            .err()
+            .unwrap_or_else(|| panic!("{mode} times out"));
+        assert_eq!(
+            error.cause(),
+            &AgentError::StartupDeadline(expected),
+            "{mode}"
+        );
+        assert_eq!(expected.restores_saved_session(), restored, "{mode}");
+        assert_gone(&root, "pid");
+    }
 }
 
 #[cfg(unix)]
@@ -322,7 +390,10 @@ async fn configuration_deadline_closes_the_known_context_with_deadline_evidence(
         .unwrap()
         .err()
         .expect("configuration times out");
-    assert_eq!(error.cause(), &AgentError::Deadline);
+    assert_eq!(
+        error.cause(),
+        &AgentError::StartupDeadline(AgentStartupPhase::SessionConfigure)
+    );
     assert!(error.cleanup().is_none());
     let records = audit.closures.lock().unwrap();
     assert_eq!(records.len(), 1);

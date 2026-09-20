@@ -5,7 +5,7 @@ import {
   NessaConversationMutationError,
   NessaConversationControlError,
 } from "../application/conversation-mutation-error.js"
-import type { ConversationView } from "../generated/product.js"
+import { ConversationErrorCode, type ConversationView } from "../generated/product.js"
 
 const conversationId = "00000000-0000-4000-8000-000000000001"
 
@@ -431,6 +431,34 @@ it("reports invalid requests as known pre-admission rejections", async () => {
   const closeError = await api.close(conversationId).catch((error) => error)
   expect(sendError).toMatchObject({ uncertain: false })
   expect(closeError).toMatchObject({ uncertain: false })
+})
+
+it("says the agent was still starting and that the same command may be retried", async () => {
+  const request = vi
+    .fn()
+    .mockRejectedValue(
+      new NessaRpcError("agent_startup_deadline", "agent_startup_deadline"),
+    )
+  const api = createConversationApi({ request }, () => "identity")
+  const error = await api.send(conversationId, "hello").catch((error) => error)
+  expect(error).toBeInstanceOf(NessaConversationMutationError)
+  expect(error.code).toBe(ConversationErrorCode.AgentStartupDeadline)
+  // Startup runs before any input reaches the provider: this is a rejection,
+  // not an unknown delivery.
+  expect(error.uncertain).toBe(false)
+  expect(error.message).toContain("still starting")
+  expect(error.message).toContain("Retrying is expected to work")
+})
+
+it("leaves an unrecognized gateway code untyped instead of guessing a meaning", async () => {
+  const request = vi
+    .fn()
+    .mockRejectedValue(new NessaRpcError("invented_code", "invented_code"))
+  const api = createConversationApi({ request }, () => "identity")
+  const error = await api.send(conversationId, "hello").catch((error) => error)
+  expect(error.code).toBeUndefined()
+  expect(error.uncertain).toBe(true)
+  expect(error.message).toBe("Conversation command failed")
 })
 
 it("enforces canonical conversation and UTF-8 byte limits before admission", async () => {

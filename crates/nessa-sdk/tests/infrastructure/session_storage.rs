@@ -26,7 +26,7 @@ mod retention;
 mod robustness;
 mod scheduling;
 mod settlement;
-use nessa_sdk::application::agent_execution::agents::AgentError;
+use nessa_sdk::application::agent_execution::agents::{AgentError, AgentStartupPhase};
 use nessa_sdk::application::agent_execution::executions::{
     ExecutionEvent, ExecutionRequest, ExecutionUpdate, SubmissionMode,
 };

@@ -148,6 +148,7 @@ export type {
   ConversationReceipt,
   ConversationPermissionSelectionState,
 } from "./generated/product.js"
+export { ConversationErrorCode } from "./generated/product.js"
 export {
   NessaConversationMutationError,
   NessaConversationControlError,

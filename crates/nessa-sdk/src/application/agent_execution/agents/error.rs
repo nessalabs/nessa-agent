@@ -9,6 +9,55 @@ use std::{error::Error, fmt, future::Future, pin::Pin};
 /// Sendable asynchronous result borrowing its adapter for the lifetime of the call.
 pub type AgentFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, AgentError>> + Send + 'a>>;
 
+/// The step of agent startup that was running when a startup budget expired.
+///
+/// Startup is the work between opening a provider and publishing a usable Agent.
+/// Each step is bounded by the adapter's own startup budget, and the step named
+/// here is the one that was still waiting when that budget ran out. It records
+/// what the caller was doing, not why the provider was slow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentStartupPhase {
+    /// Protocol negotiation with the provider, before any session exists.
+    Initialize,
+    /// Creating a new provider session for a conversation with no saved context.
+    SessionNew,
+    /// Restoring the provider session named by saved context.
+    SessionResume,
+    /// Applying the host's session configuration to an established session.
+    SessionConfigure,
+}
+impl AgentStartupPhase {
+    /// Stable lowercase identifier for logs and wire diagnostics.
+    ///
+    /// The value never changes with the provider or its protocol, so callers may
+    /// branch on it; prefer matching the variant where the type is available.
+    ///
+    /// ```
+    /// use nessa_sdk::application::agent_execution::agents::AgentStartupPhase;
+    /// assert_eq!(AgentStartupPhase::SessionResume.as_str(), "session_resume");
+    /// ```
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Initialize => "initialize",
+            Self::SessionNew => "session_new",
+            Self::SessionResume => "session_resume",
+            Self::SessionConfigure => "session_configure",
+        }
+    }
+    /// Whether this step restores saved context rather than opening new context.
+    ///
+    /// Callers use this to describe what was interrupted without repeating the
+    /// step names: only [`Self::SessionResume`] continues an earlier session.
+    pub fn restores_saved_session(self) -> bool {
+        matches!(self, Self::SessionResume)
+    }
+}
+impl fmt::Display for AgentStartupPhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Failure of an Agent operation. Inspect variants and nested outcomes rather
 /// than parsing diagnostic strings; a failed response does not prove no effect occurred.
 /// [`Self::MultipleOperationFailures`] retains independent failures in order.
@@ -100,8 +149,15 @@ pub enum AgentError {
     },
     /// A pipe or transport operation failed; delivery may be uncertain.
     Transport(String),
-    /// An explicitly bounded startup, write, audit, steering, or execution operation timed out.
+    /// An explicitly bounded write, audit, steering, or execution operation timed out.
+    /// Startup has its own [`Self::StartupDeadline`], which names the step that expired.
     Deadline,
+    /// Agent startup did not finish inside its budget. The named step was still
+    /// waiting when the budget expired; no session became usable, and no input
+    /// reached the provider. The provider process may still be running, so
+    /// resource cleanup remains a separate fact reported by CleanupReport.
+    /// Retrying is safe and is expected to succeed once the runtime is warm.
+    StartupDeadline(AgentStartupPhase),
     /// A bounded event queue overflowed or a live subscriber lagged; consult the owning stream contract.
     Backpressure,
     /// Owned resource termination could not be confirmed.

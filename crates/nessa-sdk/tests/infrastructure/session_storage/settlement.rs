@@ -88,6 +88,39 @@ async fn explicit_settlement_facts_round_trip_all_outcomes_and_cleanup_statuses(
     }
 }
 
+/// A saved startup failure must keep the step it names. Collapsing every phase
+/// onto one label would make a restored record unable to say whether saved
+/// context was being restored when the budget ran out.
+#[tokio::test]
+async fn saved_startup_deadlines_retain_the_step_that_expired() {
+    let root = tempfile::tempdir().unwrap();
+    let stores: Vec<Arc<dyn SessionStorage>> = vec![
+        Arc::new(InMemoryStorage::new()),
+        Arc::new(LocalFileStorage::new(root.path().join("private")).unwrap()),
+    ];
+    for storage in stores {
+        let lease = storage
+            .open(SessionId::new("startup-deadline-phase").unwrap())
+            .await
+            .unwrap();
+        for phase in [
+            AgentStartupPhase::Initialize,
+            AgentStartupPhase::SessionNew,
+            AgentStartupPhase::SessionResume,
+            AgentStartupPhase::SessionConfigure,
+        ] {
+            let mut value = snapshot("startup-deadline-phase");
+            value.invocations[0].events.clear();
+            value.invocations[0].result = Some(Err(AgentError::StartupDeadline(phase)));
+            lease.save(value).await.unwrap();
+            assert_eq!(
+                lease.load().await.unwrap().unwrap().invocations[0].result,
+                Some(Err(AgentError::StartupDeadline(phase)))
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn successful_local_result_cannot_contradict_independent_provider_facts() {
     let storage = InMemoryStorage::new();

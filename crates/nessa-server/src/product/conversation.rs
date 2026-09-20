@@ -3,10 +3,10 @@
 use super::{
     generated::{
         ConversationAnswerParams, ConversationCancelParams, ConversationCloseParams,
-        ConversationCreateParams, ConversationCreateResult, ConversationMutationResult,
-        ConversationPermissionAnswerErrorDetails, ConversationPermissionSelectionState,
-        ConversationReadParams, ConversationRemoveParams, ConversationReorderParams,
-        ConversationSendParams,
+        ConversationCreateParams, ConversationCreateResult, ConversationErrorCode,
+        ConversationMutationResult, ConversationPermissionAnswerErrorDetails,
+        ConversationPermissionSelectionState, ConversationReadParams, ConversationRemoveParams,
+        ConversationReorderParams, ConversationSendParams,
     },
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
@@ -29,7 +29,10 @@ pub(super) async fn dispatch(
     frame: RequestFrame,
 ) -> OutgoingMessage {
     let Some(service) = state.conversations.as_ref() else {
-        return failure(&frame.id, "agent_not_configured");
+        return failure(
+            &frame.id,
+            ConversationErrorCode::AgentNotConfigured.as_str(),
+        );
     };
     macro_rules! params {
         ($kind:ty) => {
@@ -178,7 +181,10 @@ pub(super) async fn dispatch(
                     },
                 ))
             }
-            _ => Ok(failure(&frame.id, "unknown_method")),
+            _ => Ok(failure(
+                &frame.id,
+                ConversationErrorCode::UnknownMethod.as_str(),
+            )),
         }
     }
     .await;
@@ -187,7 +193,7 @@ pub(super) async fn dispatch(
         Err(ConversationError::PermissionAnswer { error, selection }) => {
             permission_answer_failure(&frame.id, error, selection)
         }
-        Err(error) => failure(&frame.id, error_code(&error)),
+        Err(error) => failure(&frame.id, error_code(&error).as_str()),
     }
 }
 
@@ -204,34 +210,39 @@ fn permission_answer_failure(
     let details = ConversationPermissionAnswerErrorDetails { selection_state };
     failure_with_details(
         request_id,
-        error_code(&ConversationError::Agent(error)),
+        error_code(&ConversationError::Agent(error)).as_str(),
         serde_json::to_value(details).expect("generated error details serialize"),
     )
 }
-fn error_code(error: &ConversationError) -> &'static str {
+fn error_code(error: &ConversationError) -> ConversationErrorCode {
     match error {
-        ConversationError::InvalidInput => "invalid_request",
-        ConversationError::NotFound => "conversation_not_found",
-        ConversationError::Capacity => "conversation_capacity",
+        ConversationError::InvalidInput => ConversationErrorCode::InvalidRequest,
+        ConversationError::NotFound => ConversationErrorCode::ConversationNotFound,
+        ConversationError::Capacity => ConversationErrorCode::ConversationCapacity,
         ConversationError::Unavailable
         | ConversationError::Retirement(_)
-        | ConversationError::RetirementAdmission { .. } => "temporarily_unavailable",
+        | ConversationError::RetirementAdmission { .. } => {
+            ConversationErrorCode::TemporarilyUnavailable
+        }
         ConversationError::Storage(StorageError::IdentityMismatch)
         | ConversationError::Agent(AgentError::Storage(StorageError::IdentityMismatch)) => {
-            "conversation_configuration_changed"
+            ConversationErrorCode::ConversationConfigurationChanged
         }
-        ConversationError::Audit => "audit_unavailable",
+        ConversationError::Audit => ConversationErrorCode::AuditUnavailable,
         ConversationError::Metadata | ConversationError::Storage(_) => {
-            "conversation_storage_unavailable"
+            ConversationErrorCode::ConversationStorageUnavailable
         }
         ConversationError::Agent(error) => match error {
-            AgentError::SubmissionConflict => "submission_conflict",
-            AgentError::SubmissionUnresolved => "submission_unresolved",
-            AgentError::Closed => "conversation_closed",
-            AgentError::StalePermission => "stale_permission",
-            AgentError::InvalidInput(_) => "invalid_request",
-            AgentError::AuditFailure => "audit_unavailable",
-            _ => "agent_operation_failed",
+            AgentError::SubmissionConflict => ConversationErrorCode::SubmissionConflict,
+            AgentError::SubmissionUnresolved => ConversationErrorCode::SubmissionUnresolved,
+            AgentError::Closed => ConversationErrorCode::ConversationClosed,
+            AgentError::StalePermission => ConversationErrorCode::StalePermission,
+            AgentError::InvalidInput(_) => ConversationErrorCode::InvalidRequest,
+            AgentError::AuditFailure => ConversationErrorCode::AuditUnavailable,
+            // Startup never reaches the provider with input, and the runtime is
+            // warm afterwards: the same command is safe to send again.
+            AgentError::StartupDeadline(_) => ConversationErrorCode::AgentStartupDeadline,
+            _ => ConversationErrorCode::AgentOperationFailed,
         },
         ConversationError::PermissionAnswer { error, .. } => {
             error_code(&ConversationError::Agent(error.clone()))

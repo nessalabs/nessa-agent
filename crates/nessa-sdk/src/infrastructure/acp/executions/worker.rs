@@ -14,7 +14,7 @@ use super::{
     steering::{self, PendingSteering},
     wire,
 };
-use crate::application::agent_execution::agents::AgentError;
+use crate::application::agent_execution::agents::{AgentError, AgentStartupPhase};
 use crate::application::agent_execution::executions::{
     ExecutionAudit, ExecutionAuditRecord, ExecutionController, ExecutionEvent, ExecutionUpdate,
 };
@@ -228,6 +228,14 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
     }));
     if let Some(reply) = execution_reply {
         let _ = reply.send(ProviderExecutionReply::Finished(settlement));
+    }
+}
+// Startup budgets are shared by every step, so only the step that was waiting
+// identifies what expired. Other failures keep their own typed meaning.
+fn startup_phase(error: AgentError, phase: AgentStartupPhase) -> AgentError {
+    match error {
+        AgentError::Deadline => AgentError::StartupDeadline(phase),
+        other => other,
     }
 }
 struct WorkerResult {
@@ -553,7 +561,9 @@ impl<P: AcpProfile> Worker<P> {
     ) -> Result<(), AgentError> {
         let deadline = Instant::now() + self.config.startup_timeout;
         let init = self.rpc("initialize", json!({"protocolVersion":1,"clientInfo":{"name":"nessa-sdk","version":env!("CARGO_PKG_VERSION")},
-            "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}), deadline, None).await?;
+            "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}), deadline, None)
+            .await
+            .map_err(|error| startup_phase(error, AgentStartupPhase::Initialize))?;
         if init.get("protocolVersion").and_then(Value::as_u64) != Some(1) {
             return Err(json_rpc::protocol("requires ACP protocol 1"));
         }
@@ -579,7 +589,15 @@ impl<P: AcpProfile> Worker<P> {
         } else {
             "session/new"
         };
-        let result = self.rpc(method, params, deadline, None).await?;
+        let session_phase = if restore.is_some() {
+            AgentStartupPhase::SessionResume
+        } else {
+            AgentStartupPhase::SessionNew
+        };
+        let result = self
+            .rpc(method, params, deadline, None)
+            .await
+            .map_err(|error| startup_phase(error, session_phase))?;
         let id = if let Some(id) = &restore {
             id.clone()
         } else {
@@ -608,7 +626,8 @@ impl<P: AcpProfile> Worker<P> {
                     deadline,
                     Some(execution),
                 )
-                .await?;
+                .await
+                .map_err(|error| startup_phase(error, AgentStartupPhase::SessionConfigure))?;
             self.profile
                 .verify_session(&result, &self.capabilities, true)?;
         }

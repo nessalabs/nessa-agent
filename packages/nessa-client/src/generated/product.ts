@@ -475,6 +475,26 @@ export interface ConversationPart {
   /** Opaque provider message identity; only fragments with the same identity may be combined. */
   messageId?: string
 }
+/** Typed rejection code carried by a failed conversation command. Branch on these instead of message text. agent_startup_deadline means the agent was still starting when its budget expired: nothing was sent, and repeating the same command is expected to succeed once the runtime is warm. invalid_request and agent_not_configured reject the command until their cause is addressed. */
+export const ConversationErrorCode = {
+  AgentNotConfigured: "agent_not_configured",
+  UnknownMethod: "unknown_method",
+  InvalidRequest: "invalid_request",
+  ConversationNotFound: "conversation_not_found",
+  ConversationCapacity: "conversation_capacity",
+  ConversationClosed: "conversation_closed",
+  ConversationConfigurationChanged: "conversation_configuration_changed",
+  ConversationStorageUnavailable: "conversation_storage_unavailable",
+  TemporarilyUnavailable: "temporarily_unavailable",
+  AuditUnavailable: "audit_unavailable",
+  SubmissionConflict: "submission_conflict",
+  SubmissionUnresolved: "submission_unresolved",
+  StalePermission: "stale_permission",
+  AgentStartupDeadline: "agent_startup_deadline",
+  AgentOperationFailed: "agent_operation_failed",
+} as const
+export type ConversationErrorCode =
+  (typeof ConversationErrorCode)[keyof typeof ConversationErrorCode]
 export const ProductMethod = {
   SessionAuthenticate: "session.authenticate",
   AuthSession: "auth.session",

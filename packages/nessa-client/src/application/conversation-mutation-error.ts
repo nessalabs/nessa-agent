@@ -1,5 +1,8 @@
 import { NessaRpcError } from "./rpc-error.js"
-import type { ConversationPermissionSelectionState } from "../generated/product.js"
+import {
+  ConversationErrorCode,
+  type ConversationPermissionSelectionState,
+} from "../generated/product.js"
 
 function permissionSelection(
   cause: unknown,
@@ -18,10 +21,42 @@ function permissionSelection(
     : undefined
 }
 
+// A gateway that returns a code this build does not know is not reinterpreted
+// as one it does; the caller sees no typed code and keeps the original cause.
+const knownCode = (code: string): ConversationErrorCode | undefined =>
+  (Object.values(ConversationErrorCode) as string[]).includes(code)
+    ? (code as ConversationErrorCode)
+    : undefined
+
+// Codes the gateway only returns after refusing the command outright. A startup
+// deadline belongs here: startup ends before any input reaches the provider.
+const rejectedBeforeAdmission = (code: string): boolean =>
+  (
+    [
+      ConversationErrorCode.AgentNotConfigured,
+      ConversationErrorCode.InvalidRequest,
+      ConversationErrorCode.AgentStartupDeadline,
+    ] as string[]
+  ).includes(code)
+
+function rejectionMessage(cause: unknown): string {
+  if (!(cause instanceof NessaRpcError)) return "Conversation command failed"
+  switch (cause.code) {
+    case ConversationErrorCode.AgentNotConfigured:
+      return 'The gateway started without an agent: its config.json has no "agent" section, so there is no Claude ACP runtime to send to. Configure one and restart the gateway — from a Nessa checkout, `just server` writes one.'
+    case ConversationErrorCode.AgentStartupDeadline:
+      return "The agent was still starting and ran out of time, so nothing was sent. Starting it is slowest the first time after an install or update, while the operating system scans the runtime. Retrying is expected to work."
+    default:
+      return "Conversation command failed"
+  }
+}
+
 /** Failed conversation creation or message admission with its original identities and a safe same-command retry. No request is replayed automatically. */
 export class NessaConversationMutationError<T> extends Error {
   /** False only when the gateway explicitly rejected the command before admission. */
   readonly uncertain: boolean
+  /** Typed gateway rejection code, or undefined when the command failed in transport. Branch on this rather than on the message. */
+  readonly code: ConversationErrorCode | undefined
 
   constructor(
     /** Conversation whose command failed. */
@@ -33,15 +68,10 @@ export class NessaConversationMutationError<T> extends Error {
     cause: unknown,
     private readonly repeat: () => Promise<T>,
   ) {
-    super(
-      cause instanceof NessaRpcError && cause.code === "agent_not_configured"
-        ? 'The gateway started without an agent: its config.json has no "agent" section, so there is no Claude ACP runtime to send to. Configure one and restart the gateway — from a Nessa checkout, `just server` writes one.'
-        : "Conversation command failed",
-      { cause },
-    )
+    super(rejectionMessage(cause), { cause })
+    this.code = cause instanceof NessaRpcError ? knownCode(cause.code) : undefined
     this.uncertain = !(
-      cause instanceof NessaRpcError &&
-      ["agent_not_configured", "invalid_request"].includes(cause.code)
+      cause instanceof NessaRpcError && rejectedBeforeAdmission(cause.code)
     )
     this.name = "NessaConversationMutationError"
   }

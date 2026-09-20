@@ -1,4 +1,4 @@
-import { NessaConversationMutationError } from "@nessa/client"
+import { NessaConversationMutationError, type ConversationErrorCode } from "@nessa/client"
 import {
   contentText,
   hasFileAttachments,
@@ -102,6 +102,8 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
           id,
           executionId,
           message: detail(error),
+          errorCode:
+            error instanceof NessaConversationMutationError ? error.code : undefined,
           uncertain:
             admissionAttempted &&
             !(error instanceof ConversationUnavailableError) &&
@@ -327,6 +329,7 @@ const conversationSlice = createSlice({
         executionId: string
         message: string
         uncertain?: boolean
+        errorCode?: ConversationErrorCode
       }>,
     ) {
       return failSend(
@@ -335,11 +338,15 @@ const conversationSlice = createSlice({
         action.payload.executionId,
         action.payload.message,
         action.payload.uncertain,
+        action.payload.errorCode,
       )
     },
     showError(state, action: PayloadAction<{ id: string; message: string }>) {
       const current = state.conversations.find((item) => item.id === action.payload.id)
-      if (current) current.error = action.payload.message
+      if (current) {
+        current.error = action.payload.message
+        current.errorCode = undefined
+      }
     },
     readStarted(state, action: PayloadAction<{ id: string; requestId: string }>) {
       const current = state.conversations.find((item) => item.id === action.payload.id)
@@ -389,6 +396,7 @@ const conversationSlice = createSlice({
         current.controlPending = true
         current.readRequest = undefined
         current.error = undefined
+        current.errorCode = undefined
       }
     },
     controlFinished(state, action: PayloadAction<string>) {

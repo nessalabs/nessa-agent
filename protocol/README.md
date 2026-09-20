@@ -41,6 +41,12 @@ millisecond wall time. A single monotonic timeout covers challenge delivery and
 authentication; expiry closes with retryable `handshake_timeout` (4006). Typed close reasons distinguish
 terminal authority failures from retryable transport or dependency failures.
 
+Conversation commands answer with a `ConversationErrorCode`. The typed code is
+the contract; the message text is not. `agent_startup_deadline` means the agent
+was still starting when its budget expired, so no input reached the provider and
+repeating the same command is expected to succeed. `agent_not_configured` and
+`invalid_request` reject the command until their cause is addressed.
+
 Credential lifecycle RPC errors distinguish `credential_conflict`,
 `credential_capacity`, and `credential_not_found` from
 `credential_store_unavailable`. The first three reject the command; they do not

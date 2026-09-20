@@ -4,6 +4,7 @@ import {
   type MessageContent,
   type UserTurn,
 } from "../../model"
+import type { ConversationErrorCode } from "@nessa/client"
 import { findConversation, replaceConversation, takeTurnId } from "../internal/ids"
 import type { LocalTabs } from "../local-tabs"
 
@@ -45,6 +46,7 @@ export function beginSend(
     phase: "thinking",
     pending: "",
     error: undefined,
+    errorCode: undefined,
   })
 }
 
@@ -55,6 +57,7 @@ export function failSend(
   executionId: string,
   detail: string,
   uncertain = true,
+  errorCode?: ConversationErrorCode,
 ): LocalTabs {
   const conv = findConversation(tabs, conversationId)
   if (!conv) return tabs
@@ -80,6 +83,7 @@ export function failSend(
   return replaceConversation(tabs, {
     ...(uncertain || otherWork ? conv : { ...conv, phase: "idle" as const }),
     error: detail,
+    errorCode,
     draft: recoveredDraft,
     draftReset:
       recoveredDraft === conv.draft ? conv.draftReset : (conv.draftReset ?? 0) + 1,
