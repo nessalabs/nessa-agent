@@ -1,4 +1,5 @@
 import { NessaRpcError } from "../application/rpc-error.js"
+import { agentOperationTimeoutMs } from "../application/agent-budgets.js"
 import { expect, it, vi } from "vitest"
 import { createConversationApi } from "./conversation-api.js"
 import {
@@ -545,6 +546,9 @@ it("reorders an immutable full queue and accepts each typed outcome", async () =
       requestId: "reorder-action",
       executionIds: ["second", "first"],
     },
+    // Conversation commands can open an agent, so they outlast the connection's
+    // ordinary deadline rather than being abandoned mid-launch.
+    agentOperationTimeoutMs,
   ])
   finish({ requestId: "reorder-action", outcome: "applied" })
   expect(await pending).toEqual({ requestId: "reorder-action", outcome: "applied" })

@@ -100,6 +100,7 @@ pub(super) fn provider(
 }
 #[cfg(unix)]
 mod build {
+    use super::super::agent_budgets as budgets;
     use super::{AgentConfig, RunError};
     use crate::conversation::infrastructure::DurableExecutionAudit;
     use nessa_auth::application::ports::Clock;
@@ -118,7 +119,7 @@ mod build {
             model_metadata_json::load_catalog,
         },
     };
-    use std::{collections::BTreeMap, fs::File, path::Path, sync::Arc, time::Duration};
+    use std::{collections::BTreeMap, fs::File, path::Path, sync::Arc};
     pub(super) fn provider(
         config: &AgentConfig,
         directory: &Path,
@@ -182,10 +183,13 @@ mod build {
                 tools_enabled: config.tools_enabled,
                 mcp_servers: config.mcp_servers.clone(),
                 permissions: PermissionOfferPolicy::once_only(),
-                startup_timeout: Duration::from_secs(45),
+                // From protocol/defaults/agent-startup-budgets.json, which the
+                // client compiles in too: a client that gives up before the
+                // gateway has finished failing never sees the typed answer.
+                startup_timeout: budgets::startup_timeout(),
                 execution_timeout: None,
-                shutdown_grace: Duration::from_secs(3),
-                kill_timeout: Duration::from_secs(2),
+                shutdown_grace: budgets::shutdown_grace(),
+                kill_timeout: budgets::kill_timeout(),
                 event_capacity: 256,
                 max_frame_bytes: 1024 * 1024,
             },

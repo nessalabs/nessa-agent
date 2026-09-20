@@ -20,6 +20,9 @@ mod runtime_config;
 
 mod agent;
 
+#[cfg(any(unix, test))]
+mod agent_budgets;
+
 mod desktop;
 
 mod provisioning;
