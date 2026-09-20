@@ -80,7 +80,15 @@ impl LocalConversationRepository {
 /// supplied is [`NO_AGENT_NAMED`] and is never read back — this decides which
 /// refusal is honest and nothing else. Bringing such records to the current
 /// shape is `scripts/retrofit-conversation-agents.mjs`, not a reader here.
-fn unreadable(bytes: &[u8]) -> ConversationError {
+///
+/// "Otherwise exactly a current record" includes naming the conversation the
+/// file is named for. A record whose `id` disagrees with its filename is a
+/// damaged one whatever fields it has, and the ordinary path refuses it for
+/// that reason — but the ordinary path is only reached by a record that parsed,
+/// so a pre-agent record with the same disagreement would arrive here instead
+/// and be answered "this build cannot open that agent", which is neither true
+/// nor retried. The agreement is checked here for that case alone.
+fn unreadable(bytes: &[u8], id: &ConversationId) -> ConversationError {
     let Ok(serde_json::Value::Object(mut fields)) = serde_json::from_slice(bytes) else {
         return ConversationError::Metadata;
     };
@@ -88,9 +96,14 @@ fn unreadable(bytes: &[u8]) -> ConversationError {
         return ConversationError::Metadata;
     }
     fields.insert("agent".into(), NO_AGENT_NAMED.into());
-    match serde_json::from_value::<StoredConversation>(serde_json::Value::Object(fields)) {
-        Ok(_) => ConversationError::AgentUnsupported,
-        Err(_) => ConversationError::Metadata,
+    let Ok(stored) =
+        serde_json::from_value::<StoredConversation>(serde_json::Value::Object(fields))
+    else {
+        return ConversationError::Metadata;
+    };
+    match ConversationId::new(&stored.id) {
+        Ok(stored_id) if stored_id == *id => ConversationError::AgentUnsupported,
+        _ => ConversationError::Metadata,
     }
 }
 
@@ -116,7 +129,7 @@ fn read(root: &Path, id: &ConversationId) -> Result<Option<Conversation>, Conver
         return Err(ConversationError::Metadata);
     }
     let value: StoredConversation =
-        serde_json::from_slice(&bytes).map_err(|_| unreadable(&bytes))?;
+        serde_json::from_slice(&bytes).map_err(|_| unreadable(&bytes, id))?;
     let stored_id = ConversationId::new(&value.id).map_err(|_| ConversationError::Metadata)?;
     if stored_id != *id {
         return Err(ConversationError::Metadata);

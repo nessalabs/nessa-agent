@@ -91,13 +91,51 @@ function say(message) {
   process.stdout.write(`${message}\n`)
 }
 
-/** Report why there is no agent, and leave the gateway to start without one. */
+/** A configuration the gateway will refuse to start on. */
+class UnusableConfiguration extends Error {}
+
+/**
+ * Report a configuration the gateway will refuse, and fail.
+ *
+ * Distinct from [`skip`], which is for a machine that has no agent: there the
+ * gateway starts and says so when somebody sends a message. Here it does not
+ * start at all, so a zero exit would be this script reporting success for a
+ * file it knows is broken.
+ *
+ * Throws rather than exiting, which `skip` can afford to do and this cannot.
+ * `publish` is exported and the test suite calls it in its own process, so an
+ * exit here would end the whole `node --test` run at the first test that
+ * reached it — and a regression in the very thing this guard watches would
+ * read as a suite that stopped early rather than one that failed. `main`
+ * turns the throw into the nonzero exit a dev loop needs.
+ */
+function stop(reason, remedy) {
+  say(`→ dev agent configuration is unusable: ${reason}`)
+  const lines = Array.isArray(remedy) ? remedy : [remedy]
+  for (const line of lines.filter(Boolean)) say(`  ${line}`)
+  throw new UnusableConfiguration(reason)
+}
+
+/** A machine with no agent to configure. The gateway still starts. */
+class StoodDown extends Error {}
+
+/**
+ * Report why there is no agent, and leave the gateway to start without one.
+ *
+ * Throws, for the same reason [`stop`] does and not only on the paths a test
+ * happens to reach today: `publish` is exported and called in other processes,
+ * and a stand-down that exited would end the caller's run at whichever line
+ * reached it — silently, and with the success status a stand-down carries.
+ * `main` turns this into that status. Throwing also lets the configuration
+ * lock's `finally` run, which an exit from under it skipped, leaving a lock
+ * file behind for the next run to report as somebody else's.
+ */
 function skip(reason, remedy) {
   say(`→ dev agent not configured: ${reason}`)
   const lines = Array.isArray(remedy) ? remedy : [remedy]
   for (const line of lines.filter(Boolean)) say(`  ${line}`)
   say("  the gateway will start, but sending a message will report no agent")
-  process.exit(0)
+  throw new StoodDown(reason)
 }
 
 /**
@@ -281,12 +319,35 @@ export function agentIsSettled(existing) {
   return existing.agents !== undefined
 }
 
-/** Warn about agents someone else owns whose executables have gone missing. */
-function checkExisting(agents, path) {
+/**
+ * Report on a configuration this script is not going to write into.
+ *
+ * Both readers of an already-settled file come through here — the early answer
+ * and the one taken under the lock — because they have the same thing to say
+ * and only one of them used to say all of it.
+ */
+function checkExisting(existing, path, { held = false } = {}) {
+  // First, because nothing else about the file matters if the gateway will not
+  // read it. The `agents` answer beside it is somebody else's and stands, but
+  // this key is this script's own and the gateway refuses to start while it is
+  // there, so it is taken back out rather than reported as a chore.
+  //
+  // Only with the lock held. The early reader has not taken it, so it says what
+  // it found and returns `false`, and the caller goes and takes the lock — the
+  // same right every other write to this file is made under.
+  if (existing.agent !== undefined) {
+    if (!held) {
+      say(`→ ${path} still has the retired "agent" block beside "agents"`)
+      say("  taking the lock to remove it")
+      return false
+    }
+    retireAgentKey(existing, path)
+  }
+  const agents = existing.agents
   if (agents === null) {
     say(`→ ${path} sets "agents": null, which is a gateway with no agents`)
     say('  it was left as it is; remove the "agents" line and rerun to have one written')
-    return
+    return true
   }
   // Every absolute path the configuration would hand this machine. A relative
   // argument is the agent's own vocabulary — a subcommand or a flag — and is
@@ -307,13 +368,35 @@ function checkExisting(agents, path) {
     say(
       `→ dev agents already configured in ${path} (${named.join(", ") || "none named"}); left as it is`,
     )
-    return
+    return true
   }
   say(`→ dev agents in ${path} point at files that are not there:`)
   for (const value of missing) say(`    ${value}`)
   say('  it was left untouched. Reinstall what moved, or remove the "agents" block')
   say("  and run the dev loop again to have one written, after installing a harness:")
   for (const name of Object.keys(AGENTS)) say(`    ${installHarness(name)}`)
+  return true
+}
+
+/**
+ * Take the lock solely to report on, and repair, a file already settled.
+ *
+ * The ordinary path reaches the lock through `publish`, which needs a generated
+ * block to write. Here there is nothing to generate — the question is answered
+ * — and the one thing that still has to happen is a write, so the lock is taken
+ * for that alone rather than by computing a block nobody will use.
+ */
+function checkUnderLock(configPath) {
+  const lock = lockFor(configPath)
+  if ("held" in lock) {
+    say(`→ not repairing ${configPath}: its lock is held by ${lock.held}`)
+    return
+  }
+  try {
+    checkExisting(readExisting(configPath), configPath, { held: true })
+  } finally {
+    lock.release()
+  }
 }
 
 function main() {
@@ -333,7 +416,7 @@ function main() {
   // An early answer, so the work below is skipped entirely. `publish` asks
   // again at the end, because this one goes stale while that work happens.
   if (agentIsSettled(existing)) {
-    checkExisting(existing.agents, configPath)
+    if (!checkExisting(existing, configPath)) checkUnderLock(configPath)
     return
   }
 
@@ -456,6 +539,62 @@ function readHolder(lock) {
   }
 }
 
+/**
+ * Replace the configuration's bytes, never leaving a half-written one in place.
+ *
+ * Throws rather than reporting, because the two callers owe different answers:
+ * a dev loop that could not write the block it generated stands down, and one
+ * that could not remove a key the gateway refuses to start on has failed.
+ */
+function writeConfig(configPath, text) {
+  // Random, not the pid. A run killed between the write and the rename leaves
+  // the temp file behind, and a later run that happens to get the same pid then
+  // fails `wx` with EEXIST — reported as "check the namespace's permissions",
+  // which names the wrong cause entirely.
+  const temporary = `${configPath}.${randomUUID()}.tmp`
+  try {
+    writeFileSync(temporary, text, { mode: 0o600, flag: "wx" })
+    chmodSync(temporary, 0o600)
+    renameSync(temporary, configPath)
+  } catch (error) {
+    try {
+      unlinkSync(temporary)
+    } catch {
+      // Nothing to clean up.
+    }
+    throw error
+  }
+}
+
+/**
+ * Take the retired `agent` key back out of a file this script is not otherwise
+ * writing into.
+ *
+ * This script wrote that key, nothing reads it now, and the server refuses to
+ * start on a file that still carries it — so bringing it to the current shape
+ * is what the standard asks of the tool that wrote it, on this path as much as
+ * on the one where the block is generated. Only that key is touched; the
+ * `agents` answer beside it is somebody else's and is written back exactly as
+ * it was read.
+ *
+ * Called only with the configuration lock held, because it is a write.
+ */
+function retireAgentKey(existing, path) {
+  const { agent: _retired, ...rest } = existing
+  try {
+    writeConfig(path, `${JSON.stringify(rest, null, 2)}\n`)
+  } catch (error) {
+    stop(`${path} still has the retired "agent" block and could not be repaired`, [
+      error.message,
+      "the gateway refuses to start on it: `agent` is an unknown field now",
+      'delete the "agent" key by hand and run the dev loop again',
+    ])
+  }
+  say(`→ ${path} carried the retired "agent" block beside "agents"`)
+  say("    retired    the block an earlier version of this script wrote")
+  say("               the gateway refuses to start while it is there")
+}
+
 export function publish({ configPath, agents, node, mcpBinary, interrupt }) {
   const lock = lockFor(configPath)
   if ("held" in lock) {
@@ -476,15 +615,7 @@ function underLock({ configPath, agents, node, mcpBinary, interrupt }) {
   // Somebody answered the question while this was working. Theirs stands —
   // the same courtesy an agent block already in the file gets.
   if (agentIsSettled(existing)) {
-    checkExisting(existing.agents, configPath)
-    // Their block stands, but a leftover `agent` beside it still stops the
-    // gateway starting, and this script will not write into a file where the
-    // question is already answered. Naming the key is the most it can honestly
-    // do.
-    if (existing.agent !== undefined) {
-      say(`→ ${configPath} also still has the retired "agent" block`)
-      say('  the gateway refuses to start on it; delete the "agent" key and rerun')
-    }
+    checkExisting(existing, configPath, { held: true })
     return false
   }
 
@@ -503,8 +634,10 @@ function underLock({ configPath, agents, node, mcpBinary, interrupt }) {
   // Parse it back before it can become the file the gateway reads. A config.json
   // that does not parse is not a missing agent, it is a server that will not start.
   const round = JSON.parse(text)
+  // Not a stand-down: this script generated a document the gateway will refuse
+  // to start on, which is a bug here and not a machine without an agent.
   if (round.agent !== undefined)
-    skip(
+    stop(
       "the generated configuration still holds the retired agent block",
       "please report this",
     )
@@ -514,23 +647,11 @@ function underLock({ configPath, agents, node, mcpBinary, interrupt }) {
       round.agents.runtimes[name]?.args?.[0] === runtime.args[0],
   )
   if (!survived || round.agents.selected !== agents.selected)
-    skip("the generated configuration did not survive a round trip", "please report this")
+    stop("the generated configuration did not survive a round trip", "please report this")
 
-  // Random, not the pid. A run killed between the write and the rename leaves
-  // the temp file behind, and a later run that happens to get the same pid then
-  // fails `wx` with EEXIST — reported as "check the namespace's permissions",
-  // which names the wrong cause entirely.
-  const temporary = `${configPath}.${randomUUID()}.tmp`
   try {
-    writeFileSync(temporary, text, { mode: 0o600, flag: "wx" })
-    chmodSync(temporary, 0o600)
-    renameSync(temporary, configPath)
+    writeConfig(configPath, text)
   } catch (error) {
-    try {
-      unlinkSync(temporary)
-    } catch {
-      // Nothing to clean up.
-    }
     skip(
       `could not write ${configPath} (${error.message})`,
       "check the namespace's permissions",
@@ -557,4 +678,15 @@ function underLock({ configPath, agents, node, mcpBinary, interrupt }) {
 // through symlinks and `/var` → `/private/var`, but leaves `argv[1]` as typed,
 // and a script that silently did nothing would be the worst failure here.
 const invoked = process.argv[1] ? realpathSync(process.argv[1]) : ""
-if (invoked === realpathSync(fileURLToPath(import.meta.url))) main()
+if (invoked === realpathSync(fileURLToPath(import.meta.url))) {
+  try {
+    main()
+  } catch (error) {
+    // The two answers this script gives about itself. Anything else is a bug
+    // here and keeps its stack, because a dev loop that hides one is worse
+    // than one that prints it.
+    if (error instanceof StoodDown) process.exit(0)
+    if (!(error instanceof UnusableConfiguration)) throw error
+    process.exit(1)
+  }
+}

@@ -56,7 +56,20 @@ pub struct ConversationCaller {
     pub action_id: String,
 }
 impl ConversationCaller {
+    /// The attribution every command on this service records, validated once.
+    ///
+    /// `ActionContext` bounds the length and refuses a blank, and permits
+    /// control characters; `Conversation::check_creator_context` does not. Both
+    /// rules are asked here rather than only where a conversation is
+    /// constructed, because every one of these commands writes this surface and
+    /// action into a durable record — `audit_mapping` carries the action as
+    /// `requestId` — and what gets written down must not rewrite a terminal or
+    /// split a log line whichever command wrote it. The conversation entity
+    /// still asks the same question of its own fields, through the same
+    /// function, so there is one rule and not two that have to agree.
     fn actor(&self) -> Result<ActionContext, ConversationError> {
+        Conversation::check_creator_context(&self.surface_id, &self.action_id)
+            .map_err(|_| ConversationError::InvalidInput)?;
         ActionContext::new(
             self.principal_id.as_str(),
             &self.surface_id,
@@ -65,6 +78,28 @@ impl ConversationCaller {
         .map_err(|_| ConversationError::InvalidInput)
     }
 }
+/// What a creation said about the agent it wants.
+///
+/// Three cases rather than two, because a name this build has no adapter for is
+/// not the same as no name at all and must not be turned into one. It is kept
+/// as a case instead of being refused where the request is parsed, because a
+/// creation for a conversation that already exists reopens it on the agent its
+/// own record names and never looks at this at all: the panel sends its
+/// remembered choice on every send, close, reorder and permission answer, so
+/// refusing the name outright made a name from another build — or from a
+/// rolled-back one — fail every one of those in every existing conversation,
+/// with no way back but editing the host's settings by hand.
+///
+/// A misspelling is still not an installation fact, so it keeps its own
+/// refusal. It is simply given at the point the name would have been used.
+#[derive(Clone, Copy)]
+pub enum RequestedAgent {
+    /// A name this build has an adapter for.
+    Known(AgentId),
+    /// A name it has none for.
+    Unknown,
+}
+
 /// Server-selected admission limits. Clients cannot choose provider budgets or owner capacity.
 ///
 /// What is here is the same for every agent. The output budget a submission
@@ -165,6 +200,19 @@ struct LiveConversation {
 /// nothing at all: an agent dropped from the configuration refuses each of its
 /// conversations instantly and permanently, and thirty-two such refusals used
 /// to leave the server unable to create any conversation at all.
+///
+/// Giving the slot back means giving up the answer with it, which is the second
+/// thing this flag changed and the one that costs something. A slot is where
+/// the attempt is remembered, so a failure that releases it is not cached: the
+/// next call for that conversation runs the whole opening again — `metadata`
+/// load, the audit reconcile, `SessionManager::open`, and a provider spawn —
+/// and fails the same way. A panel polls, and a tab polls per tab, so a runtime
+/// pointed at a binary that is not there spawns once per poll per tab rather
+/// than once. That is accepted deliberately: the alternative is a cached
+/// refusal that survives the user installing the binary, and a wrong answer
+/// held forever is worse than a right one paid for repeatedly. A failure that
+/// did retain something keeps its slot and so keeps its answer, which is why
+/// the expensive case is exactly the cheap one to redo.
 struct OpeningFailure {
     cause: ConversationError,
     _cleanup: Option<AgentInitializationError>,
@@ -247,27 +295,21 @@ impl ConversationService {
         &self,
         id: ConversationId,
         caller: ConversationCaller,
-        agent: Option<AgentId>,
+        agent: Option<RequestedAgent>,
     ) -> Result<(), ConversationError> {
         let service = self.clone();
         supervised(async move {
             let _admission = service.admit().await?;
+            // Asked of every creation, not only the ones that build a
+            // conversation, and before the record is loaded so neither branch
+            // can record a caller nobody validated. A reopen writes this
+            // caller's surface and action into its own audit record, so the
+            // same context has to be fit to record on both branches.
             caller.actor()?;
             if service.inner.retirement.get().is_some() {
                 return Err(ConversationError::Unavailable);
             }
-            let agent = agent.unwrap_or_else(|| service.inner.agents.default_agent());
             let requested_at_ms = service.inner.clock.unix_milliseconds();
-            let proposed = Conversation::new(
-                id.clone(),
-                caller.organization_id.clone(),
-                caller.principal_id.clone(),
-                caller.surface_id.clone(),
-                caller.action_id.clone(),
-                requested_at_ms,
-                agent,
-            )
-            .map_err(|_| ConversationError::InvalidInput)?;
             // Serialize create/reopen decisions without holding the live-owner map
             // across repository or audit I/O. Existing ownership is checked before
             // this request can reserve capacity or open a provider.
@@ -310,10 +352,27 @@ impl ConversationService {
             // before the record above would have refused to reopen somebody's
             // existing Claude conversation because the panel's remembered choice
             // names an agent this server is no longer configured for — a
-            // conversation that does not need that agent at all.
+            // conversation that does not need that agent at all. The same is
+            // true of a name no adapter exists for, which is why that one is
+            // carried this far instead of being refused where it was parsed.
+            let agent = match agent {
+                Some(RequestedAgent::Known(agent)) => agent,
+                Some(RequestedAgent::Unknown) => return Err(ConversationError::InvalidInput),
+                None => service.inner.agents.default_agent(),
+            };
             if service.inner.agents.get(agent).is_none() {
                 return Err(ConversationError::AgentNotConfigured);
             }
+            let proposed = Conversation::new(
+                id.clone(),
+                caller.organization_id.clone(),
+                caller.principal_id.clone(),
+                caller.surface_id.clone(),
+                caller.action_id.clone(),
+                requested_at_ms,
+                agent,
+            )
+            .map_err(|_| ConversationError::InvalidInput)?;
             {
                 let owners = service.inner.conversations.lock().await;
                 if service.inner.retirement.get().is_some() {

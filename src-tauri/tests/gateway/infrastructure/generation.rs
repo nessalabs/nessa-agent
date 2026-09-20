@@ -21,6 +21,7 @@ fn aborted_update_fence_rotates_current_generation_before_classification() {
     let fence = RetirementEvidence {
         fingerprint: FINGERPRINT.into(),
         generation: OLD.into(),
+        retired: true,
     };
     let selected =
         select_generation(&desired, Some(&old), Some(&fence), || Ok(NEW.into())).unwrap();

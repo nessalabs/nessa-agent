@@ -3,7 +3,8 @@ use super::{
     ConversationAgent, ConversationAgents, ConversationCaller, ConversationCreation,
     ConversationCreationAudit, ConversationCreationAuditRecord, ConversationDisposition,
     ConversationError, ConversationFuture, ConversationLimits, ConversationMessageStatus,
-    ConversationOwnershipState, ConversationRepository, ConversationService, SubmissionMode,
+    ConversationOwnershipState, ConversationRepository, ConversationService, RequestedAgent,
+    SubmissionMode,
 };
 use crate::{
     agents::domain::AgentId,
@@ -1450,7 +1451,11 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
     .unwrap();
     let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
     service
-        .create(id.clone(), caller("panel", "create"), Some(AgentId::Codex))
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            Some(RequestedAgent::Known(AgentId::Codex)),
+        )
         .await
         .unwrap();
     assert_eq!(codex.open_calls.load(Ordering::SeqCst), 1);
@@ -1522,7 +1527,11 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
     .unwrap();
     let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
     service
-        .create(id.clone(), caller("panel", "create"), Some(AgentId::Codex))
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            Some(RequestedAgent::Known(AgentId::Codex)),
+        )
         .await
         .unwrap();
     service.shutdown().await.unwrap();
@@ -1608,7 +1617,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
             .create(
                 stranded.clone(),
                 caller("panel", "create"),
-                Some(AgentId::Codex),
+                Some(RequestedAgent::Known(AgentId::Codex)),
             )
             .await
             .unwrap();
@@ -1694,7 +1703,11 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
         )
         .unwrap();
         service
-            .create(id.clone(), caller("panel", "create"), Some(AgentId::Codex))
+            .create(
+                id.clone(),
+                caller("panel", "create"),
+                Some(RequestedAgent::Known(AgentId::Codex)),
+            )
             .await
             .unwrap();
         service.shutdown().await.unwrap();
@@ -1737,7 +1750,11 @@ async fn an_agent_this_server_cannot_start_is_refused_before_anything_is_written
     let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
     assert!(matches!(
         service
-            .create(id.clone(), caller("panel", "create"), Some(AgentId::Codex))
+            .create(
+                id.clone(),
+                caller("panel", "create"),
+                Some(RequestedAgent::Known(AgentId::Codex))
+            )
             .await,
         Err(ConversationError::AgentNotConfigured)
     ));
@@ -1758,10 +1775,179 @@ async fn reopening_is_never_refused_over_an_agent_that_conversation_does_not_nee
         .await
         .unwrap();
     service
-        .create(id.clone(), caller("panel", "reopen"), Some(AgentId::Codex))
+        .create(
+            id.clone(),
+            caller("panel", "reopen"),
+            Some(RequestedAgent::Known(AgentId::Codex)),
+        )
         .await
         .unwrap();
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_name_this_build_knows_nothing_about_refuses_a_creation_and_not_a_reopen() {
+    // The same rule one step further out. The host keeps whatever name setup
+    // wrote, on purpose — throwing away an unfamiliar one would throw away a
+    // choice somebody made — so a name from another build, or from one this
+    // machine was rolled back from, reaches every creation the panel sends.
+    // Refused where it was parsed, that failed every send, close, reorder and
+    // permission answer in every existing conversation, none of which needs the
+    // name at all.
+    let (service, provider, _, _) = fixture(ConversationLimits::default());
+    let existing = id();
+    let fresh = id();
+    service
+        .create(existing.clone(), caller("panel", "create"), None)
+        .await
+        .unwrap();
+    service
+        .create(
+            existing,
+            caller("panel", "reopen"),
+            Some(RequestedAgent::Unknown),
+        )
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+
+    // A conversation that does not exist yet has nothing else to be run on, so
+    // the name is refused there — and as the misspelling it is, not as a fact
+    // about what this installation has configured.
+    assert!(matches!(
+        service
+            .create(
+                fresh,
+                caller("panel", "create-unknown"),
+                Some(RequestedAgent::Unknown),
+            )
+            .await,
+        Err(ConversationError::InvalidInput)
+    ));
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_caller_context_too_damaged_to_record_is_refused_on_a_reopen_too() {
+    // A reopen builds no conversation — it writes this caller's surface and
+    // action into the reopen's own audit record instead. `ActionContext`
+    // refuses a blank and bounds the length; it allows control characters,
+    // which the conversation entity does not. So the same context was refused
+    // for a new conversation and accepted for a reopen, where it landed
+    // unvalidated in a durable `correlation_id`.
+    //
+    // Built on a recording audit rather than the fixture's accepting one,
+    // because the refusal is not the whole claim. A check that sat after the
+    // reopen's own `record` would still answer `InvalidInput`, and would have
+    // handed the damaged context to the audit port on the way — refused, and
+    // written down anyway. Only the port can say which happened.
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let audit = Arc::new(RecordingCreationAudit {
+        records: Mutex::new(Vec::new()),
+        reject: false,
+        started: Notify::new(),
+        gate: Mutex::new(None),
+    });
+    let service = ConversationService::new(
+        only(Arc::new(Provider(provider.clone()))),
+        storage,
+        repository,
+        audit.clone(),
+        Arc::new(TestClock),
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let existing = id();
+    let fresh = id();
+    service
+        .create(existing.clone(), caller("panel", "create"), None)
+        .await
+        .unwrap();
+    // Whatever an accepted creation writes is the baseline; the claim is that a
+    // refused caller adds nothing to it.
+    let before = audit.records.lock().unwrap().len();
+    let wiped = "reopen\u{0}\u{1b}[2Jwiped";
+    assert!(matches!(
+        service.create(existing, caller("panel", wiped), None).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    // Refused before anything was reopened, so the record never existed to be
+    // written: the same answer this context gets for a new conversation.
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        service.create(fresh, caller("panel", wiped), None).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    // The evidence the finding was actually about: prior evidence unchanged,
+    // and nothing of this caller's written down. Only the first creation's
+    // record is there, and no correlation id carries what it sent.
+    {
+        let records = audit.records.lock().unwrap();
+        assert_eq!(
+            records.len(),
+            before,
+            "a refused caller reached the audit port"
+        );
+        assert!(
+            !records
+                .iter()
+                .any(|record| record.correlation_id.contains('\u{0}')),
+            "a control character was written into durable correlation evidence"
+        );
+    }
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_caller_context_too_damaged_to_record_is_refused_by_every_command() {
+    // The rule belongs to the attribution, not to one command. Every command on
+    // this service writes the caller's surface and action into a durable record
+    // — the execution audit carries the action as `requestId` — so a context
+    // that cannot be written down honestly is refused wherever it arrives, not
+    // only where a conversation happens to be constructed.
+    //
+    // `submit` and `close` stand for the rest: they share the one function that
+    // builds the attribution, so a command that stopped asking would have to
+    // stop calling it.
+    let (service, _, _, _) = fixture(ConversationLimits::default());
+    let id = id();
+    service
+        .create(id.clone(), caller("panel", "create"), None)
+        .await
+        .unwrap();
+    let wiped = "send\u{0}\u{1b}[2Jwiped";
+    assert!(matches!(
+        service
+            .submit(
+                id.clone(),
+                caller("panel", wiped),
+                "execution".into(),
+                "Hello".into(),
+                SubmissionMode::Queue,
+            )
+            .await,
+        Err(ConversationError::InvalidInput)
+    ));
+    assert!(matches!(
+        service.close(id.clone(), caller("panel", wiped)).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    // And an ordinary context still gets through both, so the rule refuses the
+    // damage rather than the command.
+    service
+        .submit(
+            id.clone(),
+            caller("panel", "send"),
+            "execution".into(),
+            "Hello".into(),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    completed(&service, &id, 1).await;
+    service.close(id, caller("panel", "close")).await.unwrap();
     service.shutdown().await.unwrap();
 }
 

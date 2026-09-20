@@ -74,10 +74,12 @@ under that agent's name in `runtimes`:
 ```
 
 An agent is started by a command and the arguments handed to it, rather than by a
-shared Node and a per-agent entry script. A harness that runs under Node is
-`"command": ".../node"` with its entry script in `args`; an agent that speaks ACP
-itself is its own executable with its own subcommand, such as
-`"command": "/usr/local/bin/opencode", "args": ["acp"]`. Only the arguments that
+shared Node and a per-agent entry script. Both agents this build has an adapter
+for run under Node, so both are `"command": ".../node"` with an entry script in
+`args`. The pair is wider than that on purpose: an agent that speaks ACP itself
+would be its own executable taking its own subcommand in `args`, which the older
+runtime-plus-entry-script shape could not describe at all. No such agent has an
+adapter here yet, so there is no example of one to copy. Only the arguments that
 are absolute paths are looked for on this machine — anything else is the agent's
 own vocabulary and is passed through untouched.
 
@@ -104,12 +106,18 @@ the gateway stopped:
 
 ```bash
 node scripts/retrofit-conversation-agents.mjs            # --dry-run to look first
+node scripts/retrofit-conversation-agents.mjs --help     # what it takes
 ```
 
 It names Claude, which is honest rather than a guess — Claude was the only agent
 that could have written a record without the field — and it leaves every record
 that already states its agent exactly as it is. Until it has been run, such a
 conversation is refused as `agent_unsupported`.
+
+An entry it cannot read or write is reported by name and the rest are converted,
+so a directory is never left half migrated with nothing saying which half. It
+exits non-zero when that happens; running it again once the obstruction is gone
+is a no-op on everything already done.
 
 Each agent's model must come from its own vendor's entries
 in the catalog: Codex is signed in to OpenAI and cannot reach an Anthropic model,
@@ -354,9 +362,28 @@ the same full-tree SHA-256 used by packaging, then publishes with an exclusive
 atomic rename. The service's executable, `--desktop-runtime` argument and runtime
 `PATH` point exclusively at that retained version, so replacing `Nessa.app` cannot
 replace files under a running gateway. Corrupt existing versions cause an error;
-they are never repaired in place. All published versions are retained; automatic
-runtime garbage collection is not implemented. Failed attempts remove only their
-own temporary directory. macOS may retain its protected `com.apple.provenance`
+they are never repaired in place. Failed attempts remove only their
+own temporary directory.
+
+Once reconciliation has a gateway up, and while it still holds the per-label
+lock, it collects the versions nothing can be running: everything under the
+label except the version just registered, the version the loaded service reports
+over `/health`, and any version named by an unanswered retirement request or by
+a retirement fence that records cleanup or audit failure rather than a completed
+retirement. An update therefore leaves one published version behind, or two
+while a retirement is outstanding. A fence whose retirement was acknowledged
+describes a gateway that cleaned up and was then booted out, so its version is
+collected; honouring it forever would keep one stale generation for good. Interrupted staging attempts
+are collected too, because holding the lock means no other host is staging.
+Nothing else in the directory is touched: only a name this host writes — a
+64-hex fingerprint, or `.staging-` and one — is ever a candidate, and each
+removal is re-checked against the filesystem for a real directory this user
+owns. A reconciliation that failed collects nothing, since its predecessor may
+still be running. One entry never stops the pass: an entry the directory will
+not yield, and one whose name is not valid text, are each reported and stepped
+over, and the versions beside them are still collected. A removal that fails is logged with its path and changes
+nothing about registration: a gateway that is up matters more than disk that was
+not reclaimed. macOS may retain its protected `com.apple.provenance`
 marker on both copy paths; runtime identity and policy do not derive from that
 platform-managed attribute.
 

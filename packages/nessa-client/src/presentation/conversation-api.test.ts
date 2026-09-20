@@ -430,6 +430,55 @@ it.each([
   },
 )
 
+it.each(["toString", "constructor", "valueOf", "__proto__", "hasOwnProperty"])(
+  "treats a gateway answering %s as a failure it cannot explain",
+  async (code) => {
+    // The code is wire text, and the refusal table is an object, so asking it
+    // whether it holds a key answered for every name on `Object.prototype`.
+    // A frame saying `toString` was read as a refusal this gateway had stated
+    // — certain, so the panel would say the command was never admitted — with
+    // a native function printed where the explanation belongs.
+    const request = vi.fn().mockRejectedValue(new NessaRpcError(code, code))
+    const ids = [conversationId, "identity"]
+    let next = 0
+    const api = createConversationApi({ request }, () => ids[next++]!)
+    const error = await api.create().catch((error) => error)
+    expect(error).toBeInstanceOf(NessaConversationMutationError)
+    expect(error.uncertain).toBe(true)
+    expect(error.message).toBe("Conversation command failed")
+  },
+)
+
+it.each([
+  // Every control resolves the conversation before it is dispatched, so each
+  // meets exactly the refusals a creation meets. Saying "we do not know what
+  // happened" for those is true of the delivery and useless to the person: the
+  // reason is the whole fix, and the gateway had already given it.
+  ["conversations_not_configured", "not set up to run conversations"],
+  ["agent_not_configured", "not set up for the agent"],
+  ["agent_unsupported", "this version of Nessa cannot open"],
+])(
+  "explains %s to a control, the way it explains it to a creation",
+  async (code, said) => {
+    const request = vi.fn().mockRejectedValue(new NessaRpcError(code, code))
+    const api = createConversationApi({ request }, () => "identity")
+    for (const failed of [
+      await api.close(conversationId).catch((error) => error),
+      await api
+        .cancel(conversationId, "execution", "permission", "no longer needed")
+        .catch((error) => error),
+      await api.remove(conversationId, "execution").catch((error) => error),
+      await api
+        .answer(conversationId, "execution", "permission", "option")
+        .catch((error) => error),
+    ]) {
+      expect(failed).toBeInstanceOf(NessaConversationControlError)
+      expect(failed.message).toContain(said)
+      expect(failed.uncertain).toBe(false)
+    }
+  },
+)
+
 it("names the remedy for a gateway missing the agent, not just the symptom", () => {
   // A person told only that the agent is not set up has nowhere to go. This is
   // the one refusal with an answer short enough to state, so it states it.

@@ -14,7 +14,7 @@ use super::{
 use crate::{
     agents::domain::AgentId,
     conversation::{
-        application::{ConversationCaller, ConversationError, SubmissionMode},
+        application::{ConversationCaller, ConversationError, RequestedAgent, SubmissionMode},
         domain::ConversationId,
     },
     protocol::{OutgoingMessage, RequestFrame},
@@ -61,7 +61,7 @@ pub(super) async fn dispatch(
                     .create(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id),
-                        agent_id(params.agent.as_deref())?,
+                        requested_agent(params.agent.as_deref()),
                     )
                     .await?;
                 Ok(success(
@@ -253,13 +253,16 @@ fn conversation_id(value: &str) -> Result<ConversationId, ConversationError> {
 
 /// The agent a creation names, if it names one.
 ///
-/// A name no adapter exists for is refused here rather than carried inward: the
-/// service's "this server is not configured for that agent" is a fact about the
-/// installation, and a misspelling is not that.
-fn agent_id(value: Option<&str>) -> Result<Option<AgentId>, ConversationError> {
-    value
-        .map(|name| AgentId::parse(name).ok_or(ConversationError::InvalidInput))
-        .transpose()
+/// A name no adapter exists for is carried inward rather than refused here. It
+/// is still refused — a misspelling is not the installation fact the service's
+/// "not configured for that agent" states, so it keeps its own code — but only
+/// at the point the name would be used, which is never for a conversation that
+/// already exists. The wire says as much: `agent` is "Ignored when the
+/// conversation already exists". Refusing it here made one stale remembered
+/// name fail every send, close, reorder and permission answer in every
+/// conversation on the machine, because the panel sends it on all of them.
+fn requested_agent(value: Option<&str>) -> Option<RequestedAgent> {
+    value.map(|name| AgentId::parse(name).map_or(RequestedAgent::Unknown, RequestedAgent::Known))
 }
 
 #[cfg(test)]

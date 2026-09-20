@@ -111,6 +111,7 @@ export function HandoffFailed({
 export function SetupGate({
   agents,
   children,
+  onHandOver,
 }: {
   /** Where setup asks what each agent's runtime can do. Injected, so a test
    * substitutes an answer instead of a network. */
@@ -118,6 +119,16 @@ export function SetupGate({
   /** The panel, for a surface that has to become it in place. Omitted by the
    * desktop setup window, which closes instead. */
   children?: React.ReactNode
+  /**
+   * The agent setup finished on, told to whoever becomes the panel in place.
+   *
+   * For a surface with no host this is the only record the choice will get:
+   * nothing writes it down and nothing reads it back, so a picker whose
+   * selection is not carried here is a control that decides nothing. Omitted
+   * by the desktop setup window, where the host keeps it and a different
+   * window reads it.
+   */
+  onHandOver?: (agent: string) => void
 }) {
   const onboarding = useOnboarding(agents)
   useIntroSound(onboarding.active)
@@ -129,11 +140,25 @@ export function SetupGate({
   // the way out of setup is not a decision, and `completeOnboarding` is what
   // keeps it. The panel reads it back from the host, because this window is
   // gone by the time it asks.
-  const handoff = useSetupHandoff(
-    onboarding.active,
-    completed,
-    completed ? onboarding.state.agent : undefined,
-  )
+  const finishedOn = completed ? onboarding.state.agent : undefined
+  const handoff = useSetupHandoff(onboarding.active, completed, finishedOn)
+
+  // And told in place to a surface that has no host to write it to. Only on a
+  // finish, which is the same rule the handoff applies: a choice made on the
+  // way out of setup is not a decision. From an effect rather than from the
+  // branch below, so rendering stays a function of what setup reports.
+  //
+  // Which means the panel is mounted, and its own effects have run, before
+  // this one does: React runs a child's effects before its parent's. Nothing
+  // rests on that ordering. What makes the handover safe is that the receiving
+  // side treats a later answer as later — a host read still in flight when
+  // this fires no longer clears what it wrote — so a creation that beat this
+  // effect is the only thing the window costs, and that is the same window a
+  // conversation created mid-setup already lives in.
+  React.useEffect(() => {
+    if (onboarding.active || finishedOn === undefined) return
+    onHandOver?.(finishedOn)
+  }, [onboarding.active, finishedOn, onHandOver])
 
   if (!onboarding.active) {
     // A surface that becomes the panel in place does so now.

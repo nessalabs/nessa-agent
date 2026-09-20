@@ -44,6 +44,89 @@ describe("the agent every conversation is created on", () => {
   })
   afterEach(() => vi.unstubAllGlobals())
 
+  it("is asked for again while nobody has chosen, because setup finishes after the panel is usable", async () => {
+    // The panel exists before the choice is written down. Setup runs in a
+    // second window whose summon step puts the user in this composer, one step
+    // after picking an agent and before anything records it — so the host
+    // answering "nobody has chosen" is the ordinary case during a first run,
+    // not a failure. Remembering it sends every conversation for the rest of
+    // the launch to the gateway's default, which looks exactly like the choice
+    // having been honoured.
+    const { createDependencies } = await import("./dependencies")
+    const create = vi.fn(async ({ conversationId }: { conversationId: string }) => ({
+      conversationId,
+    }))
+    const dependencies = createDependencies()
+    dependencies.session.set({ conversation: { create } } as unknown as NessaClient)
+
+    // The same answer `chosen_agent` gives before `finish_setup` has run, and
+    // the one an unreadable `settings.json` gives too.
+    invoke.mockResolvedValueOnce(null)
+    await dependencies.conversation.create("during-setup")
+    expect(create).toHaveBeenLastCalledWith({
+      conversationId: "during-setup",
+      agent: undefined,
+    })
+
+    invoke.mockResolvedValue("codex")
+    await dependencies.conversation.create("after-setup")
+    expect(create).toHaveBeenLastCalledWith({
+      conversationId: "after-setup",
+      agent: "codex",
+    })
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it("is not asked at all once a surface with no host has handed its choice over", async () => {
+    // A browser has nothing to write the choice to, so setup tells the
+    // dependencies in place. From then on there is nothing to ask.
+    const { createDependencies } = await import("./dependencies")
+    const create = vi.fn(async ({ conversationId }: { conversationId: string }) => ({
+      conversationId,
+    }))
+    const dependencies = createDependencies()
+    dependencies.session.set({ conversation: { create } } as unknown as NessaClient)
+
+    dependencies.rememberChosenAgent("codex")
+    await dependencies.conversation.create("in-place")
+    expect(create).toHaveBeenLastCalledWith({
+      conversationId: "in-place",
+      agent: "codex",
+    })
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it("keeps a choice handed over while a host read was still in flight", async () => {
+    // The surface with no host to ask is exactly the one that hands the choice
+    // over in place, so the two can overlap. An answer that lands afterwards
+    // must not erase what it knows nothing about.
+    const { createDependencies } = await import("./dependencies")
+    const create = vi.fn(async ({ conversationId }: { conversationId: string }) => ({
+      conversationId,
+    }))
+    const dependencies = createDependencies()
+    dependencies.session.set({ conversation: { create } } as unknown as NessaClient)
+
+    let answer!: (value: null) => void
+    invoke.mockReturnValueOnce(
+      new Promise<null>((resolve) => {
+        answer = resolve
+      }),
+    )
+    const asking = dependencies.conversation.create("during-setup")
+    dependencies.rememberChosenAgent("codex")
+    answer(null)
+    await asking
+
+    await dependencies.conversation.create("after-handover")
+    expect(create).toHaveBeenLastCalledWith({
+      conversationId: "after-handover",
+      agent: "codex",
+    })
+    // And the host is not asked again: the choice was handed over, not read.
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+
   it("is asked for again after a host that could not answer, not settled for good", async () => {
     // Driven through the real lookup rather than a stand-in, because the trap
     // is in the real one: it survives a failed host by resolving to nothing, so

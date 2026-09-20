@@ -1,6 +1,7 @@
 //! The Codex profile against a handler speaking Codex's own shapes: what it
 //! selects, what it refuses to proceed without, and what survives translation.
 use super::support::*;
+use crate::application::agent_execution::providers::OperationCapabilities;
 use crate::domain::agent_execution::tools::ToolContent;
 
 #[tokio::test]
@@ -315,5 +316,193 @@ async fn codex_reporting_its_configuration_while_it_is_being_configured_is_not_a
         .await
         .into_result()
         .unwrap();
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn codex_steers_by_queue_although_its_adapter_offers_the_extension() {
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_codex_binding("echo", 16);
+    let opened = binding.open(None).await.unwrap();
+    // The fixture advertises `_meta.steering.supported` because the pinned
+    // adapter does. What it does not implement is the contract that goes with
+    // it: a steer arriving with no live turn is answered by starting a turn of
+    // Codex's own, owned by no prompt this runtime sent, where the shared
+    // worker requires `promptRequired` and would read anything else as a
+    // protocol violation and tear the session down. The profile declines, so
+    // steering queues a prompt instead — see `codex_acp/sessions/profile.rs`.
+    assert_eq!(
+        opened.session.operation_capabilities(),
+        OperationCapabilities {
+            native_steering: false,
+            session_resume: true,
+        }
+    );
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
+}
+
+#[tokio::test]
+async fn a_restored_codex_session_is_configured_again_before_it_is_used() {
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_codex_binding("echo", 16);
+    let opened = binding.open(None).await.unwrap();
+    assert_eq!(
+        opened
+            .session
+            .execute(prompt("before"))
+            .await
+            .into_result()
+            .unwrap(),
+        ExecutionOutcome::Completed
+    );
+    let id = opened.session.id().clone();
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+
+    // The path every Codex conversation takes on every gateway restart, and the
+    // one place the two-step configuration is applied over a provider state
+    // this runtime did not just create.
+    let restored = binding.open(Some(id)).await.unwrap();
+    assert_eq!(
+        restored
+            .session
+            .execute(prompt("after"))
+            .await
+            .into_result()
+            .unwrap(),
+        ExecutionOutcome::Completed
+    );
+    restored
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
+
+    // Resumed rather than opened again: both answer a prompt, and only one of
+    // them is the path a gateway restart takes.
+    assert!(root.path().join("resumed").is_file());
+    // Twice: once for the session that was opened, once for the one that was
+    // resumed. The fixture itself holds the order — a model settled before the
+    // approval mode — and writes a line only after both have arrived.
+    let configured = std::fs::read_to_string(root.path().join("configured")).unwrap();
+    assert_eq!(
+        configured.lines().collect::<Vec<_>>(),
+        [r#"["model", "mode"]"#, r#"["model", "mode"]"#],
+    );
+}
+
+#[tokio::test]
+async fn a_refused_codex_approval_is_the_answer_codex_is_given() {
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_codex_binding("file-change-permission", 16);
+    let mut opened = binding.open(None).await.unwrap();
+    let running = start(&opened, "edit the config").await;
+    let ExecutionUpdate::PermissionRequested { id, options, .. } = next(&mut opened).await else {
+        panic!("expected permission");
+    };
+    // The refusal Codex itself offered, chosen by what it means rather than by
+    // the name Codex gave it: `reject_once` is Codex's spelling, and what this
+    // binding answers with has to be the option Codex sent.
+    let refuse = options
+        .choices()
+        .iter()
+        .find(|option| {
+            option.decision().clone()
+                == PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request())
+        })
+        .unwrap()
+        .id()
+        .clone();
+    opened
+        .session
+        .answer_permission(PermissionAnswer {
+            attribution: attribution(),
+            execution_id: ExecutionId::new("edit the config").unwrap(),
+            id,
+            option_id: refuse.clone(),
+        })
+        .await
+        .map_err(|failure| failure.into_error())
+        .unwrap();
+    // A refusal is an answer, so the turn finishes rather than failing.
+    assert_eq!(running.await.unwrap().unwrap(), ExecutionOutcome::Completed);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(root.path().join("permission-outcome")).unwrap()
+        )
+        .unwrap(),
+        serde_json::json!({"outcome":"selected","optionId":refuse.as_str()})
+    );
+}
+
+#[tokio::test]
+async fn a_codex_approval_the_audit_cannot_record_is_never_given_to_codex() {
+    let _process_slot = process_test_slot().await;
+    let (root, config, model) = codex_configuration("file-change-permission", 16);
+    // Every record refused, which for this run is the answer itself: nothing
+    // else is written before it.
+    let audit = Arc::new(RecordingAudit {
+        reject: true,
+        ..Default::default()
+    });
+    let binding =
+        CodexAcpProvider::new(config, &model, TokenLimits::new(900, 100).unwrap(), audit).unwrap();
+    let mut opened = binding.open(None).await.unwrap();
+    let running = start(&opened, "edit the config").await;
+    let ExecutionUpdate::PermissionRequested { id, options, .. } = next(&mut opened).await else {
+        panic!("expected permission");
+    };
+    let allow = options
+        .choices()
+        .iter()
+        .find(|option| {
+            option.decision().clone()
+                == PermissionDecision::new(PermissionEffect::Allow, PermissionScope::request())
+        })
+        .unwrap()
+        .id()
+        .clone();
+    let failure = opened
+        .session
+        .answer_permission(PermissionAnswer {
+            attribution: attribution(),
+            execution_id: ExecutionId::new("edit the config").unwrap(),
+            id,
+            option_id: allow,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(failure.error(), &AgentError::AuditFailure);
+    assert_eq!(running.await.unwrap(), Err(AgentError::AuditFailure));
+    // The point of refusing: Codex is never told to proceed on a decision
+    // nothing could record. What it is told, if anything, is that the request
+    // was cancelled — which is the session being torn down around it, not an
+    // approval.
+    if let Ok(told) = std::fs::read_to_string(root.path().join("permission-outcome")) {
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&told).unwrap(),
+            serde_json::json!({"outcome": "cancelled"}),
+        );
+    }
+    assert_eq!(
+        opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await
+            .into_result(),
+        Err(AgentError::AuditFailure)
+    );
     assert_gone(&root, "pid");
 }

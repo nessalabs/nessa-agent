@@ -45,11 +45,35 @@ impl CodexProfile {
     }
 }
 impl AcpProfile for CodexProfile {
-    fn supports_steering(&self, initialize: &Value) -> bool {
-        initialize
-            .pointer("/_meta/steering/supported")
-            .and_then(Value::as_bool)
-            == Some(true)
+    /// Codex steers by queue, not natively, although its adapter advertises the
+    /// extension.
+    ///
+    /// The shared runtime sends `_session/steering` with
+    /// `_meta.steering.idleBehavior: "promptRequired"`, and only
+    /// `promptRequired` with `reason: "noRunningTurn"` lets it queue a prompt —
+    /// see `acp/executions/steering.rs` and `docs/claude-acp.md`: "Ambiguous
+    /// delivery is never retried as a prompt."
+    ///
+    /// The pinned adapter does not implement that vocabulary. `idleBehavior`,
+    /// `promptRequired` and `noRunningTurn` appear nowhere in its bundle, and
+    /// `performSteeringRequest` answers a steer that arrives with no live turn
+    /// by calling its own `prompt` and returning `startedNewTurn`. So the
+    /// ordinary race this contract exists for — a steer landing just after a
+    /// turn ended — would have Codex start a turn of its own, carrying the
+    /// user's text, inside a sandbox where it runs commands without asking, and
+    /// owned by no `session/prompt` this runtime sent and no execution it can
+    /// account for. This runtime would then read `startedNewTurn` as a protocol
+    /// violation, report the steer as failed and tear the session down: the
+    /// user told the message failed while Codex was acting on it.
+    ///
+    /// Queue-only steering is already a supported mode and keeps every Codex
+    /// turn owned by a prompt Nessa sent. Turning the native extension on is not
+    /// a question of reading one more outcome name: `startedNewTurn` has no
+    /// owner in this runtime's execution model, so it needs the outcome mapping
+    /// to become the profile's, and a decision about what that turn's audit
+    /// record says. Until then this answers false whatever the adapter offers.
+    fn supports_steering(&self, _initialize: &Value) -> bool {
+        false
     }
 
     fn validate_initialize(&self, result: &Value) -> Result<(), AgentError> {

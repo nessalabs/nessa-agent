@@ -24,11 +24,7 @@ impl Conversation {
         creation_requested_at_ms: u64,
         agent: AgentId,
     ) -> Result<Self, &'static str> {
-        for value in [&creator_surface, &creation_action] {
-            if value.trim().is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
-                return Err("invalid conversation creator context");
-            }
-        }
+        Self::check_creator_context(&creator_surface, &creation_action)?;
         Ok(Self {
             id,
             organization,
@@ -38,6 +34,32 @@ impl Conversation {
             creation_requested_at_ms,
             agent,
         })
+    }
+    /// Whether a surface and action are fit to be recorded against a
+    /// conversation, before there is one to record them against.
+    ///
+    /// Held apart from [`Self::new`] because the two questions are asked at
+    /// different moments. A creation for a conversation that already exists
+    /// builds nothing — it reopens what is on record — and the caller context
+    /// still travels with it, into the reopen's own audit record. Leaving the
+    /// check inside the constructor meant the same surface and action were
+    /// refused for a new conversation and accepted for a reopen, where a
+    /// control character then landed unvalidated in a durable
+    /// `correlation_id`.
+    ///
+    /// The authenticated session has already said who this is. What this adds
+    /// is that what gets written down is readable: not blank, not unbounded,
+    /// and carrying nothing that rewrites a terminal or splits a log line.
+    pub fn check_creator_context(
+        creator_surface: &str,
+        creation_action: &str,
+    ) -> Result<(), &'static str> {
+        for value in [creator_surface, creation_action] {
+            if value.trim().is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+                return Err("invalid conversation creator context");
+            }
+        }
+        Ok(())
     }
     pub fn id(&self) -> &ConversationId {
         &self.id

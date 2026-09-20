@@ -1,11 +1,13 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs"
@@ -231,6 +233,191 @@ test(
     // A hand-written block that cannot launch is reported rather than repaired.
     assert.match(output, /point at files that are not there/)
     assert.match(output, /\/nowhere\/node/)
+  },
+)
+
+test(
+  "a config carrying both the retired key and the new one has the retired one taken out",
+  unixOnly,
+  () => {
+    // What a developer who ran the dev loop on this branch before the retirement
+    // landed now has on disk. The `agents` block answers the question this
+    // script asks, so it writes no block of its own — and used to stand down
+    // saying the file was fine, while `deny_unknown_fields` refused to start
+    // the gateway on the `agent` key still sitting beside it.
+    //
+    // That key is this script's own and nothing reads it, so it is removed
+    // rather than reported as a chore. The `agents` answer beside it belongs to
+    // whoever wrote it and comes back exactly as it went in.
+    const data = temporaryRoot()
+    mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+    const path = join(data, "dev/config.json")
+    const agents = agentsLaunching("/checkout/dist/index.js")
+    writeFileSync(
+      path,
+      JSON.stringify({
+        agent: { node: "/old/node", acpEntry: "/old/entry.js" },
+        agents,
+        session: { writeTimeoutMs: 75 },
+      }),
+      { mode: 0o600 },
+    )
+
+    const output = run(data)
+
+    assert.match(output, /retired "agent" block/)
+    const saved = JSON.parse(readFileSync(path, "utf8"))
+    assert.equal(saved.agent, undefined, "the gateway still refuses to start on this")
+    assert.deepEqual(saved.agents, agents, "somebody else's answer was rewritten")
+    // Only the key this script owned. Another setting in the same file is not
+    // its to tidy either.
+    assert.equal(saved.session.writeTimeoutMs, 75)
+
+    // And a second run has nothing left to say about it.
+    assert.doesNotMatch(run(data), /retired "agent" block/)
+  },
+)
+
+test(
+  "publishing onto that config repairs it in the caller's process rather than ending it",
+  unixOnly,
+  async () => {
+    // `publish` asks the same question again under the lock, and this suite
+    // calls it here, in the process running the tests. Whatever that path
+    // decides, it must not end the process the way the stand-down path does: a
+    // regression there would stop this file at whichever test reached it first
+    // and report the tests that did run as a pass.
+    const { publish } = await import("./dev-agent-config.mjs")
+    const data = temporaryRoot()
+    mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+    const path = join(data, "dev/config.json")
+    const agents = agentsLaunching("/checkout/dist/index.js")
+    writeFileSync(path, JSON.stringify({ agent: { node: "/old/node" }, agents }), {
+      mode: 0o600,
+    })
+
+    const wrote = publish({
+      configPath: path,
+      agents,
+      node: agents.runtimes.claude.command,
+    })
+
+    assert.equal(wrote, false, "somebody else's answer was replaced")
+    const saved = JSON.parse(readFileSync(path, "utf8"))
+    assert.equal(saved.agent, undefined)
+    assert.deepEqual(saved.agents, agents)
+  },
+)
+
+test(
+  "a repair that cannot be written fails the caller instead of reporting success",
+  {
+    // One reason, not two options merged: spreading `unixOnly` and then naming
+    // `skip` again replaced its answer with `false`, so this ran on Windows and
+    // failed there while every other test in the file was skipped.
+    //
+    // Root writes through a read-only directory, so the write cannot be made to
+    // fail as root either. It fails for an ordinary user, which is what the
+    // Linux and macOS runners are.
+    skip:
+      unixOnly.skip ??
+      (process.getuid?.() === 0 ? "run as root; a write here cannot fail" : false),
+  },
+  async () => {
+    // The one path left that reports a configuration the gateway will refuse,
+    // and it throws rather than exiting, for the reason the test above gives.
+    //
+    // The directory is closed from `interrupt`, which runs with the lock
+    // already held — closing it before `publish` is called would only stop the
+    // lock being taken, and that is a different answer entirely.
+    const { publish } = await import("./dev-agent-config.mjs")
+    const data = temporaryRoot()
+    const directory = join(data, "dev")
+    mkdirSync(directory, { recursive: true, mode: 0o700 })
+    const path = join(directory, "config.json")
+    const agents = agentsLaunching("/checkout/dist/index.js")
+    writeFileSync(path, JSON.stringify({ agent: { node: "/old/node" }, agents }), {
+      mode: 0o600,
+    })
+
+    try {
+      assert.throws(
+        () =>
+          publish({
+            configPath: path,
+            agents,
+            node: agents.runtimes.claude.command,
+            interrupt: () => chmodSync(directory, 0o500),
+          }),
+        /could not be repaired/,
+      )
+      // Said, and not half done: the key is still there for the next run.
+      assert.notEqual(JSON.parse(readFileSync(path, "utf8")).agent, undefined)
+    } finally {
+      chmodSync(directory, 0o700)
+    }
+  },
+)
+
+test(
+  "a generated document the gateway would refuse fails the caller, not the run",
+  unixOnly,
+  async () => {
+    // The guards that check what this script itself produced, reached on the
+    // path where `agents` is absent so a document is actually built. They are
+    // bug reports, not stand-downs, and they run in whatever process called
+    // `publish` — so a regression in the retirement that feeds them must fail
+    // the caller rather than end its run with the status a stand-down carries.
+    const { publish } = await import("./dev-agent-config.mjs")
+    const data = temporaryRoot()
+    mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+    const path = join(data, "dev/config.json")
+    const agents = agentsLaunching("/checkout/dist/index.js")
+    // Only the retired key, so the question is still open and the document is
+    // built — which is the path the retirement, and its round-trip guard, are
+    // on. A file holding `agents` too stands down long before this.
+    writeFileSync(path, JSON.stringify({ agent: { node: "/old/node" } }), {
+      mode: 0o600,
+    })
+
+    // The ordinary run retires it and says so.
+    assert.equal(
+      publish({ configPath: path, agents, node: agents.runtimes.claude.command }),
+      true,
+    )
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).agent, undefined)
+  },
+)
+
+test(
+  "standing down does not end the process that called it either",
+  unixOnly,
+  async () => {
+    // The same rule as the guard above, for the other answer. `skip` is the
+    // stand-down, and a stand-down that exited would end a caller's run at
+    // whichever line reached it, carrying the status that says all was well.
+    // Reached here through the lock, which is also the release this throw lets
+    // run: an exit from under it left the lock file behind.
+    const { publish } = await import("./dev-agent-config.mjs")
+    const data = temporaryRoot()
+    const directory = join(data, "dev")
+    mkdirSync(directory, { recursive: true, mode: 0o700 })
+    const path = join(directory, "config.json")
+    const agents = agentsLaunching("/checkout/dist/index.js")
+
+    assert.throws(
+      () =>
+        publish({
+          configPath: path,
+          agents,
+          node: agents.runtimes.claude.command,
+          // Somebody removed the directory out from under the run, so the write
+          // cannot happen and there is no agent configured.
+          interrupt: () => rmSync(directory, { recursive: true }),
+        }),
+      /dev agent not configured|could not write/,
+    )
+    assert.equal(existsSync(`${path}.lock`), false, "the lock was left behind")
   },
 )
 

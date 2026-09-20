@@ -204,3 +204,78 @@ async fn a_record_naming_an_agent_this_build_cannot_start_is_not_opened_on_anoth
     assert!(!matches!(failure, Err(ConversationError::Metadata)));
     std::fs::remove_dir_all(root).ok();
 }
+
+#[tokio::test]
+async fn a_record_missing_more_than_its_agent_is_damaged_and_not_a_pre_agent_record() {
+    // The case the classifier exists to get right, and the one nothing failed
+    // on before: a file that parses as JSON, names no agent, and is not
+    // otherwise a current record. It must not be waved through as "published
+    // before there was a second agent", because it was not — something is wrong
+    // with it, and the caller is owed the answer that says so.
+    //
+    // A truncated file cannot show this. It never parses as JSON at all, so it
+    // is refused by the first line of the classifier and the question of what
+    // the remaining fields look like is never asked.
+    let root = std::env::temp_dir().join(format!("nessa-conversation-damaged-{}", Uuid::new_v4()));
+    let repository = LocalConversationRepository::new(root.clone()).unwrap();
+
+    // Well-formed, no `agent`, and no `owner` either. Supplying the missing
+    // agent still leaves a record this build would not have written.
+    let missing = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let mut file =
+        storage::open(&root.join(format!("{missing}.json")), OpenMode::CreateNew).unwrap();
+    file.write_all(
+        format!(
+            r#"{{"id":"{missing}","organization":"org","creator_surface":"panel","creation_action":"create","creation_requested_at_ms":123}}"#
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    drop(file);
+    assert!(matches!(
+        repository.load(&missing).await,
+        Err(ConversationError::Metadata)
+    ));
+
+    // Well-formed, no `agent`, and a field this build does not know. The record
+    // type refuses unknown keys, so this is not a pre-agent record either.
+    let extra = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let mut file = storage::open(&root.join(format!("{extra}.json")), OpenMode::CreateNew).unwrap();
+    file.write_all(
+        format!(
+            r#"{{"id":"{extra}","organization":"org","owner":"alice","creator_surface":"panel","creation_action":"create","creation_requested_at_ms":123,"model":"opus"}}"#
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    drop(file);
+    assert!(matches!(
+        repository.load(&extra).await,
+        Err(ConversationError::Metadata)
+    ));
+
+    // And one that names a different conversation than the file it is in. The
+    // agreement between the two is checked on the ordinary path, which a record
+    // naming no agent never reaches; without the same check in the classifier
+    // this reads as an agent this build cannot open.
+    let mismatched = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let other = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let mut file = storage::open(
+        &root.join(format!("{mismatched}.json")),
+        OpenMode::CreateNew,
+    )
+    .unwrap();
+    file.write_all(
+        format!(
+            r#"{{"id":"{other}","organization":"org","owner":"alice","creator_surface":"panel","creation_action":"create","creation_requested_at_ms":123}}"#
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    drop(file);
+    assert!(matches!(
+        repository.load(&mismatched).await,
+        Err(ConversationError::Metadata)
+    ));
+    std::fs::remove_dir_all(root).ok();
+}

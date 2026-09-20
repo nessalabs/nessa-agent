@@ -33,6 +33,29 @@ const REFUSALS: Record<string, string> = {
     "This conversation runs on an agent this version of Nessa cannot open.",
 }
 
+/**
+ * What this gateway said, if it said one of these and not something inherited.
+ *
+ * `code in REFUSALS` and `REFUSALS[code]` walk the prototype chain, and the
+ * code is unvalidated wire text — a frame answering `toString` or `__proto__`
+ * was read as a refusal this gateway had stated, which made the failure
+ * certain when the client knew nothing of the kind, and put a native function
+ * where the explanation belongs. This library's job is to treat a frame as
+ * untrusted, and this is the one place a wire string is used as a key.
+ */
+function refusal(cause: unknown): string | undefined {
+  if (!(cause instanceof NessaRpcError)) return undefined
+  return Object.hasOwn(REFUSALS, cause.code) ? REFUSALS[cause.code] : undefined
+}
+
+/** Whether this gateway refused the command outright rather than failing it. */
+function refused(cause: unknown): boolean {
+  return (
+    cause instanceof NessaRpcError &&
+    (refusal(cause) !== undefined || cause.code === "invalid_request")
+  )
+}
+
 /** Failed conversation creation or message admission with its original identities and a safe same-command retry. No request is replayed automatically. */
 export class NessaConversationMutationError<T> extends Error {
   /** False only when the gateway explicitly rejected the command before admission. */
@@ -48,18 +71,11 @@ export class NessaConversationMutationError<T> extends Error {
     cause: unknown,
     private readonly repeat: () => Promise<T>,
   ) {
-    super(
-      (cause instanceof NessaRpcError ? REFUSALS[cause.code] : undefined) ??
-        "Conversation command failed",
-      { cause },
-    )
+    super(refusal(cause) ?? "Conversation command failed", { cause })
     // A refusal is a decision this gateway has already made, so the command
     // never reached an agent and nothing about it is in doubt. Everything else
     // may have been admitted before the failure and is reported as uncertain.
-    this.uncertain = !(
-      cause instanceof NessaRpcError &&
-      (cause.code in REFUSALS || cause.code === "invalid_request")
-    )
+    this.uncertain = !refused(cause)
     this.name = "NessaConversationMutationError"
   }
 
@@ -87,11 +103,23 @@ export class NessaConversationControlError extends Error {
     /** Whether this command is a permission answer whose validated error details carry selection state. @internal */
     permissionAnswer = false,
   ) {
-    super("Conversation control did not return a trustworthy acknowledgement", { cause })
+    // The same refusal, said the same way. `close`, `remove`, `answer`,
+    // `cancel` and `reorder` all resolve the conversation before the control is
+    // dispatched, so they meet exactly the refusals a creation meets — an agent
+    // dropped from `config.json`, a record naming an agent this build cannot
+    // open — and used to report them as an unknown outcome with no reason
+    // given, in the one situation where the reason is the whole fix.
+    super(
+      refusal(cause) ??
+        "Conversation control did not return a trustworthy acknowledgement",
+      { cause },
+    )
     this.permissionSelection = permissionAnswer ? permissionSelection(cause) : undefined
-    this.uncertain =
-      this.permissionSelection !== "pending" &&
-      !(cause instanceof NessaRpcError && cause.code === "invalid_request")
+    // Still only `pending` and an outright refusal make a control certain. A
+    // refusal is stated before the control is applied, which is why it counts;
+    // anything else may have been applied already, and replaying a close is
+    // what that warns about.
+    this.uncertain = this.permissionSelection !== "pending" && !refused(cause)
     this.name = "NessaConversationControlError"
   }
 }

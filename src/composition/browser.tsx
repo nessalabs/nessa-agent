@@ -4,7 +4,6 @@ import { isAuthenticationFailure } from "../session/adapters/client/authenticati
 import { Provider } from "react-redux"
 import { conversationTabSnapshot, restoreConversations } from "../conversation"
 import { createTabStorage } from "../conversation/adapters/browser/tab-storage"
-import { SetupGate } from "../onboarding"
 import { App } from "../panel"
 import {
   canUseGateway,
@@ -21,6 +20,7 @@ import { makeStore } from "../store"
 import type { Environment } from "../env/environment"
 import { maintainBrowserSession } from "../session/adapters/lifecycle/browser-renewal"
 import { createDependencies } from "./dependencies"
+import { BrowserSetupGate } from "./browser-gate"
 
 function createScope(
   environment: Environment,
@@ -94,7 +94,7 @@ function BrowserSession({
   onTerminalFailure: (error: unknown) => void
 }) {
   return (
-    <SetupGate agents={scope.dependencies.agents}>
+    <BrowserSetupGate dependencies={scope.dependencies}>
       <SessionLifecycle
         dependencies={scope.dependencies}
         onTerminalFailure={onTerminalFailure}
@@ -104,7 +104,7 @@ function BrowserSession({
         onSignOut={onDisconnect}
         sessionError={error}
       />
-    </SetupGate>
+    </BrowserSetupGate>
   )
 }
 

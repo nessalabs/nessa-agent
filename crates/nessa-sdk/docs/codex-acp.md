@@ -6,7 +6,10 @@ permissions, prompts, and shared transport contracts, and read the
 [Claude guide](claude-acp.md) alongside it: everything the two bindings share —
 process supervision, restoration identity, queueing and steering, the hook
 contract, the credential and context environment split — is stated there and is
-not repeated here. What follows is what is Codex's own.
+not repeated here. What follows is what is Codex's own. One shared thing this
+binding opts out of: Codex steers by queue, because its adapter advertises the
+steering extension without the outcome contract the shared runtime requires —
+see `codex_acp/sessions/profile.rs`.
 
 ## Composition and application boundary
 
@@ -119,21 +122,45 @@ rejected at startup rather than configured around.
 
 ## Verification
 
-**No live Codex check has been run for this binding.** What exists is
-deterministic: unit tests over the configuration and wire mapping, and contract
-tests that drive a real subprocess speaking ACP —
-`tests/infrastructure/acp/contracts/fixtures/codex_acp_test_handler.py` — through
-the same shared runtime the Claude binding uses. Those cover the ordered
+**A live Codex run reaches this binding's authentication boundary and no
+further.** Against the pinned adapter the gateway starts Codex, `initialize`
+negotiates, and `session/new` is refused on a machine with no OpenAI sign-in.
+Nothing past that point has been observed against the real provider, so no
+dated live table is claimed here; the [Claude guide](claude-acp.md#verification)
+has one and this guide gains its own when somebody runs it, not before.
+
+What exists is deterministic: unit tests over the configuration and wire
+mapping, and contract tests that drive a real subprocess speaking ACP —
+`tests/infrastructure/acp/contracts/fixtures/codex_acp_test_handler.py` —
+through the same shared runtime the Claude binding uses. Those cover the ordered
 configuration steps, a harness or version that is not the pinned one, a model the
 provider does not offer, a refused model or mode, terminal content arriving where
 this client advertises none, a configuration notification arriving while the
 session is still being configured, a permission request carrying its facts in
-`_meta.codex`, and the instructions reaching the provider through its own
-configuration rather than the session request. Resource-link content is covered
-by the wire-mapping unit tests rather than through a subprocess.
+`_meta.codex` and both answers to it, an approval no audit sink could record, a
+resumed session being configured again before it is used, the steering extension
+being declined although the adapter offers it, and the instructions reaching the
+provider through its own configuration rather than the session request.
+Resource-link content is covered by the wire-mapping unit tests rather than
+through a subprocess.
+
+Not covered under this profile, and covered under the Claude profile only: a
+permission cancelled by a close or withdrawn by the provider, a caller lost
+after its answer was admitted, and the queue-ordering paths. The transitions
+belong to the shared worker and its own suites are thorough, but the standard
+asks for shared guarantees to be run across the delivery modes that use them
+rather than inferred from one profile, so these are named here rather than left
+to be assumed. Running them across a profile and fixture pair, instead of
+writing Codex copies, is what closes the gap.
+
+Queue ordering is the narrowest of the three, and worth saying exactly. The
+server routes a steer on the capability rather than on the agent — it queues
+whenever `native_steering` is false — and the backend its own suites run
+against leaves that at the conservative default, so the branch Codex takes is
+already the branch those suites exercise. What is missing there is the name on
+the fixture, not the behaviour. The gap that remains is in this crate's
+suites, where the ordering is driven through a profile's own binding.
 
 They are adapter and process tests. They establish that this binding speaks the
 protocol it claims to and fails closed where it says it does; they establish
-nothing about the real provider's behaviour. The dated live table in the
-[Claude guide](claude-acp.md#verification) has no counterpart here yet, and this
-guide gains one when somebody runs it, not before.
+nothing about the real provider's behaviour.
