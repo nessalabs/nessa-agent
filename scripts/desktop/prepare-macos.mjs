@@ -1,5 +1,5 @@
 // Build a relocatable, self-contained runtime. No user config or credentials enter the bundle.
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import {
   mkdirSync,
   cpSync,
@@ -16,6 +16,7 @@ import {
   RUNTIME_EXECUTABLES,
   runtimeEntitlements,
   signingArguments,
+  signingProblems,
 } from "./runtime-signing.mjs"
 const root = resolve(import.meta.dirname, "../..")
 if (process.platform !== "darwin")
@@ -87,7 +88,13 @@ cpSync(join(root, "crates/nessa-sdk/data/models.json"), join(out, "models.json")
 // and treats a resource as a file, so these ship with whatever signature they
 // are given at this point. Ad-hoc is fine for a build that stays on this
 // machine and is what Apple rejected v0.1.0 for — see runtime-signing.mjs.
-const identity = process.env.APPLE_SIGNING_IDENTITY?.trim() || undefined
+// The hash import-certificate.mjs resolved, which names one certificate and
+// cannot be ambiguous. APPLE_SIGNING_IDENTITY is the bundler's variable and
+// holds a name; either signs, and the hash is preferred when both are there.
+const identity =
+  process.env.NESSA_RUNTIME_SIGNING_IDENTITY?.trim() ||
+  process.env.APPLE_SIGNING_IDENTITY?.trim() ||
+  undefined
 for (const name of RUNTIME_EXECUTABLES) {
   const plist = runtimeEntitlements(name)
   execFileSync(
@@ -98,6 +105,26 @@ for (const name of RUNTIME_EXECUTABLES) {
     }),
     { stdio: "inherit" },
   )
+}
+// Read back now, not only in verify-bundle.mjs. That runs after `tauri build`
+// returns, and the bundler notarizes inside it: a signature Apple would reject
+// gets rejected by Apple first, twenty minutes in, which is the whole cost this
+// is meant to avoid. Here it costs three codesign calls and the build has not
+// started.
+if (identity) {
+  const problems = RUNTIME_EXECUTABLES.flatMap((name) => {
+    const shown = spawnSync("codesign", ["--display", "--verbose=2", join(out, name)], {
+      encoding: "utf8",
+    })
+    if (shown.status !== 0)
+      throw new Error(`Could not read the signature of runtime/${name}:\n${shown.stderr}`)
+    // codesign writes the display to stderr and nothing to stdout.
+    return signingProblems(name, shown.stderr)
+  })
+  if (problems.length > 0)
+    throw new Error(
+      `The runtime was signed, but not the way Apple requires:\n- ${problems.join("\n- ")}`,
+    )
 }
 process.stdout.write(
   identity

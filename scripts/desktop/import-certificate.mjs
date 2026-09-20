@@ -27,12 +27,16 @@ import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 
 /**
- * The Developer ID Application identity in `security find-identity` output, as
- * the SHA-1 hash that names it unambiguously.
+ * The Developer ID Application identity in `security find-identity` output,
+ * both ways it can be named.
  *
- * The hash rather than the human-readable name because the name is what a
- * person reads and the hash is what `codesign` resolves without guessing: two
- * certificates for the same team differ by hash, not by name.
+ * Both, because the two consumers disagree about what an identity is. Our own
+ * `codesign` calls take the SHA-1 hash, which resolves to one certificate and
+ * cannot be ambiguous. The bundler takes `APPLE_SIGNING_IDENTITY` as the
+ * human-readable *name* and checks it against the name on the certificate it
+ * imported — a hash there matches nothing and fails the build before anything
+ * is signed. Exporting the hash into that variable is the mistake this
+ * function's shape exists to prevent.
  *
  * Deliberately only "Developer ID Application". A keychain may also hold a
  * "Developer ID Installer" certificate, which signs installer packages and
@@ -40,7 +44,7 @@ import { pathToFileURL } from "node:url"
  * sometimes produce a failure deep inside the bundler.
  *
  * @param {string} output `security find-identity -v -p codesigning` output
- * @returns {string} the identity's SHA-1 hash
+ * @returns {{ hash: string, name: string }}
  * @throws when there is no such identity, or more than one to choose between
  */
 export function developerIdIdentity(output) {
@@ -59,7 +63,8 @@ export function developerIdIdentity(output) {
         "Set APPLE_SIGNING_IDENTITY to name the one this release signs with.\n" +
         output,
     )
-  return found[0][1]
+  const [, hash, name] = found[0]
+  return { hash, name }
 }
 
 /** Writes a variable for every step after this one. */
@@ -91,9 +96,15 @@ function main() {
   const scratch = mkdtempSync(join(tmpdir(), "nessa-signing-"))
   const pkcs12 = join(scratch, "certificate.p12")
 
+  execFileSync("security", ["create-keychain", "-p", unlock, keychain])
+  // Before the private key goes in, not after the identity comes out. The
+  // workflow's cleanup deletes what this variable names, so anything that can
+  // fail between the two would otherwise leave an unlocked keychain holding a
+  // Developer ID key on the runner, with nothing naming it to delete.
+  exportVariable("NESSA_SIGNING_KEYCHAIN", keychain)
+
   try {
     writeFileSync(pkcs12, Buffer.from(certificate, "base64"), { mode: 0o600 })
-    execFileSync("security", ["create-keychain", "-p", unlock, keychain])
     // Without this the keychain relocks on a timer partway through a long
     // build, and the signature that fails is the one at the end of it.
     execFileSync("security", ["set-keychain-settings", keychain])
@@ -137,19 +148,47 @@ function main() {
       ...existing,
     ])
 
-    const identity =
-      process.env.APPLE_SIGNING_IDENTITY?.trim() ||
-      developerIdIdentity(
-        execFileSync("security", ["find-identity", "-v", "-p", "codesigning", keychain], {
-          encoding: "utf8",
-        }),
-      )
-    exportVariable("APPLE_SIGNING_IDENTITY", identity)
-    // Named so the cleanup step can delete it whatever the build did.
-    exportVariable("NESSA_SIGNING_KEYCHAIN", keychain)
+    // Two names for one certificate, because the two consumers want different
+    // ones. APPLE_SIGNING_IDENTITY is the bundler's, and it compares it with
+    // the name on the certificate it imports for itself — a SHA-1 hash there
+    // matches nothing and fails the build. The hash is ours, for the codesign
+    // calls in prepare-macos.mjs, where it is the unambiguous way to say which
+    // certificate. A name set in the repository's secrets is a person's
+    // decision and is left exactly as it is, for both.
+    // `|| undefined`, not `?.trim()` alone: a workflow that maps an unset
+    // secret into `env:` sets this to the empty string, and an empty identity
+    // is not an identity. Taking it as one exports nothing and signs with
+    // nothing.
+    const named = process.env.APPLE_SIGNING_IDENTITY?.trim() || undefined
+    const found = named
+      ? undefined
+      : developerIdIdentity(
+          execFileSync(
+            "security",
+            ["find-identity", "-v", "-p", "codesigning", keychain],
+            { encoding: "utf8" },
+          ),
+        )
+    const identity = named ?? found.name
+    if (!named) exportVariable("APPLE_SIGNING_IDENTITY", identity)
+    exportVariable("NESSA_RUNTIME_SIGNING_IDENTITY", found?.hash ?? named)
     process.stdout.write(
       `→ imported a Developer ID certificate; signing with ${identity}\n`,
     )
+  } catch (failure) {
+    // The keychain holds a private key and this build is not going to use it.
+    // The workflow would delete it anyway; doing it here as well means a
+    // failure does not depend on a later step running at all. The original
+    // error is what gets raised — a cleanup that also fails must not replace
+    // the reason the build stopped.
+    try {
+      execFileSync("security", ["delete-keychain", keychain])
+    } catch {
+      process.stderr.write(
+        `Could not delete ${keychain} after a failed import; the workflow's cleanup step will try again.\n`,
+      )
+    }
+    throw failure
   } finally {
     // The PKCS#12 and its password are the certificate itself. The keychain
     // has what the build needs; this file has no further use and a private key
