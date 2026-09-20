@@ -1,4 +1,4 @@
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, Read, Seek, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -990,7 +990,7 @@ fn malformed(error: io::Error) -> StoreFailure {
 /// primitive as the record, instead of settling for what a stat can see.
 #[cfg(unix)]
 fn make_executable(file: &File) -> io::Result<()> {
-    file.set_permissions(fs::Permissions::from_mode(0o700))
+    file.set_permissions(std::fs::Permissions::from_mode(0o700))
 }
 
 #[cfg(not(unix))]
