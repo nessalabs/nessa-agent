@@ -80,6 +80,14 @@ for line in sys.stdin:
             "_meta": {"steering": {"supported": True}},
         })
     elif method in ("session/new", "session/resume"):
+        # Where the only live run against a real Codex ended. Its adapter
+        # refuses here, before any session exists, when nothing has signed it
+        # in — the client sent no `authenticate` and the launch named no
+        # default sign-in request. Covered so the binding's answer on that path
+        # is a contract rather than something only a live run ever sees.
+        if mode == "not-signed-in":
+            send({"id": msg["id"], "error": {"code": -32000, "message": "Authentication required"}})
+            continue
         params = msg["params"]
         # Codex is told the workspace and the trusted MCP servers, and nothing
         # else: a model or a tool policy arriving here would be this binding

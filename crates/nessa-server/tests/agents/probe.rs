@@ -11,6 +11,7 @@
 //! unanswered source does to the whole answer.
 
 use super::*;
+use std::collections::BTreeMap;
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -72,6 +73,7 @@ fn launch_files(root: &Path) -> Option<AgentLaunchFiles> {
     Some(AgentLaunchFiles {
         command: root.join("node"),
         paths: vec![root.join("acp-entry.js")],
+        environment: BTreeMap::new(),
     })
 }
 
@@ -142,6 +144,7 @@ fn an_agent_that_is_one_binary_is_installed_once_that_binary_is_there() {
         Some(AgentLaunchFiles {
             command: root.path().join("opencode"),
             paths: vec![],
+            environment: BTreeMap::new(),
         })
     };
     assert_eq!(
@@ -382,3 +385,4 @@ fn an_agent_composition_resolved_nothing_for_is_one_with_nothing_to_launch() {
     assert!(!configured.configured(AgentId::Codex));
     assert!(!probe(None, None, None).configured(AgentId::Claude));
 }
+

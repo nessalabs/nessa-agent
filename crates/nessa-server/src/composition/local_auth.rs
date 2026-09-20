@@ -107,6 +107,7 @@ pub(super) fn product_state(
                         AgentLaunchFiles {
                             command: runtime.command.clone(),
                             paths: runtime.paths(),
+                            environment: super::agent::launch_environment(id),
                         },
                     )
                 })

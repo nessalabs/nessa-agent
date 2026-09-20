@@ -219,6 +219,32 @@ async fn a_refused_model_stops_before_the_approval_mode_is_touched() {
 }
 
 #[tokio::test]
+async fn a_codex_nothing_has_signed_in_refuses_its_session_and_is_reported_as_codex_said() {
+    let _process_slot = process_test_slot().await;
+    // Where the one live run against a real Codex ended. Its adapter refuses
+    // `session/new` outright when nothing has signed it in: the client sent no
+    // ACP `authenticate` — this runtime is shared across vendors and signing in
+    // is not something it does — and the launch named no default sign-in
+    // request either.
+    //
+    // The binding's job on that path is to report what Codex said rather than
+    // to dress it as a transport or configuration fault, and to leave nothing
+    // running behind it. Covered here so it is a contract instead of something
+    // only an authenticated machine could ever discover.
+    let (root, binding) = test_codex_binding("not-signed-in", 16);
+    assert_eq!(
+        binding
+            .open(None)
+            .await
+            .err()
+            .map(|failure| failure.cause().clone())
+            .unwrap(),
+        AgentError::Provider { code: -32000 }
+    );
+    wait_until_gone(&root, "pid").await;
+}
+
+#[tokio::test]
 async fn a_binding_codex_cannot_honour_is_refused_before_a_process_starts() {
     let (_root, config, model) = codex_configuration("echo", 16);
     let limits = TokenLimits::new(900, 100).unwrap();

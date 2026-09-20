@@ -42,7 +42,8 @@ use nessa_auth::application::ports::Clock;
 use nessa_sdk::infrastructure::acp::sessions::StdioMcpServer;
 use serde::Deserialize;
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
+    ffi::OsString,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -230,6 +231,93 @@ fn output_tokens() -> u32 {
     4096
 }
 
+/// The environment every agent process inherits, beyond its credentials.
+///
+/// `env_clear` is what the bindings launch with, so anything an agent needs
+/// has to be named. The vendor-specific entries are each agent's own
+/// directory variable: naming both for both agents would be shorter and
+/// would also hand each agent a pointer into the other's configuration.
+fn process_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
+    let mut environment = BTreeMap::new();
+    let vendor = match agent {
+        AgentId::Claude => "CLAUDE_CONFIG_DIR",
+        AgentId::Codex => "CODEX_HOME",
+    };
+    for key in ["PATH", "HOME", "USER", "LOGNAME", "TMPDIR", vendor] {
+        if let Some(value) = std::env::var_os(key) {
+            environment.insert(key.into(), value);
+        }
+    }
+    if let Some((key, value)) = sign_in_instruction(agent, &credential_environment(agent)) {
+        environment.insert(key.into(), value.into());
+    }
+    environment
+}
+
+/// What an agent has to be *told* about the credential it was handed, beyond
+/// being handed it.
+///
+/// Codex only reaches for a key in its environment when it is asked to sign in
+/// that way. Its adapter takes that request from the client's ACP
+/// `authenticate` or from this variable at startup, and Nessa's shared worker
+/// sends no `authenticate` — the protocol layer is one runtime for every vendor
+/// and signing in is not something it does. So without this, a machine whose
+/// only Codex credential is `OPENAI_API_KEY` starts the agent, is offered as
+/// signed in by setup, and then refuses every `session/new` with
+/// "Authentication required": the readiness answer and the launch describing
+/// different machines.
+///
+/// `api-key` is the only method that works unattended. The others open a
+/// browser or print a device code, which is not something a gateway starting an
+/// agent can complete.
+///
+/// No key travels in this value. The adapter reads the key itself out of the
+/// environment it was started with, which is the one this is added to.
+fn sign_in_instruction(
+    agent: AgentId,
+    credentials: &BTreeMap<OsString, OsString>,
+) -> Option<(&'static str, &'static str)> {
+    match agent {
+        AgentId::Codex if !credentials.is_empty() => {
+            Some(("DEFAULT_AUTH_REQUEST", r#"{"methodId":"api-key"}"#))
+        }
+        // Claude's harness reads its own credential without being asked, and an
+        // agent handed no credential at all has nothing to be told.
+        AgentId::Claude | AgentId::Codex => None,
+    }
+}
+
+/// Exactly what a launched agent's environment is, for anything that has to
+/// ask about the agent rather than start it.
+///
+/// The readiness probe runs the agent's own tool to ask whether it is
+/// signed in, and an answer from a different environment is an answer about
+/// a different installation: `CODEX_HOME` decides which account it reads,
+/// and the session-bus variables decide whether a keyring can be opened at
+/// all. Inheriting this server's whole environment would let the probe find
+/// a sign-in the launch then cannot use.
+pub(super) fn launch_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
+    let mut environment = process_environment(agent);
+    environment.extend(credential_environment(agent));
+    environment
+}
+
+/// The sign-in this agent is started with, read from this server's own
+/// environment. Named per agent so neither is handed the other's key.
+fn credential_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
+    let keys: &[&str] = match agent {
+        AgentId::Claude => &["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+        AgentId::Codex => &["CODEX_API_KEY", "OPENAI_API_KEY"],
+    };
+    let mut environment = BTreeMap::new();
+    for key in keys {
+        if let Some(value) = std::env::var_os(key) {
+            environment.insert((*key).into(), value);
+        }
+    }
+    environment
+}
+
 /// Build a provider for every configured agent.
 ///
 /// All of them, not only the selected one: a conversation records the agent it
@@ -272,7 +360,7 @@ mod build {
     use crate::conversation::infrastructure::DurableExecutionAudit;
     use nessa_auth::application::ports::Clock;
     use nessa_sdk::{
-        application::agent_execution::providers::AgentProvider,
+        application::agent_execution::{agents::AgentError, providers::AgentProvider},
         domain::{
             agent_execution::{
                 permissions::PermissionOfferPolicy,
@@ -286,7 +374,7 @@ mod build {
             codex_acp::sessions::CodexAcpProvider, model_metadata_json::load_catalog,
         },
     };
-    use std::{collections::BTreeMap, fs::File, path::Path, sync::Arc, time::Duration};
+    use std::{fs::File, path::Path, sync::Arc, time::Duration};
 
     /// Which model catalog entries an agent's harness is allowed to run.
     ///
@@ -299,42 +387,6 @@ mod build {
             AgentId::Claude => "anthropic",
             AgentId::Codex => "openai",
         }
-    }
-
-    /// The environment every agent process inherits, beyond its credentials.
-    ///
-    /// `env_clear` is what the bindings launch with, so anything an agent needs
-    /// has to be named. The vendor-specific entries are each agent's own
-    /// directory variable: naming both for both agents would be shorter and
-    /// would also hand each agent a pointer into the other's configuration.
-    fn process_environment(agent: AgentId) -> BTreeMap<std::ffi::OsString, std::ffi::OsString> {
-        let mut environment = BTreeMap::new();
-        let vendor = match agent {
-            AgentId::Claude => "CLAUDE_CONFIG_DIR",
-            AgentId::Codex => "CODEX_HOME",
-        };
-        for key in ["PATH", "HOME", "USER", "LOGNAME", "TMPDIR", vendor] {
-            if let Some(value) = std::env::var_os(key) {
-                environment.insert(key.into(), value);
-            }
-        }
-        environment
-    }
-
-    /// The sign-in this agent is started with, read from this server's own
-    /// environment. Named per agent so neither is handed the other's key.
-    fn credential_environment(agent: AgentId) -> BTreeMap<std::ffi::OsString, std::ffi::OsString> {
-        let keys: &[&str] = match agent {
-            AgentId::Claude => &["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
-            AgentId::Codex => &["CODEX_API_KEY", "OPENAI_API_KEY"],
-        };
-        let mut environment = BTreeMap::new();
-        for key in keys {
-            if let Some(value) = std::env::var_os(key) {
-                environment.insert((*key).into(), value);
-            }
-        }
-        environment
     }
 
     /// Nessa's own instructions, attributed to Nessa rather than to the agent.
@@ -390,8 +442,8 @@ mod build {
         let acp = AcpConfig {
             executable: runtime.command.clone(),
             arguments: runtime.args.iter().map(Into::into).collect(),
-            environment: process_environment(agent),
-            credential_environment: credential_environment(agent),
+            environment: super::process_environment(agent),
+            credential_environment: super::credential_environment(agent),
             workspace,
             tools_enabled: runtime.tools_enabled,
             mcp_servers: config.mcp_servers.clone(),
@@ -404,9 +456,7 @@ mod build {
             max_frame_bytes: 1024 * 1024,
         };
         let prompt = system_prompt()?;
-        let failed = |e: nessa_sdk::application::agent_execution::agents::AgentError| {
-            RunError::Agent(format!("{}: {e}", agent.name()))
-        };
+        let failed = |e: AgentError| RunError::Agent(format!("{}: {e}", agent.name()));
         let provider: Arc<dyn AgentProvider> = match agent {
             AgentId::Claude => Arc::new(
                 ClaudeAcpProvider::new(acp, &model, limits, audit)
