@@ -17,8 +17,8 @@ fn bundled_runtime(bundle: &Path) {
 }
 
 /// Every agent the desktop ships, with its command and entry script as two
-/// bundle-relative names. Not every agent Nessa knows: Opencode is installed
-/// onto the machine by `nessa install-agent`, so a bundle that contained it
+/// bundle-relative names. Not every agent Nessa knows: Opencode is meant to be
+/// fetched onto the machine rather than shipped, so a bundle containing it
 /// would be one nobody builds.
 fn bundled_agents() -> Vec<(AgentId, [String; 2])> {
     AgentId::ALL

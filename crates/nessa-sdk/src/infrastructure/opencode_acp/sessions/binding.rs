@@ -7,7 +7,6 @@ use crate::application::agent_execution::providers::{
     AgentProvider, ProviderIdentity, ProviderOpenFuture,
 };
 use crate::domain::agent_execution::permissions::PermissionScope;
-use crate::domain::agent_execution::prompts::SystemPrompt;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::common::value_objects::TokenLimits;
 use crate::domain::effective_capabilities::value_objects::{
@@ -25,7 +24,6 @@ use tokio::process::Command;
 pub struct OpencodeAcpProvider {
     config: AcpConfig,
     capabilities: EffectiveCapabilities,
-    system_prompt: Option<SystemPrompt>,
     audit: Arc<dyn ExecutionAudit>,
 }
 
@@ -105,23 +103,36 @@ impl OpencodeAcpProvider {
         Ok(Self {
             config,
             capabilities,
-            system_prompt: None,
             audit,
         })
     }
 
-    /// Replace the harness's default instructions with these attributed ones.
-    /// The metadata stays local; only composed text reaches the launched process.
-    pub fn with_system_prompt(mut self, prompt: SystemPrompt) -> Self {
-        self.system_prompt = Some(prompt);
-        self
-    }
-
-    /// Borrow the configured override and its contribution provenance, or None
-    /// when opening should retain the harness default instructions.
-    pub fn system_prompt(&self) -> Option<&SystemPrompt> {
-        self.system_prompt.as_ref()
-    }
+    // No `with_system_prompt`, deliberately, and its absence is the contract:
+    // Nessa has found no way to give Opencode instructions over ACP that it can
+    // show arrives.
+    //
+    // The other two profiles each have one and prove it. Claude carries the
+    // text in `_meta.systemPrompt`; Codex writes it into `CODEX_CONFIG` and has
+    // a test that reads it back out of the launched process. Opencode offers no
+    // equivalent that could be tested: `initialize` advertises no such
+    // capability, and while `session/new` accepts `instructions`,
+    // `systemPrompt` and `_meta.systemPrompt` without complaint, so does it
+    // accept `thisFieldIsNonsense` — the server ignores unknown parameters
+    // rather than rejecting them, so acceptance says nothing about delivery,
+    // and the one thing that would say is a model turn.
+    //
+    // A builder here would compile, look like the others, and drop the text in
+    // silence. It would also change the provider fingerprint, so editing a
+    // prompt that never arrived would invalidate restorable Opencode sessions
+    // for no effect on them. Leaving it out makes composition unable to pass
+    // one by accident, which is the property worth having.
+    //
+    // What this costs: Opencode runs under its own default instructions, not
+    // Nessa's. The MCP servers are still handed over at `session/new`, so
+    // Nessa's tools are offered — what cannot be said is that they are to be
+    // preferred. `MODE` keeps every session in `plan`, which runs nothing, so
+    // nothing acts on the difference today; giving Opencode `build` means
+    // solving this first.
 
     fn launch_command(&self) -> Command {
         let mut command = Command::new(&self.config.executable);
@@ -145,11 +156,9 @@ impl AgentProvider for OpencodeAcpProvider {
         ProviderIdentity::new(
             "opencode-acp",
             self.capabilities.model().model_id(),
-            identity::fingerprint(
-                &self.config,
-                self.capabilities.limits(),
-                self.system_prompt.as_ref(),
-            ),
+            // `None`: there is no prompt to hash, and hashing one that never
+            // reached the process would tie restoration to text it never saw.
+            identity::fingerprint(&self.config, self.capabilities.limits(), None),
         )
         .expect("validated model and fixed-size context fingerprint")
     }

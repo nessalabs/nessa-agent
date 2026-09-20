@@ -27,10 +27,17 @@ const DEFAULT_AGENT: AgentId = AgentId::Claude;
 ///
 /// Opencode is not bundled. It is a whole runtime of its own — nearly two
 /// hundred megabytes, against a few for a Node adapter — and shipping it would
-/// put that in every download for the people who already have an agent.
-/// `nessa install-agent opencode` fetches the pinned release instead, on the
-/// machine that wants it, which is why this says nothing about where it lives:
-/// the install writes that into the configuration.
+/// put that in every download for the people who already have an agent. It is
+/// meant to be fetched onto the machine that wants it instead, which is why
+/// this says nothing about where it lives.
+///
+/// Nothing writes that yet, and this comment does not pretend otherwise. The
+/// installer is on another branch and, even there, it unpacks a binary and
+/// prints a report — it does not record a runtime, and no other code turns the
+/// unpacked path into one. So `None` here is the whole truth at this commit:
+/// the desktop does not ship Opencode and nothing else supplies it either.
+/// What is missing between the two is a step that records the installed launch,
+/// and model catalog entries for OpenCode Zen to select against.
 fn bundled_launch(agent: AgentId) -> Option<(&'static str, &'static str)> {
     match agent {
         AgentId::Claude => Some((
@@ -54,9 +61,11 @@ fn default_model(agent: AgentId) -> &'static str {
     match agent {
         AgentId::Claude => "claude-sonnet-5",
         AgentId::Codex => "gpt-5.6-terra",
-        // Reachable only if Opencode is ever bundled; the install writes its
-        // own configuration, model included. Named rather than wildcarded so
-        // that a new agent has to say what it starts on.
+        // Unreachable today: this is read for bundled agents, and Opencode is
+        // not one. Named rather than wildcarded so that a new agent has to say
+        // what it starts on. It is also not yet selectable — the shipped
+        // catalog has no OpenCode Zen entries — so whatever configures Opencode
+        // has to add those before this string means anything.
         AgentId::Opencode => "opencode/big-pickle",
     }
 }
@@ -71,9 +80,11 @@ pub(super) fn configure(
     }
     let catalog = bundle.join("models.json");
     let mcp = bundle.join("nessa-mcp");
-    // Only the agents this desktop ships. An agent that is installed onto the
-    // machine instead has its launch written by the install, and a bundle
-    // checked for files it was never meant to contain would refuse to start.
+    // Only the agents this desktop ships. A bundle checked for files it was
+    // never meant to contain would refuse to start, so an agent with no bundled
+    // launch is skipped here rather than looked for. Skipped is all it is: no
+    // launch is written for it anywhere else yet either, so an unbundled agent
+    // stays unconfigured and the picker says exactly that.
     let launches: Vec<(AgentId, PathBuf, PathBuf)> = AgentId::ALL
         .iter()
         .filter_map(|agent| {

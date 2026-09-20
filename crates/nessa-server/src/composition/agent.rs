@@ -432,11 +432,16 @@ mod build {
                     .map_err(failed)?
                     .with_system_prompt(prompt),
             ),
-            AgentId::Opencode => Arc::new(
-                OpencodeAcpProvider::new(acp, &model, limits, audit)
-                    .map_err(failed)?
-                    .with_system_prompt(prompt),
-            ),
+            // No prompt, because there is nowhere to put one that Opencode can
+            // be shown to read: its binding offers no `with_system_prompt` for
+            // exactly that reason, and this arm not calling one is the compiler
+            // enforcing it rather than a convention someone has to remember.
+            // Opencode therefore runs under its own instructions. It is opened
+            // in a mode that runs nothing, which is what keeps that difference
+            // from mattering yet.
+            AgentId::Opencode => {
+                Arc::new(OpencodeAcpProvider::new(acp, &model, limits, audit).map_err(failed)?)
+            }
         };
         Ok(provider)
     }

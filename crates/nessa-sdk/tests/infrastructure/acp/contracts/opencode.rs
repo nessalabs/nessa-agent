@@ -2,9 +2,15 @@
 //! it selects, what it refuses to proceed without, and what survives
 //! translation.
 //!
-//! The handler's frames were read off Opencode 1.18.31 by driving the installed
-//! binary — the same one `nessa install-agent opencode` puts on the machine —
-//! with an empty home and recording what it answered.
+//! Not all of the handler's frames were recorded, and the difference is stated
+//! in the handler's own docstring rather than glossed here. The `initialize`
+//! result and the `session/new` shapes were read off Opencode 1.18.31 by
+//! driving the binary with an empty home. The tool call, the permission request
+//! and the mid-turn mode change were not: each only happens during a model
+//! turn, and this environment's network policy does not allow OpenCode Zen's
+//! host, so those are written from the ACP specification. What the tests below
+//! prove about them is that this profile translates those shapes correctly —
+//! not that Opencode sends them.
 use super::support::*;
 use crate::domain::agent_execution::tools::ToolContent;
 
@@ -77,9 +83,11 @@ async fn a_session_that_leaves_its_mode_afterwards_fails_the_execution() {
     assert!(outcome.is_err(), "{outcome:?}");
 }
 
-/// The version is the one `nessa install-agent opencode` pins, and the name is
-/// the agent's own. An Opencode that Nessa did not install is one whose wire
-/// behaviour nobody here has read.
+/// The version is the one this profile was written against, and the name is the
+/// agent's own. An Opencode of another version is one whose wire behaviour
+/// nobody here has read, and it is refused rather than driven on the hope that
+/// nothing moved. Nothing yet ties that version to one anybody installs — see
+/// the note on `VERSION`.
 #[tokio::test]
 async fn an_opencode_this_profile_was_not_written_against_is_refused() {
     for mode in ["wrong-harness", "wrong-version"] {
@@ -110,6 +118,31 @@ async fn opencode_reporting_its_configuration_while_it_is_being_configured_is_no
     assert!(binding.open(None).await.is_ok());
 }
 
+/// Opencode opens every session in `build` and offers no way to start in the
+/// mode this binding wants, so until the selection lands, `build` is the honest
+/// answer to what mode the session is in. Announcing it is Opencode being
+/// truthful, and the session must survive it — the pair of this test and
+/// `a_session_that_leaves_its_mode_afterwards_fails_the_execution` is the whole
+/// rule: tolerated before the selection, refused after it.
+#[tokio::test]
+async fn opencode_naming_the_mode_it_opened_in_is_not_leaving_the_one_it_is_given() {
+    let _process_slot = process_test_slot().await;
+    let (_root, binding) = test_opencode_binding("announces-start-mode", 16);
+    assert!(binding.open(None).await.is_ok());
+}
+
+/// Tolerating the mode Opencode opens in is not tolerating any mode at all.
+/// The window before the selection lands admits the two modes the session
+/// offers and nothing else, so a session announcing a third is still refused —
+/// otherwise "we have not configured it yet" would be a hole a session could
+/// be put into any policy through.
+#[tokio::test]
+async fn a_mode_the_session_never_offered_is_refused_even_before_it_is_configured() {
+    let _process_slot = process_test_slot().await;
+    let (_root, binding) = test_opencode_binding("announces-unknown-mode", 16);
+    assert!(binding.open(None).await.is_err());
+}
+
 /// Opencode reports tool calls in the protocol's own shape, so what this
 /// profile adds is that they survive whole — the announcement and the update
 /// that completes it are one call, not two.
@@ -135,9 +168,15 @@ async fn a_tool_call_arrives_with_what_it_read() {
     assert_eq!(contents, vec![ToolContent::text("fn main() {}".to_owned())]);
 }
 
-/// A permission request reaches the host naming the tool and carrying the
-/// arguments it is asking about. Reviewing a title alone would record a decision
-/// against "Edit" with nothing saying what would be edited.
+/// A permission request reaches the host naming what class of action it is and
+/// carrying the arguments it would act on.
+///
+/// Named by its ACP kind, not by its title. The title here is "Edit
+/// src/main.rs", which is the friendlier label and the wrong thing to record: a
+/// title is display text Opencode composes, possibly out of what the model
+/// supplied, and nothing makes it agree with `rawInput`. The kind is one of the
+/// protocol's ten and the arguments say what is being acted on, which together
+/// are a decision somebody can be held to.
 #[tokio::test]
 async fn an_edit_approval_reaches_the_host_with_what_it_would_change() {
     let _process_slot = process_test_slot().await;
@@ -150,9 +189,10 @@ async fn an_edit_approval_reaches_the_host_with_what_it_would_change() {
     else {
         panic!("expected permission");
     };
-    // The tool call's own title, and the arguments it would act on. A decision
-    // recorded against a name with nothing under it is not a reviewed decision.
-    assert_eq!(input.name, "Edit src/main.rs");
+    // The kind, though the frame also carries a title. A decision recorded
+    // against a name with nothing under it is not a reviewed decision, and one
+    // recorded against a name the request chose the wording of is not either.
+    assert_eq!(input.name, "edit");
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&input.arguments_json).unwrap(),
         serde_json::json!({"filePath": "src/main.rs", "newText": "fn main() {}"})

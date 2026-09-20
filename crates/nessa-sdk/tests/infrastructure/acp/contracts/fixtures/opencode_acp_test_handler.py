@@ -1,9 +1,35 @@
 """ACP test handler for Opencode adapter tests; launched only by the test suite.
 
-The shapes here were read off Opencode 1.18.31 itself, by running
-`opencode acp` with an empty home and recording what it answered: the
-`initialize` result, and a `session/new` that succeeds with no authentication
-challenge and offers `model` and `mode` as config options.
+Which frames are recorded and which are not, because the difference decides
+how much the tests below are worth:
+
+RECORDED off Opencode 1.18.31, by running `opencode acp` with an empty home and
+keeping what it answered:
+  - the `initialize` result, including `agentInfo` and the absence of any
+    steering or instruction capability;
+  - `session/new`: it succeeds with no authentication challenge, and offers
+    `model` and `mode` as config options, with `build` current;
+  - that unknown parameters on `session/new` are ignored rather than refused.
+
+ASSUMED from the ACP specification, because observing them needs a model turn
+and this environment's network policy does not allow OpenCode Zen's host:
+  - `tool_call` and `tool_call_update` (the `read-tool-call` mode);
+  - `session/request_permission` and its `rawInput` (the `edit-permission`
+    mode), in particular that Opencode carries arguments there and needs no
+    `_meta` fallback of the kind Codex required;
+  - a mid-turn `current_mode_update` (`left-the-mode`, `announces-start-mode`).
+
+An assumed shape that turns out wrong shows up as this handler and Opencode
+disagreeing, not as a test that quietly passes — but until one has been seen,
+the production code that reads them says "assumed", and so does this.
+
+Adversarial modes, each naming the contract it deliberately breaks, since a
+shared contract fixture otherwise conforms by default: `wrong-harness` (lies in
+`agentInfo.name`), `wrong-version` (lies in `agentInfo.version`),
+`model-not-offered` (omits the asked-for model), `model-refused` (errors the
+model selection), `mode-refused` (reports a mode other than the one selected),
+`left-the-mode` (leaves the selected mode mid-turn), `announces-unknown-mode`
+(names a mode the session does not offer).
 """
 import json
 import os
@@ -107,6 +133,18 @@ for line in sys.stdin:
             assert params["value"] == model_id()
             if mode == "startup-update-configuring":
                 update({"sessionUpdate": "config_option_update", **configs()})
+            # The truth, at the one moment it is the truth: nothing has
+            # selected a mode yet, so the session really is in `build`.
+            if mode == "announces-start-mode":
+                update({"sessionUpdate": "current_mode_update",
+                        "currentModeId": "build"})
+            # Adversarial: a mode Opencode does not offer, announced in the
+            # window where the two it does offer are tolerated. Breaks the
+            # contract that `currentModeId` names one of the session's own
+            # modes.
+            if mode == "announces-unknown-mode":
+                update({"sessionUpdate": "current_mode_update",
+                        "currentModeId": "yolo"})
             if mode == "model-refused":
                 send({"id": msg["id"], "error": {"code": -32042, "message": "unknown model"}})
                 continue

@@ -14,15 +14,20 @@ use std::collections::HashMap;
 /// The agent this profile is written against, as it names itself.
 ///
 /// Opencode's ACP server is part of Opencode itself rather than a separate
-/// adapter package, so the name checked here is the agent's own — and the
-/// version is the one `nessa install-agent opencode` pins. A machine running an
-/// Opencode that Nessa did not install is not one this profile has read the wire
-/// behaviour of, and says so rather than guessing.
+/// adapter package, so the name checked here is the agent's own. A machine
+/// running an Opencode this profile has not read the wire behaviour of is one
+/// it refuses rather than guesses at.
 pub(super) const HARNESS: &str = "OpenCode";
 
-/// The pinned version. Every wire shape this profile reads was read out of it.
-/// Kept equal to the release `crates/nessa-server/data/agent-releases.json`
-/// pins: one version is installed and one version is driven.
+/// The version this profile was written against, checked at `initialize`.
+///
+/// Nothing enforces that it agrees with a version anyone installs, and it is
+/// worth being plain about that rather than implying otherwise. The intended
+/// pin lives in `crates/nessa-server/data/agent-releases.json` on the branch
+/// that adds `nessa install-agent`, which is not an ancestor of this one — so
+/// at this commit there is no second place for this string to agree with, and
+/// when the two branches meet, a test tying them together is what would make
+/// "one version installed, one version driven" true instead of hoped for.
 pub(super) const VERSION: &str = "1.18.31";
 
 /// The session mode this binding runs Opencode in.
@@ -49,6 +54,15 @@ pub(super) const VERSION: &str = "1.18.31";
 /// — so the window before `plan` is selected is one in which the session has
 /// not been prompted and cannot have run anything.
 pub(super) const MODE: &str = "plan";
+
+/// The mode Opencode opens a session in, before this binding selects [`MODE`].
+///
+/// Named because it is the truthful value of `currentModeId` for the whole
+/// establishment window, and a session that announces it must not be refused
+/// for saying so. That is the same tolerance `verify_session` and the
+/// `config_option_update` arm already grant the config options, for the same
+/// reason: nothing has been selected yet.
+pub(super) const START_MODE: &str = "build";
 
 /// Opencode's session contract: what this binding selects, checks, and retains.
 #[derive(Clone)]
@@ -125,9 +139,30 @@ impl AcpProfile for OpencodeProfile {
             }
             // A mode this binding has already put the session into, changing
             // afterwards, is the session leaving the policy it was opened under
-            // — whenever it arrives, and whoever changed it.
-            "current_mode_update" if string(update, "currentModeId")? != MODE => {
-                Err(protocol("session mode changed"))
+            // — whoever changed it.
+            //
+            // Gated on `configured` for the same reason the arm above is, and
+            // it is easy to get wrong here because the Codex profile this was
+            // written against does not need the gate: Codex is launched in its
+            // least permissive mode and is never in another one. Opencode is
+            // the opposite — it opens in `START_MODE` and offers no way to
+            // start in `MODE` — so before this binding has selected anything,
+            // `build` is the honest answer to what mode the session is in, and
+            // refusing it would be refusing Opencode for telling the truth.
+            // Before configuration either of the two modes it offers is
+            // accepted; after it, only the one this binding chose.
+            "current_mode_update" => {
+                let reported = string(update, "currentModeId")?;
+                let permitted = if configured {
+                    reported == MODE
+                } else {
+                    reported == MODE || reported == START_MODE
+                };
+                if permitted {
+                    Ok(())
+                } else {
+                    Err(protocol("session mode changed"))
+                }
             }
             _ => Ok(()),
         }
