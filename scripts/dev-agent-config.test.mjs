@@ -234,6 +234,41 @@ test(
   },
 )
 
+test(
+  "a config carrying both the retired key and the new one fails rather than reporting success",
+  unixOnly,
+  () => {
+    // What a developer who ran the dev loop on this branch before the retirement
+    // landed now has on disk. The `agents` block answers the question this
+    // script asks, so it stands down — and used to stand down saying it was
+    // fine, while `deny_unknown_fields` refused to start the gateway on the
+    // `agent` key still sitting beside it.
+    const data = temporaryRoot()
+    mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+    const path = join(data, "dev/config.json")
+    const both = JSON.stringify({
+      agent: { node: "/old/node", acpEntry: "/old/entry.js" },
+      agents: agentsLaunching("/checkout/dist/index.js"),
+    })
+    writeFileSync(path, both, { mode: 0o600 })
+
+    let status = 0
+    let output = ""
+    try {
+      output = run(data)
+    } catch (failure) {
+      status = failure.status
+      output = String(failure.stdout)
+    }
+    assert.equal(status, 1, output)
+    assert.match(output, /retired "agent" block/)
+    assert.match(output, /delete the "agent" key/)
+    // Said, not done: somebody else's `agents` block is not this script's to
+    // rewrite, so the file is exactly as it was.
+    assert.equal(readFileSync(path, "utf8"), both)
+  },
+)
+
 test("a config that does not parse is reported, not overwritten", unixOnly, () => {
   const data = temporaryRoot()
   mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })

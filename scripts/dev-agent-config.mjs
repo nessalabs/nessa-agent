@@ -91,6 +91,21 @@ function say(message) {
   process.stdout.write(`${message}\n`)
 }
 
+/**
+ * Report a configuration the gateway will refuse, and fail.
+ *
+ * Distinct from [`skip`], which is for a machine that has no agent: there the
+ * gateway starts and says so when somebody sends a message. Here it does not
+ * start at all, so a zero exit would be this script reporting success for a
+ * file it knows is broken.
+ */
+function stop(reason, remedy) {
+  say(`→ dev agent configuration is unusable: ${reason}`)
+  const lines = Array.isArray(remedy) ? remedy : [remedy]
+  for (const line of lines.filter(Boolean)) say(`  ${line}`)
+  process.exit(1)
+}
+
 /** Report why there is no agent, and leave the gateway to start without one. */
 function skip(reason, remedy) {
   say(`→ dev agent not configured: ${reason}`)
@@ -281,8 +296,24 @@ export function agentIsSettled(existing) {
   return existing.agents !== undefined
 }
 
-/** Warn about agents someone else owns whose executables have gone missing. */
-function checkExisting(agents, path) {
+/**
+ * Report on a configuration this script is not going to write into.
+ *
+ * Both readers of an already-settled file come through here — the early answer
+ * and the one taken under the lock — because they have the same thing to say
+ * and only one of them used to say all of it.
+ */
+function checkExisting(existing, path) {
+  // First, because nothing else about the file matters if the gateway will not
+  // read it. This script wrote that key, and it will not write into a file
+  // whose `agents` question somebody has already answered, so naming it is the
+  // most it can honestly do — and saying so is not a success.
+  if (existing.agent !== undefined)
+    stop(`${path} still has the retired "agent" block beside "agents"`, [
+      "the gateway refuses to start on it: `agent` is an unknown field now",
+      'delete the "agent" key and run the dev loop again',
+    ])
+  const agents = existing.agents
   if (agents === null) {
     say(`→ ${path} sets "agents": null, which is a gateway with no agents`)
     say('  it was left as it is; remove the "agents" line and rerun to have one written')
@@ -333,7 +364,7 @@ function main() {
   // An early answer, so the work below is skipped entirely. `publish` asks
   // again at the end, because this one goes stale while that work happens.
   if (agentIsSettled(existing)) {
-    checkExisting(existing.agents, configPath)
+    checkExisting(existing, configPath)
     return
   }
 
@@ -476,15 +507,7 @@ function underLock({ configPath, agents, node, mcpBinary, interrupt }) {
   // Somebody answered the question while this was working. Theirs stands —
   // the same courtesy an agent block already in the file gets.
   if (agentIsSettled(existing)) {
-    checkExisting(existing.agents, configPath)
-    // Their block stands, but a leftover `agent` beside it still stops the
-    // gateway starting, and this script will not write into a file where the
-    // question is already answered. Naming the key is the most it can honestly
-    // do.
-    if (existing.agent !== undefined) {
-      say(`→ ${configPath} also still has the retired "agent" block`)
-      say('  the gateway refuses to start on it; delete the "agent" key and rerun')
-    }
+    checkExisting(existing, configPath)
     return false
   }
 
