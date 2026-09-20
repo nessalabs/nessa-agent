@@ -241,7 +241,11 @@ or Tauri dependency; callers inject the resulting adapters through composition.
 `crates/nessa-images` fits one image to a consumer's limits: it reads the
 encoding from the bytes, turns the image upright, scales it down, and converts or
 compresses it to PNG or JPEG, or says by type why it could not. It knows nothing
-about agents, models, or conversations, does no I/O, and keeps no state. The
+about agents, models, or conversations, does no I/O, and keeps no state. It reads
+the common encodings with its own decoders and hands what only an operating
+system reads well (HEIC, AVIF, JPEG XL, PSD, camera RAW) to a `PlatformDecoder`:
+ImageIO on macOS under `src/platform/`, none yet elsewhere, where those are
+refused by type. Tests substitute the decoder; `tests/macos.rs` runs the real one. The
 numbers are the caller's: the gateway takes them from the selected model's
 `imageInput` entry in the SDK catalog, the one place image limits are recorded.
 

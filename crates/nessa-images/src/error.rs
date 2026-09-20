@@ -4,8 +4,9 @@ use std::{error, fmt};
 /// there is no partially fitted image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
-    /// The bytes are not an image in an encoding this crate reads (PNG, JPEG,
-    /// GIF, WebP, BMP, TIFF). HEIC and AVIF are not read.
+    /// The bytes are not an image in an encoding this crate or the running
+    /// system's decoder reads. Without a system decoder that includes HEIC,
+    /// AVIF, and camera RAW.
     UnsupportedEncoding,
     /// The bytes claim an encoding but do not decode as it: truncated or corrupt.
     Undecodable,

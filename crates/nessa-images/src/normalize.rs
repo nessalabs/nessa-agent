@@ -1,4 +1,4 @@
-use crate::{Encoding, Error, Limits};
+use crate::{platform_decoder, Encoding, Error, Limits, PlatformDecoder};
 use image::{
     codecs::{jpeg::JpegEncoder, png::PngEncoder},
     imageops::FilterType,
@@ -37,25 +37,50 @@ pub struct Normalized {
     pub changed: bool,
 }
 
-/// Fit `input` to `limits`. See the crate documentation for the rules.
+/// Fit `input` to `limits`, reading what this crate cannot with the running
+/// system's decoder. See the crate documentation for the rules.
 ///
 /// This decodes and encodes on the calling thread and can take hundreds of
 /// milliseconds for a large image; an async caller runs it on a blocking thread.
 pub fn normalize(input: &[u8], limits: &Limits) -> Result<Normalized, Error> {
+    normalize_with(input, limits, platform_decoder())
+}
+
+/// [`normalize`] with the platform decoder chosen by the caller: a substitute in
+/// a test, or `None` to read only what this crate reads itself.
+pub fn normalize_with(
+    input: &[u8],
+    limits: &Limits,
+    platform: Option<&dyn PlatformDecoder>,
+) -> Result<Normalized, Error> {
     if input.len() > MAX_INPUT_BYTES {
         return Err(Error::TooLargeToDecode);
     }
     let reader = ImageReader::new(Cursor::new(input))
         .with_guessed_format()
         .map_err(|_| Error::UnsupportedEncoding)?;
-    let format = reader.format().ok_or(Error::UnsupportedEncoding)?;
-    let source = match format {
-        ImageFormat::Png => Some(Encoding::Png),
-        ImageFormat::Jpeg => Some(Encoding::Jpeg),
-        ImageFormat::Gif => Some(Encoding::Gif),
-        ImageFormat::WebP => Some(Encoding::Webp),
-        ImageFormat::Bmp | ImageFormat::Tiff => None,
-        _ => return Err(Error::UnsupportedEncoding),
+    let source = match reader.format() {
+        Some(ImageFormat::Png) => Some(Encoding::Png),
+        Some(ImageFormat::Jpeg) => Some(Encoding::Jpeg),
+        Some(ImageFormat::Gif) => Some(Encoding::Gif),
+        Some(ImageFormat::WebP) => Some(Encoding::Webp),
+        // Most camera RAW files are TIFF containers whose first image is a small
+        // preview. Reading one as a TIFF would quietly return that preview.
+        Some(ImageFormat::Tiff) if !tiff_holds_only_a_preview(input) => None,
+        Some(
+            ImageFormat::Bmp
+            | ImageFormat::Ico
+            | ImageFormat::Qoi
+            | ImageFormat::Pnm
+            | ImageFormat::Hdr,
+        ) => None,
+        // HEIC, AVIF, camera RAW, and whatever else only the system reads.
+        _ => {
+            let decoder = platform.ok_or(Error::UnsupportedEncoding)?;
+            let decoded = decoder.decode(input, limits.max_long_edge_px())?;
+            let pixels = DynamicImage::ImageRgba8(decoded.pixels);
+            return fit(&pixels, decoded.lossless, limits);
+        }
     };
     let mut reader = reader;
     let mut decode_limits = image::Limits::default();
@@ -89,19 +114,24 @@ pub fn normalize(input: &[u8], limits: &Limits) -> Result<Normalized, Error> {
 
     let mut pixels = DynamicImage::from_decoder(decoder).map_err(decode_error)?;
     pixels.apply_orientation(orientation);
-    let lossless_source = source != Some(Encoding::Jpeg);
-    let transparent = has_transparency(&pixels);
-    // PNG first for what was lossless or see-through: screenshots and diagrams,
-    // where JPEG smears exactly the detail that matters.
-    let try_png = limits.accepts(Encoding::Png) && (lossless_source || transparent);
+    fit(&pixels, source != Some(Encoding::Jpeg), limits)
+}
+
+/// Scale and encode upright `pixels` until they are inside `limits`.
+fn fit(pixels: &DynamicImage, lossless_source: bool, limits: &Limits) -> Result<Normalized, Error> {
+    let transparent = has_transparency(pixels);
     let try_jpeg = limits.accepts(Encoding::Jpeg);
+    // PNG first for what was lossless or see-through: screenshots and diagrams,
+    // where JPEG smears exactly the detail that matters. And PNG always for a
+    // consumer that takes nothing else.
+    let try_png = limits.accepts(Encoding::Png) && (lossless_source || transparent || !try_jpeg);
 
     let mut long_edge = pixels
         .width()
         .max(pixels.height())
         .min(limits.max_long_edge_px());
     loop {
-        let sized = scaled_to(&pixels, long_edge);
+        let sized = scaled_to(pixels, long_edge);
         let (width, height) = (sized.width(), sized.height());
         if try_png {
             let bytes = encode_png(&sized, transparent)?;
@@ -205,4 +235,52 @@ fn flattened_onto_white(pixels: &DynamicImage) -> RgbImage {
         }
     }
     rgb
+}
+
+/// Whether a TIFF's first image is marked as a reduced-resolution copy of
+/// another, which is how camera RAW files (NEF, CR2, ARW, DNG, and the rest)
+/// lay themselves out. A plain TIFF's first image is the image.
+fn tiff_holds_only_a_preview(input: &[u8]) -> bool {
+    let read = |offset: usize, length: usize| input.get(offset..offset.checked_add(length)?);
+    let little_endian = match read(0, 2) {
+        Some(b"II") => true,
+        Some(b"MM") => false,
+        _ => return false,
+    };
+    let u16_at = |offset: usize| {
+        read(offset, 2).map(|bytes| {
+            let bytes = [bytes[0], bytes[1]];
+            if little_endian {
+                u16::from_le_bytes(bytes)
+            } else {
+                u16::from_be_bytes(bytes)
+            }
+        })
+    };
+    let u32_at = |offset: usize| {
+        read(offset, 4).map(|bytes| {
+            let bytes = [bytes[0], bytes[1], bytes[2], bytes[3]];
+            if little_endian {
+                u32::from_le_bytes(bytes)
+            } else {
+                u32::from_be_bytes(bytes)
+            }
+        })
+    };
+    let Some(directory) = u32_at(4).map(|offset| offset as usize) else {
+        return false;
+    };
+    let Some(entries) = u16_at(directory) else {
+        return false;
+    };
+    (0..usize::from(entries)).any(|index| {
+        let entry = directory + 2 + index * 12;
+        match u16_at(entry) {
+            // NewSubfileType with its lowest bit set: a reduced-resolution image.
+            Some(0x00fe) => u32_at(entry + 8).is_some_and(|value| value & 1 == 1),
+            // SubIFDs or DNGVersion: the real image lives in another directory.
+            Some(0x014a | 0xc612) => true,
+            _ => false,
+        }
+    })
 }

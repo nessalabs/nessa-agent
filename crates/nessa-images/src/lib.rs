@@ -5,11 +5,21 @@
 //! the consumer accepts, or with a typed reason it could not.
 //!
 //! This crate knows nothing about agents, models, conversations, or where limits
-//! come from. It reads no files, opens no sockets, and keeps no state: the same
-//! bytes and limits always give the same answer. The caller owns the numbers.
+//! come from. It reads no files, opens no sockets, and keeps no state. The caller
+//! owns the numbers.
+//!
+//! It reads PNG, JPEG, GIF, WebP, BMP, TIFF, ICO, QOI, PNM, and Radiance HDR with
+//! its own decoders, and the same bytes and limits always give the same answer.
+//! HEIC and HEIF, AVIF, JPEG XL, PSD, and camera RAW have no permissively
+//! licensed Rust decoder, and operating systems ship good ones, so those go to a
+//! [`PlatformDecoder`]: ImageIO on macOS, none yet elsewhere, where they are
+//! refused by type. What a system decoder returns is that system's rendering.
 //!
 //! ```text
-//! bytes ──► sniff encoding ──► read size and orientation
+//! bytes ──► sniff encoding ──► (not ours? ──► platform decoder ──► scale ► encode)
+//!                │
+//!                ▼
+//!           read size and orientation
 //!                                   │
 //!              already acceptable? ─┴─ yes ──► the same bytes, untouched
 //!                                   │
@@ -43,10 +53,14 @@
 //! re-encoded carries none.
 #![deny(missing_docs)]
 
+mod decode;
 mod error;
 mod limits;
 mod normalize;
+mod platform;
 
+pub use decode::{DecodedImage, PlatformDecoder};
 pub use error::Error;
 pub use limits::{Encoding, Limits, LimitsError};
-pub use normalize::{normalize, Normalized};
+pub use normalize::{normalize, normalize_with, Normalized};
+pub use platform::platform_decoder;
