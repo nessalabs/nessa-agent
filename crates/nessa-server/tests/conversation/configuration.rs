@@ -179,3 +179,57 @@ fn codex_is_told_to_sign_itself_in_with_the_key_it_was_handed() {
         None,
     );
 }
+
+#[test]
+fn each_agent_inherits_the_directory_variables_it_resolves_its_own_configuration_from() {
+    // Every name asked for is answered, so what the assertions see is the key
+    // selection rather than whatever this machine happens to have set.
+    let present = |key: &str| Some(OsString::from(format!("/fixture/{key}")));
+    let inherited = |agent| -> Vec<String> {
+        inherited_environment(agent, present)
+            .keys()
+            .map(|key| key.to_string_lossy().into_owned())
+            .collect()
+    };
+
+    let opencode = inherited(AgentId::Opencode);
+    // Opencode resolves config, data, cache and state from the XDG variables,
+    // and with them its providers, its plugins and the account a person signed
+    // in on. Under `env_clear` leaving one out is not "unset": Opencode falls
+    // back to a path under `HOME` and reads a different installation than the
+    // readiness probe answered about.
+    for key in [
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_STATE_HOME",
+    ] {
+        assert!(opencode.contains(&key.to_owned()), "{opencode:?}");
+    }
+    // And is handed no pointer into another vendor's configuration.
+    for key in ["CLAUDE_CONFIG_DIR", "CODEX_HOME"] {
+        assert!(!opencode.contains(&key.to_owned()), "{opencode:?}");
+    }
+
+    let claude = inherited(AgentId::Claude);
+    assert!(
+        claude.contains(&"CLAUDE_CONFIG_DIR".to_owned()),
+        "{claude:?}"
+    );
+    let codex = inherited(AgentId::Codex);
+    assert!(codex.contains(&"CODEX_HOME".to_owned()), "{codex:?}");
+    // The XDG variables are general-purpose, so they are Opencode's only by
+    // virtue of being what Opencode reads. An agent with a directory variable
+    // of its own has no business being given them as well.
+    for other in [claude, codex] {
+        assert!(!other.contains(&"XDG_CONFIG_HOME".to_owned()), "{other:?}");
+    }
+
+    // Every agent needs the same handful to start at all.
+    for agent in [AgentId::Claude, AgentId::Codex, AgentId::Opencode] {
+        let shared = inherited(agent);
+        for key in ["PATH", "HOME", "USER", "LOGNAME", "TMPDIR"] {
+            assert!(shared.contains(&key.to_owned()), "{agent:?}: {shared:?}");
+        }
+    }
+}

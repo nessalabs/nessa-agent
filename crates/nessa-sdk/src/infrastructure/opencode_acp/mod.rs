@@ -18,8 +18,11 @@
 //! than assuming the one it named is still offered.
 //!
 //! Like Codex, Opencode brings its own tools rather than taking a tool set from
-//! the host, and offers its approval policy as an ACP config option. This
-//! binding pins the least permissive one it has — see `sessions::profile`.
+//! the host. It offers its session mode as an ACP config option and its
+//! permission policy as configuration; this binding pins both — the mode to
+//! `plan` (see `sessions::profile`) and the policy to a read-only one supplied
+//! at launch (see `SESSION_POLICY` in `sessions::binding`). The second is the
+//! one that bounds the session. `plan` only denies edits.
 //!
 //! What has been observed of Opencode, and what has not, because the two are
 //! not the same and the difference decides how much to trust this module:
@@ -28,8 +31,9 @@
 //! permission requests, a mid-turn mode change — was not, because reaching a
 //! turn needs OpenCode Zen's host and this was written where the network policy
 //! does not allow it. Those shapes come from the ACP specification. Each module
-//! that reads one says so, and `MODE` keeps every session in the mode that runs
-//! nothing, which is what makes shipping on an assumption tolerable rather than
-//! reckless.
+//! that reads one says so, and every session is launched under a policy that
+//! denies everything but reading and searching, which is what makes shipping on
+//! an assumption tolerable rather than reckless: an assumption about how a tool
+//! call is framed costs less when no tool call can act.
 pub mod sessions;
 pub(crate) mod tools;

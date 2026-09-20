@@ -237,19 +237,42 @@ fn output_tokens() -> u32 {
 /// has to be named. The vendor-specific entries are each agent's own
 /// directory variable: naming every one of them for every agent would be
 /// shorter and would also hand each agent a pointer into the others'
-/// configuration. Opencode has none to name — it reads its configuration from
-/// under `HOME`, which every agent is given anyway — and an agent with nothing
-/// of its own is not given somebody else's.
+/// configuration.
+///
+/// Opencode's are the XDG ones, because that is what it resolves its own
+/// directories from — config, data, cache and state, and with them its
+/// providers, its plugins and whatever account the person signed in on. Under
+/// `env_clear` an unnamed `XDG_CONFIG_HOME` does not mean "unset", it means
+/// Opencode falls back to `$HOME/.config` and reads a different installation
+/// than the one the readiness probe answered about. They are general-purpose
+/// variables rather than Opencode's own, but they are the person's own paths
+/// and every agent here is already given `HOME`, so nothing is handed over that
+/// was not already reachable.
 fn process_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
+    inherited_environment(agent, |key: &str| std::env::var_os(key))
+}
+
+/// The variables named above, read through `lookup` rather than from this
+/// process, so that which keys an agent inherits can be asserted without a test
+/// changing the environment every other test is reading.
+fn inherited_environment(
+    agent: AgentId,
+    lookup: impl Fn(&str) -> Option<OsString>,
+) -> BTreeMap<OsString, OsString> {
     let mut environment = BTreeMap::new();
-    let vendor = match agent {
-        AgentId::Claude => Some("CLAUDE_CONFIG_DIR"),
-        AgentId::Codex => Some("CODEX_HOME"),
-        AgentId::Opencode => None,
+    let vendor: &[&str] = match agent {
+        AgentId::Claude => &["CLAUDE_CONFIG_DIR"],
+        AgentId::Codex => &["CODEX_HOME"],
+        AgentId::Opencode => &[
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_STATE_HOME",
+        ],
     };
     let shared = ["PATH", "HOME", "USER", "LOGNAME", "TMPDIR"];
-    for key in shared.into_iter().chain(vendor) {
-        if let Some(value) = std::env::var_os(key) {
+    for key in shared.into_iter().chain(vendor.iter().copied()) {
+        if let Some(value) = lookup(key) {
             environment.insert(key.into(), value);
         }
     }
@@ -488,9 +511,11 @@ mod build {
             // be shown to read: its binding offers no `with_system_prompt` for
             // exactly that reason, and this arm not calling one is the compiler
             // enforcing it rather than a convention someone has to remember.
-            // Opencode therefore runs under its own instructions. It is opened
-            // in a mode that runs nothing, which is what keeps that difference
-            // from mattering yet.
+            // Opencode therefore runs under its own instructions. What keeps
+            // that difference from mattering yet is not the session mode, which
+            // only denies edits, but the permission policy its binding launches
+            // it with: reading and searching allowed, everything else denied,
+            // including this server's own MCP shell tool.
             AgentId::Opencode => {
                 Arc::new(OpencodeAcpProvider::new(acp, &model, limits, audit).map_err(failed)?)
             }

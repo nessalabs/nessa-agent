@@ -32,12 +32,15 @@ pub(super) const VERSION: &str = "1.18.31";
 
 /// The session mode this binding runs Opencode in.
 ///
-/// Opencode offers two, `build` and `plan`, and this is the less permissive:
-/// in `plan` it reads and reasons about a workspace without editing it or
-/// running commands in it. Pinned rather than offered, for the reason the Codex
-/// binding pins its own least permissive preset — an agent that brings its own
-/// tools is bounded by the policy it was opened under, not by a tool set the
-/// host withheld.
+/// Opencode offers two, `build` and `plan`, and this is the less permissive of
+/// them. What `plan` restricts is edits: it denies the `edit` tool outside its
+/// own plans directory, and leaves `bash`, `webfetch`, `websearch`, `task` and
+/// MCP tools at the global default of `allow`. So the mode is a preference, not
+/// the bound — the bound is the permission policy the process is launched with,
+/// which is `SESSION_POLICY` in `sessions::binding`. Pinned rather than offered
+/// for the reason the Codex binding pins its own least permissive preset — an
+/// agent that brings its own tools is bounded by the policy it was opened
+/// under, not by a tool set the host withheld.
 ///
 /// `build` is the mode that makes Opencode a coding agent rather than a reading
 /// one, and moving to it is a deliberate next step rather than a default: it
@@ -50,9 +53,11 @@ pub(super) const VERSION: &str = "1.18.31";
 /// Opencode opens every session in `build` and offers no way to start in the
 /// other, so unlike the Codex binding nothing is set at launch to forestall it.
 /// It does not need to be: the shared worker applies this configuration while
-/// the session is being established and refuses the session if it does not take
-/// — so the window before `plan` is selected is one in which the session has
-/// not been prompted and cannot have run anything.
+/// the session is being established and refuses the session if it does not
+/// take, so the window before `plan` is selected is one in which the session
+/// has not been prompted. What bounds that window is not the mode, which is
+/// `build` for the length of it, but the launch policy, which is in force from
+/// the process's first instruction.
 pub(super) const MODE: &str = "plan";
 
 /// The mode Opencode opens a session in, before this binding selects [`MODE`].

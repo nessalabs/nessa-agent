@@ -41,10 +41,26 @@ root = pathlib.Path.cwd()
 session = "ses_opencode" + str(os.getpid())
 
 # The launch environment is the whole of what this binding says before the
-# protocol starts. Opencode takes no configuration variable of its own — unlike
-# Codex it is configured entirely over ACP — so the only thing set is the one
-# that keeps a gateway process from trying to open a browser.
-assert os.environ["NO_BROWSER"] == "1"
+# protocol starts, and for Opencode it carries the part that ACP cannot: the
+# session mode is selected over the protocol, but the permission policy is
+# configuration, so it is set here or it is not set at all. Asserted as parsed
+# JSON rather than as a string, because Opencode skips an OPENCODE_PERMISSION
+# it cannot parse with nothing but a warning — a policy that fails to parse is
+# a session with no bound, and it would fail silently.
+policy = json.loads(os.environ["OPENCODE_PERMISSION"])
+assert policy["*"] == "deny", policy
+assert policy["read"]["*"] == "allow", policy
+assert policy["read"]["*.env"] == "deny", policy
+for allowed in ("grep", "glob"):
+    assert policy[allowed] == "allow", policy
+# Nothing that acts, named one by one so that widening the policy has to be
+# deliberate. `task` spawns a subagent with its own policy; the rest are the
+# tools Opencode's own permission vocabulary exposes. MCP tools are not in this
+# list and cannot be — their names come from whatever servers the host hands
+# over at `session/new` — which is why the policy denies by default.
+for denied in ("bash", "edit", "webfetch", "websearch", "task", "skill"):
+    assert policy.get(denied, "deny") == "deny", policy
+assert os.environ["OPENCODE_DISABLE_PROJECT_CONFIG"] == "1"
 assert "CODEX_CONFIG" not in os.environ
 
 (root / "pid").write_text(str(os.getpid()))
