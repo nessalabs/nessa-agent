@@ -118,6 +118,56 @@ impl AcpProfile for TestAcpProfile {
     }
 }
 
+/// A profile that pins everything in its session parameters, recording which
+/// mode each `verify_session` call arrived in.
+#[derive(Clone)]
+struct PinnedProfile {
+    modes: Arc<Mutex<Vec<bool>>>,
+}
+impl AcpProfile for PinnedProfile {
+    fn validate_initialize(&self, _: &Value) -> Result<(), AgentError> {
+        Ok(())
+    }
+    fn new_session_params(&self, config: &AcpConfig, _: &EffectiveCapabilities) -> Value {
+        json!({"cwd":config.workspace,"mcpServers":[]})
+    }
+    fn session_configuration(&self, _: &str) -> Vec<Value> {
+        Vec::new()
+    }
+    fn verify_session(
+        &self,
+        _: &Value,
+        _: &EffectiveCapabilities,
+        configured: bool,
+    ) -> Result<(), AgentError> {
+        self.modes.lock().unwrap().push(configured);
+        Ok(())
+    }
+    fn verify_update(
+        &self,
+        _: &str,
+        _: &Value,
+        _: &EffectiveCapabilities,
+        _: bool,
+    ) -> Result<(), AgentError> {
+        Ok(())
+    }
+    fn validate_execution(
+        &self,
+        _: &ExecutionRequest,
+        _: &EffectiveCapabilities,
+    ) -> Result<(), AgentError> {
+        Ok(())
+    }
+    fn begin_execution(&mut self) {}
+    fn tool_call(&mut self, value: &Value) -> Result<ToolCallUpdate, AgentError> {
+        wire::tool_call(value)
+    }
+    fn permission_input(&self, _: &Value) -> Result<ToolReviewInput, AgentError> {
+        Err(protocol("no permissions in this fixture"))
+    }
+}
+
 #[tokio::test]
 async fn a_non_claude_profile_uses_shared_sessions_permissions_and_transport() {
     let (_root, config, capabilities) = profile_setup();
@@ -727,4 +777,50 @@ async fn dropping_failed_open_recovery_still_confirms_process_cleanup() {
         0,
         "confirmed cleanup reaped the provider"
     );
+}
+
+#[tokio::test]
+async fn a_profile_with_nothing_to_configure_still_has_its_session_held_to_the_final_state() {
+    // The trait allows a profile to pin everything in its session parameters
+    // and return no configuration requests. For such a profile the loop that
+    // applies them never runs, so the only mode `verify_session` was ever
+    // called in was the lenient one — the mode where a profile deliberately
+    // checks less because its own requests have not landed yet — and readiness
+    // was published anyway.
+    //
+    // Claude returns one request and Codex two, so neither shows this. A third
+    // profile written to the documented shape would get a session whose model
+    // and permission policy were never read back, with every test green. The
+    // session result is that profile's final state, and it is held to it.
+    let (_root, config, capabilities) = profile_setup();
+    let process_config = config.clone();
+    let process = Arc::new(move || {
+        let mut command = tokio::process::Command::new(&process_config.executable);
+        command
+            .args(&process_config.arguments)
+            .env_clear()
+            .envs(&process_config.environment)
+            .envs(&process_config.credential_environment)
+            .current_dir(&process_config.workspace);
+        ProcessScope::spawn(command)
+    });
+    let modes = Arc::new(Mutex::new(Vec::new()));
+    let opened = binding::open(
+        process,
+        config,
+        capabilities,
+        PinnedProfile {
+            modes: modes.clone(),
+        },
+        Arc::new(RecordingAudit::default()),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        *modes.lock().unwrap(),
+        vec![true],
+        "the session result is this profile's final state and is the only thing to check",
+    );
+    drop(opened);
 }

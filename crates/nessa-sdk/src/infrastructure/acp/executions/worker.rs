@@ -628,13 +628,20 @@ impl<P: AcpProfile> Worker<P> {
         {
             return Err(json_rpc::protocol("provider resumed a different session"));
         }
-        self.profile
-            .verify_session(&result, &self.capabilities, false)?;
         // Applied in the profile's own order, because a provider can reject a
         // later selection that an earlier one has not made available yet. Only
         // the last response is checked as fully configured; the ones before it
         // are checked against what the profile has settled so far.
         let configuration = self.profile.session_configuration(execution.id().as_str());
+        // Which makes this result the final state exactly when there is nothing
+        // to apply after it. A profile is allowed to pin everything in its
+        // session parameters and return no requests at all; for such a profile
+        // the loop below never runs, so checking this leniently would mean
+        // publishing ready having never held anything to the settled state —
+        // with every test green, because the two profiles that exist today
+        // return one request and two.
+        self.profile
+            .verify_session(&result, &self.capabilities, configuration.is_empty())?;
         let last = configuration.len().saturating_sub(1);
         for (step, params) in configuration.into_iter().enumerate() {
             let result = self

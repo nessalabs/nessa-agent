@@ -22,11 +22,19 @@ pub(crate) trait AcpProfile: Send + Sync + 'static {
     fn session_configuration(&self, session_id: &str) -> Vec<Value>;
     /// Check a session or configuration response against the configured context.
     ///
-    /// `configured` is true only for the last configuration response, when every
-    /// request from [`Self::session_configuration`] has been applied. Before
-    /// that the session is still being configured, so a profile checks only what
-    /// it can already require — which is what its own requests have not yet
+    /// `configured` is true only once every request from
+    /// [`Self::session_configuration`] has been applied: on the last
+    /// configuration response, or — for a profile that has no configuration
+    /// requests at all — on the `session/new` or `session/resume` result
+    /// itself, which for such a profile is already the final state. Before that
+    /// the session is still being configured, so a profile checks only what it
+    /// can already require — which is what its own requests have not yet
     /// changed, not everything they will eventually settle.
+    ///
+    /// So a profile that pins everything in its session parameters sees exactly
+    /// one call, with `configured` true. Nothing is published as ready before a
+    /// response has been held to the final state, whether that takes zero
+    /// configuration steps or several.
     fn verify_session(
         &self,
         result: &Value,

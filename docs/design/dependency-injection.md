@@ -169,9 +169,12 @@ is available for future integration. See [local setup](../adr/done/0010-local-au
 
 ## Gateway Agent integration
 
-Composition optionally loads the private namespace's `agent` configuration and
-constructs ClaudeAcpProvider, LocalFileStorage, LocalConversationRepository and
-DurableExecutionAudit. ProductRouteState shares ConversationService across sockets;
+Composition optionally loads the private namespace's `agents` configuration and
+constructs a provider for every agent it names — ClaudeAcpProvider,
+CodexAcpProvider — alongside LocalFileStorage, LocalConversationRepository and
+DurableExecutionAudit. Every configured agent is built, not only the one a
+creation that names none runs on, because a conversation records the agent it
+was created on and is reopened on that same agent. ProductRouteState shares ConversationService across sockets;
 tests inject providers and storage without a production test selector. Shared
 request permits outlive disconnected sockets, and controls have reserved capacity.
 The panel's ConversationEffects calls the existing authenticated NessaClient and
