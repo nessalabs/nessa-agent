@@ -211,9 +211,13 @@ send   -> conversation.send { text, attachments: [the returned references] }
   `image_input_unsupported`, `attachment_not_found`, `attachment_unavailable`,
   `conversation_not_found`, `conversation_capacity`): those leave `uncertain`
   false, and the code itself is reported as a typed `ConversationErrorCode`.
-  `adapters/gateway/effects.ts` is the one place the panel reads that code, and
-  it answers in the panel's own vocabulary — a `CommandFailure` such as
-  `agent-startup-deadline`. The panel marks the turn not sent, says why in a
+  `adapters/gateway/effects.ts` is where the panel reads that code, and it
+  answers in the panel's own vocabulary — a `CommandFailure` such as
+  `agent-startup-deadline`. It is the only place for a command's failure; one
+  read left, in `ui/notification.ts`, still compares a failed *read*'s text
+  against `conversation_configuration_changed`, because a read carries no
+  translated reason yet. That module says so, and giving reads one of their own
+  is the remaining half. The panel marks the turn not sent, says why in a
   sentence chosen by that reason, and puts the message back in the draft with
   its images. A code this build has no word for keeps the client's own sentence
   and carries no reason at all, rather than being read as one it does know. Any
@@ -228,10 +232,19 @@ send   -> conversation.send { text, attachments: [the returned references] }
   that is not a refusal, where the close did happen and only its release of the
   conversation's uploads did not — says so, and changes nothing the panel does:
   a draft's stored images are forgotten after any close, acknowledged or not.
-  `invalid_request` and `agent_startup_deadline`, which the client records as
-  refused before anything was applied, say that nothing was done rather than
-  that the answer could not be trusted. Every other reason leaves the outcome
-  genuinely open, and there the client's constant is the honest sentence.
+  Which sentence is shown is decided by what became of the control, never by
+  the reason: refused says nothing was done, applied says the choice was
+  recorded, and only a genuinely open outcome keeps the client's constant.
+- **A permission answer reports the review's state, and it is authoritative.** A
+  failed `conversation.answer` carries `selectionState`, which the protocol
+  calls authoritative knowledge of whether the option was selected and
+  independent of the diagnostic code beside it. The gateway sends an ordinary
+  code there — its own test pairs a pending review with `audit_unavailable` —
+  so a review left `pending` is certainly not applied under codes this build
+  has no word for, and the outcome is carried even when the reason cannot be.
+  A `consumed` review is the opposite certainty: the choice took effect and the
+  command failed after it, which the client can only report as uncertain, so
+  the selection state is read before the code rather than after it.
 - **A control carries its reason and its outcome as two facts.** A reason never
   says whether the command ran: a control refused as `conversation_not_found`
   and one whose acknowledgement was lost carry the same word. `CommandFailure`

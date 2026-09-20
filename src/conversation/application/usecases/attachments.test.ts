@@ -599,37 +599,69 @@ describe("sending a draft that holds images", () => {
     expect(submissionRefusalMessage("invalid-request")).toBeUndefined()
   })
 
+  const OUTCOMES = ["refused", "applied", "unknown"] as const
+  /** Every reason the vocabulary has, and the absence of one, which is also a case. */
+  const REASONS = [
+    "image-input-unsupported",
+    "attachment-not-found",
+    "attachment-unavailable",
+    "attachment-cleanup-unavailable",
+    "conversation-not-found",
+    "conversation-capacity",
+    "agent-not-configured",
+    "agent-startup-deadline",
+    "invalid-request",
+    undefined,
+  ] as const
+
   it("leaves a control's news to the control, and a message's to the message", () => {
     // Two commands, two kinds of news, one vocabulary. A close that could not
-    // let go of its files is the control's to say, whichever way its outcome
-    // was reported, and is nothing a send can be refused with.
-    for (const refused of [true, false])
-      expect(controlFailureMessage("attachment-cleanup-unavailable", refused)).toMatch(
+    // let go of its files is the control's to say, whichever way the rest of
+    // the command ended, and is nothing a send can be refused with.
+    for (const outcome of OUTCOMES)
+      expect(controlFailureMessage("attachment-cleanup-unavailable", outcome)).toMatch(
         /could not release the images/,
       )
     expect(submissionRefusalMessage("attachment-cleanup-unavailable")).toBeUndefined()
   })
 
-  it("lets a control say nothing happened only when the gateway said so", () => {
+  it("says what became of a control whenever the gateway was certain, whatever the reason", () => {
     // The client has one sentence for every failed control and it claims the
-    // outcome is unknown. Contradicting it takes the client's own verdict that
-    // the control was refused — never the reason, which arrives either way.
-    for (const reason of ["agent-startup-deadline", "invalid-request"] as const) {
-      expect(controlFailureMessage(reason, true)).toMatch(/nothing was done/)
-      expect(controlFailureMessage(reason, false)).toBeUndefined()
+    // outcome is unknown. Which of the three sentences the panel shows is the
+    // outcome's to decide, never the reason's — a review the gateway left
+    // pending is refused under any code, including one with no word here.
+    for (const reason of REASONS) {
+      if (reason === "attachment-cleanup-unavailable") continue
+      expect(
+        controlFailureMessage(reason, "refused"),
+        `${reason ?? "no reason"} refused`,
+      ).toMatch(/nothing was done/)
+      expect(
+        controlFailureMessage(reason, "applied"),
+        `${reason ?? "no reason"} applied`,
+      ).toMatch(/nothing to answer again/)
+      // Only here is the client's own sentence still the honest one.
+      expect(
+        controlFailureMessage(reason, "unknown"),
+        `${reason ?? "no reason"} unknown`,
+      ).toBeUndefined()
     }
-    // A reason the gateway never decides in advance says nothing of its own,
-    // refused or not: there is no sentence here better than "we cannot tell".
-    for (const reason of [
-      "image-input-unsupported",
-      "attachment-not-found",
-      "attachment-unavailable",
-      "conversation-not-found",
-      "conversation-capacity",
-      "agent-not-configured",
-    ] as const)
-      for (const refused of [true, false])
-        expect(controlFailureMessage(reason, refused)).toBeUndefined()
+  })
+
+  it("adds what the reason is worth to a refusal without needing one", () => {
+    // The reason shapes the sentence and never licenses it, so the ones that
+    // have something specific to add say it, and the rest share a sentence.
+    const named = ["agent-startup-deadline", "agent-not-configured"] as const
+    for (const reason of named)
+      expect(controlFailureMessage(reason, "refused")).not.toBe(
+        controlFailureMessage(undefined, "refused"),
+      )
+    expect(controlFailureMessage("agent-startup-deadline", "refused")).toMatch(
+      /still starting/,
+    )
+    expect(controlFailureMessage("invalid-request", "refused")).toBe(
+      controlFailureMessage(undefined, "refused"),
+    )
   })
 
   it("says something different, and useful, for each refusal", () => {

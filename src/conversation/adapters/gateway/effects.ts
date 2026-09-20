@@ -16,6 +16,7 @@ import {
   ControlFailedError,
   ConversationUnavailableError,
   SubmissionRefusedError,
+  type ControlOutcome,
   type ConversationEffects,
 } from "../../application/ports"
 import type { CommandFailure } from "../../model"
@@ -169,22 +170,45 @@ function submissionFailure(error: unknown): unknown {
 }
 
 /**
- * A control the gateway answered with a reason, in the panel's words, carrying
- * whether anything was applied as the separate fact it is. Anything else is
- * passed on untouched.
+ * What the gateway said became of a control that failed.
+ *
+ * The review's selection state is read before the diagnostic code, because the
+ * protocol says exactly that: it is "authoritative knowledge of whether the
+ * reviewed option was selected", and "independent of the diagnostic error
+ * code". A consumed option is the gateway stating the choice took effect, which
+ * no error code beside it can withdraw; a pending one is it stating the choice
+ * did not. Only with neither does the code decide, through the client's own
+ * verdict on whether the command was rejected before anything was applied.
+ */
+function controlOutcome(error: NessaConversationControlError): ControlOutcome {
+  if (error.permissionSelection === "consumed") return "applied"
+  if (error.permissionSelection === "pending") return "refused"
+  return error.uncertain ? "unknown" : "refused"
+}
+
+/**
+ * A control the gateway answered with a reason, in the panel's words, and with
+ * what became of it. Anything else is passed on untouched.
  *
  * Unlike a message, a control is translated whatever the client's `uncertain`
  * says, because the reason is worth passing on either way — the case that makes
  * the difference is `attachment_cleanup_unavailable`, a close that did happen
- * and whose cleanup did not, which the client can only report as uncertain. So
- * the verdict travels beside the reason rather than deciding whether there is
- * one. The store still refreshes and never replays either way.
+ * and whose cleanup did not, which the client can only report as uncertain.
+ *
+ * And the outcome travels even when the reason cannot. A review the gateway
+ * reports as still pending is certainly not applied whatever code came with it,
+ * and it sends an ordinary diagnostic code there rather than a dedicated one —
+ * so discarding the outcome for want of a word would throw away the certain
+ * half of the answer precisely where the panel has nothing else to go on.
  */
 function controlFailure(error: unknown): unknown {
-  if (!(error instanceof NessaConversationControlError) || !error.code) return error
-  const named = failures[error.code]
-  if (!named) return error
-  const failed = new ControlFailedError(named, !error.uncertain, error)
+  if (!(error instanceof NessaConversationControlError)) return error
+  const named = error.code ? failures[error.code] : undefined
+  const outcome = controlOutcome(error)
+  // Neither a word for the reason nor anything to say about the outcome that
+  // the client's own sentence does not already say. Left exactly as it came.
+  if (!named && outcome === "unknown") return error
+  const failed = new ControlFailedError(named, outcome, error)
   // The client has one constant for every control — "did not return a
   // trustworthy acknowledgement" — which names neither the command nor its
   // cause. Kept as the text to fall back to, and the application decides where

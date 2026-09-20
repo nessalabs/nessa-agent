@@ -1,5 +1,6 @@
 import {
   ConversationErrorCode,
+  NessaConversationControlError,
   NessaConversationMutationError,
   NessaRpcError,
   type NessaClient,
@@ -7,7 +8,11 @@ import {
 import { expect, it } from "vitest"
 import { makeStore } from "../../../store"
 import { createDependencies } from "../../../composition/dependencies"
-import { ControlFailedError, SubmissionRefusedError } from "../../application/ports"
+import {
+  ControlFailedError,
+  SubmissionRefusedError,
+  type ControlOutcome,
+} from "../../application/ports"
 import { textContent, type CommandFailure } from "../../model"
 import { conversationNotice } from "../../ui/notification"
 import { gatewayEffects } from "../gateway/effects"
@@ -40,8 +45,8 @@ async function stopAfterFailing(error: unknown) {
 }
 
 /** As the gateway adapter builds one: the reason, the outcome, the client's text. */
-function controlFailure(reason: CommandFailure, refused: boolean) {
-  const failed = new ControlFailedError(reason, refused)
+function controlFailure(reason: CommandFailure | undefined, outcome: ControlOutcome) {
+  const failed = new ControlFailedError(reason, outcome)
   failed.message = CLIENT_CONSTANT
   return failed
 }
@@ -50,7 +55,7 @@ it("says a close whose cleanup failed in the panel's words, by its reason", asyn
   // Not a refusal: the conversation did close, and only letting go of the files
   // it held did not. The client's constant would call that unknown.
   const tab = await stopAfterFailing(
-    controlFailure("attachment-cleanup-unavailable", false),
+    controlFailure("attachment-cleanup-unavailable", "unknown"),
   )
   expect(tab.failure).toBe("attachment-cleanup-unavailable")
   expect(tab.error).toMatch(/could not release the images/)
@@ -66,8 +71,11 @@ it("says a close whose cleanup failed in the panel's words, by its reason", asyn
 
 it("tells somebody whose control the gateway refused that nothing was done", async () => {
   // The client records these as decided before anything was applied, so saying
-  // the acknowledgement could not be trusted would claim the opposite.
-  const startup = await stopAfterFailing(controlFailure("agent-startup-deadline", true))
+  // the acknowledgement could not be trusted would claim the opposite. Every
+  // reason answers, including none at all: the outcome is what is being said.
+  const startup = await stopAfterFailing(
+    controlFailure("agent-startup-deadline", "refused"),
+  )
   expect(startup.error).toMatch(/nothing was done/)
   expect(startup.error).not.toBe(CLIENT_CONSTANT)
   expect(conversationNotice(startup)).toEqual({
@@ -75,22 +83,46 @@ it("tells somebody whose control the gateway refused that nothing was done", asy
     description: startup.error,
     retry: { kind: "refresh" },
   })
-  const invalid = await stopAfterFailing(controlFailure("invalid-request", true))
-  expect(invalid.failure).toBe("invalid-request")
-  expect(invalid.error).toMatch(/nothing was done/)
+  for (const reason of [
+    "invalid-request",
+    "conversation-not-found",
+    "conversation-capacity",
+    "agent-not-configured",
+    "image-input-unsupported",
+    "attachment-not-found",
+    "attachment-unavailable",
+    undefined,
+  ] as const) {
+    const tab = await stopAfterFailing(controlFailure(reason, "refused"))
+    expect(tab.failure).toBe(reason)
+    expect(tab.error, `${reason ?? "no reason"} was refused`).toMatch(/nothing was done/)
+    expect(tab.error).not.toBe(CLIENT_CONSTANT)
+  }
+})
+
+it("tells somebody whose choice the gateway recorded that it need not be made again", async () => {
+  // The opposite certainty, and the one a flag could not carry: the review's
+  // option was consumed, so the choice took effect even though the command
+  // failed. Calling that untrustworthy would understate what the gateway said.
+  const tab = await stopAfterFailing(controlFailure(undefined, "applied"))
+  expect(tab.failure).toBeUndefined()
+  expect(tab.error).toMatch(/nothing to answer again/)
+  expect(tab.error).not.toBe(CLIENT_CONSTANT)
 })
 
 it("keeps the client's sentence where the outcome really is open", async () => {
-  // The same two reasons, with the gateway not saying it decided them before
-  // applying anything. "Not a trustworthy acknowledgement" is then exactly
-  // right, so it stands — the reason alone never licenses the other sentence.
-  for (const reason of ["agent-startup-deadline", "invalid-request"] as const) {
-    const tab = await stopAfterFailing(controlFailure(reason, false))
+  // The same reasons, with the gateway saying nothing about what became of the
+  // command. "Not a trustworthy acknowledgement" is then exactly right, so it
+  // stands — the reason alone never licenses either of the other sentences.
+  for (const reason of [
+    "agent-startup-deadline",
+    "invalid-request",
+    "conversation-not-found",
+  ] as const) {
+    const tab = await stopAfterFailing(controlFailure(reason, "unknown"))
     expect(tab.failure).toBe(reason)
     expect(tab.error).toBe(CLIENT_CONSTANT)
   }
-  const lost = await stopAfterFailing(controlFailure("conversation-not-found", false))
-  expect(lost.error).toBe(CLIENT_CONSTANT)
 })
 
 it("carries a refused creation's reason through the control that asked for it", async () => {
@@ -140,6 +172,68 @@ it("carries a refused creation's reason through the control that asked for it", 
   })
 })
 
+it.each([
+  // The gateway attaches the review's state to an ordinary diagnostic code, so
+  // the case that matters most is the one with no word for the reason at all.
+  ["audit_unavailable", undefined],
+  ["conversation_not_found", "conversation-not-found"],
+] as const)(
+  "never tells somebody the gateway left a review pending that it could not be trusted, under %s",
+  async (code, reason) => {
+    // The whole path: the gateway's answer, the client's typed error with its
+    // selection state, the adapter's translation, the store, and the notice.
+    const client = {
+      conversation: {
+        create: async () => ({ conversationId: "server" }),
+        // Exactly what the client's own `mutate` builds for a failed permission
+        // answer: a control error flagged as one, so it reads the gateway's
+        // selection state out of the details.
+        answer: () =>
+          Promise.reject(
+            new NessaConversationControlError(
+              "server",
+              "action",
+              "execution",
+              new NessaRpcError(code, "answer failed", { selectionState: "pending" }),
+              true,
+            ),
+          ),
+        read: () => Promise.reject(new Error("no conversation")),
+      },
+    } as unknown as NessaClient
+    const store = makeStore(
+      createDependencies({
+        conversation: gatewayEffects(
+          () => client,
+          () => Promise.reject(new Error("no wait expected")),
+        ),
+      }),
+    )
+    store.dispatch(bindConversation({ id: "c0", serverId: "server" }))
+    await store.dispatch(
+      controlConversation({
+        id: "c0",
+        control: {
+          kind: "answer",
+          executionId: "execution",
+          permissionId: "permission",
+          optionId: "deny",
+        },
+      }),
+    )
+    const tab = store.getState().conversation.conversations[0]!
+    expect(tab.failure).toBe(reason)
+    // A pending review is the gateway saying the option was not taken. Whether
+    // this build has a word for the code beside it changes nothing about that.
+    expect(tab.error).toMatch(/nothing was done/)
+    expect(tab.error).not.toBe(CLIENT_CONSTANT)
+    expect(conversationNotice(tab)).toMatchObject({
+      title: "Conversation needs attention",
+      description: tab.error,
+    })
+  },
+)
+
 it("leaves an unacknowledged control untyped: a lost answer names no reason", async () => {
   const tab = await stopAfterFailing(new Error("connection lost"))
   expect(tab.failure).toBeUndefined()
@@ -159,7 +253,7 @@ it("clears the previous failure when the next control starts, reason and sentenc
       conversation: {
         ...effects,
         close: async (id: string) => {
-          if (refuse) throw controlFailure("attachment-cleanup-unavailable", false)
+          if (refuse) throw controlFailure("attachment-cleanup-unavailable", "unknown")
           await effects.close(id)
         },
       },

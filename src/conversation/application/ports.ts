@@ -84,29 +84,42 @@ export class SubmissionRefusedError extends Error {
 }
 
 /**
- * The gateway answered a conversation control with a reason of its own.
+ * What the gateway said became of a control that failed.
+ *
+ * Three states and not a flag, because a failed control has three honest
+ * answers and two of them are certain. `refused` is the gateway deciding the
+ * command before applying any of it — a code it rejects up front, or a review
+ * whose option it reports as still pending. `applied` is the opposite
+ * certainty: the review's option was consumed, so the choice took effect and
+ * the command failed after that. `unknown` is the only one that leaves it open,
+ * and is what the client's own sentence describes.
+ *
+ * A boolean here would have made `applied` and `unknown` the same answer, which
+ * is the loss this type exists to prevent.
+ */
+export type ControlOutcome = "refused" | "applied" | "unknown"
+
+/**
+ * The gateway answered a conversation control with something worth passing on:
+ * a reason this panel has a word for, a certain outcome, or both.
  *
  * Deliberately not named a refusal, because the reason alone does not say the
  * control was refused: `attachment-cleanup-unavailable` is a close that did
- * happen and whose release of the conversation's uploads did not. Whether
- * anything was applied is the separate `refused` fact beside it, and the store
- * reads the conversation again regardless — it never replays a control.
+ * happen and whose release of the conversation's uploads did not. The two facts
+ * do not determine each other — a review still pending is refused under any
+ * code, including one this build has no word for — so both are carried, and the
+ * store reads the conversation again regardless. It never replays a control.
  */
 export class ControlFailedError extends Error {
   constructor(
-    readonly reason: CommandFailure,
-    /**
-     * The client's verdict that the gateway decided this control before
-     * applying any of it, so nothing happened. False leaves that open: the
-     * control may have run and only its acknowledgement been lost. Carried
-     * beside `reason` because the two do not determine each other — a
-     * permission answer whose option is still pending is refused without a
-     * pre-admission code, and a cleanup failure names a close that did run.
-     */
-    readonly refused: boolean,
+    /** Undefined when the gateway's code has no word here; the outcome may still be certain. */
+    readonly reason: CommandFailure | undefined,
+    readonly outcome: ControlOutcome,
     cause?: unknown,
   ) {
-    super(`The gateway could not complete this control (${reason}).`, { cause })
+    super(`The gateway could not complete this control (${reason ?? outcome}).`, {
+      cause,
+    })
     this.name = "ControlFailedError"
   }
 }

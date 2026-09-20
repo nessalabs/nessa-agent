@@ -238,14 +238,24 @@ const controlError = (code: string) =>
     new NessaRpcError(code, "temporarily_unavailable"),
   )
 
+/** A permission answer the gateway failed, reporting what became of the review. */
+const answerError = (code: string, selectionState: string) =>
+  new NessaConversationControlError(
+    "server",
+    "action",
+    "execution",
+    new NessaRpcError(code, "temporarily_unavailable", { selectionState }),
+    true,
+  )
+
 it.each([
-  ["attachment_cleanup_unavailable", "attachment-cleanup-unavailable", false],
-  ["agent_startup_deadline", "agent-startup-deadline", true],
-  ["conversation_not_found", "conversation-not-found", false],
-  ["invalid_request", "invalid-request", true],
+  ["attachment_cleanup_unavailable", "attachment-cleanup-unavailable", "unknown"],
+  ["agent_startup_deadline", "agent-startup-deadline", "refused"],
+  ["conversation_not_found", "conversation-not-found", "unknown"],
+  ["invalid_request", "invalid-request", "refused"],
 ] as const)(
   "turns the gateway's control failure %s into the panel's own word for it, with its outcome",
-  async (code, reason, refused) => {
+  async (code, reason, outcome) => {
     const refuse = () => Promise.reject(controlError(code))
     const effects = effectsOf(
       () =>
@@ -271,7 +281,7 @@ it.each([
       expect(error).toBeInstanceOf(ControlFailedError)
       // The reason and the outcome, as two facts: the same reason can arrive
       // either way, so neither may be read out of the other.
-      expect(error).toMatchObject({ reason, refused })
+      expect(error).toMatchObject({ reason, outcome })
       // The client says the same thing about every control that fails, naming
       // neither the command nor its cause. Kept as the fallback text all the
       // same; what the panel does with it is the application's to decide.
@@ -298,8 +308,53 @@ it("keeps a cleanup failure's reason even though the close itself may have appli
   const error = await effects.close("server").catch((error: unknown) => error)
   expect(error).toMatchObject({
     reason: "attachment-cleanup-unavailable",
-    refused: false,
+    outcome: "unknown",
   })
+})
+
+const answering = (error: unknown) =>
+  effectsOf(
+    () =>
+      ({
+        conversation: { answer: () => Promise.reject(error) },
+      }) as unknown as NessaClient,
+  ).answer("server", "execution", "permission", "option")
+
+it.each([
+  // The gateway sends an ordinary diagnostic code beside a pending review; the
+  // server's own test pairs it with `audit_unavailable`. Two of these have no
+  // word here at all, and the review's state is certain in every one of them.
+  ["audit_unavailable", undefined],
+  ["stale_permission", undefined],
+  ["conversation_not_found", "conversation-not-found"],
+] as const)(
+  "reports a review the gateway left pending as refused, under %s",
+  async (code, reason) => {
+    const pending = answerError(code, "pending")
+    expect(pending.uncertain).toBe(false)
+    const error = await answering(pending).catch((error: unknown) => error)
+    expect(error).toBeInstanceOf(ControlFailedError)
+    // The reason may be unknown; what became of the review is not, and a code
+    // with no word for it must not take the outcome down with it.
+    expect(error).toMatchObject({ reason, outcome: "refused" })
+  },
+)
+
+it("reports a review the gateway consumed as applied, not as an untrustworthy answer", async () => {
+  // The protocol calls the selection state authoritative and independent of the
+  // code, so a consumed option means the choice took effect however the rest of
+  // the command ended. The client can only call that uncertain.
+  const consumed = answerError("audit_unavailable", "consumed")
+  expect(consumed.uncertain).toBe(true)
+  const error = await answering(consumed).catch((error: unknown) => error)
+  expect(error).toMatchObject({ reason: undefined, outcome: "applied" })
+})
+
+it("leaves a review whose state the gateway could not prove genuinely unknown", async () => {
+  const unproven = answerError("audit_unavailable", "unknown")
+  // No word for the code and nothing certain about the review: there is nothing
+  // this panel can add to what the client already says, so it says nothing.
+  expect(await answering(unproven).catch((error: unknown) => error)).toBe(unproven)
 })
 
 it("gives every code the client decides before admission a word of its own", async () => {

@@ -71,7 +71,7 @@ const refusalDetail = (error: unknown) =>
 /** The same for a control, which has no draft to hand back and says so differently. */
 const controlDetail = (error: unknown) =>
   (error instanceof ControlFailedError
-    ? controlFailureMessage(error.reason, error.refused)
+    ? controlFailureMessage(error.reason, error.outcome)
     : undefined) ?? detail(error)
 
 /**
@@ -97,6 +97,8 @@ function sendOutcome(error: unknown, admissionAttempted: boolean): SendOutcome {
 // gave one this build knows. Kept beside the message so a notice can say why
 // without reading the words — never so a reader can infer what happened, which
 // is the typed error's business and differs between a message and a control.
+// A control can be certainly refused under a code with no word here, so this
+// answering undefined is not the same as nothing being known about it.
 const commandFailure = (error: unknown): CommandFailure | undefined =>
   error instanceof SubmissionRefusedError || error instanceof ControlFailedError
     ? error.reason
