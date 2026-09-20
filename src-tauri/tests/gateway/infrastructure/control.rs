@@ -596,7 +596,7 @@ struct FakeWatch<F> {
     status_calls: Vec<Duration>,
     health_calls: usize,
 }
-impl<F: FnMut(Duration) -> (Option<Health>, ServiceStatus)> FakeWatch<F> {
+impl<F: FnMut(Duration) -> (Option<Health>, Result<ServiceStatus, String>)> FakeWatch<F> {
     fn new(answer: F) -> Self {
         Self {
             elapsed: Duration::ZERO,
@@ -613,7 +613,9 @@ impl<F: FnMut(Duration) -> (Option<Health>, ServiceStatus)> FakeWatch<F> {
             .collect()
     }
 }
-impl<F: FnMut(Duration) -> (Option<Health>, ServiceStatus)> ServiceWatch for FakeWatch<F> {
+impl<F: FnMut(Duration) -> (Option<Health>, Result<ServiceStatus, String>)> ServiceWatch
+    for FakeWatch<F>
+{
     fn now(&self) -> Instant {
         // One base instant plus a virtual offset: `Instant` has no
         // constructor, and nothing here depends on the wall clock.
@@ -628,7 +630,7 @@ impl<F: FnMut(Duration) -> (Option<Health>, ServiceStatus)> ServiceWatch for Fak
     }
     fn status(&mut self) -> Result<ServiceStatus, String> {
         self.status_calls.push(self.elapsed);
-        Ok((self.answer)(self.elapsed).1)
+        (self.answer)(self.elapsed).1
     }
 }
 static BASE: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
@@ -654,11 +656,11 @@ fn a_slow_but_healthy_start_keeps_the_whole_deadline() {
     // time. The deadline exists for exactly this, and nothing may cut it short.
     let mut watch = FakeWatch::new(|elapsed| {
         if elapsed < Duration::from_secs(29) {
-            (None, observed(Some(42), true, LastExit::NeverExited))
+            (None, Ok(observed(Some(42), true, LastExit::NeverExited)))
         } else {
             (
                 Some(Health::Managed(ready_runtime())),
-                observed(Some(42), true, LastExit::NeverExited),
+                Ok(observed(Some(42), true, LastExit::NeverExited)),
             )
         }
     });
@@ -673,7 +675,7 @@ fn a_slow_but_healthy_start_keeps_the_whole_deadline() {
 #[test]
 fn a_crash_loop_is_given_up_in_about_a_second_and_a_half() {
     // The whole point of the change: this used to cost thirty seconds.
-    let mut watch = FakeWatch::new(|_| (None, observed(None, true, LastExit::Code(1))));
+    let mut watch = FakeWatch::new(|_| (None, Ok(observed(None, true, LastExit::Code(1)))));
     let error = wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()).unwrap_err();
     assert!(matches!(error, InstallFailure::Startup(_)), "{error:?}");
     assert!(
@@ -692,7 +694,7 @@ fn a_crash_loop_is_given_up_in_about_a_second_and_a_half() {
 fn launchd_is_not_asked_ten_times_a_second() {
     // `launchctl print` is a subprocess. Polling the port is not, so the loop
     // turns quickly while the questions that cost something stay spaced out.
-    let mut watch = FakeWatch::new(|_| (None, observed(Some(42), true, LastExit::NeverExited)));
+    let mut watch = FakeWatch::new(|_| (None, Ok(observed(Some(42), true, LastExit::NeverExited))));
     assert!(wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()).is_err());
     assert!(watch.health_calls > 200, "{}", watch.health_calls);
     for gap in watch.status_gaps() {
@@ -717,7 +719,7 @@ fn a_process_that_comes_back_between_deaths_starts_the_count_again() {
         } else {
             observed(None, true, LastExit::Code(1))
         };
-        (None, status)
+        (None, Ok(status))
     });
     let error = wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()).unwrap_err();
     assert!(
@@ -731,13 +733,47 @@ fn a_process_that_comes_back_between_deaths_starts_the_count_again() {
 fn a_service_that_says_nothing_either_way_still_ends_at_the_deadline() {
     // Not ready, and never positively dead: the readiness contract's own
     // failure, which stays worded as one.
-    let mut watch = FakeWatch::new(|_| (None, observed(None, false, LastExit::Unknown)));
+    let mut watch = FakeWatch::new(|_| (None, Ok(observed(None, false, LastExit::Unknown))));
     let error = wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()).unwrap_err();
     assert!(
         matches!(error, InstallFailure::Reconciliation(ref message) if message.contains("did not advertise the expected runtime identity")),
         "{error:?}"
     );
     assert!(watch.elapsed >= Duration::from_secs(30));
+}
+
+#[test]
+fn a_launchctl_we_cannot_run_is_our_failure_and_not_the_service_s() {
+    // Asking launchd is itself an effect that can fail. When it does we have
+    // learned nothing about the service, so the wait ends at once — sitting
+    // out the deadline would only repeat a question we cannot ask — and it
+    // ends as a retryable mechanism failure carrying launchctl's own words.
+    // Blaming the service would put a sentence on screen that no evidence
+    // supports.
+    // A live, silent process throughout, so nothing here is a death and the
+    // failed question is the only reason the wait can end early.
+    let mut watch = FakeWatch::new(|elapsed| {
+        if elapsed < Duration::from_secs(2) {
+            (None, Ok(observed(Some(42), true, LastExit::NeverExited)))
+        } else {
+            (None, Err("launchctl print: Could not find service".into()))
+        }
+    });
+    let error = wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()).unwrap_err();
+    assert_eq!(
+        error,
+        InstallFailure::Reconciliation("launchctl print: Could not find service".into())
+    );
+    // Forward recovery then tells the person to retry, which is true of this
+    // and is not true of a service that will not start.
+    let sentence = forward_recovery::<()>(Err(error)).unwrap_err();
+    assert!(sentence.contains("retry reconciliation"), "{sentence}");
+    // And it stopped when it happened, rather than at the deadline.
+    assert!(
+        watch.elapsed < Duration::from_secs(3),
+        "{:?}",
+        watch.elapsed
+    );
 }
 
 #[test]
