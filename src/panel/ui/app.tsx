@@ -90,10 +90,13 @@ function panelClass(surface: Surface, compositor: CompositorKind): string {
 
 export function App({
   attachmentResources,
+  digest,
   onSignOut,
   sessionError,
 }: {
   attachmentResources: AttachmentResources
+  /** How an upload's bytes are identified. Composition owns the Web Crypto one. */
+  digest: (bytes: Blob) => Promise<string>
   onSignOut?: () => void
   sessionError?: string
 }) {
@@ -110,7 +113,7 @@ export function App({
     (item) => item.id === tabDetails?.id,
   )
   const attachments = useFileAttachments(chat, attachmentResources)
-  const uploads = useAttachmentUploads(chat, attachmentResources)
+  const uploads = useAttachmentUploads(chat, attachmentResources, digest)
   // What the draft's files need said about them now, rather than at send.
   const fileNotice = attachmentNotice({
     files: attachments.files.map((file) => ({

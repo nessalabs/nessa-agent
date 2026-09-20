@@ -1,5 +1,6 @@
 import { gatewayEffects } from "../conversation/adapters/gateway/effects"
 import { createAttachmentResources } from "../panel/adapters/attachment-resources"
+import { sha256Digest } from "../panel/adapters/sha256"
 import { nativeCredentialSource } from "../session/adapters/client/credential-source"
 import type { CredentialSource } from "@nessa/client"
 import { loadEnvironment, type Environment } from "../env/environment"
@@ -19,6 +20,7 @@ export function createDependencies(
     agents?: AgentReadinessSource
     credentialSource?: CredentialSource
     clientId?: string
+    digest?: (bytes: Blob) => Promise<string>
   } = {},
 ) {
   const config = options.environment ?? loadEnvironment({})
@@ -26,6 +28,10 @@ export function createDependencies(
   return {
     session,
     attachments: createAttachmentResources(),
+    // The Web Crypto digest an upload is identified by. Outside the process
+    // like any other read, so it arrives here rather than being reached for:
+    // tests hash with a function they wrote and never touch `crypto.subtle`.
+    digest: options.digest ?? sha256Digest,
     // Setup's one pre-session question. Constructed here so the surface takes
     // it as a dependency rather than importing the transport it happens to use.
     agents: options.agents ?? httpAgentReadiness({ baseUrl: config.gatewayBaseUrl }),
