@@ -1,4 +1,5 @@
 //! Private upgrade exchange and native process effects for the launchd adapter.
+use super::startup::{diagnose, log_tail, parse_last_exit, LastExit};
 use nessa_local_storage::OpenMode;
 use serde::{Deserialize, Deserializer};
 use std::{
@@ -33,6 +34,9 @@ pub(super) struct ServiceStatus {
     pub loaded: bool,
     pub pid: Option<u32>,
     pub process_identity_known: bool,
+    /// Diagnostic only: what launchd last saw this service's process do. It
+    /// decides nothing about identity, and never authorizes an effect.
+    pub last_exit: LastExit,
 }
 /// A loaded label and a responsive port are independent observations.
 #[derive(Debug, PartialEq, Eq)]
@@ -90,6 +94,7 @@ pub(super) fn service_status(service: &str) -> Result<ServiceStatus, String> {
             loaded: false,
             pid: None,
             process_identity_known: true,
+            last_exit: LastExit::Unknown,
         });
     }
     let text = String::from_utf8_lossy(&output.stdout);
@@ -98,6 +103,7 @@ pub(super) fn service_status(service: &str) -> Result<ServiceStatus, String> {
         loaded: true,
         pid: process.as_ref().ok().copied().flatten(),
         process_identity_known: process.is_ok(),
+        last_exit: parse_last_exit(&text),
     })
 }
 fn parse_service_process(text: &str) -> Result<Option<u32>, ()> {
@@ -158,14 +164,38 @@ fn parse_listener_pid(text: &str) -> Option<u32> {
     pid
 }
 
-pub(super) fn lock_namespace(data: &Path) -> Result<File, String> {
+/// The reconciliation lock, given up explicitly.
+///
+/// An `flock` belongs to the open file description, not to the descriptor. A
+/// subprocess forked while this one is open — `uuidgen`, `plutil`, `launchctl`,
+/// any of the ones reconciliation runs — keeps a duplicate of that description
+/// until it execs, because `O_CLOEXEC` closes the descriptor there and not at
+/// the fork. Closing ours alone would leave the namespace locked by a child
+/// that has no interest in it, so the next reconciliation waits on nothing.
+pub(super) struct NamespaceLock(File);
+impl std::os::fd::AsRawFd for NamespaceLock {
+    fn as_raw_fd(&self) -> std::os::fd::RawFd {
+        self.0.as_raw_fd()
+    }
+}
+impl Drop for NamespaceLock {
+    fn drop(&mut self) {
+        if unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) } != 0 {
+            eprintln!(
+                "[nessa] could not release the gateway reconciliation lock: {}",
+                Error::last_os_error()
+            );
+        }
+    }
+}
+pub(super) fn lock_namespace(data: &Path) -> Result<NamespaceLock, String> {
     let file =
         nessa_local_storage::open(&data.join("gateway-upgrade.lock"), OpenMode::OpenOrCreate)
             .map_err(|e| e.to_string())?;
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-            return Ok(file);
+            return Ok(NamespaceLock(file));
         }
         let error = Error::last_os_error();
         if error.kind() != ErrorKind::WouldBlock || Instant::now() >= deadline {
@@ -629,30 +659,218 @@ fn parse_health(bytes: &[u8]) -> Option<Health> {
         _ => None,
     }
 }
+/// How long a healthy-but-slow gateway is allowed to take to answer.
+const READINESS_DEADLINE: Duration = Duration::from_secs(30);
+/// How often launchd is asked what happened to the process, while the port is
+/// still silent. `launchctl print` is a subprocess; the health probe is not.
+const LIVENESS_INTERVAL: Duration = Duration::from_millis(500);
+/// Consecutive liveness checks that must agree the process exited and was not
+/// replaced. One observation can land in the gap between a clean exit and the
+/// next spawn; three across a second and a half is a service that is not coming
+/// up, well inside launchd's own five-second restart throttle.
+const DEAD_OBSERVATIONS: u32 = 3;
+const READINESS_FAILURE: &str = "the gateway did not advertise the expected runtime identity owned by its launchd service before the readiness deadline";
+
+/// A failed registration, and whether its message is already the one to show.
+///
+/// Every mechanism failure here is retryable and says so; a service that exits
+/// on startup is not a mechanism failure, and the sentence naming its cause is
+/// finished before it leaves this module.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum InstallFailure {
+    Reconciliation(String),
+    Startup(String),
+}
+impl From<String> for InstallFailure {
+    fn from(message: String) -> Self {
+        Self::Reconciliation(message)
+    }
+}
+impl From<&str> for InstallFailure {
+    fn from(message: &str) -> Self {
+        Self::Reconciliation(message.into())
+    }
+}
+
+/// What one look at the port and at launchd says about the service being
+/// started. Separated from the waiting so the judgement can be tested without
+/// a port, a subprocess or a clock, the way `classify` already is.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Step {
+    /// The expected runtime answered, owned by the exact process launchd runs.
+    Ready(ManagedRuntime),
+    /// launchd has positively established that the process is gone and that
+    /// its last exit failed.
+    Dead,
+    /// Anything else, including everything we could not establish.
+    Waiting,
+}
+
+/// Judge one observation.
+///
+/// Two things are deliberately not evidence of death. A health response from
+/// something that is not the service being started says nothing about that
+/// service — another gateway can hold this stage's port, and the per-label
+/// registration lock does not exclude it, so its answer must not stop us
+/// looking at our own. And a `launchctl print` whose process could not be read
+/// is an answer we did not get: `service_status` keeps "no process" and "could
+/// not tell" apart for exactly this reason, and only the first is absence.
+pub(super) fn assess(
+    running: Option<&Health>,
+    status: &ServiceStatus,
+    expected: (&str, &str),
+) -> Step {
+    if let Some(Health::Managed(runtime)) = running {
+        if status.loaded
+            && status.process_identity_known
+            && status.pid == Some(runtime.pid)
+            && runtime.fingerprint == expected.0
+            && runtime.generation == expected.1
+        {
+            return Step::Ready(runtime.clone());
+        }
+    }
+    if status.loaded
+        && status.process_identity_known
+        && status.pid.is_none()
+        && status.last_exit.is_failure()
+    {
+        return Step::Dead;
+    }
+    Step::Waiting
+}
+
+/// Consecutive `Dead` observations, and the rule for giving up on them.
+///
+/// Kept apart from the waiting so the reset is testable without a clock: one
+/// observation can land in the gap between a clean exit and the next spawn,
+/// and anything that is not death has to start the count again or a service
+/// that is restarting normally would eventually accumulate three.
+#[derive(Default)]
+pub(super) struct DeadCount(u32);
+impl DeadCount {
+    /// Records one observation and says whether the service should be given up.
+    pub(super) fn observe(&mut self, step: &Step) -> bool {
+        self.0 = if matches!(step, Step::Dead) {
+            self.0 + 1
+        } else {
+            0
+        };
+        self.0 >= DEAD_OBSERVATIONS
+    }
+}
+
+/// How often the port is asked, while it is silent.
+const POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// The port, launchd, and the passing of time — the three outside things
+/// readiness depends on.
+///
+/// Behind a trait so the waiting can be tested at all. The rules that matter
+/// here are about *when*: that a healthy-but-slow start keeps its full
+/// deadline, that a crash loop is given up in about a second and a half, and
+/// that `launchctl print` — a subprocess — is not run ten times a second.
+/// None of that is observable through a function that sleeps and calls the
+/// real thing.
+pub(super) trait ServiceWatch {
+    fn now(&self) -> Instant;
+    fn sleep(&mut self, duration: Duration);
+    fn health(&mut self) -> Option<Health>;
+    fn status(&mut self) -> Result<ServiceStatus, String>;
+}
+
+/// The real one: a loopback probe, `launchctl print`, and the system clock.
+struct LaunchdWatch<'a> {
+    service: &'a str,
+    port: u16,
+}
+impl ServiceWatch for LaunchdWatch<'_> {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+    fn sleep(&mut self, duration: Duration) {
+        std::thread::sleep(duration);
+    }
+    fn health(&mut self) -> Option<Health> {
+        health(self.port)
+    }
+    fn status(&mut self) -> Result<ServiceStatus, String> {
+        service_status(self.service)
+    }
+}
+
+/// Wait for the expected runtime to answer, or for launchd to prove it cannot.
+///
+/// The deadline is for a server that is starting slowly. A server that has
+/// exited, and that launchd has not replaced by the time we look again, is not
+/// starting slowly, and waiting the rest of the deadline out only delays the
+/// same answer by half a minute.
 pub(super) fn wait_fingerprint(
     service: &str,
     expected: (&str, &str),
     port: u16,
-) -> Result<ManagedRuntime, String> {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while Instant::now() < deadline {
-        if let Some(Health::Managed(runtime)) = health(port) {
-            let status = service_status(service)?;
-            if status.loaded
-                && status.pid == Some(runtime.pid)
-                && runtime.fingerprint == expected.0
-                && runtime.generation == expected.1
-            {
-                return Ok(runtime);
+    log: &Path,
+) -> Result<ManagedRuntime, InstallFailure> {
+    wait_ready(&mut LaunchdWatch { service, port }, expected, port, log)
+}
+
+pub(super) fn wait_ready(
+    watch: &mut impl ServiceWatch,
+    expected: (&str, &str),
+    port: u16,
+    log: &Path,
+) -> Result<ManagedRuntime, InstallFailure> {
+    let deadline = watch.now() + READINESS_DEADLINE;
+    let mut next_liveness_check = watch.now();
+    let mut dead = DeadCount::default();
+    while watch.now() < deadline {
+        let running = watch.health();
+        // `launchctl print` is a subprocess, so it is asked when there is
+        // something to check against it or when a liveness check is due —
+        // never on every hundred-millisecond turn of the loop.
+        let due = watch.now() >= next_liveness_check;
+        if matches!(running, Some(Health::Managed(_))) || due {
+            let status = watch.status()?;
+            match assess(running.as_ref(), &status, expected) {
+                Step::Ready(runtime) => return Ok(runtime),
+                // An observation that is not due still counts for nothing:
+                // the interval is what makes three of these a second and a
+                // half of agreement rather than three turns of the loop.
+                step if due => {
+                    next_liveness_check = watch.now() + LIVENESS_INTERVAL;
+                    if dead.observe(&step) {
+                        let failure =
+                            diagnose(&status.last_exit, &log_tail(log), port, READINESS_FAILURE);
+                        eprintln!("[nessa] {}", failure.detail);
+                        return Err(InstallFailure::Startup(failure.sentence));
+                    }
+                }
+                _ => {}
             }
         }
-        std::thread::sleep(Duration::from_millis(100));
+        watch.sleep(POLL_INTERVAL);
     }
-    Err("Gateway did not advertise the expected runtime identity owned by its launchd service before the readiness deadline".into())
+    // The process outlived the deadline without answering, which is the
+    // readiness contract's own failure and stays worded as one. Its log still
+    // goes to ours, so the next person does not have to go and find it.
+    let tail = log_tail(log);
+    if !tail.is_empty() {
+        eprintln!("[nessa] {READINESS_FAILURE}\ngateway log tail:\n{tail}");
+    }
+    Err(InstallFailure::Reconciliation(
+        "Gateway did not advertise the expected runtime identity owned by its launchd service before the readiness deadline".into(),
+    ))
 }
 /// Installation failure never authorizes stopping a process or restoring old configuration.
-pub(super) fn forward_recovery<T>(result: Result<T, String>) -> Result<T, String> {
-    result.map_err(|primary| format!("{primary}; gateway registration and any loaded process were preserved for forward recovery; retry reconciliation"))
+///
+/// The forward-recovery clause is advice about the mechanism, and it belongs on
+/// the mechanism's failures. A service that will not start is not waiting on a
+/// retry of ours, and its sentence is left exactly as it was written.
+pub(super) fn forward_recovery<T>(result: Result<T, InstallFailure>) -> Result<T, String> {
+    result.map_err(|failure| match failure {
+        InstallFailure::Startup(sentence) => sentence,
+        InstallFailure::Reconciliation(primary) => format!("{primary}; gateway registration and any loaded process were preserved for forward recovery; retry reconciliation"),
+    })
 }
 #[cfg(test)]
 #[path = "../../../../tests/gateway/infrastructure/control.rs"]

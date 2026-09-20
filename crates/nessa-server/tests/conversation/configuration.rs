@@ -143,3 +143,39 @@ fn whether_an_agent_runs_its_own_tools_is_asked_of_that_agent_alone() {
     assert!(!config.runtime(AgentId::Claude).unwrap().tools_enabled);
     assert!(config.runtime(AgentId::Codex).unwrap().tools_enabled);
 }
+
+#[test]
+fn codex_is_told_to_sign_itself_in_with_the_key_it_was_handed() {
+    // Handing Codex a key is not the same as it using one. Its adapter reads an
+    // environment key only while carrying out an `api-key` sign-in request, and
+    // Nessa's shared ACP worker sends no `authenticate` of its own — so a
+    // machine whose only Codex credential is `OPENAI_API_KEY` was offered by
+    // setup as signed in and then refused every `session/new` with
+    // "Authentication required". Readiness and the launch have to be talking
+    // about the same machine.
+    let key = |name: &str| BTreeMap::from([(OsString::from(name), OsString::from("sk-not-real"))]);
+    assert_eq!(
+        sign_in_instruction(AgentId::Codex, &key("OPENAI_API_KEY")),
+        Some(("DEFAULT_AUTH_REQUEST", r#"{"methodId":"api-key"}"#)),
+    );
+    assert_eq!(
+        sign_in_instruction(AgentId::Codex, &key("CODEX_API_KEY")),
+        Some(("DEFAULT_AUTH_REQUEST", r#"{"methodId":"api-key"}"#)),
+    );
+
+    // Signed in some other way — a credentials file, the OS keyring — there is
+    // no key here to name, and asking for an `api-key` sign-in would refuse a
+    // machine that is already signed in.
+    assert_eq!(
+        sign_in_instruction(AgentId::Codex, &BTreeMap::new()),
+        None,
+        "an api-key request with no key is a startup that cannot succeed",
+    );
+
+    // Claude's harness reads its own credential unprompted, and must not be
+    // handed another vendor's startup instruction.
+    assert_eq!(
+        sign_in_instruction(AgentId::Claude, &key("ANTHROPIC_API_KEY")),
+        None,
+    );
+}

@@ -49,7 +49,10 @@ async function run() {
   const client = await NessaClient.connect({
     profile: ConnectionProfile.Product,
     stage: Stage.Dev,
-    url: "ws://127.0.0.1:7420/session",
+    // The dev gateway. 7420 is the product port an installed Nessa holds
+    // through its background service; `protocol/defaults/gateway-ports.json`
+    // is the table, and `NESSA_PORT` overrides it.
+    url: "ws://127.0.0.1:7421/session",
     role: ClientRole.Surface,
     surface: { kind: SurfaceKind.Cli, instance: "terminal" },
     client: { id: "terminal", version: "1.0.0", platform: ClientPlatform.Node },

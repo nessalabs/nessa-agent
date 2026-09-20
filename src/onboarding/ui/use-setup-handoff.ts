@@ -38,9 +38,10 @@ export interface SetupHandoffCoordination {
  * them, so the component that draws the screen takes props and nothing else.
  *
  * What is decided is tested there, including the one-call-per-attempt gate. What
- * is performed here is not: this suite has no DOM, so the reveal and the focus
- * are covered by reading, as they were before this was extracted. Moving them
- * did not make those testable.
+ * is performed here is tested in `use-setup-handoff.test.ts`, which mounts this
+ * under Strict Mode in a DOM and answers for the host when it chooses to — so
+ * the one call, the reveal, the focus and a window gone mid-flight are all run
+ * the way React runs them rather than covered by reading.
  *
  * @param setupActive Whether setup is still on screen.
  * @param completed Whether setup was finished rather than left. The one fact

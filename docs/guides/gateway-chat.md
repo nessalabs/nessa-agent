@@ -97,8 +97,21 @@ no adapter for fails startup by name, rather than being skipped.
 
 A conversation records the agent it was created on and is reopened on that same
 agent for the rest of its life, so changing `selected` moves new conversations
-only. Records written before this server knew a second agent name no agent and
-are read as Claude's. Each agent's model must come from its own vendor's entries
+only. Records written before this server knew a second agent name no agent, and
+are refused rather than read as Claude's: the reader that assumed an agent is
+what "One current contract" forbids. Bring them to the current shape once, with
+the gateway stopped:
+
+```bash
+node scripts/retrofit-conversation-agents.mjs            # --dry-run to look first
+```
+
+It names Claude, which is honest rather than a guess — Claude was the only agent
+that could have written a record without the field — and it leaves every record
+that already states its agent exactly as it is. Until it has been run, such a
+conversation is refused as `agent_unsupported`.
+
+Each agent's model must come from its own vendor's entries
 in the catalog: Codex is signed in to OpenAI and cannot reach an Anthropic model,
 and the mismatch is reported at startup rather than by a provider refusing every
 prompt. `toolsEnabled` is asked of each agent separately and has to be stated:
@@ -125,7 +138,8 @@ available and returns `conversations_not_configured` for chat. A request naming
 an agent this server has no configuration for returns `agent_not_configured`.
 They are separate codes because they are separate situations, and only the
 second is about the agent that was asked for. A conversation already on disk that names an agent this
-build has no adapter for returns `agent_unsupported` — its own code, not a
+build has no adapter for, or that predates the field entirely, returns
+`agent_unsupported` — its own code, not a
 storage failure, because storage is fine and retrying cannot change the answer. Invalid supplied configuration fails startup. Process
 supervision currently requires Unix; there is no production test-provider
 fallback.

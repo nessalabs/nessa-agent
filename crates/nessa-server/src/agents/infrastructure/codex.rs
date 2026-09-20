@@ -18,6 +18,8 @@
 //!
 //! Nothing here reads a secret. Every question is whether a credential exists.
 
+use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -90,10 +92,21 @@ const SIGN_IN_DEADLINE: Duration = Duration::from_secs(5);
 /// is reported as a question this machine did not answer rather than as a
 /// sign-in ruled out. Nothing here handles a credential; the answer is a status
 /// code.
-pub(super) fn sign_in_status(command: &Path, entry: &Path) -> Result<bool, ProbeFailure> {
+pub(super) fn sign_in_status(
+    command: &Path,
+    entry: &Path,
+    environment: &BTreeMap<OsString, OsString>,
+) -> Result<bool, ProbeFailure> {
     let mut child = match Command::new(command)
         .arg(entry)
         .args(SIGN_IN_QUERY)
+        // Asked under exactly the launch's environment, not this server's.
+        // `CODEX_HOME` decides which account Codex reads and the session-bus
+        // variables decide whether it can open a keyring at all, so inheriting
+        // more than the launch passes would answer about an installation this
+        // server cannot actually start.
+        .env_clear()
+        .envs(environment)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

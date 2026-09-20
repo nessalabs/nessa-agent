@@ -7,9 +7,15 @@
 # but the one that built it. Which of the two happened is not left to be guessed:
 # scripts/desktop/verify-bundle.mjs reads the built bundle and says so.
 #
-# Unproven until a tag is actually built. The secrets are set and the steps are
-# here, but no release has run through them yet, so the first one should be
-# treated as the test it is.
+# What v0.1.0 proved, in the order it failed: the tag resolves to a commit, the
+# versions agree, the updater key is the pair of the one in tauri.conf.json, the
+# app compiles in the release profile, and the certificate signs and reaches
+# Apple's notary service. What it found there was that nothing signs the three
+# executables under Contents/Resources/runtime — the bundler signs the app, and
+# a resource is a file to it — so scripts/desktop/import-certificate.mjs makes
+# an identity available before the runtime is assembled and prepare-macos.mjs
+# signs them with it. Still unproven past that point: a stapled ticket, and an
+# agent actually running out of a downloaded bundle.
 #
 #   tag v* ──▶ version ──▶ updater-key ──┬─▶ build (macos-latest,    aarch64) ─┐
 #                                        └─▶ build (macos-15-intel, x86_64) ──┤
@@ -93,15 +99,22 @@ jobs:
             echo "Expected vMAJOR.MINOR.PATCH, optionally with a pre-release suffix."
             exit 1
           fi
-          sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" \
-            --jq '.object.sha' 2>/dev/null || true)"
-          if [ -z "$sha" ]; then
+          object="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" \
+            --jq '.object.type + " " + .object.sha' 2>/dev/null || true)"
+          if [ -z "$object" ]; then
             echo "No tag refs/tags/${TAG} in this repository."
             echo "Tag the commit you mean to release first; a branch of that name is not a tag."
             exit 1
           fi
-          # An annotated tag's ref points at the tag object, not the commit.
-          sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${sha}" --jq '.sha')"
+          kind="${object%% *}"
+          sha="${object##* }"
+          # An annotated tag's ref points at the tag object, not the commit, and
+          # only `git/tags` dereferences one: `repos/.../commits/<tag object>`
+          # answers 422, which is how the first attempt at v0.1.0 died. A
+          # lightweight tag's ref already names the commit and is left alone.
+          if [ "$kind" = tag ]; then
+            sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${sha}" --jq '.object.sha')"
+          fi
           printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
           printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
           echo "refs/tags/${TAG} is ${sha}"
@@ -225,6 +238,14 @@ jobs:
       # runner outlives the job's usefulness.
       - name: Choose what this build signs with
         run: node scripts/desktop/apple-credentials.mjs
+      # The bundler imports the certificate when it signs the *app*, which is
+      # after `beforeBuildCommand` has assembled and signed the runtime tree.
+      # Nothing in `Contents/Resources` is signed by the bundler, so without an
+      # identity available this early those three executables ship ad-hoc — and
+      # Apple's notary service rejected v0.1.0 for exactly that, three errors
+      # per binary. Dormant when there is no certificate to import.
+      - name: Import the Developer ID certificate
+        run: node scripts/desktop/import-certificate.mjs
       # --target is passed although it is always the runner's own architecture,
       # and that is the point: scripts/desktop/prepare-macos.mjs refuses a triple
       # that is not the host's, so if a runner image ever changes architecture
@@ -239,9 +260,15 @@ jobs:
       # would be unrunnable in.
       - name: Build, sign and verify the bundle
         run: pnpm app:build --target ${{ matrix.target }} --bundles app,dmg
-      - name: Remove the App Store Connect key
+      - name: Remove the App Store Connect key and the signing keychain
         if: always()
-        run: rm -f "$APPLE_API_KEY_FILE"
+        run: |
+          rm -f "$APPLE_API_KEY_FILE"
+          # Unset unless the import step ran and had something to import. The
+          # bundler's own temporary keychain is its business and it removes it.
+          if [ -n "${NESSA_SIGNING_KEYCHAIN:-}" ]; then
+            security delete-keychain "$NESSA_SIGNING_KEYCHAIN" || true
+          fi
       # Both runners' bundlers write the identical name Nessa.app.tar.gz. A
       # release has one flat asset namespace, so they are renamed to the names
       # the manifest will point at before they leave the runner.
@@ -305,9 +332,12 @@ jobs:
           cat > release-notes.md <<'END'
           Nessa for macOS, Apple Silicon and Intel.
 
-          **These artifacts are not notarized.** macOS Gatekeeper will refuse to
-          open them on a machine that did not build them until notarization is in
-          place. Do not publish this draft to people who cannot work around that.
+          Whether these artifacts are notarized is decided by the repository's
+          secrets, so it is stated by the build rather than promised here: the
+          "Choose what this build signs with" step in each build's log says
+          which of the two happened, and `verify-bundle.mjs` checks the ticket
+          is stapled when it was. A bundle that is only signed ad-hoc is one
+          Gatekeeper refuses on any machine but the one that built it.
 
           `latest.json` is the updater manifest. It only reaches installed apps
           once this release is published and is the newest non-prerelease.
@@ -354,7 +384,8 @@ jobs:
             echo "Nothing is offered to any installed app until the draft is published."
             echo
             echo "Before publishing:"
-            echo "- The artifacts are **not notarized** — Gatekeeper blocks them elsewhere."
+            echo "- Check each build's \`Choose what this build signs with\` line: an"
+            echo "  ad-hoc bundle is refused by Gatekeeper everywhere but its own runner."
             echo "- Open the disk image on a clean machine and check the app launches."
             echo "- Check an agent actually runs, not only that the window appears."
           } >> "$GITHUB_STEP_SUMMARY"

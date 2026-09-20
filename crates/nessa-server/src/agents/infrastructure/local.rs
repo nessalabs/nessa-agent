@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsString;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
@@ -24,6 +25,15 @@ pub struct AgentLaunchFiles {
     /// Every path the launcher hands that executable. Empty for an agent whose
     /// arguments name nothing on this machine.
     pub paths: Vec<PathBuf>,
+    /// Exactly the environment the launcher starts that executable with.
+    ///
+    /// The launch clears the environment and names what it passes, so an agent
+    /// asked about its own sign-in has to be asked under the same names or it
+    /// answers about a different installation: the vendor's home directory
+    /// decides which account it reads, and on Linux the session-bus variables
+    /// decide whether a keyring can be opened at all. A probe that inherited
+    /// this server's environment could find a sign-in the launch cannot use.
+    pub environment: BTreeMap<OsString, OsString>,
 }
 
 /// How one agent answers for its own account store.
@@ -207,7 +217,7 @@ fn codex_sign_in(files: Option<&AgentLaunchFiles>) -> Result<bool, ProbeFailure>
     if !is_file(entry)? {
         return Err(ProbeFailure::NothingToAsk);
     }
-    codex::sign_in_status(&files.command, entry)
+    codex::sign_in_status(&files.command, entry, &files.environment)
 }
 
 /// Whether there is really a file at `path`, right now.

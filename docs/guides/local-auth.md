@@ -20,15 +20,19 @@ without serving.
 
 Credentials make the gateway reachable; they do not give it an agent. So the
 same two recipes first run `node scripts/dev-agent-config.mjs`, which writes the
-`agent` section of `$HOME/.nessa/dev/config.json` from this checkout — the
+`agents` section of `$HOME/.nessa/dev/config.json` from this checkout — the
 server is not allowed to know what a git checkout is, so the checkout is what
-says where its Claude ACP harness, model catalog, Node and `nessa-mcp` build
-are. It is a guard in exactly the same sense: an `agent` section that already
-exists is left untouched, and a `config.json` that does not parse is reported
-rather than replaced. Anything it cannot resolve — most often a clone where
+says where each ACP harness, the model catalog, Node and the `nessa-mcp` build
+are. Every agent whose harness is installed is configured, not Claude alone, so
+a checkout with only the Codex harness gets a Codex gateway. It is a guard in
+exactly the same sense: an `agents` section that already exists is left
+untouched, and a `config.json` that does not parse is reported rather than
+replaced. The `agent` section an earlier version of the script wrote is retired
+when the new one is written, because the server refuses to start on a file that
+still has it. Anything it cannot resolve — most often a clone where
 `(cd crates/nessa-sdk/harnesses/claude-acp && npm ci --omit=dev)` has not been
 run yet — is printed with the command that fixes it, and the gateway still
-starts, answering `agent_not_configured` for chat. See
+starts, answering `conversations_not_configured` for chat. See
 [gateway chat](gateway-chat.md) for the section's fields.
 
 Everything below is the deliberate path, and the only path for a server you
@@ -232,7 +236,7 @@ capacity or change a conflicting command deliberately rather than blindly retryi
 
 Create `config.json` beside the namespace's `auth` directory. For default local
 development this is `$HOME/.nessa/dev/config.json` — the same file the dev loop
-writes an `agent` section into; `registry` and `session` are never written there
+writes an `agents` section into; `registry` and `session` are never written there
 and are yours alone. For an explicit instance it is
 `<root>/<stage>/instances/<instance>/config.json`; omit the `prod` stage segment.
 Create this file with the same private permissions as credential files: current OS
@@ -356,6 +360,15 @@ file `auth/browser-sessions.jsonl`. Its append-only journal retains typed transi
 causes (including credential revocation/expiry, inactive membership, identity
 mismatch, and invalid credential state), honest
 automatic or caller attribution, and before/after state; it contains no submitted access tokens.
+A record states the instant its transitions happened, and nothing in the file
+can vouch for that instant. At startup, after replay, any surviving session
+whose renewal claims to be more than an hour ahead of the clock is removed and
+that removal is journalled with the cause `FutureRenewal` and no initiator. A
+forged or clock-damaged journal therefore cannot extend a session past the next
+startup, and a backwards clock step costs one sign-in rather than refusing to
+open the store or leaving it unable to record a sign-out. A forged *expiry*
+remains possible; it grants nothing beyond what truncating the private,
+exclusively locked journal already would.
 Storage failure rejects the transition and makes the store unavailable until
 restart; corrupt journals fail startup. Journal reads, writes, and flushes run on
 the server's blocking pool and browser authentication deadlines cover the complete

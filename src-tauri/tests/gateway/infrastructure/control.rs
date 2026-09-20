@@ -1,16 +1,20 @@
 use super::super::generation::service_generation;
+use super::super::startup::LastExit;
 use super::{
-    acknowledge, atomic_write, classify, forward_recovery, lock_namespace, parse_health,
+    acknowledge, assess, atomic_write, classify, forward_recovery, lock_namespace, parse_health,
     parse_listener_pid, parse_pending_retirement, parse_retirement_evidence, parse_service_process,
     prepare_request, read_acknowledgement, read_pending_retirement, read_retirement_evidence,
-    Health, ManagedRuntime, Registration, ServiceState,
+    service_status, wait_ready, DeadCount, Health, InstallFailure, ManagedRuntime, Registration,
+    ServiceState, ServiceStatus, ServiceWatch, Step,
 };
 use nessa_local_storage::OpenMode;
 use serde_json::{json, Value};
 use std::{
     fs,
     os::{fd::AsRawFd, unix::fs::PermissionsExt},
+    time::{Duration, Instant},
 };
+const PORT_UNDER_TEST: u16 = 7420;
 const RUNNING_GENERATION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TARGET_GENERATION: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const INSTANCE: &str = "550e8400-e29b-41d4-a716-446655440000";
@@ -438,6 +442,423 @@ fn installation_failures_preserve_primary_error_and_require_forward_recovery() {
         assert!(error.contains("loaded process were preserved for forward recovery"));
     }
 }
+const EXPECTED_FINGERPRINT: &str =
+    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+fn observed(pid: Option<u32>, identity_known: bool, last_exit: LastExit) -> ServiceStatus {
+    ServiceStatus {
+        loaded: true,
+        pid,
+        process_identity_known: identity_known,
+        last_exit,
+    }
+}
+
+#[test]
+fn readiness_requires_the_exact_runtime_owned_by_the_loaded_process() {
+    let runtime = ManagedRuntime {
+        fingerprint: EXPECTED_FINGERPRINT.into(),
+        generation: RUNNING_GENERATION.into(),
+        instance: INSTANCE.into(),
+        pid: 42,
+    };
+    let expected = (EXPECTED_FINGERPRINT, RUNNING_GENERATION);
+    assert_eq!(
+        assess(
+            Some(&Health::Managed(runtime.clone())),
+            &observed(Some(42), true, LastExit::NeverExited),
+            expected
+        ),
+        Step::Ready(runtime.clone())
+    );
+    // A process launchd did not report, or reported as something else, is not
+    // the one that answered, whatever it said about itself.
+    for status in [
+        observed(Some(43), true, LastExit::NeverExited),
+        observed(Some(42), false, LastExit::NeverExited),
+        observed(None, true, LastExit::NeverExited),
+    ] {
+        assert_ne!(
+            assess(Some(&Health::Managed(runtime.clone())), &status, expected),
+            Step::Ready(runtime.clone())
+        );
+    }
+}
+
+#[test]
+fn a_pid_we_could_not_read_is_not_a_process_that_is_gone() {
+    // `service_status` keeps "no process" apart from "could not tell", and
+    // the rejected PID syntax below is the parser's own. Counting an answer
+    // we did not get as death fails a service that is merely restarting,
+    // and blames it for whatever its previous process did.
+    for diagnostic in [
+        "gui/501/service = {\n state = not running\n pid = invalid\n}",
+        "gui/501/service = {\n pid = 42\n pid = 43\n}",
+    ] {
+        let parsed = parse_service_process(diagnostic);
+        assert!(parsed.is_err(), "{diagnostic}");
+        assert_eq!(
+            assess(
+                None,
+                &observed(parsed.ok().flatten(), false, LastExit::Code(1)),
+                (EXPECTED_FINGERPRINT, RUNNING_GENERATION)
+            ),
+            Step::Waiting
+        );
+    }
+    // Absence established, with a failed exit, is the case this exists for.
+    assert_eq!(
+        assess(
+            None,
+            &observed(None, true, LastExit::Code(1)),
+            (EXPECTED_FINGERPRINT, RUNNING_GENERATION)
+        ),
+        Step::Dead
+    );
+}
+
+#[test]
+fn another_gateway_on_the_port_never_answers_for_this_one() {
+    // This stage's port is not owned by this label: registration locks are
+    // per label and the port is per stage, so a second instance can hold it.
+    // Its health response says nothing about the service being started, and
+    // must not stop us reading launchd's answer about that service — which
+    // used to cost the full deadline and the generic readiness message, the
+    // exact outcome this change exists to remove.
+    let foreign = Health::Managed(ManagedRuntime {
+        fingerprint: "d".repeat(64),
+        generation: TARGET_GENERATION.into(),
+        instance: "660e8400-e29b-41d4-a716-446655440000".into(),
+        pid: 99,
+    });
+    assert_eq!(
+        assess(
+            Some(&foreign),
+            &observed(None, true, LastExit::Code(23)),
+            (EXPECTED_FINGERPRINT, RUNNING_GENERATION)
+        ),
+        Step::Dead
+    );
+    // A legacy listener on the same port is no different.
+    assert_eq!(
+        assess(
+            Some(&Health::Legacy),
+            &observed(None, true, LastExit::Code(23)),
+            (EXPECTED_FINGERPRINT, RUNNING_GENERATION)
+        ),
+        Step::Dead
+    );
+}
+
+#[test]
+fn a_process_that_is_running_or_has_not_failed_is_still_starting() {
+    let expected = (EXPECTED_FINGERPRINT, RUNNING_GENERATION);
+    for status in [
+        // Something is running, whatever it has yet to say.
+        observed(Some(42), true, LastExit::Code(1)),
+        // Gone, but nothing says it failed.
+        observed(None, true, LastExit::NeverExited),
+        observed(None, true, LastExit::Code(0)),
+        observed(None, true, LastExit::Unknown),
+        // Not loaded at all is not this function's failure to report.
+        ServiceStatus {
+            loaded: false,
+            pid: None,
+            process_identity_known: true,
+            last_exit: LastExit::Code(1),
+        },
+    ] {
+        assert_eq!(assess(None, &status, expected), Step::Waiting);
+    }
+}
+
+#[test]
+fn an_unloaded_service_reports_no_exit_of_its_own() {
+    // The unloaded answer must not carry a stale exit into the judgement
+    // above; it is the one `service_status` synthesises, not launchd's.
+    let status = service_status("gui/501/so.nessa.absent.invalid").unwrap();
+    assert!(!status.loaded);
+    assert_eq!(status.pid, None);
+    assert!(status.process_identity_known);
+    assert_eq!(status.last_exit, LastExit::Unknown);
+    assert!(!status.last_exit.is_failure());
+}
+
+/// A port, a launchd and a clock that only this test moves.
+///
+/// Time passes when the code under test sleeps, so a thirty-second deadline
+/// costs nothing to run through, and every `launchctl print` is recorded with
+/// the instant it happened at — which is the only way to see that a
+/// subprocess is not being run ten times a second.
+struct FakeWatch<F> {
+    elapsed: Duration,
+    answer: F,
+    status_calls: Vec<Duration>,
+    health_calls: usize,
+}
+impl<F: FnMut(Duration) -> (Option<Health>, Result<ServiceStatus, String>)> FakeWatch<F> {
+    fn new(answer: F) -> Self {
+        Self {
+            elapsed: Duration::ZERO,
+            answer,
+            status_calls: Vec::new(),
+            health_calls: 0,
+        }
+    }
+    /// Gaps between consecutive `launchctl print` calls.
+    fn status_gaps(&self) -> Vec<Duration> {
+        self.status_calls
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .collect()
+    }
+}
+impl<F: FnMut(Duration) -> (Option<Health>, Result<ServiceStatus, String>)> ServiceWatch
+    for FakeWatch<F>
+{
+    fn now(&self) -> Instant {
+        // One base instant plus a virtual offset: `Instant` has no
+        // constructor, and nothing here depends on the wall clock.
+        *BASE + self.elapsed
+    }
+    fn sleep(&mut self, duration: Duration) {
+        self.elapsed += duration;
+    }
+    fn health(&mut self) -> Option<Health> {
+        self.health_calls += 1;
+        (self.answer)(self.elapsed).0
+    }
+    fn status(&mut self) -> Result<ServiceStatus, String> {
+        self.status_calls.push(self.elapsed);
+        (self.answer)(self.elapsed).1
+    }
+}
+static BASE: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
+
+const EXPECTED: (&str, &str) = (EXPECTED_FINGERPRINT, RUNNING_GENERATION);
+fn ready_runtime() -> ManagedRuntime {
+    ManagedRuntime {
+        fingerprint: EXPECTED_FINGERPRINT.into(),
+        generation: RUNNING_GENERATION.into(),
+        instance: INSTANCE.into(),
+        pid: 42,
+    }
+}
+/// A log that is not there, so the sentence carries no tail and these tests
+/// are about timing alone.
+fn absent_log() -> std::path::PathBuf {
+    std::env::temp_dir().join("nessa-no-such-gateway.log")
+}
+
+#[test]
+fn a_slow_but_healthy_start_keeps_the_whole_deadline() {
+    // Twenty-nine seconds of silence from a process that is alive the whole
+    // time. The deadline exists for exactly this, and nothing may cut it short.
+    let mut watch = FakeWatch::new(|elapsed| {
+        if elapsed < Duration::from_secs(29) {
+            (None, Ok(observed(Some(42), true, LastExit::NeverExited)))
+        } else {
+            (
+                Some(Health::Managed(ready_runtime())),
+                Ok(observed(Some(42), true, LastExit::NeverExited)),
+            )
+        }
+    });
+    assert_eq!(
+        wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()),
+        Ok(ready_runtime())
+    );
+    assert!(watch.elapsed >= Duration::from_secs(29));
+    assert!(watch.elapsed < Duration::from_secs(30));
+}
+
+#[test]
+fn a_crash_loop_is_given_up_in_about_a_second_and_a_half() {
+    // The whole point of the change: this used to cost thirty seconds.
+    let mut watch = FakeWatch::new(|_| (None, Ok(observed(None, true, LastExit::Code(1)))));
+    let error = wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()).unwrap_err();
+    assert!(matches!(error, InstallFailure::Startup(_)), "{error:?}");
+    assert!(
+        watch.elapsed >= Duration::from_secs(1),
+        "{:?}",
+        watch.elapsed
+    );
+    assert!(
+        watch.elapsed <= Duration::from_secs(2),
+        "{:?}",
+        watch.elapsed
+    );
+}
+
+#[test]
+fn launchd_is_not_asked_ten_times_a_second() {
+    // `launchctl print` is a subprocess. Polling the port is not, so the loop
+    // turns quickly while the questions that cost something stay spaced out.
+    let mut watch = FakeWatch::new(|_| (None, Ok(observed(Some(42), true, LastExit::NeverExited))));
+    assert!(wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()).is_err());
+    assert!(watch.health_calls > 200, "{}", watch.health_calls);
+    for gap in watch.status_gaps() {
+        assert!(gap >= Duration::from_millis(500), "{gap:?}");
+    }
+    // Roughly twice a second across the deadline, not ten times.
+    assert!(
+        watch.status_calls.len() <= 70,
+        "{}",
+        watch.status_calls.len()
+    );
+}
+
+#[test]
+fn a_process_that_comes_back_between_deaths_starts_the_count_again() {
+    // Two deaths, then a pid, repeatedly. An unreset counter would give up
+    // inside the first two seconds; this must run to the deadline instead.
+    let mut watch = FakeWatch::new(|elapsed| {
+        let period = elapsed.as_millis() / 500 % 3;
+        let status = if period == 2 {
+            observed(Some(42), true, LastExit::Code(1))
+        } else {
+            observed(None, true, LastExit::Code(1))
+        };
+        (None, Ok(status))
+    });
+    let error = wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()).unwrap_err();
+    assert!(
+        matches!(error, InstallFailure::Reconciliation(ref message) if message.contains("readiness deadline")),
+        "{error:?}"
+    );
+    assert!(watch.elapsed >= Duration::from_secs(30));
+}
+
+#[test]
+fn a_service_that_says_nothing_either_way_still_ends_at_the_deadline() {
+    // Not ready, and never positively dead: the readiness contract's own
+    // failure, which stays worded as one.
+    let mut watch = FakeWatch::new(|_| (None, Ok(observed(None, false, LastExit::Unknown))));
+    let error = wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()).unwrap_err();
+    assert!(
+        matches!(error, InstallFailure::Reconciliation(ref message) if message.contains("did not advertise the expected runtime identity")),
+        "{error:?}"
+    );
+    assert!(watch.elapsed >= Duration::from_secs(30));
+}
+
+#[test]
+fn a_launchctl_we_cannot_run_is_our_failure_and_not_the_service_s() {
+    // Asking launchd is itself an effect that can fail. When it does we have
+    // learned nothing about the service, so the wait ends at once — sitting
+    // out the deadline would only repeat a question we cannot ask — and it
+    // ends as a retryable mechanism failure carrying launchctl's own words.
+    // Blaming the service would put a sentence on screen that no evidence
+    // supports.
+    // A live, silent process throughout, so nothing here is a death and the
+    // failed question is the only reason the wait can end early.
+    let mut watch = FakeWatch::new(|elapsed| {
+        if elapsed < Duration::from_secs(2) {
+            (None, Ok(observed(Some(42), true, LastExit::NeverExited)))
+        } else {
+            (None, Err("launchctl print: Could not find service".into()))
+        }
+    });
+    let error = wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()).unwrap_err();
+    assert_eq!(
+        error,
+        InstallFailure::Reconciliation("launchctl print: Could not find service".into())
+    );
+    // Forward recovery then tells the person to retry, which is true of this
+    // and is not true of a service that will not start.
+    let sentence = forward_recovery::<()>(Err(error)).unwrap_err();
+    assert!(sentence.contains("retry reconciliation"), "{sentence}");
+    // And it stopped when it happened, rather than at the deadline.
+    assert!(
+        watch.elapsed < Duration::from_secs(3),
+        "{:?}",
+        watch.elapsed
+    );
+}
+
+#[test]
+fn giving_up_needs_three_deaths_in_a_row_and_nothing_in_between() {
+    let dead = || Step::Dead;
+    let alive = || Step::Waiting;
+
+    let mut count = DeadCount::default();
+    assert!(!count.observe(&dead()));
+    assert!(!count.observe(&dead()));
+    assert!(count.observe(&dead()));
+
+    // A service that exits and is restarted between two looks is not a service
+    // that is failing to start, however often it is seen mid-restart.
+    let mut count = DeadCount::default();
+    for _ in 0..10 {
+        assert!(!count.observe(&dead()));
+        assert!(!count.observe(&dead()));
+        assert!(!count.observe(&alive()));
+    }
+    // And readiness itself resets it, so a late answer is never overruled.
+    let mut count = DeadCount::default();
+    assert!(!count.observe(&dead()));
+    assert!(!count.observe(&dead()));
+    assert!(!count.observe(&Step::Ready(runtime("new", 42))));
+    assert!(!count.observe(&dead()));
+    assert!(!count.observe(&dead()));
+    assert!(count.observe(&dead()));
+}
+
+#[test]
+fn releasing_the_namespace_lock_releases_every_descriptor_sharing_it() {
+    // A `flock` belongs to the open file description. A subprocess forked
+    // while the lock is held inherits a descriptor onto that same
+    // description, and `O_CLOEXEC` closes it at exec rather than at the fork,
+    // so it outlives our own for as long as the child takes to exec.
+    //
+    // `dup` gives exactly that shape without a fork to race against: one more
+    // descriptor onto the one description. Closing ours leaves the lock held
+    // through the duplicate; unlocking releases the description itself, which
+    // is what every descriptor onto it sees. That is the difference between
+    // the next reconciliation waiting on a real holder and waiting on a
+    // `uuidgen` that has no interest in the lock.
+    let directory = std::env::temp_dir().join(format!(
+        "nessa-namespace-release-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = fs::remove_dir_all(&directory);
+    nessa_local_storage::create_directory(&directory).unwrap();
+
+    let lock = lock_namespace(&directory).unwrap();
+    let inherited = unsafe { libc::dup(lock.as_raw_fd()) };
+    assert!(inherited >= 0);
+    drop(lock);
+
+    let competing =
+        nessa_local_storage::open(&directory.join("gateway-upgrade.lock"), OpenMode::ReadWrite)
+            .unwrap();
+    assert_eq!(
+        unsafe { libc::flock(competing.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0,
+        "a descriptor that merely shares the description still holds the lock"
+    );
+    assert_eq!(unsafe { libc::close(inherited) }, 0);
+    drop(competing);
+    fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
+fn a_service_that_will_not_start_keeps_the_sentence_written_for_the_person() {
+    // Retrying reconciliation is advice about our own mechanism. It is not what
+    // someone whose service exits on startup should be told to do, and the
+    // sentence naming the cause is already finished when it arrives here.
+    let error = forward_recovery::<()>(Err(InstallFailure::Startup(
+        "Nessa's background service is not starting: its credential registry is not one this version of Nessa can read.".into(),
+    )))
+    .unwrap_err();
+    assert_eq!(
+        error,
+        "Nessa's background service is not starting: its credential registry is not one this version of Nessa can read."
+    );
+    assert!(!error.contains("forward recovery"));
+    assert!(!error.contains("runtime identity"));
+}
 #[test]
 fn private_request_replacement_is_complete_and_exclusively_locked() {
     let directory = std::env::temp_dir().join(format!(
@@ -460,15 +881,19 @@ fn private_request_replacement_is_complete_and_exclusively_locked() {
     let competing =
         nessa_local_storage::open(&directory.join("gateway-upgrade.lock"), OpenMode::ReadWrite)
             .unwrap();
-    assert_ne!(
-        unsafe { libc::flock(competing.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
-        0
-    );
-    drop(lock);
+    let take = || unsafe { libc::flock(competing.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    // Held: our own descriptor has it.
+    assert_ne!(take(), 0);
     assert_eq!(
-        unsafe { libc::flock(competing.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
-        0
+        std::io::Error::last_os_error().kind(),
+        std::io::ErrorKind::WouldBlock
     );
+    // And released the instant the guard goes, with no waiting and no retry.
+    // `NamespaceLock` unlocks rather than only closing, so a subprocess this
+    // process forked before the drop cannot keep the description locked while
+    // it makes its way to exec.
+    drop(lock);
+    assert_eq!(take(), 0);
     drop(competing);
     fs::remove_dir_all(directory).unwrap();
 }

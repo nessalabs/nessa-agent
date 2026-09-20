@@ -17,10 +17,11 @@ mod control;
 mod generation;
 mod install_attempt;
 mod staging;
+mod startup;
 use control::{
     classify, forward_recovery, health, launchctl, legacy_listener_pid, lock_namespace,
     read_pending_retirement, read_retirement_evidence, retire, service_status, wait_fingerprint,
-    Health, ManagedRuntime, Registration, ServiceState,
+    Health, InstallFailure, ManagedRuntime, Registration, ServiceState,
 };
 use generation::service_generation;
 use install_attempt::{
@@ -267,7 +268,7 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
         }
         ServiceState::Unloaded => clear_install_attempt(&lock_directory)?,
     }
-    let installation = (|| -> Result<ManagedRuntime, String> {
+    let installation = (|| -> Result<ManagedRuntime, InstallFailure> {
         std::fs::create_dir_all(&agents).map_err(|e| e.to_string())?;
         let logs = log.parent().ok_or("invalid log directory")?;
         nessa_local_storage::create_directory(logs).map_err(|e| e.to_string())?;
@@ -296,7 +297,7 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
             .sync_all()
             .map_err(|e| e.to_string())?;
         if let Err(error) = fs::rename(&next, &path) {
-            return Err(error.to_string());
+            return Err(error.to_string().into());
         }
         nessa_local_storage::sync_directory(&agents).map_err(|e| e.to_string())?;
         publish_install_attempt(&lock_directory, &service, &definition)?;
@@ -318,7 +319,7 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
             || service_status(&service).map(|status| status.loaded),
             || clear_install_attempt(&lock_directory),
         )?;
-        let running = wait_fingerprint(&service, (&fingerprint, &generation), port)?;
+        let running = wait_fingerprint(&service, (&fingerprint, &generation), port, &log)?;
         clear_install_attempt(&lock_directory)?;
         Ok(running)
     })();
@@ -447,6 +448,7 @@ mod tests {
     };
     use crate::gateway::application::ReconciledGateway;
     use crate::gateway::infrastructure::macos::control::{Health, ManagedRuntime, ServiceStatus};
+    use crate::gateway::infrastructure::macos::startup::LastExit;
     use serde_json::{json, Value};
     use std::{cell::Cell, fs, path::PathBuf};
 
@@ -468,6 +470,7 @@ mod tests {
             loaded: true,
             pid: Some(42),
             process_identity_known: true,
+            last_exit: LastExit::NeverExited,
         };
         let current = Health::Managed(ManagedRuntime {
             fingerprint: "a".repeat(64),
@@ -519,6 +522,7 @@ mod tests {
                 loaded: true,
                 pid: Some(43),
                 process_identity_known: true,
+                last_exit: LastExit::NeverExited,
             },
             Some(&current)
         ));
@@ -528,6 +532,7 @@ mod tests {
                 loaded: true,
                 pid: Some(42),
                 process_identity_known: false,
+                last_exit: LastExit::NeverExited,
             },
             Some(&current)
         ));

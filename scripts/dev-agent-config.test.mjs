@@ -351,6 +351,53 @@ test(
 )
 
 /**
+ * Every checkout that ran the dev loop before agents became a map has an
+ * `agent` block in its `config.json`. The server reads its configuration with
+ * `deny_unknown_fields`, so that key left in place is a gateway that will not
+ * start — and the run that left it there says it configured the dev agents.
+ *
+ * This script wrote that block, so retiring it is this script's job: local
+ * development data brought to the current shape by the tool that owns it, which
+ * is what the standard asks for instead of a reader in the server.
+ */
+test(
+  "the agent block an older version wrote is retired, not left beside",
+  unixOnly,
+  async () => {
+    const { publish } = await import("./dev-agent-config.mjs")
+    const data = temporaryRoot()
+    mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+    const path = join(data, "dev/config.json")
+    const agents = agentsLaunching("/checkout/dist/index.js")
+
+    // Exactly what the previous version of this script left behind, beside a
+    // setting that has nothing to do with it.
+    writeFileSync(
+      path,
+      JSON.stringify({
+        agent: { node: "/old/node", acpEntry: "/old/entry.js" },
+        session: { writeTimeoutMs: 75 },
+      }),
+      { mode: 0o600 },
+    )
+
+    const wrote = publish({
+      configPath: path,
+      agents,
+      node: agents.runtimes.claude.command,
+    })
+
+    assert.equal(wrote, true)
+    const saved = JSON.parse(readFileSync(path, "utf8"))
+    assert.deepEqual(saved.agents, agents)
+    assert.equal(saved.agent, undefined, "the old block would refuse the gateway")
+    assert.deepEqual(Object.keys(saved).sort(), ["agents", "session"])
+    // Only the key this script owned. Somebody else's settings are not its to tidy.
+    assert.equal(saved.session.writeTimeoutMs, 75)
+  },
+)
+
+/**
  * Two runs configuring at once. The window the earlier `interrupt` test could
  * not reach is the one after the final read: both runs decide to write, and the
  * second rename replaces the first — atomic, and still a lost update. The lock

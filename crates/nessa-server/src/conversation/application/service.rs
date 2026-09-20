@@ -23,7 +23,7 @@ use nessa_sdk::application::agent_execution::{
         PermissionCancellationRequest, PermissionSelectionState,
     },
     providers::AgentProvider,
-    sessions::{SessionManager, SessionStorage, StorageError},
+    sessions::{SessionManager, SessionStorage},
 };
 use nessa_sdk::domain::agent_execution::{
     executions::ExecutionId,
@@ -150,10 +150,25 @@ struct LiveConversation {
     projection: Mutex<Projection>,
     watched: Mutex<HashSet<String>>,
 }
+/// A first opening that did not produce a live conversation.
+///
+/// `holds` is the one thing this has to say about such a failure: does the
+/// attempt still own something — a provider part-way through initialization, or
+/// a state nothing can describe after a panic — so that the
+/// `max_conversations` slot it was given has to stay taken. A failure that
+/// acquired nothing gives its slot back.
+///
+/// This was a `retryable` flag until now, which is a different question, and
+/// one only the caller asks; [`ConversationError`] already answers it at the
+/// wire. The two agreed for as long as every permanent failure had genuinely
+/// retained something, and parted company at the first one that acquired
+/// nothing at all: an agent dropped from the configuration refuses each of its
+/// conversations instantly and permanently, and thirty-two such refusals used
+/// to leave the server unable to create any conversation at all.
 struct OpeningFailure {
     cause: ConversationError,
     _cleanup: Option<AgentInitializationError>,
-    retryable: bool,
+    holds: bool,
 }
 struct Slot {
     value: OnceCell<Result<Arc<LiveConversation>, OpeningFailure>>,
@@ -186,15 +201,6 @@ async fn supervised<T: Send + 'static>(
     tokio::spawn(operation)
         .await
         .map_err(|_| ConversationError::Unavailable)?
-}
-fn retryable_agent_open(error: &AgentError) -> bool {
-    !matches!(
-        error,
-        AgentError::Configuration(_)
-            | AgentError::Unsupported(_)
-            | AgentError::InvalidInput(_)
-            | AgentError::Storage(StorageError::Corrupt(_) | StorageError::IdentityMismatch)
-    )
 }
 impl ConversationService {
     /// Own every configured agent, and the one a caller gets by default.
@@ -470,11 +476,11 @@ impl ConversationService {
                                 .metadata
                                 .load(&id)
                                 .await
-                                .map_err(|cause| OpeningFailure { cause, _cleanup: None, retryable: true })?
+                                .map_err(|cause| OpeningFailure { cause, _cleanup: None, holds: false })?
                                 .ok_or(OpeningFailure {
                                     cause: ConversationError::NotFound,
                                     _cleanup: None,
-                                    retryable: false,
+                                    holds: false,
                                 })?;
                             service
                                 .reconcile_creation_audit(&record)
@@ -482,7 +488,7 @@ impl ConversationService {
                                 .map_err(|cause| OpeningFailure {
                                     cause,
                                     _cleanup: None,
-                                    retryable: true,
+                                    holds: false,
                                 })?;
                             // The agent the record names, never this server's
                             // current default: a conversation restores a
@@ -503,7 +509,7 @@ impl ConversationService {
                                 .ok_or(OpeningFailure {
                                     cause: ConversationError::AgentNotConfigured,
                                     _cleanup: None,
-                                    retryable: false,
+                                    holds: false,
                                 })?;
                             let session_id =
                                 SessionId::new(id.to_string()).expect("UUID session key");
@@ -514,18 +520,20 @@ impl ConversationService {
                             .await
                             .map_err(|error| {
                                 tracing::error!(conversation_id = %id, %error, "conversation storage opening failed");
-                                let retryable = matches!(error, StorageError::Busy | StorageError::Io(_));
-                                OpeningFailure { cause: ConversationError::Storage(error), _cleanup: None, retryable }
+                                OpeningFailure { cause: ConversationError::Storage(error), _cleanup: None, holds: false }
                             })?;
                             let agent = Agent::new(configured.provider.clone(), manager)
                                 .await
                                 .map_err(|error| {
                                 tracing::error!(conversation_id = %id, %error, "conversation restoration failed");
-                                let retryable = !error.needs_cleanup() && retryable_agent_open(error.cause());
+                                // The one question that decides ownership: a
+                                // provider left part-way through initialization
+                                // is this slot's to finish closing.
+                                let holds = error.needs_cleanup();
                                 OpeningFailure {
                                     cause: ConversationError::Agent(error.cause().clone()),
                                     _cleanup: Some(error),
-                                    retryable,
+                                    holds,
                                 }
                             })?;
                             let mut events = agent.subscribe();
@@ -574,13 +582,16 @@ impl ConversationService {
                                 // An adapter panic payload may itself panic on drop.
                                 // Publish failure before allowing any waiter to hang.
                                 mem::forget(payload);
-                                Err(OpeningFailure { cause: ConversationError::Unavailable, _cleanup: None, retryable: false })
+                                // Nothing can say what the panic left behind,
+                                // so the slot stays taken rather than being
+                                // handed to an opening that assumes it is free.
+                                Err(OpeningFailure { cause: ConversationError::Unavailable, _cleanup: None, holds: true })
                             }
                         }
                     })
                     .await;
                 owner.ready.notify_waiters();
-                if result.as_ref().is_err_and(|failure| failure.retryable) {
+                if result.as_ref().is_err_and(|failure| !failure.holds) {
                     let mut owners = service.inner.conversations.lock().await;
                     if owners
                         .get(&id)
@@ -606,7 +617,7 @@ impl ConversationService {
                     .as_ref()
                     .cloned()
                     .map_err(|failure| failure.cause.clone());
-                if result.as_ref().is_err_and(|failure| failure.retryable) {
+                if result.as_ref().is_err_and(|failure| !failure.holds) {
                     let mut owners = self.inner.conversations.lock().await;
                     if owners
                         .get(id)

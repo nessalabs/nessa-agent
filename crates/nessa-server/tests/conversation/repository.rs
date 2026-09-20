@@ -143,8 +143,14 @@ async fn a_record_that_does_not_name_its_agent_is_unreadable_rather_than_assumed
     // Records published while Claude was the only agent this server could start
     // name no agent at all. Reading them as Claude's would be a reader for data
     // written by an older build, which this repository forbids outright without
-    // an explicit decision to support compatibility. So it is refused, and the
-    // error names the field rather than guessing which agent wrote it.
+    // an explicit decision to support compatibility. So it is refused — and
+    // refused as an agent this build cannot open, which is what happened: the
+    // record parsed, storage is working, and asking again will say the same.
+    //
+    // Reporting it as unreadable metadata would reach the panel as
+    // `conversation_storage_unavailable`, which tells the caller storage is
+    // down and to retry something that can only be fixed by retrofitting the
+    // record. `scripts/retrofit-conversation-agents.mjs` is what fixes it.
     let root = std::env::temp_dir().join(format!("nessa-conversation-legacy-{}", Uuid::new_v4()));
     let repository = LocalConversationRepository::new(root.clone()).unwrap();
     let id = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
@@ -159,6 +165,18 @@ async fn a_record_that_does_not_name_its_agent_is_unreadable_rather_than_assumed
     drop(file);
     assert!(matches!(
         repository.load(&id).await,
+        Err(ConversationError::AgentUnsupported)
+    ));
+
+    // And a record that is genuinely damaged is still unreadable metadata. The
+    // two must not collapse into one answer: one is retried and one is not.
+    let broken = ConversationId::new(&Uuid::new_v4().to_string()).unwrap();
+    let mut file =
+        storage::open(&root.join(format!("{broken}.json")), OpenMode::CreateNew).unwrap();
+    file.write_all(br#"{"id":"truncated"#).unwrap();
+    drop(file);
+    assert!(matches!(
+        repository.load(&broken).await,
         Err(ConversationError::Metadata)
     ));
     std::fs::remove_dir_all(root).ok();
