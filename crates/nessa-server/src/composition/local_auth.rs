@@ -1,4 +1,5 @@
 //! Local product dependency factory. Provider choices stay outside route handlers.
+use super::agent::AgentsConfig;
 use crate::{
     agents::{
         domain::AgentId,
@@ -28,7 +29,8 @@ use nessa_auth::{
 };
 use nessa_sdk::infrastructure::session_storage::LocalFileStorage;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    path::Path,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -49,7 +51,7 @@ impl Clock for SystemClock {
 pub(super) fn product_state(
     config: &Environment,
     uptime: Arc<dyn ServerClock>,
-    bundle: Option<&std::path::Path>,
+    bundle: Option<&Path>,
 ) -> Result<ProductRouteState, RunError> {
     let directory = config
         .auth_directory
@@ -84,36 +86,18 @@ pub(super) fn product_state(
     let audience = AudienceId::new(identity.gateway_id).map_err(setup_error)?;
     let organization =
         OrganizationId::new(identity.organization_ids[0].clone()).map_err(setup_error)?;
-    // What onboarding is told about the agent is the same fact the launcher
-    // acts on: the configuration resolved above, and whether the two files it
-    // would actually execute are there. A bundled desktop run and a plain
-    // server run answer this the same way, because they answer it from the
-    // same place. Composition settles *which* paths those are and hands them
-    // over; it does not settle whether they exist, because a user can install
-    // the agent long after this runs and setup has a button that says so.
-    // Every agent the configuration describes, not only the one a new
-    // conversation would start on: setup lists them all and a person deciding
-    // between them is entitled to the truth about each.
-    let agent_launch_files: HashMap<AgentId, AgentLaunchFiles> = settings
-        .agents
-        .as_ref()
-        .map(|agents| {
-            agents
-                .agents()
-                .into_iter()
-                .map(|(id, runtime)| {
-                    (
-                        id,
-                        AgentLaunchFiles {
-                            command: runtime.command.clone(),
-                            paths: runtime.paths(),
-                            environment: super::agent::launch_environment(id),
-                        },
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // Built here, before the launch files below, because building it is how
+    // this server finds out which configured agents cannot be started at all,
+    // and that answer belongs in what setup is told. Nothing else between here
+    // and its use depends on the order.
+    let (conversations, unavailable) = match &settings.agents {
+        Some(agents) => {
+            let (service, unavailable) = conversations(agents, directory)?;
+            (Some(service), unavailable)
+        }
+        None => (None, HashSet::new()),
+    };
+    let agent_launch_files = launch_files(settings.agents.as_ref(), &unavailable);
     let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
     let admin = Arc::new(LocalAdmin {
         store: store.clone(),
@@ -141,42 +125,101 @@ pub(super) fn product_state(
         .map_err(setup_error)?,
     ));
     product.browser_http_allowed = config.browser_http_allowed();
-    if let Some(agents) = &settings.agents {
-        let root = directory
-            .parent()
-            .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
-            .join("conversations");
-        nessa_local_storage::create_directory(&root)
-            .map_err(|error| RunError::Agent(error.to_string()))?;
-        let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-        let selected = agents.selected()?;
-        let configured = super::agent::providers(agents, &root, clock.clone())?;
-        let storage = Arc::new(
-            LocalFileStorage::new(root.join("sessions"))
-                .map_err(|error| RunError::Agent(error.to_string()))?,
-        );
-        let metadata = Arc::new(
-            LocalConversationRepository::new(root.join("metadata"))
-                .map_err(|error| RunError::Agent(error.to_string()))?,
-        );
-        let creation_audit = Arc::new(
-            DurableConversationCreationAudit::new(root.join("audit").join("creation"))
-                .map_err(|error| RunError::Agent(error.to_string()))?,
-        );
-        let service = ConversationService::new(
-            ConversationAgents::new(configured, selected)
-                .map_err(|error| RunError::Agent(error.to_string()))?,
-            storage,
-            metadata,
-            creation_audit,
-            clock,
-            ConversationLimits::default(),
-            Some(agents.workspace.to_string_lossy().into_owned()),
-        )
-        .map_err(|error| RunError::Agent(error.to_string()))?;
+    if let Some(service) = conversations {
         product = product.with_conversations(Arc::new(service));
     }
     Ok(product)
+}
+
+/// What the readiness probe is given to ask about, for every agent it should
+/// answer for.
+///
+/// What onboarding is told about an agent is the same fact the launcher acts
+/// on: the configuration as resolved, and whether the files it would actually
+/// execute are there. A bundled desktop run and a plain server run answer this
+/// the same way, because they answer it from the same place. Composition
+/// settles *which* paths those are and hands them over; it does not settle
+/// whether they exist, because a person can install the agent long after this
+/// runs and setup has a button that says so.
+///
+/// Every agent the configuration describes, not only the one a new conversation
+/// would start on: setup lists them all and a person deciding between them is
+/// entitled to the truth about each.
+///
+/// Except the ones in `unavailable`, which this run already proved it cannot
+/// start with the agent sitting there installed. Those are left out entirely,
+/// so the probe has nothing to stat and readiness reports the agent as not set
+/// up on this installation rather than offering a conversation that would be
+/// refused. See [`super::agent::ConfiguredAgents::unavailable`].
+fn launch_files(
+    agents: Option<&AgentsConfig>,
+    unavailable: &HashSet<AgentId>,
+) -> HashMap<AgentId, AgentLaunchFiles> {
+    agents
+        .map(|agents| {
+            agents
+                .agents()
+                .into_iter()
+                .filter(|(id, _)| !unavailable.contains(id))
+                .map(|(id, runtime)| {
+                    (
+                        id,
+                        AgentLaunchFiles {
+                            command: runtime.command.clone(),
+                            paths: runtime.paths(),
+                            environment: super::agent::launch_environment(id),
+                        },
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The conversation service, and which configured agents this run cannot start
+/// even though they are installed.
+///
+/// The second half is the reason this is a function rather than the tail of
+/// [`product_state`]: it has to be known before the readiness probe is built,
+/// and it is only known once every provider has been built. See
+/// [`super::agent::ConfiguredAgents`].
+fn conversations(
+    agents: &AgentsConfig,
+    directory: &Path,
+) -> Result<(ConversationService, HashSet<AgentId>), RunError> {
+    let root = directory
+        .parent()
+        .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
+        .join("conversations");
+    nessa_local_storage::create_directory(&root)
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let selected = agents.selected()?;
+    let built = super::agent::providers(agents, &root, clock.clone())?;
+    let storage = Arc::new(
+        LocalFileStorage::new(root.join("sessions"))
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
+    let metadata = Arc::new(
+        LocalConversationRepository::new(root.join("metadata"))
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
+    let creation_audit = Arc::new(
+        DurableConversationCreationAudit::new(root.join("audit").join("creation"))
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
+    let service = ConversationService::new(
+        ConversationAgents::new(built.providers, selected)
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+        storage,
+        metadata,
+        creation_audit,
+        clock,
+        ConversationLimits::default(),
+        Some(agents.workspace.to_string_lossy().into_owned()),
+    )
+    .map_err(|error| RunError::Agent(error.to_string()))?;
+    Ok((service, built.unavailable))
 }
 
 fn setup_error(error: impl std::fmt::Display) -> RunError {
@@ -226,3 +269,7 @@ impl CredentialAdmin for LocalAdmin {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/composition/local_auth.rs"]
+mod tests;

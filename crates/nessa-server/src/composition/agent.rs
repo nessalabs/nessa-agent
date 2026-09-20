@@ -42,7 +42,7 @@ use nessa_auth::application::ports::Clock;
 use nessa_sdk::infrastructure::acp::sessions::StdioMcpServer;
 use serde::Deserialize;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     ffi::OsString,
     path::{Path, PathBuf},
     sync::Arc,
@@ -352,38 +352,50 @@ pub(super) fn launch_environment(agent: AgentId) -> BTreeMap<OsString, OsString>
 /// still fatal, because a server that cannot start a conversation on the agent
 /// it is set to is not a degraded server.
 ///
-/// Readiness is answered somewhere else and deliberately stays that way:
-/// `LocalAgentProbe` stats each agent's command on every ask, so an agent
+/// Most of readiness is answered somewhere else and deliberately stays that
+/// way: `LocalAgentProbe` stats each agent's command on every ask, so an agent
 /// missing here because it is not installed yet still reports `not-installed`
-/// now and `ready` the moment a person installs it. Narrowing the probe to
-/// what was built at startup would freeze that answer to what was true once.
+/// now and `ready` the moment a person installs it. Narrowing the probe to what
+/// was built at startup would freeze that answer to what was true once.
+///
+/// That holds for everything an install can change and for nothing else, which
+/// is why the agents left out come back in two groups rather than one. See
+/// [`ConfiguredAgents::unavailable`].
 #[cfg(unix)]
 pub(super) fn providers(
     config: &AgentsConfig,
     directory: &Path,
     clock: Arc<dyn Clock>,
-) -> Result<HashMap<AgentId, ConversationAgent>, RunError> {
+) -> Result<ConfiguredAgents, RunError> {
     config.validate()?;
     let selected = config.selected()?;
-    let mut agents = HashMap::new();
+    let mut providers = HashMap::new();
+    let mut unavailable = HashSet::new();
     for (agent, runtime) in config.agents() {
         let provider = match build::provider(agent, config, runtime, directory, clock.clone()) {
             Ok(provider) => provider,
             Err(failure) if agent == selected => return Err(failure),
             Err(failure) => {
-                // Loud, because it is the only place this is said. A person who
-                // never opens a conversation on this agent will see nothing
-                // else, and the reason is here rather than in the refusal
-                // downstream, which knows only that there is no provider.
+                // Loud, because it is the only place the reason is said. A
+                // person who never opens a conversation on this agent will see
+                // nothing else, and the refusal downstream knows only that
+                // there is no provider.
                 tracing::error!(
                     agent = agent.name(),
                     %failure,
                     "configured agent is unavailable this run; the others are unaffected"
                 );
+                // Asked after the failure rather than before it, because it is
+                // not a second opinion on the failure. It is the one question
+                // about it readiness needs answered: is this something
+                // installing the agent would fix?
+                if build::present(config, runtime) {
+                    unavailable.insert(agent);
+                }
                 continue;
             }
         };
-        agents.insert(
+        providers.insert(
             agent,
             ConversationAgent {
                 provider,
@@ -391,18 +403,46 @@ pub(super) fn providers(
             },
         );
     }
-    Ok(agents)
+    Ok(ConfiguredAgents {
+        providers,
+        unavailable,
+    })
 }
 #[cfg(not(unix))]
 pub(super) fn providers(
     config: &AgentsConfig,
     _: &Path,
     _: Arc<dyn Clock>,
-) -> Result<HashMap<AgentId, ConversationAgent>, RunError> {
+) -> Result<ConfiguredAgents, RunError> {
     config.validate()?;
     Err(RunError::Agent(
         "ACP agents require Unix process supervision".into(),
     ))
+}
+
+/// What building every configured agent settled.
+pub(super) struct ConfiguredAgents {
+    /// Every agent a conversation can be created on or reopened on this run.
+    pub providers: HashMap<AgentId, ConversationAgent>,
+    /// The configured agents that could not be built although everything they
+    /// launch was already on the machine.
+    ///
+    /// A narrower set than "absent from [`Self::providers`]", and the
+    /// difference is the whole reason it is carried separately. An agent
+    /// missing only because its command is not installed yet is one an install
+    /// fixes, and readiness has to go on saying `not-installed` for it, or
+    /// setup stops offering the install button for the one agent it would help.
+    /// An agent whose command is right there and which still could not be built
+    /// failed on something no amount of installing re-asks: a model its vendor
+    /// does not serve, token limits the pair will not take, a catalog that will
+    /// not parse. Reporting that one `ready` offers a person a conversation
+    /// that cannot be opened, so composition drops it from the launch files the
+    /// probe reads and readiness answers `not-configured` — not set up on this
+    /// installation, which is what happened.
+    ///
+    /// Empty in the ordinary case, including the one this whole path exists
+    /// for: an agent in the configuration that nobody has installed.
+    pub unavailable: HashSet<AgentId>,
 }
 #[cfg(unix)]
 mod build {
@@ -456,6 +496,26 @@ mod build {
             .map_err(|e| RunError::Agent(e.to_string()))
     }
 
+    /// Whether everything this agent would launch is on the machine now.
+    ///
+    /// Asked in two places and written once, because the two have to agree.
+    /// [`provider`] refuses when the answer is no, and [`super::providers`] uses
+    /// it to tell that refusal apart from every other one: a command that is not
+    /// there yet becomes a command that is there the moment somebody installs
+    /// it, and nothing else [`provider`] refuses on works that way.
+    ///
+    /// Re-asked of the filesystem each time rather than remembered. That is the
+    /// whole point of it: the answer is allowed to change while the gateway
+    /// runs.
+    pub(super) fn present(config: &AgentsConfig, runtime: &AgentRuntime) -> bool {
+        config
+            .workspace
+            .canonicalize()
+            .is_ok_and(|workspace| workspace.is_dir())
+            && runtime.command.is_file()
+            && runtime.paths().iter().all(|path| path.exists())
+    }
+
     pub(super) fn provider(
         agent: AgentId,
         config: &AgentsConfig,
@@ -478,10 +538,7 @@ mod build {
             .workspace
             .canonicalize()
             .map_err(|_| RunError::Agent("workspace must exist".into()))?;
-        if !workspace.is_dir()
-            || !runtime.command.is_file()
-            || runtime.paths().iter().any(|path| !path.exists())
-        {
+        if !present(config, runtime) {
             return Err(RunError::Agent(format!(
                 "{}: its command must be an existing file and every absolute path it is given must exist; workspace must be a directory",
                 agent.name()

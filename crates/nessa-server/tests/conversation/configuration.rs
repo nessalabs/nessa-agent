@@ -309,8 +309,8 @@ fn an_agent_that_cannot_be_built_does_not_take_the_others_with_it() {
     // Absent rather than present-and-broken: the conversation service answers a
     // missing agent with `AgentNotConfigured`, which reaches the one client that
     // asked for it and leaves every other conversation alone.
-    assert!(built.contains_key(&AgentId::Claude));
-    assert!(!built.contains_key(&AgentId::Opencode));
+    assert!(built.providers.contains_key(&AgentId::Claude));
+    assert!(!built.providers.contains_key(&AgentId::Opencode));
 }
 
 /// And Opencode is a provider composition can actually build, which nothing
@@ -328,8 +328,56 @@ fn every_configured_agent_that_can_be_built_is() {
     nessa_local_storage::create_directory(&conversations).unwrap();
 
     let built = providers(&config, &conversations, Arc::new(SystemClock)).unwrap();
-    assert_eq!(built.len(), 2);
-    assert!(built.contains_key(&AgentId::Opencode));
+    assert_eq!(built.providers.len(), 2);
+    assert!(built.providers.contains_key(&AgentId::Opencode));
+}
+
+/// The two ways an agent can be left out are told apart, because readiness
+/// needs them apart.
+///
+/// An agent whose command is not on the machine yet is one an install fixes, so
+/// the probe has to go on stating it and answering `not-installed`. An agent
+/// whose command is right there and which still could not be built failed on
+/// something installing does not re-ask — here, a catalog that serves no model
+/// under its vendor — and reporting that one `ready` offers a conversation that
+/// cannot be opened.
+// `providers` is Unix-only; on other platforms it refuses outright.
+#[cfg(unix)]
+#[test]
+fn only_a_failure_an_install_cannot_fix_is_reported_unstartable() {
+    let root = tempfile::tempdir().unwrap();
+    let (config, conversations) = two_agents(root.path(), "claude", AgentId::Opencode);
+    nessa_local_storage::create_directory(&conversations).unwrap();
+
+    let built = providers(&config, &conversations, Arc::new(SystemClock)).unwrap();
+    assert!(!built.providers.contains_key(&AgentId::Opencode));
+    assert!(
+        built.unavailable.is_empty(),
+        "an agent that is merely not installed is not unstartable; it is not installed"
+    );
+
+    // The same pair, with Opencode's command in place and a catalog that names
+    // no model under its vendor. Nothing anyone installs changes that answer.
+    let root = tempfile::tempdir().unwrap();
+    let (config, conversations) = two_agents(root.path(), "claude", AgentId::Claude);
+    std::fs::write(root.path().join(AgentId::Claude.name()), "fixture").unwrap();
+    std::fs::write(
+        root.path().join("catalog.json"),
+        serde_json::json!({
+            "verifiedOn": "2026-09-11",
+            "models": [catalog_entry("anthropic", "configured-model")],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    nessa_local_storage::create_directory(&conversations).unwrap();
+
+    let built = providers(&config, &conversations, Arc::new(SystemClock)).unwrap();
+    assert!(!built.providers.contains_key(&AgentId::Opencode));
+    assert_eq!(
+        built.unavailable,
+        std::collections::HashSet::from([AgentId::Opencode])
+    );
 }
 
 /// The agent the installation is set to use is the exception.
