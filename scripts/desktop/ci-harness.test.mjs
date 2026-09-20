@@ -90,11 +90,29 @@ test("a release builds both macOS architectures and only macOS bundles", () => {
 test("a release is staged as a draft, never published by the workflow", () => {
   // `releases/latest/download/latest.json` resolves only to a published,
   // non-prerelease release, so a draft offers nothing to anyone until a person
-  // publishes it. While artifacts are unnotarized that step must stay manual.
+  // publishes it. Publishing is the deliberate act that offers the update, and
+  // it stays a person's.
   const workflow = readFileSync(".github/workflows/release.yml", "utf8")
   assert.match(workflow, /gh release create "\$TAG" --draft/)
   assert.doesNotMatch(workflow, /--draft=false|gh release edit .*--draft/)
-  assert.match(workflow, /not notarized/i)
+})
+
+/**
+ * The notes say where to look, rather than asserting a fact about signing.
+ *
+ * They used to state flatly that the artifacts were not notarized, which was
+ * true when nothing had ever been built and false the moment the secrets were
+ * set — and nothing would have corrected it. What is actually true of every
+ * build is that the build says which of the two it did.
+ */
+test("the draft's notes point at the build's own account of what it signed with", () => {
+  const workflow = readFileSync(".github/workflows/release.yml", "utf8")
+  assert.match(workflow, /Choose what this build signs with/)
+  assert.doesNotMatch(
+    workflow,
+    /\*\*These artifacts are not notarized\.\*\*/,
+    "the notes state something about signing that no build checked",
+  )
 })
 
 test("a release builds the commit its tag names, not a branch of the same name", () => {
