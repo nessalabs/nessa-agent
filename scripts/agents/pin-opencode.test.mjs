@@ -5,7 +5,16 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import test from "node:test"
 import { createHash } from "node:crypto"
-import { agreesWithRegistry, containsExecutable } from "./pin-opencode.mjs"
+import {
+  agreesWithRegistry,
+  executableDigest,
+  sameBinaryUnderDifferentClaims,
+} from "./pin-opencode.mjs"
+
+/** What the executable entry's bytes hash to, which is now what pinning returns. */
+function sha256(contents) {
+  return createHash("sha256").update(contents).digest("hex")
+}
 
 /** A gzip tar built around one entry, laid out the way the package is. */
 function archive(t, build) {
@@ -23,7 +32,7 @@ test("a package holding the executable as a file is pinnable", (t) => {
   const tarball = archive(t, (contents) => {
     writeFileSync(join(contents, "package/bin/opencode"), "binary")
   })
-  assert.equal(containsExecutable(tarball), true)
+  assert.equal(executableDigest(tarball), sha256("binary"))
 })
 
 test("a package holding it as a symbolic link is not", (t) => {
@@ -33,7 +42,7 @@ test("a package holding it as a symbolic link is not", (t) => {
     writeFileSync(join(contents, "package/bin/real"), "binary")
     symlinkSync("real", join(contents, "package/bin/opencode"))
   })
-  assert.equal(containsExecutable(tarball), false)
+  assert.equal(executableDigest(tarball), null)
 })
 
 test("a package holding a directory of that name is not", (t) => {
@@ -41,14 +50,14 @@ test("a package holding a directory of that name is not", (t) => {
     mkdirSync(join(contents, "package/bin/opencode"))
     writeFileSync(join(contents, "package/bin/opencode/inner"), "binary")
   })
-  assert.equal(containsExecutable(tarball), false)
+  assert.equal(executableDigest(tarball), null)
 })
 
 test("a package that does not hold it at all is not", (t) => {
   const tarball = archive(t, (contents) => {
     writeFileSync(join(contents, "package/bin/somethingelse"), "binary")
   })
-  assert.equal(containsExecutable(tarball), false)
+  assert.equal(executableDigest(tarball), null)
 })
 
 test("a name that merely ends in the executable's is not it", (t) => {
@@ -58,7 +67,7 @@ test("a name that merely ends in the executable's is not it", (t) => {
     })
     writeFileSync(join(contents, "package/bin/extra/bin/opencode"), "binary")
   })
-  assert.equal(containsExecutable(tarball), false)
+  assert.equal(executableDigest(tarball), null)
 })
 
 test("a package holding it as an empty file is not", (t) => {
@@ -68,7 +77,7 @@ test("a package holding it as an empty file is not", (t) => {
   const tarball = archive(t, (contents) => {
     writeFileSync(join(contents, "package/bin/opencode"), "")
   })
-  assert.equal(containsExecutable(tarball), false)
+  assert.equal(executableDigest(tarball), null)
 })
 
 test("a package whose entries are written with a leading ./ is pinnable", (t) => {
@@ -84,7 +93,7 @@ test("a package whose entries are written with a leading ./ is pinnable", (t) =>
   const tarball = join(root, "archive.tgz")
   execFileSync("tar", ["-czf", tarball, "-C", contents, "./package"])
 
-  assert.equal(containsExecutable(tarball), true)
+  assert.equal(executableDigest(tarball), sha256("binary"))
 })
 
 /** An archive on disk, with npm's own checksums for exactly those bytes. */
@@ -139,5 +148,58 @@ test("an integrity algorithm this script does not know is passed over", async (t
   const { path } = measured(t, "the archive bytes")
   await assert.doesNotReject(() =>
     agreesWithRegistry(path, { integrity: "sha3-512-AAAA" }, "opencode@1.0.0"),
+  )
+})
+
+/** One measured build, as the generator records it after hashing the entry. */
+function build(name, { libc = null, requiresAvx2 = false, digest = "a" } = {}) {
+  return { package: name, libc, requiresAvx2, digest }
+}
+
+test("two builds claiming different processors over the same binary are refused", (t) => {
+  // The case this exists for, and the one 1.18.31 is actually in:
+  // `opencode-linux-x64` and `opencode-linux-x64-baseline` hold a byte-identical
+  // executable, so one of the two pins states something untrue of the file it
+  // points at. Which one cannot be told from the bytes, so pinning stops.
+  assert.throws(
+    () =>
+      sameBinaryUnderDifferentClaims([
+        build("opencode-linux-x64", { libc: "gnu", requiresAvx2: true }),
+        build("opencode-linux-x64-baseline", { libc: "gnu", requiresAvx2: false }),
+      ]),
+    /hold the same package\/bin\/opencode.*avx2=false.*avx2=true|hold the same package\/bin\/opencode.*avx2=true.*avx2=false/s,
+  )
+})
+
+test("two builds claiming different c libraries over the same binary are refused", (t) => {
+  // The same fault in its other shape. A glibc build and a musl build cannot be
+  // the same file, so if they measure the same one of the two names is wrong —
+  // and the machine that gets the wrong one dies in the loader.
+  assert.throws(
+    () =>
+      sameBinaryUnderDifferentClaims([
+        build("opencode-linux-x64", { libc: "gnu" }),
+        build("opencode-linux-x64-musl", { libc: "musl" }),
+      ]),
+    /hold the same package\/bin\/opencode/,
+  )
+})
+
+test("builds that differ, and ones that agree about what they are, pin", (t) => {
+  // Nine distinct binaries is the ordinary case. And two entries that measure
+  // the same *and* claim the same are not this fault: that is a duplicate
+  // platform, which the compiled-in reader refuses on its own terms.
+  assert.doesNotThrow(() =>
+    sameBinaryUnderDifferentClaims([
+      build("opencode-linux-x64", { libc: "gnu", requiresAvx2: true, digest: "a" }),
+      build("opencode-linux-x64-baseline", { libc: "gnu", digest: "b" }),
+      build("opencode-darwin-arm64", { digest: "c" }),
+    ]),
+  )
+  assert.doesNotThrow(() =>
+    sameBinaryUnderDifferentClaims([
+      build("opencode-darwin-arm64", { digest: "a" }),
+      build("opencode-darwin-arm64-again", { digest: "a" }),
+    ]),
   )
 })

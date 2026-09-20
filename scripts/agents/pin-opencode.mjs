@@ -19,6 +19,7 @@ import {
   createWriteStream,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -47,9 +48,17 @@ const registry = "https://registry.npmjs.org"
 //
 // `libc` is null where the platform has only one, which is every platform here
 // but Linux. `requiresAvx2` follows Opencode's own naming: the plain x64 build
-// is compiled for a processor with AVX2 and the `-baseline` one is the build
-// for everything else, so the pair is a preference on a machine that has AVX2
-// and the baseline is the only choice on a machine that does not.
+// is meant to be compiled for a processor with AVX2 and the `-baseline` one the
+// build for everything else, so the pair is a preference on a machine that has
+// AVX2 and the baseline is the only choice on a machine that does not.
+//
+// "Meant to be", because the name is a claim by the vendor and this table
+// repeats it. At 1.18.31 the claim is not true of the files: the plain and
+// `-baseline` packages publish a byte-identical executable on both linux-x64
+// and darwin-x64. `sameBinaryUnderDifferentClaims` is what stops that being
+// pinned silently — it hashes what each archive actually holds and refuses a
+// release whose builds say different things about the same bytes. This table
+// is still names; that check is what keeps the names honest.
 //
 // Windows is deliberately absent. Opencode publishes builds for it, but nothing
 // in Nessa launches an agent runtime on Windows yet, and pinning a platform
@@ -179,7 +188,7 @@ async function digestOf(url, scratch) {
 // every platform — which is the exact failure this function exists to make
 // impossible. The maintainer running this script is the only person who can
 // still do something about it.
-export function containsExecutable(archive) {
+export function executableDigest(archive) {
   // Listed with the platform's own tar rather than a dependency: this script
   // runs on a maintainer's machine, not in the app.
   const listing = execFileSync("tar", ["-tvzf", archive], { encoding: "utf8" })
@@ -189,7 +198,7 @@ export function containsExecutable(archive) {
     if (!mode || !mode.startsWith("-")) return false
     return fields.at(-1)?.replace(/^\.\//, "") === EXECUTABLE
   })
-  if (!named) return false
+  if (!named) return null
 
   // The size is measured by extracting the entry, not by reading a column out
   // of the listing. GNU tar prints `mode owner/group size date name` and BSD
@@ -204,10 +213,53 @@ export function containsExecutable(archive) {
   const extracted = mkdtempSync(join(tmpdir(), "nessa-entry-"))
   try {
     execFileSync("tar", ["-xzf", archive, "-C", extracted, stored])
-    return statSync(join(extracted, stored)).size > 0
+    const entry = join(extracted, stored)
+    if (statSync(entry).size === 0) return null
+    // Hashed while it is here, because it is the only moment the bytes that
+    // will actually be launched exist in this script. The archive digest says
+    // nothing about them: two archives can differ in a `package.json` field and
+    // hold the same binary, which is the case [`sameBinaryUnderDifferentClaims`]
+    // exists to catch.
+    return createHash("sha256").update(readFileSync(entry)).digest("hex")
   } finally {
     // The entry is a hundred megabytes, and this runs once per platform.
     rmSync(extracted, { recursive: true, force: true })
+  }
+}
+
+// Refuse a release whose builds claim different things about the same bytes.
+//
+// The pin's whole purpose is that a machine is offered a build it can actually
+// run, and the two claims that decide that — the C library and whether AVX2 is
+// required — are read off the package's *name* in `PLATFORMS`. A name is not a
+// measurement. Opencode publishes `opencode-linux-x64` and
+// `opencode-linux-x64-baseline`, and if the two hold the same executable then
+// one of the two pins is stating something that is not true of the file it
+// points at: either a processor without AVX2 is being offered a build that
+// needs it, which is the illegal instruction this table exists to prevent, or
+// a requirement is being claimed that the bytes do not have and the preference
+// between the pair decides nothing.
+//
+// Which of the two it is cannot be told from here, and that is the point: this
+// stops rather than guesses, and names the packages so whoever is pinning can
+// settle it with the vendor. `pin-opencode` says in its own header that the
+// digests are measured; this is what makes the requirements measured too.
+export function sameBinaryUnderDifferentClaims(measured) {
+  const claim = (build) => `${build.libc ?? "no libc"}, avx2=${build.requiresAvx2}`
+  const byBinary = new Map()
+  for (const build of measured) {
+    const seen = byBinary.get(build.digest)
+    if (!seen) {
+      byBinary.set(build.digest, build)
+      continue
+    }
+    if (claim(seen) === claim(build)) continue
+    throw new Error(
+      `${build.package} and ${seen.package} hold the same ${EXECUTABLE} ` +
+        `(sha256 ${build.digest}) but are pinned as "${claim(build)}" and ` +
+        `"${claim(seen)}"; one of those claims is not true of the file. ` +
+        `Settle which with the vendor before pinning this release.`,
+    )
   }
 }
 
@@ -274,6 +326,9 @@ async function pin() {
   mkdirSync(scratchDirectory, { recursive: true })
 
   const releases = []
+  // What each package's executable actually is, so the claims each pin makes
+  // can be checked against the bytes rather than against the package's name.
+  const measured = []
   for (const platform of PLATFORMS) {
     const detail = await json(`${registry}/${platform.package}/${version}`)
     const archive = detail.dist?.tarball
@@ -292,11 +347,18 @@ async function pin() {
     // the *same* bytes arrive again, so a bad measurement made here would be
     // pinned permanently and would verify perfectly forever.
     await agreesWithRegistry(scratch, detail.dist, `${platform.package}@${version}`)
-    if (!containsExecutable(scratch))
+    const executableDigestValue = executableDigest(scratch)
+    if (!executableDigestValue)
       throw new Error(
         `${platform.package}@${version} does not contain ${EXECUTABLE} as a file`,
       )
     rmSync(scratch, { force: true })
+    measured.push({
+      package: platform.package,
+      libc: platform.libc,
+      requiresAvx2: platform.requiresAvx2,
+      digest: executableDigestValue,
+    })
     releases.push({
       operatingSystem: platform.operatingSystem,
       architecture: platform.architecture,
@@ -312,6 +374,8 @@ async function pin() {
       executable: EXECUTABLE,
     })
   }
+
+  sameBinaryUnderDifferentClaims(measured)
 
   const destination = join(root, "crates/nessa-server/data/agent-releases.json")
   mkdirSync(resolve(destination, ".."), { recursive: true })

@@ -105,10 +105,23 @@ fn what_each_pin_says_it_needs_agrees_with_the_archive_it_names() {
     // to false there would leave the whole suite green and hand every older
     // x86-64 machine a binary that dies on an illegal instruction.
     //
-    // The archive's own name is the independent witness. Opencode publishes
-    // one npm package per build and names them for what they are: `-baseline`
-    // is the build for processors without AVX2, `-musl` is the musl build, and
-    // the plain x64 package is the one compiled for AVX2.
+    // The archive's own name is the witness — and it is not an independent
+    // one, which is the limit of what this test is worth. `pin-opencode.mjs`
+    // takes `requiresAvx2` and `libc` from a table keyed by that same package
+    // name, so this asserts that the generator copied its own table correctly
+    // and nothing more. It catches a hand-edited pin file, which is what it is
+    // for; it cannot catch a vendor whose names do not describe their
+    // contents.
+    //
+    // At 1.18.31 they do not: `opencode-linux-x64` and
+    // `opencode-linux-x64-baseline` publish a byte-identical
+    // `package/bin/opencode` (sha256 f9dab322…, 185,030,784 bytes, measured
+    // from both archives), and the darwin-x64 pair likewise. One binary cannot
+    // both need AVX2 and not need it. The measurement that *is* independent
+    // now lives in the generator — `sameBinaryUnderDifferentClaims` hashes the
+    // entry it already extracts and refuses a release whose builds claim
+    // different things about the same bytes — so this test stays as the check
+    // on the generated file and that one is the check on the vendor.
     //
     // Asserting "a build that cannot start is never offered" instead would say
     // nothing: `runs_on` is defined as exactly that comparison, so the
