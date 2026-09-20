@@ -52,19 +52,23 @@ export function useFileAttachments(
   const mounted = React.useRef(true)
   const [reading, setReading] = React.useState(false)
   /**
-   * Why the last thing offered was not taken, and what it was said about.
+   * Why the last thing offered was not taken, and which conversation it was
+   * said to.
    *
    * Typed rather than a sentence: the words, and whether there is anything to
-   * be done, belong to `attachment-notice`. Kept with the conversation it was
-   * refused in and with that draft's files as they stood, because a refusal
-   * describes a situation and stops being true when the situation does. "Attach
-   * fewer, or send what is here first" is not something to go on saying above a
-   * draft somebody has since emptied, and it was never about the conversation
-   * in the next tab.
+   * be done, belong to `attachment-notice`.
+   *
+   * A refusal answers one attempt and lives until something answers it back —
+   * and what those things are is written down here as calls to
+   * {@link answerRefusal}, not inferred from the draft afterwards. Inferring
+   * was tried and is wrong in both directions: a comparison taken while the
+   * handler runs is older than the attach happening in the same handler, so a
+   * drop that attached one file and refused another said nothing at all; and a
+   * draft restored after a refused send brings its files back under the same
+   * identities, so a refusal that had been answered came back with them.
    */
   const [refused, setRefused] = React.useState<{
     conversationId: string
-    draftFiles: string
     refusal: AttachmentRefusal
   } | null>(null)
   const [viewed, setViewed] = React.useState<{
@@ -101,30 +105,32 @@ export function useFileAttachments(
   const files = chat.active.draft.filter(
     (part): part is FileAttachment => part.type === "file",
   )
-  /** A draft's files as one comparable value: which files, in which order. */
-  const draftFilesOf = (conversationId: string) =>
-    (conversationsRef.current.find((item) => item.id === conversationId)?.draft ?? [])
-      .flatMap((part) => (part.type === "file" ? [part.id] : []))
-      .join(" ")
   /**
-   * Remember a refusal against the draft it is about. Defaults to the active
-   * conversation; a folder walk that finishes after somebody has moved on names
-   * the one it was dropped into.
+   * Say why something was not taken. Defaults to the active conversation; a
+   * folder walk that finishes after somebody has moved on names the one it was
+   * dropped into, so its refusal is not shown above another draft quoting
+   * another draft's bounds.
+   *
+   * Replaces whatever was there. There is one of these at a time, and it is
+   * always the most recent thing the panel turned away.
    */
   const refuse = (refusal: AttachmentRefusal, conversationId = chat.active.id) =>
-    setRefused({
-      conversationId,
-      draftFiles: draftFilesOf(conversationId),
-      refusal,
-    })
-  // Shown only where and while it is still true: this conversation, and this
-  // draft. Attaching, removing a tile, and sending all change the draft, and
-  // each of them answers the refusal by doing what it asked or overtaking it.
-  const refusal =
-    refused?.conversationId === chat.active.id &&
-    refused.draftFiles === files.map((file) => file.id).join(" ")
-      ? refused.refusal
-      : null
+    setRefused({ conversationId, refusal })
+  /**
+   * Put down a refusal this conversation has now answered, leaving another
+   * tab's alone. The answers are: files actually attached, a file taken off the
+   * draft, and the draft going to the gateway. Each of them is the person
+   * having moved on from the attempt the refusal was about.
+   *
+   * Written as an update rather than a read, so it is correct from inside an
+   * event handler that is also attaching — which is where the ordering matters:
+   * the drop zone hands over what passed before what it refused, and the
+   * refusal must be what survives the pair.
+   */
+  const answerRefusal = (conversationId: string) =>
+    setRefused((current) => (current?.conversationId === conversationId ? null : current))
+  /** Said only to the conversation it was said about. */
+  const refusal = refused?.conversationId === chat.active.id ? refused.refusal : null
   function addFiles(selected: readonly File[], targetId = chat.active.id) {
     if (!selected.length) return
     if (busyRef.current) {
@@ -172,7 +178,7 @@ export function useFileAttachments(
       )
       return
     }
-    setRefused(null)
+    answerRefusal(targetId)
     try {
       // Object URLs are ready synchronously; no FileReader or duplicate thumbnail URLs.
       chat.attachFiles(resources.add(selected), conversationId)
@@ -187,7 +193,7 @@ export function useFileAttachments(
     busyRef.current = true
     pendingConversation.current = targetId
     setReading(true)
-    setRefused(null)
+    answerRefusal(targetId)
     setPending({
       conversationId: targetId,
       files: [{ name: "Image", mimeType: "image/" }],
@@ -221,6 +227,13 @@ export function useFileAttachments(
     reading,
     refusal,
     refuse,
+    /**
+     * The draft has gone to the gateway, so whatever was refused before it is
+     * over. Called for a submission that was actually taken — a send the panel
+     * turned away has not moved anybody on, and is usually itself the refusal
+     * being shown.
+     */
+    draftSent: answerRefusal,
     clearRefusal: () => setRefused(null),
     addFiles,
     addImageUrl,
@@ -230,6 +243,9 @@ export function useFileAttachments(
     close: () => setViewed(null),
     remove: (id: string) => {
       chat.removeFile(id)
+      // Taking a tile off is an answer to "attach fewer" and to "this draft is
+      // too heavy" alike, whichever of them was being said.
+      answerRefusal(chat.active.id)
       if (viewed?.file.id === id) setViewed(null)
     },
   }

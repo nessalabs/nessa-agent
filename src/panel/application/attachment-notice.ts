@@ -190,9 +190,10 @@ export type DroppedFileRejection = {
  *
  * `type` is the zone's fourth answer and has no words here, because this panel
  * gives the zone no `accept` list and so the zone has no rule of that kind to
- * apply. It is still in the parameter, so the day an `accept` is added the
- * compiler does not hide the omission — but it does need words written for it
- * then, rather than being left to fall through to nothing.
+ * apply. Adding one is a prop, not a type change, and this would answer it with
+ * nothing at all: giving the zone an `accept` means writing words here in the
+ * same change. What the union does catch is a reason added upstream, which
+ * stops this file compiling until it is answered.
  *
  * `folder` is reachable in the component — the zone reports a directory it was
  * told not to expand, and also one it did expand and found empty — but not from
@@ -286,7 +287,9 @@ function draftFilesNotice(
  * So both are said. A refusal answers something somebody did a moment ago and
  * must be visible at that moment; the draft notice is a standing fact and
  * cannot be taken down by a passing one. The refusal goes last, nearest the
- * composer, because that is where the action it answers happened.
+ * composer, because that is where the action it answers happened. How long it
+ * keeps being said is `use-file-attachments`'s: it lives until attaching,
+ * removing, or sending answers it.
  *
  * Two at once is the worst case and it is a narrow one: the draft has to be
  * holding a file with something wrong with it *and* something has to have just

@@ -108,7 +108,7 @@ Chat adapters receive the composition-owned session handle; they do not open ano
 | `adapters/sha256.ts` | The SHA-256 that identifies an upload to the gateway. It reads Web Crypto, so composition injects it and tests substitute their own. |
 | `ui/use-attachment-uploads.ts`, `ui/attachment-tile.tsx` | Start an upload for every draft image that has not had one; paint a tile's upload state with its retry. |
 | `adapters/use-drop-navigation-guard.ts` | Prevent dropped URLs from navigating the webview. |
-| `ui/use-file-attachments.ts` | Remote pending previews, originating conversation, viewer state, and the last refusal — a typed reason, never a sentence, kept with the conversation and the draft it was refused against so it stops being shown when it stops being true. Local files use synchronous object URLs. Uploading is not its job. |
+| `ui/use-file-attachments.ts` | Remote pending previews, originating conversation, viewer state, and the last refusal — a typed reason, never a sentence, kept with the conversation it was said to. It is put down by the things that answer it, named as calls rather than worked out from the draft afterwards: files actually attached, a file removed, and `useComposer` reporting a draft that has gone. Local files use synchronous object URLs. Uploading is not its job. |
 | `adapters/dropped-folder.ts`, `ui/use-folder-drop.ts` | Bounded sequential folder traversal, cancellation, originating draft and pending-send guard. |
 | `ui/use-content-drop.ts`, `ui/use-attachment-menu.ts` | Drop acceptance/routing and menu geometry lifecycle, separate from rendering. |
 | `ui/attachment-preview.tsx`, `ui/attachment-icon.tsx`, `ui/add-attachment-menu.tsx` | Lazy shared file preview, file-kind icons, and composer Add menu. |

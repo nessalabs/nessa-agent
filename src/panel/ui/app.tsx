@@ -135,11 +135,15 @@ export function App({
     changeContent,
     pressChip,
     pasteAttachment,
-  } = useComposer(chat, (id) => {
-    if (!attachments.isPending(id) && !folderDrop.isPending(id)) return false
-    attachments.refuse({ reason: "sending-while-reading" })
-    return true
-  })
+  } = useComposer(
+    chat,
+    (id) => {
+      if (!attachments.isPending(id) && !folderDrop.isPending(id)) return false
+      attachments.refuse({ reason: "sending-while-reading" })
+      return true
+    },
+    attachments.draftSent,
+  )
   const contentDrop = useContentDrop({
     addFolderEntries: folderDrop.addFolderEntries,
     addImageUrl: attachments.addImageUrl,
