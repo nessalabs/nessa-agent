@@ -33,6 +33,8 @@ import {
   useConversation,
   toEditor,
   isImageFile,
+  MAX_ATTACHMENT_BYTES,
+  MAX_DRAFT_ATTACHMENTS,
 } from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
 import { useSession } from "../../session"
@@ -295,8 +297,8 @@ export function App({
             "Some dropped files could not be attached. Try selecting them with +.",
           )
         }
-        maxFiles={20}
-        maxSize={20 * 1024 * 1024}
+        maxFiles={MAX_DRAFT_ATTACHMENTS}
+        maxSize={MAX_ATTACHMENT_BYTES}
       >
         <div
           ref={edge.panelRef}

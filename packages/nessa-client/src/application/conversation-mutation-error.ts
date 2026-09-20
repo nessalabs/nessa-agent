@@ -18,10 +18,54 @@ function permissionSelection(
     : undefined
 }
 
+/**
+ * The gateway's refusals that are decided before a command is admitted, so that
+ * receiving one as the RPC's answer proves nothing was queued or dispatched.
+ *
+ * Closed on purpose, and each entry checked against the gateway: in `submit`
+ * these are all raised before `enqueue` returns a receipt. A code that is not
+ * here — `temporarily_unavailable` among them, which a supervising task also
+ * reports when work it had already admitted was lost — leaves the outcome
+ * uncertain, which is the safe reading.
+ */
+export type ConversationRejection =
+  /** Malformed or out-of-bounds command. */
+  | "invalid_request"
+  /** The gateway started with no agent to send to. */
+  | "agent_not_configured"
+  /** The conversation's agent does not take images. */
+  | "image_input_unsupported"
+  /** A named image is not held by this conversation: never uploaded into it, expired, or released when it closed. */
+  | "attachment_not_found"
+  /** A named image is held but could not be read for the agent. */
+  | "attachment_unavailable"
+  /** No such conversation for this caller. */
+  | "conversation_not_found"
+  /** The gateway is at its limit of open conversations. */
+  | "conversation_capacity"
+
+const rejections: readonly ConversationRejection[] = [
+  "invalid_request",
+  "agent_not_configured",
+  "image_input_unsupported",
+  "attachment_not_found",
+  "attachment_unavailable",
+  "conversation_not_found",
+  "conversation_capacity",
+]
+
+function rejection(cause: unknown): ConversationRejection | undefined {
+  return cause instanceof NessaRpcError
+    ? rejections.find((known) => known === cause.code)
+    : undefined
+}
+
 /** Failed conversation creation or message admission with its original identities and a safe same-command retry. No request is replayed automatically. */
 export class NessaConversationMutationError<T> extends Error {
   /** False only when the gateway explicitly rejected the command before admission. */
   readonly uncertain: boolean
+  /** Which pre-admission refusal this was; undefined exactly when `uncertain` is true. Branch on this, never on the message. */
+  readonly rejection: ConversationRejection | undefined
 
   constructor(
     /** Conversation whose command failed. */
@@ -39,10 +83,8 @@ export class NessaConversationMutationError<T> extends Error {
         : "Conversation command failed",
       { cause },
     )
-    this.uncertain = !(
-      cause instanceof NessaRpcError &&
-      ["agent_not_configured", "invalid_request"].includes(cause.code)
-    )
+    this.rejection = rejection(cause)
+    this.uncertain = this.rejection === undefined
     this.name = "NessaConversationMutationError"
   }
 

@@ -128,6 +128,11 @@ export async function establishManagedSession(
     upload: fetchAttachmentUpload(attachmentUploadUrl(resolved.url), (url, init) =>
       globalThis.fetch(url, init),
     ),
+    // The real clock for an upload's deadline; tests of the API pass their own.
+    uploadTimer: (ms: number, elapsed: () => void) => {
+      const timer = setTimeout(elapsed, ms)
+      return () => clearTimeout(timer)
+    },
   }
 }
 

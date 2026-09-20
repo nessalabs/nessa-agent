@@ -14,16 +14,18 @@ import { Provider } from "react-redux"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 
 // The conversation barrel also exports its components, which need the whole UI
-// package resolved. The hook takes one predicate from it.
-vi.mock("../../conversation", () => ({
-  isImageFile: (mimeType: string) => mimeType.startsWith("image/"),
-}))
+// package resolved. Its `testing` entry has the same `isImageFile` and no
+// component, so the barrel is mocked with that rather than with a copy of a rule.
+vi.mock("../../conversation", () => import("../../conversation/testing"))
 
 import { createDependencies } from "../../composition/dependencies"
-import { scenarioEffects } from "../../conversation/adapters/scenario/effects"
-import { attachFiles, removeFile } from "../../conversation/adapters/store/slice"
-import { AttachmentStagingError } from "../../conversation/application/ports"
-import { useConversation } from "../../conversation/ui/use-conversation"
+import {
+  attachFiles,
+  AttachmentStagingError,
+  removeFile,
+  scenarioEffects,
+  useConversation,
+} from "../../conversation/testing"
 import { makeStore } from "../../store"
 import { useAttachmentUploads } from "./use-attachment-uploads"
 
@@ -100,7 +102,7 @@ async function mounted(stageAttachment: () => Promise<typeof stored>) {
       )
     return part?.type === "file" ? part.upload : undefined
   }
-  return { store, stage, attach, uploadOf }
+  return { store, stage, attach, uploadOf, dependencies }
 }
 
 // A format no message names: it is uploaded all the same, and the gateway decides.
@@ -174,4 +176,68 @@ it("leaves a tile removed mid-upload removed when the upload resolves", async ()
   // Nothing was allocated again for it, and nothing started a second upload.
   expect(URL.createObjectURL).toHaveBeenCalledOnce()
   expect(panel.stage).toHaveBeenCalledOnce()
+})
+
+it("keeps three uploads in flight and starts the next as each one finishes", async () => {
+  // Six images dropped at once. The gateway takes four uploads at a time, so a
+  // window that started all six would have the rest refused for want of room.
+  const gates = Array.from({ length: 6 }, () => deferred<typeof stored>())
+  let next = 0
+  const panel = await mounted(() => gates[next++]!.promise)
+  const ids: string[] = []
+  for (let index = 0; index < 6; index++)
+    ids.push(
+      await panel.attach(new File(["raw"], `${index}.heic`, { type: "image/heic" })),
+    )
+  expect(panel.stage).toHaveBeenCalledTimes(3)
+  expect(ids.map((id) => panel.uploadOf(id)?.status)).toEqual([
+    "uploading",
+    "uploading",
+    "uploading",
+    // In line, and shown as waiting on their tiles.
+    "not-started",
+    "not-started",
+    "not-started",
+  ])
+  // One finishes; exactly one more starts. Nothing about the waiting images'
+  // state changed, so only the upload finishing can be what started it.
+  await React.act(async () => gates[0]!.resolve(stored))
+  expect(panel.stage).toHaveBeenCalledTimes(4)
+  expect(panel.uploadOf(ids[3]!)?.status).toBe("uploading")
+  expect(panel.uploadOf(ids[4]!)?.status).toBe("not-started")
+  // A failure frees a slot just as a success does.
+  await React.act(async () => gates[1]!.reject(new AttachmentStagingError("busy")))
+  expect(panel.stage).toHaveBeenCalledTimes(5)
+  for (const gate of gates.slice(2)) await React.act(async () => gate.resolve(stored))
+  expect(panel.stage).toHaveBeenCalledTimes(6)
+  expect(ids.map((id) => panel.uploadOf(id)?.status)).toEqual([
+    "stored",
+    "failed",
+    "stored",
+    "stored",
+    "stored",
+    "stored",
+  ])
+})
+
+it("does not spin on an image whose upload ends before React has rendered at all", async () => {
+  // Its bytes are gone, so it fails in the same tick it starts, while the last
+  // rendered draft still shows it as not started. Started again from that stale
+  // picture it would fail the same way, at once, for ever.
+  const panel = await mounted(async () => stored)
+  const change = vi.spyOn(panel.store, "dispatch")
+  const [attachment] = panel.dependencies.attachments.add([
+    new File(["raw"], "gone.heic", { type: "image/heic" }),
+  ])
+  panel.dependencies.attachments.retain(new Set())
+  await React.act(async () => {
+    panel.store.dispatch(attachFiles({ files: [attachment!], conversationId: "c0" }))
+  })
+  expect(panel.uploadOf(attachment!.id)).toEqual({
+    status: "failed",
+    reason: "unreadable",
+  })
+  expect(panel.stage).not.toHaveBeenCalled()
+  // Attach, uploading, failed — and then it stops.
+  expect(change.mock.calls.length).toBeLessThan(10)
 })

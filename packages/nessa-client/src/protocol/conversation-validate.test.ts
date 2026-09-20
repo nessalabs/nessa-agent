@@ -170,7 +170,7 @@ describe("conversation view agreement", () => {
     ["a non-image media type", { mimeType: "application/pdf" }],
     ["an empty image", { size: 0 }],
     ["a fractional size", { size: 1.5 }],
-    ["an image heavier than a whole message may be", { size: 10 * 1024 * 1024 + 1 }],
+    ["an image one byte over the schema's maximum", { size: 5_242_881 }],
     ["an unknown field", { bytes: "AAAA" }],
   ])("rejects a message image with %s", (_name, change) => {
     for (const where of ["messages", "pending"] as const) {

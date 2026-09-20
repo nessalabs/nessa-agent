@@ -1,5 +1,6 @@
 import { AttachmentStagingError, type ConversationEffects } from "../../application/ports"
 import type { ConversationView, Submission } from "../../application/view"
+import { STORED_IMAGE_TYPES } from "../../model"
 
 /** Explicit development/test injection only; production composition always uses the gateway. */
 export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffects {
@@ -62,8 +63,7 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
       // Holds nothing and converts nothing: a scenario has no storage and no
       // image library. It answers as a gateway would for the four encodings
       // that need no conversion, and says so for anything that would.
-      const stored = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const
-      const mimeType = stored.find((type) => type === file.mimeType)
+      const mimeType = STORED_IMAGE_TYPES.find((type) => type === file.mimeType)
       if (!mimeType) throw new AttachmentStagingError("unsupported-image")
       return { digest: file.digest, mimeType, size: file.size }
     },

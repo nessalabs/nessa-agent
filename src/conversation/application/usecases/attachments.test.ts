@@ -11,13 +11,19 @@ import {
   attachFiles,
   changeUpload,
   failSend,
+  forgetStoredUploads,
   removeFile,
   openConversation,
   setActive,
   setDraft,
   beginSend,
 } from "./index"
-import { imageRefusalMessage } from "./send-draft"
+import {
+  imageRefusalMessage,
+  refusalReleasesImages,
+  submissionRefusalMessage,
+} from "./send-draft"
+import { boundSentPreviews } from "./release-uploads"
 
 const file = (id: string, size = 1): FileAttachment => ({
   type: "file",
@@ -84,7 +90,11 @@ describe("draft file previews", () => {
     expect(attachFiles(count, [file("extra", 0)], "c0")).toBe(count)
     expect(attachFiles(tabs, [file("a"), file("a")], "c0")).toBe(tabs)
     expect(attachFiles(tabs, [file("a", -1)], "c0")).toBe(tabs)
-    expect(setDraft(tabs, { draft: [file("a", MAX_ATTACHMENT_BYTES + 1)] })).toBe(tabs)
+    // A draft's files are the store's: `setDraft` is no way to bring one in.
+    expect(
+      setDraft(tabs, { draft: [file("a", MAX_ATTACHMENT_BYTES + 1)] }).conversations[0]!
+        .draft,
+    ).toEqual([])
   })
   it("never submits or clears a file that cannot go, even if submission omits it", () => {
     const tabs = attachFiles(emptyLocalTabs(), [file("a")], "c0")
@@ -249,13 +259,91 @@ describe("a draft file's upload state", () => {
       { type: "text", text: "hi" },
       { ...image("a"), upload: { status: "stored", image: reference() } },
     ])
-    // And a file the draft never held cannot arrive already claiming to be stored.
+  })
+
+  it("never lets the composer's last render put back a file that was removed", () => {
+    const held = stored()
+    const rendered = held.conversations[0]!.draft
+    const removed = removeFile(held, "a")
+    const typed = setDraft(removed, {
+      draft: [{ type: "text", text: "hi" }, ...rendered],
+    })
+    expect(typed.conversations[0]!.draft).toEqual([{ type: "text", text: "hi" }])
+  })
+
+  it("never lets the composer's last render put back a file that was sent", () => {
+    const held = stored()
+    const rendered = held.conversations[0]!.draft
+    const sent = beginSend(held, { ...submission, content: rendered })
+    expect(sent.conversations[0]!.draft).toEqual([])
+    const typed = setDraft(sent, { draft: [{ type: "text", text: "next" }, ...rendered] })
+    // In the turn, and only there: the same image is not also drafted again.
+    expect(typed.conversations[0]!.draft).toEqual([{ type: "text", text: "next" }])
+    expect(typed.conversations[0]!.turns[0]).toMatchObject({ content: rendered })
+  })
+
+  it("keeps a file attached since the composer's last render, which never saw it", () => {
+    const before = emptyLocalTabs()
+    const attached = attachFiles(before, [image("new")], "c0")
+    const typed = setDraft(attached, { draft: [{ type: "text", text: "hi" }] })
+    expect(typed.conversations[0]!.draft).toEqual([
+      { type: "text", text: "hi" },
+      image("new"),
+    ])
+  })
+
+  it("cannot be used to bring in a file, stored or otherwise", () => {
     const claimed = {
       ...image("b"),
       upload: { status: "stored" as const, image: reference() },
     }
-    const smuggled = setDraft(emptyLocalTabs(), { draft: [claimed] })
-    expect(smuggled.conversations[0]!.draft).toEqual([image("b")])
+    expect(
+      setDraft(emptyLocalTabs(), { draft: [claimed] }).conversations[0]!.draft,
+    ).toEqual([])
+  })
+
+  it("declares a file the browser gave no type as an image when its extension says so", () => {
+    const raw = {
+      ...file("raw", 3),
+      name: "IMG_0042.CR3",
+      mimeType: "application/octet-stream",
+    }
+    const heic = { ...file("heic", 3), name: "holiday.heic", mimeType: "" }
+    const notes = { ...file("notes", 3), name: "notes.bin", mimeType: "" }
+    const tabs = attachFiles(emptyLocalTabs(), [raw, heic, notes], "c0")
+    expect(
+      tabs.conversations[0]!.draft.map((part) => part.type === "file" && part.mimeType),
+    ).toEqual(["image/x-canon-cr3", "image/heic", "application/octet-stream"])
+    // Which makes the RAW file sendable once the gateway has stored it.
+    const uploading = changeUpload(tabs, { fileId: "raw", to: "uploading" })
+    const done = changeUpload(uploading, {
+      fileId: "raw",
+      to: "stored",
+      image: reference(),
+    })
+    expect(done.conversations[0]!.draft[0]).toMatchObject({
+      upload: { status: "stored", image: reference() },
+    })
+  })
+
+  it("forgets what the gateway held once the conversation has been closed there", () => {
+    let tabs = attachFiles(stored("kept"), [image("flying"), image("broken")], "c0")
+    tabs = changeUpload(tabs, { fileId: "flying", to: "uploading" })
+    tabs = changeUpload(tabs, { fileId: "broken", to: "uploading" })
+    tabs = changeUpload(tabs, { fileId: "broken", to: "failed", reason: "rejected" })
+    const released = forgetStoredUploads(tabs, "c0")
+    expect(
+      released.conversations[0]!.draft.map((part) => part.type === "file" && part.upload),
+    ).toEqual([
+      // Its hold is gone, so it is an image that has not been uploaded.
+      { status: "not-started" },
+      // Still in flight, and a failure is still a failure.
+      { status: "uploading" },
+      { status: "failed", reason: "rejected" },
+    ])
+    // Nothing stored, nothing to forget; and another tab's draft is not touched.
+    expect(forgetStoredUploads(released, "c0")).toBe(released)
+    expect(forgetStoredUploads(tabs, "missing")).toBe(tabs)
   })
 
   it("does not bring back a file removed while its upload was in flight", () => {
@@ -341,6 +429,45 @@ describe("sending a draft that holds images", () => {
     expect(lost.conversations[0]!.turns[0]).toMatchObject({ receipt: "unknown", content })
   })
 
+  it("puts a message whose images the gateway no longer holds back as images to upload again", () => {
+    const tabs = stored()
+    const content = tabs.conversations[0]!.draft
+    const sent = beginSend(tabs, { ...submission, content })
+    const refused = failSend(sent, "c0", "execution", "released", false, true)
+    // The same file, with the dead reference gone: the panel uploads it again.
+    expect(refused.conversations[0]!.draft).toEqual([image("a")])
+    // The turn keeps what was actually attempted.
+    expect(refused.conversations[0]!.turns[0]).toMatchObject({
+      receipt: "failed",
+      content,
+    })
+    // An uncertain failure recovers nothing, so there is nothing to reset.
+    expect(
+      failSend(sent, "c0", "execution", "lost", true, true).conversations[0]!.draft,
+    ).toEqual([])
+  })
+
+  it("says something different, and specific, for each refusal the gateway can give", () => {
+    const reasons = [
+      "image-input-unsupported",
+      "attachment-not-found",
+      "attachment-unavailable",
+      "conversation-not-found",
+      "conversation-capacity",
+    ] as const
+    const messages = reasons.map((reason) => submissionRefusalMessage(reason))
+    expect(new Set(messages).size).toBe(reasons.length)
+    for (const message of messages) expect(message).toMatch(/back in the draft/)
+    expect(submissionRefusalMessage("attachment-not-found")).toMatch(/uploading again/)
+    expect(reasons.filter(refusalReleasesImages)).toEqual([
+      "attachment-not-found",
+      "attachment-unavailable",
+    ])
+    // The client's own message for these says more than a sentence here could.
+    expect(submissionRefusalMessage("agent-not-configured")).toBeUndefined()
+    expect(submissionRefusalMessage("invalid-request")).toBeUndefined()
+  })
+
   it("says something different, and useful, for each refusal", () => {
     const messages = [
       imageRefusalMessage({ kind: "unsupported-file", name: "notes.pdf" }),
@@ -352,5 +479,69 @@ describe("sending a draft that holds images", () => {
     expect(new Set(messages).size).toBe(messages.length)
     expect(messages[0]).toContain("notes.pdf")
     expect(messages[1]).toContain("a.png")
+  })
+})
+
+describe("originals kept to paint sent turns", () => {
+  /** Three tabs' worth of sent images, each `size` bytes, in the given receipts. */
+  function sentImages(
+    receipts: ("accepted" | "sending" | "failed" | "unknown")[],
+    size: number,
+  ) {
+    let tabs = emptyLocalTabs()
+    receipts.forEach((receipt, index) => {
+      const id = `f${index}`
+      tabs = attachFiles(tabs, [image(id, size)], "c0")
+      tabs = changeUpload(tabs, { fileId: id, to: "uploading" })
+      tabs = changeUpload(tabs, { fileId: id, to: "stored", image: reference() })
+      tabs = beginSend(tabs, {
+        ...submission,
+        executionId: `e${index}`,
+        content: tabs.conversations[0]!.draft,
+      })
+      tabs = {
+        ...tabs,
+        conversations: tabs.conversations.map((conversation) => ({
+          ...conversation,
+          turns: conversation.turns.map((turn) =>
+            turn.from === "user" && turn.executionId === `e${index}`
+              ? { ...turn, receipt }
+              : turn,
+          ),
+        })),
+      }
+    })
+    return tabs
+  }
+  const kinds = (tabs: ReturnType<typeof emptyLocalTabs>) =>
+    tabs.conversations[0]!.turns.flatMap((turn) =>
+      turn.from === "user" ? turn.content.map((part) => part.type) : [],
+    )
+
+  it("turns the oldest taken messages' originals into references past the budget", () => {
+    const tabs = sentImages(["accepted", "accepted", "accepted"], 40)
+    expect(boundSentPreviews(tabs, 120)).toBe(tabs)
+    const bounded = boundSentPreviews(tabs, 100)
+    expect(kinds(bounded)).toEqual(["image-reference", "file", "file"])
+    // What is left in place of the original is exactly what the message named.
+    expect(bounded.conversations[0]!.turns[0]).toMatchObject({
+      content: [{ type: "image-reference", ...reference() }],
+    })
+    expect(kinds(boundSentPreviews(tabs, 0))).toEqual([
+      "image-reference",
+      "image-reference",
+      "image-reference",
+    ])
+  })
+
+  it("never takes the original from a message that may yet come back to the draft", () => {
+    const tabs = sentImages(["sending", "unknown", "failed", "accepted"], 40)
+    // Only the accepted one is a preview; the rest may need their bytes again.
+    expect(kinds(boundSentPreviews(tabs, 0))).toEqual([
+      "file",
+      "file",
+      "file",
+      "image-reference",
+    ])
   })
 })

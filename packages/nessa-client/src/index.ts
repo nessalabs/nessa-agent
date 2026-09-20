@@ -135,8 +135,14 @@ export type {
 } from "./presentation/attachment-api.js"
 export {
   NessaAttachmentError,
+  type AttachmentBeginRefusal,
   type AttachmentFailureCode,
 } from "./application/attachment-upload.js"
+export {
+  asImageAttachment,
+  IMAGE_ATTACHMENT_TYPES,
+  type StoredAttachment,
+} from "./protocol/attachment-validate.js"
 export type {
   ConversationView,
   ImageAttachment,
@@ -161,6 +167,7 @@ export type {
 export {
   NessaConversationMutationError,
   NessaConversationControlError,
+  type ConversationRejection,
 } from "./application/conversation-mutation-error.js"
 
 export { isRetryableConnectionError } from "./application/connect-retry.js"

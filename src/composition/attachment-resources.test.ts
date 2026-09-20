@@ -1,18 +1,19 @@
 import { afterEach, expect, it, vi } from "vitest"
 import { createDependencies } from "./dependencies"
 import { makeStore } from "../store"
-import { scenarioEffects } from "../conversation/adapters/scenario/effects"
+import { MAX_SESSION_ATTACHMENT_BYTES } from "../panel/adapters/attachment-resources"
 import {
   attachFiles,
   closeConversation,
   openConversation,
   refreshConversation,
   removeFile,
+  scenarioEffects,
   sendDraft,
   setActive,
   stageAttachment,
   uploadChanged,
-} from "../conversation/adapters/store/slice"
+} from "../conversation/testing"
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -74,4 +75,59 @@ it("keeps a sent image's preview for its turn, and releases it with the conversa
   expect(dependencies.attachments.bytes(image!.id)).toBeDefined()
   store.dispatch(closeConversation("c0"))
   expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:sent")
+})
+
+it("does not let sent messages use up what attaching needs", async () => {
+  let index = 0
+  vi.spyOn(URL, "createObjectURL").mockImplementation(() => `blob:${++index}`)
+  const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {})
+  const dependencies = createDependencies({ conversation: scenarioEffects("echo") })
+  const store = makeStore(dependencies)
+  // Five messages, each one 64 MiB original that the gateway stored small.
+  // Metadata-only fixtures avoid allocating 320 MiB to test accounting.
+  const sentIds: string[] = []
+  for (let message = 0; message < 5; message++) {
+    const [image] = dependencies.attachments.add([
+      { name: `${message}.png`, type: "image/png", size: 64 * 1024 * 1024 } as File,
+    ])
+    sentIds.push(image!.id)
+    store.dispatch(attachFiles({ files: [image!], conversationId: "c0" }))
+    store.dispatch(uploadChanged({ fileId: image!.id, to: "uploading" }))
+    await store.dispatch(
+      stageAttachment({
+        id: "c0",
+        fileId: image!.id,
+        file: { digest: `sha256:${"ab".repeat(32)}`, mimeType: "image/png", size: 3 },
+        bytes: new Blob(["png"]),
+      }),
+    )
+    await store.dispatch(refreshConversation("c0"))
+    const sent = await store.dispatch(sendDraft({ content: [], id: "c0" }))
+    expect(sent.meta.requestStatus).toBe("fulfilled")
+  }
+  // Every draft is empty, and the whole budget is there to attach with.
+  expect(store.getState().conversation.conversations[0]!.draft).toEqual([])
+  expect(dependencies.attachments.canAdd(MAX_SESSION_ATTACHMENT_BYTES)).toBe(true)
+  // Only the newest original is still kept as a preview; the older four were
+  // released and their turns fell back to the reference tile.
+  expect(revoke).toHaveBeenCalledTimes(4)
+  expect(sentIds.map((id) => dependencies.attachments.bytes(id) !== undefined)).toEqual([
+    false,
+    false,
+    false,
+    false,
+    true,
+  ])
+  const kinds = store
+    .getState()
+    .conversation.conversations[0]!.turns.flatMap((turn) =>
+      turn.from === "user" ? turn.content.map((part) => part.type) : [],
+    )
+  expect(kinds).toEqual([
+    "image-reference",
+    "image-reference",
+    "image-reference",
+    "image-reference",
+    "file",
+  ])
 })

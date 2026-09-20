@@ -7,3 +7,4 @@ export { setDraft } from "./set-draft"
 export { moveActive } from "./move-active"
 
 export { attachFiles, changeUpload, removeFile } from "./attachments"
+export { boundSentPreviews, forgetStoredUploads } from "./release-uploads"

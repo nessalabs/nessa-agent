@@ -1,23 +1,33 @@
 import { NessaConversationMutationError } from "@nessa/client"
 import {
   contentText,
+  MAX_SENT_PREVIEW_BYTES,
   messageImages,
   type FileAttachment,
   type MessageContent,
   type UploadFailure,
 } from "../../model"
-import { createAsyncThunk, createSlice, type PayloadAction } from "@reduxjs/toolkit"
+import {
+  createAsyncThunk,
+  createSlice,
+  current as snapshot,
+  type PayloadAction,
+} from "@reduxjs/toolkit"
 import type { LocalTabs } from "../../application/local-tabs"
 import { emptyLocalTabs } from "../../application/local-tabs"
 import {
   beginSend,
   failSend,
   imageRefusalMessage,
+  refusalReleasesImages,
+  submissionRefusalMessage,
 } from "../../application/usecases/send-draft"
 import { applyView } from "../../application/usecases/apply-view"
+import { boundSentPreviews } from "../../application/usecases/release-uploads"
 import {
   AttachmentStagingError,
   ConversationUnavailableError,
+  SubmissionRefusedError,
   type ConversationEffects,
   type UploadChange,
   type UploadedFile,
@@ -33,9 +43,25 @@ type ThunkConfig = {
   state: { conversation: LocalTabs }
   extra: { conversation: ConversationEffects }
 }
-export type SendDraftArg = { content: MessageContent; id?: string; steering?: boolean }
+export type SendDraftArg = {
+  content: MessageContent
+  id?: string
+  steering?: boolean
+  /**
+   * What the caller knows about the session, which this slice cannot see. False
+   * declines the draft here, with a reason, like every other decline. A caller
+   * with no session to consult leaves it out, and the effects' own
+   * `ConversationUnavailableError` is what then says so.
+   */
+  connected?: boolean
+}
 const detail = (error: unknown) =>
   error instanceof Error ? error.message : "The gateway request failed."
+/** The sentence for a refused message: by its typed reason, else the error's own. */
+const refusalDetail = (error: unknown) =>
+  (error instanceof SubmissionRefusedError
+    ? submissionRefusalMessage(error.reason)
+    : undefined) ?? detail(error)
 
 /** Capture a tab and logical submission before awaiting any connection or admission. */
 export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
@@ -49,6 +75,17 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
     // reason like every other decline, so "was this draft taken" has one answer
     // and not two — the composer's full-pane editor rests on it.
     if (!current) return rejectWithValue({ kind: "no-such-conversation" })
+    // Said here rather than by the caller returning early: a submit that goes
+    // nowhere without a word is the defect this thunk exists to prevent.
+    if (input.connected === false) {
+      dispatch(
+        showError({
+          id,
+          message: "Not connected to the gateway yet. Your draft has been kept.",
+        }),
+      )
+      return rejectWithValue({ kind: "not-connected" })
+    }
     // Files are the draft's. Their upload state lives there and nowhere else,
     // so a caller's copy of a file part is never what gets sent — and one the
     // draft does not hold is refused rather than dropped from the message.
@@ -162,11 +199,19 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
         submissionFailed({
           id,
           executionId,
-          message: detail(error),
+          message: refusalDetail(error),
+          // A typed refusal is the gateway saying it did not take the message.
+          // Everything else after admission was attempted proves nothing.
           uncertain:
             admissionAttempted &&
+            !(error instanceof SubmissionRefusedError) &&
             !(error instanceof ConversationUnavailableError) &&
             (!(error instanceof NessaConversationMutationError) || error.uncertain),
+          // The gateway no longer has the images this message named, so the
+          // recovered draft must not offer the same dead references again.
+          reupload:
+            error instanceof SubmissionRefusedError &&
+            refusalReleasesImages(error.reason),
         }),
       )
       throw error
@@ -218,6 +263,43 @@ export const stageAttachment = createAsyncThunk<
   }
 })
 
+/**
+ * Close a tab, and the gateway conversation with it when this window made that
+ * conversation only to upload into and nothing was ever said in it.
+ *
+ * Attaching an image creates the gateway conversation, because an upload needs
+ * one. Closing the tab used to leave it there, keeping the staged bytes until
+ * they expired. Closing it on the gateway releases them. It is only done when a
+ * view has shown the conversation to be empty and idle: a tab with turns, or one
+ * whose view has not arrived, may be somebody's work — this window's or another
+ * surface's — and closing a tab never stops that.
+ *
+ * The tab closes first and whatever the gateway says. A release that fails is
+ * survivable — staged bytes expire on their own — and is reported, not shown.
+ */
+export const closeTab = createAsyncThunk<void, string, ThunkConfig>(
+  "conversation/closeTab",
+  async (id, { dispatch, getState, extra }) => {
+    const current = getState().conversation.conversations.find((item) => item.id === id)
+    dispatch(closeConversation(id))
+    const remote = current?.remote
+    if (
+      !current?.serverConversationId ||
+      current.turns.length > 0 ||
+      !remote ||
+      remote.truncated ||
+      remote.running ||
+      remote.pending.length > 0
+    )
+      return
+    try {
+      await extra.conversation.close(current.serverConversationId)
+    } catch (error) {
+      console.warn("[nessa] an emptied conversation was not closed on the gateway", error)
+    }
+  },
+)
+
 /** Read once. Callers control polling lifetime; reducers reject older in-flight reads. */
 export const refreshConversation = createAsyncThunk<void, string, ThunkConfig>(
   "conversation/refresh",
@@ -265,6 +347,10 @@ export const controlConversation = createAsyncThunk<
       case "close":
         await extra.conversation.close(serverId)
         dispatch(cancellationChanged({ id, status: "cancelled" }))
+        // Closing releases every file the conversation was keeping, so the
+        // draft's stored images name nothing now. Back to not-started they go,
+        // and the panel uploads them again before the next send.
+        dispatch(uploadsReleased(id))
         break
       case "reorder": {
         const result = await extra.conversation.reorder(serverId, requestedOrder)
@@ -336,11 +422,18 @@ export const controlConversation = createAsyncThunk<
     }
     await dispatch(refreshConversation(id))
   } catch (error) {
-    if (control.kind === "close") dispatch(cancellationChanged({ id }))
+    if (control.kind === "close") {
+      dispatch(cancellationChanged({ id }))
+      // The close may have applied — a lost acknowledgement, or a gateway that
+      // closed and then could not finish cleaning up. Forgetting is safe either
+      // way: uploading bytes the conversation still holds answers `stored`
+      // without sending them again.
+      dispatch(uploadsReleased(id))
+    }
     // A lost acknowledgement may follow an applied control. Read authority again;
     // never replay the control or infer that the previous order still holds.
     await dispatch(refreshConversation(id))
-    dispatch(showError({ id, message: detail(error) }))
+    dispatch(showError({ id, message: refusalDetail(error) }))
     throw error
   } finally {
     dispatch(controlFinished(id))
@@ -358,6 +451,16 @@ export const stopGenerating = createAsyncThunk<
     }),
   )
 })
+
+/**
+ * Apply the sent-preview bound to a draft state these reducers have already
+ * changed. The rule itself is pure and returns new tabs; a reducer that has
+ * touched its draft may not also return a value, so the result is written back.
+ */
+function releaseOldPreviews(state: LocalTabs) {
+  const bounded = boundSentPreviews(snapshot(state), MAX_SENT_PREVIEW_BYTES)
+  state.conversations = bounded.conversations
+}
 
 const conversationSlice = createSlice({
   name: "conversation",
@@ -396,6 +499,9 @@ const conversationSlice = createSlice({
     },
     uploadChanged(state, action: PayloadAction<UploadChange>) {
       return gateway.changeUpload(state, action.payload)
+    },
+    uploadsReleased(state, action: PayloadAction<string>) {
+      return gateway.forgetStoredUploads(state, action.payload)
     },
     moveActive(state, action: PayloadAction<-1 | 1>) {
       return gateway.moveActive(state, action.payload)
@@ -437,6 +543,8 @@ const conversationSlice = createSlice({
         turn.error = undefined
       }
       if (current) current.readRequest = undefined
+      // The gateway has the message: its originals are only previews from here.
+      releaseOldPreviews(state)
     },
     submissionFailed(
       state,
@@ -445,6 +553,7 @@ const conversationSlice = createSlice({
         executionId: string
         message: string
         uncertain?: boolean
+        reupload?: boolean
       }>,
     ) {
       return failSend(
@@ -453,6 +562,7 @@ const conversationSlice = createSlice({
         action.payload.executionId,
         action.payload.message,
         action.payload.uncertain,
+        action.payload.reupload,
       )
     },
     showError(state, action: PayloadAction<{ id: string; message: string }>) {
@@ -498,6 +608,8 @@ const conversationSlice = createSlice({
           current.readError = undefined
         } else {
           state.conversations[index] = applyView(current, view)
+          // A view can be what first says a turn was taken.
+          releaseOldPreviews(state)
         }
       }
     },
@@ -522,6 +634,7 @@ export const {
   attachFiles,
   removeFile,
   uploadChanged,
+  uploadsReleased,
   setActive,
   moveActive,
   setDraft,

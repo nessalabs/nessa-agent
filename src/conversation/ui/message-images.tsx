@@ -1,5 +1,10 @@
 import { Image as ImageIcon } from "lucide-react"
-import { imageReferenceLabel, isImageFile, type MessageContent } from "../model"
+import {
+  imageReferenceLabel,
+  isImageFile,
+  previewableImage,
+  type MessageContent,
+} from "../model"
 
 // The composer's attachment tile, as a shape: square, rounded, on the accent wash.
 const tile = "flex h-16 items-center justify-center overflow-hidden rounded-xl bg-accent"
@@ -22,7 +27,15 @@ export function MessageImages({ content }: { content: MessageContent }) {
   type Tile = { key: string; label: string; src: string | undefined }
   const tiles = content.flatMap((part, index): Tile[] => {
     if (part.type === "file" && isImageFile(part.mimeType))
-      return [{ key: part.id, label: part.name, src: part.previewUrl }]
+      return [
+        {
+          key: part.id,
+          label: part.name,
+          // An original the webview cannot paint (HEIC, RAW) gets the labelled
+          // tile too, by its file name, rather than a broken picture.
+          src: previewableImage(part.mimeType) ? part.previewUrl : undefined,
+        },
+      ]
     if (part.type === "image-reference")
       return [
         {

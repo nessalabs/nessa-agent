@@ -1,4 +1,5 @@
 import {
+  declaredMediaType,
   isImageFile,
   validDraftAttachments,
   validImageReference,
@@ -14,6 +15,10 @@ import { findConversation, replaceConversation, withDraft } from "../internal"
  * Every file arrives with its upload not started, whatever the caller wrote on
  * it: only `changeUpload` moves that state, so a part cannot be attached already
  * claiming bytes the gateway never received.
+ *
+ * Its media type is settled here too. A browser reports most camera RAW files,
+ * and some HEIC, with no type at all; left that way they would be files that
+ * can be previewed and never sent. A known image extension makes them images.
  */
 export function attachFiles(
   tabs: LocalTabs,
@@ -24,7 +29,11 @@ export function attachFiles(
   if (!current || files.length === 0) return tabs
   const draft = [
     ...current.draft,
-    ...files.map((file) => ({ ...file, upload: { status: "not-started" as const } })),
+    ...files.map((file) => ({
+      ...file,
+      mimeType: declaredMediaType(file.name, file.mimeType),
+      upload: { status: "not-started" as const },
+    })),
   ]
   if (!validDraftAttachments(draft)) return tabs
   return replaceConversation(tabs, withDraft(current, draft))

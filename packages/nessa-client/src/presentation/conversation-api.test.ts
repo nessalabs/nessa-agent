@@ -606,7 +606,8 @@ it("refuses a message the gateway would refuse, before admission", async () => {
     ["hello", [{ ...image, digest: image.digest.toUpperCase() }]],
     ["hello", [{ ...image, mimeType: "image/svg+xml" }]],
     ["hello", [{ ...image, size: 0 }]],
-    ["hello", [{ ...image, size: 10 * 1024 * 1024 + 1 }]],
+    // `ImageAttachment.size` maximum in the schema is 5242880.
+    ["hello", [{ ...image, size: 5_242_881 }]],
     ["hello", [{ ...image, bytes: "AAAA" }]],
     ["hello", Array.from({ length: 11 }, () => image)],
     ["hello", Array.from({ length: 3 }, () => ({ ...image, size: 4 * 1024 * 1024 }))],
@@ -621,4 +622,62 @@ it("refuses a message the gateway would refuse, before admission", async () => {
     Array.from({ length: 10 }, () => ({ ...image, size: 1024 * 1024 })),
   )
   expect(request).toHaveBeenCalledOnce()
+})
+
+it("accepts an image of exactly the schema's maximum size", async () => {
+  const request = queued()
+  await createConversationApi({ request }, () => "id").send(conversationId, "", [
+    { ...image, size: 5_242_880 },
+  ])
+  expect(request).toHaveBeenCalledOnce()
+})
+
+it.each([
+  "invalid_request",
+  "agent_not_configured",
+  "image_input_unsupported",
+  "attachment_not_found",
+  "attachment_unavailable",
+  "conversation_not_found",
+  "conversation_capacity",
+] as const)(
+  "knows %s was decided before admission, for send and steer alike",
+  async (code) => {
+    // The message names a different code: only the typed code is read.
+    const request = vi
+      .fn()
+      .mockRejectedValue(new NessaRpcError(code, "temporarily_unavailable"))
+    const api = createConversationApi({ request }, () => "id")
+    for (const submit of [api.send, api.steer]) {
+      const error = await submit(conversationId, "look", [image]).catch((error) => error)
+      expect(error).toBeInstanceOf(NessaConversationMutationError)
+      expect(error).toMatchObject({ uncertain: false, rejection: code })
+    }
+  },
+)
+
+it.each([
+  // Also what a supervising task reports after losing work it had admitted.
+  "temporarily_unavailable",
+  "conversation_storage_unavailable",
+  "audit_unavailable",
+  "agent_operation_failed",
+  "submission_conflict",
+  "a_code_nobody_taught_this_client",
+])("leaves %s uncertain: nothing proves the message was not admitted", async (code) => {
+  const request = vi
+    .fn()
+    .mockRejectedValue(new NessaRpcError(code, "attachment_not_found"))
+  const error = await createConversationApi({ request }, () => "id")
+    .send(conversationId, "look", [image])
+    .catch((error) => error)
+  expect(error).toMatchObject({ uncertain: true, rejection: undefined })
+})
+
+it("does not read a rejection out of an error that is not the gateway's answer", async () => {
+  const request = vi.fn().mockRejectedValue(new Error("attachment_not_found"))
+  const error = await createConversationApi({ request }, () => "id")
+    .send(conversationId, "look", [image])
+    .catch((error) => error)
+  expect(error).toMatchObject({ uncertain: true, rejection: undefined })
 })

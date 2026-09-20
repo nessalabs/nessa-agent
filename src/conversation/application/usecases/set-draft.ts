@@ -3,13 +3,15 @@ import type { LocalTabs } from "../local-tabs"
 import { findConversation, replaceConversation, withDraft } from "../internal"
 
 /**
- * Replace a draft's prose, keeping each file's upload state as the store has it.
+ * Replace a draft's prose. Its files are not the caller's to say.
  *
- * The composer rebuilds the draft from what it last rendered, and an upload can
- * settle between that render and the next keystroke. Taking the caller's copy of
- * a file part would put a `stored` file back to `uploading` for good. So a file
- * the draft already holds is kept exactly as it is here, and one it does not
- * hold arrives not started — only `changeUpload` moves that state.
+ * The composer rebuilds the draft from what it last rendered, and the store can
+ * move between that render and the next keystroke: an upload settles, a tile is
+ * removed, the draft is sent. Taking the caller's file parts would undo whichever
+ * of those happened — a stored file back to uploading, a removed or sent file
+ * back in the draft. So the prose comes from the caller and the files come from
+ * the store, exactly as they are. A file enters a draft through `attachFiles`
+ * and leaves through `removeFile` or a send, and nowhere else.
  */
 export function setDraft(
   tabs: LocalTabs,
@@ -17,16 +19,10 @@ export function setDraft(
 ): LocalTabs {
   const current = findConversation(tabs, input.id ?? tabs.activeId)
   if (!current) return tabs
-  const held = new Map(
-    current.draft.flatMap((part) =>
-      part.type === "file" ? [[part.id, part] as const] : [],
-    ),
-  )
-  const draft = input.draft.map((part) =>
-    part.type === "file"
-      ? (held.get(part.id) ?? { ...part, upload: { status: "not-started" as const } })
-      : part,
-  )
+  const draft = [
+    ...input.draft.filter((part) => part.type === "text" || part.type === "pasted-text"),
+    ...current.draft.filter((part) => part.type === "file"),
+  ]
   if (!validDraftAttachments(draft)) return tabs
   return replaceConversation(tabs, withDraft(current, draft))
 }

@@ -70,6 +70,29 @@ export async function uploadImage(
   }
 }
 
+/**
+ * How many uploads this window keeps in flight. The gateway takes four at once
+ * and holds each slot until the image is normalized, so a window that started
+ * every upload the moment a dozen images were dropped would have most of them
+ * refused for want of room. One slot is left for another window.
+ */
+export const MAX_UPLOADS_IN_FLIGHT = 3
+
+/**
+ * Which images to start uploading now: those not started, in the order they
+ * appear, as far as the free slots go. The rest stay `not-started` — waiting,
+ * and shown as waiting — and are chosen when a slot frees. Pure, so "the sixth
+ * image waits and then goes" is an assertion rather than a timing.
+ */
+export function nextUploads<T extends { id: string }>(
+  waiting: readonly T[],
+  inFlight: ReadonlySet<string>,
+  limit = MAX_UPLOADS_IN_FLIGHT,
+): T[] {
+  const free = Math.max(0, limit - inFlight.size)
+  return waiting.filter((file) => !inFlight.has(file.id)).slice(0, free)
+}
+
 /** Why an upload failed, for somebody deciding whether to retry or remove. */
 export function uploadFailureText(reason: UploadFailure): string {
   switch (reason) {
@@ -79,6 +102,12 @@ export function uploadFailureText(reason: UploadFailure): string {
       return "the gateway could not read this image format"
     case "too-large":
       return "it could not be brought under this model's limits"
+    case "image-input-unsupported":
+      return "this agent's model does not take images"
+    case "busy":
+      return "the gateway was busy with other uploads"
+    case "interrupted":
+      return "the upload was cut off or timed out"
     case "unavailable":
       return "the gateway could not be reached"
     case "rejected":
@@ -87,12 +116,29 @@ export function uploadFailureText(reason: UploadFailure): string {
 }
 
 /**
- * Whether trying the same bytes again could end differently. The gateway's two
- * verdicts on an image are about the image, so they will be the same next time;
- * everything else might not be.
+ * Whether trying the same bytes again could end differently. The gateway's
+ * verdicts on the image, and on an agent whose model takes none, are about the
+ * image and the agent, so they will be the same next time; everything else
+ * might not be.
  */
 export function worthRetrying(reason: UploadFailure): boolean {
-  return reason !== "unsupported-image" && reason !== "too-large"
+  return (
+    reason !== "unsupported-image" &&
+    reason !== "too-large" &&
+    reason !== "image-input-unsupported"
+  )
+}
+
+/** A draft file, as much of it as the notice needs: its upload state keeps its union. */
+export type NoticedFile = {
+  name: string
+  image: boolean
+  upload:
+    | { status: "not-started" | "uploading" | "stored" }
+    | {
+        status: "failed"
+        reason: UploadFailure
+      }
 }
 
 /**
@@ -102,27 +148,36 @@ export function worthRetrying(reason: UploadFailure): boolean {
  * an agent that takes no images is reported as soon as the gateway has said so,
  * and a file no message can carry is called that while it can still be swapped.
  * `imageInput` undefined means the gateway has not answered yet, which is not a
- * no. Uploads in flight are shown on their tiles and need no sentence.
+ * no. Uploads in flight or waiting are shown on their tiles and need no sentence.
  */
 export function attachmentNotice(input: {
-  files: readonly {
-    name: string
-    image: boolean
-    upload: { status: string; reason?: UploadFailure }
-  }[]
+  files: readonly NoticedFile[]
   imageInput: boolean | undefined
 }): string | null {
-  const failed = input.files.find((file) => file.upload.status === "failed")
-  if (failed?.upload.reason)
-    return `"${failed.name}" did not upload: ${uploadFailureText(failed.upload.reason)}. ${
-      worthRetrying(failed.upload.reason)
+  for (const file of input.files) {
+    if (file.upload.status !== "failed") continue
+    const reason = file.upload.reason
+    return `"${file.name}" did not upload: ${uploadFailureText(reason)}. ${
+      worthRetrying(reason)
         ? "Retry it from its tile, or remove it."
         : "Remove it to send."
     }`
+  }
   const unsupported = input.files.find((file) => !file.image)
   if (unsupported)
     return `"${unsupported.name}" can be previewed but not sent: messages carry images, and no other files yet.`
   if (input.files.length > 0 && input.imageInput === false)
     return "This agent does not take images. They will stay in the draft until removed."
   return null
+}
+
+/**
+ * Why nothing more can be attached, said truthfully. "Remove files" is only
+ * advice when there are files to remove: with every draft empty, what holds the
+ * budget is messages still on their way, and those release it by arriving.
+ */
+export function windowBudgetMessage(maxMiB: number, draftsHoldFiles: boolean): string {
+  return draftsHoldFiles
+    ? `Attachments can use up to ${maxMiB} MiB across conversations. Remove files or close a conversation first.`
+    : `Attachments can use up to ${maxMiB} MiB across conversations, and messages still being sent are using it. Try again once they have gone, or close a conversation.`
 }

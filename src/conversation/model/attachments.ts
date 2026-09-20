@@ -6,11 +6,21 @@ import type { MessageContent } from "./content"
  * `unreadable`: the bytes could not be read or hashed in this window.
  * `unsupported-image`: the gateway could not read this image format.
  * `too-large`: the gateway could not bring it under the selected model's limits.
+ * `image-input-unsupported`: the agent's model does not take images at all.
+ * `busy`: the gateway had no room for another upload just now; it will.
+ * `interrupted`: the transfer was cut off or timed out before it finished.
  * `unavailable`: the gateway or its storage could not be reached; trying again may work.
  * `rejected`: the gateway answered and refused these bytes for another reason.
  */
 export type UploadFailure =
-  "unreadable" | "unsupported-image" | "too-large" | "unavailable" | "rejected"
+  | "unreadable"
+  | "unsupported-image"
+  | "too-large"
+  | "image-input-unsupported"
+  | "busy"
+  | "interrupted"
+  | "unavailable"
+  | "rejected"
 
 /** The four encodings the gateway stores an image as, and so the four a message names. */
 export const STORED_IMAGE_TYPES = [
@@ -69,13 +79,20 @@ export type ImageReferencePart = { type: "image-reference" } & ImageReference
 
 /**
  * Preview budgets: what one window will hold. They bound drafts, not messages.
- * The per-file figure is also what the upload path takes, and it is the only
- * byte limit this window puts on a single file: how heavy an image may be for a
- * model is the gateway's rule, applied when it stores one.
+ * The per-file figure is also what the upload path takes — large enough for a
+ * camera RAW file — and it is the only byte limit this window puts on a single
+ * file: how heavy an image may be for a model is the gateway's rule, applied
+ * when it stores one. All of these are MiB, and the panel says "MiB".
  */
-export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
-export const MAX_DRAFT_ATTACHMENT_BYTES = 50 * 1024 * 1024
+export const MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024
+export const MAX_DRAFT_ATTACHMENT_BYTES = 128 * 1024 * 1024
 export const MAX_DRAFT_ATTACHMENTS = 20
+/**
+ * How many bytes of already-sent originals stay around to paint the transcript.
+ * Past it the oldest sent images fall back to their reference tile, so sending
+ * can never use up what attaching needs. One file of the largest size fits.
+ */
+export const MAX_SENT_PREVIEW_BYTES = 64 * 1024 * 1024
 
 /** Message rules, counted over stored references. The gateway enforces the same. */
 export const MAX_SEND_IMAGES = 10
@@ -98,6 +115,62 @@ export function validDraftAttachments(content: MessageContent): boolean {
     ) &&
     files.reduce((bytes, file) => bytes + file.size, 0) <= MAX_DRAFT_ATTACHMENT_BYTES
   )
+}
+
+/**
+ * Image formats a browser often reports with no type at all — most camera RAW
+ * extensions, and sometimes HEIC — by file extension. The gateway only needs to
+ * be told "this is an image"; it reads the real encoding from the bytes.
+ */
+const IMAGE_TYPE_BY_EXTENSION: Readonly<Record<string, string>> = {
+  heic: "image/heic",
+  heif: "image/heif",
+  avif: "image/avif",
+  jxl: "image/jxl",
+  psd: "image/vnd.adobe.photoshop",
+  tif: "image/tiff",
+  tiff: "image/tiff",
+  bmp: "image/bmp",
+  dng: "image/x-adobe-dng",
+  cr2: "image/x-canon-cr2",
+  cr3: "image/x-canon-cr3",
+  nef: "image/x-nikon-nef",
+  arw: "image/x-sony-arw",
+  raf: "image/x-fuji-raf",
+  orf: "image/x-olympus-orf",
+  rw2: "image/x-panasonic-rw2",
+  pef: "image/x-pentax-pef",
+  srw: "image/x-samsung-srw",
+}
+
+/**
+ * The media type to declare for an attached file. The browser's own answer
+ * wins whenever it gave one. When it gave none — empty, or the
+ * `application/octet-stream` that means the same — a known image extension
+ * decides, so a RAW file is an image here and not a file that cannot be sent.
+ */
+export function declaredMediaType(name: string, browserType: string): string {
+  const reported = browserType.trim().toLowerCase()
+  if (reported && reported !== "application/octet-stream") return reported
+  const extension = /\.([a-z0-9]+)$/i.exec(name.trim())?.[1]?.toLowerCase()
+  return (extension && IMAGE_TYPE_BY_EXTENSION[extension]) || "application/octet-stream"
+}
+
+/**
+ * Whether this window can paint the file itself. HEIC, RAW, TIFF and the like
+ * are images the gateway can read and a webview cannot, so their tiles are a
+ * labelled placeholder rather than a broken picture.
+ */
+export function previewableImage(mimeType: string): boolean {
+  return [
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/svg+xml",
+    "image/bmp",
+    "image/avif",
+  ].includes(mimeType)
 }
 
 /**
@@ -176,14 +249,18 @@ export function messageImages(
   return { ok: true, images }
 }
 
-/** Bytes as a person reads them: "812 KB", "3.4 MB". */
+/**
+ * Bytes as a person reads them: "812 KiB", "3.4 MiB". Binary units, named as
+ * such: every budget here is a power of two, and "MB" beside one would be a
+ * different number.
+ */
 export function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KiB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
 }
 
-/** What stands in for an image this window cannot show: "PNG image, 812 KB". */
+/** What stands in for an image this window cannot show: "PNG image, 812 KiB". */
 export function imageReferenceLabel(mimeType: StoredImageType, size: number): string {
   const kind = {
     "image/png": "PNG",

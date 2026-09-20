@@ -185,6 +185,8 @@ at 64 KiB, so bytes travel on their own HTTP request. Upload the original file,
 and send the reference the gateway gives back:
 
 ```ts
+import { asImageAttachment } from "@nessa/client"
+
 const bytes: Blob = await readImage()
 const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", await bytes.arrayBuffer()))
 const digest = `sha256:${[...hash].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`
@@ -196,49 +198,82 @@ const beginning = await client.attachments.begin(conversationId, {
   mimeType: "image/heic",
   size: bytes.size,
 })
-const image =
+const stored =
   beginning.state === "stored"
-    ? beginning.image
+    ? beginning.stored
     : await client.attachments.upload(beginning.ticket, { mimeType: "image/heic", bytes })
 
-await client.conversation.send(conversationId, "What is in this picture?", [image])
+// Storage keeps any file; a message names only images. This is that step.
+const image = asImageAttachment(stored)
+if (image) await client.conversation.send(conversationId, "What is in this picture?", [image])
 ```
 
 **Send the returned reference, never the digest you computed.** The gateway
 converts, scales, and compresses each image to what the selected model takes, so
-a HEIC, BMP, or very large PNG is stored as a smaller PNG or JPEG under a
-different digest, media type, and size. Those limits live on the gateway and
-nowhere in this client: the digest you compute only identifies the upload.
+a HEIC, camera RAW, BMP, or very large PNG is stored as a smaller PNG or JPEG
+under a different digest, media type, and size. Those limits live on the gateway
+and nowhere in this client: the digest you compute only identifies the upload.
 
-`begin` answers `stored` with that reference when the conversation already holds
-the bytes, and otherwise a ticket: secret, single-use, short-lived, and bound to
-exactly that digest, size, and conversation. Do not log it. The stored reference
-is present exactly when the state is `stored`, and the ticket exactly when it is
-`upload_required`; a reply that mixes them is refused. `upload` sends one
+Storage is media-agnostic and the client says so in its types. `begin` and
+`upload` answer with a `StoredAttachment` — `{ digest, mimeType, size }` of any
+lowercase media type up to the 64 MiB upload cap, which is the only byte limit
+this client puts on a single file. Whether a message may refer to it is the
+separate, explicit step above: `asImageAttachment(stored)` answers an
+`ImageAttachment` for one of the four image encodings (`IMAGE_ATTACHMENT_TYPES`:
+PNG, JPEG, GIF, WebP) within the protocol's 5242880-byte image bound, and
+`undefined` for anything else. That bound is the schema's, not a model's.
+
+`begin` answers `stored` when the conversation already holds the bytes, and
+otherwise a ticket: secret, single-use, short-lived, and bound to exactly that
+digest, size, and conversation. Do not log it. Every field of the reply is always
+present, with null for "not here"; the stored reference is non-null exactly when
+the state is `stored`, and the ticket exactly when it is `upload_required`. A
+reply that mixes them, or leaves a field out, is refused. `upload` sends one
 `PUT /attachments` to the gateway's own HTTP origin — the session URL's host and
 port with `ws`/`wss` read as `http`/`https` — carrying the ticket and nothing
 else: no cookies, and a redirect is an error rather than a second origin being
-handed the ticket. It resolves with the stored reference.
+handed the ticket.
 
-`begin` accepts any lowercase media type up to 20 MiB; that upload cap is the
-only byte limit this client puts on a single file. A message may refer to at
-most 10 images and 10 MiB of them in total, counted over the stored references.
-`send` and `steer` check this before anything is sent and throw `TypeError`;
-replies are held to the same bounds. Check `view.capabilities.imageInput` before
-offering images: it is `false` until an agent has been opened for the
-conversation and whenever that agent advertised no image input.
+A message may refer to at most 10 images and 10 MiB of them in total, counted
+over the stored references. `send` and `steer` check this and the image bound
+before anything is sent and throw `TypeError`; replies are held to the same
+bounds. Check `view.capabilities.imageInput` before offering images: it is
+`false` until an agent has been opened for the conversation and whenever that
+agent advertised no image input.
 
-Staging failures are a `NessaAttachmentError` whose `code` is one of
-`ticket_invalid` (unknown, expired, or already used), `size_mismatch`,
-`digest_mismatch`, `unsupported_image` (not an image format the gateway can
-read), `image_too_large` (it could not be brought under the model's limits),
-`storage_unavailable`, `audit_unavailable`, `begin_refused` (the gateway declined
-to issue a ticket; the RPC error is the `cause`), `unreachable` (no answer
-arrived), or `unexpected_response` — which includes a success whose stored
-reference is malformed. Nothing is retried for you. A ticket is spent by its
-upload whether or not the upload succeeded, so to try again, begin again: bytes
-that did arrive answer `stored`. A retried `send` re-sends the same references,
-so one execution ID always names one message.
+Staging failures are a `NessaAttachmentError` with a `code`:
+
+| `code` | Meaning | Ticket afterwards |
+| --- | --- | --- |
+| `temporarily_unavailable` | Too many uploads at once (503). | **Not spent**: try the same ticket again shortly. |
+| `ticket_invalid` | Unknown, expired, or already used (401). | Spent; begin again. |
+| `size_mismatch`, `digest_mismatch` | Not the bytes the ticket was issued for (400, 422). | Spent. |
+| `upload_interrupted` | The body stopped arriving (400). | Spent. |
+| `upload_timeout` | The transfer outlived the gateway's deadline (408), or no answer came within this client's own three-minute deadline (then `status` is undefined). | Spent, or unknown. |
+| `unsupported_image` | Not an image format the gateway can read (415). | Spent. |
+| `image_too_large` | It could not be brought under the model's limits (413). | Spent. |
+| `image_input_unsupported` | The agent's model takes no images. | Spent. |
+| `storage_unavailable`, `audit_unavailable` | The gateway could not keep or record it (503). | Spent. |
+| `begin_refused` | The gateway declined to issue a ticket. `refusal` is its own reason: `invalid_request`, `conversation_not_found`, `attachment_capacity`, `attachment_storage_unavailable` (or `storage_unavailable`), `audit_unavailable`, `temporarily_unavailable`, `agent_not_configured`, or `unexpected` for one this client was not taught. `attachment_capacity` and `temporarily_unavailable` pass with time. The RPC error is the `cause`. | None issued. |
+| `aborted` | Your `signal` aborted the upload. | Unknown. |
+| `unreachable` | No answer arrived from either step. | Unknown. |
+| `unexpected_response` | An answer this client does not recognise — a code it was not taught, or a success whose stored reference is malformed. | Unknown. |
+
+Nothing is retried for you. Except after `temporarily_unavailable`, to try again
+begin again: bytes that did arrive answer `stored`. A code the gateway adds
+later surfaces as `unexpected_response` (or `refusal: "unexpected"`) until this
+list is taught it; it is never passed through as if known.
+
+A failed `send` or `steer` is a `NessaConversationMutationError`. When the
+gateway refused the message before admitting it, `uncertain` is `false` and
+`rejection` names why: `invalid_request`, `agent_not_configured`,
+`image_input_unsupported`, `attachment_not_found` (a named image is not held by
+the conversation — never uploaded into it, expired, or released when the
+conversation was closed), `attachment_unavailable` (held but unreadable),
+`conversation_not_found`, or `conversation_capacity`. After
+`attachment_not_found` the reference is dead: upload the bytes again and send
+the new one. Any other failure leaves admission uncertain. A retried `send`
+re-sends the same references, so one execution ID always names one message.
 
 Views echo each message's and each waiting input's `attachments` as references.
 This client does not read image bytes back from the gateway.

@@ -12,6 +12,7 @@ export interface ConversationGateway {
   attachFiles(tabs: LocalTabs, files: FileAttachment[], conversationId: string): LocalTabs
   removeFile(tabs: LocalTabs, id: string): LocalTabs
   changeUpload(tabs: LocalTabs, change: UploadChange): LocalTabs
+  forgetStoredUploads(tabs: LocalTabs, conversationId: string): LocalTabs
   openConversation(tabs: LocalTabs): LocalTabs
   closeConversation(tabs: LocalTabs, conversationId: string): LocalTabs
   setDraft(tabs: LocalTabs, input: { draft: MessageContent; id?: string }): LocalTabs
@@ -61,16 +62,48 @@ export class ConversationUnavailableError extends Error {
   }
 }
 
+/**
+ * Why the gateway refused a message before admitting it. Each is the gateway's
+ * own typed answer, carried here so nothing downstream reads a message string.
+ * `attachment-not-found` and `attachment-unavailable` mean a named image is no
+ * longer there to be sent: its reference is dead and its bytes must go up again.
+ */
+export type SubmissionRefusal =
+  | "image-input-unsupported"
+  | "attachment-not-found"
+  | "attachment-unavailable"
+  | "conversation-not-found"
+  | "conversation-capacity"
+  | "agent-not-configured"
+  | "invalid-request"
+
+/**
+ * The gateway answered a send or steer with a refusal it decides before
+ * admission. Unlike a lost acknowledgement, this proves the message was not
+ * taken: the draft can come back, and nothing is left to retry as-is.
+ */
+export class SubmissionRefusedError extends Error {
+  constructor(
+    readonly reason: SubmissionRefusal,
+    cause?: unknown,
+  ) {
+    super(`The gateway refused this message (${reason}).`, { cause })
+    this.name = "SubmissionRefusedError"
+  }
+}
+
 /** The bytes being uploaded: their SHA-256, declared media type, and length. */
 export type UploadedFile = { digest: string; mimeType: string; size: number }
 
 /**
  * The gateway did not take an image's bytes, and why, as something to branch on
  * — never by reading the message. `unavailable` (no connection, no answer,
- * storage down) may succeed if tried again. `unsupported-image` and `too-large`
- * are the gateway's verdict on this image: it could not read the format, or
- * could not bring it under the selected model's limits. `rejected` is any other
- * refusal of these bytes.
+ * storage down), `busy` (no room for another upload just now), and
+ * `interrupted` (cut off or timed out) may succeed if tried again.
+ * `unsupported-image`, `too-large`, and `image-input-unsupported` are the
+ * gateway's verdict on this image or this agent: it could not read the format,
+ * could not bring it under the selected model's limits, or the model takes no
+ * images. `rejected` is any other refusal of these bytes.
  */
 export class AttachmentStagingError extends Error {
   constructor(

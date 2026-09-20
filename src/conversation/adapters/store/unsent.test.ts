@@ -38,7 +38,10 @@ it("client loss after cached creation is known unsent rather than an uncertain a
   let client: NessaClient | null = {
     conversation: { create: async () => ({ conversationId: "server" }) },
   } as unknown as NessaClient
-  const effects = gatewayEffects(() => client)
+  const effects = gatewayEffects(
+    () => client,
+    () => Promise.reject(new Error("no wait expected")),
+  )
   await effects.create("server")
   client = null
   const store = makeStore(createDependencies({ conversation: effects }))
@@ -106,7 +109,10 @@ it("a reconnecting client rejects locally without attempting a message RPC", asy
     connectionState: { status: "reconnecting" },
     conversation: { send },
   } as unknown as NessaClient
-  const effects = gatewayEffects(() => client)
+  const effects = gatewayEffects(
+    () => client,
+    () => Promise.reject(new Error("no wait expected")),
+  )
   await expect(
     Promise.resolve().then(() =>
       effects.send({

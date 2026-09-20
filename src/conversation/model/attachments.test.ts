@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest"
 import {
+  declaredMediaType,
   humanSize,
   imageReferenceLabel,
   isImageFile,
   messageImages,
   messageLabel,
+  previewableImage,
   validDraftAttachments,
   validImageReference,
   MAX_ATTACHMENT_BYTES,
+  MAX_DRAFT_ATTACHMENT_BYTES,
   MAX_SEND_IMAGES,
   MAX_SEND_TOTAL_IMAGE_BYTES,
   type FileAttachment,
@@ -225,13 +228,86 @@ describe("content read back by reference", () => {
   })
 
   it("labels what it cannot show, and names a message that has no text", () => {
-    expect(imageReferenceLabel("image/webp", 812 * 1024)).toBe("WebP image, 812 KB")
+    // Binary units, named as binary units: 812 * 1024 bytes is 812 KiB, not 812 KB.
+    expect(imageReferenceLabel("image/webp", 812 * 1024)).toBe("WebP image, 812 KiB")
     expect(humanSize(512)).toBe("512 B")
-    expect(humanSize(3.4 * 1024 * 1024)).toBe("3.4 MB")
+    expect(humanSize(3.4 * 1024 * 1024)).toBe("3.4 MiB")
     expect(messageLabel("  hello ", 2, "a.png")).toBe("hello")
     expect(messageLabel(" ", 1, "finder.png")).toBe("finder.png")
     expect(messageLabel("", 1)).toBe("1 image")
     expect(messageLabel("", 3, "a.png")).toBe("3 images")
     expect(messageLabel("", 0)).toBe("")
+  })
+})
+
+describe("a file the browser could not name", () => {
+  it.each([
+    ["holiday.heic", "image/heic"],
+    ["holiday.HEIF", "image/heif"],
+    ["scan.avif", "image/avif"],
+    ["render.jxl", "image/jxl"],
+    ["poster.psd", "image/vnd.adobe.photoshop"],
+    ["scan.tif", "image/tiff"],
+    ["scan.tiff", "image/tiff"],
+    ["icon.bmp", "image/bmp"],
+    ["IMG_0001.DNG", "image/x-adobe-dng"],
+    ["IMG_0002.cr2", "image/x-canon-cr2"],
+    ["IMG_0003.CR3", "image/x-canon-cr3"],
+    ["DSC_0004.nef", "image/x-nikon-nef"],
+    ["DSC0005.arw", "image/x-sony-arw"],
+    ["DSCF0006.raf", "image/x-fuji-raf"],
+    ["P0000007.orf", "image/x-olympus-orf"],
+    ["P0000008.rw2", "image/x-panasonic-rw2"],
+    ["IMGP0009.pef", "image/x-pentax-pef"],
+    ["SAM_0010.srw", "image/x-samsung-srw"],
+  ])("declares %s as %s, which makes it an image to upload", (name, type) => {
+    for (const reported of ["", "application/octet-stream", " "]) {
+      expect(declaredMediaType(name, reported)).toBe(type)
+      expect(isImageFile(declaredMediaType(name, reported))).toBe(true)
+    }
+    // Every declared type is one the protocol's media-type token pattern accepts.
+    expect(type).toMatch(/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/)
+  })
+
+  it("believes the browser whenever it did give a type", () => {
+    expect(declaredMediaType("holiday.heic", "image/jpeg")).toBe("image/jpeg")
+    expect(declaredMediaType("notes.cr3", "text/plain")).toBe("text/plain")
+    expect(declaredMediaType("photo.PNG", "IMAGE/PNG")).toBe("image/png")
+  })
+
+  it("does not call something an image on the strength of an unknown or missing extension", () => {
+    for (const name of [
+      "notes.bin",
+      "archive.tar.gz",
+      "README",
+      "heic",
+      ".",
+      "trailing.",
+      "",
+    ])
+      expect(declaredMediaType(name, "")).toBe("application/octet-stream")
+  })
+
+  it("knows which images a webview can paint, so the rest get a labelled tile", () => {
+    for (const type of [
+      "image/png",
+      "image/jpeg",
+      "image/gif",
+      "image/webp",
+      "image/svg+xml",
+    ])
+      expect(previewableImage(type)).toBe(true)
+    for (const type of [
+      "image/heic",
+      "image/x-canon-cr3",
+      "image/tiff",
+      "application/pdf",
+    ])
+      expect(previewableImage(type)).toBe(false)
+  })
+
+  it("lets a camera RAW file be attached at all: 64 MiB a file, 128 MiB a draft", () => {
+    expect(MAX_ATTACHMENT_BYTES).toBe(64 * 1024 * 1024)
+    expect(MAX_DRAFT_ATTACHMENT_BYTES).toBe(128 * 1024 * 1024)
   })
 })

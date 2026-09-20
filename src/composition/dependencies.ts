@@ -42,7 +42,11 @@ export function createDependencies(
       options.conversation ??
       (config.conversation.backend === "scenario"
         ? scenarioEffects(config.conversation.scenario)
-        : gatewayEffects(() => session.get())),
+        : gatewayEffects(
+            () => session.get(),
+            // The real clock for backing off a busy upload route; tests pass theirs.
+            (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+          )),
   }
 }
 export type AppDependencies = ReturnType<typeof createDependencies>

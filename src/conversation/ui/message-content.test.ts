@@ -111,11 +111,20 @@ describe("a sent turn's images", () => {
     const html = render([
       { type: "image-reference", digest, mimeType: "image/jpeg", size: 812 * 1024 },
     ])
-    expect(html).toContain("JPEG image, 812 KB")
+    expect(html).toContain("JPEG image, 812 KiB")
     expect(html).toContain("data-image-reference")
     expect(html).not.toContain("<img")
     // The digest names bytes on the gateway; it is not something to show anybody.
     expect(html).not.toContain(digest)
+  })
+
+  it("paints a labelled tile, not a broken picture, for an original the webview cannot show", () => {
+    const html = render([
+      { ...local, name: "IMG_0042.CR3", mimeType: "image/x-canon-cr3" },
+    ])
+    expect(html).not.toContain("<img")
+    expect(html).toContain("IMG_0042.CR3")
+    expect(html).toContain('aria-label="1 image"')
   })
 
   it("keeps the text and shows every image after it, local and referenced alike", () => {

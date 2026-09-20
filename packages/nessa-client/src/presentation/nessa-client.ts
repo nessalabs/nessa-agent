@@ -3,7 +3,10 @@ import type { ManagedSession, ConnectionState } from "../application/managed-ses
 import type { EventHandler, NessaClientEvents } from "../application/events.js"
 import type { NessaClientConnectOptions } from "../application/options.js"
 import { establishManagedSession } from "../composition/root.js"
-import type { AttachmentUploadTransport } from "../application/attachment-upload.js"
+import type {
+  AttachmentUploadTransport,
+  UploadTimer,
+} from "../application/attachment-upload.js"
 import { createAttachmentApi, type AttachmentApi } from "./attachment-api.js"
 import { createConversationApi, type ConversationApi } from "./conversation-api.js"
 import { createServerApi, type ServerApi } from "./server-api.js"
@@ -65,10 +68,11 @@ export class NessaClient {
     readonly profile: "product",
     newRequestId: () => string,
     upload: AttachmentUploadTransport,
+    uploadTimer: UploadTimer,
   ) {
     this.server = createServerApi(wire)
     this.conversation = createConversationApi(wire, newRequestId)
-    this.attachments = createAttachmentApi(wire, upload, newRequestId)
+    this.attachments = createAttachmentApi(wire, upload, newRequestId, uploadTimer)
     this.credentials = createCredentialApi(wire, newRequestId)
     this.auth = createAuthApi(wire)
   }
@@ -81,11 +85,9 @@ export class NessaClient {
    * @throws StageConfigError for invalid options, NessaProtocolCompatibilityError for
    * incompatible versions, or an RPC/transport error when setup fails. */
   static async connect(options: NessaClientConnectOptions): Promise<NessaClient> {
-    const { managed, profile, newRequestId, upload } = await establishManagedSession(
-      options,
-      NessaClient.defaultUrl,
-    )
-    return new NessaClient(managed, profile, newRequestId, upload)
+    const { managed, profile, newRequestId, upload, uploadTimer } =
+      await establishManagedSession(options, NessaClient.defaultUrl)
+    return new NessaClient(managed, profile, newRequestId, upload, uploadTimer)
   }
 
   /** Current authenticated handshake snapshot; available only while connected. */

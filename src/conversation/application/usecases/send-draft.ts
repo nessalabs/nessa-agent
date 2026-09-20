@@ -3,11 +3,14 @@ import {
   messageImages,
   messageLabel,
   MAX_SEND_IMAGES,
+  MAX_SEND_TOTAL_IMAGE_BYTES,
   type ImageRefusal,
   type MessageContent,
   type UserTurn,
 } from "../../model"
 import { findConversation, replaceConversation, takeTurnId } from "../internal/ids"
+import type { SubmissionRefusal } from "../ports"
+import { notUploaded } from "./release-uploads"
 import type { LocalTabs } from "../local-tabs"
 
 /**
@@ -78,17 +81,53 @@ export function imageRefusalMessage(refusal: ImageRefusal): string {
     case "too-many-images":
       return `A message carries up to ${MAX_SEND_IMAGES} images. Remove some to send.`
     case "images-too-large":
-      return "A message carries up to 10 MB of images in total. Remove some to send."
+      return `A message carries up to ${MAX_SEND_TOTAL_IMAGE_BYTES / (1024 * 1024)} MiB of images in total, as the gateway stores them. Remove some to send.`
   }
 }
 
-/** A transport failure is not proof that admission failed; retain IDs for explicit retry. */
+/**
+ * What to tell somebody whose message the gateway refused before taking it.
+ * One sentence per refusal, chosen by its typed reason. `agent-not-configured`
+ * and `invalid-request` answer undefined: the client's own message for the
+ * first names the remedy, and the second has nothing better to say than it did.
+ */
+export function submissionRefusalMessage(reason: SubmissionRefusal): string | undefined {
+  switch (reason) {
+    case "image-input-unsupported":
+      return "This agent does not take images, so the message was not sent. It is back in the draft: remove the images to send it."
+    case "attachment-not-found":
+      return "The gateway no longer holds this message's images — stopping a conversation releases them. The message is back in the draft and its images are uploading again; send once they finish."
+    case "attachment-unavailable":
+      return "The gateway could not read this message's images, so it was not sent. It is back in the draft and its images are uploading again; send once they finish."
+    case "conversation-not-found":
+      return "The gateway no longer has this conversation, so the message was not sent. It is back in the draft."
+    case "conversation-capacity":
+      return "The gateway has too many conversations open to take this one. The message is back in the draft; close a conversation or try again shortly."
+    case "agent-not-configured":
+    case "invalid-request":
+      return undefined
+  }
+}
+
+/** Whether a refusal means the message's stored images are gone and must be uploaded again. */
+export function refusalReleasesImages(reason: SubmissionRefusal): boolean {
+  return reason === "attachment-not-found" || reason === "attachment-unavailable"
+}
+
+/**
+ * A transport failure is not proof that admission failed; retain IDs for explicit retry.
+ *
+ * `reupload` is for a refusal that says the turn's stored images no longer
+ * exist on the gateway. The recovered draft then holds them as not started, so
+ * the same dead reference is not offered again and the panel uploads them anew.
+ */
 export function failSend(
   tabs: LocalTabs,
   conversationId: string,
   executionId: string,
   detail: string,
   uncertain = true,
+  reupload = false,
 ): LocalTabs {
   const conv = findConversation(tabs, conversationId)
   if (!conv) return tabs
@@ -100,7 +139,9 @@ export function failSend(
   )
   const recoveredDraft =
     !uncertain && conv.draft.length === 0 && failedTurn?.from === "user"
-      ? failedTurn.content
+      ? reupload
+        ? notUploaded(failedTurn.content)
+        : failedTurn.content
       : conv.draft
   const otherWork =
     conv.remote?.running ||

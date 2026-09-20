@@ -8,8 +8,12 @@
 import { describe, expect, it, vi } from "vitest"
 import {
   attachmentNotice,
+  MAX_UPLOADS_IN_FLIGHT,
+  nextUploads,
   uploadImage,
+  windowBudgetMessage,
   worthRetrying,
+  type NoticedFile,
   type UploadPorts,
 } from "./upload-image"
 
@@ -123,7 +127,7 @@ it("fails as unreadable, and never rejects, when hashing throws", async () => {
 })
 
 describe("what the composer says about a draft's files", () => {
-  const stored = { name: "a.png", image: true, upload: { status: "stored" } }
+  const stored: NoticedFile = { name: "a.png", image: true, upload: { status: "stored" } }
   it("says nothing when there is nothing to say", () => {
     expect(attachmentNotice({ files: [], imageInput: false })).toBeNull()
     expect(attachmentNotice({ files: [stored], imageInput: true })).toBeNull()
@@ -141,6 +145,14 @@ describe("what the composer says about a draft's files", () => {
     ["unreadable", /could not be read/, /Retry/],
     ["unavailable", /gateway could not be reached/, /Retry/],
     ["rejected", /gateway refused it/, /Retry/],
+    // Honest about what happened: not "refused", and not "could not be reached".
+    ["busy", /busy with other uploads/, /Retry/],
+    ["interrupted", /cut off or timed out/, /Retry/],
+    [
+      "image-input-unsupported",
+      /this agent's model does not take images/,
+      /Remove it to send/,
+    ],
     // The gateway's verdict on the image itself: the same bytes will fare the same.
     ["unsupported-image", /could not read this image format/, /Remove it to send/],
     ["too-large", /could not be brought under this model's limits/, /Remove it to send/],
@@ -163,6 +175,9 @@ describe("what the composer says about a draft's files", () => {
       "unreadable",
       "unsupported-image",
       "too-large",
+      "image-input-unsupported",
+      "busy",
+      "interrupted",
       "unavailable",
       "rejected",
     ] as const)
@@ -184,5 +199,37 @@ describe("what the composer says about a draft's files", () => {
     expect(attachmentNotice({ files: [stored], imageInput: false })).toMatch(
       /does not take images/,
     )
+  })
+})
+
+describe("how many uploads run at once", () => {
+  const files = ["a", "b", "c", "d", "e", "f"].map((id) => ({ id }))
+
+  it("starts three of six dropped images and leaves the rest waiting", () => {
+    expect(MAX_UPLOADS_IN_FLIGHT).toBe(3)
+    expect(nextUploads(files, new Set())).toEqual([{ id: "a" }, { id: "b" }, { id: "c" }])
+  })
+
+  it("starts the next one, in order, each time a slot frees", () => {
+    const waiting = files.slice(3)
+    expect(nextUploads(waiting, new Set(["a", "b", "c"]))).toEqual([])
+    expect(nextUploads(waiting, new Set(["a", "c"]))).toEqual([{ id: "d" }])
+    expect(nextUploads(waiting, new Set(["c"]))).toEqual([{ id: "d" }, { id: "e" }])
+    expect(nextUploads(waiting, new Set())).toEqual(waiting)
+  })
+
+  it("never starts a file that is already in flight, even if it still looks not started", () => {
+    // The snapshot is older than the call that started it.
+    expect(nextUploads(files.slice(0, 2), new Set(["a"]))).toEqual([{ id: "b" }])
+    expect(nextUploads(files, new Set(["a", "b", "c", "x"]))).toEqual([])
+  })
+})
+
+describe("why nothing more can be attached", () => {
+  it("advises removing files only when there are files to remove", () => {
+    expect(windowBudgetMessage(256, true)).toMatch(/256 MiB.*Remove files/)
+    const empty = windowBudgetMessage(256, false)
+    expect(empty).toMatch(/256 MiB.*messages still being sent/)
+    expect(empty).not.toMatch(/Remove files/)
   })
 })

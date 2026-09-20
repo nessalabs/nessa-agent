@@ -1,20 +1,34 @@
 import type { ImageAttachment } from "../generated/product.js"
 
 /**
- * What one message may carry. These are rules of the message, not of any model:
- * how heavy a single image may be is the gateway's to decide when it stores one,
- * so nothing here bounds an image except the total it counts towards.
+ * Bounds the protocol schema puts on these values. They are the contract's, not
+ * any model's: what a particular model takes is the gateway's knowledge, applied
+ * when it stores an upload, and is written nowhere in this package.
  */
+/** `ImageAttachment.size` maximum. */
+export const MAX_IMAGE_ATTACHMENT_BYTES = 5_242_880
+/** `attachments` maxItems on send, steer, messages, and pending input. */
 export const MAX_MESSAGE_IMAGES = 10
-// Ten, not twenty: the agent receives base64, a third larger, in one 16 MiB frame.
+/** Total image bytes one message may refer to: base64 of it must fit one 16 MiB agent frame. */
 export const MAX_MESSAGE_IMAGE_BYTES = 10 * 1024 * 1024
-/** What the upload path takes, whatever a message may later refer to. */
-export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+/** `AttachmentBeginParams.size` maximum: what the upload path takes, whatever it becomes. */
+export const MAX_UPLOAD_BYTES = 67_108_864
+
+/**
+ * The four encodings a message's image may be in — `ImageAttachment.mimeType`.
+ * Exported once from this package. Storage is wider than this: see
+ * {@link StoredAttachment}.
+ */
+export const IMAGE_ATTACHMENT_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+] as const
 
 const digestPattern = /^sha256:[0-9a-f]{64}$/
 const ticketPattern = /^[0-9a-f]{64}$/
 const mediaTypePattern = /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/
-const imageTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"]
 
 export function validDigest(value: unknown): value is string {
   return typeof value === "string" && digestPattern.test(value)
@@ -26,20 +40,65 @@ export function validSize(value: unknown, max: number): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= max
 }
 
-/** Why a value is not one stored image reference, or undefined when it is. */
-export function imageAttachmentProblem(item: unknown): string | undefined {
+/**
+ * What a conversation holds for an upload: any media type the upload path
+ * takes. Storage is media-agnostic; whether a message may refer to it is a
+ * separate question, answered by {@link asImageAttachment}.
+ */
+export type StoredAttachment = {
+  /** `sha256:` and 64 lowercase hexadecimal digits, over the stored bytes. */
+  digest: string
+  /** Lowercase media type without parameters. */
+  mimeType: string
+  /** Stored length in bytes. */
+  size: number
+}
+
+function exactReference(item: unknown): Record<string, unknown> | string {
   if (!item || typeof item !== "object" || Array.isArray(item))
     return "an attachment must be an object"
   if (Object.keys(item).some((key) => !["digest", "mimeType", "size"].includes(key)))
     return "an attachment has unknown fields"
-  const { digest, mimeType, size } = item as Record<string, unknown>
-  if (!validDigest(digest))
+  return item as Record<string, unknown>
+}
+
+/** Why a value is not a stored reference of any media type, or undefined when it is. */
+export function storedAttachmentProblem(item: unknown): string | undefined {
+  const reference = exactReference(item)
+  if (typeof reference === "string") return reference
+  if (!validDigest(reference.digest))
     return "an attachment digest must be sha256: and 64 lowercase hexadecimal digits"
-  if (typeof mimeType !== "string" || !imageTypes.includes(mimeType))
-    return "an attachment must be a PNG, JPEG, GIF, or WebP image"
-  if (!validSize(size, MAX_MESSAGE_IMAGE_BYTES))
-    return `an image must contain 1-${MAX_MESSAGE_IMAGE_BYTES} bytes`
+  if (!validMediaType(reference.mimeType))
+    return "an attachment media type must be lowercase, without parameters"
+  if (!validSize(reference.size, MAX_UPLOAD_BYTES))
+    return `an attachment must contain 1-${MAX_UPLOAD_BYTES} bytes`
   return undefined
+}
+
+/** Why a value is not one image a message may refer to, or undefined when it is. */
+export function imageAttachmentProblem(item: unknown): string | undefined {
+  const reference = exactReference(item)
+  if (typeof reference === "string") return reference
+  if (!validDigest(reference.digest))
+    return "an attachment digest must be sha256: and 64 lowercase hexadecimal digits"
+  if (!(IMAGE_ATTACHMENT_TYPES as readonly unknown[]).includes(reference.mimeType))
+    return "an attachment must be a PNG, JPEG, GIF, or WebP image"
+  if (!validSize(reference.size, MAX_IMAGE_ATTACHMENT_BYTES))
+    return `an image must contain 1-${MAX_IMAGE_ATTACHMENT_BYTES} bytes`
+  return undefined
+}
+
+/**
+ * The explicit step from "the conversation holds this" to "a message may name
+ * it": the same reference as an {@link ImageAttachment} when it is one of the
+ * four image encodings within the protocol's image bound, otherwise undefined.
+ * A stored PDF is a valid upload and no image.
+ */
+export function asImageAttachment(stored: StoredAttachment): ImageAttachment | undefined {
+  const image = { digest: stored.digest, mimeType: stored.mimeType, size: stored.size }
+  return imageAttachmentProblem(image) === undefined
+    ? (image as ImageAttachment)
+    : undefined
 }
 
 /**
@@ -73,26 +132,38 @@ export function imageAttachments(value: unknown, where: string): ImageAttachment
 
 /**
  * The reference the gateway stored an upload as. It may name different bytes
- * from the ones sent — the gateway normalizes images — so it is the only thing
- * a message may refer to, and a malformed one is no reference at all.
+ * from the ones sent — the gateway normalizes images — and a malformed one is no
+ * reference at all.
  */
-export function storedAttachment(value: unknown): ImageAttachment {
-  const problem = imageAttachmentProblem(value)
+export function storedAttachment(value: unknown): StoredAttachment {
+  const problem = storedAttachmentProblem(value)
   if (problem) throw new Error(`Invalid stored attachment: ${problem}`)
-  const { digest, mimeType, size } = value as ImageAttachment
+  const { digest, mimeType, size } = value as StoredAttachment
   return { digest, mimeType, size }
 }
 
 /** What `attachment.begin` answered, with each state carrying only what it means. */
 export type AttachmentBeginReply =
-  | { state: "stored"; image: ImageAttachment }
+  | { state: "stored"; stored: StoredAttachment }
   | { state: "upload_required"; ticket: string; expiresAtMs: number }
+
+const beginKeys = [
+  "requestId",
+  "state",
+  "ticket",
+  "expiresAtMs",
+  "digest",
+  "mimeType",
+  "size",
+]
 
 /**
  * The answer to `attachment.begin`, with its fields checked against each other.
  *
- * The stored reference is present exactly when the state is `stored`, and the
- * ticket and its expiry exactly when it is `upload_required`. Each of the other
+ * Every field is always present; "not here" is written as null, and a reply
+ * that leaves one out is a different contract and is refused. The stored
+ * reference is non-null exactly when the state is `stored`, and the ticket and
+ * its expiry exactly when it is `upload_required`. Each of the other
  * combinations — stored with a ticket, stored with no reference, a ticket owed
  * and absent, a ticket beside a reference — is built from individually valid
  * fields and describes nothing that can have happened, so it is refused rather
@@ -102,29 +173,19 @@ export function attachmentBegin(value: unknown, requestId: string): AttachmentBe
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("Invalid attachment response")
   const item = value as Record<string, unknown>
-  const allowed = [
-    "requestId",
-    "state",
-    "ticket",
-    "expiresAtMs",
-    "digest",
-    "mimeType",
-    "size",
-  ]
-  if (Object.keys(item).some((key) => !allowed.includes(key)))
+  if (Object.keys(item).some((key) => !beginKeys.includes(key)))
     throw new Error("Attachment response has unknown fields")
+  if (beginKeys.some((key) => item[key] === undefined))
+    throw new Error("Attachment response is missing fields")
   if (item.requestId !== requestId)
     throw new Error("Attachment response belongs to another action")
-  // The contract writes "not here" as null. An absent field says the same and
-  // is read the same; what matters is which fields carry a value.
-  const absent = (key: string) => item[key] === null || item[key] === undefined
-  const noTicket = absent("ticket") && absent("expiresAtMs")
-  const noReference = absent("digest") && absent("mimeType") && absent("size")
+  const noTicket = item.ticket === null && item.expiresAtMs === null
+  const noReference = item.digest === null && item.mimeType === null && item.size === null
   if (item.state === "stored") {
     if (!noTicket) throw new Error("Stored attachment response carries an upload ticket")
     return {
       state: "stored",
-      image: storedAttachment({
+      stored: storedAttachment({
         digest: item.digest,
         mimeType: item.mimeType,
         size: item.size,

@@ -2,7 +2,7 @@
  * The digest an upload is identified by: `sha256:` and 64 lowercase hex digits.
  *
  * Reads the whole Blob into memory once. That is bounded by what may be
- * attached at all — one file is at most the 20 MB upload cap — and the copy is
+ * attached at all — one file is at most the 64 MiB upload cap — and the copy is
  * released as soon as the hash is taken. It is not the name a message uses: the
  * gateway answers an upload with the reference it stored, and that is.
  */

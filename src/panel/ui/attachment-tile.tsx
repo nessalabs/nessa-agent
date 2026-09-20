@@ -1,6 +1,6 @@
 import { LoaderCircle, RotateCw, X } from "lucide-react"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
-import type { FileAttachment } from "../../conversation"
+import { isImageFile, previewableImage, type FileAttachment } from "../../conversation"
 import { uploadFailureText, worthRetrying } from "../application/upload-image"
 import { AttachmentIcon } from "./attachment-icon"
 
@@ -12,8 +12,8 @@ const cornerButton =
  * about it. Renders; the hooks above it decide.
  *
  * The upload state is on the tile because that is where somebody is looking
- * when they wonder why send is waiting. An upload in flight marks the tile busy
- * and dims it; a failed one says why, and offers the retry right there when
+ * when they wonder why send is waiting. An image waiting its turn to upload
+ * says so, an upload in flight marks the tile busy, and both dim it; a failed one says why, and offers the retry right there when
  * trying the same bytes again could end differently — not when the gateway has
  * said it cannot read or fit this image. Remove stays available throughout:
  * taking a tile away mid-upload is allowed, and the upload finding nothing to
@@ -31,6 +31,8 @@ export function AttachmentTile({
   onRetry: () => void
 }) {
   const uploading = file.upload.status === "uploading"
+  // Only a few uploads run at once; an image that has not started is in line.
+  const waiting = file.upload.status === "not-started" && isImageFile(file.mimeType)
   const failure = file.upload.status === "failed" ? file.upload.reason : undefined
   return (
     <span
@@ -40,13 +42,27 @@ export function AttachmentTile({
     >
       <ChatAttachmentTile
         label={file.name}
-        imageSrc={file.mimeType.startsWith("image/") ? file.previewUrl : undefined}
+        // HEIC, RAW and the like are images the gateway reads and a webview
+        // cannot: a named icon tile, not a broken picture.
+        imageSrc={previewableImage(file.mimeType) ? file.previewUrl : undefined}
         icon={<AttachmentIcon name={file.name} mimeType={file.mimeType} />}
         onOpen={onOpen}
         className={
-          uploading ? "opacity-60" : failure ? "ring-2 ring-destructive" : undefined
+          uploading || waiting
+            ? "opacity-60"
+            : failure
+              ? "ring-2 ring-destructive"
+              : undefined
         }
       />
+      {waiting && (
+        <span
+          role="status"
+          aria-label={`${file.name} is waiting to upload`}
+          title="Waiting to upload"
+          className="pointer-events-none absolute inset-0"
+        />
+      )}
       {uploading && (
         <span
           role="status"

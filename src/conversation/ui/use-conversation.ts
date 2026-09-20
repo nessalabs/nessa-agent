@@ -9,7 +9,7 @@ import {
   removeFile,
   uploadChanged,
   stageAttachment,
-  closeConversation,
+  closeTab,
   openConversation,
   sendDraft,
   setActive,
@@ -92,11 +92,12 @@ export function useConversation() {
      * back rather than by the store being read a second time.
      */
     submit: async (content: MessageContent): Promise<boolean> => {
-      if (!gatewayAvailable) return false
       const finished = await dispatch(
         sendDraft({
           content,
           id: active.id,
+          // Not an early return here: `sendDraft` declines it with a reason.
+          connected: gatewayAvailable,
           steering: deliveryMode === "steer" && active.phase !== "idle",
         }),
       )
@@ -106,7 +107,9 @@ export function useConversation() {
     openConversation: () => {
       dispatch(openConversation())
     },
-    closeConversation: (id: string) => dispatch(closeConversation(id)),
+    closeConversation: (id: string) => {
+      void dispatch(closeTab(id))
+    },
     setDraft: (draft: MessageContent) => dispatch(setDraft({ draft })),
     stopGenerating: () => dispatch(stopGenerating()),
   }

@@ -15,14 +15,13 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import type { ChatComposerEditorHandle } from "@nessa-ui/react/chat-composer-editor"
 
 // The conversation barrel also exports its components, which need the whole UI
-// package resolved. The composer takes two pure functions from it.
-vi.mock("../../conversation", () => import("../../conversation/ui/composer-content"))
+// package resolved. Its `testing` entry is the same pure functions with no
+// component among them, so the barrel is mocked with that: one definition.
+vi.mock("../../conversation", () => import("../../conversation/testing"))
 
 import { createDependencies } from "../../composition/dependencies"
-import { useConversation } from "../../conversation/ui/use-conversation"
-import { scenarioEffects } from "../../conversation/adapters/scenario/effects"
-import { attachFiles } from "../../conversation/adapters/store/slice"
-import { sessionReady } from "../../session/adapters/store/slice"
+import { attachFiles, scenarioEffects, useConversation } from "../../conversation/testing"
+import { sessionReady } from "../../session/testing"
 import { makeStore } from "../../store"
 import { useComposer } from "./use-composer"
 
@@ -45,9 +44,15 @@ const editor: ChatComposerEditorHandle = {
   getContent: () => ({ text: "hello", parts: [{ type: "text", text: "hello" }] }),
 }
 
-function Surface({ declines }: { declines: (conversationId: string) => boolean }) {
+function Surface({
+  declines,
+  mounted = editor,
+}: {
+  declines: (conversationId: string) => boolean
+  mounted?: ChatComposerEditorHandle | null
+}) {
   const { setComposerRef, submit } = useComposer(useConversation(), declines)
-  React.useEffect(() => setComposerRef(editor), [setComposerRef])
+  React.useEffect(() => setComposerRef(mounted), [setComposerRef, mounted])
   return React.createElement(
     "form",
     { onSubmit: submit },
@@ -61,12 +66,13 @@ let root: Root
 async function pressSend(
   store: ReturnType<typeof makeStore>,
   declines: (conversationId: string) => boolean,
+  mounted?: ChatComposerEditorHandle | null,
 ) {
   await React.act(async () => {
     root.render(
       React.createElement(Provider, {
         store,
-        children: React.createElement(Surface, { declines }),
+        children: React.createElement(Surface, { declines, mounted }),
       }),
     )
   })
@@ -75,16 +81,17 @@ async function pressSend(
   })
 }
 
-function storeWithAttachedFile() {
+function storeWithAttachedFile(connected = true) {
   const send = vi.fn(scenarioEffects("echo").send)
   const store = makeStore(
     createDependencies({ conversation: { ...scenarioEffects("echo"), send } }),
   )
-  // Connected, as the panel was: a submit with no gateway never reaches
-  // `sendDraft`. Only the phase and the presence of a hello are read.
-  store.dispatch(
-    sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
-  )
+  // Connected, as the panel usually is. Only the phase and the presence of a
+  // hello are read.
+  if (connected)
+    store.dispatch(
+      sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
+    )
   store.dispatch(attachFiles({ files: [file], conversationId: "c0" }))
   return { send, store }
 }
@@ -131,4 +138,36 @@ it("shows why a draft holding a file that is not an image did not send", async (
   expect(conversation.draft).toContainEqual(notes)
   expect(conversation.turns).toEqual([])
   expect(send).not.toHaveBeenCalled()
+})
+
+it("says why nothing was sent when there is no session yet, and keeps the draft", async () => {
+  // Idle, connecting, or ready without a hello: the notification above the
+  // composer says nothing for these, so a silent return here was a dead button.
+  const { send, store } = storeWithAttachedFile(false)
+  await pressSend(store, () => false)
+  const conversation = store.getState().conversation.conversations[0]!
+  expect(conversation.error).toMatch(
+    /Not connected to the gateway yet.*draft has been kept/,
+  )
+  expect(conversation.draft).toContainEqual(file)
+  expect(conversation.turns).toEqual([])
+  expect(send).not.toHaveBeenCalled()
+})
+
+it("still reaches sendDraft, with the draft's own prose, when the editor is between mounts", async () => {
+  const send = vi.fn(scenarioEffects("echo").send)
+  const store = makeStore(
+    createDependencies({ conversation: { ...scenarioEffects("echo"), send } }),
+  )
+  store.dispatch(
+    sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
+  )
+  const { setDraft } = await import("../../conversation/testing")
+  store.dispatch(
+    setDraft({ draft: [{ type: "text", text: "typed before the remount" }] }),
+  )
+  await pressSend(store, () => false, null)
+  expect(send).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ text: "typed before the remount" }),
+  )
 })
