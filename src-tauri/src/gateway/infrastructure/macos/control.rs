@@ -760,6 +760,45 @@ impl DeadCount {
     }
 }
 
+/// How often the port is asked, while it is silent.
+const POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// The port, launchd, and the passing of time — the three outside things
+/// readiness depends on.
+///
+/// Behind a trait so the waiting can be tested at all. The rules that matter
+/// here are about *when*: that a healthy-but-slow start keeps its full
+/// deadline, that a crash loop is given up in about a second and a half, and
+/// that `launchctl print` — a subprocess — is not run ten times a second.
+/// None of that is observable through a function that sleeps and calls the
+/// real thing.
+pub(super) trait ServiceWatch {
+    fn now(&self) -> Instant;
+    fn sleep(&mut self, duration: Duration);
+    fn health(&mut self) -> Option<Health>;
+    fn status(&mut self) -> Result<ServiceStatus, String>;
+}
+
+/// The real one: a loopback probe, `launchctl print`, and the system clock.
+struct LaunchdWatch<'a> {
+    service: &'a str,
+    port: u16,
+}
+impl ServiceWatch for LaunchdWatch<'_> {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+    fn sleep(&mut self, duration: Duration) {
+        std::thread::sleep(duration);
+    }
+    fn health(&mut self) -> Option<Health> {
+        health(self.port)
+    }
+    fn status(&mut self) -> Result<ServiceStatus, String> {
+        service_status(self.service)
+    }
+}
+
 /// Wait for the expected runtime to answer, or for launchd to prove it cannot.
 ///
 /// The deadline is for a server that is starting slowly. A server that has
@@ -772,24 +811,33 @@ pub(super) fn wait_fingerprint(
     port: u16,
     log: &Path,
 ) -> Result<ManagedRuntime, InstallFailure> {
-    let deadline = Instant::now() + READINESS_DEADLINE;
-    let mut next_liveness_check = Instant::now();
+    wait_ready(&mut LaunchdWatch { service, port }, expected, port, log)
+}
+
+pub(super) fn wait_ready(
+    watch: &mut impl ServiceWatch,
+    expected: (&str, &str),
+    port: u16,
+    log: &Path,
+) -> Result<ManagedRuntime, InstallFailure> {
+    let deadline = watch.now() + READINESS_DEADLINE;
+    let mut next_liveness_check = watch.now();
     let mut dead = DeadCount::default();
-    while Instant::now() < deadline {
-        let running = health(port);
+    while watch.now() < deadline {
+        let running = watch.health();
         // `launchctl print` is a subprocess, so it is asked when there is
         // something to check against it or when a liveness check is due —
         // never on every hundred-millisecond turn of the loop.
-        let due = Instant::now() >= next_liveness_check;
+        let due = watch.now() >= next_liveness_check;
         if matches!(running, Some(Health::Managed(_))) || due {
-            let status = service_status(service)?;
+            let status = watch.status()?;
             match assess(running.as_ref(), &status, expected) {
                 Step::Ready(runtime) => return Ok(runtime),
                 // An observation that is not due still counts for nothing:
                 // the interval is what makes three of these a second and a
                 // half of agreement rather than three turns of the loop.
                 step if due => {
-                    next_liveness_check = Instant::now() + LIVENESS_INTERVAL;
+                    next_liveness_check = watch.now() + LIVENESS_INTERVAL;
                     if dead.observe(&step) {
                         let failure =
                             diagnose(&status.last_exit, &log_tail(log), port, READINESS_FAILURE);
@@ -800,7 +848,7 @@ pub(super) fn wait_fingerprint(
                 _ => {}
             }
         }
-        std::thread::sleep(Duration::from_millis(100));
+        watch.sleep(POLL_INTERVAL);
     }
     // The process outlived the deadline without answering, which is the
     // readiness contract's own failure and stays worded as one. Its log still

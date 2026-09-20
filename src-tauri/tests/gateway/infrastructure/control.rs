@@ -4,15 +4,17 @@ use super::{
     acknowledge, assess, atomic_write, classify, forward_recovery, lock_namespace, parse_health,
     parse_listener_pid, parse_pending_retirement, parse_retirement_evidence, parse_service_process,
     prepare_request, read_acknowledgement, read_pending_retirement, read_retirement_evidence,
-    service_status, DeadCount, Health, InstallFailure, ManagedRuntime, Registration, ServiceState,
-    ServiceStatus, Step,
+    service_status, wait_ready, DeadCount, Health, InstallFailure, ManagedRuntime, Registration,
+    ServiceState, ServiceStatus, ServiceWatch, Step,
 };
 use nessa_local_storage::OpenMode;
 use serde_json::{json, Value};
 use std::{
     fs,
     os::{fd::AsRawFd, unix::fs::PermissionsExt},
+    time::{Duration, Instant},
 };
+const PORT_UNDER_TEST: u16 = 7420;
 const RUNNING_GENERATION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TARGET_GENERATION: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const INSTANCE: &str = "550e8400-e29b-41d4-a716-446655440000";
@@ -580,6 +582,162 @@ fn an_unloaded_service_reports_no_exit_of_its_own() {
     assert!(status.process_identity_known);
     assert_eq!(status.last_exit, LastExit::Unknown);
     assert!(!status.last_exit.is_failure());
+}
+
+/// A port, a launchd and a clock that only this test moves.
+///
+/// Time passes when the code under test sleeps, so a thirty-second deadline
+/// costs nothing to run through, and every `launchctl print` is recorded with
+/// the instant it happened at — which is the only way to see that a
+/// subprocess is not being run ten times a second.
+struct FakeWatch<F> {
+    elapsed: Duration,
+    answer: F,
+    status_calls: Vec<Duration>,
+    health_calls: usize,
+}
+impl<F: FnMut(Duration) -> (Option<Health>, ServiceStatus)> FakeWatch<F> {
+    fn new(answer: F) -> Self {
+        Self {
+            elapsed: Duration::ZERO,
+            answer,
+            status_calls: Vec::new(),
+            health_calls: 0,
+        }
+    }
+    /// Gaps between consecutive `launchctl print` calls.
+    fn status_gaps(&self) -> Vec<Duration> {
+        self.status_calls
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .collect()
+    }
+}
+impl<F: FnMut(Duration) -> (Option<Health>, ServiceStatus)> ServiceWatch for FakeWatch<F> {
+    fn now(&self) -> Instant {
+        // One base instant plus a virtual offset: `Instant` has no
+        // constructor, and nothing here depends on the wall clock.
+        *BASE + self.elapsed
+    }
+    fn sleep(&mut self, duration: Duration) {
+        self.elapsed += duration;
+    }
+    fn health(&mut self) -> Option<Health> {
+        self.health_calls += 1;
+        (self.answer)(self.elapsed).0
+    }
+    fn status(&mut self) -> Result<ServiceStatus, String> {
+        self.status_calls.push(self.elapsed);
+        Ok((self.answer)(self.elapsed).1)
+    }
+}
+static BASE: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
+
+const EXPECTED: (&str, &str) = (EXPECTED_FINGERPRINT, RUNNING_GENERATION);
+fn ready_runtime() -> ManagedRuntime {
+    ManagedRuntime {
+        fingerprint: EXPECTED_FINGERPRINT.into(),
+        generation: RUNNING_GENERATION.into(),
+        instance: INSTANCE.into(),
+        pid: 42,
+    }
+}
+/// A log that is not there, so the sentence carries no tail and these tests
+/// are about timing alone.
+fn absent_log() -> std::path::PathBuf {
+    std::env::temp_dir().join("nessa-no-such-gateway.log")
+}
+
+#[test]
+fn a_slow_but_healthy_start_keeps_the_whole_deadline() {
+    // Twenty-nine seconds of silence from a process that is alive the whole
+    // time. The deadline exists for exactly this, and nothing may cut it short.
+    let mut watch = FakeWatch::new(|elapsed| {
+        if elapsed < Duration::from_secs(29) {
+            (None, observed(Some(42), true, LastExit::NeverExited))
+        } else {
+            (
+                Some(Health::Managed(ready_runtime())),
+                observed(Some(42), true, LastExit::NeverExited),
+            )
+        }
+    });
+    assert_eq!(
+        wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()),
+        Ok(ready_runtime())
+    );
+    assert!(watch.elapsed >= Duration::from_secs(29));
+    assert!(watch.elapsed < Duration::from_secs(30));
+}
+
+#[test]
+fn a_crash_loop_is_given_up_in_about_a_second_and_a_half() {
+    // The whole point of the change: this used to cost thirty seconds.
+    let mut watch = FakeWatch::new(|_| (None, observed(None, true, LastExit::Code(1))));
+    let error = wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()).unwrap_err();
+    assert!(matches!(error, InstallFailure::Startup(_)), "{error:?}");
+    assert!(
+        watch.elapsed >= Duration::from_secs(1),
+        "{:?}",
+        watch.elapsed
+    );
+    assert!(
+        watch.elapsed <= Duration::from_secs(2),
+        "{:?}",
+        watch.elapsed
+    );
+}
+
+#[test]
+fn launchd_is_not_asked_ten_times_a_second() {
+    // `launchctl print` is a subprocess. Polling the port is not, so the loop
+    // turns quickly while the questions that cost something stay spaced out.
+    let mut watch = FakeWatch::new(|_| (None, observed(Some(42), true, LastExit::NeverExited)));
+    assert!(wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()).is_err());
+    assert!(watch.health_calls > 200, "{}", watch.health_calls);
+    for gap in watch.status_gaps() {
+        assert!(gap >= Duration::from_millis(500), "{gap:?}");
+    }
+    // Roughly twice a second across the deadline, not ten times.
+    assert!(
+        watch.status_calls.len() <= 70,
+        "{}",
+        watch.status_calls.len()
+    );
+}
+
+#[test]
+fn a_process_that_comes_back_between_deaths_starts_the_count_again() {
+    // Two deaths, then a pid, repeatedly. An unreset counter would give up
+    // inside the first two seconds; this must run to the deadline instead.
+    let mut watch = FakeWatch::new(|elapsed| {
+        let period = elapsed.as_millis() / 500 % 3;
+        let status = if period == 2 {
+            observed(Some(42), true, LastExit::Code(1))
+        } else {
+            observed(None, true, LastExit::Code(1))
+        };
+        (None, status)
+    });
+    let error = wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()).unwrap_err();
+    assert!(
+        matches!(error, InstallFailure::Reconciliation(ref message) if message.contains("readiness deadline")),
+        "{error:?}"
+    );
+    assert!(watch.elapsed >= Duration::from_secs(30));
+}
+
+#[test]
+fn a_service_that_says_nothing_either_way_still_ends_at_the_deadline() {
+    // Not ready, and never positively dead: the readiness contract's own
+    // failure, which stays worded as one.
+    let mut watch = FakeWatch::new(|_| (None, observed(None, false, LastExit::Unknown)));
+    let error = wait_ready(&mut watch, EXPECTED, PORT_UNDER_TEST, &absent_log()).unwrap_err();
+    assert!(
+        matches!(error, InstallFailure::Reconciliation(ref message) if message.contains("did not advertise the expected runtime identity")),
+        "{error:?}"
+    );
+    assert!(watch.elapsed >= Duration::from_secs(30));
 }
 
 #[test]
