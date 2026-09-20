@@ -29,29 +29,57 @@ use tokio::process::Command;
 /// anything in the workspace it was opened on. This is the bound instead, and
 /// it is a launch-time one: Opencode merges `OPENCODE_PERMISSION` into the
 /// top-level `permission` config, and merges *that* after the built-in rules of
-/// whichever agent is selected, so it is the last word over both the defaults
-/// and the mode.
+/// whichever agent is selected, so it outranks both the defaults and the mode.
 ///
 /// Deny-first rather than a list of denied tools, because a deny list cannot
 /// name the MCP tools: those are whatever the servers handed over at
 /// `session/new` expose, so only `"*"` reaches them. Reading and searching are
-/// allowed back, minus the environment files — what a read-and-plan session
-/// needs and nothing that acts. The shape is Opencode's own: its built-in
-/// `explore` agent is written the same way.
+/// allowed back — what a read-and-plan session needs and nothing that acts. The
+/// shape is Opencode's own: its built-in `explore` agent is written the same
+/// way.
 ///
 /// This is not `ask`. An `ask` is a bound a person can lift one call at a time,
 /// and the profile's claim is that these sessions do not act at all, so there
 /// is nothing here for a host to approve.
 ///
-/// What it does not cover, stated rather than implied: Opencode merges a
-/// *per-agent* `agent.plan.permission` after the top-level one this variable
-/// feeds, so a config file that names the mode by name still wins. The
-/// workspace cannot be that file — `OPENCODE_DISABLE_PROJECT_CONFIG` takes the
-/// checkout out of the search — but the person's own global config still can,
-/// and deliberately still does. Pointing `OPENCODE_CONFIG_DIR` at a directory
-/// Nessa owns would not close it either: `$HOME/.opencode` is read whatever
-/// that variable says. So the line this draws is at somebody else's repository,
-/// not at the person running Nessa on their own machine.
+/// # What this does not cover
+///
+/// Stated rather than implied, because a bound believed to be wider than it is
+/// is worse than a narrow one.
+///
+/// **The environment-file denial is not a secrets boundary.** `read` is asked
+/// for permission with the *path* it is about, so denying `*.env` there works.
+/// `grep` is asked with the *regular expression* instead, and Opencode runs
+/// ripgrep with `--hidden` unconditionally, so an allowed `grep` returns
+/// matches from the very files `read` refuses to open. The `read` rules are
+/// kept because they still stop the direct path, and they are not claimed to
+/// be more than that.
+///
+/// **Custom and plugin tools are not subject to permissions at all.** Opencode
+/// loads `{tool,tools}/*.{js,ts}` from every config directory and calls their
+/// `execute` with no permission evaluation of any kind, and plugin-supplied
+/// tools take the same route. `"*"` does not reach them because nothing asks.
+/// `OPENCODE_DISABLE_PROJECT_CONFIG` removes the opened checkout from that
+/// search, which is the case that matters — somebody else's repository cannot
+/// introduce one — but the person's own config directories remain, and this
+/// binding now passes `XDG_CONFIG_HOME` through, so theirs are found.
+///
+/// **A per-agent override still outranks this.** Opencode merges
+/// `agent.plan.permission` after the top-level rules this variable feeds, so a
+/// config file that names the mode by name wins. As above, the workspace
+/// cannot be that file and the person's own global config still can, and
+/// deliberately still does: `OPENCODE_CONFIG_DIR` would not close it either,
+/// because `$HOME/.opencode` is read whatever that variable says.
+///
+/// So the line all three draw is the same one, and it is drawn at somebody
+/// else's repository rather than at the person running Nessa on their own
+/// machine.
+///
+/// One rule is appended after this policy: Opencode gives every agent
+/// `external_directory` access to its own `tool-output` directory unless the
+/// agent already denies that exact path. Narrow and its own scratch space, so
+/// it is left alone — but it does mean "last word" is a description of rank
+/// rather than of position.
 const SESSION_POLICY: &str = r#"{"*":"deny","read":{"*":"allow","*.env":"deny","*.env.*":"deny","*.env.example":"allow"},"grep":"allow","glob":"allow","lsp":"allow","todowrite":"allow"}"#;
 
 /// Immutable composition factory; opening twice creates independent process scopes.
