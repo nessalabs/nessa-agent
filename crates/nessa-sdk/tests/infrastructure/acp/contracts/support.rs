@@ -112,6 +112,7 @@ pub(super) fn test_acp_configuration(
         tools_enabled: true,
         mcp_servers: Vec::new(),
         permissions: PermissionOfferPolicy::once_only(),
+        launch_timeout: Duration::from_secs(10),
         startup_timeout: Duration::from_secs(10),
         execution_timeout: Some(Duration::from_millis(700)),
         shutdown_grace: Duration::from_millis(100),

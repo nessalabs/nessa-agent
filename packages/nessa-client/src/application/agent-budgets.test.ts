@@ -10,17 +10,24 @@ import { agentOperationTimeoutMs } from "./agent-budgets.js"
  * the gateway, delete the request, and lose the typed answer — the defect the
  * table exists to prevent.
  */
+const oneLaunchMs =
+  budgets.agent.launchMs +
+  budgets.agent.startupMs +
+  budgets.agent.shutdownGraceMs +
+  budgets.agent.killTimeoutMs
+
 it("waits out everything the gateway can spend, plus the stated margin", () => {
-  expect(agentOperationTimeoutMs).toBe(
-    budgets.agent.startupMs +
-      budgets.agent.shutdownGraceMs +
-      budgets.agent.killTimeoutMs +
-      budgets.client.marginMs,
-  )
+  // Two launches: a command can wait on a warm-up already paying the operating
+  // system's first-execution scan, then open its own provider if that failed.
+  expect(agentOperationTimeoutMs).toBe(oneLaunchMs * 2 + budgets.client.marginMs)
 })
 
 it("outlasts the gateway rather than merely differing from it", () => {
-  const gatewayWorstCaseMs =
-    budgets.agent.startupMs + budgets.agent.shutdownGraceMs + budgets.agent.killTimeoutMs
-  expect(agentOperationTimeoutMs).toBeGreaterThan(gatewayWorstCaseMs)
+  expect(agentOperationTimeoutMs).toBeGreaterThan(oneLaunchMs * 2)
+})
+
+/** Each literal in the source is a budget the table states, not a rounding. */
+it("mirrors every budget the table states", () => {
+  expect(oneLaunchMs).toBe(120_000 + 45_000 + 3_000 + 2_000)
+  expect(budgets.client.marginMs).toBe(10_000)
 })

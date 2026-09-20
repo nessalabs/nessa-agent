@@ -3,7 +3,8 @@ use super::{
     ConversationCaller, ConversationCreation, ConversationCreationAudit,
     ConversationCreationAuditRecord, ConversationDependencies, ConversationDisposition,
     ConversationError, ConversationFuture, ConversationLimits, ConversationMessageStatus,
-    ConversationOwnershipState, ConversationRepository, ConversationService, SubmissionMode,
+    ConversationOwnershipState, ConversationRepository, ConversationService, RuntimeReadiness,
+    SubmissionMode,
 };
 use crate::{
     conversation::domain::{Conversation, ConversationId},
@@ -25,9 +26,13 @@ use nessa_sdk::{
     domain::agent_execution::sessions::{ExecutionSessionId, SessionId},
     infrastructure::session_storage::InMemoryStorage,
 };
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc, Mutex,
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 use tokio::sync::{oneshot, Notify};
 
@@ -140,6 +145,7 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
             creation_audit: audit.clone(),
             attachments: None,
             clock: Arc::new(TestClock),
+            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -193,6 +199,7 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
             creation_audit: audit.clone(),
             attachments: None,
             clock: Arc::new(TestClock),
+            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -289,6 +296,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
             creation_audit: audit.clone(),
             attachments: None,
             clock: Arc::new(TestClock),
+            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -390,6 +398,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
             creation_audit: audit.clone(),
             attachments: None,
             clock: Arc::new(TestClock),
+            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -412,6 +421,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
             creation_audit: audit.clone(),
             attachments: None,
             clock: Arc::new(TestClock),
+            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -475,6 +485,7 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
             creation_audit: audit.clone(),
             attachments: None,
             clock: Arc::new(TestClock),
+            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -728,6 +739,7 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
+            readiness: None,
         },
         ConversationLimits {
             max_conversations: 1,
@@ -904,6 +916,7 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
+            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -959,6 +972,7 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
+            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -1019,6 +1033,7 @@ async fn resource_free_provider_failure_retires_slot_for_retry() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
+            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -1058,6 +1073,197 @@ impl AgentProvider for UncertainOpenProvider {
         })
     }
 }
+/// Preparation the conversation must wait for, and which records whether the
+/// conversation reached the provider before that wait finished.
+struct GatedReadiness {
+    release: Mutex<Option<oneshot::Receiver<()>>>,
+    waited: AtomicBool,
+}
+impl RuntimeReadiness for GatedReadiness {
+    fn wait(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            self.waited.store(true, Ordering::SeqCst);
+            let release = self.release.lock().unwrap().take();
+            if let Some(release) = release {
+                let _ = release.await;
+            }
+        })
+    }
+}
+
+/// A first message arriving while the runtime is still being prepared waits for
+/// that work instead of launching a second cold provider of its own.
+#[tokio::test]
+async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let (release, gate) = oneshot::channel();
+    let readiness = Arc::new(GatedReadiness {
+        release: Mutex::new(Some(gate)),
+        waited: AtomicBool::new(false),
+    });
+    let service = ConversationService::new(
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider.clone())),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+            readiness: Some(readiness.clone()),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = id();
+    let creating = tokio::spawn({
+        let service = service.clone();
+        let id = id.clone();
+        async move { service.create(id, caller("panel", "first")).await }
+    });
+    // The conversation is held at the gate, so it has not launched a provider:
+    // the preparation already in flight is the only launch.
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while !readiness.waited.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the opening gate waits for preparation");
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+    release.send(()).unwrap();
+    creating.await.unwrap().unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    service.shutdown().await.unwrap();
+}
+
+/// The desktop quit path is the same guarantee in another delivery mode.
+///
+/// It stops agents without fencing admission, so it never set the signal a
+/// parked opening watches: quit spent its whole per-owner budget waiting for an
+/// opening that was itself waiting for the runtime, reported the owner as
+/// uncleaned, and then let that opening launch a provider the pass had already
+/// walked past — a Claude Code process tree left behind by quitting.
+#[tokio::test]
+async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparation() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    // Never released: this stands in for a cold launch still in progress.
+    let (_release, gate) = oneshot::channel();
+    let readiness = Arc::new(GatedReadiness {
+        release: Mutex::new(Some(gate)),
+        waited: AtomicBool::new(false),
+    });
+    let service = ConversationService::new(
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider.clone())),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+            readiness: Some(readiness.clone()),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let creating = tokio::spawn({
+        let service = service.clone();
+        async move { service.create(id(), caller("panel", "first")).await }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while !readiness.waited.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the opening gate waits for preparation");
+    // Well inside the 10s per-owner budget, so passing is not that timeout
+    // expiring and reporting success by another name.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        service.stop_active_agents(),
+    )
+    .await
+    .expect("quit must not wait out a preparation with no deadline")
+    .unwrap();
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), creating)
+            .await
+            .expect("the parked request is released")
+            .unwrap(),
+        Err(ConversationError::Unavailable)
+    ));
+    // Nothing was launched past the stop, so quit leaves no provider behind.
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+
+    // And admission is untouched: stopping the agents is not retirement, so the
+    // conversation this released can be opened again afterwards.
+    *readiness.release.lock().unwrap() = None;
+    service
+        .create(id(), caller("panel", "after-quit"))
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    service.shutdown().await.unwrap();
+}
+
+/// Preparation has no deadline of its own, and a conversation waiting for it
+/// holds a shared admission guard. Teardown therefore has to supersede the
+/// wait, or shutdown waits out its own admission budget and reports unconfirmed
+/// cleanup for an ordinary boot-time race.
+#[tokio::test]
+async fn retirement_supersedes_a_conversation_waiting_for_runtime_preparation() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    // Never released: this stands in for a cold launch still in progress.
+    let (_release, gate) = oneshot::channel();
+    let readiness = Arc::new(GatedReadiness {
+        release: Mutex::new(Some(gate)),
+        waited: AtomicBool::new(false),
+    });
+    let service = ConversationService::new(
+        ConversationDependencies {
+            provider: Arc::new(Provider(provider.clone())),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+            readiness: Some(readiness.clone()),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let creating = tokio::spawn({
+        let service = service.clone();
+        async move { service.create(id(), caller("panel", "first")).await }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while !readiness.waited.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the opening gate waits for preparation");
+    // Well inside the 10s admission budget, so this passing is not the timeout
+    // expiring and reporting success by another name.
+    tokio::time::timeout(std::time::Duration::from_secs(3), service.shutdown())
+        .await
+        .expect("shutdown must not wait out a preparation with no deadline")
+        .unwrap();
+    // The waiting request is released rather than left parked, and no provider
+    // is launched past the fence for nothing to close.
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), creating)
+            .await
+            .expect("the parked request is released")
+            .unwrap(),
+        Err(ConversationError::Unavailable)
+    ));
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+}
+
 fn startup_deadline() -> AgentError {
     AgentError::StartupDeadline(AgentStartupStep::new(
         AgentStartupPhase::Session,
@@ -1099,6 +1305,7 @@ async fn a_startup_deadline_releases_its_slot_so_the_same_command_can_retry() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
+            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -1151,6 +1358,7 @@ async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
+            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -1181,6 +1389,7 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
+            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -1249,6 +1458,7 @@ async fn restart_restores_saved_messages_without_replaying_input() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
+            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -1285,6 +1495,7 @@ async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
+            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -1445,6 +1656,7 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
+            readiness: None,
         },
         ConversationLimits::default(),
         None,

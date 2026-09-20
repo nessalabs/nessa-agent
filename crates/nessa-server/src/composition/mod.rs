@@ -5,6 +5,7 @@
 //! Environment -> private runtime config -> auth + ConversationService
 //!                                         -> provider / storage / audit
 //!                                         -> attachments (one store, shared)
+//!                                         -> AgentWarmUp -> readiness port
 //! ProductRouteState -> authenticated HTTP/WebSocket router
 //! ```
 //! Arrows show construction and injection. Conversations share the service across
@@ -31,5 +32,7 @@ mod attachments;
 mod desktop;
 
 mod provisioning;
+
+mod warm_up;
 
 mod cli;
