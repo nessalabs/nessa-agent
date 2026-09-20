@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use std::{
     fs,
     os::{fd::AsRawFd, unix::fs::PermissionsExt},
+    time::Duration,
 };
 const RUNNING_GENERATION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TARGET_GENERATION: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -620,15 +621,40 @@ fn private_request_replacement_is_complete_and_exclusively_locked() {
     let competing =
         nessa_local_storage::open(&directory.join("gateway-upgrade.lock"), OpenMode::ReadWrite)
             .unwrap();
-    assert_ne!(
-        unsafe { libc::flock(competing.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
-        0
+    let take = || unsafe { libc::flock(competing.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    // Held: our own descriptor has it, so this is refused with no waiting.
+    assert_ne!(take(), 0);
+    assert_eq!(
+        std::io::Error::last_os_error().kind(),
+        std::io::ErrorKind::WouldBlock
     );
     drop(lock);
-    assert_eq!(
-        unsafe { libc::flock(competing.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
-        0
-    );
+    // Released — but not necessarily in this instant. A `flock` belongs to the
+    // open file description, and `cargo test` runs these tests as threads of
+    // one process that spawns `uuidgen`, `plutil` and `launchctl`. Between
+    // another thread's fork and its exec, the child holds a duplicate of every
+    // descriptor this one has: `O_CLOEXEC` closes it at exec, not at fork, so
+    // a drop landing inside that window leaves the lock alive in the child for
+    // as long as it takes to exec. Demanding the first attempt succeed made
+    // this test fail under load. `lock_namespace` itself retries for two
+    // minutes for the same reason, so insisting on an instant here was the
+    // test asking for more than the code promises — or needs.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if take() == 0 {
+            break;
+        }
+        // Still exclusion, never some other failure we would want to see.
+        assert_eq!(
+            std::io::Error::last_os_error().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the namespace lock was never released"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     drop(competing);
     fs::remove_dir_all(directory).unwrap();
 }
