@@ -124,7 +124,11 @@ export function createConversationApi(
     const command = Object.freeze({ ...params })
     const perform = async (): Promise<T> => {
       try {
-        return validate(await session.request(method, command, agentOperationTimeoutMs))
+        return validate(
+          await session.request(method, command, {
+            atLeastMs: agentOperationTimeoutMs,
+          }),
+        )
       } catch (cause) {
         if (!retryable) {
           throw new NessaConversationControlError(
@@ -195,7 +199,7 @@ export function createConversationApi(
         await session.request(
           ProductMethod.ConversationRead,
           { conversationId: validConversationId(id) },
-          agentOperationTimeoutMs,
+          { atLeastMs: agentOperationTimeoutMs },
         ),
         id,
       ),

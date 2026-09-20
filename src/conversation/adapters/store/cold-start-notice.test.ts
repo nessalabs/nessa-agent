@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { agentOperationTimeoutMs, type NessaClient } from "@nessa/client"
+// Derived, not restated: a literal here stops tracking the table the moment the
+// table moves, and the whole point is that one table decides both sides.
+import budgets from "../../../../protocol/defaults/agent-startup-budgets.json"
 // The real transport and the real conversation API, not the package's public
 // entry point: what is under test is the wiring between them, so neither can
 // be a double.
@@ -26,7 +29,8 @@ import { sendDraft } from "./slice"
  * real conversation API, the real error wrapper, the real store, and the real
  * notice.
  */
-const SERVER_WORST_CASE_MS = 50_000
+const SERVER_WORST_CASE_MS =
+  budgets.agent.startupMs + budgets.agent.shutdownGraceMs + budgets.agent.killTimeoutMs
 
 function fakeSocket() {
   const sent: string[] = []

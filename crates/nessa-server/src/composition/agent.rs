@@ -119,7 +119,43 @@ mod build {
             model_metadata_json::load_catalog,
         },
     };
-    use std::{collections::BTreeMap, fs::File, path::Path, sync::Arc};
+    use std::{
+        collections::BTreeMap,
+        ffi::OsString,
+        fs::File,
+        path::{Path, PathBuf},
+        sync::Arc,
+    };
+    /// The launch configuration composition injects, separated from resolving
+    /// what goes into it so a test can read back the values actually used.
+    /// Everything here is a decision; nothing here reads the filesystem.
+    pub(super) fn launch_configuration(
+        config: &AgentConfig,
+        workspace: PathBuf,
+        environment: BTreeMap<OsString, OsString>,
+        credential_environment: BTreeMap<OsString, OsString>,
+    ) -> AcpConfig {
+        AcpConfig {
+            executable: config.node.clone(),
+            arguments: vec![config.acp_entry.clone().into_os_string()],
+            environment,
+            credential_environment,
+            workspace,
+            tools_enabled: config.tools_enabled,
+            mcp_servers: config.mcp_servers.clone(),
+            permissions: PermissionOfferPolicy::once_only(),
+            // From protocol/defaults/agent-startup-budgets.json, which the
+            // client compiles in too: a client that gives up before the gateway
+            // has finished failing never sees the typed answer.
+            startup_timeout: budgets::startup_timeout(),
+            execution_timeout: None,
+            shutdown_grace: budgets::shutdown_grace(),
+            kill_timeout: budgets::kill_timeout(),
+            event_capacity: 256,
+            max_frame_bytes: 1024 * 1024,
+        }
+    }
+
     pub(super) fn provider(
         config: &AgentConfig,
         directory: &Path,
@@ -174,25 +210,7 @@ mod build {
         let audit =
             Arc::new(DurableExecutionAudit::new(directory.join("audit"), clock).map_err(invalid)?);
         let provider = ClaudeAcpProvider::new(
-            AcpConfig {
-                executable: config.node.clone(),
-                arguments: vec![config.acp_entry.clone().into_os_string()],
-                environment,
-                credential_environment,
-                workspace,
-                tools_enabled: config.tools_enabled,
-                mcp_servers: config.mcp_servers.clone(),
-                permissions: PermissionOfferPolicy::once_only(),
-                // From protocol/defaults/agent-startup-budgets.json, which the
-                // client compiles in too: a client that gives up before the
-                // gateway has finished failing never sees the typed answer.
-                startup_timeout: budgets::startup_timeout(),
-                execution_timeout: None,
-                shutdown_grace: budgets::shutdown_grace(),
-                kill_timeout: budgets::kill_timeout(),
-                event_capacity: 256,
-                max_frame_bytes: 1024 * 1024,
-            },
+            launch_configuration(config, workspace, environment, credential_environment),
             &model,
             limits,
             audit,
@@ -215,3 +233,7 @@ mod build {
 #[cfg(test)]
 #[path = "../../tests/conversation/configuration.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "../../tests/conversation/launch_configuration.rs"]
+mod launch_configuration_tests;

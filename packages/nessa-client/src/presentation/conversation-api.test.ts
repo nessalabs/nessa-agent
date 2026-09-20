@@ -546,9 +546,9 @@ it("reorders an immutable full queue and accepts each typed outcome", async () =
       requestId: "reorder-action",
       executionIds: ["second", "first"],
     },
-    // Conversation commands can open an agent, so they outlast the connection's
+    // Conversation commands can open an agent, so they raise the connection's
     // ordinary deadline rather than being abandoned mid-launch.
-    agentOperationTimeoutMs,
+    { atLeastMs: agentOperationTimeoutMs },
   ])
   finish({ requestId: "reorder-action", outcome: "applied" })
   expect(await pending).toEqual({ requestId: "reorder-action", outcome: "applied" })

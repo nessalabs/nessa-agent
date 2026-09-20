@@ -50,7 +50,3 @@ pub(super) fn shutdown_grace() -> Duration {
 pub(super) fn kill_timeout() -> Duration {
     Duration::from_millis(BUDGETS.agent.kill_timeout_ms)
 }
-
-#[cfg(test)]
-#[path = "../../tests/conversation/agent_budgets.rs"]
-mod tests;
