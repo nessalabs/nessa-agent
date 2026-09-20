@@ -18,12 +18,26 @@
 //!
 //! Two decisions are worth the detail:
 //!
-//! **Interactive first.** `zsh -l -c` reads `.zprofile` and never `.zshrc`, and
-//! `.zshrc` is where pnpm's installer and the standard nvm setup put themselves.
-//! A non-interactive probe therefore *succeeds* with a `PATH` missing the tools
-//! the user actually has, which no fallback can catch, because nothing failed.
-//! So the shells that make the distinction — zsh, bash — are asked interactively
-//! first, and every other shell gets the login probe it understands.
+//! **Interactive first, and what that does and does not reach.** `zsh -l -c`
+//! reads `.zprofile` and never `.zshrc`, and `.zshrc` is where pnpm's installer
+//! and the standard nvm setup put themselves: a non-interactive probe therefore
+//! *succeeds* with a `PATH` missing the tools the user has, which no fallback can
+//! catch, because nothing failed. bash is not the same and it is worth being
+//! exact, because saying otherwise here once already hid a gap. bash reads
+//! `~/.bashrc` when it is interactive and *not* a login shell; `bash -i -l -c`
+//! reads the login files and no more, exactly as `bash -l -c` does. What `-i`
+//! buys for bash is the other half: a `.bashrc` sourced from `.bash_profile`
+//! almost always opens with `case $- in *i*) ;; *) return;; esac`, and only an
+//! interactive shell gets past that to the `PATH` lines below it. So `-i -l -c`
+//! is what a macOS terminal opens — login and interactive — and it is what makes
+//! a sourced `.bashrc` count.
+//!
+//! The gap that leaves, said plainly: a bash user whose `.bashrc` holds the
+//! tools and whose `.bash_profile` does not source it is not covered here. Their
+//! macOS terminal does not see those tools either, so the agent matches what
+//! they actually have; on a host where interactive non-login shells are how
+//! terminals start — Linux — covering it means adding a `-i -c` probe, and that
+//! belongs with the host that needs it.
 //!
 //! **Markers, not the last line.** An interactive shell prints things: a motd, a
 //! plugin banner, a prompt, a warning about a missing directory. The `PATH` is
@@ -31,9 +45,24 @@
 //! is between them is read — a profile cannot print a convincing answer because
 //! it cannot know what to print, and noise around it does not matter.
 //!
+//! Two things an interactive profile makes likelier, and what is done about
+//! them. It may background something — `ssh-agent`, `gpg-agent`, occasionally an
+//! `exec tmux` — and a backgrounded process that inherits the shell's stdout
+//! holds the pipe open after the shell is done, which the deadline then ends:
+//! the answer was there and the attempt reports a timeout anyway, and the group
+//! kill takes the agent with it. The login probe that follows usually does not
+//! do this, which is the fallback earning its place. And `.zshrc` is where
+//! working-directory-sensitive `PATH` logic lives (nvm's `.nvmrc` auto-use,
+//! direnv, pyenv local), so the shell is run from the account's home rather than
+//! from wherever this process happens to have been started: a packaged launch
+//! starts at `/` and a developer's does not, and the resolved path is compared
+//! for exact equality against the registered one. It is the same reason the
+//! account record is trusted over `SHELL`.
+//!
 //! What this module does not verify about itself: that a real `.zprofile` on a
 //! real machine exports what its owner expects. Its tests supply their own
-//! shells and their own profiles, including a real zsh with a real `.zshrc`.
+//! shells and their own profiles, including a real zsh with a real `.zshrc` and
+//! a real bash with a `.bashrc` its `.bash_profile` sources.
 use super::super::application::{LoginShellError, LoginShellPath};
 use super::super::domain::value_objects::SearchPath;
 
@@ -65,10 +94,10 @@ mod unix {
     use std::{
         ffi::{CStr, OsStr, OsString},
         fs::File,
-        io::Read,
+        io::{self, Read},
         os::unix::{ffi::OsStrExt, process::CommandExt},
         path::{Path, PathBuf},
-        process::{Command, Stdio},
+        process::{Command, ExitStatus, Stdio},
         sync::mpsc::{self, Receiver, RecvTimeoutError},
         thread,
         time::{Duration, Instant},
@@ -79,8 +108,12 @@ mod unix {
     ///
     /// Long enough for the version managers people actually have in their
     /// profiles; short enough that a profile which never returns costs a pause
-    /// at startup rather than a gateway that never registers. A shell that gets
-    /// both attempts can cost two of these, once per run of the app.
+    /// at startup rather than a gateway that never registers.
+    ///
+    /// The worst a caller can be kept waiting is both attempts, each spending
+    /// this and then [`REAP_GRACE`] confirming the kill: 2 × (5 + 2) = 14
+    /// seconds, once per run of the app, and only for a profile that hangs
+    /// twice.
     const DEADLINE: Duration = Duration::from_secs(5);
 
     /// How long to wait for a killed shell to be reaped before reporting the
@@ -171,12 +204,14 @@ mod unix {
 
         /// How this shell is worth asking, most complete answer first.
         ///
-        /// zsh and bash read the files most installers write to — `.zshrc`,
-        /// `.bashrc` — only when they are interactive, so they are asked that
-        /// way first and fall back to a login shell. Anything else is asked the
-        /// one way every shell here understands: a `-i` that a shell does not
-        /// take, or takes badly without a terminal, would cost an attempt to
-        /// learn nothing.
+        /// zsh and bash are asked interactively first, for reasons that differ
+        /// by shell — zsh reads `.zshrc` only then; bash gets past the
+        /// interactivity guard at the top of a sourced `.bashrc` only then —
+        /// and fall back to a plain login shell. Both are set out in this
+        /// module's own documentation, including what the bash case does not
+        /// reach. Anything else is asked the one way every shell here
+        /// understands: a `-i` that a shell does not take, or takes badly
+        /// without a terminal, would cost an attempt to learn nothing.
         fn probes(&self) -> &'static [Probe] {
             match self.shell.file_name().and_then(OsStr::to_str) {
                 Some("zsh" | "bash") => &[Probe::InteractiveLogin, Probe::Login],
@@ -203,8 +238,7 @@ mod unix {
         /// under the same clock, and whichever runs out first kills the shell's
         /// process group and reaps it.
         fn report(&self, probe: Probe, marker: &Marker) -> Result<String, LoginShellError> {
-            let unavailable =
-                |error: std::io::Error| LoginShellError::Unavailable(error.to_string());
+            let unavailable = |error: io::Error| LoginShellError::Unavailable(error.to_string());
             let mut child = Command::new(&self.shell)
                 .args(probe.arguments())
                 .arg(marker.command())
@@ -222,6 +256,12 @@ mod unix {
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
+                // From the account's home, not from wherever this process was
+                // started: a profile that decides the path from the working
+                // directory would otherwise answer differently for a packaged
+                // launch and a developer's, and this answer is part of the
+                // service definition.
+                .current_dir(self.working_directory())
                 // Its own process group, so a profile that leaves something
                 // running is stopped with the shell rather than outliving it.
                 .process_group(0)
@@ -282,16 +322,34 @@ mod unix {
                 .map_err(|_| LoginShellError::Unavailable("login shell output is not UTF-8".into()))
         }
 
+        /// Where the shell is run from: the account's home if it has one that
+        /// exists, and the root otherwise, which every host has.
+        fn working_directory(&self) -> PathBuf {
+            self.environment
+                .iter()
+                .find(|(key, _)| *key == "HOME")
+                .map(|(_, home)| PathBuf::from(home))
+                .filter(|home| home.is_dir())
+                .unwrap_or_else(|| PathBuf::from("/"))
+        }
+
         /// Kills the shell's process group and waits for the reap to be
         /// confirmed, then says why the attempt ended.
         fn stop(
             &self,
             group: i32,
-            exited: &Receiver<std::io::Result<std::process::ExitStatus>>,
+            exited: &Receiver<io::Result<ExitStatus>>,
             waited: RecvTimeoutError,
         ) -> LoginShellError {
-            kill_group(group);
-            let _ = exited.recv_timeout(REAP_GRACE);
+            // A shell that has already been reaped must not be signalled: its
+            // pid is free from that moment, and a group kill aimed at a
+            // recycled one would be aimed at somebody else's process group.
+            // The read can time out or fail while the shell itself is long
+            // gone, so this is asked rather than assumed.
+            if exited.try_recv().is_err() {
+                kill_group(group);
+                let _ = exited.recv_timeout(REAP_GRACE);
+            }
             match waited {
                 RecvTimeoutError::Timeout => LoginShellError::TimedOut,
                 // Nothing sends on these channels except threads that send

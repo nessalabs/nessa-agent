@@ -8,19 +8,17 @@ use std::{
     fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
+    process::Command,
     time::{Duration, Instant},
 };
 
 /// Long enough that a loaded machine does not fail a test about something else.
 const PATIENT: Duration = Duration::from_millis(5_000);
-/// Short enough that a test about the deadline is over quickly, and long enough
-/// that the shell it is applied to has certainly started — the profiles it is
-/// applied to sleep for ten minutes, so there is no reading of this as anything
-/// but the deadline. Half a second was not enough: with the rest of this file
-/// running beside it, including a real zsh, a shell can take longer than that
-/// to draw its first breath, and killing one before it has written its pid made
-/// these tests fail for a reason that was not the one they are about.
-const BRIEF: Duration = Duration::from_millis(2_000);
+/// Short enough that a test about the deadline is over quickly. The profiles it
+/// is applied to sleep for ten minutes, so an attempt that ends at all ended
+/// because of the deadline; what makes that reliable is the warm-up in
+/// [`write_shell`], not the size of this number.
+const BRIEF: Duration = Duration::from_millis(1_000);
 
 /// A directory of this test's own, named for the test using it.
 fn temporary_directory(name: &str) -> PathBuf {
@@ -31,32 +29,67 @@ fn temporary_directory(name: &str) -> PathBuf {
     directory
 }
 
-/// A stand-in login shell: a script that runs the command it is given, `$3`,
-/// the way the shell it stands in for would.
+/// Writes a stand-in shell, and runs it once before any test depends on how
+/// quickly it starts.
 ///
-/// `prelude` is what its profile does first — print a banner, narrow the path,
-/// close its output, refuse to return.
-fn shell_script(directory: &Path, prelude: &str) -> PathBuf {
+/// That warm-up is the point. macOS evaluates policy for an executable the first
+/// time it runs, and those evaluations serialise: measured on this machine,
+/// twelve freshly written scripts exec'd at once had only five of them past
+/// their first line after two seconds, while the same files re-run were all past
+/// it immediately. A fixture that writes a new executable and then races a
+/// deadline is measuring first-exec policy, not the deadline — which is how
+/// these tests came to fail four full-suite runs out of four while passing
+/// whenever they ran alone. It is the same cost issue #74 is about.
+///
+/// Every stand-in takes `--warm` and does nothing, and does so *before* it
+/// records its pid, so a warm-up cannot leave behind a pid the timed run never
+/// wrote.
+fn write_shell(directory: &Path, body: &str) -> PathBuf {
     let script = directory.join("login-shell");
-    // The pid goes to a path decided here, so what the test reads afterwards
-    // does not depend on how the shell was invoked or what it has on its own
-    // `PATH` — which is deliberately almost nothing.
     fs::write(
         &script,
-        format!(
-            "#!/bin/sh\necho \"$$\" > '{}'\n{prelude}\neval \"$3\"\n",
-            directory.join("pid").display()
-        ),
+        format!("#!/bin/sh\n[ \"$1\" = \"--warm\" ] && exit 0\n{body}\n"),
     )
     .unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    let warmed = Command::new(&script)
+        .arg("--warm")
+        .status()
+        .expect("the stand-in shell runs");
+    assert!(
+        warmed.success(),
+        "the stand-in shell failed its warm-up run"
+    );
     script
 }
 
-/// The pid the stand-in shell wrote down for itself.
+/// A stand-in login shell: a script that records that it started, then runs the
+/// command it is given, `$3`, the way the shell it stands in for would.
+///
+/// `prelude` is what its profile does between those — print a banner, narrow the
+/// path, close its output, refuse to return.
+fn shell_script(directory: &Path, prelude: &str) -> PathBuf {
+    // The pid goes to a path decided here, so what the test reads afterwards
+    // does not depend on how the shell was invoked or what it has on its own
+    // `PATH` — which is deliberately almost nothing.
+    write_shell(
+        directory,
+        &format!(
+            "echo \"$$\" > '{}'\n{prelude}\neval \"$3\"",
+            directory.join("pid").display()
+        ),
+    )
+}
+
+/// The pid the stand-in shell wrote down for itself, which it does before its
+/// profile runs.
+///
+/// A missing one is not a stricter test, it is a broken one: it means the shell
+/// was killed before it started, so what the deadline ended was a process that
+/// had not yet begun doing the thing the test is about.
 fn shell_pid(directory: &Path) -> i32 {
     fs::read_to_string(directory.join("pid"))
-        .expect("the stand-in shell records its pid")
+        .expect("the stand-in shell started and recorded its pid")
         .trim()
         .parse()
         .expect("a pid")
@@ -135,9 +168,7 @@ fn a_shell_that_answers_with_nothing_usable_is_rejected() {
 #[test]
 fn a_shell_that_never_answers_in_the_form_asked_is_unavailable() {
     let directory = temporary_directory("unmarked");
-    let script = directory.join("login-shell");
-    fs::write(&script, "#!/bin/sh\necho 'welcome back'\n").unwrap();
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    let script = write_shell(&directory, "echo 'welcome back'");
     assert!(matches!(
         LoginShell::probing(script, vec![], PATIENT).resolve(),
         Err(LoginShellError::Unavailable(_))
@@ -243,29 +274,37 @@ fn the_profile_is_given_a_closed_set_of_variables() {
     let _ = fs::remove_dir_all(&directory);
 }
 
+/// Where a real shell lives, or `None` with the reason it is not being tested.
+///
+/// macOS ships `/bin/zsh` and `/bin/bash` and logs users into one of them, so on
+/// the platform this ships on a missing shell is a broken assumption rather than
+/// a machine to be tolerant of — and skipping there would let the only tests
+/// that drive a shell which distinguishes interactive files disappear into a
+/// green run, since a passing test's output is captured and a skip looks exactly
+/// like a pass from outside.
+fn real_shell(name: &str) -> Option<PathBuf> {
+    let found = ["/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"]
+        .into_iter()
+        .map(|directory| PathBuf::from(directory).join(name))
+        .find(|shell| shell.is_file());
+    if found.is_none() {
+        assert!(
+            !cfg!(target_os = "macos") || !["zsh", "bash"].contains(&name),
+            "macOS ships {name}; a machine without it is not one to skip this on"
+        );
+        eprintln!("no {name} on this machine; the profile test for it did not run");
+    }
+    found
+}
+
 /// The finding this probe exists for, against the real thing: `zsh -l -c` reads
 /// `.zprofile` and never `.zshrc`, and `.zshrc` is where pnpm's installer and
 /// the standard nvm setup put themselves. A user with a tool there has it in
 /// every terminal, so the agent has to have it too.
 #[test]
 fn a_real_zsh_reports_the_tools_its_zshrc_adds() {
-    let Some(zsh) = ["/bin/zsh", "/usr/bin/zsh", "/usr/local/bin/zsh"]
-        .into_iter()
-        .map(PathBuf::from)
-        .find(|shell| shell.is_file())
-    else {
-        // On the platform this ships on there is no such thing as no zsh: macOS
-        // has shipped `/bin/zsh` for years and logs users into it. Skipping
-        // there would let the one test that proves the interactive probe
-        // disappear into a green run, because a passing test's output is
-        // captured — a skip and a pass look identical from the outside.
-        #[cfg(target_os = "macos")]
-        panic!("macOS ships /bin/zsh; a machine without it is not one to skip this on");
-        #[cfg(not(target_os = "macos"))]
-        {
-            eprintln!("no zsh on this machine; the interactive-profile test did not run");
-            return;
-        }
+    let Some(zsh) = real_shell("zsh") else {
+        return;
     };
     let home = temporary_directory("zshrc");
     let tools = home.join("tools");
@@ -288,6 +327,79 @@ fn a_real_zsh_reports_the_tools_its_zshrc_adds() {
         "{} is not on {}",
         tools.display(),
         resolved.as_str()
+    );
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// bash is not zsh, and the reason `-i` earns its place for it is different.
+/// `bash -i -l -c` does not read `.bashrc` — it reads the login files, exactly
+/// as `bash -l -c` does. What it does reach is a `.bashrc` that `.bash_profile`
+/// sources, because such a file almost always opens with an interactivity guard
+/// and only an interactive shell gets past it to the `PATH` lines below. This
+/// fixture is that arrangement, and it fails without the `-i`.
+#[test]
+fn a_real_bash_gets_past_the_interactivity_guard_in_a_sourced_bashrc() {
+    let Some(bash) = real_shell("bash") else {
+        return;
+    };
+    let home = temporary_directory("bashrc");
+    let tools = home.join("tools");
+    fs::create_dir_all(&tools).unwrap();
+    fs::write(
+        home.join(".bashrc"),
+        format!(
+            "case $- in *i*) ;; *) return;; esac\nexport PATH=\"{}:$PATH\"\n",
+            tools.display()
+        ),
+    )
+    .unwrap();
+    fs::write(home.join(".bash_profile"), ". \"$HOME/.bashrc\"\n").unwrap();
+
+    let resolved =
+        LoginShell::probing(bash, vec![("HOME", home.clone().into_os_string())], PATIENT)
+            .resolve()
+            .expect("bash reports a path");
+    assert!(
+        resolved
+            .as_str()
+            .split(':')
+            .any(|entry| Path::new(entry) == tools),
+        "{} is not on {}",
+        tools.display(),
+        resolved.as_str()
+    );
+    let _ = fs::remove_dir_all(&home);
+}
+
+/// The gap that leaves, written down as a test rather than only as a sentence:
+/// a `.bashrc` nothing sources is not reached, because an interactive *login*
+/// shell does not read it. A user in that position does not have those tools in
+/// their macOS terminal either. If this ever starts passing — a new probe, a
+/// different host — the documentation above it is what needs revisiting.
+#[test]
+fn a_bashrc_that_nothing_sources_is_knowingly_not_reached() {
+    let Some(bash) = real_shell("bash") else {
+        return;
+    };
+    let home = temporary_directory("bashrc-only");
+    let tools = home.join("tools");
+    fs::create_dir_all(&tools).unwrap();
+    fs::write(
+        home.join(".bashrc"),
+        format!("export PATH=\"{}:$PATH\"\n", tools.display()),
+    )
+    .unwrap();
+
+    let resolved =
+        LoginShell::probing(bash, vec![("HOME", home.clone().into_os_string())], PATIENT)
+            .resolve()
+            .expect("bash reports a path");
+    assert!(
+        !resolved
+            .as_str()
+            .split(':')
+            .any(|entry| Path::new(entry) == tools),
+        "an unsourced .bashrc is now reached; the module's account of bash needs revisiting"
     );
     let _ = fs::remove_dir_all(&home);
 }
