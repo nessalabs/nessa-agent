@@ -99,8 +99,25 @@ pub(super) fn record(error: &RunError, managed: &Managed) -> io::Result<()> {
 /// where it is rather than removed on a guess.
 pub(super) fn forget(managed: &Managed) {
     let path = path(managed.logs());
-    if !read(&path).is_some_and(|record| record.service_generation == managed.generation()) {
-        return;
+    match read(&path) {
+        // No record is the ordinary case: most runs did not give up.
+        Ok(None) => return,
+        Ok(Some(record)) if record.service_generation == managed.generation() => {}
+        // A record that outlives a start it did not belong to is not wrong,
+        // but it is evidence the host may act on later, so it is said out loud
+        // rather than passed over in silence.
+        Ok(Some(record)) => {
+            return tracing::info!(
+                generation = record.service_generation,
+                "leaving a gateway startup failure recorded by another registration"
+            )
+        }
+        Err(error) => {
+            return tracing::error!(
+                %error,
+                "could not read the last gateway startup failure; leaving it where it is"
+            )
+        }
     }
     match std::fs::remove_file(&path) {
         Ok(()) => {}
@@ -112,9 +129,19 @@ pub(super) fn forget(managed: &Managed) {
     }
 }
 
-/// A record already there, when it is one this build can make sense of.
-fn read(path: &Path) -> Option<StartupFailure> {
-    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+/// The record already there, if any.
+///
+/// Absence is an answer; a file that cannot be read or made sense of is not,
+/// and it is kept apart from absence so the caller can say which it had.
+fn read(path: &Path) -> io::Result<Option<StartupFailure>> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(io::Error::from)
 }
 
 #[cfg(test)]

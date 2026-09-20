@@ -371,6 +371,11 @@ fn sentence_for(reason: &str, port: u16) -> Option<String> {
             "the prepared runtime it was registered with is missing or is not the one it expects."
                 .into(),
         ),
+        // Not a failure at all: the service was asked to stop and said so
+        // rather than exiting zero, which would have told launchd to leave it
+        // stopped. Only a reconciliation landing inside the restart throttle
+        // ever sees it, and what it is seeing is a service on its way back.
+        "stoppedOnRequest" => Some("it was stopped, and is starting again.".into()),
         _ => None,
     }
 }

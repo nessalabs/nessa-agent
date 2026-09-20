@@ -18,6 +18,14 @@ use super::RunError;
 
 const CODES_JSON: &str = include_str!("../../../../protocol/defaults/gateway-exit-codes.json");
 
+/// The reason a managed gateway's clean stop answers to.
+///
+/// It has no `RunError` behind it, because nothing failed. It still needs a
+/// number: zero is what tells launchd to leave the service stopped, and a
+/// gateway that was asked to stop is not asking for that — see
+/// [`super::ending::report`].
+pub(super) const STOPPED_ON_REQUEST: &str = "stoppedOnRequest";
+
 #[derive(Debug, Deserialize)]
 struct GatewayExitCodes {
     codes: BTreeMap<String, u8>,
@@ -66,9 +74,15 @@ pub(super) fn reason(error: &RunError) -> &'static str {
 /// successfully or to abort: the process still fails, and the host still
 /// reports a service that will not start, without a cause it can name.
 pub fn exit_code(error: &RunError) -> u8 {
+    code(reason(error))
+}
+
+/// The number a reason answers to, or the unclassified failure when the table
+/// has no entry for it.
+pub(super) fn code(reason: &str) -> u8 {
     CODES
         .codes
-        .get(reason(error))
+        .get(reason)
         .copied()
         .filter(|code| *code != 0)
         .unwrap_or(1)
@@ -80,7 +94,8 @@ mod tests {
     use std::io::{Error, ErrorKind};
 
     /// Every reason the table names is a distinct, non-zero code, and every
-    /// error the server can fail with resolves to one of them.
+    /// error the server can fail with — and the one ending that is not an
+    /// error at all — resolves to one of them.
     #[test]
     fn each_fatal_reason_has_its_own_non_zero_code() {
         let codes: Vec<u8> = CODES.codes.values().copied().collect();
@@ -115,6 +130,15 @@ mod tests {
             assert!(CODES.codes.contains_key(reason(&error)), "{error}");
             assert_eq!(exit_code(&error), CODES.codes[reason(&error)]);
         }
+        // Stopping on request is an ending, not a failure, so no `RunError`
+        // reaches it — but launchd reads its number the same way, and zero
+        // would tell launchd to leave the service stopped.
+        assert!(CODES.codes.contains_key(STOPPED_ON_REQUEST));
+        assert_eq!(code(STOPPED_ON_REQUEST), CODES.codes[STOPPED_ON_REQUEST]);
+        assert_ne!(code(STOPPED_ON_REQUEST), 0);
+        // A reason the table has never heard of is the unclassified failure,
+        // which is still a failure.
+        assert_eq!(code("somethingTheTableDoesNotName"), 1);
     }
 
     /// The registry a build cannot read is the case the desktop reports as a

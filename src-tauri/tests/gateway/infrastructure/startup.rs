@@ -257,6 +257,26 @@ fn what_the_log_says_never_decides_what_the_panel_says() {
     );
 }
 
+/// A gateway someone killed exits with a code rather than zero, because zero
+/// would tell launchd to leave it stopped. The only window in which this host
+/// sees that code is a reconciliation inside the restart throttle, and what it
+/// is looking at is a service on its way back rather than one that failed.
+#[test]
+fn a_service_that_was_stopped_is_not_reported_as_one_that_failed() {
+    let failure = diagnose(
+        &LastExit::Code(code("stoppedOnRequest")),
+        None,
+        "",
+        PORT,
+        READINESS,
+    );
+    assert_eq!(
+        failure.sentence,
+        "Nessa's background service is not starting: it was stopped, and is starting again."
+    );
+    assert!(!failure.sentence.contains("registry"));
+}
+
 #[test]
 fn a_program_that_never_ran_is_not_reported_as_something_it_said() {
     // launchd answers a plist whose program is missing with EX_CONFIG, not
