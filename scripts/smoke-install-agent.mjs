@@ -53,24 +53,70 @@ function report(run) {
   return JSON.parse(run.stdout)
 }
 
-/** Why this run cannot reach a report, when that is not this build's fault.
+/** Whether Nessa pins an Opencode build for the machine this is running on.
  *
- * Two reasons, and neither is a defect. A runner Nessa pins no build for —
- * Windows today — has nothing to install, and a machine with no route to the
- * registry has nothing to install it from. Everything else is a failure and is
- * reported as one: a digest that did not match, an archive with no executable
- * in it, a store that could not be written are faults of this build however
- * little network there was.
+ * Read from the platform, deliberately, and never from what the command said.
+ * `install-agent` has two refusals that both open "nessa has no tested
+ * opencode release": one for a platform with no pins at all, and one for a
+ * platform that has them where none of the builds runs on *this* machine. On
+ * Windows the first is the truth. On a runner Nessa does pin for, either
+ * sentence can only mean a regression — a pin dropped from
+ * `agent-releases.json`, `host_libc` or `host_has_avx2` answering wrongly,
+ * `satisfies` broken — and a check that read it as "nothing to install here"
+ * would turn every one of those into a green step that verified nothing, with
+ * the digest never compared against the registry.
  *
- * Returns the reason to say out loud, or `undefined` when a report was owed. */
-function unavailable(stderr) {
-  if (/no tested opencode release/.test(stderr)) {
-    return `nessa pins no opencode build for ${process.platform}-${process.arch}`
-  }
-  if (stderr.includes("nothing was installed, try again")) {
-    return "the pinned archive could not be fetched"
-  }
-  return undefined
+ * So there is one platform this skips on, it is named here rather than
+ * inferred, and it is the only one. */
+const PINNED = process.platform !== "win32"
+
+/** Whether a refusal is this machine having no route to the registry.
+ *
+ * Exactly `SourceFailure::Unreachable`, matched on its own words rather than
+ * on the retry advice `explain` appends. The advice is wider than the fault:
+ * every `Download` failure that is not a refused status or an oversized body
+ * carries it, and that includes `NotStored` — the bytes arrived and this
+ * machine could not keep them, which is a full disk here and not a quiet
+ * network. Skipping on the advice would skip on a store that could not be
+ * written, which this file says in the same breath is a failure. */
+function unreachable(stderr) {
+  return stderr.includes("could not reach the release archive")
+}
+
+/** What each failure `install-agent` can report must do to the skip above.
+ *
+ * Held here rather than left to be read, because the fault this guards is a
+ * skip condition quietly growing wider than the one thing it is for, and the
+ * run where that matters is the run where it stops checking anything. These
+ * are the `SourceFailure` and `InstallFailure` sentences as `explain` emits
+ * them, retry advice included — the advice is the part that is wider than the
+ * fault, so it is present in the ones that must not skip.
+ */
+const SKIP_CASES = [
+  [
+    "could not reach the release archive: connection reset; nothing was installed, try again",
+    true,
+  ],
+  [
+    "could not store the release archive: No space left on device; nothing was installed, try again",
+    false,
+  ],
+  [
+    "the release archive was refused with status 404; the pinned release may have been withdrawn (404)",
+    false,
+  ],
+  [
+    "the archive is not the pinned one; nothing was installed and this is not worth retrying",
+    false,
+  ],
+]
+
+for (const [message, skips] of SKIP_CASES) {
+  assert.equal(
+    unreachable(message),
+    skips,
+    `${skips ? "must" : "must not"} be treated as an unreachable registry: ${message}`,
+  )
 }
 
 try {
@@ -96,17 +142,26 @@ try {
 
   // And the case the contract exists for: a real install, of the real pinned
   // archive, verified against the real compiled-in digest.
-  //
-  // Skipped rather than failed when the archive cannot be fetched, because a
-  // machine with no route to the registry is not a broken build and this must
-  // not become the check that goes red when a CDN blinks. Skipped loudly: what
-  // was not checked is said, so a run that quietly stopped testing the thing
-  // it is named after cannot pass for one that did.
   const installed = install("opencode")
-  const skipped = installed.status === 0 ? undefined : unavailable(installed.stderr)
-  if (skipped) {
+  if (!PINNED) {
+    // Nothing is pinned here, so the refusal is the whole of what this
+    // platform can be held to — and it is held to it rather than skipped past,
+    // because "nessa installs nothing on Windows" is itself a contract and a
+    // Windows pin arriving without the rest of this working should not be
+    // silent.
+    assert.notEqual(installed.status, 0, `opencode installed on ${process.platform}`)
+    assert.match(installed.stderr, /no tested opencode release/)
+    assert.equal(installed.stdout, "", `a refusal wrote to stdout: ${installed.stdout}`)
     console.log(
-      `install-agent e2e passed the refusal cases; the report itself was not checked because ${skipped}`,
+      `install-agent e2e passed the refusal cases, including that nessa pins no opencode build for ${process.platform}; there was nothing to install, so the report itself was not checked`,
+    )
+  } else if (installed.status !== 0 && unreachable(installed.stderr)) {
+    // The one skip on a platform that is pinned: no route to the registry.
+    // Not a broken build, and this must not become the check that goes red
+    // when a CDN blinks — but it is said out loud, so a run that stopped
+    // testing the thing it is named after cannot pass for one that did.
+    console.log(
+      `install-agent e2e passed the refusal cases; the report itself was not checked because the release archive could not be reached: ${installed.stderr.trim()}`,
     )
   } else {
     const first = report(installed)
