@@ -404,16 +404,25 @@ fn a_machine_with_no_known_c_library_is_told_what_the_builds_need() {
         .expect_err("no build is known to run here")
         .to_string();
 
+    // Checked first, and separately, because it is the one failure the whole
+    // sentence below would report as an unreadable diff. A wrapped literal
+    // whose continuation is lost still contains every phrase anything here
+    // looks for, so a message asserted piece by piece goes on passing with the
+    // source indentation printed in the middle of it.
     assert!(
-        message.contains("no c library nessa could name"),
-        "the message does not say what is missing about this machine: {message}"
+        !message.contains("  "),
+        "the message carries its own source indentation: {message}"
     );
-    for needed in ["gnu", "musl", "avx2"] {
-        assert!(
-            message.contains(needed),
-            "the message does not say the builds need {needed}: {message}"
-        );
-    }
+    // And then the whole of it, rather than the phrases it happens to contain:
+    // what this test is about is a person being able to read the refusal, and
+    // no set of `contains` checks says whether the sentence reads.
+    assert_eq!(
+        message,
+        "agent setup failed: nessa has no tested opencode release this machine can run: \
+         it is linux-x86_64 with no c library nessa could name and avx2, \
+         and the opencode builds for linux-x86_64 need \
+         gnu and avx2, or gnu, or musl and avx2, or musl"
+    );
 }
 
 #[test]

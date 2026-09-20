@@ -2,6 +2,7 @@ use std::fmt;
 use std::io::{Read, Write};
 use std::time::Duration;
 
+use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
 
 use crate::agent_install::application::{ArchiveSource, SourceFailure, StagedArchive};
@@ -65,7 +66,7 @@ impl std::error::Error for NoHttpsClient {}
 /// client panics there rather than deadlocking quietly, which is the better of
 /// the two but still a panic.
 pub struct HttpsArchives {
-    client: reqwest::blocking::Client,
+    client: Client,
 }
 
 impl HttpsArchives {
@@ -83,7 +84,7 @@ impl HttpsArchives {
     /// Both policies are set rather than inherited. They are reqwest's defaults
     /// today, and a default is not a decision this install can rest on.
     pub fn new() -> Result<Self, NoHttpsClient> {
-        reqwest::blocking::Client::builder()
+        Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(TRANSFER_TIMEOUT)
             .https_only(true)

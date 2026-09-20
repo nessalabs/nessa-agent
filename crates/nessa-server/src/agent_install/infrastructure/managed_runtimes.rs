@@ -1,7 +1,9 @@
 use std::fs::File;
+#[cfg(unix)]
+use std::fs::Permissions;
 use std::io::{self, Read, Seek, Write};
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use flate2::read::MultiGzDecoder;
@@ -11,7 +13,7 @@ use nessa_local_storage::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tar::EntryType;
+use tar::{Archive, EntryType};
 
 use crate::agent_install::application::{RuntimeStore, StagedArchive, StoreFailure};
 use crate::agent_install::domain::{AgentName, ArchiveDigest, PinnedRelease, ReleaseVersion};
@@ -466,7 +468,7 @@ impl ManagedRuntimes {
         // first gzip member, so a multi-member archive whose entry lives past
         // it would be reported as an archive that does not contain the pinned
         // executable — blaming the pin for a decoder that stopped early.
-        let mut tar = tar::Archive::new(MultiGzDecoder::new(staged.file_mut()));
+        let mut tar = Archive::new(MultiGzDecoder::new(staged.file_mut()));
         let entries = tar.entries().map_err(malformed)?;
         let wanted = release.executable().as_str().as_bytes();
         for entry in entries {
@@ -929,8 +931,6 @@ fn refused_kind(kind: EntryType) -> Option<&'static str> {
 #[cfg(unix)]
 impl ManagedRuntimes {
     fn same_file(&self, lock: &File, relative: &Path) -> Result<bool, StoreFailure> {
-        use std::os::unix::fs::MetadataExt;
-
         let held = lock.metadata().map_err(unwritable)?;
         match open_beneath(&self.root, relative, OpenMode::Read) {
             Ok(named) => {
@@ -990,7 +990,7 @@ fn malformed(error: io::Error) -> StoreFailure {
 /// primitive as the record, instead of settling for what a stat can see.
 #[cfg(unix)]
 fn make_executable(file: &File) -> io::Result<()> {
-    file.set_permissions(std::fs::Permissions::from_mode(0o700))
+    file.set_permissions(Permissions::from_mode(0o700))
 }
 
 #[cfg(not(unix))]

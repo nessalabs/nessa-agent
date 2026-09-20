@@ -108,7 +108,8 @@ fn unrunnable(agent: &AgentName, host: &HostPlatform, releases: &[PinnedRelease]
         return format!("nessa has no tested {agent} release for {host}");
     }
     format!(
-        "nessa has no tested {agent} release this machine can run: it is {host},          and the {agent} builds for {} need {}",
+        "nessa has no tested {agent} release this machine can run: it is {host}, \
+         and the {agent} builds for {} need {}",
         host.platform(),
         needs.join(", or ")
     )
