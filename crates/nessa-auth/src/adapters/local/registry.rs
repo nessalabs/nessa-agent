@@ -29,7 +29,7 @@ use crate::{
     },
     domain::{
         AudienceId, Credential, CredentialId, CredentialTransition, DomainError, Initiator,
-        IssuanceCause, Membership, PrincipalId, Supersession, TransitionCause,
+        IssuanceCause, Membership, PrincipalId, Supersession,
     },
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -49,10 +49,9 @@ use std::{
 };
 use subtle::ConstantTimeEq;
 
-/// Schema 2 added the `transitions` list. A schema 1 file is upgraded in memory
-/// on open and written back as schema 2 by the next mutation.
+/// Schema 2 added the `transitions` list. Earlier files are not read; the
+/// project is pre-alpha and carries no registry compatibility.
 const SCHEMA_VERSION: u32 = 2;
-const LEGACY_SCHEMA_VERSION: u32 = 1;
 const TOKEN_PREFIX: &str = "nessa_v1";
 /// Per-store resource bounds, injected by composition.
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -184,7 +183,6 @@ struct Registry {
     issue_receipts: Vec<IssueReceipt>,
     revoke_receipts: Vec<RevokeReceipt>,
     /// Append-only lifecycle evidence, committed with the state it describes.
-    #[serde(default)]
     transitions: Vec<CredentialTransitionDto>,
 }
 
@@ -249,9 +247,8 @@ impl LocalCredentialStore {
                 if bytes.len() as u64 > config.max_registry_bytes {
                     return Err(LocalStoreError::Capacity);
                 }
-                let mut registry: Registry =
+                let registry: Registry =
                     serde_json::from_slice(&bytes).map_err(|_| LocalStoreError::Corrupt)?;
-                upgrade_registry(&mut registry)?;
                 validate_registry(&registry, &config)?;
                 Some(registry)
             }
@@ -1158,8 +1155,7 @@ fn supersede_matching(
     Ok(())
 }
 
-/// The record under which `credential_id` stopped being valid: its revocation
-/// transition, or a pre-journal record that already showed it revoked.
+/// The record under which `credential_id` stopped being valid.
 fn revocation_of(registry: &Registry, credential_id: &str) -> Option<CredentialTransitionDto> {
     registry
         .transitions
@@ -1187,34 +1183,6 @@ fn transitions_of_command(
         })
         .cloned()
         .collect()
-}
-
-/// Bring a schema 1 registry into the current shape in memory. Credentials that
-/// existed before transitions were recorded get one honest `predates_journal`
-/// record each; their real cause is unknown and is not guessed.
-fn upgrade_registry(registry: &mut Registry) -> Result<(), LocalStoreError> {
-    if registry.schema_version != LEGACY_SCHEMA_VERSION {
-        return Ok(());
-    }
-    if !registry.transitions.is_empty() {
-        return Err(LocalStoreError::Corrupt);
-    }
-    for index in 0..registry.credentials.len() {
-        let credential = Credential::try_from(registry.credentials[index].metadata.clone())
-            .map_err(|_| LocalStoreError::Corrupt)?;
-        let transition = CredentialTransition::new(
-            credential.id().clone(),
-            None,
-            credential.lifecycle(),
-            TransitionCause::PredatesJournal,
-            Initiator::Unknown,
-            credential.issued_at(),
-        )
-        .map_err(|_| LocalStoreError::Corrupt)?;
-        record_transition(registry, &transition, None);
-    }
-    registry.schema_version = SCHEMA_VERSION;
-    Ok(())
 }
 
 /// The one rule for recorded evidence, applied before every write and on every
@@ -1266,11 +1234,7 @@ fn validate_transitions(
             .ok_or(LocalStoreError::Corrupt)?;
         seen += chain.len();
         let (first, rest) = chain.split_first().ok_or(LocalStoreError::Corrupt)?;
-        if !matches!(
-            first.cause,
-            TransitionCauseDto::Issued { .. } | TransitionCauseDto::PredatesJournal
-        ) || rest.len() > 1
-        {
+        if !matches!(first.cause, TransitionCauseDto::Issued { .. }) || rest.len() > 1 {
             return Err(LocalStoreError::Corrupt);
         }
         let mut previous = first;
@@ -2666,12 +2630,6 @@ mod tests {
                 }),
             ),
             (
-                "unknown initiator on a live record",
-                Box::new(|v| {
-                    v["transitions"][1]["initiator"] = serde_json::json!({"kind": "unknown"});
-                }),
-            ),
-            (
                 "initiator names no principal",
                 Box::new(|v| {
                     v["transitions"][1]["initiator"] =
@@ -2712,91 +2670,5 @@ mod tests {
                 "accepted: {name}"
             );
         }
-    }
-
-    #[test]
-    fn schema_one_registry_gets_honest_pre_journal_records_and_upgrades_on_first_write() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("auth/credentials.v1.json");
-        let store = open_store(&path).unwrap();
-        store.bootstrap(bootstrap()).unwrap();
-        store
-            .issue_sync(member_issue("issue-reader", "reader-credential"))
-            .unwrap();
-        store
-            .revoke_sync(revoke("revoke-reader", "reader-credential", 150))
-            .unwrap();
-        drop(store);
-        rewrite(&path, |v| {
-            v["schemaVersion"] = serde_json::json!(1);
-            v.as_object_mut().unwrap().remove("transitions");
-        });
-        let legacy = fs::read(&path).unwrap();
-
-        let store = open_store(&path).unwrap();
-        assert_eq!(fs::read(&path).unwrap(), legacy, "open never writes");
-        let backfilled = transitions(&store);
-        assert_eq!(
-            backfilled,
-            vec![
-                CredentialTransitionDto {
-                    sequence: 1,
-                    revision: 3,
-                    correlation: None,
-                    credential_id: "owner-credential".into(),
-                    before: None,
-                    after: lifecycle(100, Some(200), None),
-                    cause: TransitionCauseDto::PredatesJournal,
-                    initiator: InitiatorDto::Unknown,
-                    at: 100,
-                },
-                CredentialTransitionDto {
-                    sequence: 2,
-                    revision: 3,
-                    correlation: None,
-                    credential_id: "reader-credential".into(),
-                    before: None,
-                    after: lifecycle(120, None, Some(150)),
-                    cause: TransitionCauseDto::PredatesJournal,
-                    initiator: InitiatorDto::Unknown,
-                    at: 120,
-                },
-            ]
-        );
-        // A pre-journal revocation is still the credential's one revocation.
-        let replay = store
-            .revoke_sync(revoke("again", "reader-credential", 170))
-            .unwrap();
-        assert_eq!(replay.revocation, backfilled[1]);
-
-        let outcome = store
-            .revoke_sync(revoke("revoke-owner", "owner-credential", 180))
-            .unwrap();
-        let written: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(written["schemaVersion"], 2);
-        assert_eq!(written["transitions"].as_array().unwrap().len(), 3);
-        assert_eq!(
-            outcome.revocation.before,
-            Some(lifecycle(100, Some(200), None))
-        );
-        drop(store);
-        assert_eq!(transitions(&open_store(&path).unwrap()).len(), 3);
-
-        // A schema 1 file that already claims transitions is not trusted.
-        fs::write(&path, &legacy).unwrap();
-        rewrite(&path, |v| {
-            v["transitions"] = serde_json::json!([]);
-        });
-        assert!(open_store(&path).is_ok());
-        rewrite(&path, |v| {
-            v["transitions"] = serde_json::json!([{
-                "sequence": 1, "revision": 1, "correlation": null,
-                "credentialId": "owner-credential", "before": null,
-                "after": {"issuedAt": 100, "expiresAt": 200, "revokedAt": null},
-                "cause": {"kind": "issued", "cause": "bootstrap"},
-                "initiator": {"kind": "local_operator"}, "at": 100
-            }]);
-        });
-        assert!(matches!(open_store(&path), Err(LocalStoreError::Corrupt)));
     }
 }

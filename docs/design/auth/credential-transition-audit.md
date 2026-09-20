@@ -76,7 +76,7 @@ the **same atomic commit** as the state change it describes, produced by
 | # | Question from the issue | Decision | Why |
 | --- | --- | --- | --- |
 | 1 | Where does the evidence live? | In the registry file itself (`Registry.transitions`), plus a read port so the application can ask for it. | Same commit, same lock, same fsync, same validator. No second file whose ordering could drift from the state. A separate audit-port adapter can be added later; the journal would then be its local, already-durable source. |
-| 2 | Cause vocabulary | Issued: `Bootstrap`, `AdminIssue`, `SurfaceProvision`, `OwnerRecovery`. Revoked: `Explicit`, or `Superseded { by, kind: Provision \| OwnerRecovery }`. Plus `PredatesJournal` for records backfilled from a schema 1 file. | Exactly the sites that exist. `by` names the replacing credential so the chain is reconstructable. |
+| 2 | Cause vocabulary | Issued: `Bootstrap`, `AdminIssue`, `SurfaceProvision`, `OwnerRecovery`. Revoked: `Explicit`, or `Superseded { by, kind: Provision \| OwnerRecovery }`. | Exactly the sites that exist. `by` names the replacing credential so the chain is reconstructable. |
 | 2b | Is expiry a transition? | **No.** Keep it derived from `expires_at` at read time. | Nothing *happens* at expiry; no code runs, no state changes. The expiry time is already in the `Issued` record's `after`. Writing an event that nobody caused would be inventing evidence. |
 | 3 | Post-commit audit failure | Cannot occur locally: a failed journal write is a failed commit, the error is returned, and the caller retries with the same `request_id`, which the existing receipts make safe. | Satisfies "never undo a needed revocation" (it was never done) and "report delivery failure" (the error is the report). A future hosted adapter that separates the two must return a typed committed-but-unaudited result; this plan does not add that type because nothing would produce it. |
 | 4 | Does the domain become authoritative? | Yes for **decisions**, no for **storage**. Every mutation goes DTO → `Credential` → transition → DTO. `supersede()` in the registry is deleted. DTOs stay as the serde shape only. Receipts stay unchanged. | Bounded change to a 1900-line file: touch the four mutation sites and the validator, keep the idempotency and file-format machinery as-is. |
@@ -101,12 +101,10 @@ CredentialLifecycle = { issued_at, expires_at, revoked_at }   // the fields a tr
 TransitionCause
   Issued(IssuanceCause)      Bootstrap | AdminIssue | SurfaceProvision | OwnerRecovery
   Revoked(RevocationCause)   Explicit | Superseded { by: CredentialId, kind: Provision | OwnerRecovery }
-  PredatesJournal            // backfilled from a schema-1 file; cause unknown
 
 Initiator
   Principal(PrincipalId)      // verified issuer_principal_id on issue / revoke / provision
   LocalOperator               // offline bootstrap / recovery holding the registry lock; no principal
-  Unknown                     // only with PredatesJournal
 ```
 
 `Credential` gains:
@@ -150,22 +148,21 @@ It gains these checks, so a hand-edited file and a buggy live write fail the
 same way:
 
 - sequences are 1..n with no gaps; `revision` is non-decreasing and ≤ registry revision
-- every credential's first transition is `Issued` or `PredatesJournal`, followed by at most one `Revoked`
+- every credential's first transition is `Issued`, followed by at most one `Revoked`
 - each transition's `before` equals the previous transition's `after` for that id
 - the last transition's `after` equals the lifecycle the registry stores for that credential
 - every transition names a credential the registry holds
 - `by` in a supersession names a credential that exists and was issued at that same revision
-- `Initiator::Principal` names a known principal; `Unknown` appears only with `PredatesJournal`
+- `Initiator::Principal` names a known principal
 - `transitions.len() ≤ 2 × max_credentials` (no new config knob; each credential has at most one issue and one revoke)
 
-### Migration from schema 1
+### No migration
 
-On `open`, a schema-1 file is upgraded **in memory**: one `PredatesJournal`
-transition per existing credential, `Initiator::Unknown`, `before: None`,
-`after` = its current lifecycle. Schema 2 is written to disk at the **next
-mutation** (`persist` already writes the whole file). Open stays read-only, as
-it is today. The backfill is deterministic, so reopening before any mutation
-produces the same in-memory state.
+The registry schema version moves from 1 to 2 and schema 1 files are rejected
+as corrupt. The project is pre-alpha, so there is nothing to carry forward;
+an old registry is recreated with bootstrap. This keeps the cause vocabulary
+honest: every record names a real command, and there is no "unknown" cause or
+initiator anywhere in the model.
 
 ### The ready-now piece: origin predicate
 
@@ -275,7 +272,7 @@ Four commits, each leaving `cargo test --workspace` green:
 3. **Registry journal** in `crates/nessa-auth/src/adapters/local/registry.rs`:
    schema 2, the four mutation sites routed through `Credential`, the old
    `supersede()` helper deleted, `validate_transitions` called from
-   `validate_registry`, schema 1 backfill on open, results carrying evidence,
+   `validate_registry`, results carrying evidence,
    and the `CredentialTransitionReader` port.
 4. **Docs**: this file, the auth crate README, and ADR 0010.
 
@@ -288,14 +285,11 @@ Four commits, each leaving `cargo test --workspace` green:
   one `Revoked` record with the original time and cause.
 - **Single validator:** hand-write a registry file with (a) a revoked credential
   and no `Revoked` record, (b) a gap in `sequence`, (c) `before` that does not
-  match the prior `after`, (d) `Initiator::Unknown` on a non-backfilled record.
+  match the prior `after`, (d) an initiator naming no known principal.
   `open` must reject each with `Corrupt`.
 - **Sink failure = no commit:** with the existing injected pre-replace and
   directory-sync failures, assert the credential is *not* revoked, no transition
   exists, and the same request retries successfully.
-- **Migration:** open a real schema-1 fixture, list transitions (all
-  `PredatesJournal` / `Unknown`), perform one revoke, reopen, assert schema 2 on
-  disk with backfill plus the new record.
 - **Idempotent issue replay** (`ExistingSecretUnavailable`) returns the original
   transition, not a new one.
 - **Existing tests** in `registry.rs` keep passing unchanged except for the
@@ -320,7 +314,7 @@ domain unit tests in `transition.rs` and `models.rs`.
 | Risk | Handling |
 | --- | --- |
 | File size grows | Bounded at 2 × `max_credentials` records; `max_registry_bytes` still applies and is checked before write. |
-| Old files fail to open | Backfill is in memory and deterministic; nothing is written at open. |
+| Old files fail to open | Accepted. The project is pre-alpha; schema 1 registries are rejected as corrupt and must be recreated with bootstrap. |
 | Conflicts with open PRs #43, #44, #61 | None of them touch `nessa-auth` or `browser_session`. |
 | Reviewer "fixes" the single validator | Decision 6 above records that it is a requirement. |
 | The wire protocol does not expose transitions | Deliberate. The gateway result still reports the revision; evidence is durable in the registry and reachable through the read port. Exposing it over the socket is a protocol change for its own issue. |

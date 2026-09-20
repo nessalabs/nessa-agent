@@ -105,12 +105,10 @@ impl TryFrom<CredentialTransitionDto> for CredentialTransition {
                     }
                 }
             }),
-            TransitionCauseDto::PredatesJournal => TransitionCause::PredatesJournal,
         };
         let initiator = match dto.initiator {
             InitiatorDto::Principal { id } => Initiator::Principal(PrincipalId::new(id)?),
             InitiatorDto::LocalOperator => Initiator::LocalOperator,
-            InitiatorDto::Unknown => Initiator::Unknown,
         };
         Self::new(
             CredentialId::new(dto.credential_id)?,
@@ -166,14 +164,12 @@ impl CredentialTransitionDto {
                         }
                     },
                 },
-                TransitionCause::PredatesJournal => TransitionCauseDto::PredatesJournal,
             },
             initiator: match transition.initiator() {
                 Initiator::Principal(id) => InitiatorDto::Principal {
                     id: id.as_str().to_owned(),
                 },
                 Initiator::LocalOperator => InitiatorDto::LocalOperator,
-                Initiator::Unknown => InitiatorDto::Unknown,
             },
             at: transition.at(),
         }
@@ -234,7 +230,7 @@ mod tests {
             )
             .unwrap();
         let mut forged = CredentialTransitionDto::record(&issued, 1, 1, None);
-        forged.initiator = InitiatorDto::Unknown;
+        forged.before = Some(forged.after);
         assert!(CredentialTransition::try_from(forged).is_err());
         let superseded = credential
             .supersede(

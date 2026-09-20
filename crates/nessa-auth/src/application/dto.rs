@@ -157,14 +157,8 @@ pub enum RevocationCauseDto {
 #[serde(deny_unknown_fields, rename_all = "snake_case", tag = "kind")]
 /// Serialized lifecycle cause. Expiry is never a cause: nothing happens then.
 pub enum TransitionCauseDto {
-    Issued {
-        cause: IssuanceCauseDto,
-    },
-    Revoked {
-        cause: RevocationCauseDto,
-    },
-    /// Recorded before the registry kept transitions; the real cause is unknown.
-    PredatesJournal,
+    Issued { cause: IssuanceCauseDto },
+    Revoked { cause: RevocationCauseDto },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,8 +169,6 @@ pub enum InitiatorDto {
     Principal { id: String },
     /// Operating-system owner running an offline command.
     LocalOperator,
-    /// Only valid with a pre-journal cause.
-    Unknown,
 }
 
 /// One committed credential lifecycle change, secret-free. `sequence`,

@@ -332,10 +332,10 @@ looked like before and after, why it changed (a deliberate revoke, a replacement
 during surface provisioning, a displacement during owner recovery, and so on),
 who caused it, and which request it belonged to. A transition is saved in the
 same write as the change it describes, so the file never says a token is revoked
-without also saying why. Files from before this list existed are read as they
-are; each existing token gets a record marked as predating the list, and the
-next change writes the file in the current format (schema 2). The reasoning is
-in [credential transition audit](../../design/auth/credential-transition-audit.md).
+without also saying why. The file format is schema 2; files from before this
+list existed are not read, because the project is pre-alpha and keeps no
+compatibility with earlier registries. The reasoning is in
+[credential transition audit](../../design/auth/credential-transition-audit.md).
 
 A **committed change** means the server has finished saving a change to that file
 and received confirmation from the operating system that the write was synced to

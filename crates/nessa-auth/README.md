@@ -67,9 +67,9 @@ provisioning, owner recovery, explicit revocation, and supersession by
 provisioning or by owner recovery. Expiry is not a cause; nothing happens at
 expiry and the instant is already in the issuance record. Automatic
 revocations carry the initiator of the command that triggered them, and their
-cause says they were automatic. Files written before this list existed are
-upgraded in memory on open with one honest `predates_journal` record per
-credential and written back as schema 2 by the next mutation.
+cause says they were automatic. The registry file is schema 2; earlier files
+are not read, because the project is pre-alpha and carries no registry
+compatibility.
 
 Issue, bootstrap, and revoke results carry their committed transitions, and the
 `CredentialTransitionReader` port lists them per organization. See

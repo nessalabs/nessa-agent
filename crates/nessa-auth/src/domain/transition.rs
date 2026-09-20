@@ -59,9 +59,6 @@ pub enum RevocationCause {
 pub enum TransitionCause {
     Issued(IssuanceCause),
     Revoked(RevocationCause),
-    /// The credential existed before transitions were recorded. Its real cause
-    /// is unknown and is labelled as such rather than guessed.
-    PredatesJournal,
 }
 
 /// Who caused a transition. Automatic revocations carry the initiator of the
@@ -73,8 +70,6 @@ pub enum Initiator {
     /// The operating-system owner running an offline command under the registry
     /// lock. There is no authenticated principal to name.
     LocalOperator,
-    /// Only valid with [`TransitionCause::PredatesJournal`].
-    Unknown,
 }
 
 /// One validated lifecycle change of one credential.
@@ -101,20 +96,10 @@ impl CredentialTransition {
         at: u64,
     ) -> Result<Self, DomainError> {
         let invalid = |reason| Err(DomainError::InvalidTransition { reason });
-        if matches!(initiator, Initiator::Unknown)
-            != matches!(cause, TransitionCause::PredatesJournal)
-        {
-            return invalid("unknown initiator is only valid for a pre-journal record");
-        }
         match &cause {
             TransitionCause::Issued(_) => {
                 if before.is_some() || after.revoked_at.is_some() || at != after.issued_at {
                     return invalid("issuance has no prior state and is not revoked");
-                }
-            }
-            TransitionCause::PredatesJournal => {
-                if before.is_some() || at != after.issued_at {
-                    return invalid("pre-journal record has no prior state");
                 }
             }
             TransitionCause::Revoked(revocation) => {
@@ -232,37 +217,6 @@ mod tests {
             cause,
             Initiator::LocalOperator,
             99
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn unknown_initiator_is_only_for_pre_journal_records() {
-        assert!(CredentialTransition::new(
-            id("c"),
-            None,
-            live(),
-            TransitionCause::PredatesJournal,
-            Initiator::Unknown,
-            100
-        )
-        .is_ok());
-        assert!(CredentialTransition::new(
-            id("c"),
-            None,
-            live(),
-            TransitionCause::PredatesJournal,
-            Initiator::LocalOperator,
-            100
-        )
-        .is_err());
-        assert!(CredentialTransition::new(
-            id("c"),
-            None,
-            live(),
-            TransitionCause::Issued(IssuanceCause::Bootstrap),
-            Initiator::Unknown,
-            100
         )
         .is_err());
     }
