@@ -299,6 +299,26 @@ it("gives up on a PUT that never answers when its deadline elapses, and aborts t
   expect(requestSignal?.aborted).toBe(true)
 })
 
+it("gives up as upload_timeout when the timer is already out of budget, sending nothing", async () => {
+  // The contract says `elapsed` is called once after `ms`, not that a turn of
+  // the event loop passes first: a clock a test drives by hand, or one whose
+  // budget is already spent, calls it while `timer` is still running.
+  const cancelled: boolean[] = []
+  const now: UploadTimer = (_ms, elapsed) => {
+    elapsed()
+    return () => cancelled.push(true)
+  }
+  const put = vi.fn(() => new Promise<AttachmentUploadReply>(() => {}))
+  const error = await createAttachmentApi({ request: vi.fn() }, { put }, () => "id", now)
+    .upload(ticket, { mimeType: "image/heic", bytes })
+    .catch((error: unknown) => error)
+  expect(error).toBeInstanceOf(NessaAttachmentError)
+  expect(error).toMatchObject({ code: "upload_timeout", status: undefined })
+  expect(put).not.toHaveBeenCalled()
+  // The timer is still stopped, so a clock holding a handle lets it go.
+  expect(cancelled).toEqual([true])
+})
+
 it("reports the caller's own abort as aborted, not as a gateway that cannot be reached", async () => {
   const clock = manualTimer()
   const caller = new AbortController()

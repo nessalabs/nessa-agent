@@ -131,10 +131,14 @@ function putWithin(
   return new Promise((resolve, reject) => {
     const request = new AbortController()
     let settled = false
+    // Assigned after the timer is armed, and a timer is free to spend its whole
+    // budget before returning, so the deadline may settle this before there is
+    // anything to cancel. Cancelled below in that case.
+    let stopTimer: (() => void) | undefined
     const finish = (settle: () => void) => {
       if (settled) return
       settled = true
-      stopTimer()
+      stopTimer?.()
       caller?.removeEventListener("abort", onCallerAbort)
       settle()
     }
@@ -144,9 +148,11 @@ function putWithin(
         reject(error)
       })
     const onCallerAbort = () => stop(new NessaAttachmentError("aborted"))
-    const stopTimer = timer(UPLOAD_DEADLINE_MS, () =>
+    stopTimer = timer(UPLOAD_DEADLINE_MS, () =>
       stop(new NessaAttachmentError("upload_timeout")),
     )
+    // Already out of time before the request was made: nothing to send.
+    if (settled) return stopTimer()
     if (caller?.aborted) return onCallerAbort()
     caller?.addEventListener("abort", onCallerAbort, { once: true })
     transport.put({ ...upload, signal: request.signal }).then(
