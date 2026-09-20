@@ -1,5 +1,5 @@
 // Build a relocatable, self-contained runtime. No user config or credentials enter the bundle.
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import {
   mkdirSync,
   cpSync,
@@ -12,6 +12,13 @@ import { resolve, join } from "node:path"
 import { createHash } from "node:crypto"
 import { runtimeFingerprint } from "./runtime-fingerprint.mjs"
 import { materializeBinLinks } from "./materialize-bin-links.mjs"
+import {
+  RUNTIME_EXECUTABLES,
+  runtimeEntitlements,
+  signingArguments,
+  signingIdentity,
+  signingProblems,
+} from "./runtime-signing.mjs"
 const root = resolve(import.meta.dirname, "../..")
 if (process.platform !== "darwin")
   throw new Error("Bundled gateway packaging currently supports macOS")
@@ -77,9 +84,53 @@ execFileSync("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], {
 })
 materializeBinLinks(join(harness, "node_modules"))
 cpSync(join(root, "crates/nessa-sdk/data/models.json"), join(out, "models.json"))
-// Ad-hoc sign nested executables for local distribution. Release signing remains Tauri's responsibility.
-for (const name of ["node", "nessa", "nessa-mcp"])
-  execFileSync("codesign", ["--force", "--sign", "-", join(out, name)])
+// Sign the nested executables. Not Tauri's responsibility, whatever the comment
+// that used to be here said: the bundler signs the app and `Contents/MacOS`,
+// and treats a resource as a file, so these ship with whatever signature they
+// are given at this point. Ad-hoc is fine for a build that stays on this
+// machine and is what Apple rejected v0.1.0 for — see runtime-signing.mjs.
+// The hash import-certificate.mjs resolved, which names one certificate and
+// cannot be ambiguous. APPLE_SIGNING_IDENTITY is the bundler's variable and
+// holds a name; either signs, and the hash is preferred when both are there.
+const identity =
+  signingIdentity(process.env.NESSA_RUNTIME_SIGNING_IDENTITY) ??
+  signingIdentity(process.env.APPLE_SIGNING_IDENTITY)
+for (const name of RUNTIME_EXECUTABLES) {
+  const plist = runtimeEntitlements(name)
+  execFileSync(
+    "codesign",
+    signingArguments(join(out, name), {
+      identity,
+      entitlements: plist ? join(root, "src-tauri", plist) : undefined,
+    }),
+    { stdio: "inherit" },
+  )
+}
+// Read back now, not only in verify-bundle.mjs. That runs after `tauri build`
+// returns, and the bundler notarizes inside it: a signature Apple would reject
+// gets rejected by Apple first, twenty minutes in, which is the whole cost this
+// is meant to avoid. Here it costs three codesign calls and the build has not
+// started.
+if (identity) {
+  const problems = RUNTIME_EXECUTABLES.flatMap((name) => {
+    const shown = spawnSync("codesign", ["--display", "--verbose=2", join(out, name)], {
+      encoding: "utf8",
+    })
+    if (shown.status !== 0)
+      throw new Error(`Could not read the signature of runtime/${name}:\n${shown.stderr}`)
+    // codesign writes the display to stderr and nothing to stdout.
+    return signingProblems(name, shown.stderr)
+  })
+  if (problems.length > 0)
+    throw new Error(
+      `The runtime was signed, but not the way Apple requires:\n- ${problems.join("\n- ")}`,
+    )
+}
+process.stdout.write(
+  identity
+    ? `→ runtime executables signed with ${identity}, hardened and timestamped\n`
+    : "→ runtime executables signed ad-hoc; this bundle cannot be notarized\n",
+)
 const fingerprint = runtimeFingerprint(out)
 writeFileSync(
   join(out, "manifest.json"),

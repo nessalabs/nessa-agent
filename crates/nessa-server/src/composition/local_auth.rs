@@ -111,7 +111,11 @@ pub(super) fn product_state(
     .with_admin(admin)
     .with_settings(settings.session()?)
     .with_browser_sessions(Arc::new(
-        PersistentSessions::open(&directory.join("browser-sessions.jsonl")).map_err(setup_error)?,
+        PersistentSessions::open(
+            &directory.join("browser-sessions.jsonl"),
+            SystemClock.unix_seconds(),
+        )
+        .map_err(setup_error)?,
     ));
     product.browser_http_allowed = config.browser_http_allowed();
     if let Some(agent) = &settings.agent {

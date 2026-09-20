@@ -303,9 +303,10 @@ domain unit tests in `transition.rs` and `models.rs`.
 - **#52** (browser-session journal trusts `at`). Different context; this plan
   does not change `State::apply`. The registry's `at` is the command's supplied
   time, which is what the state already uses, and `revision` gives ordering.
-- **#56** (rotation supersedes across organizations). The filter in
-  `issue_internal` is left as-is. After this plan, the `SupersededByProvision`
-  record makes that scope *visible*, which is the evidence #56 needs to decide.
+- **#56** (rotation supersedes across organizations) landed separately as
+  #66: both automatic sites select through one `Replaces` scope, and this
+  work feeds that scope into the domain's supersession rule so each retired
+  credential also records why.
 - A hosted or out-of-process audit adapter. The read port is the seam for it.
 - Any change to receipts, token format, or the secret verifier.
 

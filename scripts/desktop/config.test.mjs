@@ -146,12 +146,37 @@ test("equal-form build arguments reach final verification unchanged", () => {
     },
   })
   assert.equal(status, 0)
-  assert.equal(calls.length, 2)
-  assert.deepEqual(calls[1].args, ["scripts/desktop/verify-bundle.mjs"])
-  assert.equal(calls[1].options.env.NESSA_BUILD_TARGET, "aarch64-apple-darwin")
-  assert.equal(calls[1].options.env.NESSA_BUILD_BUNDLES, "app,dmg")
-  assert.ok(calls[1].options.env.NESSA_BUILD_BUNDLES.split(",").includes("dmg"))
-  assert.equal(calls[1].options.env.RETAINED, "yes")
+  // Build, then staple the disk image, then verify. The staple is between the
+  // two because the bundler notarizes the app and builds the image around it,
+  // leaving the image itself without a ticket for the verification to find.
+  assert.equal(calls.length, 3)
+  assert.deepEqual(calls[1].args, ["scripts/desktop/notarize-disk-image.mjs"])
+  assert.deepEqual(calls[2].args, ["scripts/desktop/verify-bundle.mjs"])
+  for (const call of calls.slice(1)) {
+    assert.equal(call.options.env.NESSA_BUILD_TARGET, "aarch64-apple-darwin")
+    assert.equal(call.options.env.NESSA_BUILD_BUNDLES, "app,dmg")
+    assert.ok(call.options.env.NESSA_BUILD_BUNDLES.split(",").includes("dmg"))
+    assert.equal(call.options.env.RETAINED, "yes")
+  }
+})
+
+/** A disk image that cannot be stapled is not one to go on and verify. */
+test("a failed staple stops the build before verification", () => {
+  const calls = []
+  const status = runDesktopBuild({
+    args: ["--bundles", "app,dmg"],
+    environment: { APPLE_SIGNING_IDENTITY: "-" },
+    platform: "darwin",
+    spawn(command, args) {
+      calls.push(args.at(-1))
+      return { status: args.at(-1).includes("notarize-disk-image") ? 1 : 0 }
+    },
+  })
+  assert.equal(status, 1)
+  assert.ok(
+    !calls.some((call) => call.includes("verify-bundle")),
+    "the bundle was verified although its disk image had no ticket",
+  )
 })
 
 test("verification does not inherit artifact selectors without matching arguments", () => {

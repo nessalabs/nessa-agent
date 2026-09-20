@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  What the bundled Node binary is allowed to do, and nothing more.
+
+  Separate from Entitlements.plist, which is the app's. A nested executable
+  carries its own signature and its own entitlements: the app's do not reach
+  the process it spawns, so the agent's interpreter has to ask for its own.
+
+  Node is signed with the hardened runtime because notarization requires it of
+  every executable in the bundle, and the hardened runtime forbids writing
+  memory and then executing it — which is precisely what a JavaScript engine
+  does.
+-->
+<plist version="1.0">
+<dict>
+  <!--
+    V8 maps its generated code with MAP_JIT, which this permits. Without it
+    Node exits on the first script it compiles: the agent never starts, on
+    every machine except the one that built the bundle.
+  -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <!--
+    The same permission for the paths that do not use MAP_JIT. V8 on x86_64
+    takes them, and a release builds x86_64 as well as arm64, so leaving this
+    out would ship one architecture that works and one that does not.
+  -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+</dict>
+</plist>
