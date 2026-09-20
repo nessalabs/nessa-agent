@@ -63,7 +63,7 @@ pub(super) fn product_state(
     }
     let store = Arc::new(
         LocalCredentialStore::open_with_config(directory, "credentials.v1.json", settings.registry)
-            .map_err(setup_error)?,
+            .map_err(RunError::Registry)?,
     );
     let identity = store.identity().map_err(|_| {
         RunError::Authentication(

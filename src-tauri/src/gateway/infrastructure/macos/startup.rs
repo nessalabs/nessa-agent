@@ -3,18 +3,26 @@
 //! Readiness has a deadline because a healthy server can be slow. A server that
 //! exits on startup is not slow, and waiting out its deadline reports the
 //! readiness contract ("did not advertise the expected runtime identity")
-//! instead of the reason. Two pieces of evidence already exist at that moment:
-//! what `launchctl print` says the service's last exit was, and the tail of the
-//! log the plist itself redirects the process's stderr to. This module reads
-//! both and names the causes it can recognise.
+//! instead of the reason.
 //!
-//! The sentence is for the panel. Everything the sentence was inferred from —
-//! the exit status, the log tail, the readiness message — belongs in the app's
-//! own log, and is carried separately for that purpose.
+//! The reason comes from the server, deliberately. `RunError` chooses a process
+//! exit code from `protocol/defaults/gateway-exit-codes.json`, launchd records
+//! the exit code of the service it supervises, and `launchctl print` reports it
+//! back. This module reads that number and nothing else for meaning. The log is
+//! prose written for a person and is never parsed: a message can be reworded,
+//! a line can belong to an earlier run in the same append-only file, and a
+//! healthy launch mentions the same subsystems a failing one does.
+//!
+//! The sentence is for the panel. The exit status, the tail of the log the
+//! plist already redirects the process's stderr to, and the readiness message
+//! all belong in the app's own log, and are carried separately for that.
 use nessa_local_storage::OpenMode;
+use serde::Deserialize;
 use std::{
+    collections::BTreeMap,
     io::{Read, Seek, SeekFrom},
     path::Path,
+    sync::LazyLock,
 };
 
 /// Bytes of the gateway log read back from the end. Startup failures report
@@ -138,16 +146,17 @@ pub(super) struct StartupFailure {
     pub detail: String,
 }
 
-/// Name the cause when the evidence names it, and say plainly that we cannot
-/// when it does not. An unrecognised failure still carries its log tail to the
-/// app log, which is the whole of what diagnosing this by hand recovered.
+/// Name the cause when the server named it, and say plainly that we cannot
+/// when it did not. The log tail is carried to the app log and never read for
+/// meaning: it is prose written for a person, and the exit code is the
+/// contract.
 pub(super) fn diagnose(
     last_exit: &LastExit,
     tail: &str,
     port: u16,
     readiness: &str,
 ) -> StartupFailure {
-    let cause = recognise(last_exit, tail, port);
+    let cause = recognise(last_exit, port);
     let sentence = match &cause {
         Some(cause) => format!("Nessa's background service is not starting: {cause}"),
         None if tail.is_empty() => {
@@ -157,9 +166,9 @@ pub(super) fn diagnose(
         None => "Nessa's background service is not starting.".into(),
     };
     let mut detail = format!(
-        "gateway did not start: launchd reports {}; inferred cause: {}; {readiness}",
+        "gateway did not start: launchd reports {}; reported cause: {}; {readiness}",
         last_exit.describe(),
-        cause.as_deref().unwrap_or("none recognised")
+        cause.as_deref().unwrap_or("none reported")
     );
     if !tail.is_empty() {
         detail.push_str("\ngateway log tail:\n");
@@ -167,41 +176,59 @@ pub(super) fn diagnose(
     }
     StartupFailure { sentence, detail }
 }
-/// The server's own fatal messages are the vocabulary here — `RunError`'s
-/// `Display` is what reaches this log — plus the exec failures that happen
-/// before the server has a chance to say anything at all.
-fn recognise(last_exit: &LastExit, tail: &str, port: u16) -> Option<String> {
-    let tail = tail.to_ascii_lowercase();
-    // `LocalStoreError` says "invalid" for a registry whose contents this build
-    // cannot make sense of, which is the schema version among other things. The
-    // rest of that family — locked, not initialized — is still the registry,
-    // and saying so is better than naming a version that is not the problem.
-    if tail.contains("credential registry is invalid") {
-        return Some("its credential registry is not one this version of Nessa can read.".into());
-    }
-    if tail.contains("credential registry") {
-        return Some("its credential registry could not be read.".into());
-    }
-    if tail.contains("port already in use") || tail.contains("address already in use") {
-        return Some(format!("port {port} is already in use."));
-    }
-    if exec_failed(last_exit, &tail) {
-        return Some("its background program could not be launched.".into());
-    }
-    None
+
+const UNLAUNCHABLE: &str = "its background program could not be launched.";
+/// `protocol/defaults/gateway-exit-codes.json`, the same bytes the server
+/// compiles in to choose the code it exits with. Reading the number is the
+/// whole of how this host learns why the service stopped: the server says it
+/// deliberately, rather than this host guessing from lines the server wrote
+/// for a person to read.
+const EXIT_CODES_JSON: &str =
+    include_str!("../../../../../protocol/defaults/gateway-exit-codes.json");
+
+#[derive(Debug, Deserialize)]
+struct GatewayExitCodes {
+    codes: BTreeMap<String, u8>,
 }
-/// A shell reports 126 for a program it cannot execute and 127 for one it
-/// cannot find, and launchd's spawn failures surface the same way; dyld and the
-/// code-signing kill say so in the log before any of our own code runs.
-fn exec_failed(last_exit: &LastExit, lowercased_tail: &str) -> bool {
-    matches!(last_exit, LastExit::Code(126 | 127))
-        || lowercased_tail.contains("dyld")
-        || lowercased_tail.contains("library not loaded")
-        || lowercased_tail.contains("code signature")
-        // A missing file is only evidence about the program itself when the
-        // program never got far enough to report a failure of its own.
-        || (!lowercased_tail.contains("nessa failed")
-            && lowercased_tail.contains("no such file or directory"))
+static CODES: LazyLock<GatewayExitCodes> = LazyLock::new(|| {
+    serde_json::from_str(EXIT_CODES_JSON).expect("bundled gateway-exit-codes.json must parse")
+});
+
+/// The sentence a reason becomes. A reason the table names but this host has
+/// no sentence for falls through to the generic message rather than showing
+/// someone a name out of a JSON file.
+fn sentence_for(reason: &str, port: u16) -> Option<String> {
+    match reason {
+        "credentialRegistryInvalid" => {
+            Some("its credential registry is not one this version of Nessa can read.".into())
+        }
+        "credentialRegistry" => Some("its credential registry could not be read.".into()),
+        "portInUse" => Some(format!("port {port} is already in use.")),
+        "configuration" => Some("its configuration is not one it can start with.".into()),
+        _ => None,
+    }
+}
+
+/// What the service's own exit code says, or what launchd says when the
+/// program never ran to have an opinion.
+fn recognise(last_exit: &LastExit, port: u16) -> Option<String> {
+    let LastExit::Code(code) = last_exit else {
+        // A signal or a kernel-initiated exit: the process was ended, it did
+        // not choose a code, and there is nothing of its own to report.
+        return None;
+    };
+    let code = u8::try_from(*code).ok()?;
+    // A shell reports 126 for a program it cannot execute and 127 for one it
+    // cannot find, and launchd's own spawn failures surface the same way.
+    // These are not the server's codes; nothing of ours ran to emit one.
+    if matches!(code, 126 | 127) {
+        return Some(UNLAUNCHABLE.into());
+    }
+    CODES
+        .codes
+        .iter()
+        .find(|(_, value)| **value == code)
+        .and_then(|(reason, _)| sentence_for(reason, port))
 }
 
 #[cfg(test)]

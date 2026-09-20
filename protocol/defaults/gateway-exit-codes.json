@@ -1,0 +1,14 @@
+{
+  "note": "Why the gateway process stopped, said in the one way that survives the process boundary. launchd reports the exit code of the service it supervises, and the desktop host reads it back from `launchctl print` to tell someone why their background service is not starting. The server owns the mapping from its own fatal errors to these numbers and the host owns the sentence each one becomes; this file is the contract between them, and neither side reads the other's log to guess. 1 stays the unclassified failure, so a build that has not been taught a new reason still exits non-zero and is reported as a service that will not start.",
+  "codes": {
+    "configuration": 20,
+    "credentialRegistry": 21,
+    "credentialRegistryInvalid": 28,
+    "authentication": 22,
+    "portInUse": 23,
+    "bind": 24,
+    "agent": 25,
+    "serve": 26,
+    "shutdown": 27
+  }
+}

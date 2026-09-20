@@ -83,9 +83,27 @@ fn only_an_unsuccessful_exit_counts_as_one() {
     assert!(!LastExit::Unknown.is_failure());
 }
 
+/// `protocol/defaults/gateway-exit-codes.json`, read here the way the server
+/// reads it, so a number changed in one place cannot pass this suite.
+fn code(reason: &str) -> i32 {
+    let table: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../protocol/defaults/gateway-exit-codes.json"
+    ))
+    .unwrap();
+    table["codes"][reason].as_u64().unwrap() as i32
+}
+
 #[test]
 fn the_registry_case_reads_as_a_registry_problem() {
-    let failure = diagnose(&LastExit::Code(1), REGISTRY_LOG, PORT, READINESS);
+    // The server chose this code deliberately, from its own typed error. The
+    // log tail below is the v0.1.0 line that used to be the only evidence
+    // there was; nothing reads it for meaning any more.
+    let failure = diagnose(
+        &LastExit::Code(code("credentialRegistryInvalid")),
+        REGISTRY_LOG,
+        PORT,
+        READINESS,
+    );
     assert_eq!(
         failure.sentence,
         "Nessa's background service is not starting: its credential registry is not one this version of Nessa can read."
@@ -94,32 +112,16 @@ fn the_registry_case_reads_as_a_registry_problem() {
     assert!(!failure.sentence.contains("runtime identity"));
     assert!(!failure.sentence.contains("forward recovery"));
     // And the evidence it was inferred from survives, for the app's log.
-    assert!(failure.detail.contains("exit code 1"));
+    assert!(failure
+        .detail
+        .contains(&format!("exit code {}", code("credentialRegistryInvalid"))));
     assert!(failure.detail.contains(READINESS));
     assert!(failure.detail.contains(REGISTRY_LOG));
-
-    // The rest of that error family is still the registry, and is not told it
-    // is a version problem when the registry said something else.
-    let locked = diagnose(
-        &LastExit::Code(1),
-        "ERROR nessa failed self=authentication setup failed: credential registry is locked",
-        PORT,
-        READINESS,
-    );
-    assert_eq!(
-        locked.sentence,
-        "Nessa's background service is not starting: its credential registry could not be read."
-    );
 }
 
 #[test]
 fn a_taken_port_names_the_port_the_service_was_registered_for() {
-    let failure = diagnose(
-        &LastExit::Code(1),
-        "ERROR nessa failed: port already in use at 127.0.0.1:7420; stop the other process or set NESSA_PORT",
-        PORT,
-        READINESS,
-    );
+    let failure = diagnose(&LastExit::Code(code("portInUse")), "", PORT, READINESS);
     assert_eq!(
         failure.sentence,
         "Nessa's background service is not starting: port 7420 is already in use."
@@ -127,59 +129,101 @@ fn a_taken_port_names_the_port_the_service_was_registered_for() {
 }
 
 #[test]
-fn a_program_that_never_ran_is_not_reported_as_something_it_said() {
-    // launchd spawn failures and the loader's own refusals both happen before
-    // any of the server's code, so the exit status carries them alone.
-    for (exit, tail) in [
-        (LastExit::Code(127), ""),
-        (LastExit::Code(126), ""),
-        (
-            LastExit::Code(1),
-            "dyld[4213]: Library not loaded: @rpath/libnessa.dylib",
-        ),
-        (LastExit::Code(1), "nessa: No such file or directory"),
-    ] {
-        assert_eq!(
-            diagnose(&exit, tail, PORT, READINESS).sentence,
-            "Nessa's background service is not starting: its background program could not be launched."
-        );
-    }
-    // A server that ran far enough to report its own failure is not one that
-    // could not be launched, whatever file it went looking for.
-    assert_eq!(
-        diagnose(
-            &LastExit::Code(1),
-            "ERROR nessa failed self=invalid configuration: No such file or directory",
-            PORT,
-            READINESS,
-        )
-        .sentence,
-        "Nessa's background service is not starting."
-    );
-}
-
-#[test]
-fn a_failure_we_cannot_name_still_says_less_than_the_readiness_contract_did() {
-    let silent = diagnose(&LastExit::Code(9), "", PORT, READINESS);
-    assert_eq!(
-        silent.sentence,
-        "Nessa's background service is not starting, and it exited without reporting why."
-    );
-    assert!(silent.detail.contains("none recognised"));
-    assert!(!silent.detail.contains("log tail"));
-
-    // An unrecognised message is not shown, but it is what the app logs.
-    let spoke = diagnose(
-        &LastExit::Code(3),
-        "thread 'main' panicked at src/x.rs",
+fn what_the_log_says_never_decides_what_the_panel_says() {
+    // One append-only log covers every one of launchd's restarts, a healthy
+    // launch writes about the same subsystems a failing one does, and every
+    // one of these lines is a real line this server can emit. None of them
+    // may answer for the failure: only the code the server exited with does.
+    let misleading = [
+        " INFO nessa_server::composition::provisioning: no local credential registry; creating one and an owner credential",
+        REGISTRY_LOG,
+        " INFO nessa_server: nessa server listening",
+    ]
+    .join("\n");
+    let failure = diagnose(
+        &LastExit::Code(code("portInUse")),
+        &misleading,
         PORT,
         READINESS,
     );
     assert_eq!(
-        spoke.sentence,
-        "Nessa's background service is not starting."
+        failure.sentence,
+        "Nessa's background service is not starting: port 7420 is already in use."
     );
-    assert!(spoke.detail.contains("thread 'main' panicked at src/x.rs"));
+    // The lines are still handed to the app's log, verbatim.
+    assert!(failure.detail.contains(REGISTRY_LOG));
+
+    // And the reverse: a log that says nothing about the registry does not
+    // stop the registry being named when that is the code we were given.
+    let quiet = diagnose(
+        &LastExit::Code(code("credentialRegistryInvalid")),
+        " INFO nessa_server: nessa server listening",
+        PORT,
+        READINESS,
+    );
+    assert_eq!(
+        quiet.sentence,
+        "Nessa's background service is not starting: its credential registry is not one this version of Nessa can read."
+    );
+
+    // A registry that is held rather than unreadable is not told it is the
+    // wrong version, and neither is read out of the log.
+    assert_eq!(
+        diagnose(
+            &LastExit::Code(code("credentialRegistry")),
+            REGISTRY_LOG,
+            PORT,
+            READINESS
+        )
+        .sentence,
+        "Nessa's background service is not starting: its credential registry could not be read."
+    );
+}
+
+#[test]
+fn a_program_that_never_ran_is_not_reported_as_something_it_said() {
+    // A shell reports 126 for a program it cannot execute and 127 for one it
+    // cannot find, and launchd's spawn failures surface the same way. These
+    // are not the server's codes: nothing of ours ran to choose one.
+    for exit in [LastExit::Code(126), LastExit::Code(127)] {
+        assert_eq!(
+            diagnose(&exit, "", PORT, READINESS).sentence,
+            "Nessa's background service is not starting: its background program could not be launched."
+        );
+    }
+}
+
+#[test]
+fn a_reason_we_were_not_given_still_says_less_than_the_readiness_contract_did() {
+    // The unclassified failure, a code no table entry claims, and an exit the
+    // process did not choose at all: each is a service that is not starting,
+    // and none of them invents a cause.
+    for (exit, tail, expected) in [
+        (
+            LastExit::Code(1),
+            "",
+            "Nessa's background service is not starting, and it exited without reporting why.",
+        ),
+        (
+            LastExit::Code(99),
+            "thread 'main' panicked at src/x.rs",
+            "Nessa's background service is not starting.",
+        ),
+        (
+            LastExit::Reason("JETSAM_REASON_MEMORY_IDLE_EXIT".into()),
+            "thread 'main' panicked at src/x.rs",
+            "Nessa's background service is not starting.",
+        ),
+    ] {
+        let failure = diagnose(&exit, tail, PORT, READINESS);
+        assert_eq!(failure.sentence, expected);
+        assert!(failure.detail.contains("none reported"));
+        if tail.is_empty() {
+            assert!(!failure.detail.contains("log tail"));
+        } else {
+            assert!(failure.detail.contains(tail));
+        }
+    }
 }
 
 #[test]
