@@ -812,7 +812,9 @@ async fn expiry_and_failed_audit_writes_never_report_success_or_resurrect_sessio
             .await
             .unwrap();
         // Replace only this test instance's sink with a real read-only file.
-        store.0.lock().unwrap().file = Some(open(&path, OpenMode::Read).unwrap());
+        // Unlocked, and `Journal` only ever unlocks, which a file holding no
+        // lock accepts.
+        store.0.lock().unwrap().file = Some(Journal(open(&path, OpenMode::Read).unwrap()));
         let result = match operation {
             "insert" => store
                 .insert("c".repeat(64), session(None).await, Some(id.clone()), 100)

@@ -13,6 +13,7 @@
 
 mod bootstrap;
 mod error;
+mod exit_code;
 pub mod logging;
 pub mod trusted_origin;
 
