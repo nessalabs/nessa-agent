@@ -45,6 +45,7 @@ const PRODUCT_METHODS: &[&str] = &[
     "conversation.answer",
     "conversation.cancel",
     "conversation.close",
+    "attachment.begin",
 ];
 
 /// Run one mandatory-authentication product session.
@@ -330,7 +331,7 @@ async fn run_authenticated<S>(
                 // Admission authorizes one operation against committed state.
                 // Its response may finish after revocation; the next request
                 // and idle liveness check observe the new revision.
-                let control = matches!(frame.method.as_str(), "conversation.close" | "conversation.answer" | "conversation.cancel" | "conversation.remove" | "conversation.reorder");
+                let control = matches!(frame.method.as_str(), "conversation.close" | "conversation.answer" | "conversation.cancel" | "conversation.remove" | "conversation.reorder" | "attachment.begin");
                 if requests.len() >= if control { 20 } else { 16 } {
                     if send_error(state.settings.write_timeout(), &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
                     continue;
@@ -338,6 +339,8 @@ async fn run_authenticated<S>(
                 // Detached commands retain a shared permit through completion,
                 // so reconnecting cannot accumulate unlimited admitted tasks.
                 // Controls have separate capacity from reads and provider opens.
+                // Beginning an upload is one: it opens no provider, and staging
+                // a file must not wait behind a conversation that is starting.
                 let capacity = if control { &state.controls } else { &state.requests };
                 let Ok(permit) = capacity.clone().try_acquire_owned() else {
                     if send_error(state.settings.write_timeout(), &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
@@ -428,6 +431,9 @@ async fn dispatch_authorized(
     match frame.method.as_str() {
         method if method.starts_with("conversation.") => {
             super::conversation::dispatch(state, session, frame).await
+        }
+        method if method.starts_with("attachment.") => {
+            super::attachment::dispatch(state, session, frame).await
         }
         "server.health" => {
             if frame.params != json!({}) {
@@ -593,7 +599,9 @@ fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.reorder"
         | "conversation.answer"
         | "conversation.cancel"
-        | "conversation.close" => Some("conversation.write"),
+        | "conversation.close"
+        // Uploading into a conversation is writing to it.
+        | "attachment.begin" => Some("conversation.write"),
         "credential.issue" | "credential.list" | "credential.revoke" => Some("credential.manage"),
         _ => None,
     }
@@ -1851,4 +1859,5 @@ mod tests {
             .unwrap();
     }
     include!("../../tests/conversation/gateway.rs");
+    include!("../../tests/attachments/gateway.rs");
 }

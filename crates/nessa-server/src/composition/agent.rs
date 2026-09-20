@@ -2,7 +2,7 @@
 use crate::core::RunError;
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::{
-    application::agent_execution::providers::AgentProvider,
+    application::agent_execution::providers::{AgentProvider, UserImageSource},
     infrastructure::acp::sessions::StdioMcpServer,
 };
 use serde::Deserialize;
@@ -54,15 +54,17 @@ pub(super) fn provider(
     config: &AgentConfig,
     directory: &Path,
     clock: Arc<dyn Clock>,
+    images: Arc<dyn UserImageSource>,
 ) -> Result<Arc<dyn AgentProvider>, RunError> {
     config.validate()?;
-    build::provider(config, directory, clock)
+    build::provider(config, directory, clock, images)
 }
 #[cfg(not(unix))]
 pub(super) fn provider(
     config: &AgentConfig,
     _: &Path,
     _: Arc<dyn Clock>,
+    _: Arc<dyn UserImageSource>,
 ) -> Result<Arc<dyn AgentProvider>, RunError> {
     config.validate()?;
     let profile = if config.tools_enabled {
@@ -80,11 +82,11 @@ mod build {
     use crate::conversation::infrastructure::DurableExecutionAudit;
     use nessa_auth::application::ports::Clock;
     use nessa_sdk::{
-        application::agent_execution::providers::AgentProvider,
+        application::agent_execution::providers::{AgentProvider, UserImageSource},
         domain::{
             agent_execution::{
                 permissions::PermissionOfferPolicy,
-                prompts::{PromptSource, PromptSourceKind, SystemPromptBuilder},
+                prompts::{PromptSource, PromptSourceKind, SystemPromptBuilder, UserMessage},
             },
             common::value_objects::TokenLimits,
             model_metadata::entities::ModelMetadata,
@@ -95,10 +97,24 @@ mod build {
         },
     };
     use std::{collections::BTreeMap, fs::File, path::Path, sync::Arc, time::Duration};
+
+    /// The largest ACP frame, derived from the largest message rather than
+    /// chosen beside it. One `session/prompt` carries every image of a message
+    /// as base64, which grows bytes by a third: `UserMessage::MAX_IMAGE_BYTES`
+    /// (10 MiB) becomes 13⅓ MiB. With 8 KiB of text and the JSON around each
+    /// block, that fits 16 MiB and nothing smaller that is a round number. 16
+    /// MiB is also the most `AcpConfig` accepts, so the image budget cannot
+    /// grow without the SDK's ceiling growing first.
+    const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+    const _: () = assert!(
+        UserMessage::MAX_IMAGE_BYTES as usize / 3 * 4 + 1024 * 1024 <= MAX_FRAME_BYTES,
+        "one message's images, encoded, must fit one ACP frame"
+    );
     pub(super) fn provider(
         config: &AgentConfig,
         directory: &Path,
         clock: Arc<dyn Clock>,
+        images: Arc<dyn UserImageSource>,
     ) -> Result<Arc<dyn AgentProvider>, RunError> {
         let invalid = |error| RunError::Agent(format!("{error}"));
         let model = ModelMetadata::try_from(
@@ -164,8 +180,8 @@ mod build {
                 shutdown_grace: Duration::from_secs(3),
                 kill_timeout: Duration::from_secs(2),
                 event_capacity: 256,
-                max_frame_bytes: 1024 * 1024,
-                images: None,
+                max_frame_bytes: MAX_FRAME_BYTES,
+                images: Some(images),
             },
             &model,
             limits,

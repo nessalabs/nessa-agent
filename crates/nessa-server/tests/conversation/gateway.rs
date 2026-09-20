@@ -86,7 +86,7 @@ mod gateway {
             revision: 1,
         }
     }
-    fn chat_state() -> ProductRouteState {
+    pub(super) fn chat_state() -> ProductRouteState {
         let (mut state, _) = fixture(MembershipRole::Member);
         let snapshots = [
             chat_snapshot("owner-phone", "owner", "organization", true),
@@ -103,7 +103,7 @@ mod gateway {
         state.verifier = authority;
         state
     }
-    async fn chat_session(state: &ProductRouteState, credential: &str) -> AuthenticatedSession {
+    pub(super) async fn chat_session(state: &ProductRouteState, credential: &str) -> AuthenticatedSession {
         AuthenticateSession {
             verifier: state.verifier.as_ref(),
             access: state.access.as_ref(),
@@ -116,7 +116,7 @@ mod gateway {
         .await
         .unwrap()
     }
-    async fn chat_request(
+    pub(super) async fn chat_request(
         state: &ProductRouteState,
         session: &AuthenticatedSession,
         method: &str,
@@ -160,7 +160,7 @@ mod gateway {
             }
         }
     }
-    fn send_command(peer: &TestPeer, id: &str, method: &str, params: serde_json::Value) {
+    pub(super) fn send_command(peer: &TestPeer, id: &str, method: &str, params: serde_json::Value) {
         peer.input
             .send(Ok(Message::Text(
                 json!({"type":"req","id":id,"method":method,"params":params})
@@ -169,7 +169,7 @@ mod gateway {
             )))
             .unwrap();
     }
-    async fn response(peer: &mut TestPeer) -> serde_json::Value {
+    pub(super) async fn response(peer: &mut TestPeer) -> serde_json::Value {
         let Message::Text(text) = peer.message().await else {
             panic!("text response expected")
         };

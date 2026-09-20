@@ -4,6 +4,7 @@
 //! ```text
 //! Environment -> private runtime config -> auth + ConversationService
 //!                                         -> provider / storage / audit
+//!                                         -> attachments (one store, shared)
 //! ProductRouteState -> authenticated HTTP/WebSocket router
 //! ```
 //! Arrows show construction and injection. Conversations share the service across
@@ -19,6 +20,8 @@ mod local_auth;
 mod runtime_config;
 
 mod agent;
+
+mod attachments;
 
 mod desktop;
 

@@ -126,13 +126,29 @@ pub(super) fn product_state(
         nessa_local_storage::create_directory(&root)
             .map_err(|error| RunError::Agent(error.to_string()))?;
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-        let provider = super::agent::provider(agent, &root, clock.clone())?;
-        let storage = Arc::new(
-            LocalFileStorage::new(root.join("sessions"))
-                .map_err(|error| RunError::Agent(error.to_string()))?,
-        );
+        // Ownership records come first. The provider needs somewhere to read
+        // image bytes, reading them needs the attachment store, and beginning
+        // an upload needs to ask who owns a conversation: so the repository is
+        // built, then attachments over it, and only then the provider.
         let metadata = Arc::new(
             LocalConversationRepository::new(root.join("metadata"))
+                .map_err(|error| RunError::Agent(error.to_string()))?,
+        );
+        let attachments = super::attachments::attachments(
+            &directory
+                .parent()
+                .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
+                .join("attachments"),
+            metadata.clone(),
+            // Replaced by the nessa-images adapter in the next commit. Until
+            // then an image upload is refused rather than kept unnormalized.
+            Arc::new(super::attachments::UnconfiguredNormalizer),
+            clock.clone(),
+        )?;
+        let provider =
+            super::agent::provider(agent, &root, clock.clone(), attachments.images.clone())?;
+        let storage = Arc::new(
+            LocalFileStorage::new(root.join("sessions"))
                 .map_err(|error| RunError::Agent(error.to_string()))?,
         );
         let creation_audit = Arc::new(
@@ -145,7 +161,7 @@ pub(super) fn product_state(
                 storage,
                 metadata,
                 creation_audit,
-                attachments: None,
+                attachments: Some(attachments.conversations),
                 clock,
             },
             ConversationLimits {
@@ -155,7 +171,9 @@ pub(super) fn product_state(
             Some(agent.workspace.to_string_lossy().into_owned()),
         )
         .map_err(|error| RunError::Agent(error.to_string()))?;
-        product = product.with_conversations(Arc::new(service));
+        product = product
+            .with_conversations(Arc::new(service))
+            .with_attachments(attachments.service);
     }
     Ok(product)
 }
