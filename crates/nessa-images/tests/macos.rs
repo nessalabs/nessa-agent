@@ -1,10 +1,13 @@
 //! The real ImageIO decoder, against files the system's own `sips` tool writes.
+//! The adapter's own pixel arithmetic is covered beside it, in
+//! `tests/unit/platform/macos.rs`, where no file has to be opaque.
 #![cfg(target_os = "macos")]
-use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
-use nessa_images::{normalize, platform_decoder, Encoding, Error, Limits};
-use std::{fs, process::Command};
+mod support;
 
-const ALL: [Encoding; 4] = [Encoding::Png, Encoding::Jpeg, Encoding::Gif, Encoding::Webp];
+use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
+use nessa_images::{normalize, platform_decoder, Encoding, Error};
+use std::{fs, process::Command};
+use support::{limits, ALL};
 
 /// Left half red, right half blue, written as PNG and converted by `sips`.
 fn converted(width: u32, height: u32, format: &str, extension: &str) -> Vec<u8> {
@@ -42,7 +45,7 @@ fn a_heic_photo_becomes_an_upright_jpeg_inside_the_limits() {
     let heic = converted(1600, 800, "heic", "heic");
     assert_eq!(&heic[4..8], b"ftyp");
 
-    let limits = Limits::new(ALL.to_vec(), 1 << 20, 400).unwrap();
+    let limits = limits(&ALL, 1 << 20, 400);
     let fitted = normalize(&heic, &limits).unwrap();
     assert_eq!(
         (fitted.encoding, fitted.width, fitted.height, fitted.changed),
@@ -60,14 +63,14 @@ fn a_heic_photo_becomes_an_upright_jpeg_inside_the_limits() {
 #[test]
 fn a_small_heic_is_not_scaled_up() {
     let heic = converted(120, 60, "heic", "heic");
-    let limits = Limits::new(ALL.to_vec(), 1 << 20, 2000).unwrap();
+    let limits = limits(&ALL, 1 << 20, 2000);
     let fitted = normalize(&heic, &limits).unwrap();
     assert_eq!((fitted.width, fitted.height), (120, 60));
 }
 
 #[test]
 fn bytes_the_system_cannot_read_either_are_refused() {
-    let limits = Limits::new(ALL.to_vec(), 1 << 20, 2000).unwrap();
+    let limits = limits(&ALL, 1 << 20, 2000);
     for input in [&b"not an image at all"[..], b"%PDF-1.7\n", b""] {
         assert_eq!(
             normalize(input, &limits),
@@ -116,7 +119,7 @@ fn the_system_decoder_itself_refuses_what_this_crate_never_said_it_reads() {
         );
     }
     // The same PDF through the front door is refused before ImageIO is asked.
-    let limits = Limits::new(ALL.to_vec(), 1 << 20, 2000).unwrap();
+    let limits = limits(&ALL, 1 << 20, 2000);
     assert_eq!(normalize(&pdf, &limits), Err(Error::UnsupportedEncoding));
     // And what is on the list still decodes.
     let heic = converted(400, 200, "heic", "heic");
@@ -171,7 +174,7 @@ fn a_source_claiming_more_pixels_than_are_ever_decoded_is_refused_from_its_heade
         decoder.decode(&huge, 256).err(),
         Some(Error::TooLargeToDecode)
     );
-    let limits = Limits::new(ALL.to_vec(), 1 << 20, 256).unwrap();
+    let limits = limits(&ALL, 1 << 20, 256);
     assert_eq!(normalize(&huge, &limits), Err(Error::TooLargeToDecode));
     // Cut short after its header and row table, there is nothing to decode:
     // an attempt would answer `Undecodable`. The size is still what is refused.

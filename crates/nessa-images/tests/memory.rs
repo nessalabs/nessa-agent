@@ -3,27 +3,16 @@
 //! Each input here is a header and nothing else. A decoder that went on to
 //! read pixels would answer `Undecodable`, because there are none; answering
 //! `TooLargeToDecode` shows the refusal came first, from the size alone.
-use image::{DynamicImage, ImageFormat, Rgb, RgbImage, Rgba, RgbaImage};
-use nessa_images::{
-    normalize, normalize_with, DecodedImage, Encoding, Error, Limits, PlatformDecoder,
-};
-use std::{io::Cursor, sync::Mutex};
+mod support;
 
-const ALL: [Encoding; 4] = [Encoding::Png, Encoding::Jpeg, Encoding::Gif, Encoding::Webp];
+use image::{ImageFormat, Rgb, RgbImage, Rgba, RgbaImage};
+use nessa_images::{normalize, normalize_with, DecodedImage, Error, Limits, PlatformDecoder};
+use std::sync::Mutex;
+use support::{crc32, encoded, turned_a_quarter, ALL, HEIC};
 
+/// Room for any of these headers, so only the pixel count can refuse one.
 fn limits(max_long_edge_px: u32) -> Limits {
-    Limits::new(ALL.to_vec(), 1 << 20, max_long_edge_px).unwrap()
-}
-
-fn crc32(bytes: &[u8]) -> u32 {
-    let mut crc = u32::MAX;
-    for byte in bytes {
-        crc ^= u32::from(*byte);
-        for _ in 0..8 {
-            crc = (crc >> 1) ^ (0xedb8_8320 & 0u32.wrapping_sub(crc & 1));
-        }
-    }
-    !crc
+    support::limits(&ALL, 1 << 20, max_long_edge_px)
 }
 
 /// A PNG signature and header chunk claiming `width` by `height`, then a data
@@ -105,11 +94,10 @@ fn webp_header(width: u32, height: u32) -> Vec<u8> {
 /// A real JPEG cut off where its pixels would begin, with the size in its frame
 /// header overwritten.
 fn jpeg_header(width: u16, height: u16) -> Vec<u8> {
-    let mut whole = Cursor::new(Vec::new());
-    DynamicImage::from(RgbImage::from_pixel(8, 8, Rgb([1, 2, 3])))
-        .write_to(&mut whole, ImageFormat::Jpeg)
-        .unwrap();
-    let mut bytes = whole.into_inner();
+    let mut bytes = encoded(
+        RgbImage::from_pixel(8, 8, Rgb([1, 2, 3])),
+        ImageFormat::Jpeg,
+    );
     let at = |marker: u8| {
         bytes
             .windows(2)
@@ -140,9 +128,9 @@ fn gif_header(width: u16, height: u16) -> Vec<u8> {
 
 #[test]
 fn every_decoder_refuses_more_pixels_than_are_ever_decoded_from_the_header_alone() {
-    // 16,384 px square is 268 megapixels: inside the old edge limit, and 1 GiB
-    // or more once decoded. QOI, BMP, PNM, HDR, ICO, and WebP take no limit of
-    // their own, so nothing but the count made here stands in front of them.
+    // 16,384 px square is 268 megapixels, which is 1 GiB or more once decoded.
+    // QOI, BMP, PNM, HDR, ICO, and WebP take no limit of their own, so nothing
+    // but the count made here stands in front of them.
     for (name, header) in [
         ("png", png_header(16_384, 16_384)),
         ("qoi", qoi_header(16_384, 16_384)),
@@ -233,24 +221,21 @@ fn a_system_decoder_is_never_asked_for_more_than_this_crate_will_hold() {
             Err(Error::Undecodable)
         }
     }
-    let heic = [
-        0, 0, 0, 24, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c', 0, 0, 0, 0,
-    ];
     let asked = Asked(Mutex::new(Vec::new()));
     for max_long_edge_px in [1_200, 8_192, 8_193, u32::MAX] {
-        let _ = normalize_with(&heic, &limits(max_long_edge_px), Some(&asked));
+        let _ = normalize_with(&HEIC, &limits(max_long_edge_px), Some(&asked));
     }
     assert_eq!(*asked.0.lock().unwrap(), [1_200, 8_192, 8_192, 8_192]);
 
     // And one that returns more than it was asked for is scaled like anything else.
-    let fitted = normalize_with(&heic, &limits(100), Some(&Oversized(400, 200))).unwrap();
+    let fitted = normalize_with(&HEIC, &limits(100), Some(&Oversized(400, 200))).unwrap();
     assert_eq!((fitted.width, fitted.height), (100, 50));
 }
 
 #[test]
 fn turning_and_scaling_a_photo_gives_the_same_picture_in_either_order() {
-    // Scaling happens before the turn now, to hold less. The result is the one
-    // the other order gives: red above blue, 200 by 400.
+    // Scaling happens before the turn, to hold less. The result is the one the
+    // other order gives: red above blue, 200 by 400.
     let halves = RgbImage::from_fn(800, 400, |x, _| {
         if x < 400 {
             Rgb([255, 0, 0])
@@ -258,20 +243,7 @@ fn turning_and_scaling_a_photo_gives_the_same_picture_in_either_order() {
             Rgb([0, 0, 255])
         }
     });
-    let mut plain = Cursor::new(Vec::new());
-    DynamicImage::from(halves)
-        .write_to(&mut plain, ImageFormat::Jpeg)
-        .unwrap();
-    let plain = plain.into_inner();
-    let tiff: &[u8] = &[
-        b'I', b'I', 42, 0, 8, 0, 0, 0, 1, 0, 0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0,
-    ];
-    let mut segment = b"Exif\0\0".to_vec();
-    segment.extend_from_slice(tiff);
-    let mut input = vec![0xff, 0xd8, 0xff, 0xe1];
-    input.extend_from_slice(&(segment.len() as u16 + 2).to_be_bytes());
-    input.extend_from_slice(&segment);
-    input.extend_from_slice(&plain[2..]);
+    let input = turned_a_quarter(&encoded(halves, ImageFormat::Jpeg));
 
     let fitted = normalize(&input, &limits(400)).unwrap();
     assert_eq!((fitted.width, fitted.height), (200, 400));

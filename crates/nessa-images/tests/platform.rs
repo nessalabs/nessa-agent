@@ -1,10 +1,11 @@
 //! What goes to the platform decoder, what never does, and what happens to
 //! what it returns. A substitute stands in, so these run on every system.
-use image::{DynamicImage, ImageFormat, Rgb, RgbImage, Rgba, RgbaImage};
-use nessa_images::{normalize_with, DecodedImage, Encoding, Error, Limits, PlatformDecoder};
-use std::{io::Cursor, sync::Mutex};
+mod support;
 
-const ALL: [Encoding; 4] = [Encoding::Png, Encoding::Jpeg, Encoding::Gif, Encoding::Webp];
+use image::{DynamicImage, ImageFormat, Rgb, RgbImage, Rgba, RgbaImage};
+use nessa_images::{normalize_with, DecodedImage, Encoding, Error, PlatformDecoder};
+use std::{io::Cursor, sync::Mutex};
+use support::{limits, ALL, HEIC};
 
 /// Answers every decode with `answer` and remembers what it was asked.
 struct Substitute {
@@ -40,15 +41,6 @@ fn photo(width: u32, height: u32) -> DecodedImage {
         lossless: false,
     }
 }
-
-fn limits(accepted: &[Encoding], max_bytes: u64, max_long_edge_px: u32) -> Limits {
-    Limits::new(accepted.to_vec(), max_bytes, max_long_edge_px).unwrap()
-}
-
-/// The first bytes of an iPhone photo: an ISO media file of brand `heic`.
-const HEIC: [u8; 16] = [
-    0, 0, 0, 24, b'f', b't', b'y', b'p', b'h', b'e', b'i', b'c', 0, 0, 0, 0,
-];
 
 #[test]
 fn an_encoding_only_the_system_reads_is_decoded_there_and_fitted_here() {
