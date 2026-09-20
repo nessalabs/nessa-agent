@@ -9,8 +9,24 @@ import {
 import { buildRequestFrame } from "../protocol/encode.js"
 import { NessaRpcError } from "../application/rpc-error.js"
 import { NessaConnectionClosedError } from "../application/connection-closed-error.js"
+import type { RequestDeadline } from "../application/session-port.js"
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
+
+/**
+ * The configured deadline, raised or capped for one request.
+ *
+ * A cap is applied last: an operation that cannot usefully outlive something
+ * else — authentication and the challenge it answers — stays capped even when
+ * a floor was asked for too.
+ */
+function boundedTimeout(configuredMs: number, deadline?: RequestDeadline): number {
+  let timeoutMs = configuredMs
+  if (deadline?.atLeastMs !== undefined)
+    timeoutMs = Math.max(timeoutMs, deadline.atLeastMs)
+  if (deadline?.atMostMs !== undefined) timeoutMs = Math.min(timeoutMs, deadline.atMostMs)
+  return timeoutMs
+}
 
 type PendingRequest = {
   resolve: (payload: unknown) => void
@@ -51,12 +67,15 @@ export class WireSession {
     return this.closedError
   }
 
-  /** Send an RPC and await the matching response frame. */
-  request(
-    method: string,
-    params: unknown,
-    timeoutMs = this.requestTimeoutMs,
-  ): Promise<unknown> {
+  /**
+   * Send an RPC and await the matching response frame.
+   *
+   * `deadline` bounds the configured timeout rather than replacing it, so a
+   * caller who raised `requestTimeoutMs` keeps the time they asked for on the
+   * very operations they raised it for.
+   */
+  request(method: string, params: unknown, deadline?: RequestDeadline): Promise<unknown> {
+    const timeoutMs = boundedTimeout(this.requestTimeoutMs, deadline)
     if (this.closedError) return Promise.reject(this.closedError)
     if (this.socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new RetryableConnectError("WebSocket is not open"))

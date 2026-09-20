@@ -125,6 +125,50 @@ async fn supervised<T: Send + 'static>(
         .await
         .map_err(|_| ConversationError::Unavailable)?
 }
+/// What a reader of the gateway log is told about a failed provider opening.
+/// Kept apart from the tracing call so the wording has its own regression.
+#[derive(Debug, PartialEq, Eq)]
+struct OpeningFailureReport {
+    /// Constant summary line.
+    message: &'static str,
+    /// Startup step that ran out of budget, when the failure names one.
+    phase: Option<&'static str>,
+    /// Whether that step was restoring saved context or opening a new one.
+    /// None when the failure does not say which.
+    session: Option<&'static str>,
+}
+// The opening gate covers both a first `session/new` and a `session/resume` of
+// saved context. Only a startup deadline carries which of the two it was, so
+// every other failure is reported as an opening failure rather than claimed to
+// be a restoration: that claim sent readers looking for a snapshot that need
+// not exist. The step and the context are separate facts — a restoration can
+// run out of budget before `session/resume` is even sent — so both come from
+// the error rather than one being inferred from the other.
+fn opening_failure_report(error: &AgentError) -> OpeningFailureReport {
+    match error {
+        AgentError::StartupDeadline(step) => OpeningFailureReport {
+            message: "agent startup exceeded its budget",
+            phase: Some(step.as_str()),
+            session: Some(step.context().as_str()),
+        },
+        _ => OpeningFailureReport {
+            message: "conversation agent opening failed",
+            phase: None,
+            session: None,
+        },
+    }
+}
+fn report_opening_failure(id: &ConversationId, error: &AgentError) {
+    let report = opening_failure_report(error);
+    tracing::error!(
+        conversation_id = %id,
+        phase = report.phase,
+        session = report.session,
+        %error,
+        "{}",
+        report.message
+    );
+}
 fn retryable_agent_open(error: &AgentError) -> bool {
     !matches!(
         error,
@@ -420,7 +464,7 @@ impl ConversationService {
                             let agent = Agent::new(service.inner.provider.clone(), manager)
                                 .await
                                 .map_err(|error| {
-                                tracing::error!(conversation_id = %id, %error, "conversation restoration failed");
+                                report_opening_failure(&id, error.cause());
                                 let retryable = !error.needs_cleanup() && retryable_agent_open(error.cause());
                                 OpeningFailure {
                                     cause: ConversationError::Agent(error.cause().clone()),
@@ -933,3 +977,7 @@ impl ConversationService {
 #[cfg(test)]
 #[path = "../../../tests/conversation/retirement.rs"]
 mod retirement_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/opening_diagnostics.rs"]
+mod opening_diagnostics_tests;

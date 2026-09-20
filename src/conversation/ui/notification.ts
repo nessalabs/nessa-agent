@@ -1,3 +1,4 @@
+import { ConversationErrorCode } from "@nessa/client"
 import type { Conversation } from "../model"
 
 export type ConversationNotice = {
@@ -32,7 +33,10 @@ export function conversationNotice(
   )
   if (unsent)
     return {
-      title: "Message not sent",
+      title:
+        conversation.errorCode === ConversationErrorCode.AgentStartupDeadline
+          ? "Agent was still starting"
+          : "Message not sent",
       description: `${conversation.error} Your draft is still here. Retry sends the current draft.`,
       retry: conversation.draft.length ? { kind: "draft" } : null,
     }
@@ -41,12 +45,20 @@ export function conversationNotice(
     conversation.error ??
     conversation.readError
   if (!error) return null
-  if (error === "conversation_configuration_changed")
+  if (error === ConversationErrorCode.ConversationConfigurationChanged)
     return {
       title: "Conversation setup changed",
       description:
         "This chat uses a different agent configuration. Start a new conversation with the current setup.",
       retry: null,
+    }
+  // A control runs `create` first, so a cold agent reaches this path too, with
+  // nothing sent and no failed turn to hang a draft retry on.
+  if (conversation.errorCode === ConversationErrorCode.AgentStartupDeadline)
+    return {
+      title: "Agent was still starting",
+      description: error,
+      retry: { kind: "refresh" },
     }
   return {
     title: "Conversation needs attention",
