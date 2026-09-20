@@ -69,7 +69,9 @@ const objectUrls = URL as unknown as {
 }
 
 /** A mounted panel whose gateway's staging answer the test controls. */
-async function mounted(stageAttachment: () => Promise<typeof stored>) {
+async function mounted(
+  stageAttachment: (...staged: unknown[]) => Promise<typeof stored>,
+) {
   const stage = vi.fn(stageAttachment)
   const dependencies = createDependencies({
     conversation: { ...scenarioEffects("echo"), stageAttachment: stage },
@@ -133,6 +135,7 @@ it("uploads an attached image's original bytes once, and records what the gatewa
     panel.store.getState().conversation.conversations[0]!.serverConversationId,
     { digest: DIGEST, mimeType: "image/heic", size: 3 },
     original,
+    expect.any(AbortSignal),
   ])
   // The returned reference, not the digest computed here.
   expect(panel.uploadOf(id)).toEqual({ status: "stored", image: stored })
@@ -176,6 +179,44 @@ it("leaves a tile removed mid-upload removed when the upload resolves", async ()
   // Nothing was allocated again for it, and nothing started a second upload.
   expect(URL.createObjectURL).toHaveBeenCalledOnce()
   expect(panel.stage).toHaveBeenCalledOnce()
+})
+
+it("stops a removed tile's upload and gives its slot to the next image at once", async () => {
+  // Four images, three slots. The signals are what the gateway adapter is given.
+  const signals: AbortSignal[] = []
+  const gates = Array.from({ length: 4 }, () => deferred<typeof stored>())
+  const panel = await mounted((...staged: unknown[]) => {
+    signals.push(staged[3] as AbortSignal)
+    return gates[signals.length - 1]!.promise
+  })
+  const ids: string[] = []
+  for (let index = 0; index < 4; index++)
+    ids.push(
+      await panel.attach(new File(["raw"], `${index}.heic`, { type: "image/heic" })),
+    )
+  expect(panel.stage).toHaveBeenCalledTimes(3)
+  expect(panel.uploadOf(ids[3]!)?.status).toBe("not-started")
+
+  // The first tile is taken away while its bytes are still going. Nothing about
+  // that upload has finished: the fourth starts because the slot was given back.
+  await React.act(async () => {
+    panel.store.dispatch(removeFile(ids[0]!))
+  })
+  expect(signals[0]!.aborted).toBe(true)
+  expect(signals.slice(1, 3).map((signal) => signal.aborted)).toEqual([false, false])
+  expect(panel.stage).toHaveBeenCalledTimes(4)
+  expect(panel.uploadOf(ids[3]!)?.status).toBe("uploading")
+
+  // The stopped upload ending later takes nobody's slot and writes nothing.
+  await React.act(async () => gates[0]!.reject(new AttachmentStagingError("interrupted")))
+  expect(panel.uploadOf(ids[0]!)).toBeUndefined()
+  expect(panel.stage).toHaveBeenCalledTimes(4)
+  for (const gate of gates.slice(1)) await React.act(async () => gate.resolve(stored))
+  expect(ids.slice(1).map((id) => panel.uploadOf(id)?.status)).toEqual([
+    "stored",
+    "stored",
+    "stored",
+  ])
 })
 
 it("keeps three uploads in flight and starts the next as each one finishes", async () => {

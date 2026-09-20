@@ -189,7 +189,7 @@ export function gatewayEffects(
         throw submissionFailure(error)
       }
     },
-    async stageAttachment(conversationId, file, bytes) {
+    async stageAttachment(conversationId, file, bytes, signal) {
       try {
         const attachments = connected().attachments
         const beginning = await attachments.begin(conversationId, file)
@@ -203,10 +203,11 @@ export function gatewayEffects(
         } else {
           for (let attempt = 0; ; attempt++) {
             try {
-              stored = await attachments.upload(beginning.ticket, {
-                mimeType: file.mimeType,
-                bytes,
-              })
+              stored = await attachments.upload(
+                beginning.ticket,
+                { mimeType: file.mimeType, bytes },
+                { signal },
+              )
               break
             } catch (error) {
               const delay = BUSY_RETRY_DELAYS_MS[attempt]
@@ -215,7 +216,7 @@ export function gatewayEffects(
                 error.code === "temporarily_unavailable"
               // Only "no room just now" leaves the ticket unspent. Every other
               // failure ends this attempt; trying again means beginning again.
-              if (!busy || delay === undefined) throw error
+              if (!busy || delay === undefined || signal.aborted) throw error
               await wait(delay)
               // The session may have gone while waiting; say so rather than PUT.
               connected()

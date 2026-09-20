@@ -20,9 +20,12 @@ import { nextUploads, uploadImage } from "../application/upload-image"
  * the drafts changes when a slot frees, and an effect alone would leave it
  * waiting for good.
  *
- * `inFlight` also keeps a file from being picked up twice while its first state
- * change is still on its way back through React — Strict Mode runs the effect
- * twice on mount against the same snapshot.
+ * `inFlight` holds, for each upload under way, the means to stop it. It keeps a
+ * file from being picked up twice while its first state change is still on its
+ * way back through React — Strict Mode runs the effect twice on mount against
+ * the same snapshot. And when a tile is taken away its upload is stopped and its
+ * slot given back at once: left to finish, a removed 64 MiB file would hold one
+ * of this window's three slots, and one of the gateway's four, for minutes.
  *
  * `settled` is the same care at the other end. The ask that follows a finished
  * upload reads the drafts as React last rendered them, and an upload can finish
@@ -38,7 +41,7 @@ export function useAttachmentUploads(
   resources: AttachmentResources,
   digest: (bytes: Blob) => Promise<string> = sha256Digest,
 ) {
-  const inFlight = React.useRef(new Set<string>())
+  const inFlight = React.useRef(new Map<string, AbortController>())
   const settled = React.useRef(new Set<string>())
   const latest = React.useRef({ chat, resources, digest })
   const pump = React.useCallback(() => {
@@ -53,15 +56,22 @@ export function useAttachmentUploads(
           : [],
       ),
     )
-    for (const file of nextUploads(waiting, inFlight.current)) {
-      inFlight.current.add(file.id)
-      void uploadImage(file, {
-        digest,
-        bytes: resources.bytes,
-        change: chat.changeUpload,
-        stage: chat.stageAttachment,
-      }).finally(() => {
-        inFlight.current.delete(file.id)
+    for (const file of nextUploads(waiting, new Set(inFlight.current.keys()))) {
+      const stopping = new AbortController()
+      inFlight.current.set(file.id, stopping)
+      void uploadImage(
+        file,
+        {
+          digest,
+          bytes: resources.bytes,
+          change: chat.changeUpload,
+          stage: chat.stageAttachment,
+        },
+        stopping.signal,
+      ).finally(() => {
+        // Only this upload's own entry: a removed file's slot was given back
+        // already, and may since have gone to another file.
+        if (inFlight.current.get(file.id) === stopping) inFlight.current.delete(file.id)
         settled.current.add(file.id)
         pump()
       })
@@ -71,6 +81,16 @@ export function useAttachmentUploads(
     latest.current = { chat, resources, digest }
     // A render after an upload settled has that upload's outcome in it.
     settled.current.clear()
+    const drafted = new Set(
+      chat.conversations.flatMap((conversation) =>
+        conversation.draft.flatMap((part) => (part.type === "file" ? [part.id] : [])),
+      ),
+    )
+    for (const [fileId, stopping] of inFlight.current) {
+      if (drafted.has(fileId)) continue
+      stopping.abort()
+      inFlight.current.delete(fileId)
+    }
     pump()
   }, [chat, resources, digest, pump])
   return {

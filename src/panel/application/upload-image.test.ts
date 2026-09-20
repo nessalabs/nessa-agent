@@ -32,6 +32,9 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
+/** A signal nobody aborts. */
+const live = () => new AbortController().signal
+
 /** Ports over a tiny resource store of one file, which a test can remove. */
 function ports(original: Blob | undefined, overrides: Partial<UploadPorts> = {}) {
   let held = original
@@ -39,7 +42,10 @@ function ports(original: Blob | undefined, overrides: Partial<UploadPorts> = {})
   const all: UploadPorts = {
     digest: vi.fn(async () => DIGEST),
     bytes: () => held,
-    change: (change) => changes.push(change),
+    change: (change) => {
+      changes.push(change)
+      return true
+    },
     stage: vi.fn(async () => {}),
     ...overrides,
   }
@@ -50,15 +56,18 @@ it("marks the file uploading, then hashes and stages exactly the original bytes"
   // 18 MB of HEIC: nothing here scales, converts, or refuses it for its weight.
   const original = blob(18 * 1024 * 1024)
   const { all, changes } = ports(original)
-  await uploadImage(file, all)
+  await uploadImage(file, all, live())
   expect(changes).toEqual([{ fileId: "f", to: "uploading" }])
   expect(all.digest).toHaveBeenCalledExactlyOnceWith(original)
-  expect(all.stage).toHaveBeenCalledExactlyOnceWith({
-    conversationId: "c0",
-    fileId: "f",
-    file: { digest: DIGEST, mimeType: "image/heic", size: 18 * 1024 * 1024 },
-    bytes: original,
-  })
+  expect(all.stage).toHaveBeenCalledExactlyOnceWith(
+    {
+      conversationId: "c0",
+      fileId: "f",
+      file: { digest: DIGEST, mimeType: "image/heic", size: 18 * 1024 * 1024 },
+      bytes: original,
+    },
+    expect.any(AbortSignal),
+  )
   expect(vi.mocked(all.stage).mock.calls[0]![0].bytes).toBe(original)
 })
 
@@ -72,7 +81,7 @@ describe("a tile removed while its upload is in flight", () => {
         return hashing.promise
       },
     })
-    const running = uploadImage(file, all)
+    const running = uploadImage(file, all, live())
     await reached.promise
     remove()
     hashing.resolve(DIGEST)
@@ -91,7 +100,7 @@ describe("a tile removed while its upload is in flight", () => {
         return hashing.promise
       },
     })
-    const running = uploadImage(file, all)
+    const running = uploadImage(file, all, live())
     await reached.promise
     remove()
     hashing.reject(new Error("blob released"))
@@ -107,7 +116,7 @@ it.each([
   "fails an image %s as unreadable without staging it",
   async (_name, original) => {
     const { all, changes } = ports(original)
-    await uploadImage(file, all)
+    await uploadImage(file, all, live())
     expect(changes).toEqual([
       { fileId: "f", to: "uploading" },
       { fileId: "f", to: "failed", reason: "unreadable" },
@@ -121,7 +130,7 @@ it("fails as unreadable, and never rejects, when hashing throws", async () => {
   const { all, changes } = ports(blob(40_000), {
     digest: () => Promise.reject(new Error("no subtle crypto")),
   })
-  await expect(uploadImage(file, all)).resolves.toBeUndefined()
+  await expect(uploadImage(file, all, live())).resolves.toBeUndefined()
   expect(changes.at(-1)).toEqual({ fileId: "f", to: "failed", reason: "unreadable" })
   expect(all.stage).not.toHaveBeenCalled()
 })
@@ -232,4 +241,33 @@ describe("why nothing more can be attached", () => {
     expect(empty).toMatch(/256 MiB.*messages still being sent/)
     expect(empty).not.toMatch(/Remove files/)
   })
+})
+
+it("sends nothing for a file the conversation did not take to uploading", async () => {
+  // A snapshot a render behind offered a file that has since gone, or that
+  // another pass already started. Uploading it anyway would spend a gateway
+  // slot on a result nobody records.
+  const { all } = ports(blob(8), { change: () => false })
+  await uploadImage(file, all, live())
+  expect(all.digest).not.toHaveBeenCalled()
+  expect(all.stage).not.toHaveBeenCalled()
+})
+
+it("stages nothing once the tile was taken away while its bytes were being hashed", async () => {
+  const hashing = deferred<string>()
+  const stopping = new AbortController()
+  const { all, changes } = ports(blob(8), { digest: () => hashing.promise })
+  const uploading = uploadImage(file, all, stopping.signal)
+  stopping.abort()
+  hashing.resolve(DIGEST)
+  await uploading
+  expect(all.stage).not.toHaveBeenCalled()
+  expect(changes).toEqual([{ fileId: "f", to: "uploading" }])
+})
+
+it("hands the signal that stops it to the transfer", async () => {
+  const stopping = new AbortController()
+  const { all } = ports(blob(8))
+  await uploadImage(file, all, stopping.signal)
+  expect(all.stage).toHaveBeenCalledExactlyOnceWith(expect.anything(), stopping.signal)
 })

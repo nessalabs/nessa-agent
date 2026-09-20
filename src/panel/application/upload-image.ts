@@ -12,22 +12,29 @@ export type UploadPorts = {
   digest(bytes: Blob): Promise<string>
   /** The file's bytes, or nothing once its tile has been removed. */
   bytes(fileId: string): Blob | undefined
-  /** Ask the conversation for one step of this file's upload state. */
+  /**
+   * Ask the conversation for one step of this file's upload state, and hear
+   * whether it was taken. A step is refused when the file is not where the step
+   * starts from: gone from every draft, or already uploading.
+   */
   change(
     change: { fileId: string } & (
       { to: "uploading" } | { to: "failed"; reason: UploadFailure }
     ),
-  ): void
+  ): boolean
   /**
    * Upload the bytes. Records on the file what the gateway stored them as, or
    * why it did not; never rejects.
    */
-  stage(input: {
-    conversationId: string
-    fileId: string
-    file: { digest: string; mimeType: string; size: number }
-    bytes: Blob
-  }): Promise<void>
+  stage(
+    input: {
+      conversationId: string
+      fileId: string
+      file: { digest: string; mimeType: string; size: number }
+      bytes: Blob
+    },
+    signal: AbortSignal,
+  ): Promise<void>
 }
 
 /**
@@ -40,29 +47,38 @@ export type UploadPorts = {
  * computed here only identifies the upload, and the only size this window
  * checks is the one it already checked at attach time.
  *
- * Removal is checked after the wait. A tile taken away mid-upload has had its
- * bytes released, and the step after that finds nothing and stops: nothing is
- * staged, and no state is written for a file that is no longer there. Every
- * other ending is an upload state on the file; this never rejects.
+ * Nothing is sent for a file the conversation did not take to `uploading`: a
+ * snapshot a render behind can offer a file that has since gone or already
+ * started, and uploading it anyway would spend a gateway slot on a result
+ * nobody records.
+ *
+ * `signal` is aborted when the tile is taken away. Hashing cannot be stopped,
+ * so removal is checked after it; the transfer can, and stops. Every other
+ * ending is an upload state on the file; this never rejects.
  */
 export async function uploadImage(
   file: { conversationId: string; id: string; mimeType: string },
   ports: UploadPorts,
+  signal: AbortSignal,
 ): Promise<void> {
-  ports.change({ fileId: file.id, to: "uploading" })
-  const fail = (reason: UploadFailure) =>
+  if (!ports.change({ fileId: file.id, to: "uploading" })) return
+  const fail = (reason: UploadFailure) => {
     ports.change({ fileId: file.id, to: "failed", reason })
+  }
   const bytes = ports.bytes(file.id)
   if (!bytes || bytes.size < 1) return fail("unreadable")
   try {
     const digest = await ports.digest(bytes)
-    if (ports.bytes(file.id) === undefined) return
-    await ports.stage({
-      conversationId: file.conversationId,
-      fileId: file.id,
-      file: { digest, mimeType: file.mimeType, size: bytes.size },
-      bytes,
-    })
+    if (signal.aborted || ports.bytes(file.id) === undefined) return
+    await ports.stage(
+      {
+        conversationId: file.conversationId,
+        fileId: file.id,
+        file: { digest, mimeType: file.mimeType, size: bytes.size },
+        bytes,
+      },
+      signal,
+    )
   } catch {
     // Hashing or a port threw. The bytes never reached the gateway, and the
     // only thing known about why is that this window could not process them.

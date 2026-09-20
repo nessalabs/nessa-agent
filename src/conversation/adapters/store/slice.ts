@@ -230,38 +230,62 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
  * still in a draft, so an upload that settles after its tile was removed
  * changes nothing.
  */
+/**
+ * Ask for one step of a file's upload state, and say whether it was taken.
+ *
+ * The rules refuse a step that does not start where the file is, by leaving
+ * the tabs exactly as they were. Whoever asked has to know, because the next
+ * thing it does is send bytes.
+ */
+export const takeUploadStep =
+  (change: UploadChange) =>
+  (
+    dispatch: (action: ReturnType<typeof uploadChanged>) => unknown,
+    getState: () => ThunkConfig["state"],
+  ): boolean => {
+    const before = getState().conversation
+    dispatch(uploadChanged(change))
+    return getState().conversation !== before
+  }
+
 export const stageAttachment = createAsyncThunk<
   void,
   { id: string; fileId: string; file: UploadedFile; bytes: Blob },
   ThunkConfig
->("conversation/stageAttachment", async (input, { dispatch, getState, extra }) => {
-  const current = getState().conversation.conversations.find(
-    (item) => item.id === input.id,
-  )
-  if (!current?.draft.some((part) => part.type === "file" && part.id === input.fileId))
-    return
-  const serverId = current.serverConversationId ?? crypto.randomUUID()
-  dispatch(bindConversation({ id: input.id, serverId }))
-  try {
-    const created = await extra.conversation.create(serverId)
-    if (created.conversationId !== serverId)
-      throw new Error("Gateway returned a different conversation identity.")
-    dispatch(conversationReady(input.id))
-    const image = await extra.conversation.stageAttachment(
-      serverId,
-      input.file,
-      input.bytes,
+>(
+  "conversation/stageAttachment",
+  async (input, { dispatch, getState, extra, signal }) => {
+    const current = getState().conversation.conversations.find(
+      (item) => item.id === input.id,
     )
-    dispatch(uploadChanged({ fileId: input.fileId, to: "stored", image }))
-  } catch (error) {
-    // Only a staging refusal says the gateway looked at these bytes and said
-    // no. Anything else — not connected, conversation not created, no answer —
-    // is the gateway being away, and may work if tried again.
-    const reason: UploadFailure =
-      error instanceof AttachmentStagingError ? error.reason : "unavailable"
-    dispatch(uploadChanged({ fileId: input.fileId, to: "failed", reason }))
-  }
-})
+    if (!current?.draft.some((part) => part.type === "file" && part.id === input.fileId))
+      return
+    const serverId = current.serverConversationId ?? crypto.randomUUID()
+    dispatch(bindConversation({ id: input.id, serverId }))
+    try {
+      const created = await extra.conversation.create(serverId)
+      if (created.conversationId !== serverId)
+        throw new Error("Gateway returned a different conversation identity.")
+      dispatch(conversationReady(input.id))
+      // `signal` is this thunk's own: aborting the dispatched promise stops the
+      // upload, which is how a removed tile gives its slot back.
+      const image = await extra.conversation.stageAttachment(
+        serverId,
+        input.file,
+        input.bytes,
+        signal,
+      )
+      dispatch(uploadChanged({ fileId: input.fileId, to: "stored", image }))
+    } catch (error) {
+      // Only a staging refusal says the gateway looked at these bytes and said
+      // no. Anything else — not connected, conversation not created, no answer —
+      // is the gateway being away, and may work if tried again.
+      const reason: UploadFailure =
+        error instanceof AttachmentStagingError ? error.reason : "unavailable"
+      dispatch(uploadChanged({ fileId: input.fileId, to: "failed", reason }))
+    }
+  },
+)
 
 /**
  * Close a tab, and the gateway conversation with it when this window made that

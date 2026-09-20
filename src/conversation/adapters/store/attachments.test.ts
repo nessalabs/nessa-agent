@@ -498,6 +498,7 @@ it("stages the original into a conversation it creates first, and records what c
     context.current().serverConversationId,
     described(file),
     bytes,
+    expect.any(AbortSignal),
   )
   expect(context.current().serverReady).toBe(true)
   // The file still describes the original; the reference is the gateway's.

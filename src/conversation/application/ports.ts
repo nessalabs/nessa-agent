@@ -38,6 +38,8 @@ export interface ConversationEffects {
     conversationId: string,
     file: UploadedFile,
     bytes: Blob,
+    /** Aborted when the file stops being wanted; the upload stops with it. */
+    signal: AbortSignal,
   ): Promise<ImageReference>
   reorder(
     conversationId: string,

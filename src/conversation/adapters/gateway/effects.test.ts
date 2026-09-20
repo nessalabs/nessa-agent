@@ -74,6 +74,8 @@ const stored = {
 }
 const ticket = "cd".repeat(32)
 const bytes = new Blob(["raw"], { type: "image/heic" })
+/** A signal nobody aborts. */
+const live = () => new AbortController().signal
 const owed = { requestId: "r", state: "upload_required", ticket, expiresAtMs: 1 }
 function staging(
   attachments: { begin: unknown; upload?: unknown },
@@ -180,9 +182,9 @@ it("passes an uncertain send failure on untouched: a lost answer is not a refusa
 it("uploads nothing when the conversation already holds the bytes, and answers with its reference", async () => {
   const begin = vi.fn(async () => ({ requestId: "r", state: "stored", stored }))
   const upload = vi.fn()
-  expect(await staging({ begin, upload }).stageAttachment("server", file, bytes)).toEqual(
-    stored,
-  )
+  expect(
+    await staging({ begin, upload }).stageAttachment("server", file, bytes, live()),
+  ).toEqual(stored)
   expect(begin).toHaveBeenCalledExactlyOnceWith("server", file)
   expect(upload).not.toHaveBeenCalled()
 })
@@ -194,11 +196,13 @@ it("uploads the original bytes under the ticket and answers with what was stored
     "server",
     file,
     bytes,
+    live(),
   )
-  expect(upload).toHaveBeenCalledExactlyOnceWith(ticket, {
-    mimeType: "image/heic",
-    bytes,
-  })
+  expect(upload).toHaveBeenCalledExactlyOnceWith(
+    ticket,
+    { mimeType: "image/heic", bytes },
+    { signal: expect.any(AbortSignal) },
+  )
   // The gateway's reference, not a restatement of what was uploaded.
   expect(reference).toEqual(stored)
   expect(reference.digest).not.toBe(file.digest)
@@ -217,7 +221,7 @@ it.each([
     { begin: async () => owed, upload: async () => kept },
   ])
     await expect(
-      staging(attachments).stageAttachment("server", file, bytes),
+      staging(attachments).stageAttachment("server", file, bytes, live()),
     ).rejects.toMatchObject({ reason: "unsupported-image" })
 })
 
@@ -240,7 +244,7 @@ it.each([
   const cause = new NessaAttachmentError(code, 400)
   const upload = vi.fn(() => Promise.reject(cause))
   const error = await staging({ begin: async () => owed, upload })
-    .stageAttachment("server", file, bytes)
+    .stageAttachment("server", file, bytes, live())
     .catch((error: unknown) => error)
   expect(error).toBeInstanceOf(AttachmentStagingError)
   expect(error).toMatchObject({ reason, cause })
@@ -280,6 +284,7 @@ it("offers the same ticket again after a short wait when the gateway had no room
     "server",
     file,
     bytes,
+    live(),
   )
   await clock.reached(1)
   // Nothing is sent again until the wait is over.
@@ -299,7 +304,7 @@ it("gives up as busy after a bounded number of tries, and says so on the tile's 
   const clock = manualWait()
   const upload = vi.fn(() => Promise.reject(busy()))
   const staged = staging({ begin: async () => owed, upload }, clock.wait)
-    .stageAttachment("server", file, bytes)
+    .stageAttachment("server", file, bytes, live())
     .catch((error: unknown) => error)
   for (let index = 0; index < BUSY_RETRY_DELAYS_MS.length; index++) {
     await clock.reached(index + 1)
@@ -323,7 +328,7 @@ it("stops offering the ticket when the session went away during the wait", async
     clock.wait,
   )
   const staged = effects
-    .stageAttachment("server", file, bytes)
+    .stageAttachment("server", file, bytes, live())
     .catch((error: unknown) => error)
   await clock.reached(1)
   status = "reconnecting"
@@ -349,7 +354,7 @@ it.each([
       new NessaAttachmentError("begin_refused", undefined, undefined, refusal),
     )
   await expect(
-    staging({ begin, upload }).stageAttachment("server", file, bytes),
+    staging({ begin, upload }).stageAttachment("server", file, bytes, live()),
   ).rejects.toMatchObject({ reason })
   expect(upload).not.toHaveBeenCalled()
 })
@@ -366,6 +371,7 @@ it("maps an unanswered begin, and one the client would not send, without reachin
         "server",
         file,
         bytes,
+        live(),
       ),
     ).rejects.toMatchObject({ reason })
   }
@@ -375,7 +381,9 @@ it("maps an unanswered begin, and one the client would not send, without reachin
 it("reports staging with no live connection as unavailable, asking nothing", async () => {
   const begin = vi.fn()
   const offline = effectsOf(() => null)
-  await expect(offline.stageAttachment("server", file, bytes)).rejects.toMatchObject({
+  await expect(
+    offline.stageAttachment("server", file, bytes, live()),
+  ).rejects.toMatchObject({
     reason: "unavailable",
   })
   const reconnecting = effectsOf(
@@ -386,7 +394,26 @@ it("reports staging with no live connection as unavailable, asking nothing", asy
       }) as unknown as NessaClient,
   )
   await expect(
-    reconnecting.stageAttachment("server", file, bytes),
+    reconnecting.stageAttachment("server", file, bytes, live()),
   ).rejects.toBeInstanceOf(AttachmentStagingError)
   expect(begin).not.toHaveBeenCalled()
+})
+
+it("hands the caller's signal to the upload, and stops offering a busy ticket once it is aborted", async () => {
+  const begin = vi.fn(async () => owed)
+  const stopping = new AbortController()
+  const upload = vi.fn(async () => {
+    // Removed while the gateway had no room: the wait is not worth taking.
+    stopping.abort()
+    throw busy()
+  })
+  const error = await staging({ begin, upload }, unexpectedWait)
+    .stageAttachment("server", file, bytes, stopping.signal)
+    .catch((cause: unknown) => cause)
+  expect(upload).toHaveBeenCalledExactlyOnceWith(
+    ticket,
+    { mimeType: file.mimeType, bytes },
+    { signal: stopping.signal },
+  )
+  expect(error).toBeInstanceOf(AttachmentStagingError)
 })

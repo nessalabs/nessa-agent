@@ -7,8 +7,8 @@ import {
   renameConversation,
   attachFiles,
   removeFile,
-  uploadChanged,
   stageAttachment,
+  takeUploadStep,
   closeTab,
   openConversation,
   sendDraft,
@@ -54,18 +54,22 @@ export function useConversation() {
       dispatch(attachFiles({ files, conversationId })),
     removeFile: (id: string) => dispatch(removeFile(id)),
     /** Ask for one step in a draft file's upload. Steps that do not follow are ignored. */
-    changeUpload: (change: UploadChange) => dispatch(uploadChanged(change)),
+    /** One step of a file's upload state; false when the rules refused it. */
+    changeUpload: (change: UploadChange): boolean => dispatch(takeUploadStep(change)),
     /**
      * Upload a draft image's original bytes. Settles when the file's upload
-     * state says how it went; it never rejects.
+     * state says how it went, or when `signal` stops it; it never rejects.
      */
-    stageAttachment: async (input: {
-      conversationId: string
-      fileId: string
-      file: UploadedFile
-      bytes: Blob
-    }): Promise<void> => {
-      await dispatch(
+    stageAttachment: async (
+      input: {
+        conversationId: string
+        fileId: string
+        file: UploadedFile
+        bytes: Blob
+      },
+      signal: AbortSignal,
+    ): Promise<void> => {
+      const staging = dispatch(
         stageAttachment({
           id: input.conversationId,
           fileId: input.fileId,
@@ -73,6 +77,14 @@ export function useConversation() {
           bytes: input.bytes,
         }),
       )
+      const stop = () => staging.abort()
+      if (signal.aborted) stop()
+      signal.addEventListener("abort", stop, { once: true })
+      try {
+        await staging
+      } finally {
+        signal.removeEventListener("abort", stop)
+      }
     },
     conversations,
     active,

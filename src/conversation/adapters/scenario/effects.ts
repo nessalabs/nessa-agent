@@ -58,8 +58,9 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
     },
     send,
     steer: send,
-    async stageAttachment(id, file) {
+    async stageAttachment(id, file, _bytes, signal) {
       get(id)
+      if (signal.aborted) throw new AttachmentStagingError("interrupted")
       // Holds nothing and converts nothing: a scenario has no storage and no
       // image library. It answers as a gateway would for the four encodings
       // that need no conversion, and says so for anything that would.
