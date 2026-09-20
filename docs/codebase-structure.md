@@ -245,7 +245,15 @@ about agents, models, or conversations, does no I/O, and keeps no state. It read
 the common encodings with its own decoders and hands what only an operating
 system reads well (HEIC, AVIF, JPEG XL, PSD, camera RAW) to a `PlatformDecoder`:
 ImageIO on macOS under `src/platform/`, none yet elsewhere, where those are
-refused by type. Tests substitute the decoder; `tests/macos.rs` runs the real one. The
+refused by type. Two gates stand in front of a system decoder: `src/sniff.rs`
+puts to it only bytes that begin like one of those encodings, on every system
+and in front of a test's substitute, and the macOS adapter decodes only what
+ImageIO itself names as one of them, so a PDF is refused rather than rendered.
+`src/budget.rs` holds the one pixel and memory budget every decoder is held to
+before a pixel is read, and an image that would pass through unchanged is
+decoded whole first (`src/jpeg.rs` reads a JPEG strictly). Tests substitute the
+decoder; `tests/memory.rs` covers the budget from headers alone and
+`tests/macos.rs` runs the real decoder. The
 numbers are the caller's: the gateway takes them from the selected model's
 `imageInput` entry in the SDK catalog, the one place image limits are recorded.
 

@@ -279,6 +279,64 @@ fn bytes_that_are_not_a_readable_image_are_refused_by_kind() {
     );
 }
 
+#[test]
+fn an_image_that_would_pass_through_must_first_be_shown_to_decode() {
+    // Every one of these is in an accepted encoding, upright, and inside both
+    // limits by its header. None holds a whole image, so none is "unchanged".
+    let roomy = limits(&ALL, 1 << 20, 4096);
+    for (format, name) in [
+        (ImageFormat::Png, "png"),
+        (ImageFormat::Jpeg, "jpeg"),
+        (ImageFormat::Gif, "gif"),
+        (ImageFormat::WebP, "webp"),
+    ] {
+        let whole = encoded(noise(64, 64), format);
+        assert!(!normalize(&whole, &roomy).unwrap().changed, "{name}");
+
+        let truncated = &whole[..whole.len() / 2];
+        assert_eq!(
+            normalize(truncated, &roomy),
+            Err(Error::Undecodable),
+            "{name} cut short"
+        );
+
+        // The header is kept so the size still reads; the pixels are overwritten.
+        let mut corrupt = whole.clone();
+        let body = corrupt.len() / 2;
+        for byte in &mut corrupt[body..] {
+            *byte = 0x55;
+        }
+        let result = normalize(&corrupt, &roomy);
+        if format == ImageFormat::Gif {
+            // GIF carries no checksum, and nearly any bytes are valid LZW
+            // codes: overwritten pixels can still be a whole image as far as
+            // any decoder can tell. What is promised is that such a file was
+            // decoded to its end, not that damage is always detectable.
+            assert!(
+                matches!(&result, Ok(image) if !image.changed) || result == Err(Error::Undecodable),
+                "{name} overwritten"
+            );
+        } else {
+            assert_eq!(result, Err(Error::Undecodable), "{name} overwritten");
+        }
+    }
+
+    // A PNG of 75 bytes: a true header, then a data chunk of noise.
+    let mut header = b"IHDR".to_vec();
+    header.extend(32_u32.to_be_bytes());
+    header.extend(32_u32.to_be_bytes());
+    header.extend([8, 2, 0, 0, 0]);
+    let mut data = b"IDAT".to_vec();
+    data.extend([0x13, 0x37, 0xc0, 0xff, 0xee, 0x00, 0x42, 0x99, 0x10, 0x20]);
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    for chunk in [header.as_slice(), data.as_slice(), b"IEND"] {
+        png.extend((chunk.len() as u32 - 4).to_be_bytes());
+        png.extend(chunk);
+        png.extend(crc32(chunk).to_be_bytes());
+    }
+    assert_eq!(normalize(&png, &roomy), Err(Error::Undecodable));
+}
+
 fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = u32::MAX;
     for byte in bytes {

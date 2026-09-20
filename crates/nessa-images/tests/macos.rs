@@ -86,3 +86,110 @@ fn bytes_the_system_cannot_read_either_are_refused() {
         "{refused:?}"
     );
 }
+
+#[test]
+fn the_system_decoder_itself_refuses_what_this_crate_never_said_it_reads() {
+    // Straight to the adapter, past the first-bytes check `normalize` makes, so
+    // this is ImageIO's own answer being held to the list. ImageIO renders
+    // every one of the first four perfectly well, which is the point.
+    let decoder = platform_decoder().expect("macOS wraps ImageIO");
+    let pdf = converted(200, 200, "pdf", "pdf");
+    assert!(pdf.starts_with(b"%PDF"));
+    let png = converted(200, 200, "png", "png");
+    let tiff = converted(200, 200, "tiff", "tiff");
+    let bmp = converted(200, 200, "bmp", "bmp");
+    // An empty archive, and text.
+    let mut zip = b"PK\x05\x06".to_vec();
+    zip.extend([0; 18]);
+    for (name, input) in [
+        ("pdf", pdf.as_slice()),
+        ("png", &png),
+        ("tiff", &tiff),
+        ("bmp", &bmp),
+        ("zip", &zip),
+        ("text", b"just some words, not an image"),
+    ] {
+        assert_eq!(
+            decoder.decode(input, 4096).err(),
+            Some(Error::UnsupportedEncoding),
+            "{name}"
+        );
+    }
+    // The same PDF through the front door is refused before ImageIO is asked.
+    let limits = Limits::new(ALL.to_vec(), 1 << 20, 2000).unwrap();
+    assert_eq!(normalize(&pdf, &limits), Err(Error::UnsupportedEncoding));
+    // And what is on the list still decodes.
+    let heic = converted(400, 200, "heic", "heic");
+    assert_eq!(decoder.decode(&heic, 4096).unwrap().pixels.width(), 400);
+}
+
+/// A whole Photoshop file of `width` by `height` white pixels, run-length
+/// packed so that a hundred megapixels are a few megabytes.
+fn white_psd(width: u32, height: u32) -> Vec<u8> {
+    let mut psd = b"8BPS".to_vec();
+    psd.extend(1_u16.to_be_bytes());
+    psd.extend([0; 6]);
+    psd.extend(3_u16.to_be_bytes());
+    psd.extend(height.to_be_bytes());
+    psd.extend(width.to_be_bytes());
+    psd.extend(8_u16.to_be_bytes());
+    psd.extend(3_u16.to_be_bytes());
+    // Colour mode data, image resources, layers: all empty.
+    psd.extend([0; 12]);
+    // PackBits: a count byte of `1 - n` repeats the next byte `n` times.
+    let mut row = Vec::new();
+    let mut left = width;
+    while left > 0 {
+        let run = left.min(128);
+        row.extend([(1 - run as i32) as u8, 0xff]);
+        left -= run;
+    }
+    psd.extend(1_u16.to_be_bytes());
+    let rows = height as usize * 3;
+    for _ in 0..rows {
+        psd.extend((row.len() as u16).to_be_bytes());
+    }
+    for _ in 0..rows {
+        psd.extend(&row);
+    }
+    psd
+}
+
+#[test]
+fn a_source_claiming_more_pixels_than_are_ever_decoded_is_refused_from_its_header() {
+    let decoder = platform_decoder().expect("macOS wraps ImageIO");
+    // The same file at a size inside the budget decodes, so the refusal below
+    // is about the size and not about the file.
+    let small = decoder.decode(&white_psd(300, 200), 4096).unwrap();
+    assert_eq!(small.pixels.dimensions(), (300, 200));
+    assert_eq!(small.pixels.get_pixel(150, 100).0, [255; 4]);
+
+    // 108 megapixels. Asked for 256 px, ImageIO would still have to decode
+    // them all to scale them down; it is never asked.
+    let huge = white_psd(12_000, 9_000);
+    assert_eq!(
+        decoder.decode(&huge, 256).err(),
+        Some(Error::TooLargeToDecode)
+    );
+    let limits = Limits::new(ALL.to_vec(), 1 << 20, 256).unwrap();
+    assert_eq!(normalize(&huge, &limits), Err(Error::TooLargeToDecode));
+    // Cut short after its header and row table, there is nothing to decode:
+    // an attempt would answer `Undecodable`. The size is still what is refused.
+    let header_only = &huge[..26 + 12 + 2 + 2 * 27_000];
+    assert_eq!(
+        decoder.decode(header_only, 256).err(),
+        Some(Error::TooLargeToDecode)
+    );
+}
+
+#[test]
+fn the_edge_asked_of_the_system_is_bounded_whatever_the_caller_asks() {
+    let decoder = platform_decoder().expect("macOS wraps ImageIO");
+    let heic = converted(400, 200, "heic", "heic");
+    // An absurd request is neither an overflow nor an allocation: it is clamped
+    // to what this crate will hold, and nothing is scaled up to meet it.
+    for (asked, expected) in [(100, (100, 50)), (u32::MAX, (400, 200))] {
+        let decoded = decoder.decode(&heic, asked).unwrap();
+        assert_eq!(decoded.pixels.dimensions(), expected, "{asked}");
+    }
+}

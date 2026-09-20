@@ -1,38 +1,86 @@
 //! ImageIO: the decoder macOS itself uses. It reads HEIC and HEIF, AVIF, JPEG XL,
 //! PSD, and camera RAW from several hundred cameras, under the system's own
 //! codec licences.
-use crate::{DecodedImage, Error, PlatformDecoder};
+//!
+//! ImageIO reads far more than that: PDF pages, icons, every encoding this crate
+//! already decodes itself. So this adapter asks ImageIO what it takes the bytes
+//! for and goes on only for the types the crate documentation names. Camera RAW
+//! is several hundred vendor types, all declared by the system as kinds of
+//! `public.camera-raw-image`, so that one is asked of the system rather than
+//! listed here.
+use crate::{
+    budget::{check_pixels, MAX_PLATFORM_LONG_EDGE_PX},
+    DecodedImage, Error, PlatformDecoder,
+};
 use image::RgbaImage;
 use objc2_core_foundation::{
-    CFBoolean, CFData, CFDictionary, CFNumber, CFString, CFType, CGPoint, CGRect, CGSize,
+    CFBoolean, CFData, CFDictionary, CFNumber, CFRetained, CFString, CFType, CGPoint, CGRect,
+    CGSize,
 };
 use objc2_core_graphics::{
-    CGBitmapContextCreate, CGColorSpace, CGContext, CGImage, CGImageAlphaInfo,
+    kCGColorSpaceSRGB, CGBitmapContextCreate, CGColorSpace, CGContext, CGImage, CGImageAlphaInfo,
 };
 use objc2_image_io::{
+    kCGImagePropertyPixelHeight, kCGImagePropertyPixelWidth,
     kCGImageSourceCreateThumbnailFromImageAlways, kCGImageSourceCreateThumbnailWithTransform,
     kCGImageSourceShouldCache, kCGImageSourceThumbnailMaxPixelSize, CGImageSource,
 };
+
+/// The types handed on to ImageIO by name. Camera RAW is matched by kind below.
+const LISTED_TYPES: [&str; 8] = [
+    "public.heic",
+    "public.heif",
+    "public.heics",
+    "public.avif",
+    "public.avis",
+    "public.jpeg-xl",
+    "com.adobe.photoshop-image",
+    // DNG. Also a kind of camera RAW; named so the list reads whole.
+    "com.adobe.raw-image",
+];
+/// The kind every vendor's RAW type is declared under.
+const CAMERA_RAW: &str = "public.camera-raw-image";
+
+// `UTTypeConformsTo` is the C call behind uniform type identifiers. Apple marks
+// it deprecated in favour of an Objective-C class; it remains exported, and it
+// is the one way to ask this without an Objective-C runtime dependency.
+#[link(name = "CoreServices", kind = "framework")]
+extern "C" {
+    fn UTTypeConformsTo(identifier: &CFString, kind: &CFString) -> u8;
+}
+
 pub(super) struct ImageIo;
 
 impl PlatformDecoder for ImageIo {
     fn decode(&self, input: &[u8], max_long_edge_px: u32) -> Result<DecodedImage, Error> {
-        let max_pixel_size = i32::try_from(max_long_edge_px).unwrap_or(i32::MAX);
+        // The result is drawn into memory sized from this, so it is bounded here
+        // and not only by whoever called.
+        let long_edge = max_long_edge_px.clamp(1, MAX_PLATFORM_LONG_EDGE_PX);
         let data = CFData::from_bytes(input);
-        // SAFETY: no options dictionary is passed, so there are no generics to get wrong.
+        // SAFETY: `data` is a live CFData, and no options dictionary is passed,
+        // so there are no generics to get wrong.
         let source =
             unsafe { CGImageSource::with_data(&data, None) }.ok_or(Error::UnsupportedEncoding)?;
-        // SAFETY: `source` is a live image source; these only read it.
+        // SAFETY: `source` is a live image source; this only reads it.
         if unsafe { source.count() } == 0 {
             return Err(Error::UnsupportedEncoding);
         }
+        // SAFETY: as above.
+        let kind = unsafe { source.r#type() }.ok_or(Error::UnsupportedEncoding)?;
+        if !is_handed_on(&kind) {
+            return Err(Error::UnsupportedEncoding);
+        }
+        // Read from the file's header, before any pixel is decoded.
+        let (source_width, source_height) = pixel_size(&source).ok_or(Error::Undecodable)?;
+        check_pixels(source_width, source_height)?;
 
         // "Thumbnail" is ImageIO's name for a decode to a bounded size. Made from
         // the full image always, never from a small preview a file may embed, and
         // with the recorded rotation applied.
         let yes: &CFType = CFBoolean::new(true).as_ref();
         let no: &CFType = CFBoolean::new(false).as_ref();
-        let size = CFNumber::new_i32(max_pixel_size);
+        // At most 8,192, so it fits.
+        let size = CFNumber::new_i32(long_edge as i32);
         // SAFETY: these statics are valid CFStrings for the life of the process.
         let keys: [&CFString; 4] = unsafe {
             [
@@ -58,23 +106,32 @@ impl PlatformDecoder for ImageIo {
         else {
             return Err(Error::TooLargeToDecode);
         };
+        // ImageIO was asked for at most `long_edge`; hold it to that.
+        if pixel_width.max(pixel_height) > long_edge {
+            return Err(Error::TooLargeToDecode);
+        }
+        let row_bytes = width.checked_mul(4).ok_or(Error::TooLargeToDecode)?;
+        let buffer_bytes = row_bytes
+            .checked_mul(height)
+            .ok_or(Error::TooLargeToDecode)?;
 
         // Draw into memory of a known layout, whatever the source's was: sRGB,
         // eight bits a channel, red first, alpha last and premultiplied.
-        let mut buffer = vec![0_u8; width * height * 4];
+        let mut buffer = vec![0_u8; buffer_bytes];
         // SAFETY: the static is a valid CFString naming a colour space.
-        let space =
-            CGColorSpace::with_name(Some(unsafe { objc2_core_graphics::kCGColorSpaceSRGB }))
-                .ok_or(Error::Undecodable)?;
-        // SAFETY: `buffer` is exactly `height` rows of `width * 4` bytes and
-        // outlives `context`, which is dropped before `buffer` is read.
+        let space = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB }))
+            .ok_or(Error::Undecodable)?;
+        // SAFETY: `buffer` is `height` rows of `row_bytes`, which is `width`
+        // pixels of four bytes: exactly the layout described to the context, in
+        // checked arithmetic. It outlives `context`, which is dropped below
+        // before `buffer` is read or moved.
         let context = unsafe {
             CGBitmapContextCreate(
                 buffer.as_mut_ptr().cast(),
                 width,
                 height,
                 8,
-                width * 4,
+                row_bytes,
                 Some(&space),
                 CGImageAlphaInfo::PremultipliedLast.0,
             )
@@ -98,6 +155,36 @@ impl PlatformDecoder for ImageIo {
             lossless: false,
         })
     }
+}
+
+/// Whether ImageIO's name for what it found is one this crate hands on to it.
+fn is_handed_on(kind: &CFString) -> bool {
+    let name = kind.to_string();
+    if LISTED_TYPES.contains(&name.as_str()) {
+        return true;
+    }
+    let camera_raw = CFString::from_static_str(CAMERA_RAW);
+    // SAFETY: both arguments are live CFStrings, which is all the call reads.
+    unsafe { UTTypeConformsTo(kind, &camera_raw) != 0 }
+}
+
+/// The first image's width and height in pixels as its header states them,
+/// before any rotation. `None` when ImageIO cannot say, as for a file cut short
+/// inside its header.
+fn pixel_size(source: &CGImageSource) -> Option<(u32, u32)> {
+    // SAFETY: `source` is a live image source and no options are passed.
+    let properties = unsafe { source.properties_at_index(0, None) }?;
+    // SAFETY: an image property dictionary is keyed by CFString, and every
+    // value in it is some CoreFoundation object, which is all `CFType` claims.
+    // Each value's real type is checked before use.
+    let properties = unsafe { properties.cast_unchecked::<CFString, CFType>() };
+    let number = |key: &CFString| -> Option<u32> {
+        let value: CFRetained<CFType> = properties.get(key)?;
+        u32::try_from(value.downcast_ref::<CFNumber>()?.as_i64()?).ok()
+    };
+    // SAFETY: these statics are valid CFStrings for the life of the process.
+    let (width, height) = unsafe { (kCGImagePropertyPixelWidth, kCGImagePropertyPixelHeight) };
+    Some((number(width)?, number(height)?))
 }
 
 /// Core Graphics draws premultiplied alpha; everything after this works in
