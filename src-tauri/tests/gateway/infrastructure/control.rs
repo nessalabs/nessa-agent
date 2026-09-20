@@ -3,7 +3,7 @@ use super::{
     acknowledge, atomic_write, classify, forward_recovery, lock_namespace, parse_health,
     parse_listener_pid, parse_pending_retirement, parse_retirement_evidence, parse_service_process,
     prepare_request, read_acknowledgement, read_pending_retirement, read_retirement_evidence,
-    Health, ManagedRuntime, Registration, ServiceState,
+    Health, InstallFailure, ManagedRuntime, Registration, ServiceState,
 };
 use nessa_local_storage::OpenMode;
 use serde_json::{json, Value};
@@ -437,6 +437,22 @@ fn installation_failures_preserve_primary_error_and_require_forward_recovery() {
         assert!(error.starts_with(stage));
         assert!(error.contains("loaded process were preserved for forward recovery"));
     }
+}
+#[test]
+fn a_service_that_will_not_start_keeps_the_sentence_written_for_the_person() {
+    // Retrying reconciliation is advice about our own mechanism. It is not what
+    // someone whose service exits on startup should be told to do, and the
+    // sentence naming the cause is already finished when it arrives here.
+    let error = forward_recovery::<()>(Err(InstallFailure::Startup(
+        "Nessa's background service is not starting: its credential registry is not one this version of Nessa can read.".into(),
+    )))
+    .unwrap_err();
+    assert_eq!(
+        error,
+        "Nessa's background service is not starting: its credential registry is not one this version of Nessa can read."
+    );
+    assert!(!error.contains("forward recovery"));
+    assert!(!error.contains("runtime identity"));
 }
 #[test]
 fn private_request_replacement_is_complete_and_exclusively_locked() {

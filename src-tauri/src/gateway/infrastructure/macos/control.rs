@@ -1,4 +1,5 @@
 //! Private upgrade exchange and native process effects for the launchd adapter.
+use super::startup::{diagnose, log_tail, parse_last_exit, LastExit};
 use nessa_local_storage::OpenMode;
 use serde::{Deserialize, Deserializer};
 use std::{
@@ -33,6 +34,9 @@ pub(super) struct ServiceStatus {
     pub loaded: bool,
     pub pid: Option<u32>,
     pub process_identity_known: bool,
+    /// Diagnostic only: what launchd last saw this service's process do. It
+    /// decides nothing about identity, and never authorizes an effect.
+    pub last_exit: LastExit,
 }
 /// A loaded label and a responsive port are independent observations.
 #[derive(Debug, PartialEq, Eq)]
@@ -90,6 +94,7 @@ pub(super) fn service_status(service: &str) -> Result<ServiceStatus, String> {
             loaded: false,
             pid: None,
             process_identity_known: true,
+            last_exit: LastExit::Unknown,
         });
     }
     let text = String::from_utf8_lossy(&output.stdout);
@@ -98,6 +103,7 @@ pub(super) fn service_status(service: &str) -> Result<ServiceStatus, String> {
         loaded: true,
         pid: process.as_ref().ok().copied().flatten(),
         process_identity_known: process.is_ok(),
+        last_exit: parse_last_exit(&text),
     })
 }
 fn parse_service_process(text: &str) -> Result<Option<u32>, ()> {
@@ -629,12 +635,54 @@ fn parse_health(bytes: &[u8]) -> Option<Health> {
         _ => None,
     }
 }
+/// How long a healthy-but-slow gateway is allowed to take to answer.
+const READINESS_DEADLINE: Duration = Duration::from_secs(30);
+/// How often launchd is asked what happened to the process, while the port is
+/// still silent. `launchctl print` is a subprocess; the health probe is not.
+const LIVENESS_INTERVAL: Duration = Duration::from_millis(500);
+/// Consecutive liveness checks that must agree the process exited and was not
+/// replaced. One observation can land in the gap between a clean exit and the
+/// next spawn; three across a second and a half is a service that is not coming
+/// up, well inside launchd's own five-second restart throttle.
+const DEAD_OBSERVATIONS: u32 = 3;
+const READINESS_FAILURE: &str = "the gateway did not advertise the expected runtime identity owned by its launchd service before the readiness deadline";
+
+/// A failed registration, and whether its message is already the one to show.
+///
+/// Every mechanism failure here is retryable and says so; a service that exits
+/// on startup is not a mechanism failure, and the sentence naming its cause is
+/// finished before it leaves this module.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum InstallFailure {
+    Reconciliation(String),
+    Startup(String),
+}
+impl From<String> for InstallFailure {
+    fn from(message: String) -> Self {
+        Self::Reconciliation(message)
+    }
+}
+impl From<&str> for InstallFailure {
+    fn from(message: &str) -> Self {
+        Self::Reconciliation(message.into())
+    }
+}
+
+/// Wait for the expected runtime to answer, or for launchd to prove it cannot.
+///
+/// The deadline is for a server that is starting slowly. A server that has
+/// exited, and that launchd has not replaced by the time we look again, is not
+/// starting slowly, and waiting the rest of the deadline out only delays the
+/// same answer by half a minute.
 pub(super) fn wait_fingerprint(
     service: &str,
     expected: (&str, &str),
     port: u16,
-) -> Result<ManagedRuntime, String> {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    log: &Path,
+) -> Result<ManagedRuntime, InstallFailure> {
+    let deadline = Instant::now() + READINESS_DEADLINE;
+    let mut next_liveness_check = Instant::now();
+    let mut dead = 0u32;
     while Instant::now() < deadline {
         if let Some(Health::Managed(runtime)) = health(port) {
             let status = service_status(service)?;
@@ -645,14 +693,45 @@ pub(super) fn wait_fingerprint(
             {
                 return Ok(runtime);
             }
+        } else if Instant::now() >= next_liveness_check {
+            next_liveness_check = Instant::now() + LIVENESS_INTERVAL;
+            let status = service_status(service)?;
+            // A pid means something is running, whatever it has yet to say;
+            // only an absent process with a failed last exit is death.
+            dead = if status.pid.is_none() && status.last_exit.is_failure() {
+                dead + 1
+            } else {
+                0
+            };
+            if dead >= DEAD_OBSERVATIONS {
+                let failure = diagnose(&status.last_exit, &log_tail(log), port, READINESS_FAILURE);
+                eprintln!("[nessa] {}", failure.detail);
+                return Err(InstallFailure::Startup(failure.sentence));
+            }
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    Err("Gateway did not advertise the expected runtime identity owned by its launchd service before the readiness deadline".into())
+    // The process outlived the deadline without answering, which is the
+    // readiness contract's own failure and stays worded as one. Its log still
+    // goes to ours, so the next person does not have to go and find it.
+    let tail = log_tail(log);
+    if !tail.is_empty() {
+        eprintln!("[nessa] {READINESS_FAILURE}\ngateway log tail:\n{tail}");
+    }
+    Err(InstallFailure::Reconciliation(
+        "Gateway did not advertise the expected runtime identity owned by its launchd service before the readiness deadline".into(),
+    ))
 }
 /// Installation failure never authorizes stopping a process or restoring old configuration.
-pub(super) fn forward_recovery<T>(result: Result<T, String>) -> Result<T, String> {
-    result.map_err(|primary| format!("{primary}; gateway registration and any loaded process were preserved for forward recovery; retry reconciliation"))
+///
+/// The forward-recovery clause is advice about the mechanism, and it belongs on
+/// the mechanism's failures. A service that will not start is not waiting on a
+/// retry of ours, and its sentence is left exactly as it was written.
+pub(super) fn forward_recovery<T>(result: Result<T, InstallFailure>) -> Result<T, String> {
+    result.map_err(|failure| match failure {
+        InstallFailure::Startup(sentence) => sentence,
+        InstallFailure::Reconciliation(primary) => format!("{primary}; gateway registration and any loaded process were preserved for forward recovery; retry reconciliation"),
+    })
 }
 #[cfg(test)]
 #[path = "../../../../tests/gateway/infrastructure/control.rs"]
