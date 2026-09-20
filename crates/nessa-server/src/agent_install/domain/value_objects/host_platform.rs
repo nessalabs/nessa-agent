@@ -58,7 +58,17 @@ impl fmt::Display for Libc {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ReleaseRequirements {
     /// The C library this build needs, where that is a distinction at all.
-    /// `None` means the platform has only one, as macOS and Windows do.
+    ///
+    /// `None` means the build does not name one, which is what macOS builds
+    /// do: there is one C library there and nothing to choose between.
+    ///
+    /// Windows is not that case, however much it looks like it.
+    /// `*-pc-windows-gnu` and `*-pc-windows-msvc` are different builds and a
+    /// Rust host reports `gnu` or `msvc` for them, so `Some` is a legitimate
+    /// thing for a Windows build to say and
+    /// [`super::pinned_release::PinnedRelease::new`] accepts it.
+    /// What it would mean for a *vendor's* Windows archive is a question no
+    /// pin has had to answer yet, since none of them ships one.
     libc: Option<Libc>,
     /// Whether the processor must support AVX2. Only ever true for x86-64;
     /// nothing else in the instruction sets Nessa pins for is optional.
