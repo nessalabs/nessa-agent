@@ -1,4 +1,5 @@
 use crate::agents::entrypoint::http as agents_handler;
+use crate::attachments::entrypoint::http as attachments_handler;
 use crate::browser_session::entrypoint as browser;
 use crate::health::entrypoint::handler as health_handler;
 use crate::protocol::MAX_PAYLOAD_BYTES;
@@ -7,7 +8,7 @@ use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::State;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, Router};
+use axum::routing::{get, post, put, Router};
 
 /// Every RPC path uses the same mandatory authentication and authorization flow.
 /// The HTTP probe reports liveness only and exposes no product state.
@@ -27,6 +28,15 @@ pub fn router(product: crate::product::ProductRouteState) -> Router {
         .route("/browser/logout", post(browser::logout))
         .route("/browser/session", get(browser_upgrade))
         .layer(axum::extract::DefaultBodyLimit::max(20 * 1024))
+        // Added after the limit above so that limit does not apply to it. An
+        // upload is bounded by its ticket instead: the body is streamed, and
+        // abandoned as soon as it runs past the size the ticket was issued for.
+        .route(
+            "/attachments",
+            put(attachments_handler::handle_upload)
+                .options(attachments_handler::handle_preflight)
+                .layer(axum::extract::DefaultBodyLimit::disable()),
+        )
         .with_state(product)
 }
 

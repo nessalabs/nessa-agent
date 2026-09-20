@@ -86,3 +86,38 @@ it.each(["pending", "running", "completed", "failed"])(
     )
   },
 )
+
+it("keeps a row for a turn of images alone, so the transcript has a user turn to paint", () => {
+  const transcript = agentTranscript(
+    "chat",
+    [
+      {
+        id: "pictures",
+        from: "user",
+        executionId: "run",
+        receipt: "delivered",
+        // No text at all: the row must not depend on there being any.
+        content: [
+          {
+            type: "image-reference",
+            digest: `sha256:${"ab".repeat(32)}`,
+            mimeType: "image/png",
+            size: 2048,
+          },
+        ],
+      },
+      {
+        id: "assistant",
+        from: "assistant",
+        executionId: "run",
+        text: "A finder window.",
+        status: "completed",
+        parts: [{ offset: 0, kind: "text", text: "A finder window.", toolId: "" }],
+      },
+    ],
+    [],
+  )
+  const rows = transcript.turns.map((turn) => agentTurnView(turn, transcript))
+  // `Transcript` looks the user turn up by this id and renders its content.
+  expect(rows.map((row) => row.promptId)).toEqual(["pictures"])
+})

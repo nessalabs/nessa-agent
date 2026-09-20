@@ -267,6 +267,7 @@ async fn a_binding_codex_cannot_honour_is_refused_before_a_process_starts() {
         max_output_tokens: 200,
         knowledge_cutoff: "2026-01".into(),
         documentation_url: "https://example.com".into(),
+        image_input: None,
     })
     .unwrap();
     assert_eq!(
@@ -334,8 +335,12 @@ async fn codex_steers_by_queue_although_its_adapter_offers_the_extension() {
     assert_eq!(
         opened.session.operation_capabilities(),
         OperationCapabilities {
+            negotiated: true,
             native_steering: false,
             session_resume: true,
+            // The fixture binding is given no image source, so this connection
+            // carries none whatever the agent advertised.
+            image_input: false,
         }
     );
     opened

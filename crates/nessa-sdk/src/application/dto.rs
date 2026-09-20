@@ -23,6 +23,26 @@ pub struct EffectiveCapabilitiesDto {
     pub max_output_tokens: u32,
 }
 
+/// Published limits for one input image; see the domain `ImageInputLimits`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageInputLimitsDto {
+    /// Accepted encodings as exact lowercase media types such as `image/png`:
+    /// at least one, none repeated.
+    pub media_types: Vec<String>,
+    /// Largest single image as base64 text, the strictest across serving
+    /// platforms. At least 4: one base64 group, the least that carries a byte.
+    pub max_encoded_bytes: u64,
+    /// Longest width or height, in pixels, the model accepts at all.
+    pub max_edge_px: u32,
+    /// The lower ceiling, in pixels, a provider applies to every image once a
+    /// request holds many of them. At most `max_edge_px`.
+    pub many_images_max_edge_px: u32,
+    /// The long edge, in pixels, the model actually sees; a larger image is
+    /// scaled down by the provider. At most `max_edge_px`.
+    pub native_long_edge_px: u32,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelMetadataDto {
@@ -30,6 +50,9 @@ pub struct ModelMetadataDto {
     pub model_id: String,
     pub display_name: String,
     pub input: ModalitiesDto,
+    /// Present only with image input, and only once its limits are recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_input: Option<ImageInputLimitsDto>,
     pub output: ModalitiesDto,
     pub tool_use: bool,
     pub reasoning: bool,

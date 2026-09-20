@@ -1,4 +1,5 @@
 use super::*;
+use nessa_sdk::domain::common::value_objects::ImageMediaType;
 use std::ffi::OsStr;
 
 /// The shared part of the configuration, with one agent under it.
@@ -218,4 +219,58 @@ fn the_agent_is_launched_with_the_path_that_rule_chose() {
     // No path to hand over means none is named, rather than an empty one, which
     // would search the working directory the agent writes to.
     assert!(!inherited_environment(AgentId::Codex, None).contains_key(OsStr::new("PATH")));
+}
+
+/// One store holds the uploads of conversations that each run on their own
+/// agent, so an image has to be one every configured agent would take.
+///
+/// Fitting to one model and sending to another is a refusal at the moment of
+/// sending, which is the one point where there is nothing left to do about it:
+/// the bytes are already kept, the message is already written.
+#[test]
+fn an_image_is_fitted_to_what_every_configured_agent_would_take() {
+    let limits = |types: Vec<ImageMediaType>, encoded, max_edge, many, native| {
+        ImageInputLimits::new(types, encoded, max_edge, many, native).unwrap()
+    };
+    let roomy = limits(
+        vec![
+            ImageMediaType::Png,
+            ImageMediaType::Jpeg,
+            ImageMediaType::Webp,
+        ],
+        8_000_000,
+        8000,
+        2000,
+        1600,
+    );
+    let tight = limits(
+        vec![ImageMediaType::Jpeg, ImageMediaType::Png],
+        5_000_000,
+        4000,
+        1500,
+        1400,
+    );
+    let both = narrower(&roomy, &tight).expect("both accept PNG and JPEG");
+    // Every figure is the smaller, so the image meets both.
+    assert_eq!(both.max_encoded_bytes(), 5_000_000);
+    assert_eq!(both.max_edge_px(), 4000);
+    assert_eq!(both.many_images_max_edge_px(), 1500);
+    assert_eq!(both.native_long_edge_px(), 1400);
+    // WebP goes, because one of the two would refuse it; the order is the
+    // first's, which is the order the catalog published.
+    assert_eq!(
+        both.media_types(),
+        [ImageMediaType::Png, ImageMediaType::Jpeg]
+    );
+    // Narrowing is symmetric in what it admits, whichever way round it is asked.
+    let other_way = narrower(&tight, &roomy).unwrap();
+    assert_eq!(other_way.max_encoded_bytes(), both.max_encoded_bytes());
+    assert_eq!(other_way.max_edge_px(), both.max_edge_px());
+    // Two models with no encoding in common leave nothing this gateway could
+    // store and then send, which is not an error: it is no images.
+    assert!(narrower(
+        &limits(vec![ImageMediaType::Png], 8_000_000, 8000, 2000, 1600),
+        &limits(vec![ImageMediaType::Gif], 8_000_000, 8000, 2000, 1600),
+    )
+    .is_none());
 }

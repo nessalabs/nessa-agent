@@ -4,6 +4,7 @@ import { createDependencies } from "./dependencies"
 import { scenarioEffects } from "../conversation/adapters/scenario/effects"
 import { makeStore } from "../store"
 import { sendDraft } from "../conversation/adapters/store/slice"
+import { sha256Digest } from "../panel/adapters/sha256"
 
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }))
 vi.mock("@tauri-apps/api/core", () => ({ invoke }))
@@ -33,6 +34,18 @@ describe("application dependency scope", () => {
       { receipt: "failed" },
     )
     expect(disconnected.getState().conversation.conversations[0]!.turns).toHaveLength(1)
+  })
+
+  it("hands out the digest an upload is identified by, and takes a substitute for it", async () => {
+    // Hashing reads Web Crypto, which is outside this process like a socket or
+    // a clock, so it arrives from here rather than being imported where it is
+    // used — and a test can hash without `crypto.subtle` anywhere near it.
+    const bytes = new Blob(["abc"])
+    expect(await createDependencies().digest(bytes)).toBe(await sha256Digest(bytes))
+    const substitute = vi.fn(async () => `sha256:${"cd".repeat(32)}`)
+    const scoped = createDependencies({ digest: substitute })
+    expect(await scoped.digest(bytes)).toBe(`sha256:${"cd".repeat(32)}`)
+    expect(substitute).toHaveBeenCalledExactlyOnceWith(bytes)
   })
 })
 

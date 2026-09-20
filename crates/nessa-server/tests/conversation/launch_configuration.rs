@@ -5,8 +5,15 @@
 //! that these are the gateway's real budgets. Checking the table against itself
 //! cannot catch a literal written here instead, which is the drift that puts
 //! the client back under the gateway and loses the typed answer again.
-use super::{build::launch_configuration, AgentId, AgentRuntime, AgentsConfig};
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+use super::{build::launch_configuration, AgentRuntime, AgentsConfig};
+use nessa_sdk::application::agent_execution::providers::UserImageSource;
+use std::{
+    collections::{BTreeMap, HashMap},
+    ffi::OsString,
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 
 const BUDGETS_JSON: &str = include_str!("../../../../protocol/defaults/agent-startup-budgets.json");
 
@@ -44,10 +51,12 @@ fn the_budgets_injected_are_the_ones_the_shared_table_states() {
     let table: serde_json::Value =
         serde_json::from_str(BUDGETS_JSON).expect("bundled budgets table must parse");
     let injected = launch_configuration(
-        AgentId::Claude,
         &agents_config(),
         &runtime(),
         PathBuf::from("/workspace"),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        None,
     );
     assert_eq!(injected.startup_timeout, millis(&table, "startupMs"));
     assert_eq!(injected.shutdown_grace, millis(&table, "shutdownGraceMs"));
@@ -59,10 +68,12 @@ fn the_budgets_injected_are_the_ones_the_shared_table_states() {
 #[test]
 fn every_injected_budget_is_a_positive_interval() {
     let injected = launch_configuration(
-        AgentId::Claude,
         &agents_config(),
         &runtime(),
         PathBuf::from("/workspace"),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        None,
     );
     for budget in [
         injected.startup_timeout,
@@ -76,31 +87,51 @@ fn every_injected_budget_is_a_positive_interval() {
     }
 }
 
-/// The budget is the user's patience with a cold runtime, not a vendor's
-/// decision, so every agent is launched under the same one. Reading it back per
-/// agent is what keeps a later per-agent literal from quietly reappearing.
+/// Everything an agent is launched with that differs per agent now arrives as
+/// an argument, so this is where it is checked to arrive unchanged.
+///
+/// It used to be two calls, one per agent, asserting the budgets matched; the
+/// budgets cannot differ per agent any more, because nothing here knows which
+/// agent it is building for. What can still be got wrong is dropping one of
+/// these on the way into `AcpConfig`, which is what the launch would then be
+/// missing: the vendor directory, the sign-in keys, or the images.
 #[test]
-fn every_agent_is_launched_under_the_same_budgets() {
-    let config = agents_config();
-    let runtime = runtime();
-    let claude = launch_configuration(
-        AgentId::Claude,
-        &config,
-        &runtime,
+fn what_the_launch_is_given_is_what_it_carries() {
+    let environment = BTreeMap::from([(OsString::from("CODEX_HOME"), OsString::from("/home/x"))]);
+    let credentials = BTreeMap::from([(OsString::from("CODEX_API_KEY"), OsString::from("k"))]);
+    let images: Arc<dyn UserImageSource> = Arc::new(NoImages);
+    let injected = launch_configuration(
+        &agents_config(),
+        &runtime(),
         PathBuf::from("/workspace"),
+        environment.clone(),
+        credentials.clone(),
+        Some(images),
     );
-    let codex = launch_configuration(
-        AgentId::Codex,
-        &config,
-        &runtime,
+    assert_eq!(injected.environment, environment);
+    assert_eq!(injected.credential_environment, credentials);
+    assert!(injected.images.is_some());
+    // And a binding given no source offers no image input at all.
+    assert!(launch_configuration(
+        &agents_config(),
+        &runtime(),
         PathBuf::from("/workspace"),
-    );
-    assert_eq!(claude.startup_timeout, codex.startup_timeout);
-    assert_eq!(claude.shutdown_grace, codex.shutdown_grace);
-    assert_eq!(claude.kill_timeout, codex.kill_timeout);
-    // What each launch carries beyond the budgets does differ per agent - the
-    // vendor directory it names, the sign-in keys it passes - and is covered
-    // where those are decided. It is not asserted from here, because both are
-    // read from this process's own environment and a machine with neither set
-    // would make the two launches identical without anything being wrong.
+        BTreeMap::new(),
+        BTreeMap::new(),
+        None,
+    )
+    .images
+    .is_none());
+}
+
+/// A source nothing in this test reads: what is asserted is that it arrives,
+/// not what it answers.
+struct NoImages;
+impl UserImageSource for NoImages {
+    fn read(
+        &self,
+        _: nessa_sdk::domain::agent_execution::prompts::ImageReference,
+    ) -> nessa_sdk::application::agent_execution::providers::UserImageFuture<'_> {
+        unreachable!("the launch configuration never reads its image source")
+    }
 }

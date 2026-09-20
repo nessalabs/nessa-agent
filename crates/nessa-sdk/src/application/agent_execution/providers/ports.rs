@@ -37,6 +37,25 @@ pub trait ProviderSessionBackend: Send + Sync {
         OperationCapabilities::default()
     }
 
+    /// Refuse, before it is accepted, an `input` this backend already knows it
+    /// could never deliver, whatever state the connection is in: for ACP, a
+    /// request its profile rejects or a message too large for one frame.
+    ///
+    /// [`ProviderSession`] calls this at every admission, after its own checks
+    /// and before anything is saved, queued, or sent. It must be synchronous
+    /// and pure: no I/O, no restoration, no bytes read, and the same answer for
+    /// the same input for as long as the backend lives. Rules that depend on
+    /// the live connection belong in [`Self::operation_capabilities`] instead.
+    /// The default accepts everything.
+    ///
+    /// # Errors
+    ///
+    /// The typed reason the input is refused, such as
+    /// [`AgentError::MessageTooLarge`].
+    fn validate_input(&self, _input: &ExecutionRequest) -> Result<(), AgentError> {
+        Ok(())
+    }
+
     /// Ensure the context and its event stream are live without sending user input.
     /// Restoration must complete before Agent starts polling observations.
     fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()>;

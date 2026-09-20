@@ -5,9 +5,12 @@ use crate::{
         infrastructure::{AgentLaunchFiles, LocalAgentProbe},
     },
     app::ports::Clock as ServerClock,
+    attachments::infrastructure::ModelImageNormalizer,
     browser_session::adapters::PersistentSessions,
     conversation::{
-        application::{ConversationAgents, ConversationLimits, ConversationService},
+        application::{
+            ConversationAgents, ConversationDependencies, ConversationLimits, ConversationService,
+        },
         infrastructure::{DurableConversationCreationAudit, LocalConversationRepository},
     },
     core::RunError,
@@ -150,13 +153,39 @@ pub(super) fn product_state(
             .map_err(|error| RunError::Agent(error.to_string()))?;
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
         let selected = agents.selected()?;
-        let configured = super::agent::providers(agents, &root, clock.clone())?;
-        let storage = Arc::new(
-            LocalFileStorage::new(root.join("sessions"))
-                .map_err(|error| RunError::Agent(error.to_string()))?,
-        );
+        // Ownership records come first. A binding needs somewhere to read image
+        // bytes, reading them needs the attachment store, and beginning an
+        // upload needs to ask who owns a conversation: so the repository is
+        // built, then attachments over it, and only then the providers.
         let metadata = Arc::new(
             LocalConversationRepository::new(root.join("metadata"))
+                .map_err(|error| RunError::Agent(error.to_string()))?,
+        );
+        let attachments = super::attachments::attachments(
+            &directory
+                .parent()
+                .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
+                .join("attachments"),
+            metadata.clone(),
+            // The image limits from the catalog, which is the one place they
+            // are recorded, taken across every configured agent's model rather
+            // than the selected one's: the store is shared by conversations
+            // that each run on their own agent. Every uploaded image is fitted
+            // to them, using the running system's decoder for the encodings the
+            // image library does not read itself.
+            Arc::new(
+                ModelImageNormalizer::new(
+                    super::agent::image_limits(agents)?.as_ref(),
+                    nessa_images::platform_decoder(),
+                )
+                .map_err(|error| RunError::Agent(format!("model image limits: {error}")))?,
+            ),
+            clock.clone(),
+        )?;
+        let configured =
+            super::agent::providers(agents, &root, clock.clone(), attachments.images.clone())?;
+        let storage = Arc::new(
+            LocalFileStorage::new(root.join("sessions"))
                 .map_err(|error| RunError::Agent(error.to_string()))?,
         );
         let creation_audit = Arc::new(
@@ -164,17 +193,22 @@ pub(super) fn product_state(
                 .map_err(|error| RunError::Agent(error.to_string()))?,
         );
         let service = ConversationService::new(
-            ConversationAgents::new(configured, selected)
-                .map_err(|error| RunError::Agent(error.to_string()))?,
-            storage,
-            metadata,
-            creation_audit,
-            clock,
+            ConversationDependencies {
+                agents: ConversationAgents::new(configured, selected)
+                    .map_err(|error| RunError::Agent(error.to_string()))?,
+                storage,
+                metadata,
+                creation_audit,
+                attachments: Some(attachments.conversations),
+                clock,
+            },
             ConversationLimits::default(),
             Some(agents.workspace.to_string_lossy().into_owned()),
         )
         .map_err(|error| RunError::Agent(error.to_string()))?;
-        product = product.with_conversations(Arc::new(service));
+        product = product
+            .with_conversations(Arc::new(service))
+            .with_attachments(attachments.service);
     }
     Ok(product)
 }

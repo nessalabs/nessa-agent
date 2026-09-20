@@ -1,19 +1,44 @@
-import type { FileAttachment } from "./attachments"
+import type { FileAttachment, ImageReference, ImageReferencePart } from "./attachments"
 
 /** Ordered message content; pasted payloads remain literal and independently viewable. */
 export type MessagePart =
   | { type: "text"; text: string }
   | { type: "pasted-text"; id: string; text: string }
   | FileAttachment
+  | ImageReferencePart
 
 export type MessageContent = MessagePart[]
 
-/** Text sent to the agent, retaining the exact order and whitespace of pasted payloads. */
+/**
+ * Text sent to the agent, retaining the exact order and whitespace of pasted
+ * payloads. Files and images contribute nothing here: they travel as references.
+ */
 export function contentText(content: MessageContent): string {
-  return content.map((part) => (part.type === "file" ? "" : part.text)).join("")
+  return content
+    .map((part) => (part.type === "text" || part.type === "pasted-text" ? part.text : ""))
+    .join("")
 }
 
 /** Creates an ordinary Markdown draft. */
 export function textContent(text: string): MessageContent {
   return text ? [{ type: "text", text }] : []
+}
+
+/**
+ * A message as the gateway reports it: its text, then its images by reference.
+ * This window never held those bytes, so the parts carry nothing to preview.
+ */
+export function referencedContent(
+  text: string,
+  images: readonly ImageReference[],
+): MessageContent {
+  return [
+    ...textContent(text),
+    ...images.map((image) => ({
+      type: "image-reference" as const,
+      digest: image.digest,
+      mimeType: image.mimeType,
+      size: image.size,
+    })),
+  ]
 }

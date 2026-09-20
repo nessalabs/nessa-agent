@@ -1,13 +1,15 @@
 use nessa_sdk::domain::common::value_objects::TokenLimits;
 use nessa_sdk::domain::{
-    common::value_objects::{Date, Url},
+    common::value_objects::{Date, ImageMediaType, Url},
     effective_capabilities::value_objects::{
         BindingRestrictions, CapabilityError, CapabilityRequirement as R, EffectiveCapabilities,
         Modality as M,
     },
     model_metadata::{
         entities::ModelMetadata,
-        value_objects::{Modalities, ModelDescription, ModelFeatures, ModelKey, ModelProvider},
+        value_objects::{
+            ImageInputLimits, Modalities, ModelDescription, ModelFeatures, ModelKey, ModelProvider,
+        },
     },
 };
 
@@ -22,7 +24,19 @@ fn features(image: bool, audio: bool, tool_use: bool, reasoning: bool) -> ModelF
 fn limits(context: u32, output: u32) -> TokenLimits {
     TokenLimits::new(context, output).unwrap()
 }
+fn image_limits() -> ImageInputLimits {
+    ImageInputLimits::new(vec![ImageMediaType::Png], 5_000_000, 8000, 2000, 2576).unwrap()
+}
+/// A model that lists image input also records its image limits, as the catalog does.
 fn model(id: &str, features: ModelFeatures) -> ModelMetadata {
+    let model = bare_model(id, features);
+    if features.input().image() {
+        model.with_image_input(image_limits()).unwrap()
+    } else {
+        model
+    }
+}
+fn bare_model(id: &str, features: ModelFeatures) -> ModelMetadata {
     ModelMetadata::new(
         ModelKey::new(ModelProvider::OpenAi, id.into()).unwrap(),
         ModelDescription::new(
@@ -339,4 +353,38 @@ fn effective_feature_snapshot_exposes_only_the_intersection() {
     assert!(!snapshot.features().input().image());
     assert!(!snapshot.features().reasoning());
     assert!(snapshot.features().tool_use());
+}
+
+#[test]
+fn image_input_is_offered_only_with_recorded_limits_and_carries_them() {
+    let sees_images = features(true, false, false, false);
+    let recorded = EffectiveCapabilities::new(
+        &model("recorded", sees_images),
+        binding(sees_images),
+        limits(800, 150),
+    )
+    .unwrap();
+    assert!(recorded.supports(R::Input(M::Image)));
+    assert_eq!(recorded.image_input(), Some(&image_limits()));
+
+    // The model lists images but nothing records what an acceptable one is.
+    let unrecorded = EffectiveCapabilities::new(
+        &bare_model("unrecorded", sees_images),
+        binding(sees_images),
+        limits(800, 150),
+    )
+    .unwrap();
+    assert!(!unrecorded.supports(R::Input(M::Image)));
+    assert!(unrecorded.supports(R::Input(M::Text)));
+    assert_eq!(unrecorded.image_input(), None);
+
+    // A text-only binding removes the limits along with the modality.
+    let text_binding = EffectiveCapabilities::new(
+        &model("narrowed", sees_images),
+        binding(features(false, false, false, false)),
+        limits(800, 150),
+    )
+    .unwrap();
+    assert!(!text_binding.supports(R::Input(M::Image)));
+    assert_eq!(text_binding.image_input(), None);
 }

@@ -240,13 +240,56 @@ export interface ConversationCapabilities {
   resume: boolean
   /** Can review provider permission requests. */
   permissions: boolean
+  /** The connected agent advertised image input. False until an agent has been opened, and whenever it advertised none. */
+  imageInput: boolean
+}
+/** One uploaded image a message refers to. The bytes travel on the upload path, never in a socket message. */
+export interface ImageAttachment {
+  /** SHA-256 of the image bytes: `sha256:` and 64 lowercase hexadecimal digits. */
+  digest: string
+  /** Image encoding. */
+  mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+  /** Image length in bytes, at most 5 MiB. */
+  size: number
+}
+/** Ask to upload one file into a conversation. Repeating it for bytes the conversation already holds needs no upload. */
+export interface AttachmentBeginParams {
+  /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
+  conversationId: string
+  /** Stable action identifier retained for retries of one logical command. */
+  requestId: string
+  /** SHA-256 of the bytes to be uploaded; the upload is refused unless the received bytes hash to it. */
+  digest: string
+  /** Declared lowercase media type without parameters. Storage accepts any; what a message may refer to is narrower. */
+  mimeType: string
+  /** Exact length in bytes, at most 64 MiB, which admits a camera RAW file; the upload is refused unless it is exactly this long. */
+  size: number
+}
+/** Either the conversation already holds this upload, with the reference a message uses for it, or a single-use ticket to upload it. A successful `PUT /attachments` answers with the same reference shape. */
+export interface AttachmentBeginResult {
+  /** The action this answers. */
+  requestId: string
+  /** `stored` needs nothing further; `upload_required` carries a ticket. */
+  state: "stored" | "upload_required"
+  /** Secret single-use upload ticket, sent as the `x-nessa-upload-ticket` header of one `PUT /attachments`. Null when stored. Do not log it. */
+  ticket: string | null
+  /** Unix milliseconds after which the ticket is refused. Null when stored. */
+  expiresAtMs: number | null
+  /** When stored: digest of what the conversation holds, which is what a message refers to. The gateway may have converted or compressed the upload, so this can differ from the uploaded digest. Null when an upload is required. */
+  digest: string | null
+  /** When stored: media type of what the conversation holds. Null when an upload is required. */
+  mimeType: string | null
+  /** When stored: length in bytes of what the conversation holds. Null when an upload is required. */
+  size: number | null
 }
 /** One bounded conversation turn; omitted older text is indicated by the enclosing truncated flag. */
 export interface ConversationMessage {
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
-  /** User input text. */
+  /** User input text; empty for a message of images alone. */
   userText: string
+  /** Images the user sent with this turn, in attachment order. */
+  attachments: ImageAttachment[]
   /** Current invocation state. */
   status: ConversationMessageStatus
   /** Bounded diagnostic for this invocation. */
@@ -262,8 +305,10 @@ export interface ConversationMessage {
 export interface ConversationPending {
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
-  /** Waiting user input. */
+  /** Waiting user input; empty for a message of images alone. */
   text: string
+  /** Images waiting with this input, in attachment order. */
+  attachments: ImageAttachment[]
   /** Queue or steering admission. */
   mode: ConversationPendingMode
 }
@@ -358,8 +403,10 @@ export interface ConversationSendParams {
   requestId: string
   /** Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes. */
   executionId: string
-  /** User message, at most 8 KiB UTF-8; gateway enforces the byte bound. */
+  /** User message, at most 8 KiB UTF-8; gateway enforces the byte bound. May be blank only when attachments are present. */
   text: string
+  /** Images already uploaded into this conversation, in attachment order; at most 10 MiB in total. Empty for a message of text alone. */
+  attachments: ImageAttachment[]
 }
 /** Remove an input that has not dispatched. */
 export interface ConversationRemoveParams {
@@ -477,7 +524,7 @@ export interface ConversationPart {
   /** Opaque provider message identity; only fragments with the same identity may be combined. */
   messageId?: string
 }
-/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. */
+/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. */
 export const ConversationErrorCode = {
   AgentNotConfigured: "agent_not_configured",
   AgentUnsupported: "agent_unsupported",
@@ -496,9 +543,23 @@ export const ConversationErrorCode = {
   StalePermission: "stale_permission",
   AgentStartupDeadline: "agent_startup_deadline",
   AgentOperationFailed: "agent_operation_failed",
+  ImageInputUnsupported: "image_input_unsupported",
+  AttachmentNotFound: "attachment_not_found",
+  AttachmentUnavailable: "attachment_unavailable",
+  AttachmentCapacity: "attachment_capacity",
+  AttachmentStorageUnavailable: "attachment_storage_unavailable",
+  AttachmentCleanupUnavailable: "attachment_cleanup_unavailable",
 } as const
 export type ConversationErrorCode =
   (typeof ConversationErrorCode)[keyof typeof ConversationErrorCode]
+/** Bounds the product schema puts on attachments, generated from it so no copy of a number can drift. */
+export const bounds = {
+  maxImageBytes: 5242880,
+  imageMimeTypes: ["image/png", "image/jpeg", "image/gif", "image/webp"],
+  maxMessageImages: 10,
+  maxMessageImageBytes: 10485760,
+  maxUploadBytes: 67108864,
+} as const
 export const ProductMethod = {
   SessionAuthenticate: "session.authenticate",
   AuthSession: "auth.session",
@@ -515,5 +576,6 @@ export const ProductMethod = {
   ConversationCancel: "conversation.cancel",
   ConversationClose: "conversation.close",
   ConversationReorder: "conversation.reorder",
+  AttachmentBegin: "attachment.begin",
 } as const
 export const ProductEvent = { SessionChallenge: "session.challenge" } as const

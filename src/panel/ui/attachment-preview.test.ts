@@ -12,6 +12,7 @@ function preview(name: string, size: number) {
     mimeType: "application/octet-stream",
     size,
     previewUrl: "blob:local-preview",
+    upload: { status: "not-started" },
   }
   return renderToStaticMarkup(createElement(AttachmentPreview, { file }))
 }

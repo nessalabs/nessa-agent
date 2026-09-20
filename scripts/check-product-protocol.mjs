@@ -18,6 +18,15 @@ ajv.addKeyword({
   schemaType: "number",
   validate: (limit, value) => Buffer.byteLength(value, "utf8") <= limit,
 })
+// What one message's images may weigh together. `maxItems` bounds how many
+// there are and `ImageAttachment.size` how heavy one is; neither says this.
+ajv.addKeyword({
+  keyword: "x-maxTotalBytes",
+  type: "array",
+  schemaType: "number",
+  validate: (limit, value) =>
+    value.reduce((total, item) => total + (Number(item?.size) || 0), 0) <= limit,
+})
 ajv.addSchema(schema)
 for (const name of [
   ...Object.values(manifest.methods),
@@ -55,10 +64,22 @@ for (const invalid of [
   if (validateSend(invalid))
     throw new Error("Product conversation schema accepts invalid command")
 }
+const image = send.attachments[0]
+const images = (count, size) => Array.from({ length: count }, () => ({ ...image, size }))
+for (const invalid of [
+  { ...send, attachments: images(11, 1) },
+  { ...send, attachments: images(1, 5_242_881) },
+  // Each image is within its own bound; together they are over the message's.
+  { ...send, attachments: images(3, 4 * 1024 * 1024) },
+]) {
+  if (validateSend(invalid))
+    throw new Error("Product conversation schema accepts oversized attachments")
+}
 for (const valid of [
   { ...send, executionId: "😀".repeat(64) },
   { ...send, requestId: "😀".repeat(64) },
   { ...send, text: "😀".repeat(2048) },
+  { ...send, attachments: images(10, 1024 * 1024) },
 ]) {
   if (!validateSend(valid))
     throw new Error(

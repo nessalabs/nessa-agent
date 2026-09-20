@@ -14,14 +14,17 @@ use super::{
 use crate::{
     agents::domain::AgentId,
     conversation::{
-        application::{ConversationCaller, ConversationError, RequestedAgent, SubmissionMode},
+        application::{
+            ConversationCaller, ConversationError, RequestedAgent, SubmissionMode, SubmittedImage,
+        },
         domain::ConversationId,
     },
     protocol::{OutgoingMessage, RequestFrame},
 };
 use nessa_auth::application::session::AuthenticatedSession;
 use nessa_sdk::application::agent_execution::{
-    agents::AgentError, permissions::PermissionSelectionState, sessions::StorageError,
+    agents::AgentError, permissions::PermissionSelectionState, providers::ImageInputRefusal,
+    sessions::StorageError,
 };
 
 pub(super) async fn dispatch(
@@ -100,6 +103,15 @@ pub(super) async fn dispatch(
                         caller(params.request_id),
                         params.execution_id,
                         params.text,
+                        params
+                            .attachments
+                            .into_iter()
+                            .map(|image| SubmittedImage {
+                                digest: image.digest,
+                                media_type: image.mime_type,
+                                size: image.size,
+                            })
+                            .collect(),
                         mode,
                     )
                     .await?;
@@ -226,6 +238,22 @@ fn permission_answer_failure(
 fn error_code(error: &ConversationError) -> ConversationErrorCode {
     match error {
         ConversationError::InvalidInput => ConversationErrorCode::InvalidRequest,
+        ConversationError::ImagesUnsupported => ConversationErrorCode::ImageInputUnsupported,
+        ConversationError::AttachmentNotFound => ConversationErrorCode::AttachmentNotFound,
+        // Everything was let go and only the evidence of it was lost, so there
+        // is no cleanup left to retry: the answer is the lost record.
+        ConversationError::AttachmentCleanup {
+            storage_failures: 0,
+            ..
+        } => ConversationErrorCode::AuditUnavailable,
+        // The conversation did close; what failed is cleanup the caller can retry.
+        ConversationError::AttachmentRelease(_) | ConversationError::AttachmentCleanup { .. } => {
+            ConversationErrorCode::AttachmentCleanupUnavailable
+        }
+        // The conversation did not close, which is what a caller must act on;
+        // closing again also lets go of the uploads again. The release failure
+        // stays in the typed error and the log, not in a second wire code.
+        ConversationError::CloseIncomplete { agent, .. } => error_code(agent),
         ConversationError::NotFound => ConversationErrorCode::ConversationNotFound,
         ConversationError::AgentNotConfigured => ConversationErrorCode::AgentNotConfigured,
         ConversationError::AgentUnsupported => ConversationErrorCode::AgentUnsupported,
@@ -249,6 +277,21 @@ fn error_code(error: &ConversationError) -> ConversationErrorCode {
             AgentError::Closed => ConversationErrorCode::ConversationClosed,
             AgentError::StalePermission => ConversationErrorCode::StalePermission,
             AgentError::InvalidInput(_) => ConversationErrorCode::InvalidRequest,
+            // Refused before the message was accepted, so the caller still has it.
+            // An agent that takes no images is the same fact whether this service
+            // or the SDK's admission noticed it. An image outside the model's
+            // limits, or a message too large for one frame, is a request this
+            // gateway could never have delivered as it stands.
+            // No images here, whichever layer noticed: the agent declined them,
+            // or this model or binding offers none. One fact, one code.
+            AgentError::ImageInputRefused(
+                ImageInputRefusal::AgentDoesNotAccept | ImageInputRefusal::NotOffered,
+            ) => ConversationErrorCode::ImageInputUnsupported,
+            AgentError::ImageInputRefused(
+                ImageInputRefusal::MediaType(_) | ImageInputRefusal::ImageTooLarge { .. },
+            )
+            | AgentError::MessageTooLarge { .. } => ConversationErrorCode::InvalidRequest,
+            AgentError::UserImage(_) => ConversationErrorCode::AttachmentUnavailable,
             AgentError::AuditFailure => ConversationErrorCode::AuditUnavailable,
             // Startup never reaches the provider with input, and the runtime is
             // warm afterwards: the same command is safe to send again.

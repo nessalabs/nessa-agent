@@ -1,10 +1,10 @@
 //! Shared conversation ownership and admission tests use real SDK scheduling.
 use super::{
     ConversationAgent, ConversationAgents, ConversationCaller, ConversationCreation,
-    ConversationCreationAudit, ConversationCreationAuditRecord, ConversationDisposition,
-    ConversationError, ConversationFuture, ConversationLimits, ConversationMessageStatus,
-    ConversationOwnershipState, ConversationRepository, ConversationService, RequestedAgent,
-    SubmissionMode,
+    ConversationCreationAudit, ConversationCreationAuditRecord, ConversationDependencies,
+    ConversationDisposition, ConversationError, ConversationFuture, ConversationLimits,
+    ConversationMessageStatus, ConversationOwnershipState, ConversationRepository,
+    ConversationService, RequestedAgent, SubmissionMode,
 };
 use crate::{
     agents::domain::AgentId,
@@ -139,11 +139,14 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
         gate: Mutex::new(None),
     });
     let service = ConversationService::new(
-        only(Arc::new(Provider(provider.clone()))),
-        storage,
-        repository.clone(),
-        audit.clone(),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: only(Arc::new(Provider(provider.clone()))),
+            storage,
+            metadata: repository.clone(),
+            creation_audit: audit.clone(),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -189,11 +192,14 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
         accepted: Mutex::new(Vec::new()),
     });
     let service = ConversationService::new(
-        only(Arc::new(Provider(provider.clone()))),
-        storage,
-        repository.clone(),
-        audit.clone(),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: only(Arc::new(Provider(provider.clone()))),
+            storage,
+            metadata: repository.clone(),
+            creation_audit: audit.clone(),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -282,11 +288,14 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
         records: Mutex::new(Vec::new()),
     });
     let service = ConversationService::new(
-        only(Arc::new(Provider(provider.clone()))),
-        storage,
-        repository.clone(),
-        audit.clone(),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: only(Arc::new(Provider(provider.clone()))),
+            storage,
+            metadata: repository.clone(),
+            creation_audit: audit.clone(),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -313,6 +322,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
                 caller("panel", "send-1"),
                 "send-1".into(),
                 "Hello".into(),
+                Vec::new(),
                 SubmissionMode::Queue,
             )
             .await,
@@ -346,6 +356,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
             caller("phone", "send-2"),
             "send-2".into(),
             "Hello".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -378,11 +389,14 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
         records: Mutex::new(Vec::new()),
     });
     let service = ConversationService::new(
-        only(Arc::new(Provider(provider.clone()))),
-        storage,
-        repository.clone(),
-        audit.clone(),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: only(Arc::new(Provider(provider.clone()))),
+            storage,
+            metadata: repository.clone(),
+            creation_audit: audit.clone(),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -397,11 +411,14 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
 
     // A fresh owner map, so the next create must open the provider again.
     let service = ConversationService::new(
-        only(Arc::new(Provider(provider.clone()))),
-        Arc::new(InMemoryStorage::new()),
-        repository,
-        audit.clone(),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: only(Arc::new(Provider(provider.clone()))),
+            storage: Arc::new(InMemoryStorage::new()),
+            metadata: repository,
+            creation_audit: audit.clone(),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -457,11 +474,14 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
         gate: Mutex::new(Some(gate)),
     });
     let service = ConversationService::new(
-        only(Arc::new(Provider(provider.clone()))),
-        storage,
-        repository,
-        audit.clone(),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: only(Arc::new(Provider(provider.clone()))),
+            storage,
+            metadata: repository,
+            creation_audit: audit.clone(),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -564,6 +584,7 @@ async fn consumed_permission_failure_is_not_reoffered_on_the_immediate_read() {
             caller("panel", "send"),
             "review".into(),
             "change file".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -713,11 +734,14 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
     tokio::task::yield_now().await;
 
     let restarted = ConversationService::new(
-        only(Arc::new(Provider(provider.clone()))),
-        storage,
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: only(Arc::new(Provider(provider.clone()))),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits {
             max_conversations: 1,
             ..ConversationLimits::default()
@@ -756,6 +780,7 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
             caller("panel", "first"),
             "first".into(),
             "Hello".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -767,6 +792,7 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
             caller("phone", "second"),
             "second".into(),
             "Again".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -784,6 +810,7 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
             caller("panel", "first"),
             "first".into(),
             "Hello".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -884,11 +911,14 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
         inner: storage,
     });
     let service = ConversationService::new(
-        only(Arc::new(Provider(provider.clone()))),
-        storage.clone(),
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: only(Arc::new(Provider(provider.clone()))),
+            storage: storage.clone(),
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -941,11 +971,14 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
         started: Notify::new(),
     });
     let service = ConversationService::new(
-        only(Arc::new(Provider(provider))),
-        storage,
-        repository.clone(),
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: only(Arc::new(Provider(provider))),
+            storage,
+            metadata: repository.clone(),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1002,11 +1035,14 @@ async fn resource_free_provider_failure_retires_slot_for_retry() {
         delegate: Provider(provider.clone()),
     });
     let service = ConversationService::new(
-        only(provider.clone()),
-        storage,
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: only(provider.clone()),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1084,11 +1120,14 @@ async fn a_startup_deadline_releases_its_slot_so_the_same_command_can_retry() {
         delegate: Provider(provider.clone()),
     });
     let service = ConversationService::new(
-        only(provider.clone()),
-        storage,
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: only(provider.clone()),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1136,11 +1175,14 @@ async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
         identity: ProviderIdentity::new("gateway-test", "test", "test").unwrap(),
     });
     let service = ConversationService::new(
-        only(provider.clone()),
-        storage,
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: only(provider.clone()),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1165,11 +1207,14 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
         identity: ProviderIdentity::new("gateway-test", "test", "test").unwrap(),
     });
     let service = ConversationService::new(
-        only(provider.clone()),
-        storage,
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: only(provider.clone()),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1219,6 +1264,7 @@ async fn restart_restores_saved_messages_without_replaying_input() {
             caller("panel", "first"),
             "first".into(),
             "Hello".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -1229,11 +1275,14 @@ async fn restart_restores_saved_messages_without_replaying_input() {
     // Receipt and observation supervisors release their temporary Agent references.
     tokio::task::yield_now().await;
     let restored = ConversationService::new(
-        only(Arc::new(Provider(provider.clone()))),
-        storage,
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: only(Arc::new(Provider(provider.clone()))),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1262,11 +1311,14 @@ impl SessionStorage for PanickingStorage {
 async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
     let (_, provider, repository, _) = fixture(ConversationLimits::default());
     let service = ConversationService::new(
-        only(Arc::new(Provider(provider))),
-        Arc::new(PanickingStorage),
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: only(Arc::new(Provider(provider))),
+            storage: Arc::new(PanickingStorage),
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1301,6 +1353,7 @@ async fn boundary_steering_can_be_removed_without_dispatch() {
             caller("panel", "running"),
             "running".into(),
             "Hello".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -1312,6 +1365,7 @@ async fn boundary_steering_can_be_removed_without_dispatch() {
             caller("phone", "steer"),
             "steer".into(),
             "Followup".into(),
+            Vec::new(),
             SubmissionMode::Steer,
         )
         .await
@@ -1353,6 +1407,7 @@ async fn close_then_replay_does_not_reopen_or_dispatch_and_new_input_still_works
             caller("panel", "original"),
             "original".into(),
             "Hello".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -1368,6 +1423,7 @@ async fn close_then_replay_does_not_reopen_or_dispatch_and_new_input_still_works
             caller("panel", "original"),
             "original".into(),
             "Hello".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -1390,6 +1446,7 @@ async fn close_then_replay_does_not_reopen_or_dispatch_and_new_input_still_works
             caller("phone", "new"),
             "new".into(),
             "Again".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -1414,11 +1471,14 @@ impl SessionStorage for HostileStorage {
 async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
     let (_, provider, repository, _) = fixture(ConversationLimits::default());
     let service = ConversationService::new(
-        only(Arc::new(Provider(provider))),
-        Arc::new(HostileStorage),
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: only(Arc::new(Provider(provider))),
+            storage: Arc::new(HostileStorage),
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1507,6 +1567,7 @@ async fn desktop_quit_keeps_gateway_admission_open() {
             caller("panel", "submit-next"),
             "next".into(),
             "Hello".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await
@@ -1547,11 +1608,14 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
         .unwrap()
     };
     let service = ConversationService::new(
-        both(),
-        storage.clone(),
-        repository.clone(),
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: both(),
+            storage: storage.clone(),
+            metadata: repository.clone(),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1578,11 +1642,14 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
     drop(service);
     tokio::task::yield_now().await;
     let restarted = ConversationService::new(
-        both(),
-        storage,
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: both(),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1616,18 +1683,21 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
         )
     };
     let service = ConversationService::new(
-        ConversationAgents::new(
-            HashMap::from([
-                agent(AgentId::Claude, &claude),
-                agent(AgentId::Codex, &codex),
-            ]),
-            AgentId::Claude,
-        )
-        .unwrap(),
-        storage.clone(),
-        repository.clone(),
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: ConversationAgents::new(
+                HashMap::from([
+                    agent(AgentId::Claude, &claude),
+                    agent(AgentId::Codex, &codex),
+                ]),
+                AgentId::Claude,
+            )
+            .unwrap(),
+            storage: storage.clone(),
+            metadata: repository.clone(),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1647,15 +1717,18 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
 
     // Restarted with Codex no longer configured at all.
     let without_codex = ConversationService::new(
-        ConversationAgents::new(
-            HashMap::from([agent(AgentId::Claude, &claude)]),
-            AgentId::Claude,
-        )
-        .unwrap(),
-        storage.clone(),
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: ConversationAgents::new(
+                HashMap::from([agent(AgentId::Claude, &claude)]),
+                AgentId::Claude,
+            )
+            .unwrap(),
+            storage: storage.clone(),
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1704,18 +1777,21 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
     let stranded = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
     {
         let service = ConversationService::new(
-            ConversationAgents::new(
-                HashMap::from([
-                    agent(AgentId::Claude, &claude),
-                    agent(AgentId::Codex, &codex),
-                ]),
-                AgentId::Claude,
-            )
-            .unwrap(),
-            storage.clone(),
-            repository.clone(),
-            Arc::new(AcceptingCreationAudit),
-            Arc::new(TestClock),
+            ConversationDependencies {
+                agents: ConversationAgents::new(
+                    HashMap::from([
+                        agent(AgentId::Claude, &claude),
+                        agent(AgentId::Codex, &codex),
+                    ]),
+                    AgentId::Claude,
+                )
+                .unwrap(),
+                storage: storage.clone(),
+                metadata: repository.clone(),
+                creation_audit: Arc::new(AcceptingCreationAudit),
+                attachments: None,
+                clock: Arc::new(TestClock),
+            },
             limits,
             None,
         )
@@ -1733,15 +1809,18 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
     tokio::task::yield_now().await;
 
     let without_codex = ConversationService::new(
-        ConversationAgents::new(
-            HashMap::from([agent(AgentId::Claude, &claude)]),
-            AgentId::Claude,
-        )
-        .unwrap(),
-        storage,
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: ConversationAgents::new(
+                HashMap::from([agent(AgentId::Claude, &claude)]),
+                AgentId::Claude,
+            )
+            .unwrap(),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         limits,
         None,
     )
@@ -1793,18 +1872,21 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
     let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
     {
         let service = ConversationService::new(
-            ConversationAgents::new(
-                HashMap::from([
-                    agent(AgentId::Claude, &claude),
-                    agent(AgentId::Codex, &codex),
-                ]),
-                AgentId::Claude,
-            )
-            .unwrap(),
-            storage.clone(),
-            repository.clone(),
-            Arc::new(AcceptingCreationAudit),
-            Arc::new(TestClock),
+            ConversationDependencies {
+                agents: ConversationAgents::new(
+                    HashMap::from([
+                        agent(AgentId::Claude, &claude),
+                        agent(AgentId::Codex, &codex),
+                    ]),
+                    AgentId::Claude,
+                )
+                .unwrap(),
+                storage: storage.clone(),
+                metadata: repository.clone(),
+                creation_audit: Arc::new(AcceptingCreationAudit),
+                attachments: None,
+                clock: Arc::new(TestClock),
+            },
             ConversationLimits::default(),
             None,
         )
@@ -1828,15 +1910,18 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
         .unwrap();
 
     let without_codex = ConversationService::new(
-        ConversationAgents::new(
-            HashMap::from([agent(AgentId::Claude, &claude)]),
-            AgentId::Claude,
-        )
-        .unwrap(),
-        storage.clone(),
-        repository,
-        Arc::new(AcceptingCreationAudit),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: ConversationAgents::new(
+                HashMap::from([agent(AgentId::Claude, &claude)]),
+                AgentId::Claude,
+            )
+            .unwrap(),
+            storage: storage.clone(),
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -1957,11 +2042,14 @@ async fn a_caller_context_too_damaged_to_record_is_refused_on_a_reopen_too() {
         gate: Mutex::new(None),
     });
     let service = ConversationService::new(
-        only(Arc::new(Provider(provider.clone()))),
-        storage,
-        repository,
-        audit.clone(),
-        Arc::new(TestClock),
+        ConversationDependencies {
+            agents: only(Arc::new(Provider(provider.clone()))),
+            storage,
+            metadata: repository,
+            creation_audit: audit.clone(),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
         ConversationLimits::default(),
         None,
     )
@@ -2032,6 +2120,7 @@ async fn a_caller_context_too_damaged_to_record_is_refused_by_every_command() {
                 caller("panel", wiped),
                 "execution".into(),
                 "Hello".into(),
+                Vec::new(),
                 SubmissionMode::Queue,
             )
             .await,
@@ -2049,6 +2138,7 @@ async fn a_caller_context_too_damaged_to_record_is_refused_by_every_command() {
             caller("panel", "send"),
             "execution".into(),
             "Hello".into(),
+            Vec::new(),
             SubmissionMode::Queue,
         )
         .await

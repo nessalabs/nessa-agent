@@ -80,6 +80,13 @@ export default defineConfig({
       "/onboarding": {
         target: gatewayTarget,
       },
+      // Where attachment bytes are uploaded. A browser preview derives the
+      // upload origin from its proxied session, so the upload goes through here
+      // too and stays same-origin; the packaged app uploads to the gateway
+      // directly.
+      "/attachments": {
+        target: gatewayTarget,
+      },
     },
     port: 1420,
     strictPort: true,

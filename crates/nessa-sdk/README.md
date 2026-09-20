@@ -27,6 +27,18 @@ ACP harness availability, and permissions are not inferred from this data. Older
 generations, convenience aliases, and specialized image/audio/embedding models
 are excluded. Haiku 4.5 remains the latest Haiku despite its older release date.
 
+`imageInput` is the one place image limits live: accepted media types, the largest
+single image as base64 text, the longest edge accepted at all, the lower edge
+ceiling a provider applies once a request holds many images (a conversation
+resends its earlier ones, so a long one reaches it), and the long edge the model
+actually sees. Each figure is the strictest published across the platforms
+serving the model: Claude's come from the
+[vision guide](https://platform.claude.com/docs/en/build-with-claude/vision),
+where Amazon Bedrock and Google Cloud accept 5 MB where the direct API accepts
+10 MB. Whatever prepares an image for a model reads these and carries no numbers
+of its own. A model that lists image input without recorded limits, as the OpenAI
+entries do today, is offered no images: nothing could prepare one for it.
+
 Entries expose identity, display name, input/output modalities, tool use,
 reasoning support, context window, standard maximum output, knowledge cutoff,
 and documentation URL. Required features are booleans, including explicit false

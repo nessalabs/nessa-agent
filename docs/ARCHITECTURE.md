@@ -70,12 +70,16 @@ opinion rather than the product's.
 | `model/` | Shared language: `Conversation`, `Turn`, `ConversationTabs` (`conversations` + `activeId`). Discriminated turns and phases. No id mill. |
 | `application/local-tabs.ts` | UI-session store shape: the shared tabs plus local id counters. UI-local turn counters; durable conversation and submission UUIDs remain separate identities. |
 | `application/usecases/` | One file per command. Local drafts and tabs, send/steer/queue, stop, permission replies, and replacement-view application. |
-| `application/ports.ts` | `ConversationGateway` — what the panel may ask the product to do. |
-| `adapters/gateway/local.ts` | In-process draft/tab projection. Remote effects live in `adapters/gateway/effects.ts` and use the shared authenticated client. |
+| `application/ports.ts` | `ConversationGateway` for local draft and tab operations; `ConversationEffects` for what the panel may ask the product to do, including staging an image's bytes; the typed `AttachmentStagingError`. |
+| `adapters/gateway/local.ts` | In-process draft/tab projection. Remote effects live in `adapters/gateway/effects.ts` and use the shared authenticated client; staging is begin, then upload of the original bytes only when a ticket was issued; it answers with the reference the gateway stored, and maps the client's failure codes to the panel's typed reasons. |
 | `adapters/store/` | Redux projection and command thunks. Thunks invoke injected effects; reducers apply local UI state and returned views. |
-| `ui/` | Transcript, thinking pill, `useConversation`. Paints and dispatches. |
-| `model/attachments.ts` | Local file parts and per-file/draft budgets; file-bearing drafts cannot enter text-only sends. |
-| `application/usecases/attachments.ts` | Attach to the originating conversation and remove individual draft files. |
+| `ui/` | Transcript, thinking pill, `useConversation`. Paints and dispatches. `message-images.tsx` paints a sent turn's images: the local preview when this window has one, a labelled placeholder when only a reference is known. |
+| `model/attachments.ts` | File parts with their upload state (a stored file carries the gateway's whole returned reference), reference-only image parts, the preview budgets, and the message rules counted over stored references (10 images, 10 MiB together). No per-image byte or pixel limit lives here: that is the gateway's, per model. `messageImages` decides which parts of a message go as image references, or the one reason none can. `declaredMediaType` names a file the browser gave no type (camera RAW, some HEIC) by its extension, and `previewableImage` says which images a webview can paint. |
+| `application/usecases/attachments.ts` | Attach to the originating conversation, remove individual draft files, and own every step of a draft file's upload state; a result for a removed file changes nothing. |
+| `application/usecases/release-uploads.ts` | Forget a draft's stored images once the gateway conversation that held them has been closed, and bound how many already-sent originals are kept to paint the transcript. |
+| `application/usecases/upload-failure.ts` | Why an upload failed, in words, and whether a retry could end differently. One owner for both, so the tile and the composer's notice cannot drift apart; exported through the barrel for the panel. |
+| `application/usecases/send-draft.ts` | Every local reason a draft is declined, as a pure `declineReason` the store shows and rejects in one place; what a refusal says; and how a submission's outcome lands on its turn. |
+| `testing.ts` | What another context's tests may import instead of reaching into `adapters/` or mocking the barrel with a copy of a rule. No component, and not for product code. `src/session/testing.ts` is the session's. |
 | `model/identity.ts` | The agent's name, seed, and hue wheel. |
 
 **Session vertical** (`src/session/`) — WebSocket control-plane connection.
@@ -97,18 +101,24 @@ Chat adapters receive the composition-owned session handle; they do not open ano
 | `model/` | `Surface` — frosted or clear. |
 | `adapters/` | Host subscriptions: colour scheme, edge reveal, panel frame, frost, remembered surface, compositor flush, config-driven tab shortcuts. |
 | `ui/app.tsx` | The chrome: stage, glow, resize handle, tab strip, composer. Renders; no effects. |
-| `adapters/attachment-resources.ts`, `adapters/dropped-image.ts`, `adapters/dropped-text.ts` | Bounded object-URL resources, remote image reads, and external drop representations. |
+| `adapters/attachment-resources.ts`, `adapters/dropped-image.ts`, `adapters/dropped-text.ts` | Bounded object-URL resources that also hold each file's original bytes for upload and stop counting a file once its message has been taken, remote image reads, and external drop representations. |
+| `application/upload-image.ts` | The order of one upload — hash the original, then stage it, checking after the wait that the tile is still there — which waiting images start next (three in flight per window), and what the composer says about a draft's files. The words for a failed upload are the conversation's; no image processing, which is the gateway's. |
+| `adapters/sha256.ts` | The SHA-256 that identifies an upload to the gateway. It reads Web Crypto, so composition injects it and tests substitute their own. |
+| `ui/use-attachment-uploads.ts`, `ui/attachment-tile.tsx` | Start an upload for every draft image that has not had one; paint a tile's upload state with its retry. |
 | `adapters/use-drop-navigation-guard.ts` | Prevent dropped URLs from navigating the webview. |
-| `ui/use-file-attachments.ts` | Remote pending previews, originating conversation, and viewer state. Local files use synchronous object URLs. |
+| `ui/use-file-attachments.ts` | Remote pending previews, originating conversation, and viewer state. Local files use synchronous object URLs. Uploading is not its job. |
 | `adapters/dropped-folder.ts`, `ui/use-folder-drop.ts` | Bounded sequential folder traversal, cancellation, originating draft and pending-send guard. |
 | `ui/use-content-drop.ts`, `ui/use-attachment-menu.ts` | Drop acceptance/routing and menu geometry lifecycle, separate from rendering. |
 | `ui/attachment-preview.tsx`, `ui/attachment-icon.tsx`, `ui/add-attachment-menu.tsx` | Lazy shared file preview, file-kind icons, and composer Add menu. |
 | `ui/waveform-icon.tsx` | The voice glyph in the composer. |
 
 The composition root injects an attachment resource store into the panel. Redux
-keeps metadata and URLs; its subscription reconciles resource IDs after commands
-and revokes URLs removed from drafts, including closed conversations. The resource
-store shares the product store lifetime so React remounts do not invalidate previews.
+keeps metadata, URLs, and each file's upload state; its subscription reconciles resource IDs after commands and revokes URLs
+that are in no draft and no sent turn, including closed conversations. A sent
+turn keeps its previews so the transcript can paint them and so a refused send
+can return them to the draft. The resource store shares the product store
+lifetime so React remounts do not invalidate previews. See
+[images in a message](guides/gateway-chat.md#images-in-a-message-panel-and-client).
 
 ## Boundaries
 
@@ -300,9 +310,21 @@ boundaries and mandatory audit records independently. Unfinished streaming text
 can be lost on crash. Reads are bounded current views, not a durable cursor stream.
 No second event database is required for this initial integration.
 
+A message refers to an image by digest, media type and size; its bytes never
+ride the product socket. `attachment.begin` on the authenticated socket answers
+with a single-use, five-minute ticket bound to one file, conversation and caller,
+and `PUT /attachments` streams the bytes under it. The gateway verifies the
+transfer against the ticket, normalizes an image through an injected port, stores
+bytes once per digest, and records that the conversation holds them. The
+conversation service accepts only references its conversation holds; the ACP
+adapter reads bytes by content through the SDK's image port, and its frame bound
+is derived from the message's image budget. Closing a conversation releases its
+holds, with audit evidence for every transition. See the
+[attachments module map](../crates/nessa-server/src/attachments/mod.rs).
+
 ADRs 0009 and 0011's exact replay and broader collaboration remain proposed work.
-Remote TLS/device provisioning, uploads, and more provider adapters remain separate
-features. Existing design proposals do not replace the implemented Agent contract.
+Remote TLS/device provisioning, files other than images in a message, and more
+provider adapters remain separate features. Existing design proposals do not replace the implemented Agent contract.
 
 **Identity/access contracts** (`crates/nessa-auth`) — reusable library, no binary.
 Owns domain identities/memberships/credential metadata, boundary DTO validation,

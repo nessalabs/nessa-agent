@@ -1,10 +1,11 @@
 //! Explicit DTO/domain translation; constructors remain the only invariant owners.
-use super::dto::{EffectiveCapabilitiesDto, ModalitiesDto, ModelMetadataDto};
+use super::dto::{EffectiveCapabilitiesDto, ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto};
 use crate::domain::common::value_objects::TokenLimits;
-use crate::domain::common::value_objects::{Date, Url};
+use crate::domain::common::value_objects::{Date, ImageMediaType, Url};
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::domain::model_metadata::{
     entities::ModelMetadata,
+    value_objects::ImageInputLimits,
     value_objects::Modalities,
     value_objects::ModelDescription,
     value_objects::ModelFeatures,
@@ -44,7 +45,28 @@ impl From<&EffectiveCapabilities> for EffectiveCapabilitiesDto {
 impl TryFrom<ModelMetadataDto> for ModelMetadata {
     type Error = MetadataError;
     fn try_from(dto: ModelMetadataDto) -> Result<Self, Self::Error> {
-        Ok(Self::new(
+        let image_input = dto
+            .image_input
+            .map(|limits| {
+                ImageInputLimits::new(
+                    limits
+                        .media_types
+                        .iter()
+                        .map(|media_type| {
+                            ImageMediaType::parse(media_type).map_err(|_| MetadataError::Invalid {
+                                field: "image input",
+                                reason: "unsupported media type",
+                            })
+                        })
+                        .collect::<Result<_, _>>()?,
+                    limits.max_encoded_bytes,
+                    limits.max_edge_px,
+                    limits.many_images_max_edge_px,
+                    limits.native_long_edge_px,
+                )
+            })
+            .transpose()?;
+        let model = Self::new(
             ModelKey::new(
                 ModelProvider::try_from(dto.provider.as_str())?,
                 dto.model_id,
@@ -61,7 +83,11 @@ impl TryFrom<ModelMetadataDto> for ModelMetadata {
                 dto.reasoning,
             ),
             TokenLimits::new(dto.max_context_window_tokens, dto.max_output_tokens)?,
-        ))
+        );
+        match image_input {
+            Some(limits) => model.with_image_input(limits),
+            None => Ok(model),
+        }
     }
 }
 impl From<&ModelMetadata> for ModelMetadataDto {
@@ -73,6 +99,17 @@ impl From<&ModelMetadata> for ModelMetadataDto {
             knowledge_cutoff: model.description().knowledge_cutoff().as_str().into(),
             documentation_url: model.description().documentation_url().as_str().into(),
             input: model.features().input().into(),
+            image_input: model.image_input().map(|limits| ImageInputLimitsDto {
+                media_types: limits
+                    .media_types()
+                    .iter()
+                    .map(|media_type| media_type.as_str().into())
+                    .collect(),
+                max_encoded_bytes: limits.max_encoded_bytes(),
+                max_edge_px: limits.max_edge_px(),
+                many_images_max_edge_px: limits.many_images_max_edge_px(),
+                native_long_edge_px: limits.native_long_edge_px(),
+            }),
             output: model.features().output().into(),
             tool_use: model.features().tool_use(),
             reasoning: model.features().reasoning(),

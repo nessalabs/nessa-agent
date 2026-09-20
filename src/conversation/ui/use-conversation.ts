@@ -1,12 +1,15 @@
 import { pollConversation } from "../adapters/gateway/polling"
 import { useEffect, useEffectEvent, useState } from "react"
 import { type FileAttachment, type MessageContent } from "../model"
+import type { UploadChange, UploadedFile } from "../application/ports"
 import { activeConversation } from "../application/queries/active-conversation"
 import {
   renameConversation,
   attachFiles,
   removeFile,
-  closeConversation,
+  stageAttachment,
+  takeUploadStep,
+  closeTab,
   openConversation,
   sendDraft,
   setActive,
@@ -50,6 +53,39 @@ export function useConversation() {
     attachFiles: (files: FileAttachment[], conversationId: string) =>
       dispatch(attachFiles({ files, conversationId })),
     removeFile: (id: string) => dispatch(removeFile(id)),
+    /** Ask for one step in a draft file's upload. Steps that do not follow are ignored. */
+    /** One step of a file's upload state; false when the rules refused it. */
+    changeUpload: (change: UploadChange): boolean => dispatch(takeUploadStep(change)),
+    /**
+     * Upload a draft image's original bytes. Settles when the file's upload
+     * state says how it went, or when `signal` stops it; it never rejects.
+     */
+    stageAttachment: async (
+      input: {
+        conversationId: string
+        fileId: string
+        file: UploadedFile
+        bytes: Blob
+      },
+      signal: AbortSignal,
+    ): Promise<void> => {
+      const staging = dispatch(
+        stageAttachment({
+          id: input.conversationId,
+          fileId: input.fileId,
+          file: input.file,
+          bytes: input.bytes,
+        }),
+      )
+      const stop = () => staging.abort()
+      if (signal.aborted) stop()
+      signal.addEventListener("abort", stop, { once: true })
+      try {
+        await staging
+      } finally {
+        signal.removeEventListener("abort", stop)
+      }
+    },
     conversations,
     active,
     gatewayAvailable,
@@ -68,11 +104,12 @@ export function useConversation() {
      * back rather than by the store being read a second time.
      */
     submit: async (content: MessageContent): Promise<boolean> => {
-      if (!gatewayAvailable) return false
       const finished = await dispatch(
         sendDraft({
           content,
           id: active.id,
+          // Not an early return here: `sendDraft` declines it with a reason.
+          connected: gatewayAvailable,
           steering: deliveryMode === "steer" && active.phase !== "idle",
         }),
       )
@@ -82,7 +119,9 @@ export function useConversation() {
     openConversation: () => {
       dispatch(openConversation())
     },
-    closeConversation: (id: string) => dispatch(closeConversation(id)),
+    closeConversation: (id: string) => {
+      void dispatch(closeTab(id))
+    },
     setDraft: (draft: MessageContent) => dispatch(setDraft({ draft })),
     stopGenerating: () => dispatch(stopGenerating()),
   }
