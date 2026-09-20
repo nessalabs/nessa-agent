@@ -3,15 +3,15 @@
  *
  * The barrel (`index.ts`) is what product code imports, and it also exports
  * components, which drag the whole design system into a test that wanted one
- * predicate. Tests outside this folder used to reach past it into
- * `adapters/store/slice` and `application/ports`, or mock the barrel with their
- * own copy of a rule — a copy that keeps passing after the rule changes.
+ * predicate. The alternatives are worse: reaching past the barrel into
+ * `adapters/store/slice` and `application/ports`, or mocking it with a copy of
+ * a rule — a copy that keeps passing after the rule changes.
  *
- * This is the door for them instead: the store's commands, the scenario
- * substitute, the typed errors, the hook, and the pure parts of the barrel, with
- * no component among them. A test that needs the barrel mocked mocks it with
- * this module, so there is one definition of everything it uses. Product code
- * does not import this file.
+ * This is the door instead: the store's commands, the scenario substitute, the
+ * typed errors, the hook, and the pure parts of the barrel, with no component
+ * among them. A test that needs the barrel mocked mocks it with this module, so
+ * there is one definition of everything it uses. Product code does not import
+ * this file.
  */
 export {
   attachFiles,
@@ -38,9 +38,12 @@ export { useConversation } from "./ui/use-conversation"
 export { fromEditor, toEditor, pastedTextLabel } from "./ui/composer-content"
 export {
   type FileAttachment,
+  type UploadFailure,
   MAX_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENTS,
   isImageFile,
   previewableImage,
+  validDraftAttachments,
 } from "./model"
+export { uploadFailureText, worthRetrying } from "./application/usecases/upload-failure"

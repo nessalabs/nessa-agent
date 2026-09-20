@@ -4,9 +4,9 @@
  *
  * `sendDraft` refusing a draft whose files cannot go, each with its reason, is
  * tested against the store in `attachments.test.ts`. This is the half that test
- * cannot see: that the composer's submit reaches it. It once returned early for
- * a draft holding files, so the reason was never shown and the panel looked
- * broken.
+ * cannot see: that the composer's submit reaches it. A submit that returns
+ * early for a draft holding files shows no reason at all, and the panel looks
+ * broken while behaving exactly as its store says.
  */
 import * as React from "react"
 import { createRoot, type Root } from "react-dom/client"

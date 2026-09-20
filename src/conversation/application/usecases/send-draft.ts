@@ -4,6 +4,7 @@ import {
   messageLabel,
   MAX_SEND_IMAGES,
   MAX_SEND_TOTAL_IMAGE_BYTES,
+  type Conversation,
   type ImageRefusal,
   type MessageContent,
   type UserTurn,
@@ -115,20 +116,127 @@ export function refusalReleasesImages(reason: SubmissionRefusal): boolean {
 }
 
 /**
- * A transport failure is not proof that admission failed; retain IDs for explicit retry.
+ * Why a draft was not sent, in the shape the panel needs to act on it.
  *
- * `reupload` is for a refusal that says the turn's stored images no longer
- * exist on the gateway. The recovered draft then holds them as not started, so
- * the same dead reference is not offered again and the panel uploads them anew.
+ * `kind` is what a caller branches on; `message` is what the conversation shows,
+ * and only `empty-draft` has none — there is nothing to say about nothing.
+ * `askAgain` means the decline is "not known yet" rather than "no", so the
+ * conversation is worth reading again before somebody presses send a second time.
  */
+export type DraftDecline = {
+  kind: string
+  message?: string
+  askAgain?: boolean
+}
+
+/** What a send would carry: the caller's prose, and the draft's own files. */
+export function draftMessage(
+  conv: Conversation,
+  content: MessageContent,
+): MessageContent {
+  return [
+    ...content.filter((part) => part.type === "text" || part.type === "pasted-text"),
+    ...conv.draft.filter((part) => part.type === "file"),
+  ]
+}
+
+/**
+ * Why this draft cannot be sent, or null when it can.
+ *
+ * Every local reason a send is declined that has somewhere to be said, in one
+ * pure function, in the order somebody would want to hear them: there is no
+ * session, the caller named a file this draft does not hold, the files cannot
+ * go, there is nothing to say, the text is too long, and finally what the agent
+ * takes. The caller shows and rejects in one place, so "was this draft taken"
+ * has one answer wherever it is asked. A send into a conversation that is no
+ * longer open is the caller's own: there is nowhere to show a sentence.
+ *
+ * `connected` is what the caller knows about the session and this cannot see.
+ * A caller with no session to consult leaves it out; the effects' own
+ * unavailable error is what then says so.
+ */
+export function declineReason(
+  conv: Conversation,
+  input: { content: MessageContent; connected?: boolean },
+): DraftDecline | null {
+  if (input.connected === false)
+    return {
+      kind: "not-connected",
+      message: "Not connected to the gateway yet. Your draft has been kept.",
+    }
+  // Files are the draft's. Their upload state lives there and nowhere else, so
+  // a caller's copy of a file part is never what gets sent — and one the draft
+  // does not hold is refused rather than dropped from the message.
+  const held = new Set(
+    conv.draft.flatMap((part) => (part.type === "file" ? [part.id] : [])),
+  )
+  if (input.content.some((part) => part.type === "file" && !held.has(part.id)))
+    return {
+      kind: "unknown-attachment",
+      message: "An attachment is no longer in this draft. Attach it again.",
+    }
+  const content = draftMessage(conv, input.content)
+  const sendable = messageImages(content)
+  if (!sendable.ok)
+    return { kind: sendable.refusal.kind, message: imageRefusalMessage(sendable.refusal) }
+  const text = contentText(content)
+  // Refused rather than silently fulfilled, so every way this declines a draft
+  // looks the same from outside: a rejection carrying a reason. A caller that
+  // has to know whether the draft left — the composer deciding whether its
+  // full-pane editor is finished with — cannot tell "nothing to send" from
+  // "sent" otherwise. An image is something to say: only a draft with neither
+  // text nor images is empty.
+  if (!text.trim() && sendable.images.length === 0) return { kind: "empty-draft" }
+  if (new TextEncoder().encode(text).length > 8192)
+    return {
+      kind: "message-too-large",
+      message:
+        "This gateway accepts up to 8 KiB of text per message. Your draft has been kept.",
+    }
+  if (sendable.images.length === 0) return null
+  // Whether the agent takes images is the gateway's fact, reported in a view,
+  // and false until an agent is open. Staging the images created the
+  // conversation and started its reads, so the answer is normally here by now.
+  // When it is not, the draft waits: guessing yes would hand the gateway a
+  // message it must refuse, and guessing no would refuse images an agent takes.
+  const imageInput = conv.remote?.capabilities.imageInput
+  if (imageInput === undefined)
+    return {
+      kind: "image-input-unknown",
+      message: "Still checking whether this agent takes images. Send again in a moment.",
+      askAgain: true,
+    }
+  if (!imageInput)
+    return {
+      kind: "image-input-unsupported",
+      message:
+        "This agent does not take images. Remove them to send; your draft has been kept.",
+    }
+  return null
+}
+
+/**
+ * Whether a message went, as one answer rather than two flags.
+ *
+ * `uncertain` is a transport failure, which is no proof that admission failed:
+ * the turn keeps its identities for an explicit retry and the draft stays
+ * empty. `refused` is the gateway or the client saying the message was not
+ * taken, so the draft comes back — and `reupload` is the refusal that also says
+ * the turn's stored images are gone from the gateway, in which case the
+ * recovered draft holds them as not started and the panel uploads them anew.
+ */
+export type SendOutcome = { kind: "uncertain" } | { kind: "refused"; reupload: boolean }
+
+/** Record how a submission ended on its turn, and recover the draft when it can. */
 export function failSend(
   tabs: LocalTabs,
   conversationId: string,
   executionId: string,
   detail: string,
-  uncertain = true,
-  reupload = false,
+  outcome: SendOutcome,
 ): LocalTabs {
+  const uncertain = outcome.kind === "uncertain"
+  const reupload = outcome.kind === "refused" && outcome.reupload
   const conv = findConversation(tabs, conversationId)
   if (!conv) return tabs
   const failedTurn = conv.turns.find(

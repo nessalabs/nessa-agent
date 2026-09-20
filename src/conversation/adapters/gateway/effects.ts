@@ -41,19 +41,14 @@ function beginFailure(refusal: AttachmentBeginRefusal | undefined) {
 }
 
 /**
- * The client's staging codes, as what the panel can do about them.
+ * The client's staging codes, as one of the reasons a tile can show — see
+ * {@link UploadFailure} for what each of those means.
  *
- * The gateway's verdicts on an image, and on an agent whose model takes none,
- * keep their meaning, because the tile says something different for each and
- * trying again would not change them. Everything that time or a second attempt
- * may cure is told apart from a refusal: no room for another upload (`busy`), a
- * transfer cut off or timed out (`interrupted`), and a spent or expired ticket,
- * storage or the audit record being away, or no answer at all (`unavailable`).
- * What is left — a size or digest the gateway disagreed with, an answer nobody
- * recognises, arguments the client itself would not send — is `rejected`.
- *
- * Exhaustive over the client's codes: a code added there does not compile here
- * until somebody decides what the panel says about it.
+ * The translation is what this owns: the gateway's verdicts on an image and on
+ * an agent keep their own meaning, and everything time or a second attempt may
+ * cure is told apart from a refusal. Exhaustive over the client's codes, so a
+ * code added there does not compile here until somebody decides what the panel
+ * says about it.
  */
 function stagingFailure(error: unknown): AttachmentStagingError {
   if (error instanceof ConversationUnavailableError)

@@ -17,8 +17,12 @@ import {
   setActive,
   setDraft,
   beginSend,
+  uploadFailureText,
+  worthRetrying,
 } from "./index"
 import {
+  declineReason,
+  draftMessage,
   imageRefusalMessage,
   refusalReleasesImages,
   submissionRefusalMessage,
@@ -53,6 +57,23 @@ const submission = {
   executionId: "execution",
   actionId: "action",
   mode: "queued" as const,
+}
+const capabilities = {
+  queue: true,
+  steer: false,
+  resume: false,
+  permissions: false,
+  imageInput: true,
+}
+/** A view has arrived for this conversation, and it said the agent takes images. */
+const remote = {
+  running: false,
+  permissions: [],
+  tools: [],
+  pending: [],
+  capabilities,
+  queueComplete: true,
+  truncated: false,
 }
 
 describe("draft file previews", () => {
@@ -371,6 +392,124 @@ describe("a draft file's upload state", () => {
   })
 })
 
+/** A send refused before admission: the message was not taken, so the draft is back. */
+const refusedSend = { kind: "refused", reupload: false } as const
+
+describe("why an upload failed, in words", () => {
+  const reasons = [
+    "unreadable",
+    "unsupported-image",
+    "too-large",
+    "image-input-unsupported",
+    "busy",
+    "interrupted",
+    "unavailable",
+    "rejected",
+  ] as const
+
+  it("says something different for each reason, and honest about which", () => {
+    const texts = reasons.map(uploadFailureText)
+    expect(new Set(texts).size).toBe(reasons.length)
+    // Not "refused" and not "could not be reached": each names what happened.
+    expect(uploadFailureText("busy")).toMatch(/busy with other uploads/)
+    expect(uploadFailureText("interrupted")).toMatch(/cut off or timed out/)
+    expect(uploadFailureText("unsupported-image")).toMatch(/could not read this image/)
+    // Never a byte or pixel limit: those are the gateway's, and per model.
+    for (const text of texts) expect(text).not.toMatch(/\d\s?(MB|MiB|px)/)
+  })
+
+  it("offers a retry for everything but a verdict on the image or the agent", () => {
+    expect(reasons.filter((reason) => !worthRetrying(reason))).toEqual([
+      "unsupported-image",
+      "too-large",
+      "image-input-unsupported",
+    ])
+  })
+})
+
+describe("why a draft is declined before anything is sent", () => {
+  const hello = [{ type: "text" as const, text: "hello" }]
+  /** The conversation `stored()` built, with the gateway's answer about images. */
+  const withImages = (imageInput?: boolean) => {
+    const conv = stored().conversations[0]!
+    return imageInput === undefined
+      ? conv
+      : { ...conv, remote: { ...remote, capabilities: { ...capabilities, imageInput } } }
+  }
+
+  it("takes a draft that can go, whatever the caller left out of its prose", () => {
+    expect(declineReason(withImages(true), { content: hello })).toBeNull()
+    // Text alone needs no view: whether the agent takes images is not asked.
+    expect(
+      declineReason(emptyLocalTabs().conversations[0]!, { content: hello }),
+    ).toBeNull()
+  })
+
+  it.each<[string, Parameters<typeof declineReason>, string]>([
+    [
+      "the caller has no session",
+      [withImages(true), { content: hello, connected: false }],
+      "not-connected",
+    ],
+    [
+      "the caller named a file this draft does not hold",
+      [withImages(true), { content: [...hello, image("stranger")] }],
+      "unknown-attachment",
+    ],
+    [
+      "a file cannot go as an image",
+      [
+        attachFiles(emptyLocalTabs(), [file("notes")], "c0").conversations[0]!,
+        { content: hello },
+      ],
+      "unsupported-file",
+    ],
+    [
+      "there is neither text nor an image",
+      [emptyLocalTabs().conversations[0]!, { content: [] }],
+      "empty-draft",
+    ],
+    [
+      "the text is over what one message carries",
+      [
+        emptyLocalTabs().conversations[0]!,
+        { content: [{ type: "text" as const, text: "x".repeat(8193) }] },
+      ],
+      "message-too-large",
+    ],
+    [
+      "nobody has said yet whether the agent takes images",
+      [withImages(), { content: hello }],
+      "image-input-unknown",
+    ],
+    [
+      "the agent takes no images",
+      [withImages(false), { content: hello }],
+      "image-input-unsupported",
+    ],
+  ])("declines because %s", (_name, args, kind) => {
+    const decline = declineReason(...args)
+    expect(decline).toMatchObject({ kind })
+    // Every decline says something but the empty draft: there is nothing to
+    // tell about nothing, and the composer shows the rest above itself.
+    expect(Boolean(decline?.message)).toBe(kind !== "empty-draft")
+  })
+
+  it("asks for a fresh view only when the decline is 'not known yet'", () => {
+    expect(declineReason(withImages(), { content: hello })?.askAgain).toBe(true)
+    for (const conv of [withImages(false), withImages(true)])
+      expect(declineReason(conv, { content: [] })?.askAgain).toBeUndefined()
+  })
+
+  it("sends the draft's own files, never the caller's copy of one", () => {
+    const conv = withImages(true)
+    const stale = { ...image("a"), upload: { status: "uploading" as const } }
+    // The caller's prose is kept and its file part discarded: the draft's file,
+    // which is the one with the stored reference, is what the message carries.
+    expect(draftMessage(conv, [...hello, stale])).toEqual([...hello, ...conv.draft])
+  })
+})
+
 describe("sending a draft that holds images", () => {
   it("turns stored images and text into one turn and empties the draft", () => {
     const tabs = stored()
@@ -420,11 +559,19 @@ describe("sending a draft that holds images", () => {
     const tabs = stored()
     const content = tabs.conversations[0]!.draft
     const sent = beginSend(tabs, { ...submission, content })
-    const refused = failSend(sent, "c0", "execution", "This agent takes no images", false)
+    const refused = failSend(
+      sent,
+      "c0",
+      "execution",
+      "This agent takes no images",
+      refusedSend,
+    )
     expect(refused.conversations[0]!.draft).toEqual(content)
     expect(refused.conversations[0]!.turns[0]).toMatchObject({ receipt: "failed" })
     // An uncertain failure keeps the turn for retry and leaves the draft alone.
-    const lost = failSend(sent, "c0", "execution", "connection lost")
+    const lost = failSend(sent, "c0", "execution", "connection lost", {
+      kind: "uncertain",
+    })
     expect(lost.conversations[0]!.draft).toEqual([])
     expect(lost.conversations[0]!.turns[0]).toMatchObject({ receipt: "unknown", content })
   })
@@ -433,7 +580,10 @@ describe("sending a draft that holds images", () => {
     const tabs = stored()
     const content = tabs.conversations[0]!.draft
     const sent = beginSend(tabs, { ...submission, content })
-    const refused = failSend(sent, "c0", "execution", "released", false, true)
+    const refused = failSend(sent, "c0", "execution", "released", {
+      kind: "refused",
+      reupload: true,
+    })
     // The same file, with the dead reference gone: the panel uploads it again.
     expect(refused.conversations[0]!.draft).toEqual([image("a")])
     // The turn keeps what was actually attempted.
@@ -443,7 +593,8 @@ describe("sending a draft that holds images", () => {
     })
     // An uncertain failure recovers nothing, so there is nothing to reset.
     expect(
-      failSend(sent, "c0", "execution", "lost", true, true).conversations[0]!.draft,
+      failSend(sent, "c0", "execution", "lost", { kind: "uncertain" }).conversations[0]!
+        .draft,
     ).toEqual([])
   })
 

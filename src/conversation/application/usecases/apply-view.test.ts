@@ -254,6 +254,7 @@ it("a complete queue still keeps unacknowledged local sends and local failures",
     "c0",
     "uncertain",
     "offline",
+    { kind: "uncertain" },
   )
   const projected = applyView(uncertain.conversations[0]!, {
     ...view,
@@ -269,6 +270,9 @@ it("a complete queue still keeps unacknowledged local sends and local failures",
   ])
 })
 
+/** A send refused before admission: the message was not taken, so the draft is back. */
+const refused = { kind: "refused", reupload: false } as const
+
 it("stale queued rows no longer hold the conversation in thinking after an offline rejection", () => {
   const { tabs } = stoppedQueue(true)
   const sending = beginSend(tabs, {
@@ -278,7 +282,7 @@ it("stale queued rows no longer hold the conversation in thinking after an offli
     mode: "queued",
     content: textContent("next"),
   })
-  const rejected = failSend(sending, "c0", "next", "Agent not configured", false)
+  const rejected = failSend(sending, "c0", "next", "Agent not configured", refused)
   expect(rejected.conversations[0]!.phase).toBe("idle")
   expect(rejected.conversations[0]!.draft).toEqual(textContent("next"))
 })

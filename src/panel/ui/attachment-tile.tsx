@@ -1,7 +1,12 @@
 import { LoaderCircle, RotateCw, X } from "lucide-react"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
-import { isImageFile, previewableImage, type FileAttachment } from "../../conversation"
-import { uploadFailureText, worthRetrying } from "../application/upload-image"
+import {
+  isImageFile,
+  previewableImage,
+  uploadFailureText,
+  worthRetrying,
+  type FileAttachment,
+} from "../../conversation"
 import { AttachmentIcon } from "./attachment-icon"
 
 const cornerButton =

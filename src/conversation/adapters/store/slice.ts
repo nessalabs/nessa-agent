@@ -3,6 +3,7 @@ import {
   contentText,
   MAX_SENT_PREVIEW_BYTES,
   messageImages,
+  storedImages,
   type FileAttachment,
   type MessageContent,
   type UploadFailure,
@@ -17,10 +18,13 @@ import type { LocalTabs } from "../../application/local-tabs"
 import { emptyLocalTabs } from "../../application/local-tabs"
 import {
   beginSend,
+  declineReason,
+  draftMessage,
   failSend,
   imageRefusalMessage,
   refusalReleasesImages,
   submissionRefusalMessage,
+  type SendOutcome,
 } from "../../application/usecases/send-draft"
 import { applyView } from "../../application/usecases/apply-view"
 import { boundSentPreviews } from "../../application/usecases/release-uploads"
@@ -63,104 +67,48 @@ const refusalDetail = (error: unknown) =>
     ? submissionRefusalMessage(error.reason)
     : undefined) ?? detail(error)
 
+/**
+ * Did this message go? A typed refusal is the gateway, or the client that
+ * validates its arguments, saying it was not taken: the draft can come back.
+ * A failure after admission was attempted proves nothing either way.
+ */
+function sendOutcome(error: unknown, admissionAttempted: boolean): SendOutcome {
+  if (error instanceof SubmissionRefusedError)
+    return { kind: "refused", reupload: refusalReleasesImages(error.reason) }
+  if (
+    !admissionAttempted ||
+    error instanceof ConversationUnavailableError ||
+    (error instanceof NessaConversationMutationError && !error.uncertain)
+  )
+    return { kind: "refused", reupload: false }
+  return { kind: "uncertain" }
+}
+
 /** Capture a tab and logical submission before awaiting any connection or admission. */
 export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
   "conversation/sendDraft",
   async (input, { dispatch, getState, extra, rejectWithValue }) => {
     const tabs = getState().conversation
     const id = input.id ?? tabs.activeId
-    const current = tabs.conversations.find((item) => item.id === id)
+    const conv = tabs.conversations.find((item) => item.id === id)
     // The last way this could decline a draft and look like it had taken one:
     // the conversation closing in the same tick as a submit. Refused with a
-    // reason like every other decline, so "was this draft taken" has one answer
-    // and not two — the composer's full-pane editor rests on it.
-    if (!current) return rejectWithValue({ kind: "no-such-conversation" })
-    // Said here rather than by the caller returning early: a submit that goes
-    // nowhere without a word is the defect this thunk exists to prevent.
-    if (input.connected === false) {
-      dispatch(
-        showError({
-          id,
-          message: "Not connected to the gateway yet. Your draft has been kept.",
-        }),
-      )
-      return rejectWithValue({ kind: "not-connected" })
+    // reason like every other decline — silently, because a conversation that
+    // is gone has nowhere to show a sentence.
+    if (!conv) return rejectWithValue({ kind: "no-such-conversation" })
+    // Every other local reason a draft is declined is decided in one pure
+    // place and said in one place here, so "was this draft taken" has one
+    // answer and not eight — the composer's full-pane editor rests on it.
+    const decline = declineReason(conv, input)
+    if (decline) {
+      if (decline.askAgain) void dispatch(refreshConversation(id))
+      if (decline.message) dispatch(showError({ id, message: decline.message }))
+      return rejectWithValue({ kind: decline.kind })
     }
-    // Files are the draft's. Their upload state lives there and nowhere else,
-    // so a caller's copy of a file part is never what gets sent — and one the
-    // draft does not hold is refused rather than dropped from the message.
-    const files = current.draft.filter((part) => part.type === "file")
-    const held = new Set(files.map((file) => file.id))
-    if (input.content.some((part) => part.type === "file" && !held.has(part.id))) {
-      dispatch(
-        showError({
-          id,
-          message: "An attachment is no longer in this draft. Attach it again.",
-        }),
-      )
-      return rejectWithValue({ kind: "unknown-attachment" })
-    }
-    const content: MessageContent = [
-      ...input.content.filter(
-        (part) => part.type === "text" || part.type === "pasted-text",
-      ),
-      ...files,
-    ]
-    const sendable = messageImages(content)
-    if (!sendable.ok) {
-      dispatch(showError({ id, message: imageRefusalMessage(sendable.refusal) }))
-      return rejectWithValue({ kind: sendable.refusal.kind })
-    }
+    const content = draftMessage(conv, input.content)
     const text = contentText(content)
-    // Refused rather than silently fulfilled, so every way this can decline a
-    // draft looks the same from outside: a rejection carrying a reason. A
-    // caller that has to know whether the draft left — the composer deciding
-    // whether its full-pane editor is finished with — cannot tell "nothing to
-    // send" from "sent" otherwise.
-    // An image is something to say: only a draft with neither is empty.
-    if (!text.trim() && sendable.images.length === 0)
-      return rejectWithValue({ kind: "empty-draft" })
-    if (new TextEncoder().encode(text).length > 8192) {
-      dispatch(
-        showError({
-          id,
-          message:
-            "This gateway accepts up to 8 KiB of text per message. Your draft has been kept.",
-        }),
-      )
-      return rejectWithValue({ kind: "message-too-large" })
-    }
-    if (sendable.images.length > 0) {
-      // Whether the agent takes images is the gateway's fact, reported in a
-      // view, and false until an agent is open. Staging the images created the
-      // conversation and started its reads, so the answer is normally here by
-      // now. When it is not, it is asked for and the draft waits: guessing yes
-      // would hand the gateway a message it must refuse, and guessing no would
-      // refuse images an agent can take.
-      const imageInput = current.remote?.capabilities.imageInput
-      if (imageInput === undefined) {
-        void dispatch(refreshConversation(id))
-        dispatch(
-          showError({
-            id,
-            message:
-              "Still checking whether this agent takes images. Send again in a moment.",
-          }),
-        )
-        return rejectWithValue({ kind: "image-input-unknown" })
-      }
-      if (!imageInput) {
-        dispatch(
-          showError({
-            id,
-            message:
-              "This agent does not take images. Remove them to send; your draft has been kept.",
-          }),
-        )
-        return rejectWithValue({ kind: "image-input-unsupported" })
-      }
-    }
-    const serverId = current.serverConversationId ?? crypto.randomUUID()
+    const images = storedImages(content)
+    const serverId = conv.serverConversationId ?? crypto.randomUUID()
     const executionId = crypto.randomUUID()
     const actionId = crypto.randomUUID()
     dispatch(bindConversation({ id, serverId }))
@@ -184,7 +132,7 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
         executionId,
         actionId,
         text,
-        attachments: sendable.images,
+        attachments: images,
       }
       admissionAttempted = true
       const receipt = await (input.steering
@@ -200,18 +148,7 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
           id,
           executionId,
           message: refusalDetail(error),
-          // A typed refusal is the gateway saying it did not take the message.
-          // Everything else after admission was attempted proves nothing.
-          uncertain:
-            admissionAttempted &&
-            !(error instanceof SubmissionRefusedError) &&
-            !(error instanceof ConversationUnavailableError) &&
-            (!(error instanceof NessaConversationMutationError) || error.uncertain),
-          // The gateway no longer has the images this message named, so the
-          // recovered draft must not offer the same dead references again.
-          reupload:
-            error instanceof SubmissionRefusedError &&
-            refusalReleasesImages(error.reason),
+          outcome: sendOutcome(error, admissionAttempted),
         }),
       )
       throw error
@@ -292,11 +229,11 @@ export const stageAttachment = createAsyncThunk<
  * conversation only to upload into and nothing was ever said in it.
  *
  * Attaching an image creates the gateway conversation, because an upload needs
- * one. Closing the tab used to leave it there, keeping the staged bytes until
- * they expired. Closing it on the gateway releases them. It is only done when a
- * view has shown the conversation to be empty and idle: a tab with turns, or one
- * whose view has not arrived, may be somebody's work — this window's or another
- * surface's — and closing a tab never stops that.
+ * one. A conversation left open keeps the staged bytes, and closing it on the
+ * gateway is what releases them. It is only done when a view has shown the
+ * conversation to be empty and idle: a tab with turns, or one whose view has
+ * not arrived, may be somebody's work — this window's or another surface's —
+ * and closing a tab never stops that.
  *
  * The tab closes first and whatever the gateway says. A release that fails is
  * survivable — staged bytes expire on their own — and is reported, not shown.
@@ -576,8 +513,7 @@ const conversationSlice = createSlice({
         id: string
         executionId: string
         message: string
-        uncertain?: boolean
-        reupload?: boolean
+        outcome: SendOutcome
       }>,
     ) {
       return failSend(
@@ -585,8 +521,7 @@ const conversationSlice = createSlice({
         action.payload.id,
         action.payload.executionId,
         action.payload.message,
-        action.payload.uncertain,
-        action.payload.reupload,
+        action.payload.outcome,
       )
     },
     showError(state, action: PayloadAction<{ id: string; message: string }>) {

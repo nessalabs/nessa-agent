@@ -99,13 +99,8 @@ export type UploadedFile = { digest: string; mimeType: string; size: number }
 
 /**
  * The gateway did not take an image's bytes, and why, as something to branch on
- * — never by reading the message. `unavailable` (no connection, no answer,
- * storage down), `busy` (no room for another upload just now), and
- * `interrupted` (cut off or timed out) may succeed if tried again.
- * `unsupported-image`, `too-large`, and `image-input-unsupported` are the
- * gateway's verdict on this image or this agent: it could not read the format,
- * could not bring it under the selected model's limits, or the model takes no
- * images. `rejected` is any other refusal of these bytes.
+ * — never by reading the message. The reasons are {@link UploadFailure}, minus
+ * `unreadable`, which is this window failing before the gateway saw anything.
  */
 export class AttachmentStagingError extends Error {
   constructor(

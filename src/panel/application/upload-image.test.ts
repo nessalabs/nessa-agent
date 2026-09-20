@@ -6,13 +6,19 @@
  * rather than a timing. Nothing sleeps.
  */
 import { describe, expect, it, vi } from "vitest"
+
+// The conversation barrel also exports its components, which need the whole UI
+// package resolved. Its `testing` entry is the same pure functions with no
+// component among them, so the barrel is mocked with that: one definition.
+vi.mock("../../conversation", () => import("../../conversation/testing"))
+
+import { uploadFailureText, worthRetrying } from "../../conversation/testing"
 import {
   attachmentNotice,
   MAX_UPLOADS_IN_FLIGHT,
   nextUploads,
   uploadImage,
   windowBudgetMessage,
-  worthRetrying,
   type NoticedFile,
   type UploadPorts,
 } from "./upload-image"
@@ -150,53 +156,24 @@ describe("what the composer says about a draft's files", () => {
     ).toBeNull()
   })
 
-  it.each([
-    ["unreadable", /could not be read/, /Retry/],
-    ["unavailable", /gateway could not be reached/, /Retry/],
-    ["rejected", /gateway refused it/, /Retry/],
-    // Honest about what happened: not "refused", and not "could not be reached".
-    ["busy", /busy with other uploads/, /Retry/],
-    ["interrupted", /cut off or timed out/, /Retry/],
-    [
-      "image-input-unsupported",
-      /this agent's model does not take images/,
-      /Remove it to send/,
-    ],
-    // The gateway's verdict on the image itself: the same bytes will fare the same.
-    ["unsupported-image", /could not read this image format/, /Remove it to send/],
-    ["too-large", /could not be brought under this model's limits/, /Remove it to send/],
-  ] as const)("names a failed upload and why: %s", (reason, text, advice) => {
-    const notice = attachmentNotice({
-      files: [
-        stored,
-        { name: "b.heic", image: true, upload: { status: "failed", reason } },
-      ],
-      imageInput: true,
-    })
-    expect(notice).toMatch(/"b\.heic" did not upload/)
-    expect(notice).toMatch(text)
-    expect(notice).toMatch(advice)
-    expect(worthRetrying(reason)).toBe(advice.source === "Retry")
-  })
-
-  it("never quotes a byte or pixel limit: those are the gateway's, per model", () => {
-    for (const reason of [
-      "unreadable",
-      "unsupported-image",
-      "too-large",
-      "image-input-unsupported",
-      "busy",
-      "interrupted",
-      "unavailable",
-      "rejected",
-    ] as const)
-      expect(
-        attachmentNotice({
-          files: [{ name: "b.png", image: true, upload: { status: "failed", reason } }],
-          imageInput: true,
-        }),
-      ).not.toMatch(/\d\s?(MB|MiB|px)/)
-  })
+  // What each reason says is the conversation's, and tested there. This is the
+  // composing: the failed file is named, its reason is quoted whole, and the
+  // advice follows from whether trying the same bytes again could go differently.
+  it.each(["unavailable", "too-large"] as const)(
+    "names the failed file, why, and what to do about it: %s",
+    (reason) => {
+      const notice = attachmentNotice({
+        files: [
+          stored,
+          { name: "b.heic", image: true, upload: { status: "failed", reason } },
+        ],
+        imageInput: true,
+      })
+      expect(notice).toMatch(/"b\.heic" did not upload/)
+      expect(notice).toContain(uploadFailureText(reason))
+      expect(notice).toMatch(worthRetrying(reason) ? /Retry/ : /Remove it to send/)
+    },
+  )
 
   it("says at attach time that a file cannot be sent, or that the agent takes no images", () => {
     expect(

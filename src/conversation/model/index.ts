@@ -42,6 +42,7 @@ export {
   messageImages,
   messageLabel,
   previewableImage,
+  storedImages,
   validDraftAttachments,
   validImageReference,
 } from "./attachments"

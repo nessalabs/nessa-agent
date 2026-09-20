@@ -163,10 +163,10 @@ export function App({
    *
    * Selecting a conversation is also leaving the update tab and closing the
    * pasted-text viewer: the strip is one strip, and a selection that left the
-   * update on screen would be selecting nothing. That used to be three calls
-   * remembered at each of eight places — a shortcut, a click, the tab menu, a
-   * new tab — and the ninth way to select a conversation would have forgotten
-   * one. This is the one door; `show` is only which conversation.
+   * update on screen would be selecting nothing. That is three calls, and there
+   * are eight ways to select a conversation — a shortcut, a click, the tab
+   * menu, a new tab — so they go through one door rather than being remembered
+   * at each; `show` is only which conversation.
    */
   const showConversation = React.useEffectEvent((show: () => void) => {
     closePaste()

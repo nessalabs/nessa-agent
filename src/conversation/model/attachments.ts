@@ -216,6 +216,25 @@ export type ImageRefusal =
  * reference that is not one names nothing the gateway holds, so it counts as an
  * upload that failed.
  */
+/**
+ * The references this content already names: each file's stored one, and each
+ * part that is nothing but a reference. A file still uploading names none, so
+ * whether this is the whole message is {@link messageImages}'s question.
+ */
+export function storedImages(content: MessageContent): ImageReference[] {
+  return content.flatMap((part): ImageReference[] => {
+    const image =
+      part.type === "image-reference"
+        ? part
+        : part.type === "file" && part.upload.status === "stored"
+          ? part.upload.image
+          : undefined
+    return image
+      ? [{ digest: image.digest, mimeType: image.mimeType, size: image.size }]
+      : []
+  })
+}
+
 export function messageImages(
   content: MessageContent,
 ): { ok: true; images: ImageReference[] } | { ok: false; refusal: ImageRefusal } {
@@ -231,17 +250,7 @@ export function messageImages(
   if (failed) return { ok: false, refusal: { kind: "upload-failed", name: failed.name } }
   if (files.some((file) => file.upload.status !== "stored"))
     return { ok: false, refusal: { kind: "upload-in-flight" } }
-  const images = content.flatMap((part): ImageReference[] => {
-    const image =
-      part.type === "image-reference"
-        ? part
-        : part.type === "file" && part.upload.status === "stored"
-          ? part.upload.image
-          : undefined
-    return image
-      ? [{ digest: image.digest, mimeType: image.mimeType, size: image.size }]
-      : []
-  })
+  const images = storedImages(content)
   if (images.length > MAX_SEND_IMAGES)
     return { ok: false, refusal: { kind: "too-many-images" } }
   if (images.reduce((bytes, image) => bytes + image.size, 0) > MAX_SEND_TOTAL_IMAGE_BYTES)

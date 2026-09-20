@@ -365,9 +365,9 @@ it.each(["attachment-not-found", "attachment-unavailable"] as const)(
 it("knows a message the client would not put on the wire was never sent", async () => {
   // The model puts no per-image byte bound on a stored reference: how heavy one
   // image may be is the protocol's rule, enforced by the client, which refuses
-  // the arguments before anything is sent. A refusal there used to escape as a
-  // plain TypeError and be read as a lost acknowledgement — "delivery unknown",
-  // with the draft gone. It is a refusal, so the draft comes back.
+  // the arguments before anything is sent. A refusal there is a refusal, not a
+  // lost acknowledgement, so the turn is failed and the draft comes back rather
+  // than the panel showing a message of unknown delivery with nothing to edit.
   const context = await readyToSend({
     stageAttachment: vi.fn(async () => ({ ...stored, size: 6 * 1024 * 1024 })),
   })
