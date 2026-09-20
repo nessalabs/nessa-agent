@@ -106,8 +106,10 @@ impl Error for LoginShellError {}
 /// runs it with a bounded deadline and a clean environment, and the value it
 /// returns has been through [`SearchPath::parse`].
 ///
-/// One resolution per registration, so the answer is fixed in the service
-/// definition and changes only by re-registering.
+/// Asked at most once per host process, not once per registration: reconciling
+/// again is routine — every webview load does it — and a path that changed in
+/// between would retire a healthy gateway and stop its agents mid-session. A
+/// changed profile takes effect the next time the app is launched.
 pub trait LoginShellPath: Send + Sync {
     fn resolve(&self) -> Result<SearchPath, LoginShellError>;
 }

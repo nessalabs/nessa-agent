@@ -9,6 +9,34 @@ fn login_shell(path: &str) -> Arc<FixedLoginShell> {
     Arc::new(FixedLoginShell(Ok(SearchPath::parse(path).unwrap())))
 }
 
+/// A login shell that answers whatever it is told to, and counts being asked.
+struct CountingLoginShell {
+    answers: Mutex<Vec<Result<SearchPath, LoginShellError>>>,
+    resolutions: Mutex<usize>,
+}
+impl CountingLoginShell {
+    fn new(answers: Vec<Result<SearchPath, LoginShellError>>) -> Arc<Self> {
+        Arc::new(Self {
+            answers: Mutex::new(answers),
+            resolutions: Mutex::new(0),
+        })
+    }
+    fn resolutions(&self) -> usize {
+        *self.resolutions.lock().unwrap()
+    }
+}
+impl LoginShellPath for CountingLoginShell {
+    fn resolve(&self) -> Result<SearchPath, LoginShellError> {
+        *self.resolutions.lock().unwrap() += 1;
+        let mut answers = self.answers.lock().unwrap();
+        if answers.is_empty() {
+            Err(LoginShellError::TimedOut)
+        } else {
+            answers.remove(0)
+        }
+    }
+}
+
 struct FakeHost {
     registration: Result<ReconciledGateway, GatewayError>,
     stop_result: Result<(), GatewayError>,
@@ -158,6 +186,65 @@ fn a_login_shell_that_cannot_be_read_still_registers_the_service() {
         tauri::async_runtime::block_on(gateway.wait_ready()).unwrap();
         assert_eq!(*host.calls.lock().unwrap(), ["register:ci:-"], "{failure}");
     }
+}
+
+/// Reconciling again is routine — every webview load does it — so the login
+/// shell is asked once and the answer is reused, whatever it was. A profile
+/// edited while Nessa is open must not produce a second, different path: that
+/// would be a changed service definition, which retires the running gateway and
+/// stops its agents in the middle of a session nobody asked to interrupt.
+#[test]
+fn reconciling_again_reuses_the_path_rather_than_asking_the_login_shell_again() {
+    let login_shell = CountingLoginShell::new(vec![
+        Ok(SearchPath::parse("/opt/homebrew/bin:/usr/bin").unwrap()),
+        Ok(SearchPath::parse("/somewhere/else").unwrap()),
+    ]);
+    let host = Arc::new(FakeHost {
+        registration: Ok(reconciled("gui/501/so.nessa.gateway.ci")),
+        stop_result: Ok(()),
+        calls: Mutex::new(vec![]),
+    });
+    let gateway = Gateway::bootstrap(
+        host.clone(),
+        login_shell.clone(),
+        "/runtime".into(),
+        "ci".into(),
+    );
+    for _ in 0..3 {
+        tauri::async_runtime::block_on(gateway.wait_ready()).unwrap();
+    }
+    assert_eq!(login_shell.resolutions(), 1);
+    assert_eq!(
+        *host.calls.lock().unwrap(),
+        ["register:ci:/opt/homebrew/bin:/usr/bin"; 3]
+    );
+}
+
+/// The same holds for a shell that could not be read: the failure is the
+/// outcome, remembered as such. Otherwise every panel load would spend the
+/// whole deadline again on a profile already known to hang.
+#[test]
+fn a_login_shell_that_failed_once_is_not_asked_again_this_session() {
+    let login_shell = CountingLoginShell::new(vec![
+        Err(LoginShellError::TimedOut),
+        Ok(SearchPath::parse("/opt/homebrew/bin:/usr/bin").unwrap()),
+    ]);
+    let host = Arc::new(FakeHost {
+        registration: Ok(reconciled("gui/501/so.nessa.gateway.ci")),
+        stop_result: Ok(()),
+        calls: Mutex::new(vec![]),
+    });
+    let gateway = Gateway::bootstrap(
+        host.clone(),
+        login_shell.clone(),
+        "/runtime".into(),
+        "ci".into(),
+    );
+    for _ in 0..2 {
+        tauri::async_runtime::block_on(gateway.wait_ready()).unwrap();
+    }
+    assert_eq!(login_shell.resolutions(), 1);
+    assert_eq!(*host.calls.lock().unwrap(), ["register:ci:-"; 2]);
 }
 
 /// Every failure names itself, because the fallback is only discoverable if it

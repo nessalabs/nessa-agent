@@ -293,10 +293,15 @@ login shell for its path once, while registering, and writes the answer into the
 launchd definition. That makes it part of the service's identity — changing it is
 a deliberate re-registration, not something that shifts under a running gateway —
 and it is resolved from a clean login shell, so launching Nessa from a terminal
-with an unusual path does not rewrite the service. A login shell that hangs,
-fails, or answers with something that is not a path costs the registration
-nothing: it keeps the path already registered, or falls back to the system path
-on a first run, and says so on stderr. The staged runtime is never on it, so the
+with an unusual path does not rewrite the service. It is asked once per run of the app, not once per
+reconciliation: the panel reconciles on every webview load, and a profile edited
+while Nessa is open would otherwise produce a different definition and retire a
+healthy gateway mid-session. A changed profile therefore takes effect the next
+time the app is launched, and that launch re-registers the service. A login shell
+that hangs, fails, or answers with something that is not a path costs the
+registration nothing: it keeps the path already registered, or falls back to the
+system path on a first run, says so on stderr, and is not asked again until the
+app is launched again. The staged runtime is never on it, so the
 agent's `node` is the user's or none at all.
 
 The desktop bootstrap registers `so.nessa.gateway.prod` in the user's launchd
