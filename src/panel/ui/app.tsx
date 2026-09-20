@@ -1,7 +1,8 @@
 import { ComposerDeliveryMode } from "@nessa-ui/react/composer-queue"
 import type { AttachmentResources } from "../adapters/attachment-resources"
+import { attachmentNotice } from "../application/upload-image"
 import * as React from "react"
-import { CircleArrowUp, Download, Square, X } from "lucide-react"
+import { CircleArrowUp, Download, Square } from "lucide-react"
 import { AgentNotification } from "@nessa-ui/react/agent-notification"
 import {
   ChatComposerAction,
@@ -31,6 +32,7 @@ import {
   Transcript,
   useConversation,
   toEditor,
+  isImageFile,
 } from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
 import { useSession } from "../../session"
@@ -46,12 +48,14 @@ import { tabAfter, tabAt } from "../application/tab-navigation"
 import { UpdateTab } from "./update-tab"
 import { useComposer } from "./use-composer"
 import { useFileAttachments } from "./use-file-attachments"
+import { useAttachmentUploads } from "./use-attachment-uploads"
 import { useFolderDrop } from "./use-folder-drop"
 import { useContentDrop } from "./use-content-drop"
 import { FileDropZone } from "@nessa-ui/react/file-drop-zone"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 
 import { AddAttachmentMenu } from "./add-attachment-menu"
+import { AttachmentTile } from "./attachment-tile"
 import { AttachmentIcon } from "./attachment-icon"
 import { WaveformIcon } from "./waveform-icon"
 
@@ -104,6 +108,16 @@ export function App({
     (item) => item.id === tabDetails?.id,
   )
   const attachments = useFileAttachments(chat, attachmentResources)
+  const uploads = useAttachmentUploads(chat, attachmentResources)
+  // What the draft's files need said about them now, rather than at send.
+  const fileNotice = attachmentNotice({
+    files: attachments.files.map((file) => ({
+      name: file.name,
+      image: isImageFile(file.mimeType),
+      upload: file.upload,
+    })),
+    imageInput: chat.active.remote?.capabilities.imageInput,
+  })
   const folderDrop = useFolderDrop(
     chat.active.id,
     attachments.addFiles,
@@ -504,6 +518,11 @@ export function App({
                 {attachments.error}
               </p>
             )}
+            {fileNotice && !attachments.error && (
+              <p role="status" className="px-3 nessa-text-4 text-muted-foreground">
+                {fileNotice}
+              </p>
+            )}
             {attachments.reading && (
               <p role="status" className="px-3 nessa-text-4 text-muted-foreground">
                 Reading files…
@@ -536,25 +555,13 @@ export function App({
                   </span>
                 ))}
                 {attachments.files.map((file) => (
-                  <span key={file.id} className="relative m-1 inline-flex">
-                    <ChatAttachmentTile
-                      label={file.name}
-                      imageSrc={
-                        file.mimeType.startsWith("image/") ? file.previewUrl : undefined
-                      }
-                      icon={<AttachmentIcon name={file.name} mimeType={file.mimeType} />}
-                      onOpen={() => attachments.open(file)}
-                    />
-                    <button
-                      type="button"
-                      aria-label={`Remove ${file.name}`}
-                      title={`Remove ${file.name}`}
-                      onClick={() => attachments.remove(file.id)}
-                      className="absolute -right-1.5 -top-1.5 inline-flex size-5 items-center justify-center rounded-full bg-background text-foreground shadow-sm outline-none focus-visible:[outline-style:solid] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring [&_svg]:size-3"
-                    >
-                      <X aria-hidden="true" />
-                    </button>
-                  </span>
+                  <AttachmentTile
+                    key={file.id}
+                    file={file}
+                    onOpen={() => attachments.open(file)}
+                    onRemove={() => attachments.remove(file.id)}
+                    onRetry={() => uploads.retry(file.id)}
+                  />
                 ))}
               </ChatComposerAttachments>
               <PillComposerRow>
