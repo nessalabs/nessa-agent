@@ -4,24 +4,29 @@ use serde_json::Value;
 
 /// Check a session or configuration response against the configured context.
 ///
-/// Codex does not take a model in its session parameters: it opens the session
-/// with whatever its own configuration selects and offers the rest through
-/// config options. So the two checks are different questions, and `mode` is what
-/// tells them apart.
+/// Shared by every profile whose provider opens a session from its own
+/// configuration and offers the rest through ACP config options — Codex and
+/// Opencode both do, and both name the same two of them, `model` and `mode`.
+/// The shape read here is the protocol's, not either provider's.
 ///
-/// `None` — this profile's selections are not all applied yet. That covers the
-/// newly created session, the response to the model request that precedes the
-/// mode request, and any `config_option_update` Codex sends while those requests
-/// are still going out. The only thing that can be settled is whether the model
-/// this binding is configured for is one Codex will accept, which is worth
-/// settling here: "Codex does not offer this model" is a configuration mistake,
+/// The provider does not take a model in its session parameters: it opens the
+/// session with whatever its own configuration selects. So the two checks are
+/// different questions, and `mode` is what tells them apart.
+///
+/// `None` — the calling profile's selections are not all applied yet. That
+/// covers the newly created session, the response to the model request that
+/// precedes the mode request, and any `config_option_update` the provider sends
+/// while those requests are still going out. The only thing that can be settled
+/// is whether the model this binding is configured for is one the provider will
+/// accept, which is worth settling here: "this provider does not offer this
+/// model" is a configuration mistake,
 /// and finding it out at the moment of selection would report it as a refused
 /// selection instead. What it deliberately does not check is `currentValue`: the
 /// selection that would set it is the one still in flight.
 ///
 /// `Some(mode)` — every selection has been applied, and the response must now
 /// read back exactly what was asked for.
-pub(super) fn verify_config(
+pub(crate) fn verify_config(
     result: &Value,
     model: &str,
     mode: Option<&str>,
@@ -85,5 +90,5 @@ fn current(option: &Value) -> Option<&str> {
 }
 
 #[cfg(test)]
-#[path = "../../../../tests/infrastructure/codex_acp/sessions/configuration.rs"]
+#[path = "../../../../tests/infrastructure/acp/sessions/configuration.rs"]
 mod tests;

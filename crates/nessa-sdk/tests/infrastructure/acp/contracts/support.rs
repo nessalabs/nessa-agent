@@ -12,6 +12,7 @@ pub(super) use crate::domain::model_metadata::entities::ModelMetadata;
 pub(super) use crate::infrastructure::acp::sessions::AcpConfig;
 pub(super) use crate::infrastructure::claude_acp::sessions::ClaudeAcpProvider;
 pub(super) use crate::infrastructure::codex_acp::sessions::CodexAcpProvider;
+pub(super) use crate::infrastructure::opencode_acp::sessions::OpencodeAcpProvider;
 pub(super) use std::{
     collections::BTreeMap,
     path::PathBuf,
@@ -174,6 +175,56 @@ pub(super) fn test_codex_binding(mode: &str, capacity: usize) -> (TempDir, Codex
     (
         root,
         CodexAcpProvider::new(
+            config,
+            &model,
+            TokenLimits::new(900, 100).unwrap(),
+            Arc::new(RecordingAudit::default()),
+        )
+        .unwrap(),
+    )
+}
+
+/// The same fixture setup for Opencode, whose session is configured over the
+/// protocol rather than at launch and whose models are served by its own
+/// gateway.
+pub(super) fn opencode_configuration(
+    mode: &str,
+    capacity: usize,
+) -> (TempDir, AcpConfig, ModelMetadata) {
+    let (root, mut config, _) = test_acp_configuration(mode, capacity);
+    config.arguments = vec![
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/infrastructure/acp/contracts/fixtures/opencode_acp_test_handler.py")
+            .into_os_string(),
+        mode.into(),
+    ];
+    let text = ModalitiesDto {
+        text: true,
+        image: false,
+        audio: false,
+    };
+    let model = ModelMetadata::try_from(ModelMetadataDto {
+        provider: "opencode".into(),
+        model_id: "exact-fixture-model".into(),
+        display_name: "Fixture".into(),
+        input: text,
+        output: text,
+        tool_use: true,
+        reasoning: false,
+        max_context_window_tokens: 1000,
+        max_output_tokens: 200,
+        knowledge_cutoff: "2026-01".into(),
+        documentation_url: "https://example.com".into(),
+    })
+    .unwrap();
+    (root, config, model)
+}
+
+pub(super) fn test_opencode_binding(mode: &str, capacity: usize) -> (TempDir, OpencodeAcpProvider) {
+    let (root, config, model) = opencode_configuration(mode, capacity);
+    (
+        root,
+        OpencodeAcpProvider::new(
             config,
             &model,
             TokenLimits::new(900, 100).unwrap(),
