@@ -8,7 +8,7 @@
 //! Nothing here reads a secret. Every question is whether a credential exists.
 
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus};
 use std::time::{Duration, Instant};
 
@@ -89,15 +89,12 @@ fn holds_a_credential(contents: &str) -> bool {
 /// obeys; otherwise `default` beneath this user's home. A host with neither
 /// leaves nowhere to look, which the caller reports as a question it could not
 /// ask rather than as a sign-in ruled out.
-pub(super) fn config_directory(variable: &str, default: &str) -> Option<std::path::PathBuf> {
-    std::env::var(variable)
-        .map(std::path::PathBuf::from)
-        .ok()
-        .or_else(|| {
-            std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-                .ok()
-                .map(|home| std::path::PathBuf::from(home).join(default))
-        })
+pub(super) fn config_directory(variable: &str, default: &str) -> Option<PathBuf> {
+    std::env::var(variable).map(PathBuf::from).ok().or_else(|| {
+        std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .ok()
+            .map(|home| PathBuf::from(home).join(default))
+    })
 }
 
 /// How often the waiting thread looks to see whether a tool has finished.
