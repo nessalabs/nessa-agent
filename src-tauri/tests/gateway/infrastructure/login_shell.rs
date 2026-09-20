@@ -44,13 +44,19 @@ fn temporary_directory(name: &str) -> PathBuf {
 /// Every stand-in takes `--warm` and does nothing, and does so *before* it
 /// records its pid, so a warm-up cannot leave behind a pid the timed run never
 /// wrote.
+///
+/// The file is put in place by [`copy_into_place`] rather than written here,
+/// which is what keeps that warm-up from failing with `ETXTBSY` on Linux; the
+/// reasoning is there.
 fn write_shell(directory: &Path, body: &str) -> PathBuf {
     let script = directory.join("login-shell");
+    let text = directory.join("login-shell.text");
     fs::write(
-        &script,
+        &text,
         format!("#!/bin/sh\n[ \"$1\" = \"--warm\" ] && exit 0\n{body}\n"),
     )
     .unwrap();
+    copy_into_place(&text, &script);
     fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
     let warmed = Command::new(&script)
         .arg("--warm")
@@ -61,6 +67,48 @@ fn write_shell(directory: &Path, body: &str) -> PathBuf {
         "the stand-in shell failed its warm-up run"
     );
     script
+}
+
+/// Puts the stand-in shell where it will be run, through a separate process, so
+/// that this one never holds a descriptor open for writing on the file it is
+/// about to execute.
+///
+/// Linux refuses to `execve` a file that any process has open for writing:
+/// `ETXTBSY`, "Text file busy". Writing the file here and running it here looks
+/// safe, because the write's descriptor is closed before the write call returns
+/// — but this is a test binary with many threads, and while one of them holds
+/// that descriptor another thread's `Command::spawn` forks. The child inherits a
+/// copy of the whole descriptor table, and the open file description it refers
+/// to stays alive until that child reaches its own `execve`, where close-on-exec
+/// finally drops it. For that window the file is open for writing in a process
+/// nobody was thinking about, and any attempt to run it fails. That is what took
+/// down `a_profile_that_closes_its_output_and_hangs_still_times_out` on
+/// ubuntu-latest after #83 merged, on code that had passed on the same runner.
+///
+/// Retrying the failed exec would have made it rarer. This makes it
+/// unreachable: `cp` opens the destination, and `cp` is the only thing that ever
+/// does. Its descriptor belongs to its own process, so no fork of *this* process
+/// can be holding one, and it is gone before this function returns, because the
+/// exit status is waited for. After that the file has no writer anywhere and
+/// cannot acquire one — nothing writes it again — so neither the warm-up nor the
+/// timed run that follows can meet `ETXTBSY`. The source file it is copied from
+/// is written the ordinary way and never executed, so the same window over
+/// *that* inode means nothing.
+fn copy_into_place(text: &Path, script: &Path) {
+    let copy = ["/bin/cp", "/usr/bin/cp"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|command| command.is_file())
+        .expect("a Unix host has cp");
+    let copied = Command::new(copy)
+        .arg(text)
+        .arg(script)
+        .status()
+        .expect("cp runs");
+    assert!(
+        copied.success(),
+        "the stand-in shell could not be put in place"
+    );
 }
 
 /// A stand-in login shell: a script that records that it started, then runs the
