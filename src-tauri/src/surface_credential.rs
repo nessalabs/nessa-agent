@@ -241,7 +241,10 @@ pub async fn load_surface_credential(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gateway::application::{GatewayError, GatewayHost, ReconciledGateway};
+    use crate::gateway::application::{
+        testing::system_login_shell, GatewayError, GatewayHost, ReconciledGateway,
+    };
+    use crate::gateway::domain::value_objects::SearchPath;
     use std::{fs, io::Write, path::Path, sync::Arc, sync::Mutex};
 
     /// A credential source that has already made up its mind, and writes down
@@ -297,7 +300,12 @@ mod tests {
     }
 
     impl GatewayHost for FakeHost {
-        fn register(&self, _: &Path, _: &str) -> Result<ReconciledGateway, GatewayError> {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+        ) -> Result<ReconciledGateway, GatewayError> {
             *self.registrations.lock().unwrap() += 1;
             self.registration.clone()
         }
@@ -313,7 +321,12 @@ mod tests {
             registrations: Mutex::new(0),
         });
         (
-            Gateway::bootstrap(host.clone(), "/runtime".into(), "ci".into()),
+            Gateway::bootstrap(
+                host.clone(),
+                system_login_shell(),
+                "/runtime".into(),
+                "ci".into(),
+            ),
             host,
         )
     }
