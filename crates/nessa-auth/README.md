@@ -24,6 +24,9 @@ Composition → verifier + access reader + clock → AuthenticateSession
 
 - `domain/`: private-field IDs and models, memberships, exact grants, credential
   lifetime/revocation invariants, and AuthContext. No serde or runtime imports.
+  `Credential` produces a `CredentialTransition` (before, after, cause,
+  initiator, time) for every issuance, explicit revocation, and automatic
+  supersession; nothing assembles that evidence after the fact.
 - `application/dto.rs`: serializable boundary data. Parsing is not authentication.
 - `application/mapping.rs`: `TryFrom` validation into domain objects. Mapping an
   admin membership does not authorize storing it; that belongs in a trusted use case.
@@ -47,6 +50,31 @@ checked-in Cedar profile explicitly defines the initial Nessa action vocabulary.
 or displayed by the crate. Its explicit byte accessor is for trusted adapters;
 it is not a memory-zeroization guarantee. DTOs contain metadata, never secrets.
 External identity DTOs are untrusted data, not a mechanism for minting AuthContext.
+
+## Lifecycle evidence is committed with the state
+
+The local registry file keeps an append-only `transitions` list next to the
+credentials and receipts. A mutation appends its transitions in the same atomic
+write as the state change, so a failed write is a failed commit and there is no
+"committed but unaudited" state to reconcile. `validate_registry` applies one
+rule to that list before every write and on every reopen: each record satisfies
+the domain, chains from the previous state of its credential, and ends at the
+lifecycle the registry actually stores. A file edited by hand fails the same
+way a bad live write would.
+
+Causes are exactly the commands that exist: bootstrap, admin issue, surface
+provisioning, owner recovery, explicit revocation, and supersession by
+provisioning or by owner recovery. Expiry is not a cause; nothing happens at
+expiry and the instant is already in the issuance record. Automatic
+revocations carry the initiator of the command that triggered them, and their
+cause says they were automatic. Files written before this list existed are
+upgraded in memory on open with one honest `predates_journal` record per
+credential and written back as schema 2 by the next mutation.
+
+Issue, bootstrap, and revoke results carry their committed transitions, and the
+`CredentialTransitionReader` port lists them per organization. See
+[credential transition audit](../../docs/design/auth/credential-transition-audit.md)
+for the decisions.
 
 ## Authentication is not ongoing authorization
 
@@ -81,7 +109,7 @@ Independent changes can target these modules after agreeing on their ports:
 | Work | Owns | Depends on |
 | --- | --- | --- |
 | Local verifier/store (implemented) | `adapters/local/` | Evidence verification, durable lifecycle and coherent snapshots |
-| Credential lifecycle (implemented) | `application/credential_admin.rs` and `adapters/local/` | Durable issuance, idempotent retries, revocation, and owner recovery |
+| Credential lifecycle (implemented) | `application/credential_admin.rs` and `adapters/local/` | Durable issuance, idempotent retries, revocation, owner recovery, and committed transition evidence |
 | Policy evolution | Existing `adapters/cedar/` | Nessa-authored policies and authoritative resource inputs |
 | Gateway integration (implemented) | `nessa-server/src/product/` | Verified session, current-state policy checks and bounded socket lifetime |
 | Hosted identity | Future managed adapter | Verified binding mapping and authority/freshness rules |

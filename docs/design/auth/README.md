@@ -8,6 +8,7 @@ Implementation decisions and unfinished work are tracked in the ADR folders.
 | [Cedar primer](cedar-primer.md) | How policy evaluation works, with examples and links to the implementation |
 | [Scoped authentication design](scoped-authentication.md) | Original detailed plan and acceptance criteria, with current status and superseded assumptions identified |
 | [Identity, tenancy, and cloud](identity-tenancy-and-cloud.md) | Proposed identity/provider direction and supporting research; broader integrations remain unimplemented |
+| [Credential transition audit](credential-transition-audit.md) | Why every credential lifecycle change is committed with its before/after, cause, and initiator, and the decisions behind that design |
 
 ## Decisions and work tracking
 
