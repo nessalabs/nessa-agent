@@ -647,6 +647,27 @@ impl ManagedRuntimes {
         // is worse than the disk. The same port is what the install path is
         // waiting on, so the two land together or not at all.
         //
+        // Three things the implementation owes, written here because this is
+        // where it will be read.
+        //
+        // The early return above skips this line. A run that finds the
+        // artifact already published also holds the lock and also has a record
+        // that is true, so it is a second safe moment — and reclaiming only on
+        // the branch that unpacked means a machine that bumps its pin and then
+        // re-runs the install never reclaims anything at all.
+        //
+        // The module doc leaves the old artifact on the ground that whatever
+        // is running it keeps working. On Unix a removal keeps that true for a
+        // process that already holds the file open and makes it false for its
+        // next start; on Windows the removal fails outright against a running
+        // image. That paragraph and this one would then say opposite things
+        // about the same artifact, so they are settled together.
+        //
+        // And it is recomputed, never enumerated: "every artifact directory
+        // this agent's record does not name" is derived from the record and
+        // the pin. A `read_dir` of `versions/` is the one shape that could
+        // remove a directory nothing verified.
+        //
         // The one path that leaves this type, so the one that is spelled in
         // full: everything above is relative because everything above is
         // reached through the root rather than resolved from the outside.
