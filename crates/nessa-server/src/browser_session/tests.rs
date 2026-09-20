@@ -261,7 +261,7 @@ async fn minimal_session_survives_restart_and_rejects_malformed_credential_ids()
     let (state, _) = fixture(MembershipRole::Admin);
     let credential_id = authenticate(&state).await.context().credential_id().clone();
     let id = "8".repeat(64);
-    let store = PersistentSessions::open(&sessions_path).unwrap();
+    let store = PersistentSessions::open(&sessions_path, 100 + 2 * crate::browser_session::domain::value_objects::IDLE_SECONDS).unwrap();
     store
         .insert(
             id.clone(),
@@ -274,7 +274,7 @@ async fn minimal_session_survives_restart_and_rejects_malformed_credential_ids()
         .unwrap();
     drop(store);
 
-    let store = PersistentSessions::open(&sessions_path).unwrap();
+    let store = PersistentSessions::open(&sessions_path, 100 + 2 * crate::browser_session::domain::value_objects::IDLE_SECONDS).unwrap();
     let restored = store.get(id.clone()).await.unwrap().unwrap();
     assert_eq!(restored.credential_id(), &credential_id);
     let evidence = SessionEvidence::new(id.as_bytes().to_vec()).unwrap();
@@ -308,7 +308,7 @@ async fn minimal_session_survives_restart_and_rejects_malformed_credential_ids()
     }
     record["changes"][0]["after"]["credential_id"] = json!(" credential");
     std::fs::write(&sessions_path, format!("{record}\n")).unwrap();
-    assert!(PersistentSessions::open(&sessions_path).is_err());
+    assert!(PersistentSessions::open(&sessions_path, 100 + 2 * crate::browser_session::domain::value_objects::IDLE_SECONDS).is_err());
 }
 
 #[tokio::test]
