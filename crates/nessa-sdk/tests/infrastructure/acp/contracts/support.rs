@@ -259,7 +259,23 @@ pub(super) fn test_opencode_binding_on_a_model_that_takes_images(
     mode: &str,
     capacity: usize,
 ) -> (TempDir, OpencodeAcpProvider) {
-    let (root, config, model) = opencode_configuration(mode, capacity);
+    test_opencode_binding_on_a_model_that_takes_images_from(mode, capacity, None)
+}
+
+/// The same, with the byte source composition would have supplied.
+///
+/// Image input needs three things to agree: the model's recorded limits, the
+/// agent's advertised prompt capability, and somewhere to read the bytes from.
+/// The binding owns only the last of those, so it is the one a test has to be
+/// able to vary. The source is never read here — what is asserted is what the
+/// session declares, not what it sends.
+pub(super) fn test_opencode_binding_on_a_model_that_takes_images_from(
+    mode: &str,
+    capacity: usize,
+    images: Option<Arc<dyn UserImageSource>>,
+) -> (TempDir, OpencodeAcpProvider) {
+    let (root, mut config, model) = opencode_configuration(mode, capacity);
+    config.images = images;
     let model = ModelMetadata::try_from(ModelMetadataDto {
         provider: "opencode".into(),
         model_id: model.key().model_id().into(),
@@ -303,6 +319,15 @@ pub(super) fn test_opencode_binding_on_a_model_that_takes_images(
         )
         .unwrap(),
     )
+}
+
+/// A byte source that exists and is never asked. Declaring image input needs
+/// composition to have supplied one; it does not need it to answer.
+pub(super) struct UnreadImages;
+impl UserImageSource for UnreadImages {
+    fn read(&self, _: ImageReference) -> UserImageFuture<'_> {
+        unreachable!("these tests assert on declared capability, never on a prompt")
+    }
 }
 
 pub(super) fn prompt(text: &str) -> ExecutionRequest {

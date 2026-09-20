@@ -228,23 +228,52 @@ async fn an_edit_approval_reaches_the_host_with_what_it_would_change() {
     );
 }
 
-/// Opencode's `initialize` advertises image prompts, and this binding declines
-/// to pass that on. The reason is not Opencode: the shared worker builds every
-/// `session/prompt` as a single text block, so a session that declared images
-/// would be offering a modality with no way to reach the process — a caller
-/// that took the offer would have its picture silently left behind.
+/// Image input is offered exactly when composition supplied a byte source, and
+/// never otherwise.
+///
+/// This binding declared text-only for a while, because the shared worker built
+/// every `session/prompt` as a single text block and an image declared here had
+/// nowhere to go. The worker now carries image blocks, so the honest answer
+/// flipped: withholding the modality is what would leave a caller's picture
+/// behind. Both directions are asserted, because one alone passes on a binding
+/// that ignores the source and hardcodes the answer either way.
+///
+/// The model is one that takes images. The fixture's own model is text-only,
+/// and `EffectiveCapabilities` intersects the two, so through that model the
+/// bit would come out text whatever the binding said.
 #[tokio::test]
-async fn a_session_offers_only_the_modality_a_prompt_can_carry() {
+async fn a_session_offers_image_input_exactly_when_it_has_somewhere_to_read_bytes() {
     let _process_slot = process_test_slot().await;
+    let (root, binding) = test_opencode_binding_on_a_model_that_takes_images_from(
+        "echo",
+        16,
+        Some(Arc::new(UnreadImages)),
+    );
+    let opened = binding.open(None).await.unwrap();
+    let features = opened.session.capabilities().features();
+    assert!(features.input().text());
+    assert!(
+        features.input().image(),
+        "a binding with a byte source withheld the model's image input"
+    );
+    // Nothing Opencode serves sends an image back.
+    assert!(!features.output().image());
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
+
     let (root, binding) = test_opencode_binding_on_a_model_that_takes_images("echo", 16);
     let opened = binding.open(None).await.unwrap();
     let features = opened.session.capabilities().features();
     assert!(features.input().text());
     assert!(
         !features.input().image(),
-        "the binding passed the model's image input through"
+        "a binding with no byte source offered an image it could not read"
     );
-    assert!(!features.output().image());
     opened
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))

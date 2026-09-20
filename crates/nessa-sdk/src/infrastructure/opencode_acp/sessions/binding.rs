@@ -167,14 +167,26 @@ impl OpencodeAcpProvider {
                 "Opencode requires a model served through OpenCode Zen".into(),
             ));
         }
-        // Opencode's `initialize` advertises image prompts, but this binding
-        // cannot offer one: the shared ACP worker builds every `session/prompt`
-        // as a single text block, so an image declared here would be a
-        // capability with no way to reach the process. Text in, text out, until
-        // the worker can carry an image block.
         let text = Modalities::new(true, false, false).expect("text modality is nonempty");
+        // Image input is offered only when composition supplied the bytes'
+        // source, the same rule the Claude binding states. The model's own
+        // metadata and Opencode's advertised prompt capabilities narrow it
+        // further; neither can widen it.
+        //
+        // This binding declared text-only for a while, and the reason has since
+        // expired: the shared worker built every `session/prompt` as a single
+        // text block, so an image declared here had no way to reach the
+        // process. It now builds text and image blocks and gates them on
+        // `promptCapabilities.image` together with a byte source, so the
+        // capability is deliverable and withholding it is what would be the
+        // false statement. Opencode's `initialize` does advertise image
+        // prompts — that was measured against 1.18.31 — and
+        // `opencode/mimo-v2.5-free` in the shipped catalogue takes them, so
+        // this is a model a person can select today.
+        let input = Modalities::new(true, config.images.is_some(), false)
+            .expect("text modality is nonempty");
         let restrictions = BindingRestrictions::new(
-            ModelFeatures::new(text, text, true, false),
+            ModelFeatures::new(input, text, true, false),
             // Binding ceilings, not model or Opencode facts. OpenCode Zen
             // reports nothing about the windows of the models it serves — and
             // rotates which ones it serves — so these bound what this binding
