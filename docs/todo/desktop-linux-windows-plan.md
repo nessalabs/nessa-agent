@@ -1,6 +1,7 @@
 # Plan: ship the desktop app on Linux and Windows
 
 Status: TODO. macOS is done. Linux and Windows are not started.
+Tracking issue: [nessalabs/nessa-agent#69](https://github.com/nessalabs/nessa-agent/issues/69).
 
 This plan is written in plain language so anyone on the team can follow it.
 Diagrams use Mermaid and render on GitHub.
