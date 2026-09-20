@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 nessa-sdk = { path = "../nessa-sdk" }
+nessa-images = { path = "../nessa-images" }
 nessa-local-storage = { path = "../nessa-local-storage" }
 nessa-auth = { path = "../nessa-auth" }
 axum = { version = "0.8", features = ["ws"] }
@@ -27,6 +28,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tungstenite = "0.29"
 uuid = { version = "1", features = ["v4"] }
 getrandom = "0.3"
+sha2 = "0.10"
+subtle = "2.6"
 
 [target.'cfg(unix)'.dependencies]
 # Opening the gateway log without following a link where it should be.
@@ -34,4 +37,7 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { version = "1", features = ["test-util"] }
+tokio = { version = "1", features = ["test-util", "io-util"] }
+# Only to build the pixels a substitute system decoder hands back. The image
+# library this workspace already compiles; nothing new is built.
+image = { version = "0.25.10", default-features = false }

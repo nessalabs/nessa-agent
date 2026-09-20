@@ -5,7 +5,9 @@ use crate::application::agent_execution::{
     sessions::{validation::VALIDATION_CALLS, StorageFuture},
 };
 use crate::domain::agent_execution::{
-    executions::MessageChunk, prompts::PromptText, sessions::ExecutionSessionId,
+    executions::MessageChunk,
+    prompts::{PromptText, UserMessage},
+    sessions::ExecutionSessionId,
 };
 use crate::infrastructure::session_storage::InMemoryStorage;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,7 +36,7 @@ fn invocation(id: &str, complete: bool) -> InvocationRecord {
         submission: SubmissionMode::Immediate,
         request: ExecutionRequest {
             execution_id: id.clone(),
-            user_message: PromptText::new("input").unwrap(),
+            user_message: UserMessage::text_only(PromptText::new("input").unwrap()),
             estimated_input_tokens: 1,
             reserved_output_tokens: 1,
         },

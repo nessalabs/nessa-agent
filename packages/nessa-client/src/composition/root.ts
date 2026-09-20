@@ -12,6 +12,8 @@ import {
   waitForSessionChallenge,
 } from "../application/product-connect-flow.js"
 import type { ProductSessionReady } from "../protocol/product-types.js"
+import { attachmentUploadUrl } from "../application/attachment-upload.js"
+import { fetchAttachmentUpload } from "../transport/attachment-upload.js"
 import { waitForSocketOpen, WireSession } from "../transport/index.js"
 
 export type EstablishedSession = {
@@ -116,7 +118,22 @@ export async function establishManagedSession(
         }),
     },
   )
-  return { managed, profile: initial.profile, newRequestId: () => crypto.randomUUID() }
+  return {
+    managed,
+    profile: initial.profile,
+    newRequestId: () => crypto.randomUUID(),
+    // Uploads go to the gateway this session is connected to, and nowhere a
+    // caller names later. `fetch` is looked up per request, so a runtime
+    // without one fails at the upload, as a typed `unreachable`.
+    upload: fetchAttachmentUpload(attachmentUploadUrl(resolved.url), (url, init) =>
+      globalThis.fetch(url, init),
+    ),
+    // The real clock for an upload's deadline; tests of the API pass their own.
+    uploadTimer: (ms: number, elapsed: () => void) => {
+      const timer = setTimeout(elapsed, ms)
+      return () => clearTimeout(timer)
+    },
+  }
 }
 
 async function loadCredential(

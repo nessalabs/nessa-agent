@@ -19,7 +19,7 @@ use crate::domain::agent_execution::executions::{ExecutionId, ExecutionOutcome, 
 use crate::domain::agent_execution::permissions::{
     PermissionCancellationReason, PermissionOfferPolicy, PermissionOptionId,
 };
-use crate::domain::agent_execution::prompts::PromptText;
+use crate::domain::agent_execution::prompts::{PromptText, UserMessage};
 use crate::domain::agent_execution::tools::ToolCallUpdate;
 use crate::domain::common::value_objects::TokenLimits;
 use crate::domain::effective_capabilities::value_objects::{
@@ -147,7 +147,7 @@ async fn a_non_claude_profile_uses_shared_sessions_permissions_and_transport() {
     // The fixture uses a different tool schema and permits a smaller reservation.
     for id in ["first", "second"] {
         let session = opened.session.clone();
-        let user_message = PromptText::new("read").unwrap();
+        let user_message = UserMessage::text_only(PromptText::new("read").unwrap());
         let pending = tokio::spawn(async move {
             session
                 .execute(ExecutionRequest {
@@ -248,6 +248,7 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
         model_id: "fixture".into(),
         display_name: "Fixture".into(),
         input: text,
+        image_input: None,
         output: text,
         tool_use: true,
         reasoning: false,
@@ -281,6 +282,8 @@ pub(crate) fn profile_setup() -> (tempfile::TempDir, AcpConfig, EffectiveCapabil
         kill_timeout: Duration::from_secs(10),
         event_capacity: 16,
         max_frame_bytes: 4096,
+        max_incoming_frame_bytes: 4096,
+        images: None,
     };
     config.validate().unwrap();
     (root, config, capabilities)

@@ -27,6 +27,7 @@ fn projection_describes_the_validating_snapshot_and_cannot_change_it() {
             image: true,
             ..text
         },
+        image_input: None,
         output: text,
         tool_use: true,
         reasoning: true,

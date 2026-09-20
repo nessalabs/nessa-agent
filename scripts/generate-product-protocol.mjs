@@ -79,6 +79,41 @@ for (const [name, def] of Object.entries(schema.$defs)) {
   ts += "}\n"
   if (!externalRust) rs += "}\n"
 }
+/**
+ * The one value every `attachments` array in the schema agrees on, so a bound
+ * that drifted between two commands is a generation failure rather than a
+ * constant the client quietly copies from whichever array was read first.
+ */
+function attachmentArrayBound(keyword) {
+  const arrays = Object.entries(schema.$defs).flatMap(([name, def]) =>
+    Object.entries(def.properties ?? {})
+      .filter(
+        ([field, node]) =>
+          field === "attachments" && node.items?.$ref?.endsWith("/ImageAttachment"),
+      )
+      .map(([, node]) => [name, node[keyword]]),
+  )
+  if (arrays.length === 0) throw new Error(`No attachments array carries ${keyword}`)
+  const [[, bound]] = arrays
+  const disagreeing = arrays.filter(([, value]) => value !== bound)
+  if (bound === undefined || disagreeing.length > 0)
+    throw new Error(
+      `attachments arrays disagree on ${keyword}: ${JSON.stringify(arrays)}`,
+    )
+  return bound
+}
+const image = schema.$defs.ImageAttachment.properties
+// Named for what a reader of the client says, not for the schema's field paths.
+const bounds = {
+  maxImageBytes: image.size.maximum,
+  imageMimeTypes: image.mimeType.enum,
+  maxMessageImages: attachmentArrayBound("maxItems"),
+  maxMessageImageBytes: attachmentArrayBound("x-maxTotalBytes"),
+  maxUploadBytes: schema.$defs.AttachmentBeginParams.properties.size.maximum,
+}
+ts += `${doc(
+  "Bounds the product schema puts on attachments, generated from it so no copy of a number can drift.",
+)}export const bounds = ${JSON.stringify(bounds)} as const\n`
 for (const [kind, entries] of [
   ["Method", manifest.methods],
   ["Event", manifest.events],

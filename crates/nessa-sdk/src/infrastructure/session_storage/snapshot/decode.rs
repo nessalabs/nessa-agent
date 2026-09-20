@@ -180,6 +180,9 @@ impl<'de> Visitor<'de> for Seed {
                 }
                 return Ok(());
             };
+            if !self.shape.allows(&key) {
+                return Err(de::Error::custom("journal image has an unknown field"));
+            }
             has_index |= key == "index";
             fields += 1;
             if fields > 32 {

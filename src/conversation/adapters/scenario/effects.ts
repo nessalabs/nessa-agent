@@ -1,5 +1,11 @@
-import type { ConversationEffects } from "../../application/ports"
+import { imageAttachmentsProblem } from "@nessa/client"
+import {
+  AttachmentStagingError,
+  SubmissionRefusedError,
+  type ConversationEffects,
+} from "../../application/ports"
 import type { ConversationView, Submission } from "../../application/view"
+import { STORED_IMAGE_TYPES } from "../../model"
 
 /** Explicit development/test injection only; production composition always uses the gateway. */
 export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffects {
@@ -11,11 +17,21 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
     return view
   }
   const send = async (input: Submission) => {
+    // A substitute that cannot refuse is a substitute that proves nothing. The
+    // gateway adapter is held to the client's verdict on a message's images, so
+    // this one asks the client the same question and refuses the same way.
+    const problem = imageAttachmentsProblem(input.attachments)
+    if (problem) {
+      const refused = new SubmissionRefusedError("invalid-request")
+      refused.message = `Invalid message attachments: ${problem}`
+      throw refused
+    }
     const view = get(input.conversationId)
     if (!view.messages.some((message) => message.executionId === input.executionId)) {
       view.messages.push({
         executionId: input.executionId,
         userText: input.text,
+        attachments: input.attachments,
         parts: [
           { offset: 0, kind: "thought", text: "", toolId: "" },
           { offset: 1, kind: "text", text: input.text, toolId: "" },
@@ -37,7 +53,15 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
           pending: [],
           permissions: [],
           tools: [],
-          capabilities: { queue: true, steer: false, resume: false, permissions: false },
+          // The echo scenario stands in for an agent that takes images, so the
+          // attach-and-send path can be driven with no gateway.
+          capabilities: {
+            queue: true,
+            steer: false,
+            resume: false,
+            permissions: false,
+            imageInput: true,
+          },
           truncated: false,
           queueComplete: true,
         })
@@ -48,6 +72,16 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
     },
     send,
     steer: send,
+    async stageAttachment(id, file, _bytes, signal) {
+      get(id)
+      if (signal.aborted) throw new AttachmentStagingError("interrupted")
+      // Holds nothing and converts nothing: a scenario has no storage and no
+      // image library. It answers as a gateway would for the four encodings
+      // that need no conversion, and says so for anything that would.
+      const mimeType = STORED_IMAGE_TYPES.find((type) => type === file.mimeType)
+      if (!mimeType) throw new AttachmentStagingError("unsupported-image")
+      return { digest: file.digest, mimeType, size: file.size }
+    },
     async reorder(id, executionIds) {
       const view = get(id)
       if (

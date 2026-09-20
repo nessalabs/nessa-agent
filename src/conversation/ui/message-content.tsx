@@ -4,6 +4,7 @@ import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
 import { Button } from "@nessa-ui/react/button"
 import type { MessageContent } from "../model"
 import { pastedTextLabel } from "./composer-content"
+import { MessageImages } from "./message-images"
 
 type MarkdownNode = {
   type: string
@@ -20,7 +21,8 @@ function pastedDocument(content: MessageContent) {
   const pastes = new Map<string, string>()
   const source = content
     .map((part, index) => {
-      if (part.type === "file") return ""
+      // Files and images are not Markdown; `MessageImages` paints them below.
+      if (part.type === "file" || part.type === "image-reference") return ""
       if (part.type === "text") return part.text
       const token = `${prefix}${index}z`
       pastes.set(token, part.text)
@@ -108,41 +110,48 @@ export function MessageContentView({
 }) {
   const document = React.useMemo(() => pastedDocument(content), [content])
   return (
-    <MessageMarkdown
-      className="text-inherit [&_p]:whitespace-pre-wrap [&_a]:text-inherit [&_blockquote]:text-inherit [&_th]:text-foreground [&_code]:text-foreground"
-      remarkPlugins={[document.plugin]}
-      components={{
-        span: ({ node, children, ...props }) => {
-          const token = node?.properties["data-paste-slot"]
-          const text = typeof token === "string" ? document.pastes.get(token) : undefined
-          if (text === undefined) return <span {...props}>{children}</span>
-          return (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="nessa-pasted-pill inline-flex h-auto max-w-full gap-1 rounded-full px-1 py-0 align-baseline text-inherit"
-              onClick={() => onOpenPaste(text)}
-            >
-              <Clipboard aria-hidden="true" className="size-3 shrink-0" />
-              <span className="truncate">{pastedTextLabel(text)}</span>
-            </Button>
-          )
-        },
-        // A table containing slots has synthetic source; do not expose its
-        // Markdown-source copy control. Ordinary tables keep the default.
-        ...(document.pastes.size
-          ? {
-              table: ({
-                node: _node,
-                ...props
-              }: React.ComponentProps<"table"> & { node?: unknown }) => (
-                <table {...props} />
-              ),
-            }
-          : {}),
-      }}
-    >
-      {document.source}
-    </MessageMarkdown>
+    <>
+      {/* An image-only turn has no text; an empty Markdown block would only add a gap. */}
+      {document.source.trim() ? (
+        <MessageMarkdown
+          className="text-inherit [&_p]:whitespace-pre-wrap [&_a]:text-inherit [&_blockquote]:text-inherit [&_th]:text-foreground [&_code]:text-foreground"
+          remarkPlugins={[document.plugin]}
+          components={{
+            span: ({ node, children, ...props }) => {
+              const token = node?.properties["data-paste-slot"]
+              const text =
+                typeof token === "string" ? document.pastes.get(token) : undefined
+              if (text === undefined) return <span {...props}>{children}</span>
+              return (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="nessa-pasted-pill inline-flex h-auto max-w-full gap-1 rounded-full px-1 py-0 align-baseline text-inherit"
+                  onClick={() => onOpenPaste(text)}
+                >
+                  <Clipboard aria-hidden="true" className="size-3 shrink-0" />
+                  <span className="truncate">{pastedTextLabel(text)}</span>
+                </Button>
+              )
+            },
+            // A table containing slots has synthetic source; do not expose its
+            // Markdown-source copy control. Ordinary tables keep the default.
+            ...(document.pastes.size
+              ? {
+                  table: ({
+                    node: _node,
+                    ...props
+                  }: React.ComponentProps<"table"> & { node?: unknown }) => (
+                    <table {...props} />
+                  ),
+                }
+              : {}),
+          }}
+        >
+          {document.source}
+        </MessageMarkdown>
+      ) : null}
+      <MessageImages content={content} />
+    </>
   )
 }

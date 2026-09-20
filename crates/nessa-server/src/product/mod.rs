@@ -1,5 +1,6 @@
 //! Mandatory authenticated product WebSocket profile served at `/session`.
 
+mod attachment;
 mod generated;
 mod socket;
 mod state;

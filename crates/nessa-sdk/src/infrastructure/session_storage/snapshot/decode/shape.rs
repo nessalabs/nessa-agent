@@ -5,6 +5,7 @@ use crate::application::agent_execution::executions::{
 };
 use crate::domain::agent_execution::{
     permissions::PermissionOption,
+    prompts::UserMessage,
     tools::{FileLocation, ToolContent},
 };
 use std::mem::size_of;
@@ -13,6 +14,10 @@ use Shape::*;
 pub(super) const LARGE_STRING: usize = 32 * 1024 * 1024;
 pub(super) const ERROR_BYTES: usize = 1024 * 1024;
 pub(super) const KEY_BYTES: usize = 128;
+/// `sha256:` and 64 hexadecimal digits: the one text form of a digest.
+const DIGEST_BYTES: usize = 71;
+/// Longer than any image media type the domain names (`image/jpeg` is ten).
+const MEDIA_TYPE_BYTES: usize = 16;
 
 #[derive(Clone, Copy)]
 pub(super) enum Shape {
@@ -22,6 +27,8 @@ pub(super) enum Shape {
     Changes,
     Change,
     Metadata,
+    Images,
+    Image,
     Provider,
     Actor,
     Events,
@@ -75,6 +82,9 @@ impl Shape {
             (Change, "scheduling") => Scheduling,
             (Metadata, "execution_id") | (Event, "execution_id" | "message_id") => Text(256),
             (Metadata, "user_message") => Text(ExecutionRequest::MAX_MESSAGE_BYTES),
+            (Metadata, "user_images") => Images,
+            (Image, "digest") => Text(DIGEST_BYTES),
+            (Image, "media_type") => Text(MEDIA_TYPE_BYTES),
             (Event, "update") => Update,
             (Update, "Text" | "Thought") => Text(MAX_MESSAGE_CHUNK_BYTES),
             (Update, "Tool") | (Review, "tool") => Tool,
@@ -84,6 +94,7 @@ impl Shape {
             (Tool, "id") | (Review, "id" | "execution_id" | "tool_id" | "session_id") => Text(256),
             (Review, "options") => Options,
             (Error, "BeforeInvocationHook") => Generic,
+            (Error, "ImageInputMediaType") => Text(MEDIA_TYPE_BYTES),
             (
                 Error,
                 "Configuration" | "Unsupported" | "InvalidInput" | "Protocol" | "Transport",
@@ -109,8 +120,15 @@ impl Shape {
             _ => Generic,
         }
     }
+    /// Whether an object of this shape may hold `key` at all. A saved image is
+    /// exactly a digest, a media type, and a size: anything else is refused
+    /// before its value is read, rather than after the record is built.
+    pub(super) fn allows(self, key: &str) -> bool {
+        !matches!(self, Image) || matches!(key, "digest" | "media_type" | "size")
+    }
     pub(super) fn element(self) -> Self {
         match self {
+            Self::Images => Self::Image,
             Self::Changes => Self::Change,
             Self::Events => Self::Event,
             Self::Hooks => Self::Hook,
@@ -127,6 +145,9 @@ impl Shape {
             Self::Hooks => 128,
             Self::Reorders => usize::MAX,
             Self::QueueEntries | Self::QueueIds => 64,
+            // The message's own constructor refuses more; refuse them here
+            // before the excess references are built.
+            Self::Images => UserMessage::MAX_IMAGES,
             // Collection slots alone cannot exceed the live 32 MiB tool/review
             // budget, even when every element carries an empty payload.
             Self::Content => LARGE_STRING / size_of::<ToolContent>(),

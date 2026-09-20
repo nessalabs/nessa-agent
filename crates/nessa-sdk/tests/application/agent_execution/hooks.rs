@@ -76,7 +76,7 @@ fn hook(index: usize, calls: &Calls) -> RecordingHook {
 fn request(id: &str) -> ExecutionRequest {
     ExecutionRequest {
         execution_id: ExecutionId::new(id).unwrap(),
-        user_message: PromptText::new("hello").unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("hello").unwrap()),
         estimated_input_tokens: 1,
         reserved_output_tokens: 100,
     }

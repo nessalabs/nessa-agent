@@ -1,3 +1,4 @@
+use nessa_sdk::domain::agent_execution::prompts::ImageReference;
 use serde::Serialize;
 
 /// A bounded replacement view. Its revision is transient and is not a durable event cursor.
@@ -29,6 +30,7 @@ pub struct ConversationMessage {
     pub event_count: usize,
     pub execution_id: String,
     pub user_text: String,
+    pub attachments: Vec<ConversationAttachment>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub steering_target: Option<String>,
     pub status: ConversationMessageStatus,
@@ -40,7 +42,25 @@ pub struct ConversationMessage {
 pub struct ConversationPending {
     pub execution_id: String,
     pub text: String,
+    pub attachments: Vec<ConversationAttachment>,
     pub mode: ConversationPendingMode,
+}
+/// One image a turn referred to. The view never carries its bytes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationAttachment {
+    pub digest: String,
+    pub mime_type: String,
+    pub size: u64,
+}
+impl From<&ImageReference> for ConversationAttachment {
+    fn from(image: &ImageReference) -> Self {
+        Self {
+            digest: image.digest().to_string(),
+            mime_type: image.media_type().as_str().into(),
+            size: image.size(),
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -69,11 +89,14 @@ pub struct ConversationTool {
     pub status: String,
 }
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConversationCapabilities {
     pub queue: bool,
     pub steer: bool,
     pub resume: bool,
     pub permissions: bool,
+    /// The opened agent advertised image input and this gateway can supply the bytes.
+    pub image_input: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

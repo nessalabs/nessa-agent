@@ -324,8 +324,10 @@ async fn operation_capabilities_follow_successful_negotiation_and_restoration() 
         assert_eq!(
             opened.session.operation_capabilities(),
             OperationCapabilities {
+                negotiated: true,
                 native_steering: false,
                 session_resume: mode != "resume-unsupported",
+                image_input: false,
             }
         );
         opened
@@ -339,8 +341,10 @@ async fn operation_capabilities_follow_successful_negotiation_and_restoration() 
     assert_eq!(
         opened.session.operation_capabilities(),
         OperationCapabilities {
+            negotiated: true,
             native_steering: true,
             session_resume: true,
+            image_input: false,
         }
     );
     opened
@@ -355,8 +359,10 @@ async fn operation_capabilities_follow_successful_negotiation_and_restoration() 
     assert_eq!(
         opened.session.operation_capabilities(),
         OperationCapabilities {
+            negotiated: true,
             native_steering: false,
             session_resume: true,
+            image_input: false,
         }
     );
     let active = start(&opened, "restored").await;
@@ -415,7 +421,7 @@ async fn oversized_steering_is_rejected_without_interrupting_the_active_prompt()
         ExecutionUpdate::Message(MessageChunk::text("running:active-survives"))
     );
     let oversized = ExecutionRequest {
-        user_message: PromptText::new("\u{0}".repeat(2048)).unwrap(),
+        user_message: UserMessage::text_only(PromptText::new("\u{0}".repeat(2048)).unwrap()),
         ..prompt("oversized-steering")
     };
     assert!(matches!(
@@ -424,7 +430,7 @@ async fn oversized_steering_is_rejected_without_interrupting_the_active_prompt()
             .steer(ExecutionId::new("active-survives").unwrap(), oversized)
             .await
             .map_err(|failure| failure.into_error()),
-        Err(AgentError::InvalidInput(_))
+        Err(AgentError::MessageTooLarge { .. })
     ));
     assert!(!active.is_finished());
     assert!(!root.path().join("cancel-observed").exists());

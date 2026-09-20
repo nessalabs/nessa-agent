@@ -86,7 +86,7 @@ mod gateway {
             revision: 1,
         }
     }
-    fn chat_state() -> ProductRouteState {
+    pub(super) fn chat_state() -> ProductRouteState {
         let (mut state, _) = fixture(MembershipRole::Member);
         let snapshots = [
             chat_snapshot("owner-phone", "owner", "organization", true),
@@ -103,7 +103,7 @@ mod gateway {
         state.verifier = authority;
         state
     }
-    async fn chat_session(state: &ProductRouteState, credential: &str) -> AuthenticatedSession {
+    pub(super) async fn chat_session(state: &ProductRouteState, credential: &str) -> AuthenticatedSession {
         AuthenticateSession {
             verifier: state.verifier.as_ref(),
             access: state.access.as_ref(),
@@ -116,7 +116,7 @@ mod gateway {
         .await
         .unwrap()
     }
-    async fn chat_request(
+    pub(super) async fn chat_request(
         state: &ProductRouteState,
         session: &AuthenticatedSession,
         method: &str,
@@ -160,7 +160,7 @@ mod gateway {
             }
         }
     }
-    fn send_command(peer: &TestPeer, id: &str, method: &str, params: serde_json::Value) {
+    pub(super) fn send_command(peer: &TestPeer, id: &str, method: &str, params: serde_json::Value) {
         peer.input
             .send(Ok(Message::Text(
                 json!({"type":"req","id":id,"method":method,"params":params})
@@ -169,7 +169,7 @@ mod gateway {
             )))
             .unwrap();
     }
-    async fn response(peer: &mut TestPeer) -> serde_json::Value {
+    pub(super) async fn response(peer: &mut TestPeer) -> serde_json::Value {
         let Message::Text(text) = peer.message().await else {
             panic!("text response expected")
         };
@@ -315,10 +315,16 @@ mod gateway {
             .ok
         );
         for params in [
-            json!({"conversationId":"00000000-0000-4000-8000-00000000000A","requestId":"send","executionId":"execution","text":"hello"}),
-            json!({"conversationId":id,"requestId":"😀".repeat(65),"executionId":"execution","text":"hello"}),
-            json!({"conversationId":id,"requestId":"send","executionId":"😀".repeat(65),"text":"hello"}),
-            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"😀".repeat(2049)}),
+            json!({"conversationId":"00000000-0000-4000-8000-00000000000A","requestId":"send","executionId":"execution","text":"hello","attachments":[]}),
+            json!({"conversationId":id,"requestId":"😀".repeat(65),"executionId":"execution","text":"hello","attachments":[]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"😀".repeat(65),"text":"hello","attachments":[]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"😀".repeat(2049),"attachments":[]}),
+            // One contract: the attachment list is always present, and a message is never empty.
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello"}),
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":" \n","attachments":[]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[{"digest":"sha256:00","mimeType":"image/png","size":1}]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[{"digest":format!("sha256:{}", "0".repeat(64)),"mimeType":"image/svg+xml","size":1}]}),
+            json!({"conversationId":id,"requestId":"send","executionId":"execution","text":"hello","attachments":[{"digest":format!("sha256:{}", "0".repeat(64)),"mimeType":"image/png","size":0}]}),
         ] {
             let response =
                 chat_request(&state, &session, "conversation.send", params).await;
@@ -330,7 +336,7 @@ mod gateway {
                 &state,
                 &session,
                 "conversation.send",
-                json!({"conversationId":id,"requestId":"😀".repeat(64),"executionId":"😀".repeat(64),"text":"😀".repeat(2048)}),
+                json!({"conversationId":id,"requestId":"😀".repeat(64),"executionId":"😀".repeat(64),"text":"😀".repeat(2048),"attachments":[]}),
             )
             .await
             .ok
@@ -481,7 +487,7 @@ mod gateway {
                 &peer,
                 execution,
                 "conversation.send",
-                json!({"conversationId":id,"requestId":execution,"executionId":execution,"text":execution}),
+                json!({"conversationId":id,"requestId":execution,"executionId":execution,"text":execution,"attachments":[]}),
             );
             assert_eq!(response(&mut peer).await["ok"], true);
             if execution == "running" {

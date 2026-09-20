@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/nessa-mcp", "crates/nessa-server", "crates/nessa-auth", "crates/nessa-local-storage", "crates/nessa-sdk", "src-tauri"]
+members = ["crates/nessa-mcp", "crates/nessa-server", "crates/nessa-auth", "crates/nessa-local-storage", "crates/nessa-sdk", "crates/nessa-images", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -18,3 +18,16 @@ strip = true
 
 [profile.dev]
 debug = "line-tables-only"
+
+# Dependencies are optimized even in a development build. Our own crates are
+# not, so they still build fast and debug honestly; a dependency is code we are
+# not stepping through anyway, and it is built once and cached.
+#
+# This is here because of what image work costs unoptimized. Fitting one Retina
+# screenshot — decode, Lanczos3 down to 2,000 px, encode — takes 3.2s of CPU
+# with the codecs built as they come, and 0.11s with them optimized. The
+# shipped app is a release build and never saw it; `just start` did, on every
+# image anybody attached, which is how the feature came to look slow when it
+# was the profile.
+[profile.dev.package."*"]
+opt-level = 2

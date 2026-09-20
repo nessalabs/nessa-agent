@@ -73,6 +73,7 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
             for reject_audit in [false, true] {
                 let (root, mut config, capabilities) = profile_setup();
                 config.max_frame_bytes = 16 * 1024 * 1024;
+                config.max_incoming_frame_bytes = 16 * 1024 * 1024;
                 config.shutdown_grace = Duration::from_millis(20);
                 let socket = root.path().join("control.sock");
                 let listener = UnixListener::bind(&socket).unwrap();
@@ -85,7 +86,10 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                 let mut process = tokio::process::Command::new("/usr/bin/python3");
                 process.args(["-c", CHILD, socket.to_str().unwrap(), &frames]);
                 let mut scope = ProcessScope::spawn(process).unwrap();
-                let mut reader = Reader::new(scope.stdout.take().unwrap(), config.max_frame_bytes);
+                let mut reader = Reader::new(
+                    scope.stdout.take().unwrap(),
+                    config.max_incoming_frame_bytes,
+                );
                 assert_eq!(
                     reader.next().await.unwrap().method.as_deref(),
                     Some("ready")
@@ -157,6 +161,7 @@ async fn nested_startup_response_writes_observe_remaining_rpc_deadline() {
                     active: None,
                     steering: None,
                     steering_supported: false,
+                    agent_accepts_images: false,
                     operation_capabilities,
                     permissions: HashMap::new(),
                     shutdown_deadline: None,

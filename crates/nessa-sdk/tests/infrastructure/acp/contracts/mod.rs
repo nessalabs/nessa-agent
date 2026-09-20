@@ -3,6 +3,7 @@
 //! ```text
 //! ACP tests -> shared fixture setup -> Python subprocess
 //!           -> sessions / executions / steering / permissions / audit / restoration
+//!           -> images (advertised prompt capability, byte source, content blocks)
 //! ```
 //! Arrows show which test layer exercises each feature.
 
@@ -10,6 +11,7 @@ mod audit;
 mod configuration;
 mod executions;
 mod identity;
+mod images;
 mod permissions;
 mod prompts;
 mod restoration;

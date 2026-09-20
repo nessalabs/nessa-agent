@@ -1,4 +1,5 @@
 use crate::agents::application::{AgentProbe, SharedAgentReadiness};
+use crate::attachments::{application::AttachmentService, entrypoint::http::UploadRoute};
 use crate::conversation::application::ConversationService;
 use axum::extract::FromRef;
 use nessa_auth::{
@@ -25,6 +26,11 @@ pub struct ProductRouteState {
     pub(crate) browser_session_origin: Option<String>,
     pub(crate) requests: Arc<Semaphore>,
     pub(crate) controls: Arc<Semaphore>,
+    /// Beginning an upload has capacity of its own. It opens no provider, so it
+    /// does not belong behind reads and opens; and it sweeps tickets, reads
+    /// holds, and writes audit records, so it must never be what keeps a
+    /// permission answer or a close from being admitted.
+    pub(crate) upload_begins: Arc<Semaphore>,
     pub(crate) settings: SessionSettings,
     pub(crate) gateway: Resource,
     pub(crate) audience: AudienceId,
@@ -33,6 +39,7 @@ pub struct ProductRouteState {
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) policy: Arc<dyn PolicyEvaluator>,
     pub(crate) conversations: Option<Arc<ConversationService>>,
+    pub(crate) attachments: Option<AttachmentService>,
     pub(crate) admin: Option<Arc<dyn CredentialAdmin>>,
     pub(crate) uptime_clock: Arc<dyn crate::app::ports::Clock>,
     pub(crate) agent_readiness: Arc<SharedAgentReadiness>,
@@ -48,6 +55,15 @@ pub struct ProductRouteState {
 impl FromRef<ProductRouteState> for Arc<SharedAgentReadiness> {
     fn from_ref(state: &ProductRouteState) -> Self {
         state.agent_readiness.clone()
+    }
+}
+
+/// The upload route is given the attachment service and nothing else. It
+/// authenticates nobody, so it must not be able to reach a verifier, a policy,
+/// or a conversation: a ticket the socket issued is all it acts on.
+impl FromRef<ProductRouteState> for UploadRoute {
+    fn from_ref(state: &ProductRouteState) -> Self {
+        UploadRoute::new(state.attachments.clone())
     }
 }
 
@@ -86,6 +102,7 @@ impl ProductRouteState {
             settings: SessionSettings::default(),
             requests: Arc::new(Semaphore::new(128)),
             controls: Arc::new(Semaphore::new(32)),
+            upload_begins: Arc::new(Semaphore::new(16)),
             gateway: Resource::new(gateway_organization_id, gateway_id),
             audience,
             verifier: dependencies.verifier,
@@ -94,6 +111,7 @@ impl ProductRouteState {
             policy: dependencies.policy,
             admin: None,
             conversations: None,
+            attachments: None,
             uptime_clock: dependencies.uptime_clock,
             agent_readiness: Arc::new(SharedAgentReadiness::new(dependencies.agent_probe)),
         }
@@ -121,6 +139,13 @@ impl ProductRouteState {
     /// Share server-owned Agents across authenticated sockets. No socket owns cleanup.
     pub fn with_conversations(mut self, service: Arc<ConversationService>) -> Self {
         self.conversations = Some(service);
+        self
+    }
+
+    /// Share one attachment service between the socket that issues tickets and
+    /// the route that redeems them. Composed only alongside conversations.
+    pub fn with_attachments(mut self, service: AttachmentService) -> Self {
+        self.attachments = Some(service);
         self
     }
 

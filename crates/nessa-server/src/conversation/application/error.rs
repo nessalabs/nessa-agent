@@ -7,6 +7,26 @@ use std::{error::Error, fmt};
 #[derive(Clone, Debug)]
 pub enum ConversationError {
     InvalidInput,
+    /// The connected agent, or this gateway's configuration, takes no images.
+    ImagesUnsupported,
+    /// The message refers to an image this conversation has not uploaded.
+    AttachmentNotFound,
+    /// The conversation closed, but letting go of its uploads did not complete.
+    AttachmentRelease(Box<ConversationError>),
+    /// What a release of uploads could not complete, after all of it was
+    /// tried. The two are different failures and are kept apart: files still
+    /// in place, and transitions that happened without acknowledged evidence.
+    AttachmentCleanup {
+        storage_failures: usize,
+        audit_failures: usize,
+    },
+    /// Closing failed twice over: the agent did not close (or could not be
+    /// reached to close), and letting go of the uploads did not complete
+    /// either. Neither replaces the other.
+    CloseIncomplete {
+        agent: Box<ConversationError>,
+        release: Box<ConversationError>,
+    },
     NotFound,
     Capacity,
     Unavailable,
