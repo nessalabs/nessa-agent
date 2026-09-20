@@ -42,6 +42,23 @@ millisecond wall time. A single monotonic timeout covers challenge delivery and
 authentication; expiry closes with retryable `handshake_timeout` (4006). Typed close reasons distinguish
 terminal authority failures from retryable transport or dependency failures.
 
+A conversation command can open or restore an agent, which the gateway spends a
+real budget on before it can answer at all.
+[defaults/agent-startup-budgets.json](defaults/agent-startup-budgets.json) is
+the one table for that: the gateway compiles it into what it spends, and the
+client into how long it waits. A client that gave up first deleted its request
+and dropped the typed answer when it arrived, so the caller learned nothing
+about a failure the gateway had described exactly.
+
+A conversation command the gateway dispatched and refused answers with a
+`ConversationErrorCode`. The typed code is the contract; the message text is not.
+Access and routing failures are answered by the session before a conversation
+command is dispatched and carry their own codes, so this is not every code a
+conversation request can receive. `agent_startup_deadline` means the agent was
+still starting when its budget expired, so nothing reached the provider and the
+same command is safe to repeat. `agent_not_configured` and `invalid_request`
+reject the command until their cause is addressed.
+
 Credential lifecycle RPC errors distinguish `credential_conflict`,
 `credential_capacity`, and `credential_not_found` from
 `credential_store_unavailable`. The first three reject the command; they do not

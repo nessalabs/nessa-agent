@@ -1,7 +1,7 @@
 //! `attachment.begin` translates into the attachment service. The socket has
 //! already checked current access and the `conversation.write` grant.
 use super::{
-    generated::{AttachmentBeginParams, AttachmentBeginResult},
+    generated::{AttachmentBeginParams, AttachmentBeginResult, ConversationErrorCode},
     socket::{failure, success},
     state::ProductRouteState,
 };
@@ -19,10 +19,13 @@ pub(super) async fn dispatch(
     // Uploads exist to be sent to an agent. With none configured nothing is
     // kept, and the answer is the one every conversation method gives.
     let Some(attachments) = state.attachments.as_ref() else {
-        return failure(&frame.id, "agent_not_configured");
+        return failure(
+            &frame.id,
+            ConversationErrorCode::AgentNotConfigured.as_str(),
+        );
     };
     let Ok(params) = serde_json::from_value::<AttachmentBeginParams>(frame.params) else {
-        return failure(&frame.id, error_code(BeginError::InvalidRequest));
+        return failure(&frame.id, error_code(BeginError::InvalidRequest).as_str());
     };
     let context = session.context();
     // As for conversations: the credential is the verified surface, and client
@@ -47,7 +50,7 @@ pub(super) async fn dispatch(
         .await;
     match outcome {
         Ok(outcome) => success(&frame.id, &begin_result(request_id, outcome)),
-        Err(error) => failure(&frame.id, error_code(error)),
+        Err(error) => failure(&frame.id, error_code(error).as_str()),
     }
 }
 
@@ -79,17 +82,17 @@ fn begin_result(request_id: String, outcome: BeginOutcome) -> AttachmentBeginRes
     }
 }
 
-fn error_code(error: BeginError) -> &'static str {
+fn error_code(error: BeginError) -> ConversationErrorCode {
     match error {
-        BeginError::InvalidRequest => "invalid_request",
-        BeginError::ConversationNotFound => "conversation_not_found",
+        BeginError::InvalidRequest => ConversationErrorCode::InvalidRequest,
+        BeginError::ConversationNotFound => ConversationErrorCode::ConversationNotFound,
         // The same word `conversation.send` and the upload route give for the
         // same fact: this gateway's model is offered no images.
-        BeginError::ImagesUnsupported => "image_input_unsupported",
-        BeginError::Capacity => "attachment_capacity",
-        BeginError::Storage => "attachment_storage_unavailable",
-        BeginError::Audit => "audit_unavailable",
-        BeginError::Unavailable => "temporarily_unavailable",
+        BeginError::ImagesUnsupported => ConversationErrorCode::ImageInputUnsupported,
+        BeginError::Capacity => ConversationErrorCode::AttachmentCapacity,
+        BeginError::Storage => ConversationErrorCode::AttachmentStorageUnavailable,
+        BeginError::Audit => ConversationErrorCode::AuditUnavailable,
+        BeginError::Unavailable => ConversationErrorCode::TemporarilyUnavailable,
     }
 }
 

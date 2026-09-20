@@ -1,10 +1,13 @@
 //! Opening failures retain their actionable meaning at the product boundary.
 use super::{
-    error_code, permission_answer_failure, AgentError, ConversationError, ImageInputRefusal,
-    OutgoingMessage, PermissionSelectionState, StorageError,
+    error_code, permission_answer_failure, AgentError, ConversationError, ConversationErrorCode,
+    ImageInputRefusal, OutgoingMessage, PermissionSelectionState, StorageError,
 };
 use nessa_sdk::{
-    application::agent_execution::providers::UserImageError,
+    application::agent_execution::{
+        agents::{AgentStartupContext, AgentStartupPhase, AgentStartupStep},
+        providers::UserImageError,
+    },
     domain::common::value_objects::ImageMediaType,
 };
 
@@ -14,11 +17,37 @@ fn configuration_mismatch_is_not_a_transient_outage() {
         ConversationError::Storage(StorageError::IdentityMismatch),
         ConversationError::Agent(AgentError::Storage(StorageError::IdentityMismatch)),
     ] {
-        assert_eq!(error_code(&error), "conversation_configuration_changed");
+        assert_eq!(
+            error_code(&error),
+            ConversationErrorCode::ConversationConfigurationChanged
+        );
     }
     assert_eq!(
         error_code(&ConversationError::Unavailable),
-        "temporarily_unavailable"
+        ConversationErrorCode::TemporarilyUnavailable
+    );
+}
+
+#[test]
+fn startup_deadline_is_distinguished_from_other_agent_failures() {
+    for phase in [
+        AgentStartupPhase::Initialize,
+        AgentStartupPhase::Session,
+        AgentStartupPhase::Configure,
+    ] {
+        for context in [AgentStartupContext::New, AgentStartupContext::Restored] {
+            let code = error_code(&ConversationError::Agent(AgentError::StartupDeadline(
+                AgentStartupStep::new(phase, context),
+            )));
+            assert_eq!(code, ConversationErrorCode::AgentStartupDeadline);
+            assert_eq!(code.as_str(), "agent_startup_deadline");
+        }
+    }
+    // A deadline outside startup keeps the unclassified code; it says nothing
+    // about whether the command was admitted.
+    assert_eq!(
+        error_code(&ConversationError::Agent(AgentError::Deadline)),
+        ConversationErrorCode::AgentOperationFailed
     );
 }
 
@@ -35,7 +64,7 @@ fn permission_answer_failure_preserves_selection_separately_from_diagnostic_code
             panic!("response expected")
         };
         let error = response.error.expect("error response");
-        assert_eq!(error.code, "audit_unavailable");
+        assert_eq!(error.code, ConversationErrorCode::AuditUnavailable.as_str());
         assert_eq!(
             error.details.expect("typed details")["selectionState"],
             expected
@@ -54,15 +83,21 @@ fn a_close_that_failed_twice_is_named_for_the_conversation_that_did_not_close() 
         cleanup(),
         ConversationError::AttachmentRelease(Box::new(cleanup())),
     ] {
-        assert_eq!(error_code(&closed), "attachment_cleanup_unavailable");
+        assert_eq!(
+            error_code(&closed),
+            ConversationErrorCode::AttachmentCleanupUnavailable
+        );
     }
     // Not closed and not cleaned up: what the caller must act on is the close,
     // and closing again lets go of the uploads again.
     for (agent, code) in [
-        (ConversationError::Capacity, "conversation_capacity"),
+        (
+            ConversationError::Capacity,
+            ConversationErrorCode::ConversationCapacity,
+        ),
         (
             ConversationError::Agent(AgentError::Deadline),
-            "agent_operation_failed",
+            ConversationErrorCode::AgentOperationFailed,
         ),
     ] {
         let both = ConversationError::CloseIncomplete {
@@ -81,39 +116,39 @@ fn an_image_message_refused_before_acceptance_says_which_kind_of_refusal_it_was(
     for (error, code) in [
         (
             AgentError::ImageInputRefused(ImageInputRefusal::AgentDoesNotAccept),
-            "image_input_unsupported",
+            ConversationErrorCode::ImageInputUnsupported,
         ),
         (
             AgentError::ImageInputRefused(ImageInputRefusal::NotOffered),
-            "image_input_unsupported",
+            ConversationErrorCode::ImageInputUnsupported,
         ),
         (
             AgentError::ImageInputRefused(ImageInputRefusal::MediaType(ImageMediaType::Webp)),
-            "invalid_request",
+            ConversationErrorCode::InvalidRequest,
         ),
         (
             AgentError::ImageInputRefused(ImageInputRefusal::ImageTooLarge {
                 size: 9,
                 max_bytes: 6,
             }),
-            "invalid_request",
+            ConversationErrorCode::InvalidRequest,
         ),
         (
             AgentError::MessageTooLarge {
                 encoded_bytes: 17,
                 max_bytes: 16,
             },
-            "invalid_request",
+            ConversationErrorCode::InvalidRequest,
         ),
         (
             AgentError::UserImage(UserImageError::Missing),
-            "attachment_unavailable",
+            ConversationErrorCode::AttachmentUnavailable,
         ),
     ] {
         assert_eq!(error_code(&ConversationError::Agent(error)), code);
     }
     assert_eq!(
         error_code(&ConversationError::ImagesUnsupported),
-        "image_input_unsupported"
+        ConversationErrorCode::ImageInputUnsupported
     );
 }

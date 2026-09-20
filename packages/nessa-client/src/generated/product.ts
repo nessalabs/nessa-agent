@@ -522,6 +522,32 @@ export interface ConversationPart {
   /** Opaque provider message identity; only fragments with the same identity may be combined. */
   messageId?: string
 }
+/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command. */
+export const ConversationErrorCode = {
+  AgentNotConfigured: "agent_not_configured",
+  UnknownMethod: "unknown_method",
+  InvalidRequest: "invalid_request",
+  ConversationNotFound: "conversation_not_found",
+  ConversationCapacity: "conversation_capacity",
+  ConversationClosed: "conversation_closed",
+  ConversationConfigurationChanged: "conversation_configuration_changed",
+  ConversationStorageUnavailable: "conversation_storage_unavailable",
+  TemporarilyUnavailable: "temporarily_unavailable",
+  AuditUnavailable: "audit_unavailable",
+  SubmissionConflict: "submission_conflict",
+  SubmissionUnresolved: "submission_unresolved",
+  StalePermission: "stale_permission",
+  AgentStartupDeadline: "agent_startup_deadline",
+  AgentOperationFailed: "agent_operation_failed",
+  ImageInputUnsupported: "image_input_unsupported",
+  AttachmentNotFound: "attachment_not_found",
+  AttachmentUnavailable: "attachment_unavailable",
+  AttachmentCapacity: "attachment_capacity",
+  AttachmentStorageUnavailable: "attachment_storage_unavailable",
+  AttachmentCleanupUnavailable: "attachment_cleanup_unavailable",
+} as const
+export type ConversationErrorCode =
+  (typeof ConversationErrorCode)[keyof typeof ConversationErrorCode]
 /** Bounds the product schema puts on attachments, generated from it so no copy of a number can drift. */
 export const bounds = {
   maxImageBytes: 5242880,

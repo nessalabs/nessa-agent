@@ -1,0 +1,12 @@
+{
+  "note": "Budgets that have to agree across the wire when a conversation command opens or restores an agent. The gateway spends startupMs on the ACP handshake and then up to shutdownGraceMs + killTimeoutMs tearing the failed process down before it can answer, so a client that gives up sooner deletes the request and drops the typed answer when it finally arrives — the caller is told 'command failed' for a failure the gateway described exactly. One table, so the two sides cannot drift: crates/nessa-server/src/composition/agent_budgets.rs and packages/nessa-client/src/application/agent-budgets.ts read these same bytes.",
+  "agent": {
+    "startupMs": 45000,
+    "shutdownGraceMs": 3000,
+    "killTimeoutMs": 2000
+  },
+  "client": {
+    "note": "Added to the gateway's worst case to cover audit writes, the response write, and scheduling. The client budget is a backstop against a gateway that has stopped answering at all, not a second opinion about how long a launch may take.",
+    "marginMs": 10000
+  }
+}

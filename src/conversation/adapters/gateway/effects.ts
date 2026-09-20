@@ -5,7 +5,7 @@ import {
   NessaAttachmentError,
   NessaConversationMutationError,
   type AttachmentBeginRefusal,
-  type ConversationRejection,
+  type ConversationErrorCode,
   type NessaClient,
   type StoredAttachment,
 } from "@nessa/client"
@@ -112,7 +112,13 @@ function storedImageRefusal(stored: StoredAttachment): AttachmentStagingError {
   return new AttachmentStagingError("rejected")
 }
 
-const refusals: Record<ConversationRejection, SubmissionRefusal> = {
+/**
+ * The gateway's pre-admission codes this panel has its own word for. A code
+ * that refused the send but is not here — a startup deadline, say — keeps the
+ * client's own sentence and is still a refusal; only these change what the
+ * panel does about it.
+ */
+const refusals: Partial<Record<ConversationErrorCode, SubmissionRefusal>> = {
   image_input_unsupported: "image-input-unsupported",
   attachment_not_found: "attachment-not-found",
   attachment_unavailable: "attachment-unavailable",
@@ -134,11 +140,15 @@ const refusals: Record<ConversationRejection, SubmissionRefusal> = {
  * Either way the client's own sentence is kept, because it names what is wrong.
  */
 function submissionFailure(error: unknown): unknown {
+  const named =
+    error instanceof NessaConversationMutationError && !error.uncertain && error.code
+      ? refusals[error.code]
+      : undefined
   const refused =
     error instanceof TypeError
       ? new SubmissionRefusedError("invalid-request", error)
-      : error instanceof NessaConversationMutationError && error.rejection
-        ? new SubmissionRefusedError(refusals[error.rejection], error)
+      : named
+        ? new SubmissionRefusedError(named, error)
         : undefined
   if (!refused) return error
   refused.message = (error as Error).message

@@ -2,6 +2,7 @@ import {
   NessaConversationMutationError,
   NessaConversationControlError,
 } from "../application/conversation-mutation-error.js"
+import { agentOperationTimeoutMs } from "../application/agent-budgets.js"
 import type { RpcRequester } from "../application/session-port.js"
 import { ProductMethod } from "../generated/product.js"
 import type {
@@ -52,22 +53,23 @@ export type ConversationApi = {
    * @param text - At most 8 KiB UTF-8. May be blank only when `attachments` is not empty.
    * @param attachments - The references `client.attachments` returned for
    * images staged into this conversation, in order: at most 10, and 10 MiB
-   * together. Pass `[]` for a message of text alone. A retry re-sends the same
-   * list, so the same execution ID always names the same message.
+   * together. Omit it, or pass `[]`, for a message of text alone. A retry
+   * re-sends the same list, so the same execution ID always names the same
+   * message.
    * @param options - Optional IDs support optimistic UI correlation.
    * @throws TypeError before anything is sent when the message breaks these bounds.
    */
   send: (
     conversationId: string,
     text: string,
-    attachments: readonly ImageAttachment[],
+    attachments?: readonly ImageAttachment[],
     options?: ConversationSendOptions,
   ) => Promise<ConversationSubmission>
   /** Submit steering input using the agent's supported steering behavior. Takes the same message as `send`, under the same bounds. */
   steer: (
     conversationId: string,
     text: string,
-    attachments: readonly ImageAttachment[],
+    attachments?: readonly ImageAttachment[],
     options?: ConversationSendOptions,
   ) => Promise<ConversationSubmission>
   /** Remove the identified waiting input before provider dispatch. */
@@ -136,7 +138,11 @@ export function createConversationApi(
     const command = Object.freeze({ ...params })
     const perform = async (): Promise<T> => {
       try {
-        return validate(await session.request(method, command))
+        return validate(
+          await session.request(method, command, {
+            atLeastMs: agentOperationTimeoutMs,
+          }),
+        )
       } catch (cause) {
         if (!retryable) {
           throw new NessaConversationControlError(
@@ -162,7 +168,7 @@ export function createConversationApi(
     method: string,
     conversationId: string,
     text: string,
-    attachments: readonly ImageAttachment[],
+    attachments: readonly ImageAttachment[] = [],
     options: ConversationSendOptions = {},
   ) {
     validConversationId(conversationId)
@@ -221,9 +227,11 @@ export function createConversationApi(
     },
     read: async (id) =>
       conversationView(
-        await session.request(ProductMethod.ConversationRead, {
-          conversationId: validConversationId(id),
-        }),
+        await session.request(
+          ProductMethod.ConversationRead,
+          { conversationId: validConversationId(id) },
+          { atLeastMs: agentOperationTimeoutMs },
+        ),
         id,
       ),
     send: (id, text, attachments, options) =>

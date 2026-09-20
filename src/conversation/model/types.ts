@@ -1,3 +1,4 @@
+import type { ConversationErrorCode } from "@nessa/client"
 import type { ImageReference } from "./attachments"
 import type { MessageContent } from "./content"
 
@@ -49,6 +50,8 @@ type ConversationState = {
   serverConversationId?: string
   serverReady?: boolean
   error?: string
+  /** Typed gateway rejection behind `error`, when the failure carried one. Notices branch on this, never on the message text. */
+  errorCode?: ConversationErrorCode
   readError?: string
   revision?: string
   readRequest?: string

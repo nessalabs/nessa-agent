@@ -204,6 +204,7 @@ fn stop_agents_if_asked(settings: &dyn SettingsStore, gateway: Option<&Gateway>)
 mod tests {
     use super::*;
     use gateway::application::{GatewayError, GatewayHost, ReconciledGateway};
+    use gateway::domain::value_objects::SearchPath;
     use settings::testing::in_memory;
     use std::path::Path;
     use std::sync::Arc;
@@ -217,7 +218,12 @@ mod tests {
     }
 
     impl GatewayHost for FakeHost {
-        fn register(&self, _: &Path, _: &str) -> Result<ReconciledGateway, GatewayError> {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+        ) -> Result<ReconciledGateway, GatewayError> {
             self.calls.lock().unwrap().push("register");
             Ok(ReconciledGateway::new(
                 "com.nessa.gateway".into(),
@@ -246,7 +252,12 @@ mod tests {
 
     /// A gateway that has already reconciled, so a stop has somewhere to go.
     fn reconciled_gateway(host: Arc<FakeHost>) -> Gateway {
-        let gateway = Gateway::bootstrap(host, "/runtime".into(), "ci".into());
+        let gateway = Gateway::bootstrap(
+            host,
+            gateway::application::testing::system_login_shell(),
+            "/runtime".into(),
+            "ci".into(),
+        );
         tauri::async_runtime::block_on(gateway.wait_ready()).expect("the fake host registers");
         gateway
     }

@@ -42,13 +42,16 @@ fn every_refusal_has_its_own_code() {
     let codes = [
         (BeginError::InvalidRequest, "invalid_request"),
         (BeginError::ConversationNotFound, "conversation_not_found"),
+        (BeginError::ImagesUnsupported, "image_input_unsupported"),
         (BeginError::Capacity, "attachment_capacity"),
         (BeginError::Storage, "attachment_storage_unavailable"),
         (BeginError::Audit, "audit_unavailable"),
         (BeginError::Unavailable, "temporarily_unavailable"),
     ];
+    // The words, not the variants: what a client reads is the string the
+    // generated code spells, and this is the one place that is asserted.
     for (error, code) in codes {
-        assert_eq!(error_code(error), code);
+        assert_eq!(error_code(error).as_str(), code);
     }
 }
 

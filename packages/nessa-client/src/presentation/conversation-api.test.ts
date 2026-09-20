@@ -1,11 +1,12 @@
 import { NessaRpcError } from "../application/rpc-error.js"
+import { agentOperationTimeoutMs } from "../application/agent-budgets.js"
 import { expect, it, vi } from "vitest"
 import { createConversationApi } from "./conversation-api.js"
 import {
   NessaConversationMutationError,
   NessaConversationControlError,
 } from "../application/conversation-mutation-error.js"
-import type { ConversationView } from "../generated/product.js"
+import { ConversationErrorCode, type ConversationView } from "../generated/product.js"
 
 const conversationId = "00000000-0000-4000-8000-000000000001"
 
@@ -452,6 +453,56 @@ it("reports invalid requests as known pre-admission rejections", async () => {
   expect(closeError).toMatchObject({ uncertain: false })
 })
 
+it("says the agent was still starting and that the same command may be retried", async () => {
+  const request = vi
+    .fn()
+    .mockRejectedValue(
+      new NessaRpcError("agent_startup_deadline", "agent_startup_deadline"),
+    )
+  const api = createConversationApi({ request }, () => "identity")
+  const error = await api.send(conversationId, "hello").catch((error) => error)
+  expect(error).toBeInstanceOf(NessaConversationMutationError)
+  expect(error.code).toBe(ConversationErrorCode.AgentStartupDeadline)
+  // Startup runs before any input reaches the provider: this is a rejection,
+  // not an unknown delivery.
+  expect(error.uncertain).toBe(false)
+  expect(error.message).toContain("still starting")
+  expect(error.message).toContain("Retry normally succeeds")
+})
+
+it("treats a startup deadline on a control as a rejection before it was applied", async () => {
+  const request = vi
+    .fn()
+    .mockRejectedValue(
+      new NessaRpcError("agent_startup_deadline", "agent_startup_deadline"),
+    )
+  const api = createConversationApi({ request }, () => "identity")
+  const error = await api.close(conversationId).catch((error) => error)
+  expect(error).toBeInstanceOf(NessaConversationControlError)
+  expect(error.code).toBe(ConversationErrorCode.AgentStartupDeadline)
+  // Startup ends before the control could reach the provider, so nothing was
+  // applied and the caller is not left guessing.
+  expect(error.uncertain).toBe(false)
+})
+
+it("leaves an unrecognized gateway code untyped instead of guessing a meaning", async () => {
+  const request = vi
+    .fn()
+    .mockRejectedValue(new NessaRpcError("invented_code", "invented_code"))
+  const api = createConversationApi({ request }, () => "identity")
+  const sendError = await api.send(conversationId, "hello").catch((error) => error)
+  expect(sendError.code).toBeUndefined()
+  expect(sendError.uncertain).toBe(true)
+  expect(sendError.message).toBe("Conversation command failed")
+  // Codes the socket answers with before dispatch are gateway rejections, but
+  // they are not conversation codes, so they stay untyped here too.
+  const forbidden = vi.fn().mockRejectedValue(new NessaRpcError("forbidden", "forbidden"))
+  const closeError = await createConversationApi({ request: forbidden }, () => "identity")
+    .close(conversationId)
+    .catch((error) => error)
+  expect(closeError.code).toBeUndefined()
+})
+
 it("enforces canonical conversation and UTF-8 byte limits before admission", async () => {
   const request = vi.fn().mockImplementation((_method, params) =>
     Promise.resolve({
@@ -515,6 +566,9 @@ it("reorders an immutable full queue and accepts each typed outcome", async () =
       requestId: "reorder-action",
       executionIds: ["second", "first"],
     },
+    // Conversation commands can open an agent, so they raise the connection's
+    // ordinary deadline rather than being abandoned mid-launch.
+    { atLeastMs: agentOperationTimeoutMs },
   ])
   finish({ requestId: "reorder-action", outcome: "applied" })
   expect(await pending).toEqual({ requestId: "reorder-action", outcome: "applied" })
@@ -573,9 +627,10 @@ it("sends an image-only message, and steers with images the same way", async () 
   await api.send(conversationId, "", [image])
   await api.steer(conversationId, "  ", [image])
   const command = { conversationId, executionId: "id", requestId: "id" }
+  const deadline = { atLeastMs: agentOperationTimeoutMs }
   expect(request.mock.calls).toEqual([
-    ["conversation.send", { ...command, text: "", attachments: [image] }],
-    ["conversation.steer", { ...command, text: "  ", attachments: [image] }],
+    ["conversation.send", { ...command, text: "", attachments: [image] }, deadline],
+    ["conversation.steer", { ...command, text: "  ", attachments: [image] }, deadline],
   ])
 })
 it("retries with the images it was given, whatever the caller did to its list since", async () => {
@@ -611,7 +666,9 @@ it("refuses a message the gateway would refuse, before admission", async () => {
     ["hello", [{ ...image, bytes: "AAAA" }]],
     ["hello", Array.from({ length: 11 }, () => image)],
     ["hello", Array.from({ length: 3 }, () => ({ ...image, size: 4 * 1024 * 1024 }))],
-    ["hello", undefined],
+    // Omitted is a message of text alone, so the text still has to say something.
+    ["", undefined],
+    ["hello", "not a list"],
   ]
   for (const [text, attachments] of refused)
     expect(() => api.send(conversationId, text, attachments as never)).toThrow(TypeError)
@@ -621,7 +678,9 @@ it("refuses a message the gateway would refuse, before admission", async () => {
     "hello",
     Array.from({ length: 10 }, () => ({ ...image, size: 1024 * 1024 })),
   )
-  expect(request).toHaveBeenCalledOnce()
+  // And a message of text alone needs no list at all.
+  await api.send(conversationId, "hello")
+  expect(request).toHaveBeenCalledTimes(2)
 })
 
 it("accepts an image of exactly the schema's maximum size", async () => {
@@ -651,7 +710,7 @@ it.each([
     for (const submit of [api.send, api.steer]) {
       const error = await submit(conversationId, "look", [image]).catch((error) => error)
       expect(error).toBeInstanceOf(NessaConversationMutationError)
-      expect(error).toMatchObject({ uncertain: false, rejection: code })
+      expect(error).toMatchObject({ uncertain: false, code })
     }
   },
 )
@@ -671,7 +730,9 @@ it.each([
   const error = await createConversationApi({ request }, () => "id")
     .send(conversationId, "look", [image])
     .catch((error) => error)
-  expect(error).toMatchObject({ uncertain: true, rejection: undefined })
+  // The code is still reported when this client knows it; what it does not
+  // report is that the message was refused.
+  expect(error).toMatchObject({ uncertain: true })
 })
 
 it("does not read a rejection out of an error that is not the gateway's answer", async () => {
@@ -679,5 +740,5 @@ it("does not read a rejection out of an error that is not the gateway's answer",
   const error = await createConversationApi({ request }, () => "id")
     .send(conversationId, "look", [image])
     .catch((error) => error)
-  expect(error).toMatchObject({ uncertain: true, rejection: undefined })
+  expect(error).toMatchObject({ uncertain: true, code: undefined })
 })

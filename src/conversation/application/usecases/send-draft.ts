@@ -9,6 +9,7 @@ import {
   type MessageContent,
   type UserTurn,
 } from "../../model"
+import type { ConversationErrorCode } from "@nessa/client"
 import { findConversation, replaceConversation, takeTurnId } from "../internal/ids"
 import type { SubmissionRefusal } from "../ports"
 import { notUploaded } from "./release-uploads"
@@ -67,6 +68,7 @@ export function beginSend(
     phase: "thinking",
     pending: "",
     error: undefined,
+    errorCode: undefined,
   })
 }
 
@@ -234,6 +236,7 @@ export function failSend(
   executionId: string,
   detail: string,
   outcome: SendOutcome,
+  errorCode?: ConversationErrorCode,
 ): LocalTabs {
   const uncertain = outcome.kind === "uncertain"
   const reupload = outcome.kind === "refused" && outcome.reupload
@@ -263,6 +266,7 @@ export function failSend(
   return replaceConversation(tabs, {
     ...(uncertain || otherWork ? conv : { ...conv, phase: "idle" as const }),
     error: detail,
+    errorCode,
     draft: recoveredDraft,
     draftReset:
       recoveredDraft === conv.draft ? conv.draftReset : (conv.draftReset ?? 0) + 1,

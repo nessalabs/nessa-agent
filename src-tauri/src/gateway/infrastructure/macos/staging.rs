@@ -243,16 +243,20 @@ fn clone_file(source: &Path, destination: &Path) -> Result<bool, String> {
         Err(error.to_string())
     }
 }
-pub(super) fn launch_settings(runtime: &Path) -> (Value, String) {
-    (
-        json!([
-            runtime.join("nessa"),
-            "server",
-            "--desktop-runtime",
-            runtime
-        ]),
-        format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", runtime.display()),
-    )
+/// How launchd starts this staged runtime.
+///
+/// The runtime directory is named here and nowhere else in the service's
+/// environment. Everything the gateway runs out of it — `nessa`, `node`, the
+/// ACP entry, `nessa-mcp` — it addresses by absolute path, so the directory
+/// does not belong on any `PATH`; on the agent's it would mean Nessa's bundled
+/// Node shadowing whichever one the user's project pinned.
+pub(super) fn launch_settings(runtime: &Path) -> Value {
+    json!([
+        runtime.join("nessa"),
+        "server",
+        "--desktop-runtime",
+        runtime
+    ])
 }
 fn validate_private_tree(path: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;

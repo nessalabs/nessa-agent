@@ -1,0 +1,115 @@
+//! Whether starting this process again could end any differently.
+//!
+//! The packaged gateway is supervised by launchd, which is told to keep it
+//! running. Keeping a crashed server running is the point of that; retrying a
+//! registry this build cannot read, every five seconds, for as long as the user
+//! is logged in, is not. The two are told apart here, once, on the typed
+//! failure — never on the words the failure happens to print.
+//!
+//! launchd can express "restart unless the process exited successfully"
+//! (`KeepAlive: { SuccessfulExit: false }`) and nothing finer: there is no
+//! condition on *which* non-zero code. So a failure that retrying cannot fix
+//! ends the process with a zero status, which is the only sentence launchd
+//! understands as "do not start me again", and writes down what actually
+//! happened for the desktop host to read — see [`super::startup_failure`].
+//!
+//! Only failures that provably cannot improve are treated that way. Everything
+//! else keeps the behaviour it had, because a service that retries too often is
+//! a worse bug than one that retries when it did not need to, but a service
+//! that gives up on a failure that would have cleared is worse than both.
+use nessa_auth::adapters::local::LocalStoreError;
+
+use super::RunError;
+
+/// What a fatal failure says about being started again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Restart {
+    /// The cause can clear without anyone doing anything: a port the process
+    /// holding it is about to release, a registry lock held by a gateway that
+    /// is still shutting down, a disk that was busy. launchd tries again.
+    Worthwhile,
+    /// The next attempt reads the same configuration, the same registry and the
+    /// same runtime, and reaches the same answer. It is reported once and left
+    /// alone until someone changes something.
+    Pointless,
+}
+
+/// Exhaustive by construction, like the exit-code table beside it: a new fatal
+/// failure does not compile until someone has said whether retrying it helps.
+pub(super) fn restart(error: &RunError) -> Restart {
+    match error {
+        // Configuration is read once, from the launchd definition and the
+        // environment it fixes. Nothing rereads differently five seconds later.
+        RunError::Environment(_) => Restart::Pointless,
+        // Contents this build cannot make sense of, including a registry
+        // written by a schema it does not know. Reading them again is reading
+        // the same bytes.
+        RunError::Registry(LocalStoreError::Corrupt | LocalStoreError::Capacity) => {
+            Restart::Pointless
+        }
+        // A registry another process is holding. That holder can let go — an
+        // upgrade's outgoing gateway is still finishing while its replacement
+        // starts — so this is exactly the failure launchd's retry is for.
+        RunError::Registry(LocalStoreError::Locked) => Restart::Worthwhile,
+        // A prepared runtime that is missing, unreadable, or not the one this
+        // registration was fingerprinted against. Only a new registration
+        // changes any of that.
+        RunError::Runtime(_) => Restart::Pointless,
+        // Everything below is either transient by nature or carries no typed
+        // cause to judge — an opaque message is not evidence of permanence, and
+        // guessing wrong here strands a gateway that would have started.
+        RunError::Registry(_)
+        | RunError::Authentication(_)
+        | RunError::Agent(_)
+        | RunError::Bind { .. }
+        | RunError::Serve(_)
+        | RunError::Shutdown(_) => Restart::Worthwhile,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::env::{EnvironmentError, HOST};
+    use std::io::{Error, ErrorKind};
+
+    /// The failure this issue was reported for: a registry this build cannot
+    /// read, retried every five seconds until the data directory was repaired
+    /// by hand.
+    #[test]
+    fn a_registry_this_build_cannot_read_is_not_worth_starting_for_again() {
+        for error in [
+            RunError::Registry(LocalStoreError::Corrupt),
+            RunError::Registry(LocalStoreError::Capacity),
+            RunError::Environment(EnvironmentError::Empty { variable: HOST }),
+            RunError::Runtime("missing bundled runtime file".into()),
+        ] {
+            assert_eq!(restart(&error), Restart::Pointless, "{error}");
+        }
+    }
+
+    /// A lock is held by someone, and someone lets go. An upgrade's outgoing
+    /// gateway still holds this stage's registry while its replacement starts,
+    /// and that replacement must be allowed to try again.
+    #[test]
+    fn a_failure_that_can_clear_on_its_own_is_still_retried() {
+        for error in [
+            RunError::Registry(LocalStoreError::Locked),
+            RunError::Registry(LocalStoreError::Io(Error::from(
+                ErrorKind::PermissionDenied,
+            ))),
+            RunError::Bind {
+                addr: "127.0.0.1:7420".into(),
+                source: Error::from(ErrorKind::AddrInUse),
+            },
+            RunError::Serve(Error::from(ErrorKind::BrokenPipe)),
+            RunError::Shutdown(None),
+            // No typed cause to judge: the message is prose, and prose is not
+            // evidence that the next attempt would fail the same way.
+            RunError::Authentication("setup".into()),
+            RunError::Agent("provider".into()),
+        ] {
+            assert_eq!(restart(&error), Restart::Worthwhile, "{error}");
+        }
+    }
+}

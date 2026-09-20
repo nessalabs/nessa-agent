@@ -8,6 +8,7 @@ use nessa_sdk::{
 };
 use serde::Deserialize;
 use std::{
+    ffi::OsString,
     fs::File,
     path::{Path, PathBuf},
     sync::Arc,
@@ -44,6 +45,29 @@ impl AgentConfig {
         Ok(())
     }
 }
+/// The `PATH` the agent's process tree gets: Claude Code, its Bash tool, and
+/// the Nessa MCP shell tool all inherit this one.
+///
+/// It is deliberately not this process's own. A packaged gateway is a launchd
+/// service, and the `PATH` launchd gives it is the system one — nothing the user
+/// installed is on it, which is how "run the tests" became `command not found:
+/// pnpm` on a machine where every terminal has `pnpm`. The desktop host resolves
+/// the user's login-shell path once, when it registers the service, and hands it
+/// over as `NESSA_AGENT_PATH`: a variable of Nessa's own, so widening what the
+/// agent can reach never widens what the service itself can.
+///
+/// A developer loop has no host and no such variable, and there the process
+/// `PATH` *is* the developer's own shell path, which is the right answer.
+// Only a Unix build supervises an agent process; the rule is still decided and
+// tested here rather than inside that target's branch.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn agent_search_path(resolved: Option<OsString>, inherited: Option<OsString>) -> Option<OsString> {
+    resolved
+        .filter(|path| !path.is_empty())
+        .or(inherited)
+        .filter(|path| !path.is_empty())
+}
+
 fn context_tokens() -> u32 {
     100_000
 }
@@ -97,6 +121,7 @@ pub(super) fn provider(
 }
 #[cfg(unix)]
 mod build {
+    use super::super::agent_budgets as budgets;
     use super::{AgentConfig, ModelMetadata, RunError};
     use crate::conversation::infrastructure::DurableExecutionAudit;
     use nessa_auth::application::ports::Clock;
@@ -111,7 +136,12 @@ mod build {
         },
         infrastructure::{acp::sessions::AcpConfig, claude_acp::sessions::ClaudeAcpProvider},
     };
-    use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
+    use std::{
+        collections::BTreeMap,
+        ffi::OsString,
+        path::{Path, PathBuf},
+        sync::Arc,
+    };
 
     /// The largest ACP frame, derived from the largest message rather than
     /// chosen beside it. One `session/prompt` carries every image of a message
@@ -129,6 +159,44 @@ mod build {
     /// allocate for one frame and has nothing to do with the prompts it writes.
     /// An agent answers in text, so it keeps the mebibyte it had before images.
     const MAX_INCOMING_FRAME_BYTES: usize = 1024 * 1024;
+
+    /// The launch configuration composition injects, separated from resolving
+    /// what goes into it so a test can read back the values actually used.
+    /// Everything here is a decision; nothing here reads the filesystem.
+    ///
+    /// `images` is the one dependency rather than a decision: the source a
+    /// binding reads a message's uploads from, and `None` is a binding that
+    /// sends none.
+    pub(super) fn launch_configuration(
+        config: &AgentConfig,
+        workspace: PathBuf,
+        environment: BTreeMap<OsString, OsString>,
+        credential_environment: BTreeMap<OsString, OsString>,
+        images: Option<Arc<dyn UserImageSource>>,
+    ) -> AcpConfig {
+        AcpConfig {
+            executable: config.node.clone(),
+            arguments: vec![config.acp_entry.clone().into_os_string()],
+            environment,
+            credential_environment,
+            workspace,
+            tools_enabled: config.tools_enabled,
+            mcp_servers: config.mcp_servers.clone(),
+            permissions: PermissionOfferPolicy::once_only(),
+            // From protocol/defaults/agent-startup-budgets.json, which the
+            // client compiles in too: a client that gives up before the gateway
+            // has finished failing never sees the typed answer.
+            startup_timeout: budgets::startup_timeout(),
+            execution_timeout: None,
+            shutdown_grace: budgets::shutdown_grace(),
+            kill_timeout: budgets::kill_timeout(),
+            event_capacity: 256,
+            max_frame_bytes: MAX_FRAME_BYTES,
+            max_incoming_frame_bytes: MAX_INCOMING_FRAME_BYTES,
+            images,
+        }
+    }
+
     pub(super) fn provider(
         config: &AgentConfig,
         model: &ModelMetadata,
@@ -155,17 +223,16 @@ mod build {
         let limits = TokenLimits::new(config.context_tokens, config.output_tokens)
             .map_err(|e| RunError::Agent(e.to_string()))?;
         let mut environment = BTreeMap::new();
-        for key in [
-            "PATH",
-            "HOME",
-            "USER",
-            "LOGNAME",
-            "TMPDIR",
-            "CLAUDE_CONFIG_DIR",
-        ] {
+        for key in ["HOME", "USER", "LOGNAME", "TMPDIR", "CLAUDE_CONFIG_DIR"] {
             if let Some(value) = std::env::var_os(key) {
                 environment.insert(key.into(), value);
             }
+        }
+        if let Some(path) = super::agent_search_path(
+            std::env::var_os("NESSA_AGENT_PATH"),
+            std::env::var_os("PATH"),
+        ) {
+            environment.insert("PATH".into(), path);
         }
         let mut credential_environment = BTreeMap::new();
         for key in ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] {
@@ -176,24 +243,13 @@ mod build {
         let audit =
             Arc::new(DurableExecutionAudit::new(directory.join("audit"), clock).map_err(invalid)?);
         let provider = ClaudeAcpProvider::new(
-            AcpConfig {
-                executable: config.node.clone(),
-                arguments: vec![config.acp_entry.clone().into_os_string()],
+            launch_configuration(
+                config,
+                workspace,
                 environment,
                 credential_environment,
-                workspace,
-                tools_enabled: config.tools_enabled,
-                mcp_servers: config.mcp_servers.clone(),
-                permissions: PermissionOfferPolicy::once_only(),
-                startup_timeout: Duration::from_secs(45),
-                execution_timeout: None,
-                shutdown_grace: Duration::from_secs(3),
-                kill_timeout: Duration::from_secs(2),
-                event_capacity: 256,
-                max_frame_bytes: MAX_FRAME_BYTES,
-                max_incoming_frame_bytes: MAX_INCOMING_FRAME_BYTES,
-                images: Some(images),
-            },
+                Some(images),
+            ),
             model,
             limits,
             audit,
@@ -216,3 +272,7 @@ mod build {
 #[cfg(test)]
 #[path = "../../tests/conversation/configuration.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "../../tests/conversation/launch_configuration.rs"]
+mod launch_configuration_tests;

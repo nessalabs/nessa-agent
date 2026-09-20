@@ -1,4 +1,8 @@
-import { NessaConversationMutationError } from "@nessa/client"
+import {
+  NessaConversationControlError,
+  NessaConversationMutationError,
+  type ConversationErrorCode,
+} from "@nessa/client"
 import {
   contentText,
   MAX_SENT_PREVIEW_BYTES,
@@ -84,6 +88,14 @@ function sendOutcome(error: unknown, admissionAttempted: boolean): SendOutcome {
   return { kind: "uncertain" }
 }
 
+// The typed rejection behind that text, when the gateway supplied one. Kept
+// beside the message so a notice can branch on the code rather than the words.
+const rejectionCode = (error: unknown): ConversationErrorCode | undefined =>
+  error instanceof NessaConversationMutationError ||
+  error instanceof NessaConversationControlError
+    ? error.code
+    : undefined
+
 /** Capture a tab and logical submission before awaiting any connection or admission. */
 export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
   "conversation/sendDraft",
@@ -149,6 +161,7 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
           executionId,
           message: refusalDetail(error),
           outcome: sendOutcome(error, admissionAttempted),
+          errorCode: rejectionCode(error),
         }),
       )
       throw error
@@ -395,7 +408,9 @@ export const controlConversation = createAsyncThunk<
     // A lost acknowledgement may follow an applied control. Read authority again;
     // never replay the control or infer that the previous order still holds.
     await dispatch(refreshConversation(id))
-    dispatch(showError({ id, message: refusalDetail(error) }))
+    dispatch(
+      showError({ id, message: refusalDetail(error), errorCode: rejectionCode(error) }),
+    )
     throw error
   } finally {
     dispatch(controlFinished(id))
@@ -515,6 +530,7 @@ const conversationSlice = createSlice({
         executionId: string
         message: string
         outcome: SendOutcome
+        errorCode?: ConversationErrorCode
       }>,
     ) {
       return failSend(
@@ -523,11 +539,22 @@ const conversationSlice = createSlice({
         action.payload.executionId,
         action.payload.message,
         action.payload.outcome,
+        action.payload.errorCode,
       )
     },
-    showError(state, action: PayloadAction<{ id: string; message: string }>) {
+    showError(
+      state,
+      action: PayloadAction<{
+        id: string
+        message: string
+        errorCode?: ConversationErrorCode
+      }>,
+    ) {
       const current = state.conversations.find((item) => item.id === action.payload.id)
-      if (current) current.error = action.payload.message
+      if (current) {
+        current.error = action.payload.message
+        current.errorCode = action.payload.errorCode
+      }
     },
     readStarted(state, action: PayloadAction<{ id: string; requestId: string }>) {
       const current = state.conversations.find((item) => item.id === action.payload.id)
@@ -579,6 +606,7 @@ const conversationSlice = createSlice({
         current.controlPending = true
         current.readRequest = undefined
         current.error = undefined
+        current.errorCode = undefined
       }
     },
     controlFinished(state, action: PayloadAction<string>) {

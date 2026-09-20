@@ -108,6 +108,10 @@ for line in sys.stdin:
                 result(msg["id"], {"sessionId": "different-session", **configs()})
                 continue
         else:
+            if mode == "new-session-stall":
+                record("new-session-wait", session)
+                time.sleep(20)
+                continue
             count_path = root / "new-session-count"
             count = int(count_path.read_text()) if count_path.exists() else 0
             record("new-session-count", str(count + 1))
