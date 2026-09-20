@@ -14,7 +14,7 @@ pub use ports::{
 };
 pub use service::{
     ConversationAgent, ConversationAgents, ConversationCaller, ConversationLimits,
-    ConversationService, SubmissionMode,
+    ConversationService, RequestedAgent, SubmissionMode,
 };
 pub use view::{
     ConversationCapabilities, ConversationDisposition, ConversationMessage,

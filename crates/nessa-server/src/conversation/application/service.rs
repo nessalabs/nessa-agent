@@ -65,6 +65,28 @@ impl ConversationCaller {
         .map_err(|_| ConversationError::InvalidInput)
     }
 }
+/// What a creation said about the agent it wants.
+///
+/// Three cases rather than two, because a name this build has no adapter for is
+/// not the same as no name at all and must not be turned into one. It is kept
+/// as a case instead of being refused where the request is parsed, because a
+/// creation for a conversation that already exists reopens it on the agent its
+/// own record names and never looks at this at all: the panel sends its
+/// remembered choice on every send, close, reorder and permission answer, so
+/// refusing the name outright made a name from another build — or from a
+/// rolled-back one — fail every one of those in every existing conversation,
+/// with no way back but editing the host's settings by hand.
+///
+/// A misspelling is still not an installation fact, so it keeps its own
+/// refusal. It is simply given at the point the name would have been used.
+#[derive(Clone, Copy)]
+pub enum RequestedAgent {
+    /// A name this build has an adapter for.
+    Known(AgentId),
+    /// A name it has none for.
+    Unknown,
+}
+
 /// Server-selected admission limits. Clients cannot choose provider budgets or owner capacity.
 ///
 /// What is here is the same for every agent. The output budget a submission
@@ -247,7 +269,7 @@ impl ConversationService {
         &self,
         id: ConversationId,
         caller: ConversationCaller,
-        agent: Option<AgentId>,
+        agent: Option<RequestedAgent>,
     ) -> Result<(), ConversationError> {
         let service = self.clone();
         supervised(async move {
@@ -256,18 +278,7 @@ impl ConversationService {
             if service.inner.retirement.get().is_some() {
                 return Err(ConversationError::Unavailable);
             }
-            let agent = agent.unwrap_or_else(|| service.inner.agents.default_agent());
             let requested_at_ms = service.inner.clock.unix_milliseconds();
-            let proposed = Conversation::new(
-                id.clone(),
-                caller.organization_id.clone(),
-                caller.principal_id.clone(),
-                caller.surface_id.clone(),
-                caller.action_id.clone(),
-                requested_at_ms,
-                agent,
-            )
-            .map_err(|_| ConversationError::InvalidInput)?;
             // Serialize create/reopen decisions without holding the live-owner map
             // across repository or audit I/O. Existing ownership is checked before
             // this request can reserve capacity or open a provider.
@@ -310,10 +321,27 @@ impl ConversationService {
             // before the record above would have refused to reopen somebody's
             // existing Claude conversation because the panel's remembered choice
             // names an agent this server is no longer configured for — a
-            // conversation that does not need that agent at all.
+            // conversation that does not need that agent at all. The same is
+            // true of a name no adapter exists for, which is why that one is
+            // carried this far instead of being refused where it was parsed.
+            let agent = match agent {
+                Some(RequestedAgent::Known(agent)) => agent,
+                Some(RequestedAgent::Unknown) => return Err(ConversationError::InvalidInput),
+                None => service.inner.agents.default_agent(),
+            };
             if service.inner.agents.get(agent).is_none() {
                 return Err(ConversationError::AgentNotConfigured);
             }
+            let proposed = Conversation::new(
+                id.clone(),
+                caller.organization_id.clone(),
+                caller.principal_id.clone(),
+                caller.surface_id.clone(),
+                caller.action_id.clone(),
+                requested_at_ms,
+                agent,
+            )
+            .map_err(|_| ConversationError::InvalidInput)?;
             {
                 let owners = service.inner.conversations.lock().await;
                 if service.inner.retirement.get().is_some() {

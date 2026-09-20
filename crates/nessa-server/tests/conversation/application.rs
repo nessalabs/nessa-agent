@@ -3,7 +3,8 @@ use super::{
     ConversationAgent, ConversationAgents, ConversationCaller, ConversationCreation,
     ConversationCreationAudit, ConversationCreationAuditRecord, ConversationDisposition,
     ConversationError, ConversationFuture, ConversationLimits, ConversationMessageStatus,
-    ConversationOwnershipState, ConversationRepository, ConversationService, SubmissionMode,
+    ConversationOwnershipState, ConversationRepository, ConversationService, RequestedAgent,
+    SubmissionMode,
 };
 use crate::{
     agents::domain::AgentId,
@@ -1450,7 +1451,11 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
     .unwrap();
     let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
     service
-        .create(id.clone(), caller("panel", "create"), Some(AgentId::Codex))
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            Some(RequestedAgent::Known(AgentId::Codex)),
+        )
         .await
         .unwrap();
     assert_eq!(codex.open_calls.load(Ordering::SeqCst), 1);
@@ -1522,7 +1527,11 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
     .unwrap();
     let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
     service
-        .create(id.clone(), caller("panel", "create"), Some(AgentId::Codex))
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            Some(RequestedAgent::Known(AgentId::Codex)),
+        )
         .await
         .unwrap();
     service.shutdown().await.unwrap();
@@ -1608,7 +1617,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
             .create(
                 stranded.clone(),
                 caller("panel", "create"),
-                Some(AgentId::Codex),
+                Some(RequestedAgent::Known(AgentId::Codex)),
             )
             .await
             .unwrap();
@@ -1694,7 +1703,11 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
         )
         .unwrap();
         service
-            .create(id.clone(), caller("panel", "create"), Some(AgentId::Codex))
+            .create(
+                id.clone(),
+                caller("panel", "create"),
+                Some(RequestedAgent::Known(AgentId::Codex)),
+            )
             .await
             .unwrap();
         service.shutdown().await.unwrap();
@@ -1737,7 +1750,11 @@ async fn an_agent_this_server_cannot_start_is_refused_before_anything_is_written
     let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
     assert!(matches!(
         service
-            .create(id.clone(), caller("panel", "create"), Some(AgentId::Codex))
+            .create(
+                id.clone(),
+                caller("panel", "create"),
+                Some(RequestedAgent::Known(AgentId::Codex))
+            )
             .await,
         Err(ConversationError::AgentNotConfigured)
     ));
@@ -1758,10 +1775,56 @@ async fn reopening_is_never_refused_over_an_agent_that_conversation_does_not_nee
         .await
         .unwrap();
     service
-        .create(id.clone(), caller("panel", "reopen"), Some(AgentId::Codex))
+        .create(
+            id.clone(),
+            caller("panel", "reopen"),
+            Some(RequestedAgent::Known(AgentId::Codex)),
+        )
         .await
         .unwrap();
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_name_this_build_knows_nothing_about_refuses_a_creation_and_not_a_reopen() {
+    // The same rule one step further out. The host keeps whatever name setup
+    // wrote, on purpose — throwing away an unfamiliar one would throw away a
+    // choice somebody made — so a name from another build, or from one this
+    // machine was rolled back from, reaches every creation the panel sends.
+    // Refused where it was parsed, that failed every send, close, reorder and
+    // permission answer in every existing conversation, none of which needs the
+    // name at all.
+    let (service, provider, _, _) = fixture(ConversationLimits::default());
+    let existing = id();
+    let fresh = id();
+    service
+        .create(existing.clone(), caller("panel", "create"), None)
+        .await
+        .unwrap();
+    service
+        .create(
+            existing,
+            caller("panel", "reopen"),
+            Some(RequestedAgent::Unknown),
+        )
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+
+    // A conversation that does not exist yet has nothing else to be run on, so
+    // the name is refused there — and as the misspelling it is, not as a fact
+    // about what this installation has configured.
+    assert!(matches!(
+        service
+            .create(
+                fresh,
+                caller("panel", "create-unknown"),
+                Some(RequestedAgent::Unknown),
+            )
+            .await,
+        Err(ConversationError::InvalidInput)
+    ));
     service.shutdown().await.unwrap();
 }
 
