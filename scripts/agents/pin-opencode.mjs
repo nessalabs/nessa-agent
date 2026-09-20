@@ -47,32 +47,44 @@ const registry = "https://registry.npmjs.org"
 // without it dies on an illegal instruction.
 //
 // `libc` is null where the platform has only one, which is every platform here
-// but Linux. `requiresAvx2` is a claim about the bytes, and at 1.18.31 it is
-// `true` for every x86-64 build there is.
+// but Linux.
 //
-// Six packages, not nine: the three `-baseline` ones are deliberately absent.
-// Opencode names them as the builds for a processor without AVX2, and at
-// 1.18.31 they are not. Each publishes an executable byte-identical to its
-// plain sibling — linux-x64 and linux-x64-baseline both sha256 f9dab322…,
-// darwin-x64 and its baseline 9cd3d83b…, linux-x64-musl and its baseline
-// b4a7415a… — and all three of those binaries are full of AVX2: `vpermd`,
-// `vpbroadcastd`, `vextracti128`, `vpsllvd`, thousands of sites each, measured
-// with `llvm-objdump -d` on the archives this file pins.
+// Six packages, not nine: the three `-baseline` ones are deliberately absent,
+// and the reason is that nobody can currently say what they need. Opencode
+// names them as the builds for a processor without AVX2, and at 1.18.31 each
+// publishes an executable byte-identical to its plain sibling — linux-x64 and
+// linux-x64-baseline both sha256 f9dab322…, darwin-x64 and its baseline
+// 9cd3d83b…, linux-x64-musl and its baseline b4a7415a…. One file cannot both
+// need AVX2 and not need it, so one claim in each pair is false, and which one
+// cannot be read off the bytes:
 //
-// So pinning a `-baseline` package would not give an older machine something
-// that runs. It would hand it the AVX2 binary under a name promising
-// otherwise, and turn a clean "no build for this machine" into an illegal
-// instruction after a 180 MB download. Leaving them out is what makes the file
-// true: at this pin, Opencode needs AVX2 on x86-64, `preferred` matches
-// nothing on a machine without it, and the install says so.
+//   - The file does contain AVX2 — 2,151 AVX2-only instructions in the linux
+//     build. But they are 0.015% of its 14.2 million, and they sit in four
+//     twentieths of `.text` with 90% in two. That is the shape of
+//     runtime-dispatched SIMD kernels (simdutf, zlib-ng, the engine's string
+//     paths), not of a whole program compiled for Haswell, and it is evidence
+//     for `requiresAvx2: false` on both.
+//   - Evidence, not proof. Clustering is consistent with a `cpuid` check in
+//     front of every one of those sites; it does not demonstrate one. Settling
+//     it needs the binary run on a processor without AVX2, and no such machine
+//     or emulator was available here.
+//
+// So the pin says neither. It offers no x86-64 build to a machine without
+// AVX2, which leaves such a machine with "nessa has no tested opencode release
+// this machine can run" — true under either reading, since no build has been
+// run on one. Claiming `false` would be asserting the untested half; claiming
+// a `-baseline` package would be offering bytes under a name that does not
+// describe them. This is the one resolution that cannot end in an illegal
+// instruction after a 180 MB download.
 //
 // `sameBinaryUnderDifferentClaims` is what found this and is why it stays: it
 // hashes what each archive actually holds and refuses a release whose builds
 // say different things about the same bytes. Running the generator against
-// 1.18.31 with the baseline packages in this table throws, by design. If a
-// later release publishes baseline builds that really are baseline — different
-// bytes, no AVX2 in them — they belong back in this table, and that check is
-// what will say whether they do.
+// 1.18.31 with the baseline packages in this table throws, by design. When a
+// later release publishes baseline builds that differ from their siblings —
+// or when somebody runs this one on a pre-AVX2 machine and reports what
+// happened — they belong back in this table, with `requiresAvx2` set to
+// whatever that settled.
 //
 // Windows is deliberately absent. Opencode publishes builds for it, but nothing
 // in Nessa launches an agent runtime on Windows yet, and pinning a platform

@@ -75,17 +75,20 @@ const COVERED: &[(&str, &str, Option<Libc>, bool)] = &[
 /// Every machine the pin file is expected to have nothing for.
 ///
 /// An x86-64 processor without AVX2. Opencode names three `-baseline` packages
-/// as the builds for exactly this machine, and at 1.18.31 they are not: each
-/// holds an executable byte-identical to its plain sibling, and all three of
-/// those binaries are full of AVX2 instructions. Pinning one would not give
-/// this machine something that runs. It would hand it the AVX2 binary under a
-/// name promising otherwise, and turn a clean "no build for this machine" into
-/// an illegal instruction after a 180 MB download.
+/// as the builds for exactly this machine, and at 1.18.31 each holds an
+/// executable byte-identical to its plain sibling, so one claim in each pair
+/// is false and the bytes do not say which. `scripts/agents/pin-opencode.mjs`
+/// carries the measurement and the reasoning; the short of it is that the
+/// evidence leans towards these builds not needing AVX2 at all, and leaning is
+/// not enough to promise somebody their runtime will start.
 ///
-/// So this is the other half of [`COVERED`], and the more fragile half: the
-/// natural repair for "Opencode is not offered on this machine" is to add the
-/// package the vendor named for it, which is the one thing that must not
-/// happen while it holds the same bytes. This says so as a test.
+/// So nothing is offered here, and "nessa has no tested opencode release this
+/// machine can run" is true under either reading of the bytes.
+///
+/// This is the other half of [`COVERED`], and the more fragile half: the
+/// natural repair for "Opencode is not offered on this machine" is to add back
+/// the package the vendor named for it, which is the one thing that must not
+/// happen while nobody can say what it needs. This says so as a test.
 const UNSERVED: &[(&str, &str, Option<Libc>)] = &[
     ("macos", "x86_64", None),
     ("linux", "x86_64", Some(Libc::Gnu)),
@@ -149,14 +152,13 @@ fn what_each_pin_says_it_needs_agrees_with_the_archive_it_names() {
     // contents.
     //
     // At 1.18.31 they do not, which is why no `-baseline` package is pinned at
-    // all and why the rule below is the flat one: every x86-64 build needs
-    // AVX2. All three pairs publish a byte-identical `package/bin/opencode`
-    // (linux-x64 sha256 f9dab322…, darwin-x64 9cd3d83b…, linux-x64-musl
-    // b4a7415a…, measured from both archives of each pair), and all three of
-    // those binaries disassemble full of AVX2. One binary cannot both need
-    // AVX2 and not need it, and which way it resolves was settled by reading
-    // the bytes rather than by preferring one of the vendor's two names.
-    // [`UNSERVED`] is the consequence, and
+    // all and why the rule below is the flat one: every x86-64 build that *is*
+    // pinned is pinned as needing AVX2. All three pairs publish a
+    // byte-identical `package/bin/opencode` (linux-x64 sha256 f9dab322…,
+    // darwin-x64 9cd3d83b…, linux-x64-musl b4a7415a…, measured from both
+    // archives of each pair), so one claim in each pair is false and the bytes
+    // do not say which. Rather than pick, the file offers no x86-64 build to a
+    // machine without AVX2 at all: [`UNSERVED`] says why, and
     // `a_machine_without_avx2_is_offered_nothing_rather_than_something_that_dies`
     // is what holds it.
     //
@@ -178,7 +180,7 @@ fn what_each_pin_says_it_needs_agrees_with_the_archive_it_names() {
         );
         assert!(
             !package.contains("-baseline"),
-            "{package} is pinned, and at 1.18.31 no baseline build is one"
+            "{package} is pinned, and at 1.18.31 nobody can say what a baseline build needs"
         );
         let libc = match release.platform().operating_system() {
             "linux" if package.contains("-musl") => Some(Libc::Musl),

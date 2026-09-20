@@ -381,10 +381,11 @@ fn each_machine_gets_the_build_opencode_publishes_for_it() {
 
 #[test]
 fn a_processor_without_avx2_is_told_no_tested_build_fits_it() {
-    // At 1.18.31 there is no x86-64 Opencode that runs here. The vendor names
-    // three `-baseline` packages for this machine and every one of them holds
-    // the same bytes as its AVX2 sibling, so none is pinned; the pin file's own
-    // side of that is `a_machine_without_avx2_is_offered_nothing_...`.
+    // At 1.18.31 there is no x86-64 Opencode Nessa will promise runs here. The
+    // vendor names three `-baseline` packages for this machine and every one of
+    // them holds the same bytes as its AVX2 sibling, so what those bytes need
+    // is unsettled and none is pinned; the pin file's own side of that is
+    // `a_machine_without_avx2_is_offered_nothing_...`.
     //
     // This is the half a person sees. A refusal naming what this machine is and
     // what the builds ask for is a sentence somebody can act on; the failure
