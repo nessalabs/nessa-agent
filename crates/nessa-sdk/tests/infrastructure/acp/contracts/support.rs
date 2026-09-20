@@ -184,9 +184,9 @@ pub(super) fn test_codex_binding(mode: &str, capacity: usize) -> (TempDir, Codex
     )
 }
 
-/// The same fixture setup for Opencode, whose session is configured over the
-/// protocol rather than at launch and whose models are served by its own
-/// gateway.
+/// The same fixture setup for Opencode, whose session is configured partly over
+/// the protocol (the mode) and partly at launch (the permission policy), and
+/// whose models are served by its own gateway.
 pub(super) fn opencode_configuration(
     mode: &str,
     capacity: usize,
@@ -222,6 +222,52 @@ pub(super) fn opencode_configuration(
 
 pub(super) fn test_opencode_binding(mode: &str, capacity: usize) -> (TempDir, OpencodeAcpProvider) {
     let (root, config, model) = opencode_configuration(mode, capacity);
+    (
+        root,
+        OpencodeAcpProvider::new(
+            config,
+            &model,
+            TokenLimits::new(900, 100).unwrap(),
+            Arc::new(RecordingAudit::default()),
+        )
+        .unwrap(),
+    )
+}
+
+/// The same binding on a model that does take images.
+///
+/// The fixture model is text-only, so what a binding declares about images is
+/// invisible through it: the effective capability would come out text either
+/// way, and a binding that passed Opencode's advertised image prompt through
+/// would look the same as one that did not. This is the model that tells them
+/// apart.
+pub(super) fn test_opencode_binding_on_a_model_that_takes_images(
+    mode: &str,
+    capacity: usize,
+) -> (TempDir, OpencodeAcpProvider) {
+    let (root, config, model) = opencode_configuration(mode, capacity);
+    let model = ModelMetadata::try_from(ModelMetadataDto {
+        provider: "opencode".into(),
+        model_id: model.key().model_id().into(),
+        display_name: "Fixture that takes images".into(),
+        input: ModalitiesDto {
+            text: true,
+            image: true,
+            audio: false,
+        },
+        output: ModalitiesDto {
+            text: true,
+            image: false,
+            audio: false,
+        },
+        tool_use: true,
+        reasoning: false,
+        max_context_window_tokens: 1000,
+        max_output_tokens: 200,
+        knowledge_cutoff: "2026-01".into(),
+        documentation_url: "https://example.com".into(),
+    })
+    .unwrap();
     (
         root,
         OpencodeAcpProvider::new(

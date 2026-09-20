@@ -78,12 +78,14 @@ impl OpencodeAcpProvider {
                 "Opencode requires a model served through OpenCode Zen".into(),
             ));
         }
+        // Opencode's `initialize` advertises image prompts, but this binding
+        // cannot offer one: the shared ACP worker builds every `session/prompt`
+        // as a single text block, so an image declared here would be a
+        // capability with no way to reach the process. Text in, text out, until
+        // the worker can carry an image block.
         let text = Modalities::new(true, false, false).expect("text modality is nonempty");
-        // Opencode's `initialize` advertises image prompts, so a picture can be
-        // sent; nothing it serves sends one back.
-        let prompt = Modalities::new(true, true, false).expect("text modality is nonempty");
         let restrictions = BindingRestrictions::new(
-            ModelFeatures::new(prompt, text, true, false),
+            ModelFeatures::new(text, text, true, false),
             // Binding ceilings, not model or Opencode facts. OpenCode Zen
             // reports nothing about the windows of the models it serves — and
             // rotates which ones it serves — so these bound what this binding

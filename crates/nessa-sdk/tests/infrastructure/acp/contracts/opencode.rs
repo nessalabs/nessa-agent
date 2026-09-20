@@ -227,3 +227,29 @@ async fn an_edit_approval_reaches_the_host_with_what_it_would_change() {
         serde_json::json!({"outcome":"selected","optionId":allow.as_str()})
     );
 }
+
+/// Opencode's `initialize` advertises image prompts, and this binding declines
+/// to pass that on. The reason is not Opencode: the shared worker builds every
+/// `session/prompt` as a single text block, so a session that declared images
+/// would be offering a modality with no way to reach the process — a caller
+/// that took the offer would have its picture silently left behind.
+#[tokio::test]
+async fn a_session_offers_only_the_modality_a_prompt_can_carry() {
+    let _process_slot = process_test_slot().await;
+    let (root, binding) = test_opencode_binding_on_a_model_that_takes_images("echo", 16);
+    let opened = binding.open(None).await.unwrap();
+    let features = opened.session.capabilities().features();
+    assert!(features.input().text());
+    assert!(
+        !features.input().image(),
+        "the binding passed the model's image input through"
+    );
+    assert!(!features.output().image());
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
+}
