@@ -256,8 +256,7 @@ KiB).
 
 - **No way to release one staged file.** Removing a stored tile is local: the
   gateway has no "release this hold" command, so the bytes stay held until the
-  conversation closes or an unsent upload expires. This needs a gateway API; it
-  is not worked around here.
+  conversation closes. This needs a gateway API; it is not worked around here.
 - **Closing a tab with turns does not release staged-but-unsent bytes**, for the
   same reason, and because closing a tab never stops a conversation's work.
 - **A tab closed before its first view arrives** is not closed on the gateway
@@ -393,7 +392,12 @@ library reads, so a camera's raw file fits; four transfers run at once, across
 every caller (this gateway serves one organization, and a caller refused for
 want of a slot keeps its ticket); two images are normalized at once, because
 each holds a whole upload and its pixels in memory while transfers stream to
-disk; one transfer has 120 seconds. Storage takes any media type. What a message may
+disk; one transfer has 120 seconds. One audit record has 5 seconds to be
+acknowledged and one phase of them — a release's withdrawals, releases and
+removals, or one sweep of expired tickets — has 30 seconds together, because
+those lists are as long as a conversation has holds or the book has tickets;
+records the budget does not reach are reported as lost evidence and the cleanup
+they describe still happens. Storage takes any media type. What a message may
 refer to is narrower: PNG, JPEG, GIF or WebP, at most 5 MiB each, 10 images and
 10 MiB in one message.
 
@@ -402,9 +406,14 @@ A present `Origin` must be one the gateway trusts for `/session`, and is echoed 
 `content-type` and `x-nessa-upload-ticket`. Any other origin is `403`.
 
 `attachment.begin` fails with `invalid_request`, `conversation_not_found` (also
-for another owner's conversation), `attachment_capacity`,
-`attachment_storage_unavailable`, `audit_unavailable`, `temporarily_unavailable`,
-or `agent_not_configured`. The upload fails with `{"code": …}`:
+for another owner's conversation), `image_input_unsupported`,
+`attachment_capacity`, `attachment_storage_unavailable`, `audit_unavailable`,
+`temporarily_unavailable`, or `agent_not_configured`.
+`image_input_unsupported` answers a `mimeType` of `image/*` on a gateway whose
+selected model records no image limits and so is offered no images: no ticket is
+issued, because no message could ever name what was uploaded. It is the same
+code `conversation.send` and the upload route give for the same fact. The upload
+fails with `{"code": …}`:
 
 | Status | `code` | Meaning |
 | --- | --- | --- |
@@ -417,6 +426,7 @@ or `agent_not_configured`. The upload fails with `{"code": …}`:
 | 415 | `image_input_unsupported` | The selected model is offered no images. Nothing is wrong with the upload. |
 | 413 | `image_too_large` | An image that cannot be brought under the selected model's limits. |
 | 503 | `storage_unavailable` | Storing or normalizing failed, or no agent is configured. |
+| 503 | `upload_unresolved` | The upload's own work stopped without an answer. Its ticket is spent and nothing it wrote was kept. |
 | 503 | `audit_unavailable` | The upload was good but could not be recorded, so it was not kept. |
 | 409 | `attachment_not_kept` | The upload was good, but its conversation let go of its files before it was kept. Begin again. |
 | 503 | `temporarily_unavailable` | Too many uploads in progress. The ticket was **not** spent; retry with it. |
@@ -439,14 +449,22 @@ hold and no other, and the trail says so (`attachment_hold_reverted`).
 
 A conversation holds what was uploaded into it until it closes. Closing withdraws
 its unused tickets, releases its holds, pending ones included, and removes bytes
-nothing else holds. It does this from the ownership record, so it happens even
-when the agent cannot be opened or closed (no room for another live
-conversation, a provider that will not start); the close then reports the
-agent's failure, and the files are still let go. If the cleanup or its audit
-record fails, `conversation.close` answers `attachment_cleanup_unavailable` and
-the conversation is still closed; if the agent failed as well, the agent's code
-is the one answered and both failures are kept in the gateway's own error and
-log. Closing is not final: a conversation can be reopened and nothing in its
+nothing else holds. Who is closing comes from the ownership record, before
+anything else, so a stranger's close and a close of nothing let go of nothing.
+
+The files go once the agent is known to be closed, or once its saved session is
+known to hold no unsettled turn that names images. A close that could not reach
+the agent (no room for another live conversation, a provider that will not
+start) reports that failure and keeps the files: an agent that was never closed
+keeps its queued turns, and a queued turn that names images reads their bytes
+when it is dispatched. Closing again, once the agent can be opened, lets them go.
+
+If the cleanup or its audit record fails, `conversation.close` answers
+`attachment_cleanup_unavailable` when files are still in place, and
+`audit_unavailable` when everything went and only the evidence of it was lost;
+the conversation is closed either way. If the agent failed as well, the agent's
+code is the one answered and both failures are kept in the gateway's own error
+and log. Closing is not final: a conversation can be reopened and nothing in its
 ownership record says it was closed, so uploads after a close are held like any
 others until the next close. A retry of a turn the agent already has does not
 depend on its upload still being held: the same images recover the original

@@ -569,12 +569,19 @@ conversation port, and the image source; it is composed only when an agent is.
 The normalizer is an argument of that factory: `infrastructure/normalizer.rs`
 fits every upload that says it is an image to the selected model's `imageInput`
 limits from the SDK catalog, through `crates/nessa-images`, reading the encoding
-from the bytes and never from the declared type. A model with no recorded limits
-has no image prepared for it.
+from the bytes and never from the declared type. Composition also hands it the
+running system's image decoder, which is the one thing here that reads outside
+this process, so a test can put a decoder that refuses, answers nonsense, or
+stops dead in its place. A model with no recorded limits has no image prepared
+for it, and `ImageNormalizer::offers_images` says so before a ticket is issued:
+an `image/*` `attachment.begin` on such a gateway is refused with
+`image_input_unsupported` rather than answered with a ticket for bytes no
+message could name.
 Holds live until their conversation closes; what expires on its own is an unused
 ticket. Tests under `tests/attachments/` split domain rules, the service over
 doubles, the real store on a real filesystem, audit records, the adapters, the
-HTTP boundary, the wire mapping, and the socket and router.
+HTTP boundary, the wire mapping, the socket and router, and the facts this
+context and the published protocol schema must agree on (`agreement.rs`).
 
 ## Command-line surface
 
