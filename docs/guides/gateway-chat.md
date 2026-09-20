@@ -210,10 +210,23 @@ send   -> conversation.send { text, attachments: [the returned references] }
   (`invalid_request`, `agent_not_configured`, `agent_startup_deadline`,
   `image_input_unsupported`, `attachment_not_found`, `attachment_unavailable`,
   `conversation_not_found`, `conversation_capacity`): those leave `uncertain`
-  false, and the code itself is reported as a typed `ConversationErrorCode`. The
-  panel marks the turn not sent, says why in a sentence chosen by that code, and
-  puts the message back in the draft with its images. Any other failure after
-  admission was attempted stays uncertain and keeps its explicit retry.
+  false, and the code itself is reported as a typed `ConversationErrorCode`.
+  `adapters/gateway/effects.ts` is the one place the panel reads that code, and
+  it answers in the panel's own vocabulary — a `CommandFailure` such as
+  `agent-startup-deadline`. The panel marks the turn not sent, says why in a
+  sentence chosen by that reason, and puts the message back in the draft with
+  its images. A code this build has no word for keeps the client's own sentence
+  and carries no reason at all, rather than being read as one it does know. Any
+  other failure after admission was attempted stays uncertain and keeps its
+  explicit retry.
+- **A control's failure is translated the same way, and says something else.**
+  Controls carry no draft, so they get their own sentences: the one that needs
+  it is `attachment_cleanup_unavailable`, the single image code that is not a
+  refusal — the close did happen and only its release of the conversation's
+  uploads did not. That arrives as `attachment-cleanup-unavailable`, and the
+  panel says so instead of showing "did not return a trustworthy
+  acknowledgement". It changes nothing the panel does: a draft's stored images
+  are forgotten after any close, acknowledged or not.
 - **Nor is a message the client would not put on the wire.** The client is the
   one boundary that validates a message's images — the panel's model puts no
   byte bound on a stored reference, because how heavy one image may be is the

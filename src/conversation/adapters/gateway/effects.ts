@@ -3,6 +3,7 @@ import {
   IMAGE_ATTACHMENT_TYPES,
   MAX_IMAGE_ATTACHMENT_BYTES,
   NessaAttachmentError,
+  NessaConversationControlError,
   NessaConversationMutationError,
   type AttachmentBeginRefusal,
   type ConversationErrorCode,
@@ -12,11 +13,12 @@ import {
 import type { ConversationView } from "../../application/view"
 import {
   AttachmentStagingError,
+  ControlFailedError,
   ConversationUnavailableError,
   SubmissionRefusedError,
   type ConversationEffects,
-  type SubmissionRefusal,
 } from "../../application/ports"
+import type { CommandFailure } from "../../model"
 
 /** Why the gateway declined to issue a ticket, as what the panel can do about it. */
 function beginFailure(refusal: AttachmentBeginRefusal | undefined) {
@@ -113,25 +115,31 @@ function storedImageRefusal(stored: StoredAttachment): AttachmentStagingError {
 }
 
 /**
- * The gateway's pre-admission codes this panel has its own word for. A code
- * that refused the send but is not here — a startup deadline, say — keeps the
- * client's own sentence and is still a refusal; only these change what the
- * panel does about it.
+ * The gateway's codes, as the words this panel has for them. One table for
+ * every conversation command, because a code means the same thing whichever
+ * command met it, and this is the one place the wire's vocabulary is read.
+ *
+ * A code that is not here keeps the client's own sentence and reaches the panel
+ * with no typed reason at all, which is what an unknown answer deserves: only
+ * these change what the panel says or does about a failure.
  */
-const refusals: Partial<Record<ConversationErrorCode, SubmissionRefusal>> = {
+const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   image_input_unsupported: "image-input-unsupported",
   attachment_not_found: "attachment-not-found",
   attachment_unavailable: "attachment-unavailable",
+  attachment_cleanup_unavailable: "attachment-cleanup-unavailable",
   conversation_not_found: "conversation-not-found",
   conversation_capacity: "conversation-capacity",
   agent_not_configured: "agent-not-configured",
+  agent_startup_deadline: "agent-startup-deadline",
   invalid_request: "invalid-request",
 }
 
 /**
- * A send that was refused rather than lost, as the application's own typed
- * refusal. Anything else is passed on untouched: a lost acknowledgement is not a
- * refusal, and the store already knows what to do with one.
+ * A conversation, send, or steer that was refused rather than lost, as the
+ * application's own typed refusal. Anything else is passed on untouched: a lost
+ * acknowledgement is not a refusal, and the store already knows what to do with
+ * one.
  *
  * Two things are refusals. The gateway's own pre-admission rejection, and the
  * client refusing the arguments — the client is the one boundary that validates
@@ -142,7 +150,7 @@ const refusals: Partial<Record<ConversationErrorCode, SubmissionRefusal>> = {
 function submissionFailure(error: unknown): unknown {
   const named =
     error instanceof NessaConversationMutationError && !error.uncertain && error.code
-      ? refusals[error.code]
+      ? failures[error.code]
       : undefined
   const refused =
     error instanceof TypeError
@@ -153,6 +161,27 @@ function submissionFailure(error: unknown): unknown {
   if (!refused) return error
   refused.message = (error as Error).message
   return refused
+}
+
+/**
+ * A control the gateway answered with a reason, in the panel's words. Anything
+ * else is passed on untouched.
+ *
+ * A control is not read through `uncertain` the way a message is, because this
+ * says what went wrong and not whether it was applied. The difference is the
+ * whole point of `attachment_cleanup_unavailable`: the close happened, its
+ * release of the conversation's files did not, and the gateway leaves that
+ * uncertain by design. The store still refreshes and never replays either way.
+ */
+function controlFailure(error: unknown): unknown {
+  if (!(error instanceof NessaConversationControlError) || !error.code) return error
+  const named = failures[error.code]
+  if (!named) return error
+  const failed = new ControlFailedError(named, error)
+  // The client's sentence names the command and its cause; keep it as the text
+  // to fall back to when the panel has nothing of its own to add.
+  failed.message = error.message
+  return failed
 }
 
 /**
@@ -186,11 +215,13 @@ export function gatewayEffects(
     create(conversationId) {
       const existing = creations.get(conversationId)
       if (existing) return existing
+      // A conversation that could not be opened is a message that was not sent,
+      // and a control that never ran: the same refusals, translated the same way.
       const request = api()
         .create({ conversationId })
-        .catch((error) => {
+        .catch((error: unknown) => {
           creations.delete(conversationId)
-          throw error
+          throw submissionFailure(error)
         })
       creations.set(conversationId, request)
       return request
@@ -275,24 +306,44 @@ export function gatewayEffects(
       }
     },
     async reorder(conversationId, executionIds) {
-      return (await api().reorder(conversationId, executionIds)).outcome
+      try {
+        return (await api().reorder(conversationId, executionIds)).outcome
+      } catch (error) {
+        throw controlFailure(error)
+      }
     },
     async remove(conversationId, executionId) {
-      await api().remove(conversationId, executionId)
+      try {
+        await api().remove(conversationId, executionId)
+      } catch (error) {
+        throw controlFailure(error)
+      }
     },
     async answer(conversationId, executionId, permissionId, optionId) {
-      await api().answer(conversationId, executionId, permissionId, optionId)
+      try {
+        await api().answer(conversationId, executionId, permissionId, optionId)
+      } catch (error) {
+        throw controlFailure(error)
+      }
     },
     async cancel(conversationId, executionId, permissionId) {
-      await api().cancel(
-        conversationId,
-        executionId,
-        permissionId,
-        "Dismissed from the conversation panel",
-      )
+      try {
+        await api().cancel(
+          conversationId,
+          executionId,
+          permissionId,
+          "Dismissed from the conversation panel",
+        )
+      } catch (error) {
+        throw controlFailure(error)
+      }
     },
     async close(conversationId) {
-      await api().close(conversationId)
+      try {
+        await api().close(conversationId)
+      } catch (error) {
+        throw controlFailure(error)
+      }
     },
   }
 }

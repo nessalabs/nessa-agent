@@ -1,6 +1,27 @@
-import type { ConversationErrorCode } from "@nessa/client"
 import type { ImageReference } from "./attachments"
 import type { MessageContent } from "./content"
+
+/**
+ * Why a conversation command did not do what was asked, in this panel's own
+ * words rather than the gateway's.
+ *
+ * The gateway answers in wire codes. `adapters/gateway/effects.ts` is the one
+ * place those are read, and these are what everything after it decides from:
+ * whether the draft comes back, whether its images must be uploaded again, and
+ * what a notice says. Most are refusals — the command was not run at all — but
+ * `attachment-cleanup-unavailable` is not one: it is a close that did happen
+ * and could not release the files the conversation was holding.
+ */
+export type CommandFailure =
+  | "image-input-unsupported"
+  | "attachment-not-found"
+  | "attachment-unavailable"
+  | "attachment-cleanup-unavailable"
+  | "conversation-not-found"
+  | "conversation-capacity"
+  | "agent-not-configured"
+  | "agent-startup-deadline"
+  | "invalid-request"
 
 export type Receipt =
   "sending" | "accepted" | "queued" | "unknown" | "failed" | "delivered"
@@ -50,8 +71,8 @@ type ConversationState = {
   serverConversationId?: string
   serverReady?: boolean
   error?: string
-  /** Typed gateway rejection behind `error`, when the failure carried one. Notices branch on this, never on the message text. */
-  errorCode?: ConversationErrorCode
+  /** Typed reason behind `error`, when the failure carried one. Notices branch on this, never on the message text. */
+  failure?: CommandFailure
   readError?: string
   revision?: string
   readRequest?: string

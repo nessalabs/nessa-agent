@@ -1,13 +1,10 @@
-import {
-  NessaConversationControlError,
-  NessaConversationMutationError,
-  type ConversationErrorCode,
-} from "@nessa/client"
+import { NessaConversationMutationError } from "@nessa/client"
 import {
   contentText,
   MAX_SENT_PREVIEW_BYTES,
   messageImages,
   storedImages,
+  type CommandFailure,
   type FileAttachment,
   type MessageContent,
   type UploadFailure,
@@ -31,9 +28,11 @@ import {
   type SendOutcome,
 } from "../../application/usecases/send-draft"
 import { applyView } from "../../application/usecases/apply-view"
+import { controlFailureMessage } from "../../application/usecases/control-failure"
 import { boundSentPreviews } from "../../application/usecases/release-uploads"
 import {
   AttachmentStagingError,
+  ControlFailedError,
   ConversationUnavailableError,
   SubmissionRefusedError,
   type ConversationEffects,
@@ -70,6 +69,11 @@ const refusalDetail = (error: unknown) =>
   (error instanceof SubmissionRefusedError
     ? submissionRefusalMessage(error.reason)
     : undefined) ?? detail(error)
+/** The same for a control, which has no draft to hand back and says so differently. */
+const controlDetail = (error: unknown) =>
+  (error instanceof ControlFailedError
+    ? controlFailureMessage(error.reason)
+    : undefined) ?? detail(error)
 
 /**
  * Did this message go? A typed refusal is the gateway, or the client that
@@ -88,12 +92,12 @@ function sendOutcome(error: unknown, admissionAttempted: boolean): SendOutcome {
   return { kind: "uncertain" }
 }
 
-// The typed rejection behind that text, when the gateway supplied one. Kept
-// beside the message so a notice can branch on the code rather than the words.
-const rejectionCode = (error: unknown): ConversationErrorCode | undefined =>
-  error instanceof NessaConversationMutationError ||
-  error instanceof NessaConversationControlError
-    ? error.code
+// The typed reason behind that text, in the panel's own words, when the gateway
+// gave one this build knows. Kept beside the message so a notice can branch on
+// the reason rather than the words — and so nothing here reads a wire code.
+const commandFailure = (error: unknown): CommandFailure | undefined =>
+  error instanceof SubmissionRefusedError || error instanceof ControlFailedError
+    ? error.reason
     : undefined
 
 /** Capture a tab and logical submission before awaiting any connection or admission. */
@@ -161,7 +165,7 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
           executionId,
           message: refusalDetail(error),
           outcome: sendOutcome(error, admissionAttempted),
-          errorCode: rejectionCode(error),
+          failure: commandFailure(error),
         }),
       )
       throw error
@@ -409,7 +413,13 @@ export const controlConversation = createAsyncThunk<
     // never replay the control or infer that the previous order still holds.
     await dispatch(refreshConversation(id))
     dispatch(
-      showError({ id, message: refusalDetail(error), errorCode: rejectionCode(error) }),
+      showError({
+        id,
+        // A retry is a message, and is refused in a message's words; every
+        // other control is a control and speaks for itself.
+        message: control.kind === "retry" ? refusalDetail(error) : controlDetail(error),
+        failure: commandFailure(error),
+      }),
     )
     throw error
   } finally {
@@ -530,7 +540,7 @@ const conversationSlice = createSlice({
         executionId: string
         message: string
         outcome: SendOutcome
-        errorCode?: ConversationErrorCode
+        failure?: CommandFailure
       }>,
     ) {
       return failSend(
@@ -539,21 +549,17 @@ const conversationSlice = createSlice({
         action.payload.executionId,
         action.payload.message,
         action.payload.outcome,
-        action.payload.errorCode,
+        action.payload.failure,
       )
     },
     showError(
       state,
-      action: PayloadAction<{
-        id: string
-        message: string
-        errorCode?: ConversationErrorCode
-      }>,
+      action: PayloadAction<{ id: string; message: string; failure?: CommandFailure }>,
     ) {
       const current = state.conversations.find((item) => item.id === action.payload.id)
       if (current) {
         current.error = action.payload.message
-        current.errorCode = action.payload.errorCode
+        current.failure = action.payload.failure
       }
     },
     readStarted(state, action: PayloadAction<{ id: string; requestId: string }>) {
@@ -606,7 +612,7 @@ const conversationSlice = createSlice({
         current.controlPending = true
         current.readRequest = undefined
         current.error = undefined
-        current.errorCode = undefined
+        current.failure = undefined
       }
     },
     controlFinished(state, action: PayloadAction<string>) {

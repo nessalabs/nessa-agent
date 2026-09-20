@@ -1,4 +1,3 @@
-import { ConversationErrorCode } from "@nessa/client"
 import { describe, expect, it } from "vitest"
 import { conversation } from "../model"
 import { conversationNotice } from "./notification"
@@ -45,7 +44,7 @@ describe("conversation notification", () => {
   it("says the agent was still starting when the gateway rejected the send", () => {
     const value = conversation("tab")
     value.error = "The agent was still starting and ran out of time, so nothing was sent."
-    value.errorCode = ConversationErrorCode.AgentStartupDeadline
+    value.failure = "agent-startup-deadline"
     value.draft = [{ type: "text", text: "draft" }]
     value.turns = [
       {
@@ -69,9 +68,22 @@ describe("conversation notification", () => {
     // A control fails before any turn is sent, so there is no failed turn and
     // no draft to restore; the notice must still name the cause.
     value.error = "The agent was still starting and ran out of time."
-    value.errorCode = ConversationErrorCode.AgentStartupDeadline
+    value.failure = "agent-startup-deadline"
     expect(conversationNotice(value)).toEqual({
       title: "Agent was still starting",
+      description: value.error,
+      retry: { kind: "refresh" },
+    })
+  })
+  it("says a control failed in its own words without claiming the agent was starting", () => {
+    const value = conversation("tab")
+    // A close whose cleanup did not finish is not a startup deadline and not a
+    // refusal; it gets the ordinary heading and the sentence the store chose.
+    value.error =
+      "The conversation stopped, but the gateway could not release the images it had stored for it."
+    value.failure = "attachment-cleanup-unavailable"
+    expect(conversationNotice(value)).toEqual({
+      title: "Conversation needs attention",
       description: value.error,
       retry: { kind: "refresh" },
     })

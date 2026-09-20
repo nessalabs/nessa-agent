@@ -4,14 +4,13 @@ import {
   messageLabel,
   MAX_SEND_IMAGES,
   MAX_SEND_TOTAL_IMAGE_BYTES,
+  type CommandFailure,
   type Conversation,
   type ImageRefusal,
   type MessageContent,
   type UserTurn,
 } from "../../model"
-import type { ConversationErrorCode } from "@nessa/client"
 import { findConversation, replaceConversation, takeTurnId } from "../internal/ids"
-import type { SubmissionRefusal } from "../ports"
 import { notUploaded } from "./release-uploads"
 import type { LocalTabs } from "../local-tabs"
 
@@ -68,7 +67,7 @@ export function beginSend(
     phase: "thinking",
     pending: "",
     error: undefined,
-    errorCode: undefined,
+    failure: undefined,
   })
 }
 
@@ -91,10 +90,11 @@ export function imageRefusalMessage(refusal: ImageRefusal): string {
 /**
  * What to tell somebody whose message the gateway refused before taking it.
  * One sentence per refusal, chosen by its typed reason. `agent-not-configured`
- * and `invalid-request` answer undefined: the client's own message for the
- * first names the remedy, and the second has nothing better to say than it did.
+ * and `agent-startup-deadline` answer undefined because the client's own
+ * message names the remedy at length, and `invalid-request` because it has
+ * nothing better to say than the client already did.
  */
-export function submissionRefusalMessage(reason: SubmissionRefusal): string | undefined {
+export function submissionRefusalMessage(reason: CommandFailure): string | undefined {
   switch (reason) {
     case "image-input-unsupported":
       return "This agent does not take images, so the message was not sent. It is back in the draft: remove the images to send it."
@@ -106,14 +106,18 @@ export function submissionRefusalMessage(reason: SubmissionRefusal): string | un
       return "The gateway no longer has this conversation, so the message was not sent. It is back in the draft."
     case "conversation-capacity":
       return "The gateway has too many conversations open to take this one. The message is back in the draft; close a conversation or try again shortly."
+    // The last of these is a close whose cleanup failed, which no send is ever
+    // refused with; named so the gateway's whole vocabulary stays accounted for.
     case "agent-not-configured":
+    case "agent-startup-deadline":
     case "invalid-request":
+    case "attachment-cleanup-unavailable":
       return undefined
   }
 }
 
 /** Whether a refusal means the message's stored images are gone and must be uploaded again. */
-export function refusalReleasesImages(reason: SubmissionRefusal): boolean {
+export function refusalReleasesImages(reason: CommandFailure): boolean {
   return reason === "attachment-not-found" || reason === "attachment-unavailable"
 }
 
@@ -236,7 +240,7 @@ export function failSend(
   executionId: string,
   detail: string,
   outcome: SendOutcome,
-  errorCode?: ConversationErrorCode,
+  failure?: CommandFailure,
 ): LocalTabs {
   const uncertain = outcome.kind === "uncertain"
   const reupload = outcome.kind === "refused" && outcome.reupload
@@ -266,7 +270,7 @@ export function failSend(
   return replaceConversation(tabs, {
     ...(uncertain || otherWork ? conv : { ...conv, phase: "idle" as const }),
     error: detail,
-    errorCode,
+    failure,
     draft: recoveredDraft,
     draftReset:
       recoveredDraft === conv.draft ? conv.draftReset : (conv.draftReset ?? 0) + 1,

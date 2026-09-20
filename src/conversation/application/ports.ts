@@ -1,5 +1,6 @@
 import type { ConversationView, Submission, SubmissionReceipt } from "./view"
 import {
+  type CommandFailure,
   type FileAttachment,
   type ImageReference,
   type MessageContent,
@@ -65,32 +66,39 @@ export class ConversationUnavailableError extends Error {
 }
 
 /**
- * Why the gateway refused a message before admitting it. Each is the gateway's
- * own typed answer, carried here so nothing downstream reads a message string.
- * `attachment-not-found` and `attachment-unavailable` mean a named image is no
- * longer there to be sent: its reference is dead and its bytes must go up again.
- */
-export type SubmissionRefusal =
-  | "image-input-unsupported"
-  | "attachment-not-found"
-  | "attachment-unavailable"
-  | "conversation-not-found"
-  | "conversation-capacity"
-  | "agent-not-configured"
-  | "invalid-request"
-
-/**
- * The gateway answered a send or steer with a refusal it decides before
- * admission. Unlike a lost acknowledgement, this proves the message was not
- * taken: the draft can come back, and nothing is left to retry as-is.
+ * The gateway answered a conversation's creation, a send, or a steer with a
+ * refusal it decides before admission. Unlike a lost acknowledgement, this
+ * proves the message was not taken: the draft can come back, and nothing is
+ * left to retry as-is. `attachment-not-found` and `attachment-unavailable` mean
+ * a named image is no longer there to be sent: its reference is dead and its
+ * bytes must go up again.
  */
 export class SubmissionRefusedError extends Error {
   constructor(
-    readonly reason: SubmissionRefusal,
+    readonly reason: CommandFailure,
     cause?: unknown,
   ) {
     super(`The gateway refused this message (${reason}).`, { cause })
     this.name = "SubmissionRefusedError"
+  }
+}
+
+/**
+ * The gateway answered a conversation control with a reason of its own.
+ *
+ * Deliberately not a refusal: `attachment-cleanup-unavailable` is a close that
+ * did happen and whose release of the conversation's uploads did not. So this
+ * carries only what went wrong, never whether the control was applied — the
+ * store reads the conversation again either way, as it does for any control
+ * whose acknowledgement it cannot trust.
+ */
+export class ControlFailedError extends Error {
+  constructor(
+    readonly reason: CommandFailure,
+    cause?: unknown,
+  ) {
+    super(`The gateway could not complete this control (${reason}).`, { cause })
+    this.name = "ControlFailedError"
   }
 }
 

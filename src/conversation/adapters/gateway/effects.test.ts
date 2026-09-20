@@ -5,13 +5,18 @@ import {
   MAX_MESSAGE_IMAGES,
   MAX_UPLOAD_BYTES,
   NessaAttachmentError,
+  NessaConversationControlError,
   NessaConversationMutationError,
   NessaRpcError,
   type NessaClient,
   type ConversationView,
 } from "@nessa/client"
 import { expect, it, vi } from "vitest"
-import { AttachmentStagingError, SubmissionRefusedError } from "../../application/ports"
+import {
+  AttachmentStagingError,
+  ControlFailedError,
+  SubmissionRefusedError,
+} from "../../application/ports"
 import {
   MAX_ATTACHMENT_BYTES,
   MAX_SEND_IMAGES,
@@ -138,6 +143,7 @@ it.each([
   ["conversation_not_found", "conversation-not-found"],
   ["conversation_capacity", "conversation-capacity"],
   ["agent_not_configured", "agent-not-configured"],
+  ["agent_startup_deadline", "agent-startup-deadline"],
   ["invalid_request", "invalid-request"],
 ] as const)(
   "turns the gateway's pre-admission refusal %s into a typed refusal, for send and steer",
@@ -220,6 +226,112 @@ it("passes an uncertain send failure on untouched: a lost answer is not a refusa
     })
     .catch((error: unknown) => error)
   expect(error).toBe(lost)
+})
+
+const controlError = (code: string) =>
+  new NessaConversationControlError(
+    "server",
+    "action",
+    undefined,
+    // The message names another code: only the typed one is read.
+    new NessaRpcError(code, "temporarily_unavailable"),
+  )
+
+it.each([
+  ["attachment_cleanup_unavailable", "attachment-cleanup-unavailable"],
+  ["agent_startup_deadline", "agent-startup-deadline"],
+  ["conversation_not_found", "conversation-not-found"],
+  ["invalid_request", "invalid-request"],
+] as const)(
+  "turns the gateway's control failure %s into the panel's own word for it",
+  async (code, reason) => {
+    const refuse = () => Promise.reject(controlError(code))
+    const effects = effectsOf(
+      () =>
+        ({
+          conversation: {
+            close: refuse,
+            remove: refuse,
+            answer: refuse,
+            cancel: refuse,
+            reorder: refuse,
+          },
+        }) as unknown as NessaClient,
+    )
+    const controls = [
+      () => effects.close("server"),
+      () => effects.remove("server", "execution"),
+      () => effects.answer("server", "execution", "permission", "option"),
+      () => effects.cancel("server", "execution", "permission"),
+      () => effects.reorder("server", ["execution"]),
+    ]
+    for (const control of controls) {
+      const error = await control().catch((error: unknown) => error)
+      expect(error).toBeInstanceOf(ControlFailedError)
+      expect(error).toMatchObject({ reason })
+      // The client's sentence names the command and its cause; keep it.
+      expect((error as Error).message).toBe(controlError(code).message)
+    }
+  },
+)
+
+it("keeps a cleanup failure's reason even though the close itself may have applied", async () => {
+  // `attachment_cleanup_unavailable` is the one image code that is not a
+  // refusal: the close happened and only its release of the uploads did not,
+  // so the client leaves it uncertain. The reason still has to reach the panel.
+  const refused = controlError("attachment_cleanup_unavailable")
+  expect(refused.uncertain).toBe(true)
+  const effects = effectsOf(
+    () =>
+      ({
+        conversation: { close: () => Promise.reject(refused) },
+      }) as unknown as NessaClient,
+  )
+  const error = await effects.close("server").catch((error: unknown) => error)
+  expect(error).toMatchObject({ reason: "attachment-cleanup-unavailable" })
+})
+
+it("passes a control failure this build has no word for on untouched", async () => {
+  const unknown = controlError("quantum_flux")
+  expect(unknown.code).toBeUndefined()
+  const effects = effectsOf(
+    () =>
+      ({
+        conversation: { close: () => Promise.reject(unknown) },
+      }) as unknown as NessaClient,
+  )
+  expect(await effects.close("server").catch((error: unknown) => error)).toBe(unknown)
+})
+
+it("refuses an unopenable conversation in the panel's words, once, for every waiter", async () => {
+  // `create` is the prerequisite of both a send and a control, and is joined
+  // across callers; every one of them gets the same translated refusal.
+  const create = vi.fn(() =>
+    Promise.reject(
+      new NessaConversationMutationError(
+        "server",
+        "action",
+        undefined,
+        new NessaRpcError("agent_startup_deadline", "agent_startup_deadline"),
+        () => Promise.reject(new Error("unused")),
+      ),
+    ),
+  )
+  const effects = effectsOf(
+    () => ({ conversation: { create } }) as unknown as NessaClient,
+  )
+  const failures = await Promise.all(
+    [effects.create("server"), effects.create("server")].map((pending) =>
+      pending.catch((error: unknown) => error),
+    ),
+  )
+  expect(create).toHaveBeenCalledOnce()
+  for (const error of failures) {
+    expect(error).toBeInstanceOf(SubmissionRefusedError)
+    expect(error).toMatchObject({ reason: "agent-startup-deadline" })
+    // The client's long sentence about a cold runtime, not a word from here.
+    expect((error as Error).message).toMatch(/still starting and ran out of time/)
+  }
 })
 
 it("uploads nothing when the conversation already holds the bytes, and answers with its reference", async () => {

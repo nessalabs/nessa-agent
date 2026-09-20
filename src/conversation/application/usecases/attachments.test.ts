@@ -27,6 +27,7 @@ import {
   refusalReleasesImages,
   submissionRefusalMessage,
 } from "./send-draft"
+import { controlFailureMessage } from "./control-failure"
 import { boundSentPreviews } from "./release-uploads"
 
 const file = (id: string, size = 1): FileAttachment => ({
@@ -594,7 +595,30 @@ describe("sending a draft that holds images", () => {
     ])
     // The client's own message for these says more than a sentence here could.
     expect(submissionRefusalMessage("agent-not-configured")).toBeUndefined()
+    expect(submissionRefusalMessage("agent-startup-deadline")).toBeUndefined()
     expect(submissionRefusalMessage("invalid-request")).toBeUndefined()
+  })
+
+  it("leaves a control's news to the control, and a message's to the message", () => {
+    // Two commands, two kinds of news, one vocabulary. A close that could not
+    // let go of its files is the control's to say and nothing a send can be
+    // refused with; everything a send explains, the control leaves to the
+    // client's own sentence, which names the command that failed.
+    expect(controlFailureMessage("attachment-cleanup-unavailable")).toMatch(
+      /could not release the images/,
+    )
+    expect(submissionRefusalMessage("attachment-cleanup-unavailable")).toBeUndefined()
+    for (const reason of [
+      "image-input-unsupported",
+      "attachment-not-found",
+      "attachment-unavailable",
+      "conversation-not-found",
+      "conversation-capacity",
+      "agent-not-configured",
+      "agent-startup-deadline",
+      "invalid-request",
+    ] as const)
+      expect(controlFailureMessage(reason)).toBeUndefined()
   })
 
   it("says something different, and useful, for each refusal", () => {
