@@ -17,7 +17,7 @@ use nessa_auth::{
         authorization::AuthorizeAction,
         credential_admin::{
             CredentialAdminError, IssueCredentialOutcome, IssueCredentialRequest,
-            ListCredentialsRequest, RevokeCredentialRequest,
+            ListCredentialsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
         },
         dto::{CredentialGrantDto, MembershipRoleDto, MembershipStateDto, ResourceDto},
         ports::{AccessError, AccessSnapshot, CredentialEvidence, Decision, SessionEvidence},
@@ -480,7 +480,11 @@ async fn dispatch_authorized(
                 })
                 .await;
             match outcome {
-                Ok(IssueCredentialOutcome::Issued { metadata, evidence }) => {
+                // Lifecycle evidence is committed durably with the registry state
+                // itself; the wire result reports the credential, not the journal.
+                Ok(IssueCredentialOutcome::Issued {
+                    metadata, evidence, ..
+                }) => {
                     let Ok(secret) = String::from_utf8(evidence.expose_bytes().to_vec()) else {
                         return failure(&frame.id, "internal_error");
                     };
@@ -492,7 +496,7 @@ async fn dispatch_authorized(
                         },
                     )
                 }
-                Ok(IssueCredentialOutcome::ExistingSecretUnavailable { metadata }) => success(
+                Ok(IssueCredentialOutcome::ExistingSecretUnavailable { metadata, .. }) => success(
                     &frame.id,
                     &ExistingCredentialResult {
                         credential: metadata,
@@ -558,7 +562,7 @@ async fn dispatch_authorized(
                 })
                 .await
             {
-                Ok(revision) => success(
+                Ok(RevokeCredentialOutcome { revision, .. }) => success(
                     &frame.id,
                     &CredentialRevokeResult {
                         credential_id: params.credential_id,
@@ -1071,7 +1075,7 @@ mod tests {
         fn revoke<'a>(
             &'a self,
             _: RevokeCredentialRequest,
-        ) -> PortFuture<'a, u64, CredentialAdminError> {
+        ) -> PortFuture<'a, RevokeCredentialOutcome, CredentialAdminError> {
             Box::pin(async { Err(self.0) })
         }
     }

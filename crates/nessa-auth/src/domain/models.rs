@@ -286,8 +286,12 @@ impl Credential {
     }
 
     /// Evidence that this credential was created by `cause` on behalf of
-    /// `initiator`. Call once, on the newly constructed credential.
-    pub fn issued(&self, cause: IssuanceCause, initiator: Initiator) -> CredentialTransition {
+    /// `initiator`. Only a credential that has never been revoked can be issued.
+    pub fn issued(
+        &self,
+        cause: IssuanceCause,
+        initiator: Initiator,
+    ) -> Result<CredentialTransition, DomainError> {
         CredentialTransition::new(
             self.id.clone(),
             None,
@@ -296,7 +300,6 @@ impl Credential {
             initiator,
             self.issued_at,
         )
-        .expect("a fresh credential satisfies the issuance transition rule")
     }
 
     /// Restore a stored revocation time under the same rule as a live one.
@@ -489,7 +492,9 @@ mod tests {
     #[test]
     fn issuance_evidence_describes_the_fresh_credential() {
         let credential = credential("organization-1").unwrap();
-        let evidence = credential.issued(IssuanceCause::Bootstrap, Initiator::LocalOperator);
+        let evidence = credential
+            .issued(IssuanceCause::Bootstrap, Initiator::LocalOperator)
+            .unwrap();
         assert_eq!(evidence.credential_id(), credential.id());
         assert_eq!(evidence.before(), None);
         assert_eq!(evidence.after(), &credential.lifecycle());

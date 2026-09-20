@@ -16,7 +16,7 @@ use nessa_auth::{
     application::{
         credential_admin::{
             CredentialAdmin, CredentialAdminError, IssueCredentialOutcome, IssueCredentialRequest,
-            ListCredentialsRequest, RevokeCredentialRequest,
+            ListCredentialsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
         },
         dto::CredentialMetadataDto,
         ports::{Clock, PortFuture},
@@ -190,7 +190,7 @@ impl CredentialAdmin for LocalAdmin {
     fn revoke<'a>(
         &'a self,
         request: RevokeCredentialRequest,
-    ) -> PortFuture<'a, u64, CredentialAdminError> {
+    ) -> PortFuture<'a, RevokeCredentialOutcome, CredentialAdminError> {
         let store = self.store.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || store.revoke_sync(request))
