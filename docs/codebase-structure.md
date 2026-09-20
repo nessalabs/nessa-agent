@@ -284,6 +284,18 @@ or compresses an image. A test outside a context imports that context's
 the pure parts of the barrel — rather than its internals, and mocks the barrel
 with it when the barrel's components cannot be resolved.
 
+## Agent runtime warm-up
+
+`crates/nessa-server/src/agent_warm_up/` owns the one-time preparation of the
+configured agent runtime: which runtime is being prepared (domain), running it
+through one open and close and committing that evidence (application), and the
+completion record and audit files in the data directory (infrastructure). It is
+started by composition once the gateway is listening, so the operating system's
+first-execution scan is paid in the background rather than inside a user's first
+message. The conversation context waits through its own `RuntimeReadiness` port,
+which `composition/warm_up.rs` connects; the two contexts do not depend on each
+other. Tests live under `crates/nessa-server/tests/agent_warm_up/`.
+
 ## MCP tools
 
 `crates/nessa-mcp/src/mcp.rs` owns stdio transport and routing. Nessa-owned tools

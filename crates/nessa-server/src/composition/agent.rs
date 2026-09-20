@@ -183,9 +183,13 @@ mod build {
             tools_enabled: config.tools_enabled,
             mcp_servers: config.mcp_servers.clone(),
             permissions: PermissionOfferPolicy::once_only(),
-            // From protocol/defaults/agent-startup-budgets.json, which the
-            // client compiles in too: a client that gives up before the gateway
-            // has finished failing never sees the typed answer.
+            // All four from protocol/defaults/agent-startup-budgets.json,
+            // which the client compiles in too: a client that gives up before
+            // the gateway has finished failing never sees the typed answer.
+            // Spawning is the operating system's work — a runtime staged by a
+            // fresh install is scanned on its first execution — so it has its
+            // own, far larger budget than protocol work.
+            launch_timeout: budgets::launch_timeout(),
             startup_timeout: budgets::startup_timeout(),
             execution_timeout: None,
             shutdown_grace: budgets::shutdown_grace(),
