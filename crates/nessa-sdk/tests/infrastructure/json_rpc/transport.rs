@@ -249,6 +249,19 @@ fn the_write_allowance_is_one_second_until_a_frame_reaches_a_mebibyte() {
     }
 }
 
+#[test]
+fn a_length_no_frame_could_have_still_answers_a_duration() {
+    // No configured limit allows a frame of this length, and the allowance is
+    // total for every one: the answer saturates instead of overflowing the
+    // multiplication behind it, whatever the per-mebibyte constant becomes.
+    let saturated = Duration::from_secs(u64::from(u32::MAX));
+    assert_eq!(large_frame_allowance(usize::MAX), saturated);
+    assert_eq!(
+        write_allowance(usize::MAX),
+        saturated + Duration::from_secs(1)
+    );
+}
+
 /// Reads a mebibyte, then is busy for nine tenths of a second, as an agent
 /// that parses what it receives is. Slower than a pipe, faster than stalled.
 async fn read_slowly(mut input: tokio::io::DuplexStream) {

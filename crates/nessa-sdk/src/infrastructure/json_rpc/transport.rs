@@ -246,8 +246,12 @@ pub(crate) fn write_allowance(frame_bytes: usize) -> Duration {
 /// The part of [`write_allowance`] that grows with the frame: a second for
 /// each whole mebibyte, and nothing below one. A fixed acknowledgement
 /// deadline that has to cover the write as well is extended by this much.
+///
+/// Total for any length: a frame larger than a configured limit can ever be
+/// still answers a duration rather than overflowing.
 pub(crate) fn large_frame_allowance(frame_bytes: usize) -> Duration {
-    WRITE_PER_MIB * u32::try_from(frame_bytes / (1024 * 1024)).unwrap_or(u32::MAX)
+    let mebibytes = u32::try_from(frame_bytes / (1024 * 1024)).unwrap_or(u32::MAX);
+    WRITE_PER_MIB.saturating_mul(mebibytes)
 }
 
 /// Write a frame already encoded and validated by `encode`, preserving its bytes.
