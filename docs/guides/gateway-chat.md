@@ -74,10 +74,12 @@ under that agent's name in `runtimes`:
 ```
 
 An agent is started by a command and the arguments handed to it, rather than by a
-shared Node and a per-agent entry script. A harness that runs under Node is
-`"command": ".../node"` with its entry script in `args`; an agent that speaks ACP
-itself is its own executable with its own subcommand, such as
-`"command": "/usr/local/bin/opencode", "args": ["acp"]`. Only the arguments that
+shared Node and a per-agent entry script. Both agents this build has an adapter
+for run under Node, so both are `"command": ".../node"` with an entry script in
+`args`. The pair is wider than that on purpose: an agent that speaks ACP itself
+would be its own executable taking its own subcommand in `args`, which the older
+runtime-plus-entry-script shape could not describe at all. No such agent has an
+adapter here yet, so there is no example of one to copy. Only the arguments that
 are absolute paths are looked for on this machine — anything else is the agent's
 own vocabulary and is passed through untouched.
 
