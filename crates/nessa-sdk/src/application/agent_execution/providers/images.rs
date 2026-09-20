@@ -39,9 +39,13 @@ impl Error for UserImageError {}
 /// images, which can happen after a restoration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageInputRefusal {
-    /// The connected agent did not agree to receive images, or this process has
-    /// no [`UserImageSource`] to read them from. The selected model may well
-    /// accept images; this agent connection does not carry them.
+    /// This attachment offers no image input at all: either the selected model
+    /// does not list it, or composition gave the binding no [`UserImageSource`]
+    /// to read bytes from. Nothing about the message could make it acceptable.
+    NotOffered,
+    /// The connected agent did not agree to receive images. The selected model
+    /// accepts them and this process could supply them; this agent connection
+    /// does not carry them, and a restored one may.
     AgentDoesNotAccept,
     /// The selected model does not accept an image in this encoding.
     MediaType(ImageMediaType),
@@ -66,6 +70,7 @@ impl From<ImageInputViolation> for ImageInputRefusal {
 impl fmt::Display for ImageInputRefusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NotOffered => write!(f, "this attachment offers no image input"),
             Self::AgentDoesNotAccept => write!(f, "the connected agent does not accept images"),
             Self::MediaType(media_type) => {
                 write!(f, "the model does not accept {}", media_type.as_str())

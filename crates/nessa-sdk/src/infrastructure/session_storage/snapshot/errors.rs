@@ -157,6 +157,7 @@ pub(super) enum SavedError {
     UserImageMissing,
     UserImageUnavailable,
     UserImageMismatch,
+    ImageInputNotOffered,
     ImageInputAgentDoesNotAccept,
     ImageInputMediaType(MediaType),
     ImageInputImageTooLarge {
@@ -260,6 +261,9 @@ impl From<SavedError> for AgentError {
             SavedError::UserImageMissing => Self::UserImage(UserImageError::Missing),
             SavedError::UserImageUnavailable => Self::UserImage(UserImageError::Unavailable),
             SavedError::UserImageMismatch => Self::UserImage(UserImageError::Mismatch),
+            SavedError::ImageInputNotOffered => {
+                Self::ImageInputRefused(ImageInputRefusal::NotOffered)
+            }
             SavedError::ImageInputAgentDoesNotAccept => {
                 Self::ImageInputRefused(ImageInputRefusal::AgentDoesNotAccept)
             }
@@ -363,6 +367,9 @@ impl From<AgentError> for SavedError {
             AgentError::UserImage(UserImageError::Missing) => Self::UserImageMissing,
             AgentError::UserImage(UserImageError::Unavailable) => Self::UserImageUnavailable,
             AgentError::UserImage(UserImageError::Mismatch) => Self::UserImageMismatch,
+            AgentError::ImageInputRefused(ImageInputRefusal::NotOffered) => {
+                Self::ImageInputNotOffered
+            }
             AgentError::ImageInputRefused(ImageInputRefusal::AgentDoesNotAccept) => {
                 Self::ImageInputAgentDoesNotAccept
             }

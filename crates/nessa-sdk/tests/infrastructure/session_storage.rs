@@ -425,6 +425,7 @@ async fn snapshots_preserve_all_settlement_errors_and_unresolved_attempts() {
         AgentError::UserImage(UserImageError::Missing),
         AgentError::UserImage(UserImageError::Unavailable),
         AgentError::UserImage(UserImageError::Mismatch),
+        AgentError::ImageInputRefused(ImageInputRefusal::NotOffered),
         AgentError::ImageInputRefused(ImageInputRefusal::AgentDoesNotAccept),
         AgentError::ImageInputRefused(ImageInputRefusal::MediaType(ImageMediaType::Png)),
         AgentError::ImageInputRefused(ImageInputRefusal::MediaType(ImageMediaType::Jpeg)),
