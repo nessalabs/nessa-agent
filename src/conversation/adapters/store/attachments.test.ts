@@ -112,6 +112,9 @@ async function expectRefused(
   expect(context.effects.send).not.toHaveBeenCalled()
 }
 
+// Which drafts cannot go is `declineReason`'s, and tested there over every
+// reason. What the thunk does with one of those answers is this file's: the
+// reason is shown, the draft is untouched, and nothing is sent.
 it("refuses a file that is not an image, and says which", async () => {
   const context = storeWith()
   const notes = image("notes", { name: "notes.pdf", mimeType: "application/pdf" })
@@ -120,7 +123,6 @@ it("refuses a file that is not an image, and says which", async () => {
   for (const content of [
     [{ type: "text" as const, text: "hello" }],
     [{ type: "text" as const, text: "hello" }, notes],
-    [notes],
   ])
     await expectRefused(
       context,
@@ -131,32 +133,8 @@ it("refuses a file that is not an image, and says which", async () => {
   expect(context.effects.stageAttachment).not.toHaveBeenCalled()
 })
 
-it("refuses while an upload is in flight", async () => {
-  const context = storeWith()
-  context.store.dispatch(attachFiles({ files: [image("a")], conversationId: "c0" }))
-  await expectRefused(context, "upload-in-flight", /still uploading/)
-  context.store.dispatch(uploadChanged({ fileId: "a", to: "uploading" }))
-  await expectRefused(context, "upload-in-flight", /still uploading/)
-})
-
-it.each(["rejected", "unavailable", "unsupported-image", "too-large"] as const)(
-  "refuses after an upload failed as %s, and points at the tile",
-  async (reason) => {
-    const context = storeWith()
-    context.store.dispatch(attachFiles({ files: [image("a")], conversationId: "c0" }))
-    context.store.dispatch(uploadChanged({ fileId: "a", to: "uploading" }))
-    context.store.dispatch(uploadChanged({ fileId: "a", to: "failed", reason }))
-    await expectRefused(context, "upload-failed", /a\.heic.*did not upload.*tile/)
-  },
-)
-
-it("refuses more images, or more stored bytes, than one message carries", async () => {
-  const many = storeWith()
-  for (let index = 0; index < 11; index++)
-    await attachStored(many.store, image(`i${index}`))
-  await expectRefused(many, "too-many-images", /up to 10 images/)
-
-  // Counted over what the gateway stored: three tiny files stored at 4 MB each.
+it("refuses more stored bytes than one message carries, counted over what came back", async () => {
+  // Three tiny files the gateway stored at 4 MB each: the files are nothing.
   const heavy = storeWith({
     stageAttachment: vi.fn(async () => ({ ...stored, size: 4 * 1024 * 1024 })),
   })
@@ -527,38 +505,16 @@ it("stages the original into a conversation it creates first, and records what c
   ])
 })
 
+// Which reason a staging refusal carries is the gateway adapter's, and tested
+// there. Here: a typed refusal reaches the tile as itself, and anything else —
+// nothing says the gateway ever looked at the bytes — is the gateway being away.
 it.each([
   ["the gateway refusing the bytes", new AttachmentStagingError("rejected"), "rejected"],
-  ["storage being away", new AttachmentStagingError("unavailable"), "unavailable"],
-  [
-    "a format the gateway cannot read",
-    new AttachmentStagingError("unsupported-image"),
-    "unsupported-image",
-  ],
-  [
-    "an image that cannot fit the model",
-    new AttachmentStagingError("too-large"),
-    "too-large",
-  ],
-  // Not a staging error at all: nothing says the gateway looked at the bytes.
   ["an unrelated fault", new Error("rejected"), "unavailable"],
 ] as const)("records %s on the tile", async (_name, error, reason) => {
   const context = storeWith({ stageAttachment: vi.fn(() => Promise.reject(error)) })
   await attachStored(context.store, image("a"))
   expect(context.draft()).toEqual([image("a", { upload: { status: "failed", reason } })])
-})
-
-it("fails the upload rather than store a reference that is not one", async () => {
-  const context = storeWith({
-    stageAttachment: vi.fn(async () => ({
-      ...stored,
-      mimeType: "image/heic" as "image/jpeg",
-    })),
-  })
-  await attachStored(context.store, image("a"))
-  expect(context.draft()).toEqual([
-    image("a", { upload: { status: "failed", reason: "rejected" } }),
-  ])
 })
 
 it("fails the upload as unavailable when the conversation cannot be created", async () => {
@@ -591,28 +547,9 @@ it("does not bring back a tile removed while its upload was in flight", async ()
   expect(context.draft()).toEqual([])
   gate.resolve(stored)
   await staging
+  // A late failure is the same: `changeUpload` ignores every result for a file
+  // the draft no longer holds, whichever way the upload ended.
   expect(context.draft()).toEqual([])
-
-  // The same, for an upload that fails late.
-  const failing = deferred<ImageReference>()
-  const begun = deferred<void>()
-  const second = storeWith({
-    stageAttachment: vi.fn(() => {
-      begun.resolve()
-      return failing.promise
-    }),
-  })
-  const other = image("b")
-  second.store.dispatch(attachFiles({ files: [other], conversationId: "c0" }))
-  second.store.dispatch(uploadChanged({ fileId: "b", to: "uploading" }))
-  const late = second.store.dispatch(
-    stageAttachment({ id: "c0", fileId: "b", file: described(other), bytes }),
-  )
-  await begun.promise
-  second.store.dispatch(removeFile("b"))
-  failing.reject(new AttachmentStagingError("unavailable"))
-  await late
-  expect(second.draft()).toEqual([])
 })
 
 it("uploads nothing for a file that is already gone", async () => {

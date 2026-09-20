@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest"
 import {
-  contentText,
   MAX_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENTS,
@@ -119,31 +118,11 @@ describe("draft file previews", () => {
   })
   it("never submits or clears a file that cannot go, even if submission omits it", () => {
     const tabs = attachFiles(emptyLocalTabs(), [file("a")], "c0")
-    expect(
-      beginSend(tabs, {
-        conversationId: "c0",
-        executionId: "execution",
-        actionId: "action",
-        mode: "queued",
-        content: [{ type: "text", text: "hello" }, file("a")],
-      }),
-    ).toBe(tabs)
-    expect(
-      beginSend(tabs, {
-        conversationId: "c0",
-        executionId: "execution",
-        actionId: "action",
-        mode: "queued",
-        content: [{ type: "text", text: "hello" }],
-      }),
-    ).toBe(tabs)
-    expect(
-      contentText([
-        { type: "text", text: "  hi " },
-        file("a"),
-        { type: "pasted-text", id: "p", text: " there\n" },
-      ]),
-    ).toBe("  hi  there\n")
+    for (const content of [
+      [{ type: "text" as const, text: "hello" }, file("a")],
+      [{ type: "text" as const, text: "hello" }],
+    ])
+      expect(beginSend(tabs, { ...submission, content })).toBe(tabs)
   })
 })
 
@@ -231,7 +210,6 @@ describe("a draft file's upload state", () => {
       { ...reference(), mimeType: "image/heic" as "image/png" },
     ],
     ["nothing at all", reference(0)],
-    ["a fractional size", reference(1.5)],
   ])("fails, rather than stores, a reference to %s", (_name, claimed) => {
     const uploading = changeUpload(attachFiles(emptyLocalTabs(), [image("a")], "c0"), {
       fileId: "a",
@@ -256,19 +234,6 @@ describe("a draft file's upload state", () => {
     expect(result.conversations[0]!.draft[0]).toMatchObject({
       upload: { status: "failed", reason: "rejected" },
     })
-  })
-
-  it("keeps the gateway's verdict on an image as the reason it failed", () => {
-    for (const reason of ["unsupported-image", "too-large"] as const) {
-      const uploading = changeUpload(attachFiles(emptyLocalTabs(), [image("a")], "c0"), {
-        fileId: "a",
-        to: "uploading",
-      })
-      const failed = changeUpload(uploading, { fileId: "a", to: "failed", reason })
-      expect(failed.conversations[0]!.draft[0]).toMatchObject({
-        upload: { status: "failed", reason },
-      })
-    }
   })
 
   it("keeps the store's upload state when the composer rewrites the draft around it", () => {

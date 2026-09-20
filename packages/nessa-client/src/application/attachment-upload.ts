@@ -23,9 +23,8 @@ export type AttachmentUploadReply = { status: number; body: unknown }
  * The upload route, as this package needs it. HTTP is on the other side.
  *
  * The socket cannot carry bytes — one message is capped at 64 KiB — so they
- * travel on their own request. This is the seam for it: composition supplies
- * the `fetch`-backed adapter, tests supply one that can refuse, stall, or fail.
- * An adapter rejects only when no answer arrived at all.
+ * travel on their own request, and this is the seam for it. An adapter rejects
+ * only when no answer arrived at all.
  */
 export interface AttachmentUploadTransport {
   put(upload: AttachmentUploadRequest): Promise<AttachmentUploadReply>
@@ -47,49 +46,12 @@ export type UploadTimer = (ms: number, elapsed: () => void) => () => void
 export const UPLOAD_DEADLINE_MS = 180_000
 
 /**
- * Why an attachment was not staged.
- *
- * Upload-route refusals, as the gateway names them:
- * - `ticket_invalid`: unknown, expired, or already used.
- * - `size_mismatch`, `digest_mismatch`: not the bytes the ticket was issued for.
- * - `upload_interrupted`: the body stopped arriving.
- * - `attachment_not_kept`: the bytes were good, but the conversation let go of
- *   its files before they were kept. Beginning again stages them.
- * - `upload_timeout`: the transfer outlived the gateway's deadline — or this
- *   client's own, when no answer came at all (then there is no `status`).
- * - `unsupported_image`: not an image format the gateway can read.
- * - `image_too_large`: could not be brought under the selected model's limits.
- * - `image_input_unsupported`: the agent's model takes no images.
- * - `storage_unavailable`, `audit_unavailable`: the gateway could not keep or record it.
- * - `temporarily_unavailable`: too many uploads at once. The only refusal that
- *   does **not** spend the ticket: the same ticket may be tried again shortly.
- *
- * And this client's own: `begin_refused` (the gateway declined to issue a
- * ticket; see `refusal`), `aborted` (the caller's signal), `unreachable` (no
- * answer from either step), `unexpected_response` (an answer this client does
- * not recognise, including a code it has not been taught).
+ * The refusals the upload route is known to give, and the only ones read from
+ * its answer: a code that is not here stays `unexpected_response` until
+ * somebody decides what it means. The list is also half of
+ * {@link AttachmentFailureCode}, so neither can grow without the other.
  */
-export type AttachmentFailureCode =
-  | "ticket_invalid"
-  | "size_mismatch"
-  | "digest_mismatch"
-  | "upload_interrupted"
-  | "attachment_not_kept"
-  | "upload_timeout"
-  | "unsupported_image"
-  | "image_too_large"
-  | "image_input_unsupported"
-  | "storage_unavailable"
-  | "audit_unavailable"
-  | "temporarily_unavailable"
-  | "begin_refused"
-  | "aborted"
-  | "unreachable"
-  | "unexpected_response"
-
-// A closed list on purpose. A code that is not here stays `unexpected_response`
-// until somebody decides what it means; it is never passed through as if known.
-const uploadRefusals: readonly AttachmentFailureCode[] = [
+const uploadRefusals = [
   "ticket_invalid",
   "size_mismatch",
   "digest_mismatch",
@@ -102,7 +64,34 @@ const uploadRefusals: readonly AttachmentFailureCode[] = [
   "storage_unavailable",
   "audit_unavailable",
   "temporarily_unavailable",
-]
+] as const
+
+/**
+ * Why an attachment was not staged.
+ *
+ * Upload-route refusals, as the gateway names them, where the name does not
+ * already say it:
+ * - `ticket_invalid`: unknown, expired, or already used.
+ * - `size_mismatch`, `digest_mismatch`: not the bytes the ticket was issued for.
+ * - `attachment_not_kept`: the bytes were good, but the conversation let go of
+ *   its files before they were kept. Beginning again stages them.
+ * - `upload_timeout`: the transfer outlived the gateway's deadline — or this
+ *   client's own, when no answer came at all (then there is no `status`).
+ * - `image_too_large`: could not be brought under the selected model's limits.
+ * - `temporarily_unavailable`: too many uploads at once, and the only refusal
+ *   that does **not** spend the ticket — the same one may be tried again.
+ *
+ * And this client's own: `begin_refused` (see `refusal`), `aborted` (the
+ * caller's signal), `unreachable` (no answer from either step),
+ * `unexpected_response` (an answer this client does not recognise, including a
+ * code it has not been taught — a code is never passed through as if known).
+ */
+export type AttachmentFailureCode =
+  | (typeof uploadRefusals)[number]
+  | "begin_refused"
+  | "aborted"
+  | "unreachable"
+  | "unexpected_response"
 
 /** A refusal code the upload route is known to give, or `unexpected_response`. */
 export function uploadRefusal(body: unknown): AttachmentFailureCode {
@@ -115,26 +104,8 @@ export function uploadRefusal(body: unknown): AttachmentFailureCode {
   )
 }
 
-/**
- * Why the gateway declined `attachment.begin`, as it named it. `unexpected` is a
- * code this client has not been taught. `attachment_capacity` and
- * `temporarily_unavailable` pass with time — capacity frees as tickets are used
- * or expire — so asking again later may work. The upload route says
- * `storage_unavailable` where the socket says `attachment_storage_unavailable`;
- * both are here.
- */
-export type AttachmentBeginRefusal =
-  | "invalid_request"
-  | "conversation_not_found"
-  | "attachment_capacity"
-  | "attachment_storage_unavailable"
-  | "storage_unavailable"
-  | "audit_unavailable"
-  | "temporarily_unavailable"
-  | "agent_not_configured"
-  | "unexpected"
-
-const beginRefusals: readonly AttachmentBeginRefusal[] = [
+/** The reasons `attachment.begin` is known to give, and the only ones read. */
+const beginRefusals = [
   "invalid_request",
   "conversation_not_found",
   "attachment_capacity",
@@ -143,7 +114,16 @@ const beginRefusals: readonly AttachmentBeginRefusal[] = [
   "audit_unavailable",
   "temporarily_unavailable",
   "agent_not_configured",
-]
+] as const
+
+/**
+ * Why the gateway declined `attachment.begin`, as it named it. `unexpected` is a
+ * code this client has not been taught. `attachment_capacity` and
+ * `temporarily_unavailable` pass with time, so asking again later may work. The
+ * upload route says `storage_unavailable` where the socket says
+ * `attachment_storage_unavailable`; both are here.
+ */
+export type AttachmentBeginRefusal = (typeof beginRefusals)[number] | "unexpected"
 
 /** The gateway's reason for refusing `begin`, read from the RPC error's code and nothing else. */
 export function beginRefusal(cause: NessaRpcError): AttachmentBeginRefusal {
@@ -151,13 +131,11 @@ export function beginRefusal(cause: NessaRpcError): AttachmentBeginRefusal {
 }
 
 /**
- * An attachment that was not staged, with a code to branch on.
- *
- * Nothing here is replayed for you. After `temporarily_unavailable` the ticket
- * is still good and the same upload may be tried again; after every other upload
- * failure the ticket is spent or of unknown state, so begin again — bytes that
- * did arrive answer `stored`, and bytes that did not get a fresh ticket. The
- * message and cause never contain the ticket.
+ * An attachment that was not staged, with a {@link AttachmentFailureCode} to
+ * branch on. Nothing is replayed for you: after any upload failure but
+ * `temporarily_unavailable` the ticket is spent or of unknown state, so begin
+ * again — bytes that did arrive answer `stored`, and bytes that did not get a
+ * fresh ticket. The message and cause never contain the ticket.
  */
 export class NessaAttachmentError extends Error {
   constructor(
@@ -177,11 +155,9 @@ export class NessaAttachmentError extends Error {
 }
 
 /**
- * Where uploads go for a session: the gateway's own origin, over HTTP.
- *
- * Same host and port as the WebSocket, `ws` to `http` and `wss` to `https`, and
- * no path — `/session` and `/browser/session` are socket routes. Pure, so the
- * rule is tested without a connection.
+ * Where uploads go for a session: the gateway's own origin, over HTTP. Same
+ * host and port as the WebSocket, `ws` to `http` and `wss` to `https`, and no
+ * path — `/session` and `/browser/session` are socket routes.
  */
 export function attachmentUploadUrl(sessionUrl: string): string {
   const url = new URL(sessionUrl)
