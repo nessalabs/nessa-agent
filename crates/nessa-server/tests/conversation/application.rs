@@ -1829,6 +1829,36 @@ async fn a_name_this_build_knows_nothing_about_refuses_a_creation_and_not_a_reop
 }
 
 #[tokio::test]
+async fn a_caller_context_too_damaged_to_record_is_refused_on_a_reopen_too() {
+    // A reopen builds no conversation — it writes this caller's surface and
+    // action into the reopen's own audit record instead. `ActionContext`
+    // refuses a blank and bounds the length; it allows control characters,
+    // which the conversation entity does not. So the same context was refused
+    // for a new conversation and accepted for a reopen, where it landed
+    // unvalidated in a durable `correlation_id`.
+    let (service, provider, _, _) = fixture(ConversationLimits::default());
+    let existing = id();
+    let fresh = id();
+    service
+        .create(existing.clone(), caller("panel", "create"), None)
+        .await
+        .unwrap();
+    let wiped = "reopen\u{0}\u{1b}[2Jwiped";
+    assert!(matches!(
+        service.create(existing, caller("panel", wiped), None).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    // Refused before anything was reopened, so the record never existed to be
+    // written: the same answer this context gets for a new conversation.
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        service.create(fresh, caller("panel", wiped), None).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_default_agent_nobody_configured_is_refused_before_any_conversation_exists() {
     // The pairing is the invariant, not either half of it. A default that is not
     // among the configured agents would accept a creation naming nothing and

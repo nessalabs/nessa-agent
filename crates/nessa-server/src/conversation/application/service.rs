@@ -187,6 +187,19 @@ struct LiveConversation {
 /// nothing at all: an agent dropped from the configuration refuses each of its
 /// conversations instantly and permanently, and thirty-two such refusals used
 /// to leave the server unable to create any conversation at all.
+///
+/// Giving the slot back means giving up the answer with it, which is the second
+/// thing this flag changed and the one that costs something. A slot is where
+/// the attempt is remembered, so a failure that releases it is not cached: the
+/// next call for that conversation runs the whole opening again — `metadata`
+/// load, the audit reconcile, `SessionManager::open`, and a provider spawn —
+/// and fails the same way. A panel polls, and a tab polls per tab, so a runtime
+/// pointed at a binary that is not there spawns once per poll per tab rather
+/// than once. That is accepted deliberately: the alternative is a cached
+/// refusal that survives the user installing the binary, and a wrong answer
+/// held forever is worse than a right one paid for repeatedly. A failure that
+/// did retain something keeps its slot and so keeps its answer, which is why
+/// the expensive case is exactly the cheap one to redo.
 struct OpeningFailure {
     cause: ConversationError,
     _cleanup: Option<AgentInitializationError>,
@@ -275,6 +288,16 @@ impl ConversationService {
         supervised(async move {
             let _admission = service.admit().await?;
             caller.actor()?;
+            // Asked of every creation, not only the ones that build a
+            // conversation. A reopen writes this caller's surface and action
+            // into its own audit record, so the same context has to be fit to
+            // record on both branches — and `ActionContext` bounds the length
+            // and refuses blanks but allows control characters, which
+            // `Conversation::new` does not. Checking it only where a
+            // conversation is constructed left a reopen's `correlation_id`
+            // carrying whatever the caller sent.
+            Conversation::check_creator_context(&caller.surface_id, &caller.action_id)
+                .map_err(|_| ConversationError::InvalidInput)?;
             if service.inner.retirement.get().is_some() {
                 return Err(ConversationError::Unavailable);
             }
