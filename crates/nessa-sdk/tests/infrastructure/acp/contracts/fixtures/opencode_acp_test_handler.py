@@ -51,6 +51,14 @@ policy = json.loads(os.environ["OPENCODE_PERMISSION"])
 assert policy["*"] == "deny", policy
 assert policy["read"]["*"] == "allow", policy
 assert policy["read"]["*.env"] == "deny", policy
+# These next two are in tension with the line above, deliberately and not by
+# oversight. `read` is asked for permission with the path it is about, so
+# denying `*.env` there works; `grep` is asked with the regular expression
+# instead and Opencode runs ripgrep with `--hidden`, so an allowed `grep`
+# returns matches from the files `read` refuses to open. The `.env` rules stop
+# the direct path and are not claimed to be a secrets boundary; `binding.rs`
+# says so where the policy is defined, and this asserts the pair that makes it
+# true rather than leaving the two lines to look like a contradiction.
 for allowed in ("grep", "glob"):
     assert policy[allowed] == "allow", policy
 # Nothing that acts, named one by one so that widening the policy has to be

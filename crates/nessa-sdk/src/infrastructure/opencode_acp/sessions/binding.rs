@@ -78,8 +78,8 @@ use tokio::process::Command;
 /// One rule is appended after this policy: Opencode gives every agent
 /// `external_directory` access to its own `tool-output` directory unless the
 /// agent already denies that exact path. Narrow and its own scratch space, so
-/// it is left alone — but it does mean "last word" is a description of rank
-/// rather than of position.
+/// it is left alone — but it does mean this policy is the last word among
+/// the permission rules rather than the last rule merged.
 const SESSION_POLICY: &str = r#"{"*":"deny","read":{"*":"allow","*.env":"deny","*.env.*":"deny","*.env.example":"allow"},"grep":"allow","glob":"allow","lsp":"allow","todowrite":"allow"}"#;
 
 /// Immutable composition factory; opening twice creates independent process scopes.
