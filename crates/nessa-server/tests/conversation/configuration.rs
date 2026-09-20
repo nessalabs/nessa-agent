@@ -332,6 +332,46 @@ fn every_configured_agent_that_can_be_built_is() {
     assert!(built.providers.contains_key(&AgentId::Opencode));
 }
 
+/// Opencode can be started against the catalog Nessa actually ships.
+///
+/// Every other test on this path writes its own catalog, so none of them could
+/// tell "composition builds an Opencode provider" from "composition builds one
+/// when handed a catalog invented for the test". This one hands it the shipped
+/// file and the model the desktop starts Opencode on, which is the pair a real
+/// installation has.
+// `providers` is Unix-only; on other platforms it refuses outright.
+#[cfg(unix)]
+#[test]
+fn opencode_builds_against_the_catalog_nessa_ships() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    nessa_local_storage::create_directory(&workspace).unwrap();
+    let command = root.path().join("opencode");
+    std::fs::write(&command, "fixture").unwrap();
+    let conversations = root.path().join("conversations");
+    nessa_local_storage::create_directory(&conversations).unwrap();
+
+    let config: AgentsConfig = serde_json::from_value(serde_json::json!({
+        "catalog": concat!(env!("CARGO_MANIFEST_DIR"), "/../nessa-sdk/data/models.json"),
+        "workspace": workspace,
+        "selected": "opencode",
+        "runtimes": {"opencode": {
+            "command": command,
+            "args": ["acp"],
+            // What `composition::desktop::default_model` starts Opencode on.
+            "model": "opencode/big-pickle",
+            "toolsEnabled": true,
+        }},
+    }))
+    .unwrap();
+
+    // Selected, so a refusal would be fatal rather than logged: this asserts
+    // the provider was built, not that the failure was survivable.
+    let built = providers(&config, &conversations, Arc::new(SystemClock)).unwrap();
+    assert!(built.providers.contains_key(&AgentId::Opencode));
+    assert!(built.unavailable.is_empty());
+}
+
 /// The two ways an agent can be left out are told apart, because readiness
 /// needs them apart.
 ///

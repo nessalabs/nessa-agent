@@ -36,8 +36,10 @@ const DEFAULT_AGENT: AgentId = AgentId::Claude;
 /// prints a report — it does not record a runtime, and no other code turns the
 /// unpacked path into one. So `None` here is the whole truth at this commit:
 /// the desktop does not ship Opencode and nothing else supplies it either.
-/// What is missing between the two is a step that records the installed launch,
-/// and model catalog entries for OpenCode Zen to select against.
+/// What is missing between the two is one step, a step that records the
+/// installed launch. The catalog is no longer part of that gap — the shipped
+/// `models.json` now carries OpenCode Zen entries, so a runtime written by
+/// hand starts today.
 fn bundled_launch(agent: AgentId) -> Option<(&'static str, &'static str)> {
     match agent {
         AgentId::Claude => Some((
@@ -61,11 +63,13 @@ fn default_model(agent: AgentId) -> &'static str {
     match agent {
         AgentId::Claude => "claude-sonnet-5",
         AgentId::Codex => "gpt-5.6-terra",
-        // Unreachable today: this is read for bundled agents, and Opencode is
-        // not one. Named rather than wildcarded so that a new agent has to say
-        // what it starts on. It is also not yet selectable — the shipped
-        // catalog has no OpenCode Zen entries — so whatever configures Opencode
-        // has to add those before this string means anything.
+        // Unreachable from here today: this is read for bundled agents, and
+        // Opencode is not one. Named rather than wildcarded so that a new agent
+        // has to say what it starts on, and a real name rather than a
+        // placeholder: the shipped catalog serves it, and
+        // `opencode_builds_against_the_catalog_nessa_ships` holds the two
+        // together. Spelled the way Opencode spells it, slash and all, because
+        // the binding sends this string back as the session's `model` option.
         AgentId::Opencode => "opencode/big-pickle",
     }
 }
