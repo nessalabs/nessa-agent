@@ -1,3 +1,6 @@
+//! The closed set of image encodings Nessa names.
+#![deny(missing_docs)]
+
 use std::{error::Error, fmt};
 
 /// The text is not one of the supported image media types, written exactly.

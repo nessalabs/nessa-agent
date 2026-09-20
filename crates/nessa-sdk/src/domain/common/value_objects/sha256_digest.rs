@@ -1,4 +1,10 @@
-use std::{error::Error, fmt};
+//! A SHA-256 digest as a value: what content hashes to, without the content.
+#![deny(missing_docs)]
+
+use std::{
+    error::Error,
+    fmt::{self, Write},
+};
 
 /// The text is not `sha256:` followed by 64 lowercase hexadecimal digits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,7 +56,6 @@ impl Sha256Digest {
     /// The 64 lowercase hexadecimal digits without the algorithm prefix: a
     /// portable file-name form.
     pub fn to_hex(&self) -> String {
-        use fmt::Write;
         let mut hex = String::with_capacity(64);
         for byte in self.0 {
             let _ = write!(hex, "{byte:02x}");
