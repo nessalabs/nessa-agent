@@ -1,4 +1,5 @@
 use super::{SearchPath, SearchPathError};
+#[cfg(target_os = "macos")]
 use std::path::Path;
 
 #[test]
@@ -83,6 +84,10 @@ fn an_unbounded_value_is_refused_before_it_is_parsed() {
 
 /// The staged runtime holds Nessa's own `node`. Whatever the login shell says,
 /// it does not become the `node` a project's tools find first.
+///
+/// Gated with what it exercises: only the host that stages a runtime has one to
+/// exclude.
+#[cfg(target_os = "macos")]
 #[test]
 fn the_runtime_directory_is_excluded_wherever_it_appears() {
     let runtime = Path::new("/Users/me/Library/Application Support/Nessa/gateway-runtimes/abc");
@@ -102,6 +107,7 @@ fn the_runtime_directory_is_excluded_wherever_it_appears() {
     assert_eq!(untouched.as_str(), "/opt/homebrew/bin:/usr/bin");
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn excluding_the_only_entry_leaves_no_path_at_all() {
     let runtime = Path::new("/staged/runtime");
@@ -113,7 +119,7 @@ fn excluding_the_only_entry_leaves_no_path_at_all() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 #[test]
 fn a_directory_that_is_not_utf8_removes_nothing() {
     use std::{ffi::OsString, os::unix::ffi::OsStringExt};

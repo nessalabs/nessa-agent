@@ -2,6 +2,6 @@
 mod ports;
 mod service;
 #[cfg(test)]
-pub(crate) mod testing;
+pub(crate) use ports::testing;
 pub use ports::{GatewayError, GatewayHost, LoginShellError, LoginShellPath, ReconciledGateway};
 pub use service::Gateway;

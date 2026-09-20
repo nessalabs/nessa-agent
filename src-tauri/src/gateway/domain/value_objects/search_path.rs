@@ -1,10 +1,8 @@
-use std::{error::Error, fmt, path::Path};
-
-/// The minimal set of system directories every Nessa process can rely on.
-///
-/// It is what launchd would give a service with no `PATH` of its own, and it is
-/// the floor the agent falls back to when the user's login shell cannot be read.
-const SYSTEM_ENTRIES: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+use std::{error::Error, fmt};
+// Named only by `excluding`, which is gated with the host that has a directory
+// to exclude.
+#[cfg(target_os = "macos")]
+use std::path::Path;
 
 /// A `PATH` value: colon-separated absolute directories, in the order they are
 /// searched.
@@ -25,6 +23,9 @@ pub struct SearchPath(String);
 ///
 /// Each variant is a distinct reason, because "the login shell said nothing" and
 /// "the login shell said something unusable" are different things to report.
+// Constructed where a reported path is parsed, which is where a login shell can
+// be read; see the note on `impl SearchPath`.
+#[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchPathError {
     /// Longer than [`SearchPath::LIMIT`] bytes. A real `PATH` is not, and an
@@ -48,7 +49,21 @@ impl fmt::Display for SearchPathError {
 }
 impl Error for SearchPathError {}
 
+// Every target carries this value: `GatewayHost::register` and `LoginShellPath`
+// both name it, and those contracts read the same everywhere. Building one is
+// what a host that can ask a login shell for a `PATH` does, and that is a Unix
+// host — a Windows build compiles the value and reaches none of it, the way it
+// compiles `ReconciledGateway` with no launchd to fill one in. The rules are
+// still exercised on every platform by this module's own tests.
+#[cfg_attr(not(unix), allow(dead_code))]
 impl SearchPath {
+    /// The minimal set of system directories every Nessa process can rely on.
+    ///
+    /// It is what launchd would give a service with no `PATH` of its own, and
+    /// it is the floor the agent falls back to when the login shell cannot be
+    /// read.
+    const SYSTEM_ENTRIES: &'static str = "/usr/bin:/bin:/usr/sbin:/sbin";
+
     /// The most a `PATH` may be. Chosen well above any real one — a long
     /// developer `PATH` is a few hundred bytes — and well below the point where
     /// a runaway shell could make the service definition unreadable.
@@ -56,7 +71,7 @@ impl SearchPath {
 
     /// The system directories, and nothing else.
     pub fn system() -> Self {
-        Self(SYSTEM_ENTRIES.into())
+        Self(Self::SYSTEM_ENTRIES.into())
     }
 
     /// A reported `PATH` — what a login shell printed, or what an already
@@ -94,6 +109,11 @@ impl SearchPath {
     /// `nessa` and `nessa-mcp`, which the gateway addresses by absolute path and
     /// the agent must not reach by name. A user whose login shell somehow names
     /// that directory still does not get a `node` that shadows their project's.
+    ///
+    /// Gated like the only thing that stages a runtime and registers a service
+    /// to run it: the launchd adapter. A host that has no such directory has
+    /// nothing to take out, and the gate moves when a second host grows one.
+    #[cfg(target_os = "macos")]
     pub fn excluding(&self, directory: &Path) -> Option<Self> {
         // A directory this host cannot spell in UTF-8 is not an entry of a path
         // that is one, so there is nothing to take out.
@@ -108,9 +128,9 @@ impl SearchPath {
         &self.0
     }
 
-    /// Absolute is spelled out rather than asked of [`Path`]: what counts as an
-    /// absolute path differs by host, and what counts as an entry of a `PATH`
-    /// the agent will be given must not.
+    /// Absolute is spelled out rather than asked of `std::path::Path`: what
+    /// counts as an absolute path differs by host, and what counts as an entry
+    /// of a `PATH` the agent will be given must not.
     fn from_entries<'a>(entries: impl Iterator<Item = &'a str>) -> Option<Self> {
         let kept: Vec<&str> = entries.filter(|entry| entry.starts_with('/')).collect();
         (!kept.is_empty()).then(|| Self(kept.join(":")))

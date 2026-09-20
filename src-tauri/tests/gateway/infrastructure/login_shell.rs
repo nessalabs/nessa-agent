@@ -1,6 +1,6 @@
 //! The adapter against real shells: scripts that stand in for a user's profile,
 //! including the profiles that misbehave.
-use super::{reported_path, LoginShell};
+use super::{unix::reported_path, LoginShell};
 use crate::gateway::application::{LoginShellError, LoginShellPath};
 use crate::gateway::domain::value_objects::SearchPathError;
 use std::{

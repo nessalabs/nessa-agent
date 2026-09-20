@@ -75,6 +75,9 @@ impl Error for GatewayError {}
 ///
 /// Kept apart from [`GatewayError`]: none of these stop a registration. They
 /// are what the fallback to the system path is reported as.
+// A host with no login shell to run reports only `Unavailable`; the other two
+// are what running one can end in, and the port reads the same on every target.
+#[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoginShellError {
     /// The shell could not be started, or did not exit successfully.
@@ -131,4 +134,33 @@ pub trait GatewayHost: Send + Sync {
         agent_path: Option<&SearchPath>,
     ) -> Result<ReconciledGateway, GatewayError>;
     fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError>;
+}
+
+/// Substitutes for these ports, beside the ports themselves, so every module
+/// that bootstraps a [`Gateway`](super::Gateway) in a test uses the same ones.
+///
+/// Inline rather than in a file of its own, like `settings::testing`: an item
+/// at the top level of a `#[cfg(test)]` file reads to
+/// `scripts/desktop/platform-gates.mjs` as something every platform compiles
+/// and only macOS reaches, and on Windows — where that script's module walk
+/// finds no children to carry the gate to — it says so.
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::{LoginShellError, LoginShellPath, SearchPath};
+    use std::sync::Arc;
+
+    /// A login shell with a fixed answer — the path it reports, or the reason
+    /// it reported none.
+    pub(crate) struct FixedLoginShell(pub(crate) Result<SearchPath, LoginShellError>);
+    impl LoginShellPath for FixedLoginShell {
+        fn resolve(&self) -> Result<SearchPath, LoginShellError> {
+            self.0.clone()
+        }
+    }
+
+    /// A login shell that answers with the system path: enough for a test whose
+    /// subject is something else.
+    pub(crate) fn system_login_shell() -> Arc<dyn LoginShellPath> {
+        Arc::new(FixedLoginShell(Ok(SearchPath::system())))
+    }
 }

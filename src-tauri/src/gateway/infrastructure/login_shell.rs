@@ -23,28 +23,6 @@
 //! descendant of a dead leader is not ours to observe.
 use super::super::application::{LoginShellError, LoginShellPath};
 use super::super::domain::value_objects::SearchPath;
-use std::time::Duration;
-
-/// How long a registration will wait for a login shell before giving up on it.
-///
-/// Long enough for the version managers people actually have in their profiles;
-/// short enough that a profile which waits for input costs one pause at startup
-/// rather than a gateway that never registers.
-const DEADLINE: Duration = Duration::from_secs(5);
-
-/// The shell to ask when the account record names none that can be run.
-const FALLBACK_SHELL: &str = "/bin/sh";
-
-/// What the login shell is asked to run.
-///
-/// `printenv` rather than `echo $PATH`: every shell that a Mac ships or a user
-/// installs exports `PATH` as one colon-separated string, but not all of them
-/// interpolate it as one — fish holds it as a list and would print it with the
-/// separators gone, which is a different path that happens to look like one.
-const REPORT_PATH: &str = "/usr/bin/printenv PATH";
-
-/// The most output to read before deciding this is not a shell reporting a path.
-const OUTPUT_LIMIT: u64 = 64 * 1024;
 
 #[cfg(unix)]
 pub(super) use unix::LoginShell;
@@ -68,25 +46,9 @@ impl LoginShellPath for LoginShell {
     }
 }
 
-/// The path the shell reported, which is the last line it printed.
-///
-/// Profiles print things — a fortune, a version manager's notice, a warning
-/// about a missing directory. The command asked for is the last thing to run,
-/// so its answer is the last line, and everything above it is somebody else's.
-fn reported_path(output: &str) -> &str {
-    output
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("")
-}
-
 #[cfg(unix)]
 mod unix {
-    use super::{
-        LoginShellError, LoginShellPath, SearchPath, DEADLINE, FALLBACK_SHELL, OUTPUT_LIMIT,
-        REPORT_PATH,
-    };
+    use super::{LoginShellError, LoginShellPath, SearchPath};
     use std::{
         ffi::{CStr, OsStr},
         io::Read,
@@ -97,6 +59,44 @@ mod unix {
         thread,
         time::Duration,
     };
+
+    /// How long a registration will wait for a login shell before giving up on
+    /// it.
+    ///
+    /// Long enough for the version managers people actually have in their
+    /// profiles; short enough that a profile which waits for input costs one
+    /// pause at startup rather than a gateway that never registers.
+    const DEADLINE: Duration = Duration::from_secs(5);
+
+    /// The shell to ask when the account record names none that can be run.
+    const FALLBACK_SHELL: &str = "/bin/sh";
+
+    /// What the login shell is asked to run.
+    ///
+    /// `printenv` rather than `echo $PATH`: every shell that a Mac ships or a
+    /// user installs exports `PATH` as one colon-separated string, but not all
+    /// of them interpolate it as one — fish holds it as a list and would print
+    /// it with the separators gone, which is a different path that happens to
+    /// look like one.
+    const REPORT_PATH: &str = "/usr/bin/printenv PATH";
+
+    /// The most output to read before deciding this is not a shell reporting a
+    /// path.
+    const OUTPUT_LIMIT: u64 = 64 * 1024;
+
+    /// The path the shell reported, which is the last line it printed.
+    ///
+    /// Profiles print things — a fortune, a version manager's notice, a warning
+    /// about a missing directory. The command asked for is the last thing to
+    /// run, so its answer is the last line, and everything above it is somebody
+    /// else's.
+    pub(super) fn reported_path(output: &str) -> &str {
+        output
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("")
+    }
 
     /// The account's login shell, run for its `PATH`.
     pub(in super::super) struct LoginShell {
@@ -197,8 +197,7 @@ mod unix {
 
     impl LoginShellPath for LoginShell {
         fn resolve(&self) -> Result<SearchPath, LoginShellError> {
-            SearchPath::parse(super::reported_path(&self.report()?))
-                .map_err(LoginShellError::Rejected)
+            SearchPath::parse(reported_path(&self.report()?)).map_err(LoginShellError::Rejected)
         }
     }
 
