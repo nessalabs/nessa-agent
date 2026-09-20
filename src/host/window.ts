@@ -273,6 +273,14 @@ export type SetupHandoff =
   | { outcome: "no-native-host" }
   /** The panel did not come up. This window is still on screen. */
   | { outcome: "panel-unavailable"; cause: unknown }
+  /**
+   * The panel is up and setup is over, but this machine did not write it down.
+   * The host deliberately leaves this window open for it: the write carries the
+   * completion flag and the chosen agent in one update, so losing it loses the
+   * choice too, and every conversation of this launch would run on the
+   * gateway's default while the screen said the handoff worked.
+   */
+  | { outcome: "setup-not-recorded"; cause: unknown }
   /** The panel is up; this window is the only thing that did not go. */
   | { outcome: "setup-close-failed"; panelShown: true; cause: unknown }
 
@@ -357,26 +365,51 @@ export async function finishSetupWindow(
     // window is still on screen, which is what the surface has to say.
     return { outcome: "panel-unavailable", cause }
   }
+  // Not survivable in the way this used to claim. The host writes the
+  // completion and the agent in one update, so a failure loses both:
+  // `chosen_agent` then truthfully says nobody chose, the panel rightly
+  // declines to remember that, and every conversation of this launch runs on
+  // the gateway's default — the same failure the in-place handover exists to
+  // prevent, reached by a different road. The host leaves this window up for
+  // it, and the surface offers the write again.
   if (handoff.recordError) {
-    // Survivable, and already logged on the host's side: the panel is up and
-    // this window can still close, so the handoff is not abandoned over it.
-    //
-    // What it costs is more than the next launch's straight start, which is
-    // what this used to claim. The host writes the completion and the agent in
-    // one update, so a failure loses both: `chosen_agent` then truthfully says
-    // nobody chose, the panel rightly declines to remember that, and every
-    // conversation of this launch runs on the gateway's default — the same
-    // failure the in-place handover exists to prevent, reached by a different
-    // road and reported to the user as a handoff that worked.
-    //
-    // Saying so on the surface means carrying the fact through this outcome
-    // rather than only into the console, which is a change to what
-    // `setupRecovery` renders and is not made here.
-    console.warn("[nessa] could not record that setup finished", handoff.recordError)
+    return { outcome: "setup-not-recorded", cause: handoff.recordError }
   }
   // The panel is up. A window that will not close is not a panel failure and is
   // no longer reported as one — the surface says what actually happened and
   // offers a close rather than another handoff.
+  if (!handoff.setupClosed) {
+    return { outcome: "setup-close-failed", panelShown: true, cause: handoff.closeError }
+  }
+  return { outcome: "handed-over" }
+}
+
+/**
+ * Write setup off again, after a handoff whose write the host refused.
+ *
+ * The panel is already up, so this asks for the write and the close alone.
+ * Asking for the whole handoff again would summon a panel that is on screen,
+ * which re-anchors and refits a window somebody may have moved to.
+ *
+ * The agent travels again because nothing was recorded for the host to read it
+ * back from, and this window still has the choice setup finished on.
+ */
+export async function retrySetupRecord(agent?: string): Promise<SetupHandoff> {
+  if (!inTauri) return { outcome: "no-native-host" }
+  const { invoke } = await import("@tauri-apps/api/core")
+  let handoff: NativeSetupHandoff
+  try {
+    handoff = await invoke<NativeSetupHandoff>("retry_setup_record", {
+      agent: agent ?? null,
+    })
+  } catch (cause) {
+    // The host could not be asked at all. Nothing was written, and the screen
+    // that asked is still the right one: it offers this again.
+    return { outcome: "setup-not-recorded", cause }
+  }
+  if (handoff.recordError) {
+    return { outcome: "setup-not-recorded", cause: handoff.recordError }
+  }
   if (!handoff.setupClosed) {
     return { outcome: "setup-close-failed", panelShown: true, cause: handoff.closeError }
   }

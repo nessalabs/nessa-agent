@@ -65,7 +65,7 @@ describe("what the handoff leaves on screen", () => {
       { type: "settled", attempt: 1, outcome: handoffRejection(cause) },
     )
     expect(rejected.outcome).toEqual({ outcome: "panel-unavailable", cause })
-    expect(setupRecovery(rejected.outcome)?.panelShown).toBe(false)
+    expect(setupRecovery(rejected.outcome)?.offer).toBe("hand-over-again")
   })
 
   it("ignores an answer belonging to an attempt a retry abandoned", () => {
@@ -179,5 +179,30 @@ describe("asking for the handoff at most once per attempt", () => {
     expect(one.claim()).toBe(true)
     // A second setup surface has its own, so one does not block the other.
     expect(other.claim()).toBe(true)
+  })
+})
+
+describe("saving again after a refused write", () => {
+  it("starts a fresh attempt pointed at the write alone", () => {
+    const refused = record(
+      { type: "requested" },
+      {
+        type: "settled",
+        attempt: 1,
+        outcome: { outcome: "setup-not-recorded", cause: "disk full" },
+      },
+    )
+    expect(refused.resume).toBe("hand-over")
+
+    const saving = applySetupHandoff(refused, { type: "save-again" })
+    expect(saving.resume).toBe("record")
+    expect(shouldHandOver(saving, false)).toBe(true)
+    // A number the outstanding attempt cannot answer to, as a retry gets.
+    expect(applySetupHandoff(saving, { type: "requested" }).requested).toBe(2)
+  })
+
+  it("goes back to the whole handoff on an ordinary retry", () => {
+    const saving = applySetupHandoff(noSetupHandoff, { type: "save-again" })
+    expect(applySetupHandoff(saving, { type: "retry" }).resume).toBe("hand-over")
   })
 })

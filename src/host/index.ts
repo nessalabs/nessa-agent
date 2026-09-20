@@ -18,6 +18,7 @@ export {
   availableUpdate,
   closeSetupWindow,
   finishSetupWindow,
+  retrySetupRecord,
   hasNativeHost,
   installUpdate,
   type ChosenAgent,

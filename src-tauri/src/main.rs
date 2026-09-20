@@ -40,6 +40,7 @@ fn main() {
             platform::panel_size,
             platform::flush_compositor,
             panel::finish_setup,
+            panel::retry_setup_record,
             panel::chosen_agent,
             panel::reveal_setup_window,
             surface_credential::load_surface_credential,

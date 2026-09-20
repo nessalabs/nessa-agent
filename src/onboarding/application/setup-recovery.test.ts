@@ -21,7 +21,7 @@ describe("what is left on screen when setup is over", () => {
       outcome: "panel-unavailable",
       cause: new Error("there is no panel to summon"),
     })
-    expect(recovery?.panelShown).toBe(false)
+    expect(recovery?.offer).toBe("hand-over-again")
     expect(recovery?.heading).toBe("Nessa could not open the panel")
   })
 
@@ -34,15 +34,32 @@ describe("what is left on screen when setup is over", () => {
       panelShown: true,
       cause: "could not close setup: the window server said no",
     })
-    expect(recovery?.panelShown).toBe(true)
+    expect(recovery?.offer).toBeNull()
     expect(recovery?.heading).not.toContain("could not open the panel")
     expect(recovery?.detail).toContain("the panel is ready")
+  })
+
+  // The other defect at the same seam, and the worse one: the panel came up,
+  // the write was refused, and the window closed itself anyway — so nothing
+  // ever said that the agent just chosen had not been kept, and every
+  // conversation of that launch ran on the gateway's default.
+  it("offers the write again when the panel is up and nothing was recorded", () => {
+    const recovery = setupRecovery({
+      outcome: "setup-not-recorded",
+      cause: "could not record that setup finished: disk full",
+    })
+    expect(recovery?.offer).toBe("save-again")
+    expect(recovery?.heading).not.toContain("could not open the panel")
+    // Both halves of the cost. Somebody who closes this window instead has
+    // lost the choice, and is owed the chance to know that.
+    expect(recovery?.detail).toContain("ask again next time")
+    expect(recovery?.detail).toContain("default agent")
   })
 
   it("treats an ending it does not recognize as a panel that did not come up", () => {
     // Both ways out are on that screen, so it is the safe thing to be wrong
     // with: it offers a retry as well as a close.
     const unknown = { outcome: "from-a-later-build" } as unknown as SetupHandoff
-    expect(setupRecovery(unknown)?.panelShown).toBe(false)
+    expect(setupRecovery(unknown)?.offer).toBe("hand-over-again")
   })
 })

@@ -34,13 +34,15 @@ const RECOVERY_BUTTON =
 export function HandoffFailed({
   recovery,
   onRetry,
+  onSaveAgain,
   onClose,
   closeFailed,
   ref,
 }: {
-  /** What happened, and whether the panel is up. */
+  /** What happened, and the one thing worth pressing about it. */
   recovery: SetupRecovery
   onRetry: () => void
+  onSaveAgain: () => void
   onClose: () => void
   /** True once a close was asked for and the window system did not do it. */
   closeFailed: boolean
@@ -69,11 +71,16 @@ export function HandoffFailed({
         </h1>
         <p className="nessa-text-3 text-muted-foreground">{recovery.detail}</p>
         <div className="flex flex-wrap items-center justify-center gap-3">
-          {recovery.panelShown ? null : (
+          {recovery.offer === "hand-over-again" ? (
             <button type="button" className={RECOVERY_BUTTON} onClick={onRetry}>
               Try again
             </button>
-          )}
+          ) : null}
+          {recovery.offer === "save-again" ? (
+            <button type="button" className={RECOVERY_BUTTON} onClick={onSaveAgain}>
+              Save again
+            </button>
+          ) : null}
           <button type="button" className={RECOVERY_BUTTON} onClick={onClose}>
             Close this window
           </button>
@@ -172,6 +179,7 @@ export function SetupGate({
           ref={handoff.dialog}
           recovery={handoff.recovery}
           onRetry={handoff.retry}
+          onSaveAgain={handoff.saveAgain}
           onClose={handoff.close}
           closeFailed={handoff.closeFailed}
         />

@@ -2,6 +2,7 @@ import * as React from "react"
 import {
   closeSetupWindow,
   finishSetupWindow,
+  retrySetupRecord,
   revealSetupWindow,
   type SetupHandoff,
 } from "../../host"
@@ -25,6 +26,8 @@ export interface SetupHandoffCoordination {
   dialog: React.RefObject<HTMLDivElement | null>
   /** Ask for the handoff again, from the beginning. */
   retry: () => void
+  /** Ask for the write alone again, after this machine refused it. */
+  saveAgain: () => void
   /** Close this window without the panel. */
   close: () => void
 }
@@ -102,9 +105,14 @@ export function useSetupHandoff(
       gate.release()
       record({ type: "settled", attempt, outcome })
     }
-    void finishSetupWindow(completed, agent)
-      .then(settle)
-      .catch((cause: unknown) => settle(handoffRejection(cause)))
+    // Which of the two the attempt is for is the reducer's to say, because it
+    // is decided by the button that was pressed and has to survive the
+    // re-render that button causes. See `SetupHandoffState.resume`.
+    const call =
+      state.resume === "record"
+        ? retrySetupRecord(agent)
+        : finishSetupWindow(completed, agent)
+    void call.then(settle).catch((cause: unknown) => settle(handoffRejection(cause)))
   }, [state, setupActive, completed, agent, gate])
 
   // What the window has to show for the handoff it got, if anything. Kept by
@@ -125,11 +133,15 @@ export function useSetupHandoff(
   // answered released the gate, so there is nothing to release anyway.
   const retry = React.useCallback(() => record({ type: "retry" }), [])
 
+  // Saving again is the same fresh attempt, pointed at the write alone. Only
+  // reachable from the screen a refused write leaves, where the panel is up.
+  const saveAgain = React.useCallback(() => record({ type: "save-again" }), [])
+
   // Closing without the panel. Every way this can fail is a value rather than a
   // rejection, so the screen can say what happened and keep its buttons.
   const close = React.useCallback(() => {
     void closeSetupWindow().then((close) => record({ type: "closed", close }))
   }, [])
 
-  return { recovery, closeFailed: state.closeFailed, dialog, retry, close }
+  return { recovery, closeFailed: state.closeFailed, dialog, retry, saveAgain, close }
 }
