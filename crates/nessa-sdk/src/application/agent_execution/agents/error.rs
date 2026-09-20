@@ -15,44 +15,99 @@ pub type AgentFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, AgentError>>
 /// Each step is bounded by the adapter's own startup budget, and the step named
 /// here is the one that was still waiting when that budget ran out. It records
 /// what the caller was doing, not why the provider was slow.
+///
+/// This says nothing about whether saved context was involved: every step runs
+/// both when opening new context and when restoring saved context. That is the
+/// separate [`AgentStartupContext`], and the two travel together in
+/// [`AgentStartupStep`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentStartupPhase {
     /// Protocol negotiation with the provider, before any session exists.
     Initialize,
-    /// Creating a new provider session for a conversation with no saved context.
-    SessionNew,
-    /// Restoring the provider session named by saved context.
-    SessionResume,
+    /// Establishing the provider session itself.
+    Session,
     /// Applying the host's session configuration to an established session.
-    SessionConfigure,
+    Configure,
 }
-impl AgentStartupPhase {
-    /// Stable lowercase identifier for logs and wire diagnostics.
-    ///
-    /// The value never changes with the provider or its protocol, so callers may
-    /// branch on it; prefer matching the variant where the type is available.
-    ///
-    /// ```
-    /// use nessa_sdk::application::agent_execution::agents::AgentStartupPhase;
-    /// assert_eq!(AgentStartupPhase::SessionResume.as_str(), "session_resume");
-    /// ```
+
+/// Whether startup was opening new provider context or restoring saved context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentStartupContext {
+    /// No saved context existed; the provider was asked for a new session.
+    New,
+    /// Saved context named a provider session, which was being restored.
+    Restored,
+}
+impl AgentStartupContext {
+    /// Stable lowercase identifier for logs and diagnostics.
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Initialize => "initialize",
-            Self::SessionNew => "session_new",
-            Self::SessionResume => "session_resume",
-            Self::SessionConfigure => "session_configure",
+            Self::New => "new",
+            Self::Restored => "restored",
         }
     }
-    /// Whether this step restores saved context rather than opening new context.
-    ///
-    /// Callers use this to describe what was interrupted without repeating the
-    /// step names: only [`Self::SessionResume`] continues an earlier session.
+    /// Whether this startup was continuing an earlier session.
     pub fn restores_saved_session(self) -> bool {
-        matches!(self, Self::SessionResume)
+        matches!(self, Self::Restored)
     }
 }
-impl fmt::Display for AgentStartupPhase {
+impl fmt::Display for AgentStartupContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The startup step that ran out of budget, together with the context it was
+/// establishing.
+///
+/// The two facts are separate: a restoration can expire while still negotiating
+/// the protocol, long before the provider is asked to resume anything, and it
+/// can expire again while applying configuration after the resume succeeded.
+/// Reading the context off the step would call both of those a new session.
+///
+/// The pair is immutable and always consistent, because it is only ever built
+/// from what the adapter was actually doing.
+///
+/// ```
+/// use nessa_sdk::application::agent_execution::agents::{
+///     AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+/// };
+/// let step = AgentStartupStep::new(AgentStartupPhase::Session, AgentStartupContext::Restored);
+/// assert_eq!(step.as_str(), "session_resume");
+/// assert!(step.context().restores_saved_session());
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AgentStartupStep {
+    phase: AgentStartupPhase,
+    context: AgentStartupContext,
+}
+impl AgentStartupStep {
+    /// Record the step that expired and the context it was establishing.
+    pub fn new(phase: AgentStartupPhase, context: AgentStartupContext) -> Self {
+        Self { phase, context }
+    }
+    /// The startup step that was still waiting when the budget ran out.
+    pub fn phase(self) -> AgentStartupPhase {
+        self.phase
+    }
+    /// Whether that step was opening new context or restoring saved context.
+    pub fn context(self) -> AgentStartupContext {
+        self.context
+    }
+    /// Stable lowercase identifier naming the resolved step, for logs and
+    /// diagnostics. Establishing a session reads as `session_new` or
+    /// `session_resume` according to the context; the other steps have one
+    /// spelling each, and the context remains available separately.
+    pub fn as_str(self) -> &'static str {
+        match (self.phase, self.context) {
+            (AgentStartupPhase::Initialize, _) => "initialize",
+            (AgentStartupPhase::Session, AgentStartupContext::New) => "session_new",
+            (AgentStartupPhase::Session, AgentStartupContext::Restored) => "session_resume",
+            (AgentStartupPhase::Configure, _) => "session_configure",
+        }
+    }
+}
+impl fmt::Display for AgentStartupStep {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
@@ -152,12 +207,13 @@ pub enum AgentError {
     /// An explicitly bounded write, audit, steering, or execution operation timed out.
     /// Startup has its own [`Self::StartupDeadline`], which names the step that expired.
     Deadline,
-    /// Agent startup did not finish inside its budget. The named step was still
+    /// Agent startup did not finish inside its budget. The step was still
     /// waiting when the budget expired; no session became usable, and no input
     /// reached the provider. The provider process may still be running, so
-    /// resource cleanup remains a separate fact reported by CleanupReport.
-    /// Retrying is safe and is expected to succeed once the runtime is warm.
-    StartupDeadline(AgentStartupPhase),
+    /// resource cleanup remains a separate fact reported by CleanupReport, and
+    /// unconfirmed cleanup can still retain the session's storage lease.
+    /// Retrying is safe; whether it can succeed depends on that cleanup.
+    StartupDeadline(AgentStartupStep),
     /// A bounded event queue overflowed or a live subscriber lagged; consult the owning stream contract.
     Backpressure,
     /// Owned resource termination could not be confirmed.

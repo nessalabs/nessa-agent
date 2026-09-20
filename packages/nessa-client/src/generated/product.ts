@@ -475,7 +475,7 @@ export interface ConversationPart {
   /** Opaque provider message identity; only fragments with the same identity may be combined. */
   messageId?: string
 }
-/** Typed rejection code carried by a failed conversation command. Branch on these instead of message text. agent_startup_deadline means the agent was still starting when its budget expired: nothing was sent, and repeating the same command is expected to succeed once the runtime is warm. invalid_request and agent_not_configured reject the command until their cause is addressed. */
+/** Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. */
 export const ConversationErrorCode = {
   AgentNotConfigured: "agent_not_configured",
   UnknownMethod: "unknown_method",

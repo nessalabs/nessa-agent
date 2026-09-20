@@ -39,13 +39,26 @@ const rejectedBeforeAdmission = (code: string): boolean =>
     ] as string[]
   ).includes(code)
 
+// A control has no input to admit, so the question is only whether it could
+// have been applied. Startup ends before any control reaches the provider.
+const rejectedBeforeApplying = (code: string): boolean =>
+  (
+    [
+      ConversationErrorCode.InvalidRequest,
+      ConversationErrorCode.AgentStartupDeadline,
+    ] as string[]
+  ).includes(code)
+
 function rejectionMessage(cause: unknown): string {
   if (!(cause instanceof NessaRpcError)) return "Conversation command failed"
   switch (cause.code) {
     case ConversationErrorCode.AgentNotConfigured:
       return 'The gateway started without an agent: its config.json has no "agent" section, so there is no Claude ACP runtime to send to. Configure one and restart the gateway — from a Nessa checkout, `just server` writes one.'
+    // Not a guarantee: a launch whose process could not be confirmed stopped
+    // keeps its conversation blocked, and the gateway cannot tell the two apart
+    // in this code. Retry is still the right next step, and normally succeeds.
     case ConversationErrorCode.AgentStartupDeadline:
-      return "The agent was still starting and ran out of time, so nothing was sent. Starting it is slowest the first time after an install or update, while the operating system scans the runtime. Retrying is expected to work."
+      return "The agent was still starting and ran out of time, so nothing was sent. Starting it is slowest the first time after an install or update, while the operating system scans the runtime. Retry normally succeeds once the runtime is warm."
     default:
       return "Conversation command failed"
   }
@@ -53,9 +66,9 @@ function rejectionMessage(cause: unknown): string {
 
 /** Failed conversation creation or message admission with its original identities and a safe same-command retry. No request is replayed automatically. */
 export class NessaConversationMutationError<T> extends Error {
-  /** False only when the gateway explicitly rejected the command before admission. */
+  /** False only when the gateway explicitly rejected the command before admission. A rejected create may still have recorded the conversation's ownership; creation is idempotent by conversation ID, so repeating it is safe. */
   readonly uncertain: boolean
-  /** Typed gateway rejection code, or undefined when the command failed in transport. Branch on this rather than on the message. */
+  /** Typed conversation rejection code. Undefined for a transport failure, and also for a gateway rejection this build does not know — including the access and routing codes the socket answers with before a conversation command is dispatched. Inspect `cause` for those. Branch on this rather than on the message. */
   readonly code: ConversationErrorCode | undefined
 
   constructor(
@@ -86,6 +99,8 @@ export class NessaConversationMutationError<T> extends Error {
 export class NessaConversationControlError extends Error {
   /** False when the gateway explicitly rejected the command before applying it. */
   readonly uncertain: boolean
+  /** Typed conversation rejection code, with the same meaning and the same limits as NessaConversationMutationError.code. */
+  readonly code: ConversationErrorCode | undefined
   /** Permission-answer state reported by the gateway. Undefined for other controls or failures without trustworthy typed details. */
   readonly permissionSelection: ConversationPermissionSelectionState | undefined
 
@@ -102,9 +117,10 @@ export class NessaConversationControlError extends Error {
   ) {
     super("Conversation control did not return a trustworthy acknowledgement", { cause })
     this.permissionSelection = permissionAnswer ? permissionSelection(cause) : undefined
+    this.code = cause instanceof NessaRpcError ? knownCode(cause.code) : undefined
     this.uncertain =
       this.permissionSelection !== "pending" &&
-      !(cause instanceof NessaRpcError && cause.code === "invalid_request")
+      !(cause instanceof NessaRpcError && rejectedBeforeApplying(cause.code))
     this.name = "NessaConversationControlError"
   }
 }

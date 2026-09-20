@@ -105,18 +105,29 @@ async fn saved_startup_deadlines_retain_the_step_that_expired() {
             .unwrap();
         for phase in [
             AgentStartupPhase::Initialize,
-            AgentStartupPhase::SessionNew,
-            AgentStartupPhase::SessionResume,
-            AgentStartupPhase::SessionConfigure,
+            AgentStartupPhase::Session,
+            AgentStartupPhase::Configure,
         ] {
-            let mut value = snapshot("startup-deadline-phase");
-            value.invocations[0].events.clear();
-            value.invocations[0].result = Some(Err(AgentError::StartupDeadline(phase)));
-            lease.save(value).await.unwrap();
-            assert_eq!(
-                lease.load().await.unwrap().unwrap().invocations[0].result,
-                Some(Err(AgentError::StartupDeadline(phase)))
-            );
+            // Both facts must survive independently: a restoration can expire
+            // during any step, so the context is not recoverable from the step.
+            for context in [AgentStartupContext::New, AgentStartupContext::Restored] {
+                let step = AgentStartupStep::new(phase, context);
+                let mut value = snapshot("startup-deadline-phase");
+                value.invocations[0].events.clear();
+                value.invocations[0].result = Some(Err(AgentError::StartupDeadline(step)));
+                lease.save(value).await.unwrap();
+                let restored = lease.load().await.unwrap().unwrap();
+                assert_eq!(
+                    restored.invocations[0].result,
+                    Some(Err(AgentError::StartupDeadline(step)))
+                );
+                let Some(Err(AgentError::StartupDeadline(saved))) = restored.invocations[0].result
+                else {
+                    panic!("startup deadline retained")
+                };
+                assert_eq!(saved.phase(), phase);
+                assert_eq!(saved.context(), context);
+            }
         }
     }
 }

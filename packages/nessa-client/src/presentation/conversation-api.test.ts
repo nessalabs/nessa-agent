@@ -447,7 +447,22 @@ it("says the agent was still starting and that the same command may be retried",
   // not an unknown delivery.
   expect(error.uncertain).toBe(false)
   expect(error.message).toContain("still starting")
-  expect(error.message).toContain("Retrying is expected to work")
+  expect(error.message).toContain("Retry normally succeeds")
+})
+
+it("treats a startup deadline on a control as a rejection before it was applied", async () => {
+  const request = vi
+    .fn()
+    .mockRejectedValue(
+      new NessaRpcError("agent_startup_deadline", "agent_startup_deadline"),
+    )
+  const api = createConversationApi({ request }, () => "identity")
+  const error = await api.close(conversationId).catch((error) => error)
+  expect(error).toBeInstanceOf(NessaConversationControlError)
+  expect(error.code).toBe(ConversationErrorCode.AgentStartupDeadline)
+  // Startup ends before the control could reach the provider, so nothing was
+  // applied and the caller is not left guessing.
+  expect(error.uncertain).toBe(false)
 })
 
 it("leaves an unrecognized gateway code untyped instead of guessing a meaning", async () => {
@@ -455,10 +470,17 @@ it("leaves an unrecognized gateway code untyped instead of guessing a meaning", 
     .fn()
     .mockRejectedValue(new NessaRpcError("invented_code", "invented_code"))
   const api = createConversationApi({ request }, () => "identity")
-  const error = await api.send(conversationId, "hello").catch((error) => error)
-  expect(error.code).toBeUndefined()
-  expect(error.uncertain).toBe(true)
-  expect(error.message).toBe("Conversation command failed")
+  const sendError = await api.send(conversationId, "hello").catch((error) => error)
+  expect(sendError.code).toBeUndefined()
+  expect(sendError.uncertain).toBe(true)
+  expect(sendError.message).toBe("Conversation command failed")
+  // Codes the socket answers with before dispatch are gateway rejections, but
+  // they are not conversation codes, so they stay untyped here too.
+  const forbidden = vi.fn().mockRejectedValue(new NessaRpcError("forbidden", "forbidden"))
+  const closeError = await createConversationApi({ request: forbidden }, () => "identity")
+    .close(conversationId)
+    .catch((error) => error)
+  expect(closeError.code).toBeUndefined()
 })
 
 it("enforces canonical conversation and UTF-8 byte limits before admission", async () => {

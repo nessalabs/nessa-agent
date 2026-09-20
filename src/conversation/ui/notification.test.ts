@@ -64,6 +64,18 @@ describe("conversation notification", () => {
     expect(notice?.description).toContain(value.error)
     expect(notice?.description).toContain("Retry sends the current draft.")
   })
+  it("says the same for a control that found the agent still starting", () => {
+    const value = conversation("tab")
+    // A control fails before any turn is sent, so there is no failed turn and
+    // no draft to restore; the notice must still name the cause.
+    value.error = "The agent was still starting and ran out of time."
+    value.errorCode = ConversationErrorCode.AgentStartupDeadline
+    expect(conversationNotice(value)).toEqual({
+      title: "Agent was still starting",
+      description: value.error,
+      retry: { kind: "refresh" },
+    })
+  })
   it("explains a configuration mismatch without offering an ineffective retry", () => {
     const value = conversation("tab")
     value.readError = "conversation_configuration_changed"

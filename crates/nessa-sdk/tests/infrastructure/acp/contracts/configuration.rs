@@ -218,7 +218,10 @@ async fn startup_deadline_cleans_up_an_initialized_process_that_never_replies() 
         .unwrap()
         .unwrap();
     assert!(matches!(result, Err(error) if error.cause()
-            == &AgentError::StartupDeadline(AgentStartupPhase::Initialize)));
+    == &AgentError::StartupDeadline(AgentStartupStep::new(
+        AgentStartupPhase::Initialize,
+        AgentStartupContext::New,
+    ))));
     assert_gone(&root, "pid");
 }
 
@@ -228,27 +231,54 @@ async fn startup_deadline_cleans_up_an_initialized_process_that_never_replies() 
 #[tokio::test]
 async fn startup_deadline_names_the_step_that_ran_out_of_budget() {
     let _process_slot = process_test_slot().await;
-    for (mode, marker, restored, expected) in [
-        ("startup-stall", "pid", false, AgentStartupPhase::Initialize),
+    // Restoring saved context is decided before any step runs, so it is crossed
+    // with the steps rather than read off them: a restoration that expires
+    // during `initialize` or while configuring is still a restoration.
+    for (mode, marker, context, phase, step) in [
+        (
+            "startup-stall",
+            "pid",
+            AgentStartupContext::New,
+            AgentStartupPhase::Initialize,
+            "initialize",
+        ),
+        (
+            "startup-stall",
+            "pid",
+            AgentStartupContext::Restored,
+            AgentStartupPhase::Initialize,
+            "initialize",
+        ),
         (
             "new-session-stall",
             "new-session-wait",
-            false,
-            AgentStartupPhase::SessionNew,
+            AgentStartupContext::New,
+            AgentStartupPhase::Session,
+            "session_new",
         ),
         (
             "resume-stall",
             "resume-observed",
-            true,
-            AgentStartupPhase::SessionResume,
+            AgentStartupContext::Restored,
+            AgentStartupPhase::Session,
+            "session_resume",
         ),
         (
             "configuration-stall",
             "configuration-wait",
-            false,
-            AgentStartupPhase::SessionConfigure,
+            AgentStartupContext::New,
+            AgentStartupPhase::Configure,
+            "session_configure",
+        ),
+        (
+            "configuration-stall",
+            "configuration-wait",
+            AgentStartupContext::Restored,
+            AgentStartupPhase::Configure,
+            "session_configure",
         ),
     ] {
+        let restored = context.restores_saved_session();
         let (root, mut config, model) = test_acp_configuration(mode, 16);
         config.startup_timeout = Duration::from_secs(30);
         let restore = restored.then(|| ExecutionSessionId::new("restored-context").unwrap());
@@ -279,12 +309,20 @@ async fn startup_deadline_names_the_step_that_ran_out_of_budget() {
             .unwrap()
             .err()
             .unwrap_or_else(|| panic!("{mode} times out"));
+        let expected = AgentStartupStep::new(phase, context);
         assert_eq!(
             error.cause(),
             &AgentError::StartupDeadline(expected),
-            "{mode}"
+            "{mode} {context}"
         );
-        assert_eq!(expected.restores_saved_session(), restored, "{mode}");
+        // The resolved name is what the gateway log prints, and the context
+        // stays readable beside it.
+        assert_eq!(expected.as_str(), step, "{mode} {context}");
+        assert_eq!(
+            expected.context().restores_saved_session(),
+            restored,
+            "{mode} {context}"
+        );
         assert_gone(&root, "pid");
     }
 }
@@ -392,7 +430,10 @@ async fn configuration_deadline_closes_the_known_context_with_deadline_evidence(
         .expect("configuration times out");
     assert_eq!(
         error.cause(),
-        &AgentError::StartupDeadline(AgentStartupPhase::SessionConfigure)
+        &AgentError::StartupDeadline(AgentStartupStep::new(
+            AgentStartupPhase::Configure,
+            AgentStartupContext::New,
+        ))
     );
     assert!(error.cleanup().is_none());
     let records = audit.closures.lock().unwrap();

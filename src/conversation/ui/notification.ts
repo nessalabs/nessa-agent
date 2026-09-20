@@ -52,6 +52,14 @@ export function conversationNotice(
         "This chat uses a different agent configuration. Start a new conversation with the current setup.",
       retry: null,
     }
+  // A control runs `create` first, so a cold agent reaches this path too, with
+  // nothing sent and no failed turn to hang a draft retry on.
+  if (conversation.errorCode === ConversationErrorCode.AgentStartupDeadline)
+    return {
+      title: "Agent was still starting",
+      description: error,
+      retry: { kind: "refresh" },
+    }
   return {
     title: "Conversation needs attention",
     description: error,

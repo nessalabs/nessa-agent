@@ -138,20 +138,18 @@ struct OpeningFailureReport {
     session: Option<&'static str>,
 }
 // The opening gate covers both a first `session/new` and a `session/resume` of
-// saved context. Only a startup deadline knows which step it was waiting on, so
+// saved context. Only a startup deadline carries which of the two it was, so
 // every other failure is reported as an opening failure rather than claimed to
 // be a restoration: that claim sent readers looking for a snapshot that need
-// not exist.
+// not exist. The step and the context are separate facts — a restoration can
+// run out of budget before `session/resume` is even sent — so both come from
+// the error rather than one being inferred from the other.
 fn opening_failure_report(error: &AgentError) -> OpeningFailureReport {
     match error {
-        AgentError::StartupDeadline(phase) => OpeningFailureReport {
+        AgentError::StartupDeadline(step) => OpeningFailureReport {
             message: "agent startup exceeded its budget",
-            phase: Some(phase.as_str()),
-            session: Some(if phase.restores_saved_session() {
-                "restored"
-            } else {
-                "new"
-            }),
+            phase: Some(step.as_str()),
+            session: Some(step.context().as_str()),
         },
         _ => OpeningFailureReport {
             message: "conversation agent opening failed",

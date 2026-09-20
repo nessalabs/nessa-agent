@@ -3,7 +3,9 @@ use super::{
     error_code, permission_answer_failure, AgentError, ConversationError, ConversationErrorCode,
     OutgoingMessage, PermissionSelectionState, StorageError,
 };
-use nessa_sdk::application::agent_execution::agents::AgentStartupPhase;
+use nessa_sdk::application::agent_execution::agents::{
+    AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+};
 
 #[test]
 fn configuration_mismatch_is_not_a_transient_outage() {
@@ -26,15 +28,16 @@ fn configuration_mismatch_is_not_a_transient_outage() {
 fn startup_deadline_is_distinguished_from_other_agent_failures() {
     for phase in [
         AgentStartupPhase::Initialize,
-        AgentStartupPhase::SessionNew,
-        AgentStartupPhase::SessionResume,
-        AgentStartupPhase::SessionConfigure,
+        AgentStartupPhase::Session,
+        AgentStartupPhase::Configure,
     ] {
-        let code = error_code(&ConversationError::Agent(AgentError::StartupDeadline(
-            phase,
-        )));
-        assert_eq!(code, ConversationErrorCode::AgentStartupDeadline);
-        assert_eq!(code.as_str(), "agent_startup_deadline");
+        for context in [AgentStartupContext::New, AgentStartupContext::Restored] {
+            let code = error_code(&ConversationError::Agent(AgentError::StartupDeadline(
+                AgentStartupStep::new(phase, context),
+            )));
+            assert_eq!(code, ConversationErrorCode::AgentStartupDeadline);
+            assert_eq!(code.as_str(), "agent_startup_deadline");
+        }
     }
     // A deadline outside startup keeps the unclassified code; it says nothing
     // about whether the command was admitted.
