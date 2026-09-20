@@ -16,8 +16,8 @@ use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::{
     application::agent_execution::agents::AgentError,
     domain::{
-        agent_execution::prompts::{ImageMediaType, ImageReference},
-        common::value_objects::Sha256Digest,
+        agent_execution::prompts::ImageReference,
+        common::value_objects::{ImageMediaType, Sha256Digest},
     },
 };
 use std::sync::{atomic::Ordering, Arc};

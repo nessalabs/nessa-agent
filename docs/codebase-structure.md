@@ -554,9 +554,11 @@ stored reference. `product/attachment.rs` maps `attachment.begin`.
 Composition builds the store once in `composition/attachments.rs` and hands out
 the service (shared by the socket and the route through a narrow `FromRef`), the
 conversation port, and the image source; it is composed only when an agent is.
-The normalizer is an argument of that factory. Until the image adapter is wired
-in, `local_auth.rs` passes `UnconfiguredNormalizer`, which refuses every image
-upload as `storage_unavailable` rather than keep one nobody normalized.
+The normalizer is an argument of that factory: `infrastructure/normalizer.rs`
+fits every upload that says it is an image to the selected model's `imageInput`
+limits from the SDK catalog, through `crates/nessa-images`, reading the encoding
+from the bytes and never from the declared type. A model with no recorded limits
+has no image prepared for it.
 Holds live until their conversation closes; what expires on its own is an unused
 ticket. Tests under `tests/attachments/` split domain rules, the service over
 doubles, the real store on a real filesystem, audit records, the adapters, the

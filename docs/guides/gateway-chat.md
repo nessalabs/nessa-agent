@@ -275,8 +275,15 @@ path, so the 64 KiB product socket never carries them.
    is what `conversation.send` and `conversation.steer` must name. The gateway
    normalizes an image after verifying the transfer, so the stored digest, type
    and size can all differ from what was sent. Any other file is kept as sent.
-   Until the image normalizer adapter is composed, every image upload answers
-   `storage_unavailable`; the gateway does not keep an image nobody normalized.
+   Normalizing fits the image to the selected model's `imageInput` limits in the
+   model catalog: it is converted to PNG or JPEG when the model does not take its
+   encoding, turned upright, scaled to the long edge worth sending, and compressed
+   under the byte limit. An image already inside every limit is kept byte for
+   byte. The encoding is read from the bytes, not from `mimeType`. HEIC, AVIF and
+   camera RAW are read where the operating system provides a decoder, which today
+   is macOS. `unsupported_image` (415) means the bytes are not a readable image,
+   or the model has no recorded image limits; `image_too_large` (413) means no
+   legible version fits.
 
 Limits: a ticket lives five minutes and is refused after `expiresAtMs`; at most 64
 are outstanding at once; a file is 1 byte to 20 MiB; four uploads run at once;

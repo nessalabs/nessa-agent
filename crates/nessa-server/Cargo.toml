@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 nessa-sdk = { path = "../nessa-sdk" }
+nessa-images = { path = "../nessa-images" }
 nessa-local-storage = { path = "../nessa-local-storage" }
 nessa-auth = { path = "../nessa-auth" }
 axum = { version = "0.8", features = ["ws"] }

@@ -18,7 +18,7 @@ use crate::{
 };
 use nessa_sdk::{
     application::agent_execution::providers::{UserImageError, UserImageSource},
-    domain::agent_execution::prompts::{ImageMediaType, ImageReference},
+    domain::{agent_execution::prompts::ImageReference, common::value_objects::ImageMediaType},
 };
 use std::sync::{atomic::Ordering, Arc};
 

@@ -5,7 +5,6 @@ use crate::{
     attachments::{
         application::{
             AttachmentDependencies, AttachmentLimits, AttachmentService, ImageNormalizer,
-            NormalizeError, NormalizeFuture,
         },
         infrastructure::{
             ConversationHolds, DurableAttachmentAudit, LocalAttachmentStore, OsTicketSecrets,
@@ -61,15 +60,4 @@ pub(super) fn attachments(
         images: Arc::new(StoredUserImages::new(store)),
         service,
     })
-}
-
-/// Stands where the image normalizer will be. It normalizes nothing and says
-/// so: every image upload is refused as a storage failure, and no image is
-/// ever kept in a form nobody checked against the model's limits. Files that
-/// are not images are unaffected.
-pub(super) struct UnconfiguredNormalizer;
-impl ImageNormalizer for UnconfiguredNormalizer {
-    fn normalize<'a>(&'a self, _: Vec<u8>, _: &'a str) -> NormalizeFuture<'a> {
-        Box::pin(async { Err(NormalizeError::Failed) })
-    }
 }

@@ -3,8 +3,8 @@ use super::*;
 use crate::conversation::domain::ConversationId;
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::domain::{
-    agent_execution::prompts::{ImageMediaType, ImageReference},
-    common::value_objects::Sha256Digest,
+    agent_execution::prompts::ImageReference,
+    common::value_objects::{ImageMediaType, Sha256Digest},
 };
 
 const CONVERSATION: &str = "00000000-0000-4000-8000-0000000000a1";

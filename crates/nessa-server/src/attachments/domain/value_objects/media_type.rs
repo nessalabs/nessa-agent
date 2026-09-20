@@ -1,5 +1,5 @@
 use crate::attachments::domain::AttachmentError;
-use nessa_sdk::domain::agent_execution::prompts::ImageMediaType;
+use nessa_sdk::domain::common::value_objects::ImageMediaType;
 use std::fmt;
 
 /// A declared media type: lowercase `type/subtype`, no parameters.

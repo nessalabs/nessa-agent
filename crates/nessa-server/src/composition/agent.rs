@@ -3,10 +3,12 @@ use crate::core::RunError;
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::{
     application::agent_execution::providers::{AgentProvider, UserImageSource},
-    infrastructure::acp::sessions::StdioMcpServer,
+    domain::model_metadata::entities::ModelMetadata,
+    infrastructure::{acp::sessions::StdioMcpServer, model_metadata_json::load_catalog},
 };
 use serde::Deserialize;
 use std::{
+    fs::File,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -49,19 +51,36 @@ fn output_tokens() -> u32 {
     4096
 }
 
+/// The selected model as the catalog records it. Read once: the provider is
+/// built for it, and uploaded images are fitted to its image limits.
+pub(super) fn model(config: &AgentConfig) -> Result<ModelMetadata, RunError> {
+    ModelMetadata::try_from(
+        load_catalog(
+            File::open(&config.catalog)
+                .map_err(|_| RunError::Agent("cannot read model catalog".into()))?,
+        )
+        .map_err(|e| RunError::Agent(e.to_string()))?
+        .select("anthropic", &config.model)
+        .map_err(|e| RunError::Agent(e.to_string()))?,
+    )
+    .map_err(|e| RunError::Agent(e.to_string()))
+}
+
 #[cfg(unix)]
 pub(super) fn provider(
     config: &AgentConfig,
+    model: &ModelMetadata,
     directory: &Path,
     clock: Arc<dyn Clock>,
     images: Arc<dyn UserImageSource>,
 ) -> Result<Arc<dyn AgentProvider>, RunError> {
     config.validate()?;
-    build::provider(config, directory, clock, images)
+    build::provider(config, model, directory, clock, images)
 }
 #[cfg(not(unix))]
 pub(super) fn provider(
     config: &AgentConfig,
+    _: &ModelMetadata,
     _: &Path,
     _: Arc<dyn Clock>,
     _: Arc<dyn UserImageSource>,
@@ -78,7 +97,7 @@ pub(super) fn provider(
 }
 #[cfg(unix)]
 mod build {
-    use super::{AgentConfig, RunError};
+    use super::{AgentConfig, ModelMetadata, RunError};
     use crate::conversation::infrastructure::DurableExecutionAudit;
     use nessa_auth::application::ports::Clock;
     use nessa_sdk::{
@@ -89,14 +108,10 @@ mod build {
                 prompts::{PromptSource, PromptSourceKind, SystemPromptBuilder, UserMessage},
             },
             common::value_objects::TokenLimits,
-            model_metadata::entities::ModelMetadata,
         },
-        infrastructure::{
-            acp::sessions::AcpConfig, claude_acp::sessions::ClaudeAcpProvider,
-            model_metadata_json::load_catalog,
-        },
+        infrastructure::{acp::sessions::AcpConfig, claude_acp::sessions::ClaudeAcpProvider},
     };
-    use std::{collections::BTreeMap, fs::File, path::Path, sync::Arc, time::Duration};
+    use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
 
     /// The largest ACP frame, derived from the largest message rather than
     /// chosen beside it. One `session/prompt` carries every image of a message
@@ -112,21 +127,12 @@ mod build {
     );
     pub(super) fn provider(
         config: &AgentConfig,
+        model: &ModelMetadata,
         directory: &Path,
         clock: Arc<dyn Clock>,
         images: Arc<dyn UserImageSource>,
     ) -> Result<Arc<dyn AgentProvider>, RunError> {
         let invalid = |error| RunError::Agent(format!("{error}"));
-        let model = ModelMetadata::try_from(
-            load_catalog(
-                File::open(&config.catalog)
-                    .map_err(|_| RunError::Agent("cannot read model catalog".into()))?,
-            )
-            .map_err(|e| RunError::Agent(e.to_string()))?
-            .select("anthropic", &config.model)
-            .map_err(|e| RunError::Agent(e.to_string()))?,
-        )
-        .map_err(|e| RunError::Agent(e.to_string()))?;
         let workspace = config
             .workspace
             .canonicalize()
@@ -183,7 +189,7 @@ mod build {
                 max_frame_bytes: MAX_FRAME_BYTES,
                 images: Some(images),
             },
-            &model,
+            model,
             limits,
             audit,
         )
