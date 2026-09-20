@@ -388,8 +388,9 @@ impl PinnedRelease {
     /// [`ReleasePlatform`] are each perfectly valid alone and can still
     /// describe a build that cannot exist.
     ///
-    /// Two such rules, and both decide whether a machine is offered something
-    /// it cannot start, which is what this whole context exists to prevent:
+    /// Three such rules, and each decides whether a machine is offered
+    /// something it cannot start, which is what this whole context exists to
+    /// prevent:
     ///
     /// - A Linux build names a C library. Every Linux build is linked against
     ///   one, so `None` there is a field somebody left out rather than a build
@@ -397,6 +398,17 @@ impl PinnedRelease {
     ///   unnamed library as "nothing required", so such a release would be
     ///   offered to every Linux machine and would fail in the loader on half
     ///   of them.
+    /// - A macOS build names none. This is the mirror of the rule above and
+    ///   fails the other way: no Apple target is built against musl or glibc,
+    ///   so `host_libc` answers `None` on every macOS machine there is, and a
+    ///   macOS release naming a library is one nothing can satisfy. It would
+    ///   install nowhere and say nothing about why.
+    ///
+    ///   Windows is deliberately not included. A `*-windows-gnu` build of
+    ///   Nessa does report `gnu` — MinGW, a different fact wearing the same
+    ///   name — so a Windows release naming it is one some build could
+    ///   actually match. Refusing it here would reject a pin nobody has
+    ///   written yet on a guess about what the word will mean when they do.
     /// - AVX2 is asked for only where a processor could have it. An `aarch64`
     ///   build requiring it is not dangerous, only unreachable: nothing would
     ///   ever satisfy it, so the pin would quietly install on no machine at
@@ -417,6 +429,11 @@ impl PinnedRelease {
         if platform.operating_system() == "linux" && requirements.libc().is_none() {
             return Err(PinRejected::Requirements(format!(
                 "{platform} does not say which c library it needs"
+            )));
+        }
+        if platform.operating_system() == "macos" && requirements.libc().is_some() {
+            return Err(PinRejected::Requirements(format!(
+                "{platform} names a c library, which no macos build of nessa reports"
             )));
         }
         // `x86` as well as `x86_64`: a 32-bit x86 processor can have AVX2, and

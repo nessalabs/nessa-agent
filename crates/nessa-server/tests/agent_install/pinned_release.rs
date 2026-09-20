@@ -301,6 +301,23 @@ fn a_build_that_could_not_exist_is_not_a_release() {
         Err(PinRejected::Requirements(_))
     ));
 
+    // A macOS build naming a C library: the mirror of the first case, failing
+    // the other way. No Apple target is built against musl or glibc, so
+    // `host_libc` answers `None` on every macOS machine there is and this
+    // release would be offered to none of them — the same "a requirement
+    // nothing can meet is a typo" fault as the AVX2 case above, and the one
+    // that is silent rather than loud.
+    for named in [Libc::Gnu, Libc::Musl] {
+        assert!(matches!(
+            assemble(
+                "macos",
+                "x86_64",
+                ReleaseRequirements::new(Some(named), false)
+            ),
+            Err(PinRejected::Requirements(_))
+        ));
+    }
+
     // And the builds that do exist. macOS has one C library, so naming none
     // there is the truth rather than an omission; 32-bit x86 processors have
     // AVX2 too, so the check is about the instruction set and not about the
@@ -319,6 +336,17 @@ fn a_build_that_could_not_exist_is_not_a_release() {
         assemble("macos", "aarch64", ReleaseRequirements::default()),
         assemble("macos", "x86_64", ReleaseRequirements::new(None, true)),
         assemble("x86", "x86", ReleaseRequirements::new(None, true)),
+        // Windows naming `gnu` is a release some build could match: a
+        // `*-windows-gnu` Nessa reports `gnu` for MinGW. The rule above is
+        // about macOS by name rather than about "not Linux", so that a pin
+        // nobody has written yet is not refused on a guess about what the
+        // word will mean there.
+        assemble(
+            "windows",
+            "x86_64",
+            ReleaseRequirements::new(Some(Libc::Gnu), false),
+        ),
+        assemble("windows", "x86_64", ReleaseRequirements::default()),
     ] {
         assert!(ok.is_ok(), "{ok:?} is a build that exists");
     }
