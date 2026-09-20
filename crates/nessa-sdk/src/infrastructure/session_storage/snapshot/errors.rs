@@ -1,4 +1,6 @@
-use crate::application::agent_execution::agents::AgentError;
+use crate::application::agent_execution::agents::{
+    AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+};
 use crate::application::agent_execution::hooks::{HookError, HookFailure};
 use crate::application::agent_execution::providers::CloseOutcome;
 use crate::application::agent_execution::sessions::storage::StorageError;
@@ -128,6 +130,7 @@ pub(super) enum SavedError {
     Closed,
     StalePermission,
     Deadline,
+    StartupDeadline(StartupStep),
     Backpressure,
     CleanupUncertain,
     AuditFailure,
@@ -153,6 +156,58 @@ pub(super) enum SavedError {
         error: StorageFailure,
         execution_result: Box<Result<Outcome, SavedError>>,
     },
+}
+/// Saved counterpart of the step named by a startup deadline. The context is
+/// stored beside the step rather than folded into it, because a restoration can
+/// expire during any step.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct StartupStep {
+    phase: StartupPhase,
+    context: StartupContext,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) enum StartupPhase {
+    Initialize,
+    Session,
+    Configure,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) enum StartupContext {
+    New,
+    Restored,
+}
+impl From<AgentStartupStep> for StartupStep {
+    fn from(value: AgentStartupStep) -> Self {
+        Self {
+            phase: match value.phase() {
+                AgentStartupPhase::Initialize => StartupPhase::Initialize,
+                AgentStartupPhase::Session => StartupPhase::Session,
+                AgentStartupPhase::Configure => StartupPhase::Configure,
+            },
+            context: match value.context() {
+                AgentStartupContext::New => StartupContext::New,
+                AgentStartupContext::Restored => StartupContext::Restored,
+            },
+        }
+    }
+}
+impl From<StartupStep> for AgentStartupStep {
+    fn from(value: StartupStep) -> Self {
+        Self::new(
+            match value.phase {
+                StartupPhase::Initialize => AgentStartupPhase::Initialize,
+                StartupPhase::Session => AgentStartupPhase::Session,
+                StartupPhase::Configure => AgentStartupPhase::Configure,
+            },
+            match value.context {
+                StartupContext::New => AgentStartupContext::New,
+                StartupContext::Restored => AgentStartupContext::Restored,
+            },
+        )
+    }
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -219,6 +274,7 @@ impl From<SavedError> for AgentError {
             SavedError::Closed => Self::Closed,
             SavedError::StalePermission => Self::StalePermission,
             SavedError::Deadline => Self::Deadline,
+            SavedError::StartupDeadline(step) => Self::StartupDeadline(step.into()),
             SavedError::Backpressure => Self::Backpressure,
             SavedError::CleanupUncertain => Self::CleanupUncertain,
             SavedError::AuditFailure => Self::AuditFailure,
@@ -303,6 +359,7 @@ impl From<AgentError> for SavedError {
             AgentError::Closed => Self::Closed,
             AgentError::StalePermission => Self::StalePermission,
             AgentError::Deadline => Self::Deadline,
+            AgentError::StartupDeadline(step) => Self::StartupDeadline(step.into()),
             AgentError::Backpressure => Self::Backpressure,
             AgentError::CleanupUncertain => Self::CleanupUncertain,
             AgentError::AuditFailure => Self::AuditFailure,

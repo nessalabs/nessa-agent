@@ -148,9 +148,11 @@ export type {
   ConversationReceipt,
   ConversationPermissionSelectionState,
 } from "./generated/product.js"
+export { ConversationErrorCode } from "./generated/product.js"
 export {
   NessaConversationMutationError,
   NessaConversationControlError,
 } from "./application/conversation-mutation-error.js"
 
 export { isRetryableConnectionError } from "./application/connect-retry.js"
+export { agentOperationTimeoutMs } from "./application/agent-budgets.js"
