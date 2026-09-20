@@ -871,8 +871,14 @@ pub(super) fn wait_ready(
             let status = watch.status()?;
             // Only asked for when launchd has no process to show: a running
             // service has nothing to say about having given up, and this is a
-            // file read on every liveness check otherwise.
-            let gave_up = (status.pid.is_none()).then(|| watch.gave_up()).flatten();
+            // file read on every liveness check otherwise. A record belonging
+            // to another registration is dropped here rather than carried on
+            // as something to judge or to say — it is about a service that is
+            // not the one being started.
+            let gave_up = (status.pid.is_none())
+                .then(|| watch.gave_up())
+                .flatten()
+                .filter(|record| record.belongs_to(expected.1));
             match assess(running.as_ref(), &status, expected, gave_up.as_ref()) {
                 Step::Ready(runtime) => return Ok(runtime),
                 // An observation that is not due still counts for nothing:

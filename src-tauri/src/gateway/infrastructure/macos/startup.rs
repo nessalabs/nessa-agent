@@ -229,7 +229,7 @@ impl RecordedFailure {
     pub(super) fn sentence(&self, port: u16) -> Option<String> {
         sentence_for(&self.reason, port)
     }
-    fn describe(&self) -> String {
+    pub(super) fn describe(&self) -> String {
         format!(
             "gateway recorded a startup failure it will not retry: {} (reason {}, code {}, pid {})",
             self.message, self.reason, self.exit_code, self.process_id
@@ -283,7 +283,16 @@ pub(super) fn parse_record(bytes: &[u8]) -> Option<RecordedFailure> {
     if bytes.len() as u64 > RECORD_MAX_BYTES {
         return None;
     }
-    serde_json::from_slice(bytes).ok()
+    let record: RecordedFailure = serde_json::from_slice(bytes).ok()?;
+    // The reason and the code are two ways of saying the same thing, out of one
+    // table both sides compile in. A record where they disagree describes no
+    // run this server could have had, so it is not evidence about one. A reason
+    // the table does not name is a newer server's word and is left alone: there
+    // is no sentence for it here either way.
+    match CODES.codes.get(&record.reason) {
+        Some(code) if *code != record.exit_code => None,
+        _ => Some(record),
+    }
 }
 
 /// One sentence for the panel, and the evidence behind it for the app log.

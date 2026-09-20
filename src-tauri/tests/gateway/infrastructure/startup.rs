@@ -495,6 +495,34 @@ fn an_unreadable_or_malformed_record_says_nothing_at_all() {
     }
     // Nor is something far larger than a record.
     assert_eq!(parse_record(&vec![b'x'; 65_537]), None);
+
+    // The reason and the code are two ways of saying the same thing. A record
+    // where they disagree describes no run this server could have had.
+    let contradictory = serde_json::json!({
+        "reason": "credentialRegistryInvalid",
+        "exitCode": code("portInUse"),
+        "message": "",
+        "serviceGeneration": GENERATION,
+        "processId": 1u32,
+    })
+    .to_string();
+    assert_eq!(parse_record(contradictory.as_bytes()), None);
+    write_private_log(&path, &contradictory);
+    assert_eq!(recorded_failure(&directory), None);
+    // A reason this host has never heard of is a newer server's word, not a
+    // contradiction: the table cannot say what code it should have carried.
+    assert!(parse_record(
+        serde_json::json!({
+            "reason": "somethingThisHostHasNeverHeardOf",
+            "exitCode": 99u8,
+            "message": "",
+            "serviceGeneration": GENERATION,
+            "processId": 1u32,
+        })
+        .to_string()
+        .as_bytes()
+    )
+    .is_some());
     fs::remove_dir_all(&directory).unwrap();
 }
 

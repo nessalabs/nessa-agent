@@ -309,6 +309,15 @@ fn register(runtime: &Path, stage: &str) -> Result<ReconciledGateway, String> {
             {
                 return Err(unavailable_service(recorded.as_ref(), port));
             }
+            if let Some(recorded) = &recorded {
+                // What is being replaced, why, and on whose say-so, in the log
+                // of the process doing it. The registration has no running
+                // process to retire and no conversations to stop.
+                eprintln!(
+                    "[nessa] Replacing gateway {service}, which launchd will not start again: {}",
+                    recorded.describe()
+                );
+            }
             launchctl(&["bootout", &service])?;
             if recorded.is_some() {
                 startup::forget_recorded_failure(&installed_logs);

@@ -18,6 +18,18 @@ const PORT_UNDER_TEST: u16 = 7420;
 const RUNNING_GENERATION: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TARGET_GENERATION: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const INSTANCE: &str = "550e8400-e29b-41d4-a716-446655440000";
+/// The bytes `crates/nessa-server/src/core/startup_failure.rs` writes.
+fn gave_up_record(reason: &str, generation: &str) -> String {
+    json!({
+        "reason": reason,
+        "exitCode": 28,
+        "message": "authentication setup failed: credential registry is invalid",
+        "serviceGeneration": generation,
+        "processId": 4711,
+    })
+    .to_string()
+}
+
 fn runtime(fingerprint: &str, pid: u32) -> ManagedRuntime {
     ManagedRuntime {
         fingerprint: fingerprint.into(),
@@ -560,6 +572,44 @@ fn another_gateway_on_the_port_never_answers_for_this_one() {
     );
 }
 
+/// A server that gave up exits successfully, so nothing in launchd's answer
+/// says it failed and only its own record makes that absence a death — for the
+/// registration being started, and no other.
+#[test]
+fn a_successful_exit_is_a_death_only_with_this_registration_s_own_record() {
+    let expected = (EXPECTED_FINGERPRINT, RUNNING_GENERATION);
+    let gone = observed(None, true, LastExit::Code(0));
+    let ours =
+        parse_record(gave_up_record("credentialRegistryInvalid", RUNNING_GENERATION).as_bytes())
+            .expect("record");
+    let theirs =
+        parse_record(gave_up_record("credentialRegistryInvalid", TARGET_GENERATION).as_bytes())
+            .expect("record");
+    assert_eq!(assess(None, &gone, expected, Some(&ours)), Step::Dead);
+    assert_eq!(assess(None, &gone, expected, Some(&theirs)), Step::Waiting);
+    assert_eq!(assess(None, &gone, expected, None), Step::Waiting);
+    // A record is not licence to call a running process dead, nor an absence
+    // launchd could not establish.
+    assert_ne!(
+        assess(
+            None,
+            &observed(Some(42), true, LastExit::Code(0)),
+            expected,
+            Some(&ours)
+        ),
+        Step::Dead
+    );
+    assert_ne!(
+        assess(
+            None,
+            &observed(None, false, LastExit::Code(0)),
+            expected,
+            Some(&ours)
+        ),
+        Step::Dead
+    );
+}
+
 #[test]
 fn a_process_that_is_running_or_has_not_failed_is_still_starting() {
     let expected = (EXPECTED_FINGERPRINT, RUNNING_GENERATION);
@@ -694,18 +744,6 @@ fn a_slow_but_healthy_start_keeps_the_whole_deadline() {
     );
     assert!(watch.elapsed >= Duration::from_secs(29));
     assert!(watch.elapsed < Duration::from_secs(30));
-}
-
-/// The bytes `crates/nessa-server/src/core/startup_failure.rs` writes.
-fn gave_up_record(reason: &str, generation: &str) -> String {
-    json!({
-        "reason": reason,
-        "exitCode": 28,
-        "message": "authentication setup failed: credential registry is invalid",
-        "serviceGeneration": generation,
-        "processId": 4711,
-    })
-    .to_string()
 }
 
 /// A server that gave up exits *successfully* — the only thing launchd reads
