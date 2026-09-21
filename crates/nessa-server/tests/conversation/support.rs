@@ -220,6 +220,7 @@ pub(crate) fn only(provider: Arc<dyn AgentProvider>) -> ConversationAgents {
             ConversationAgent {
                 provider,
                 reserved_output_tokens: 4096,
+                readiness: None,
             },
         )]),
         AgentId::Claude,

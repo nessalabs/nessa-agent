@@ -1,5 +1,11 @@
 //! Local product dependency factory. Provider choices stay outside route handlers.
+use super::warm_up::PreparedRuntime;
 use crate::{
+    agent_warm_up::{
+        application::AgentWarmUp,
+        domain::RuntimeFingerprint,
+        infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
+    },
     agents::{
         domain::AgentId,
         infrastructure::{AgentLaunchFiles, LocalAgentProbe},
@@ -29,7 +35,7 @@ use nessa_auth::{
     },
     domain::{AudienceId, OrganizationId, ResourceId},
 };
-use nessa_sdk::infrastructure::session_storage::LocalFileStorage;
+use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, LocalFileStorage};
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -48,12 +54,23 @@ impl Clock for SystemClock {
     }
 }
 
+/// Everything composition built that the server lifecycle, rather than a route,
+/// has to own. The warm-up is started once the gateway is listening, so it
+/// cannot be started here.
+pub(super) struct LocalProduct {
+    pub(super) routes: ProductRouteState,
+    /// One per configured agent, each preparing its own runtime. Empty when no
+    /// agent is configured, which is the same gateway that serves no
+    /// conversations.
+    pub(super) warm_ups: Vec<AgentWarmUp>,
+}
+
 /// Construct the guarded product route from a previously initialized local registry.
 pub(super) fn product_state(
     config: &Environment,
     uptime: Arc<dyn ServerClock>,
     bundle: Option<&std::path::Path>,
-) -> Result<ProductRouteState, RunError> {
+) -> Result<LocalProduct, RunError> {
     let directory = config
         .auth_directory
         .as_ref()
@@ -144,6 +161,7 @@ pub(super) fn product_state(
         .map_err(setup_error)?,
     ));
     product.browser_http_allowed = config.browser_http_allowed();
+    let mut warm_ups = Vec::new();
     if let Some(agents) = &settings.agents {
         let root = directory
             .parent()
@@ -182,8 +200,52 @@ pub(super) fn product_state(
             ),
             clock.clone(),
         )?;
-        let configured =
+        let mut configured =
             super::agent::providers(agents, &root, clock.clone(), attachments.images.clone())?;
+        // One warm-up per configured agent, because each runs its own runtime
+        // and the operating system scans each of them separately on its first
+        // execution. One for the server would leave whichever agent it did not
+        // cover paying that scan inside somebody's first message, which is the
+        // failure this exists to prevent.
+        //
+        // They share one records directory and one audit directory: a record is
+        // stored under a digest of the runtime it describes, so two runtimes
+        // never collide, and a third configured later finds no record of its
+        // own and warms itself.
+        let records = Arc::new(
+            FileWarmUpRecords::new(root.join("warm-up"))
+                .map_err(|error| RunError::Agent(error.to_string()))?,
+        );
+        let warm_up_audit = Arc::new(
+            DurableWarmUpAudit::new(root.join("audit").join("warm-up"))
+                .map_err(|error| RunError::Agent(error.to_string()))?,
+        );
+        for agent in configured.values_mut() {
+            // The provider's own credential-free identity, rather than a
+            // hand-picked list of fields: it already covers the executable, its
+            // arguments, the environment, the workspace, and every MCP server
+            // binary the child will start, and it is computed from raw OS bytes
+            // rather than a lossy path conversion. Anything that changes which
+            // files are executed changes it, which is what a first-execution
+            // scan is paid for.
+            let identity = agent.provider.identity();
+            let runtime =
+                RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context())
+                    .map_err(|error| RunError::Agent(error.to_string()))?;
+            let prepared = AgentWarmUp::new(
+                agent.provider.clone(),
+                // A throwaway context: the warm-up must not leave a snapshot on
+                // disk and must not take an exclusive lease on a conversation a
+                // user owns.
+                Arc::new(InMemoryStorage::new()),
+                records.clone(),
+                warm_up_audit.clone(),
+                clock.clone(),
+                runtime,
+            );
+            agent.readiness = Some(Arc::new(PreparedRuntime(prepared.clone())));
+            warm_ups.push(prepared);
+        }
         let storage = Arc::new(
             LocalFileStorage::new(root.join("sessions"))
                 .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -210,7 +272,10 @@ pub(super) fn product_state(
             .with_conversations(Arc::new(service))
             .with_attachments(attachments.service);
     }
-    Ok(product)
+    Ok(LocalProduct {
+        routes: product,
+        warm_ups,
+    })
 }
 
 fn setup_error(error: impl std::fmt::Display) -> RunError {
