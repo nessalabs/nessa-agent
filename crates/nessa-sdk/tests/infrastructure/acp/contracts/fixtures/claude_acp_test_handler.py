@@ -131,10 +131,13 @@ for line in sys.stdin:
         assert options["settingSources"] == []
         assert options["tools"] == {"type": "preset", "preset": "claude_code"}
         assert "Bash" in options["disallowedTools"]
-        assert "WebSearch" in options["settings"]["permissions"]["ask"]
+        assert "Bash" in options["settings"]["permissions"]["deny"]
+        # Every tool the harness offers is reviewed by Nessa's permission owner;
+        # naming them one by one left unnamed tools running unreviewed and
+        # failed the execution when one of them was called.
+        assert options["settings"]["permissions"]["ask"] == ["*"]
         assert options["settings"]["disableAllHooks"] is True
         assert options["settings"]["allowedMcpServers"] == []
-        assert "Read" in options["settings"]["permissions"]["ask"]
         response = configs("alias" if mode == "wrong-model" else model)
         if mode.startswith("duplicate-session-"):
             response = duplicate_configs(mode.removeprefix("duplicate-session-"))

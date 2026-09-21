@@ -106,7 +106,7 @@ fn invalid_content_does_not_reserve_a_provider_tool_name() {
 }
 
 #[test]
-fn provider_name_retention_is_bounded_by_allowlist_identity_and_entry_limits() {
+fn provider_name_retention_is_bounded_by_name_identity_and_entry_limits() {
     let mut names = HashMap::new();
     let oversized = "Write".repeat(1024 * 1024);
     for id in ["first", "second"] {
@@ -213,23 +213,102 @@ fn enabled_native_inputs_are_preserved_and_unmanaged_shell_is_rejected() {
 }
 
 #[test]
-fn admission_matches_the_native_review_policy_and_configured_mcp_namespaces() {
-    for name in REVIEW_TOOLS {
-        assert!(enabled_name(name, &[]), "reviewed native tool {name}");
+fn deferred_schema_loading_is_admitted_before_the_tool_it_loads() {
+    // The pinned harness defers tool schemas: a turn that needs WebSearch first
+    // calls ToolSearch to load it. Refusing the loader refused the whole turn.
+    let mut names = HashMap::new();
+    for (name, kind) in [("ToolSearch", "other"), ("WebSearch", "fetch")] {
+        tool_call(
+            &json!({"toolCallId":name,"kind":kind,"_meta":{"claudeCode":{"toolName":name}}}),
+            &mut names,
+        )
+        .unwrap();
+        assert_eq!(names.get(name).map(String::as_str), Some(name));
     }
+    let args = json!({"query":"select:WebSearch","max_results":5});
+    let review = tool_input("ToolSearch", &args).unwrap();
+    assert_eq!(review.name, "ToolSearch");
+    assert_eq!(review.arguments_json, args.to_string());
+}
+
+#[test]
+fn execution_and_escaping_tools_are_denied_even_though_admission_is_open() {
+    // Admission is open, so this list is the whole boundary. Each name here is
+    // a way out of what Nessa owns: shell execution outside Shepherd, the
+    // permission mode itself, work that outlives its execution, and effects on
+    // services beyond this machine. A permission prompt is not ownership.
+    let mut names = HashMap::new();
     for name in [
-        "FutureNativeTool",
-        "ReadFile",
-        "Shell",
-        "mcp__nessa__shell",
-        "mcp__nessa__",
+        "Bash",
+        "BashOutput",
+        "KillShell",
+        "Monitor",
+        "REPL",
+        "EnterPlanMode",
+        "ExitPlanMode",
+        "Workflow",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "EnterWorktree",
+        "ExitWorktree",
+        "Artifact",
+        "PushNotification",
+        "RemoteTrigger",
+        "SendFeedback",
     ] {
-        assert!(!enabled_name(name, &[]), "unconfigured tool {name}");
+        assert!(
+            DISALLOWED_TOOLS.contains(&name),
+            "{name} must stay denied once admission is open"
+        );
+        assert!(!enabled_name(name, &[]), "denied tool {name} was admitted");
+        assert!(matches!(
+            tool_call(
+                &json!({"toolCallId":name,"_meta":{"claudeCode":{"toolName":name}}}),
+                &mut names
+            ),
+            Err(AgentError::Unsupported(_))
+        ));
+        assert!(tool_input(name, &json!({"command":"true"})).is_err());
+    }
+    // Denial reserves no provider name, whatever the caller sends.
+    assert!(names.is_empty());
+}
+
+#[test]
+fn admission_reviews_every_harness_tool_except_denials_and_unconfigured_namespaces() {
+    // Which built-ins the pinned harness offers is its fact, reached through
+    // deferred schema loading. Nessa reviews them all rather than refusing the
+    // ones it has not heard of, which used to fail the whole execution.
+    for name in [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "NotebookEdit",
+        "WebSearch",
+        "WebFetch",
+        "Agent",
+        "Task",
+        "TodoWrite",
+        "Skill",
+        "ToolSearch",
+        "FutureNativeTool",
+    ] {
+        assert!(enabled_name(name, &[]), "reviewable harness tool {name}");
     }
     for name in DISALLOWED_TOOLS {
         assert!(!enabled_name(name, &[]), "denied native tool {name}");
     }
-
+    for name in ["", " Read", "Read!", &"T".repeat(129)] {
+        assert!(!enabled_name(name, &[]), "unbounded tool name {name:?}");
+    }
+    // An MCP name must belong to a configured server rather than merely look
+    // like one, whatever the harness offers.
+    for name in ["mcp__nessa__shell", "mcp__nessa__", "mcp__other__shell"] {
+        assert!(!enabled_name(name, &[]), "unconfigured tool {name}");
+    }
     let configured = vec!["mcp__nessa__".to_owned()];
     assert!(enabled_name("mcp__nessa__shell", &configured));
     assert!(!enabled_name("mcp__nessa__", &configured));
@@ -250,14 +329,33 @@ fn admission_matches_the_native_review_policy_and_configured_mcp_namespaces() {
         args.to_string()
     );
 
+    // A built-in Nessa has never heard of is reviewed with its input preserved,
+    // not refused: refusing it ended the turn with nothing to show the caller.
     let future = json!({
         "toolCallId":"future",
         "kind":"other",
         "_meta":{"claudeCode":{"toolName":"FutureNativeTool"}}
     });
+    super::tool_call(&future, &mut names, &configured).unwrap();
+    assert_eq!(
+        names.get("future").map(String::as_str),
+        Some("FutureNativeTool")
+    );
+    let future_args = json!({"some_field":"value"});
+    assert_eq!(
+        super::tool_input("FutureNativeTool", &future_args, &configured)
+            .unwrap()
+            .arguments_json,
+        future_args.to_string()
+    );
+    // A denied tool is still refused, and reserves no provider name.
     assert!(matches!(
-        super::tool_call(&future, &mut names, &configured),
+        super::tool_call(
+            &json!({"toolCallId":"denied","_meta":{"claudeCode":{"toolName":"Bash"}}}),
+            &mut names,
+            &configured
+        ),
         Err(AgentError::Unsupported(_))
     ));
-    assert!(!names.contains_key("future"));
+    assert!(!names.contains_key("denied"));
 }

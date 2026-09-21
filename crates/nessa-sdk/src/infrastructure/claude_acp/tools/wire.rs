@@ -7,34 +7,62 @@ use crate::infrastructure::json_rpc::protocol;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
-// Native shell and mode changes must not bypass Nessa's execution and permission owners.
+/// What the pinned harness offers that Nessa must not let an agent reach.
+///
+/// Admission is otherwise open — see [`enabled_name`] — so this list is the
+/// whole of that boundary, and it is read against one pinned harness version,
+/// which startup verifies. Reviewing a tool is not the same as owning what it
+/// does: an approval says "yes, do this", and these do it somewhere Nessa
+/// cannot see, account for, or stop.
+///
+/// Grouped by what would escape, not by name:
+///
+/// 1. Execution outside Shepherd. `Monitor` takes a shell command or a
+///    WebSocket and streams it back, which is `Bash` by another door.
+/// 2. Permission-mode changes, which would rewrite the policy the rest of
+///    this profile depends on.
+/// 3. Work that outlives the execution that asked for it: scheduled prompts
+///    that survive a restart, workflow scripts that spawn their own agents,
+///    and worktree switches that move the checkout underneath one.
+/// 4. Effects on services beyond this machine, which belong to the user's
+///    account rather than to a local conversation.
+///
+/// These names go to the harness as both `disallowedTools` and permission
+/// `deny`, and it reads rule names through an alias map before matching —
+/// `KillShell` and `BashOutput` are read there as `TaskStop` and `TaskOutput`.
+/// None of the names above is an alias, so each denies the tool it names, but
+/// a name added here must be checked against that map: this list and the
+/// harness must deny the same set for admission to be open safely.
 pub(in crate::infrastructure::claude_acp) const DISALLOWED_TOOLS: &[&str] = &[
+    // Execution Nessa does not own.
     "Bash",
     "BashOutput",
     "KillShell",
+    "Monitor",
+    "REPL",
+    // Permission mode.
     "EnterPlanMode",
     "ExitPlanMode",
+    // Work that outlives or escapes this execution.
+    "Workflow",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "EnterWorktree",
+    "ExitWorktree",
+    // Effects beyond this machine.
+    "Artifact",
+    "PushNotification",
+    "RemoteTrigger",
+    "SendFeedback",
 ];
-pub(in crate::infrastructure::claude_acp) const REVIEW_TOOLS: &[&str] = &[
-    "Read",
-    "Write",
-    "Edit",
-    "Glob",
-    "Grep",
-    "NotebookEdit",
-    "WebSearch",
-    "WebFetch",
-    "Agent",
-    "Task",
-    "TodoWrite",
-    "TaskCreate",
-    "TaskUpdate",
-    "TaskList",
-    "TaskGet",
-    "TaskOutput",
-    "TaskStop",
-    "Skill",
-];
+/// The namespace the harness gives every tool of a configured MCP server.
+pub(in crate::infrastructure::claude_acp) const MCP_NAMESPACE: &str = "mcp__";
+/// The permission rule that routes every tool the harness offers — its
+/// built-ins and the tools of configured MCP servers — to Nessa's permission
+/// owner. Naming tools individually left the rest running unreviewed inside
+/// the harness; what Nessa refuses outright is denied separately.
+pub(in crate::infrastructure::claude_acp) const REVIEWED_TOOLS_RULE: &str = "*";
 fn bounded_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 128
@@ -42,12 +70,25 @@ fn bounded_name(name: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
+/// Whether Nessa's permission owner may review a call to this tool.
+///
+/// The harness's own built-in tools are all reviewable: the model reaches them
+/// through deferred schema loading, and which ones exist is the pinned
+/// harness's fact, not a list Nessa can keep current. Enumerating them refused
+/// executions outright — a whole turn died on the first tool Nessa had not
+/// heard of — so admission asks the two questions Nessa does own instead.
+/// Tools Nessa denies outright stay denied, and an MCP name must belong to a
+/// configured server rather than merely look like one.
 fn enabled_name(name: &str, mcp_prefixes: &[String]) -> bool {
-    bounded_name(name)
-        && (REVIEW_TOOLS.contains(&name)
-            || mcp_prefixes
-                .iter()
-                .any(|prefix| name.starts_with(prefix) && name.len() > prefix.len()))
+    if !bounded_name(name) || DISALLOWED_TOOLS.contains(&name) {
+        return false;
+    }
+    if name.starts_with(MCP_NAMESPACE) {
+        return mcp_prefixes
+            .iter()
+            .any(|prefix| name.starts_with(prefix) && name.len() > prefix.len());
+    }
+    true
 }
 pub(in crate::infrastructure::claude_acp) fn tool_call(
     value: &Value,
@@ -61,11 +102,10 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
         .pointer("/_meta/claudeCode/toolName")
         .and_then(Value::as_str)
     {
-        // Only native tools included in the configured review policy and tools
-        // from configured MCP namespaces may reach Nessa's permission owner.
-        // Names are also bounded before retention; together with 256-byte IDs
-        // and 4,096 entries, this bounds the map's string payload independently
-        // of incoming frame size.
+        // Names are bounded before retention; together with 256-byte IDs and
+        // 4,096 entries, this bounds the map's string payload independently of
+        // incoming frame size. Which names are admitted at all is
+        // `enabled_name`'s account, not a second one here.
         if !enabled_name(name, mcp_prefixes) {
             // A rejected name can occupy the entire frame. Do not copy it into
             // an error that teardown will retain and clone.
