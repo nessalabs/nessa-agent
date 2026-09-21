@@ -272,6 +272,30 @@ for line in sys.stdin:
                 pending = None
             elif mode == "permission-provider-error":
                 send({"id": pending, "error": {"code": -32000, "message": "fixture provider failure"}})
+        elif mode.startswith("declined-"):
+            # A review this binding will not put to a host. The call is still
+            # observed, the review is answered "no", and the turn finishes —
+            # which is the point: refusing one tool is not refusing the turn.
+            call = {key: value for key, value in tool("Bash").items() if key != "title"}
+            options = [
+                {"optionId": "approve-one", "kind": "allow_once", "name": "Allow once"},
+                {"optionId": "deny-one", "kind": "reject_once", "name": "Deny once"}]
+            if mode == "declined-tool":
+                update({"sessionUpdate": "tool_call", **tool("Bash")})
+            elif mode == "declined-options":
+                # Nothing offerable survives filtering, so there was never a
+                # decision a host could have made.
+                update({"sessionUpdate": "tool_call", **tool("Write")})
+                call = {key: value for key, value in tool().items() if key != "title"}
+                options = [{"optionId": "always", "kind": "allow_always", "name": "Always"}]
+            elif mode == "declined-unreadable":
+                # Reviewed under an identity that was never observed: nothing
+                # this binding could describe to somebody deciding.
+                update({"sessionUpdate": "tool_call", **tool("Write")})
+                call = {key: value for key, value in tool().items() if key != "title"}
+                call["toolCallId"] = "never-observed"
+            send({"id": permission_id, "method": "session/request_permission", "params": {
+                "sessionId": session, "toolCall": call, "options": options}})
         elif mode in ("stall", "image-stall", "complete-on-stop", "ignore-stop", "late-tool-close", "consumer-loss-during-close"):
             if mode == "late-tool-close":
                 update({"sessionUpdate": "tool_call", **tool()})
@@ -336,6 +360,16 @@ for line in sys.stdin:
             pending = None
     elif mode == "permission-pair" and msg.get("id") in ("first-review", "second-review"):
         record(msg["id"] + "-outcome", json.dumps(msg["result"]["outcome"]))
+    elif mode.startswith("declined-") and msg.get("id") == permission_id:
+        # Every answer for this review, in order: one refusal must not be able
+        # to hide behind a later one.
+        seen = root / "permission-outcomes"
+        prior = seen.read_text() if seen.exists() else ""
+        record("permission-outcomes", prior + json.dumps(msg["result"]["outcome"]) + "\n")
+        record("permission-outcome", json.dumps(msg["result"]["outcome"]))
+        text("declined and carried on")
+        result(pending, {"stopReason": "end_turn"})
+        pending = None
     elif msg.get("id") == permission_id:
         choice = msg["result"]["outcome"]
         if provider_cancel_mode:

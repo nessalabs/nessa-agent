@@ -603,3 +603,135 @@ async fn a_stalled_audit_is_bounded_and_does_not_prevent_process_cleanup() {
     assert_eq!(active.await.unwrap(), Err(AgentError::AuditFailure));
     assert_gone(&root, "pid");
 }
+
+/// A review this binding will not put to a host costs that tool, not the turn.
+///
+/// This is the shape of the bug that started it: a tool the adapter would not
+/// review ended the execution and closed the session, and the caller was shown
+/// nothing at all. Each mode here refuses for a different reason, and each one
+/// has to leave the agent told, the turn finishing, and the refusal recorded.
+#[tokio::test]
+async fn a_declined_review_refuses_the_tool_and_leaves_the_turn_running() {
+    let _process_slot = process_test_slot().await;
+    for (mode, reason, outcome, named) in [
+        (
+            "declined-tool",
+            ReviewDeclineReason::ToolNotReviewable,
+            serde_json::json!({"outcome":"selected","optionId":"deny-one"}),
+            Some("Bash"),
+        ),
+        (
+            // No rejection was offered — only a persistent choice this binding
+            // may not make for a host — so the review is cancelled instead.
+            "declined-options",
+            ReviewDeclineReason::UnusableOptions,
+            serde_json::json!({"outcome":"cancelled"}),
+            Some("Write"),
+        ),
+        (
+            // Unreadable, but the provider still offered a rejection to choose:
+            // why this binding refuses does not change how plainly it can say
+            // so, and a chosen "no" is plainer than a cancellation.
+            "declined-unreadable",
+            ReviewDeclineReason::UnreadableRequest,
+            serde_json::json!({"outcome":"selected","optionId":"deny-one"}),
+            Some("Write"),
+        ),
+    ] {
+        let audit = Arc::new(RecordingAudit::default());
+        let (root, binding) = test_acp_binding_with_audit(mode, 16, audit.clone());
+        let mut opened = binding.open(None).await.unwrap();
+        let active = start(&opened, "write").await;
+
+        // The call is observed. Refusing the frame hid the tool as well as
+        // ending the turn, so the tool row still has to arrive.
+        assert!(
+            matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)),
+            "{mode}: the declined call was not shown"
+        );
+        // No review reaches a host: there was nothing this binding could put
+        // to one. The turn carries on to its own ending.
+        let ExecutionUpdate::Message(chunk) = next(&mut opened).await else {
+            panic!("{mode}: expected the turn to continue after the decline");
+        };
+        assert_eq!(chunk.as_str(), "declined and carried on");
+        assert_eq!(
+            timeout(Duration::from_secs(3), active)
+                .await
+                .unwrap()
+                .unwrap(),
+            Ok(ExecutionOutcome::Completed),
+            "{mode}: a refused tool ended the execution"
+        );
+
+        // The agent was told, and told in the strongest terms the frame
+        // allowed: a chosen rejection where one was offered.
+        let answered: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.path().join("permission-outcome")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(answered, outcome, "{mode}");
+
+        // Both halves of the evidence: the decision, then what the wire did.
+        let declines = audit.declines.lock().unwrap().clone();
+        assert_eq!(declines.len(), 2, "{mode}: {declines:?}");
+        for record in &declines {
+            assert_eq!(record.execution_id().as_str(), "write");
+            assert_eq!(record.decline().reason(), reason, "{mode}");
+            assert_eq!(record.decline().tool(), named, "{mode}");
+        }
+        assert_eq!(declines[0].delivery(), &PermissionAnswerDelivery::Selected);
+        assert_eq!(declines[1].delivery(), &PermissionAnswerDelivery::Written);
+        // A decline is not a cancellation: nothing was pending to cancel.
+        assert!(audit.records.lock().unwrap().is_empty(), "{mode}");
+        assert!(audit.answers.lock().unwrap().is_empty(), "{mode}");
+
+        // The session outlives the refusal and can still be closed cleanly.
+        opened
+            .session
+            .shutdown(SessionCloseRequest::Explicit(close_action()))
+            .await
+            .into_result()
+            .unwrap();
+    }
+}
+
+/// A sink that will not take the refusal does not make the refusal go away.
+///
+/// The agent still has to be told: an answer it never receives is a turn that
+/// waits forever, which is the failure this whole path exists to prevent. The
+/// audit failure is reported after the answer has gone, not instead of it.
+#[tokio::test]
+async fn a_refusal_reaches_the_agent_even_when_its_audit_cannot_be_recorded() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit {
+        reject: true,
+        ..RecordingAudit::default()
+    });
+    let (root, binding) = test_acp_binding_with_audit("declined-tool", 16, audit.clone());
+    let mut opened = binding.open(None).await.unwrap();
+    let active = start(&opened, "write").await;
+    assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+
+    // The execution ends on the audit failure — evidence is mandatory here, and
+    // that is a different failure from "a tool was unfamiliar".
+    let outcome = timeout(Duration::from_secs(3), active)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(outcome, Err(AgentError::AuditFailure), "{outcome:?}");
+
+    // The refusal went anyway: the provider recorded the answer it was given.
+    // Exactly one answer, and it is the refusal: a request answered twice is
+    // its own protocol fault, and the audit failure must not cause one.
+    let answered = std::fs::read_to_string(root.path().join("permission-outcomes")).unwrap();
+    assert_eq!(
+        answered.lines().collect::<Vec<_>>(),
+        vec![r#"{"optionId": "deny-one", "outcome": "selected"}"#],
+        "the refusal was not the provider's only answer"
+    );
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+}

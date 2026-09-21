@@ -5,9 +5,17 @@ use serde_json::json;
 
 fn tool_call(
     value: &Value,
-    names: &mut HashMap<String, String>,
+    names: &mut HashMap<String, ObservedTool>,
 ) -> Result<ToolCallUpdate, AgentError> {
     super::tool_call(value, names, &[])
+}
+
+/// The name this binding retained for `id`, or `None` where it retained none.
+fn reviewable(names: &HashMap<String, ObservedTool>, id: &str) -> Option<String> {
+    match names.get(id) {
+        Some(ObservedTool::Reviewable(name)) => Some(name.clone()),
+        _ => None,
+    }
 }
 
 fn tool_input(name: &str, value: &Value) -> Result<ToolReviewInput, AgentError> {
@@ -80,11 +88,14 @@ fn sparse_tool_updates_keep_omission_distinct_from_empty_and_preserve_diffs() {
         &mut names
     )
     .is_err());
-    assert!(tool_call(
+    // A denied tool is observed rather than refused: the call happened, and the
+    // person watching should see it. What it does not get is a review.
+    tool_call(
         &json!({"toolCallId":"b","_meta":{"claudeCode":{"toolName":"Bash"}}}),
-        &mut names
+        &mut names,
     )
-    .is_err());
+    .unwrap();
+    assert_eq!(names.get("b"), Some(&ObservedTool::Declined));
 }
 #[test]
 fn invalid_content_does_not_reserve_a_provider_tool_name() {
@@ -102,36 +113,36 @@ fn invalid_content_does_not_reserve_a_provider_tool_name() {
         &mut names,
     )
     .unwrap();
-    assert_eq!(names.get("a").map(String::as_str), Some("Read"));
+    assert_eq!(reviewable(&names, "a").as_deref(), Some("Read"));
 }
 
 #[test]
 fn provider_name_retention_is_bounded_by_name_identity_and_entry_limits() {
     let mut names = HashMap::new();
     let oversized = "Write".repeat(1024 * 1024);
+    // A name too large to be a name is refused as one. The frame is still
+    // observed — refusing the frame is what ended whole executions — but
+    // nothing of that name is retained, so a caller cannot spend this map's
+    // budget by choosing a long enough tool name.
     for id in ["first", "second"] {
-        let error = tool_call(
+        tool_call(
             &json!({
                 "toolCallId": id, "_meta": {"claudeCode": {"toolName": oversized}}
             }),
             &mut names,
         )
-        .unwrap_err();
-        // Inspect the immediate parser error, before report constructors bound it.
-        let AgentError::Unsupported(message) = &error else {
-            panic!("expected unsupported tool diagnostic");
-        };
-        assert!(
-            message.len() <= 64,
-            "diagnostic retained {} bytes",
-            message.len()
-        );
-        assert_eq!(
-            error,
-            AgentError::Unsupported("tool is outside the configured tool profile".into())
-        );
-        assert!(names.is_empty());
+        .unwrap();
+        assert_eq!(names.get(id), Some(&ObservedTool::Declined));
+        assert_eq!(reviewable(&names, id), None);
     }
+    assert_eq!(
+        names
+            .iter()
+            .map(|(id, observed)| id.len() + observed_bytes(observed))
+            .sum::<usize>(),
+        "first".len() + "second".len()
+    );
+    names.clear();
     for i in 0..4096 {
         let id = format!("{i:0256}");
         tool_call(
@@ -146,7 +157,7 @@ fn provider_name_retention_is_bounded_by_name_identity_and_entry_limits() {
     assert_eq!(
         names
             .iter()
-            .map(|(id, name)| id.len() + name.len())
+            .map(|(id, observed)| id.len() + observed_bytes(observed))
             .sum::<usize>(),
         4096 * (256 + 5)
     );
@@ -163,12 +174,22 @@ fn provider_name_retention_is_bounded_by_name_identity_and_entry_limits() {
     .is_err());
     assert_eq!(names.len(), 4096);
     names.clear();
+    // An identity too large to be an identity is still refused outright: there
+    // is nothing to place the observation under.
     assert!(tool_call(
         &json!({"toolCallId": "x".repeat(257), "_meta": {"claudeCode": {"toolName": "Write"}}}),
         &mut names
     )
     .is_err());
     assert!(names.is_empty());
+}
+
+/// Name bytes this binding retained for one observed call.
+fn observed_bytes(observed: &ObservedTool) -> usize {
+    match observed {
+        ObservedTool::Reviewable(name) => name.len(),
+        ObservedTool::Declined => 0,
+    }
 }
 
 #[test]
@@ -202,11 +223,12 @@ fn enabled_native_inputs_are_preserved_and_unmanaged_shell_is_rejected() {
         );
     }
     for name in DISALLOWED_TOOLS {
-        assert!(tool_call(
+        tool_call(
             &json!({"toolCallId":"blocked","_meta":{"claudeCode":{"toolName":name}}}),
-            &mut names
+            &mut names,
         )
-        .is_err());
+        .unwrap();
+        assert_eq!(names.get("blocked"), Some(&ObservedTool::Declined));
         assert!(tool_input(name, &json!({"command":"true"})).is_err());
     }
     assert!(tool_input("WebSearch", &json!("not an object")).is_err());
@@ -223,7 +245,7 @@ fn deferred_schema_loading_is_admitted_before_the_tool_it_loads() {
             &mut names,
         )
         .unwrap();
-        assert_eq!(names.get(name).map(String::as_str), Some(name));
+        assert_eq!(reviewable(&names, name).as_deref(), Some(name));
     }
     let args = json!({"query":"select:WebSearch","max_results":5});
     let review = tool_input("ToolSearch", &args).unwrap();
@@ -262,17 +284,25 @@ fn execution_and_escaping_tools_are_denied_even_though_admission_is_open() {
             "{name} must stay denied once admission is open"
         );
         assert!(!enabled_name(name, &[]), "denied tool {name} was admitted");
+        // The call is observed so it can be shown, and refused where the
+        // refusal can be answered: the review. Ending the execution over it is
+        // what left a caller staring at silence.
+        tool_call(
+            &json!({"toolCallId":name,"_meta":{"claudeCode":{"toolName":name}}}),
+            &mut names,
+        )
+        .unwrap();
+        assert_eq!(names.get(name as &str), Some(&ObservedTool::Declined));
         assert!(matches!(
-            tool_call(
-                &json!({"toolCallId":name,"_meta":{"claudeCode":{"toolName":name}}}),
-                &mut names
-            ),
-            Err(AgentError::Unsupported(_))
+            tool_input(name, &json!({"command":"true"})),
+            Err(AgentError::Unsupported(_) | AgentError::Protocol(_))
         ));
-        assert!(tool_input(name, &json!({"command":"true"})).is_err());
     }
     // Denial reserves no provider name, whatever the caller sends.
-    assert!(names.is_empty());
+    assert!(names
+        .values()
+        .all(|observed| *observed == ObservedTool::Declined));
+    assert_eq!(names.len(), DISALLOWED_TOOLS.len());
 }
 
 #[test]
@@ -338,7 +368,7 @@ fn admission_reviews_every_harness_tool_except_denials_and_unconfigured_namespac
     });
     super::tool_call(&future, &mut names, &configured).unwrap();
     assert_eq!(
-        names.get("future").map(String::as_str),
+        reviewable(&names, "future").as_deref(),
         Some("FutureNativeTool")
     );
     let future_args = json!({"some_field":"value"});
@@ -348,14 +378,14 @@ fn admission_reviews_every_harness_tool_except_denials_and_unconfigured_namespac
             .arguments_json,
         future_args.to_string()
     );
-    // A denied tool is still refused, and reserves no provider name.
-    assert!(matches!(
-        super::tool_call(
-            &json!({"toolCallId":"denied","_meta":{"claudeCode":{"toolName":"Bash"}}}),
-            &mut names,
-            &configured
-        ),
-        Err(AgentError::Unsupported(_))
-    ));
-    assert!(!names.contains_key("denied"));
+    // A denied tool is observed without reserving a provider name; the review
+    // is where it is refused.
+    super::tool_call(
+        &json!({"toolCallId":"denied","_meta":{"claudeCode":{"toolName":"Bash"}}}),
+        &mut names,
+        &configured,
+    )
+    .unwrap();
+    assert_eq!(names.get("denied"), Some(&ObservedTool::Declined));
+    assert_eq!(reviewable(&names, "denied"), None);
 }

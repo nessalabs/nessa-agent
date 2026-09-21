@@ -279,6 +279,9 @@ impl ProviderSessionBackend for InMemoryPermissionBackend {
                             ExecutionAuditRecord::QueueReordered(_) => {
                                 panic!("close cannot reorder pending work")
                             }
+                            ExecutionAuditRecord::ReviewDeclined(_) => {
+                                panic!("close cannot decline a review")
+                            }
                         }
                     }
                     Ok(CloseOutcome { forced: false })

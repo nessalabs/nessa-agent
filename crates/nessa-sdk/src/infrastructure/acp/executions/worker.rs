@@ -26,7 +26,7 @@ use crate::application::agent_execution::executions::{
 use crate::application::agent_execution::permissions::{
     CancellationOrigin, PermissionAnswer, PermissionAnswerDelivery, PermissionAnswerRecord,
     PermissionCancellation, PermissionCancellationRequest, PermissionResolution,
-    PermissionSelectionState,
+    PermissionSelectionState, ReviewDeclineRecord,
 };
 use crate::application::agent_execution::providers::{
     CleanupReport, ExecutionReport, ImageInputRefusal, ObservationFailureCause,
@@ -38,7 +38,8 @@ use crate::domain::agent_execution::executions::{
     ExecutionId, ExecutionOutcome, MessageChunk, MessageId,
 };
 use crate::domain::agent_execution::permissions::{
-    PermissionCancellationReason, PermissionCancellationReasonView, PermissionId,
+    PermissionCancellationReason, PermissionCancellationReasonView, PermissionId, ReviewDecline,
+    ReviewDeclineReason,
 };
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
@@ -140,6 +141,15 @@ struct Worker<P> {
     agent_accepts_images: bool,
     operation_capabilities: watch::Sender<OperationCapabilities>,
     permissions: HashMap<PermissionId, RpcId>,
+    /// The review this worker answered without registering one — a refusal.
+    ///
+    /// The dispatcher answers any request whose handler failed and which it
+    /// cannot find among the pending reviews, so that a provider is never left
+    /// waiting on a question nobody will answer. A refusal is exactly that
+    /// shape — answered, never registered — so without this it would be
+    /// answered twice, and answering one request twice is its own protocol
+    /// fault.
+    declined: Option<RpcId>,
     shutdown_deadline: Option<Instant>,
     /// True once every request from `session_configuration` has been applied.
     ///
@@ -195,6 +205,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         agent_accepts_images: false,
         operation_capabilities,
         permissions: HashMap::new(),
+        declined: None,
         shutdown_deadline: None,
         configured: false,
         closing: false,
@@ -1349,7 +1360,11 @@ impl<P: AcpProfile> Worker<P> {
                     let result = self
                         .permission(execution, id.clone(), params, response_deadline)
                         .await;
-                    if result.is_err() && !self.permissions.values().any(|wire_id| *wire_id == id) {
+                    let answered = self.declined.take().is_some_and(|wire_id| wire_id == id);
+                    if result.is_err()
+                        && !answered
+                        && !self.permissions.values().any(|wire_id| *wire_id == id)
+                    {
                         let _ = self
                             .send_before(permission_wire::permission_cancel(&id), response_deadline)
                             .await;
@@ -1604,13 +1619,70 @@ impl<P: AcpProfile> Worker<P> {
                 "permission request limit or duplicate ID",
             ));
         }
-        let input = self.profile.permission_input(&params)?;
-        let tool = self.profile.tool_call(
-            params
-                .get("toolCall")
-                .ok_or_else(|| json_rpc::protocol("missing permission tool"))?,
-        )?;
-        let options = permission_wire::permission_options(&params, &self.config.permissions)?;
+        // A review this binding cannot put to a host is one tool's answer, not
+        // the execution's ending. Each of these used to leave the turn dead and
+        // the caller with nothing on screen; the agent is now told no, and goes
+        // on to say so in its own words.
+        let call = match params.get("toolCall") {
+            Some(call) => call,
+            None => {
+                return self
+                    .decline_review(
+                        execution,
+                        wire_id,
+                        &params,
+                        ReviewDeclineReason::UnreadableRequest,
+                        response_deadline,
+                    )
+                    .await
+            }
+        };
+        // `Unsupported` is the profile saying it will not review this tool;
+        // anything else is it saying it could not read the request. Flattening
+        // the two would file a refusal under the wrong reason, and the reason
+        // is most of what the record is for.
+        let input = match self.profile.permission_input(&params) {
+            Ok(input) => input,
+            Err(error) => {
+                return self
+                    .decline_review(
+                        execution,
+                        wire_id,
+                        &params,
+                        decline_reason(&error),
+                        response_deadline,
+                    )
+                    .await
+            }
+        };
+        let tool = match self.profile.tool_call(call) {
+            Ok(tool) => tool,
+            Err(error) => {
+                return self
+                    .decline_review(
+                        execution,
+                        wire_id,
+                        &params,
+                        decline_reason(&error),
+                        response_deadline,
+                    )
+                    .await
+            }
+        };
+        let options = match permission_wire::permission_options(&params, &self.config.permissions) {
+            Ok(options) => options,
+            Err(_) => {
+                return self
+                    .decline_review(
+                        execution,
+                        wire_id,
+                        &params,
+                        ReviewDeclineReason::UnusableOptions,
+                        response_deadline,
+                    )
+                    .await
+            }
+        };
         let sequence = self
             .permission_sequence
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -1630,6 +1702,82 @@ impl<P: AcpProfile> Worker<P> {
             execution.request_permission(target, permission_id.clone(), tool, input, options)?;
         self.permissions.insert(permission_id, wire_id);
         self.emit(event)
+    }
+    /// Answer one review "no" without offering it, and leave the turn running.
+    ///
+    /// The agent asked to use a tool this binding will not put to a host, or
+    /// asked in a frame that could not be described to one. Either way the
+    /// answer is about that tool: the execution continues, and the agent —
+    /// having been told no rather than cut off — is the one that explains it to
+    /// whoever is reading.
+    ///
+    /// A refusal is delivered the way a selection is, so it is recorded the
+    /// same way: the local decision first, then what the wire did with it.
+    /// Where the provider offered a rejection to choose, that is the answer,
+    /// because a chosen "no" is a denial the agent can act on. Where no such
+    /// choice could be read, the review is cancelled instead — the weaker
+    /// statement, and the honest one.
+    async fn decline_review(
+        &mut self,
+        execution: &ExecutionController,
+        wire_id: RpcId,
+        params: &Value,
+        reason: ReviewDeclineReason,
+        response_deadline: Option<Instant>,
+    ) -> Result<(), AgentError> {
+        let decline = ReviewDecline::new(declared_tool_name(params), reason);
+        let session_id = execution.id().clone();
+        let Some(execution_id) = self
+            .active
+            .as_ref()
+            .map(|active| active.execution_id.clone())
+        else {
+            // Without an active execution there is nothing to correlate the
+            // refusal with, and the caller's own guard has already answered.
+            return self
+                .send_before(
+                    permission_wire::permission_cancel(&wire_id),
+                    response_deadline,
+                )
+                .await;
+        };
+        tracing::warn!(
+            session_id = %session_id.as_str(),
+            execution_id = %execution_id.as_str(),
+            tool = decline.tool().unwrap_or("<unnamed>"),
+            reason = ?decline.reason(),
+            "tool review declined; the agent is told no and the execution continues"
+        );
+        let record = |delivery| {
+            ExecutionAuditRecord::ReviewDeclined(ReviewDeclineRecord::new(
+                session_id.clone(),
+                execution_id.clone(),
+                decline.clone(),
+                delivery,
+            ))
+        };
+        // The decision is evidence before the wire sees it. An unrecordable
+        // decision still has to reach the agent, so the refusal is sent either
+        // way and the audit failure is reported after it.
+        let decided = self
+            .record_audit(record(PermissionAnswerDelivery::Selected))
+            .await;
+        let response = match rejection_option(params) {
+            Some(option) => permission_wire::selected(&wire_id, &option),
+            None => permission_wire::permission_cancel(&wire_id),
+        };
+
+        // Answered, and deliberately not registered: a refusal has no pending
+        // review to register. The dispatcher is told so it does not answer the
+        // same request a second time when this returns an audit failure.
+        self.declined = Some(wire_id);
+        let delivery = self.send_before(response, response_deadline).await;
+        let observed = match &delivery {
+            Ok(()) => PermissionAnswerDelivery::Written,
+            Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
+        };
+        let written = self.record_audit(record(observed)).await;
+        decided.and(written).and(delivery)
     }
     async fn record_audit(&mut self, record: ExecutionAuditRecord) -> Result<(), AgentError> {
         let result = catch_worker_panic(async {
@@ -1738,6 +1886,51 @@ impl<P: AcpProfile> Worker<P> {
         }
         Ok(())
     }
+}
+
+/// Which of the two things a profile's refusal was saying.
+///
+/// `Unsupported` is "this binding does not review that tool"; everything else
+/// is "this binding could not read the request". They lead to the same answer
+/// on the wire and to different records, which is the point of keeping them
+/// apart.
+fn decline_reason(error: &AgentError) -> ReviewDeclineReason {
+    match error {
+        AgentError::Unsupported(_) => ReviewDeclineReason::ToolNotReviewable,
+        _ => ReviewDeclineReason::UnreadableRequest,
+    }
+}
+
+/// The provider's own name for the tool under review, as its frame gives it.
+///
+/// Either place the provider names it counts. A permission request carries the
+/// name on its `toolCall`; the profile metadata that a tool-call update uses
+/// may carry it instead, and a refusal should not go unnamed over which field
+/// a provider chose. Whether the name is worth retaining is
+/// [`ReviewDecline`]'s decision, not this one's.
+fn declared_tool_name(params: &Value) -> Option<&str> {
+    params
+        .pointer("/toolCall/name")
+        .or_else(|| params.pointer("/toolCall/_meta/claudeCode/toolName"))
+        .and_then(Value::as_str)
+}
+
+/// A rejection the provider offered, if it offered one that says "no" once.
+///
+/// Read from the frame rather than through the offer policy, because this is
+/// the path taken when that policy could not be applied. Only `reject_once`
+/// qualifies: a persistent refusal would answer for reviews this binding has
+/// not seen, which is not a decision it may make on a host's behalf.
+fn rejection_option(params: &Value) -> Option<String> {
+    params
+        .get("options")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|option| option.get("kind").and_then(Value::as_str) == Some("reject_once"))
+        .and_then(|option| option.get("optionId"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty() && id.len() <= 256)
+        .map(str::to_owned)
 }
 
 /// No artificial far-future timestamp: no configured limit means no timer.

@@ -90,9 +90,25 @@ fn enabled_name(name: &str, mcp_prefixes: &[String]) -> bool {
     }
     true
 }
+/// What this binding knows about one tool call it has observed.
+///
+/// A call it will not put to a host is still a call the agent made, and the
+/// person watching should see it happen. Refusing the frame outright hid the
+/// tool *and* ended the turn; keeping the observation lets the tool row appear
+/// and leaves the refusal where it can be answered — the permission request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::infrastructure::claude_acp) enum ObservedTool {
+    /// A name this binding will put to a host, retained for the review.
+    Reviewable(String),
+    /// A name it will not. The name is deliberately not retained: an unbounded
+    /// one would be retained here for the rest of the execution, and the frame
+    /// that asks for the review carries the name again for the record.
+    Declined,
+}
+
 pub(in crate::infrastructure::claude_acp) fn tool_call(
     value: &Value,
-    names: &mut HashMap<String, String>,
+    names: &mut HashMap<String, ObservedTool>,
     mcp_prefixes: &[String],
 ) -> Result<ToolCallUpdate, AgentError> {
     // Validate the complete representation before retaining provider name state.
@@ -106,20 +122,18 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
         // 4,096 entries, this bounds the map's string payload independently of
         // incoming frame size. Which names are admitted at all is
         // `enabled_name`'s account, not a second one here.
-        if !enabled_name(name, mcp_prefixes) {
-            // A rejected name can occupy the entire frame. Do not copy it into
-            // an error that teardown will retain and clone.
-            return Err(AgentError::Unsupported(
-                "tool is outside the configured tool profile".into(),
-            ));
-        }
-        if names.get(&id).is_some_and(|old| old != name) {
+        let observed = if enabled_name(name, mcp_prefixes) {
+            ObservedTool::Reviewable(name.to_owned())
+        } else {
+            ObservedTool::Declined
+        };
+        if names.get(&id).is_some_and(|old| *old != observed) {
             return Err(protocol("tool identity changed"));
         }
         if names.len() >= 4096 && !names.contains_key(&id) {
             return Err(protocol("tool count limit exceeded"));
         }
-        names.insert(id.clone(), name.to_owned());
+        names.insert(id.clone(), observed);
     }
     Ok(update)
 }

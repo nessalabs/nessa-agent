@@ -75,6 +75,9 @@ fn answers(audit: &AnswerAudit) -> Vec<PermissionAnswerRecord> {
                 panic!("resolved answer must not be relabelled on cleanup")
             }
             ExecutionAuditRecord::QueueReordered(_) => None,
+            ExecutionAuditRecord::ReviewDeclined(record) => {
+                panic!("an offered review must not be refused unoffered: {record:?}")
+            }
         })
         .collect()
 }

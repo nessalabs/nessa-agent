@@ -4,6 +4,7 @@
 use crate::application::agent_execution::agents::{AgentError, AgentFuture};
 use crate::application::agent_execution::permissions::{
     ActionContext, CancellationOrigin, PermissionAnswerRecord, PermissionCancellation,
+    ReviewDeclineRecord,
 };
 use crate::domain::agent_execution::executions::QueueOrderChange;
 use crate::domain::agent_execution::sessions::SessionId;
@@ -101,6 +102,9 @@ pub enum ExecutionAuditRecord {
     Cancelled(PermissionCancellation),
     /// Selection before effects, followed by a separate wire delivery observation.
     Answered(PermissionAnswerRecord),
+    /// A review refused by this binding before any host was offered it, with the
+    /// same separation of local decision from observed delivery.
+    ReviewDeclined(ReviewDeclineRecord),
 }
 
 /// Required audit boundary, independent of bounded UI streams and caller waits.
