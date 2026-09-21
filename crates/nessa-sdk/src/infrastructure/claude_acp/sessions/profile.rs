@@ -69,16 +69,7 @@ impl AcpProfile for ClaudeProfile {
             .iter()
             .map(|server| json!({"serverName":server.name}))
             .collect();
-        let mut ask: Vec<String> = wire::REVIEW_TOOLS
-            .iter()
-            .map(|name| (*name).into())
-            .collect();
-        ask.extend(
-            config
-                .mcp_servers
-                .iter()
-                .map(|server| format!("mcp__{}__*", server.name)),
-        );
+        let ask = [wire::REVIEWED_TOOLS_RULE];
         let mut params = json!({"cwd":config.workspace,"mcpServers":servers,"_meta":{"claudeCode":{"options":{
             "model":capabilities.model().model_id(),"settingSources":[],"tools":tools,"permissionMode":"default",
             "disallowedTools":wire::DISALLOWED_TOOLS,

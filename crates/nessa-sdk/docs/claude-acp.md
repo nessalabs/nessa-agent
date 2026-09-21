@@ -56,12 +56,17 @@ cleanup. An already-settled invocation keeps its earlier result.
   applies to startup/restoration replies and live updates. Later model/mode drift closes the binding. Managed
   restrictions are not rewritten to make a selection succeed.
 - Text prompts/output with an optional Claude-native tool preset, including
-  WebSearch and WebFetch, plus explicitly configured stdio MCP servers. Native
-  file tools retain schema validation; other tools preserve bounded original
-  JSON review input. MCP names must belong to a configured server. Native tool
-  names are bounded and provider-validated. Existing native review rules and
-  configured MCP tools use permission `ask`; only supplied `allow_once` and
-  `reject_once` choices are exposed. Ambiguous permission options fail closed.
+  WebSearch and WebFetch, plus explicitly configured stdio MCP servers. The
+  preset defers tool schemas: the model calls ToolSearch to load a tool before
+  it may call that tool at all. Every tool the harness offers — its built-ins
+  and the tools of configured MCP servers — is therefore reviewable, and is
+  routed to Nessa's permission owner by a single `ask` rule. A built-in this
+  adapter has never heard of is reviewed with its input preserved rather than
+  refused; refusing one ended the whole execution. Native file tools retain
+  schema validation; other tools preserve bounded original JSON review input.
+  MCP names must belong to a configured server. Native tool names are bounded
+  and provider-validated. Only supplied `allow_once` and `reject_once` choices
+  are exposed. Ambiguous permission options fail closed.
 - Native Bash/BashOutput/KillShell are disabled. Nessa-owned tools, including
   Shepherd-backed shell execution, are exposed through MCP. EnterPlanMode and
   ExitPlanMode are disabled to preserve default permission mode. Form elicitation,

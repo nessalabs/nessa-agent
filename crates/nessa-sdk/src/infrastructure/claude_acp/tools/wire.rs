@@ -15,26 +15,13 @@ pub(in crate::infrastructure::claude_acp) const DISALLOWED_TOOLS: &[&str] = &[
     "EnterPlanMode",
     "ExitPlanMode",
 ];
-pub(in crate::infrastructure::claude_acp) const REVIEW_TOOLS: &[&str] = &[
-    "Read",
-    "Write",
-    "Edit",
-    "Glob",
-    "Grep",
-    "NotebookEdit",
-    "WebSearch",
-    "WebFetch",
-    "Agent",
-    "Task",
-    "TodoWrite",
-    "TaskCreate",
-    "TaskUpdate",
-    "TaskList",
-    "TaskGet",
-    "TaskOutput",
-    "TaskStop",
-    "Skill",
-];
+/// The namespace the harness gives every tool of a configured MCP server.
+pub(in crate::infrastructure::claude_acp) const MCP_NAMESPACE: &str = "mcp__";
+/// The permission rule that routes every tool the harness offers — its
+/// built-ins and the tools of configured MCP servers — to Nessa's permission
+/// owner. Naming tools individually left the rest running unreviewed inside
+/// the harness; what Nessa refuses outright is denied separately.
+pub(in crate::infrastructure::claude_acp) const REVIEWED_TOOLS_RULE: &str = "*";
 fn bounded_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 128
@@ -42,12 +29,25 @@ fn bounded_name(name: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
+/// Whether Nessa's permission owner may review a call to this tool.
+///
+/// The harness's own built-in tools are all reviewable: the model reaches them
+/// through deferred schema loading, and which ones exist is the pinned
+/// harness's fact, not a list Nessa can keep current. Enumerating them refused
+/// executions outright — a whole turn died on the first tool Nessa had not
+/// heard of — so admission asks the two questions Nessa does own instead.
+/// Tools Nessa denies outright stay denied, and an MCP name must belong to a
+/// configured server rather than merely look like one.
 fn enabled_name(name: &str, mcp_prefixes: &[String]) -> bool {
-    bounded_name(name)
-        && (REVIEW_TOOLS.contains(&name)
-            || mcp_prefixes
-                .iter()
-                .any(|prefix| name.starts_with(prefix) && name.len() > prefix.len()))
+    if !bounded_name(name) || DISALLOWED_TOOLS.contains(&name) {
+        return false;
+    }
+    if name.starts_with(MCP_NAMESPACE) {
+        return mcp_prefixes
+            .iter()
+            .any(|prefix| name.starts_with(prefix) && name.len() > prefix.len());
+    }
+    true
 }
 pub(in crate::infrastructure::claude_acp) fn tool_call(
     value: &Value,
