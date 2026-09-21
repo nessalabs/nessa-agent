@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   Sheet,
   SheetHandle,
@@ -13,6 +13,7 @@ import {
   ComposerQueue,
   ComposerQueueItem,
 } from "@nessa-ui/react/composer-queue"
+import { mountTraced, tracing } from "../../diagnostics/trace"
 import { messageLabel, type Conversation } from "../model"
 import { useConversationDispatch } from "../adapters/store/hooks"
 import { controlConversation } from "../adapters/store/slice"
@@ -27,6 +28,13 @@ export function ConversationQueue({
 }) {
   const [open, setOpen] = useState(false)
   const dispatch = useConversationDispatch()
+  // How many of these are alive at once, and what conversation each believes
+  // it belongs to. One conversation draws one chip; a second live mount is the
+  // defect, not the count on the chip.
+  useEffect(
+    () => mountTraced("ConversationQueue", `conversation=${conversation.id}`, tracing()),
+    [conversation.id],
+  )
   const waiting = conversation.remote?.pending ?? []
   if (!waiting.length) return null
   return (

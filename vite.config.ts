@@ -108,6 +108,13 @@ export default defineConfig({
         // validation tsconfigs forces a full reload on every install.
         "**/.vendor/nessa_ui/apps/**",
         "**/.vendor/nessa_ui/validation/**",
+        // Agent worktrees are checkouts of this repo living inside it, and
+        // something is usually building in one: generated client docs, a
+        // `dist`, a test run. Each written file reloaded the page, so a panel
+        // opened while another agent worked never finished painting — a blank
+        // window, and no sign of why. What happens in another checkout is not
+        // a change to this one.
+        "**/.claude/worktrees/**",
       ],
     },
     // The design system is a symlink that often lives outside this checkout

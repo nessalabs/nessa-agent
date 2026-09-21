@@ -11,13 +11,18 @@ import { conversationReducer } from "./conversation/adapters/store/slice"
 import { sessionReducer } from "./session/adapters/store/slice"
 
 import { createDependencies, type AppDependencies } from "./composition/dependencies"
+import { publishRecording, traceMiddleware, tracing } from "./diagnostics/trace"
 
 export function makeStore(dependencies: AppDependencies = createDependencies()) {
+  // Off unless asked for. Read once here because the store is built once, and
+  // the recording is turned on before the panel opens.
+  const recordingActions = tracing(import.meta.env as { VITE_NESSA_TRACE?: string })
+  if (recordingActions) publishRecording()
   const store = configureStore({
     middleware: (getDefaultMiddleware) =>
       getDefaultMiddleware({
         thunk: { extraArgument: { conversation: dependencies.conversation } },
-      }),
+      }).concat(traceMiddleware(recordingActions)),
     reducer: {
       conversation: conversationReducer,
       session: sessionReducer,
