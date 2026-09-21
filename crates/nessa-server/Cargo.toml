@@ -28,8 +28,29 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tungstenite = "0.29"
 uuid = { version = "1", features = ["v4"] }
 getrandom = "0.3"
+# Installing an agent's own runtime: fetch an archive, hash it, unpack one file.
+# `reqwest` is blocking here on purpose — see `agent_install::infrastructure`.
+# Response compression is deliberately absent: the archive's digest is taken
+# over the bytes on the wire, so a transport that silently decompressed them
+# would hash something the pin was never measured against.
+# Taken without a TLS backend, which `agent_install::infrastructure` then names
+# — the same way `tauri` and `tauri-plugin-updater` take it. The `rustls`
+# feature would name one instead, and name it for every crate in the build
+# graph that shares this dependency: cargo unifies features, so the agent
+# installer would be choosing the cryptography the desktop's updater ships
+# with, and pulling `aws-lc-sys` — a C and assembly build — into a gateway
+# that has no need of it.
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls-no-provider", "http2"] }
+# Only to name that backend. *ring* is the one this build already has, and the
+# one both Tauri crates install, so a workspace build holds a single
+# implementation rather than two.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 sha2 = "0.10"
 subtle = "2.6"
+flate2 = "1"
+tar = "0.4"
+# Parsing a pinned archive URL, rather than matching on its spelling.
+url = "2"
 
 [target.'cfg(unix)'.dependencies]
 # Opening the gateway log without following a link where it should be.

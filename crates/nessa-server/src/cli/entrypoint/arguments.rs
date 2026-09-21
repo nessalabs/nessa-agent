@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-pub const HELP: &str = "Nessa\n\n  nessa server [--provision-local]\n  nessa auth init --local [--owner-token-file PATH]\n  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]\n  nessa doctor [--local] [--credential-file PATH]\n  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]\n  nessa auth recover-owner --local --owner-token-file PATH\n\nLocal is the current backend. Cloud auth is not implemented.\n`server --provision-local` creates the owner and panel credentials of the selected\nnamespace when they are absent, then serves; it never replaces existing ones.\nWithout it, `nessa server` only serves what the offline auth commands provisioned.\nNESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.\nToken defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.\n";
+use crate::agent_install::domain::AgentName;
+
+pub const HELP: &str = "Nessa\n\n  nessa server [--provision-local]\n  nessa auth init --local [--owner-token-file PATH]\n  nessa auth token [--local] [--ttl 12h|7d|30m|60s | --no-expiry] [--credential-file PATH]\n  nessa doctor [--local] [--credential-file PATH]\n  nessa install-agent NAME\n  nessa auth provision-surface --local --surface-id NAME [--grants ACTIONS]\n  nessa auth recover-owner --local --owner-token-file PATH\n\ninstall-agent downloads the release of an agent's own runtime that Nessa has\ntested, verifies it against a compiled-in digest, and reports what it installed\nas JSON on stdout. Installing one already present downloads nothing.\n\nLocal is the current backend. Cloud auth is not implemented.\n`server --provision-local` creates the owner and panel credentials of the selected\nnamespace when they are absent, then serves; it never replaces existing ones.\nWithout it, `nessa server` only serves what the offline auth commands provisioned.\nNESSA_HOST, NESSA_PORT, NESSA_STAGE, NESSA_DATA_DIR and NESSA_INSTANCE select the local gateway.\nToken defaults to no expiry (capped by issuer expiry) and prints only the secret to stdout; pipe it to pbcopy.\n";
 
 /// Whether a serving process may create the local credentials it needs.
 ///
@@ -30,6 +32,14 @@ pub enum Command {
     Doctor {
         credential_file: Option<PathBuf>,
     },
+    /// Put an agent's own runtime on this machine, at the tested version.
+    InstallAgent {
+        /// The agent as Nessa names it, such as `opencode`. Read into its value
+        /// object here, at the edge, so that nothing further in has a name it
+        /// still has to doubt — and so that a person who mistypes one gets the
+        /// answer before anything is downloaded.
+        agent: AgentName,
+    },
 }
 
 pub fn parse(args: &[String]) -> Result<Command, String> {
@@ -44,6 +54,15 @@ pub fn parse(args: &[String]) -> Result<Command, String> {
     }
     if args == ["server", "--provision-local"] {
         return Ok(Command::Server(LocalProvisioning::Automatic));
+    }
+    if let [install, rest @ ..] = args {
+        if install == "install-agent" {
+            let [agent] = rest else {
+                return Err("install-agent takes one agent name, such as opencode".into());
+            };
+            let agent = AgentName::parse(agent).map_err(|error| error.to_string())?;
+            return Ok(Command::InstallAgent { agent });
+        }
     }
     if let [server, flag, directory] = args {
         if server == "server"

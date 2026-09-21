@@ -56,6 +56,11 @@ pub(super) fn reason(error: &RunError) -> &'static str {
             "credentialRegistryInvalid"
         }
         RunError::Registry(_) => "credentialRegistry",
+        // The command line named nothing this binary can run. Under launchd
+        // that is this installation's own plist being wrong, not anything the
+        // person did, so it is told apart from the reasons they can act on
+        // rather than folded into one of them.
+        RunError::Usage(_) => "usage",
         RunError::Authentication(_) => "authentication",
         RunError::Bind { source, .. } if source.kind() == std::io::ErrorKind::AddrInUse => {
             "portInUse"
@@ -113,6 +118,7 @@ mod tests {
             RunError::Registry(LocalStoreError::Io(Error::from(
                 ErrorKind::PermissionDenied,
             ))),
+            RunError::Usage("unknown command".into()),
             RunError::Authentication("setup".into()),
             RunError::Agent("provider".into()),
             RunError::Runtime("missing bundled runtime file".into()),

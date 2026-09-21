@@ -12,6 +12,7 @@
     "serve": 26,
     "shutdown": 27,
     "runtime": 30,
-    "stoppedOnRequest": 31
+    "stoppedOnRequest": 31,
+    "usage": 32
   }
 }

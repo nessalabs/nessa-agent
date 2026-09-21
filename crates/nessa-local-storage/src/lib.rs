@@ -15,8 +15,9 @@ mod windows;
 use windows as platform;
 
 pub use platform::{
-    create_directory, create_directory_beneath, open, open_beneath, replace, replace_beneath,
-    sync_directory, sync_directory_beneath, verify_directory, verify_file,
+    create_directory, create_directory_beneath, open, open_beneath, remove_directory_beneath,
+    remove_file_beneath, replace, replace_beneath, sync_directory, sync_directory_beneath,
+    verify_directory, verify_file,
 };
 // Publication post-conditions differ by platform: the Unix link leaves the
 // writer's own name behind until it is released. Only `PrivateTempFile::publish`
@@ -271,6 +272,56 @@ mod tests {
             .unwrap()
             .success());
         assert!(open(&fifo, OpenMode::ReadNonblocking).is_err());
+    }
+
+    /// A removal named relative to a root stops at that root, however the name
+    /// is reached. `fs::remove_file` resolves the whole path in the kernel, so
+    /// a link planted at any directory above the leaf makes it delete
+    /// somebody else's file; the `beneath` form opens one verified component
+    /// at a time and cannot leave.
+    #[cfg(unix)]
+    #[test]
+    fn removals_beneath_a_root_cannot_be_redirected_through_a_symbolic_link() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        create_directory(&root).unwrap();
+
+        // Removing what really is beneath the root works, files and empty
+        // directories alike.
+        create_directory_beneath(&root, Path::new("agent/versions")).unwrap();
+        let file = Path::new("agent/versions/opencode");
+        open(&root.join(file), OpenMode::CreateNew).unwrap();
+        remove_file_beneath(&root, file).unwrap();
+        assert!(!root.join(file).exists());
+        remove_directory_beneath(&root, Path::new("agent/versions")).unwrap();
+        assert!(!root.join("agent/versions").exists());
+
+        // Elsewhere, reachable only through a link inside the root.
+        let outside = temporary.path().join("outside");
+        create_directory(&outside).unwrap();
+        let treasure = outside.join("keep");
+        open(&treasure, OpenMode::CreateNew).unwrap();
+        let victim = outside.join("directory");
+        create_directory(&victim).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("agent/elsewhere")).unwrap();
+
+        // What the unanchored call would have done, said out loud: the link is
+        // followed and the file outside the root is the one that goes.
+        assert!(std::fs::remove_file(root.join("agent/elsewhere/keep")).is_ok());
+        assert!(!treasure.exists());
+        open(&treasure, OpenMode::CreateNew).unwrap();
+
+        assert!(remove_file_beneath(&root, Path::new("agent/elsewhere/keep")).is_err());
+        assert!(treasure.exists(), "the file outside the root survived");
+        assert!(remove_directory_beneath(&root, Path::new("agent/elsewhere/directory")).is_err());
+        assert!(victim.exists(), "the directory outside the root survived");
+
+        // And the link itself is not a directory to descend through, nor a
+        // path outside the root to be handed in directly.
+        assert!(remove_directory_beneath(&root, Path::new("agent/elsewhere")).is_err());
+        assert!(remove_file_beneath(&root, Path::new("../outside/keep")).is_err());
+        assert!(remove_file_beneath(&root, Path::new("")).is_err());
+        assert!(treasure.exists());
     }
 
     #[cfg(unix)]

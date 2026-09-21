@@ -55,6 +55,11 @@ pub(super) fn restart(error: &RunError) -> Restart {
         // registration was fingerprinted against. Only a new registration
         // changes any of that.
         RunError::Runtime(_) => Restart::Pointless,
+        // The command line named nothing this build can run. Under launchd
+        // that command line is this installation's own plist, which the next
+        // attempt reads unchanged, so retrying is the relaunch loop and not a
+        // recovery.
+        RunError::Usage(_) => Restart::Pointless,
         // Everything below is either transient by nature or carries no typed
         // cause to judge — an opaque message is not evidence of permanence, and
         // guessing wrong here strands a gateway that would have started.
@@ -83,6 +88,9 @@ mod tests {
             RunError::Registry(LocalStoreError::Capacity),
             RunError::Environment(EnvironmentError::Empty { variable: HOST }),
             RunError::Runtime("missing bundled runtime file".into()),
+            // The command line is read again unchanged, so the next attempt
+            // fails on the same words.
+            RunError::Usage("unknown command".into()),
         ] {
             assert_eq!(restart(&error), Restart::Pointless, "{error}");
         }

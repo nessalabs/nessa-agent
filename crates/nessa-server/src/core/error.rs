@@ -17,6 +17,10 @@ use std::io::{self, ErrorKind};
 #[derive(Debug)]
 pub enum RunError {
     Environment(EnvironmentError),
+    /// The command line itself did not name something this binary can run.
+    /// Every command is parsed before it is dispatched, so this is the one
+    /// failure any invocation can end in, whatever it was trying to do.
+    Usage(String),
     /// The credential registry on disk could not be opened. Kept typed rather
     /// than flattened into `Authentication`, because it is the one setup
     /// failure the desktop host reports in its own words, and it learns which
@@ -48,6 +52,10 @@ impl fmt::Display for RunError {
         match self {
             Self::Agent(message) => write!(f, "agent setup failed: {message}"),
             Self::Runtime(message) => write!(f, "prepared runtime unusable: {message}"),
+            // Said as it is. A usage message already names what was wrong with
+            // the command, and the help text is one of the things it can be, so
+            // there is no failing subsystem to announce in front of it.
+            Self::Usage(message) => write!(f, "{message}"),
             // Same sentence a flattened registry error used to produce: this
             // is still what authentication setup failed on.
             Self::Registry(error) => write!(f, "authentication setup failed: {error}"),
@@ -76,7 +84,7 @@ impl std::error::Error for RunError {
         match self {
             Self::Environment(error) => Some(error),
             Self::Registry(error) => Some(error),
-            Self::Authentication(_) | Self::Agent(_) | Self::Runtime(_) => None,
+            Self::Usage(_) | Self::Authentication(_) | Self::Agent(_) | Self::Runtime(_) => None,
             Self::Bind { source, .. } => Some(source),
             Self::Serve(source) => Some(source),
             Self::Shutdown(error) => error.as_ref().map(|error| error as _),

@@ -1,4 +1,4 @@
-use crate::cli::entrypoint::parse;
+use crate::cli::entrypoint::{parse, Command};
 use crate::composition::CompositionRoot;
 use crate::core::{ending, logging, Launch, RunError};
 #[cfg(unix)]
@@ -13,11 +13,11 @@ pub fn run() -> std::process::ExitCode {
     // decides whether a failure may exit zero to stop launchd relaunching this
     // service, and whether the record that failure leaves behind may be written
     // or removed — one fact, not three sniffed out separately further in.
-    let command = match parse(&std::env::args().skip(1).collect::<Vec<_>>()) {
+    let command = match parsed(&std::env::args().skip(1).collect::<Vec<_>>()) {
         Ok(command) => command,
-        Err(message) => {
+        Err(failure) => {
             return ending::report(
-                Err(RunError::Authentication(message)),
+                Err(failure),
                 // Arguments this build cannot parse are not the ones the plist
                 // holds, so there is no registration to answer for.
                 &Launch::Standalone,
@@ -42,6 +42,23 @@ pub fn run() -> std::process::ExitCode {
     )
 }
 
+/// The command these arguments name, or the one failure any invocation can end
+/// in.
+///
+/// Parsing happens before anything is dispatched, so a command line this build
+/// cannot run is the one thing that can go wrong whatever it was trying to do.
+/// It used to be reported as `Authentication`, which said authentication setup
+/// failed about an invocation that never reached authentication — and under
+/// launchd, where this installation's own plist is what got it wrong, that sent
+/// the host looking in the wrong place. A usage problem is its own fact.
+///
+/// A named function rather than three lines inline because this is the only
+/// place the mapping exists, and a mapping nothing can name is one nothing can
+/// test.
+fn parsed(arguments: &[String]) -> Result<Command, RunError> {
+    parse(arguments).map_err(RunError::Usage)
+}
+
 /// Keep `gateway.log` within its size bound, before this run writes its first
 /// line into it.
 ///
@@ -64,3 +81,7 @@ fn bound_log() {
         tracing::warn!(%error, "could not keep the gateway log within its size bound");
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/core/bootstrap.rs"]
+mod tests;

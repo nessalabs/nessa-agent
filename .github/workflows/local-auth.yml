@@ -144,6 +144,7 @@ jobs:
       - run: node --test scripts/product-protocol/rust-types.test.mjs
       - run: cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk -- --check
       - run: node --test scripts/architecture/*.test.mjs
+      - run: node --test scripts/agents/*.test.mjs
       - run: node scripts/check-architecture.mjs
       - run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk
       - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings
@@ -196,4 +197,11 @@ jobs:
         working-directory: .ci-auth
         if: runner.os == 'Windows'
       - run: node --import tsx scripts/smoke-auth.mjs
+        working-directory: .ci-auth
+      # What `install-agent` writes to stdout is an interface the desktop reads,
+      # and only the real process can be held to it. On a runner Nessa pins a
+      # build for this also fetches that archive and checks it against the
+      # compiled-in digest, which is the one place those digests are verified
+      # against the registry rather than trusted.
+      - run: node --import tsx scripts/smoke-install-agent.mjs
         working-directory: .ci-auth
