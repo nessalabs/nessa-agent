@@ -45,52 +45,36 @@ it("a failed creation cannot make an unattempted message admission uncertain", a
   expect(tab.draftReset).toBe(1)
   expect(conversationNotice(tab)?.retry).toEqual({ kind: "draft" })
 })
-/**
- * A store over the real gateway adapter, whose client refuses to open the
- * conversation with the gateway's own typed rejection.
- *
- * The real adapter, because the whole question is where the wire's word for a
- * failure becomes the panel's: a substitute that answered in the panel's words
- * already would be asserting its own fixture.
- */
-function refusingCreation(code: string) {
-  const client = {
-    conversation: {
-      create: () =>
-        Promise.reject(
-          new NessaConversationMutationError(
+it("carries the gateway startup-deadline code into the notice, not just its text", async () => {
+  const effects = scenarioEffects("echo")
+  const store = makeStore(
+    createDependencies({
+      conversation: {
+        ...effects,
+        create: async () => {
+          throw new NessaConversationMutationError(
             "server",
             "action",
             undefined,
-            new NessaRpcError(code, "agent_startup_deadline"),
+            new NessaRpcError(
+              ConversationErrorCode.AgentStartupDeadline,
+              "agent_startup_deadline",
+            ),
             async () => undefined,
-          ),
-        ),
-    },
-  } as unknown as NessaClient
-  return makeStore(
-    createDependencies({
-      conversation: gatewayEffects(
-        () => client,
-        () => Promise.reject(new Error("no wait expected")),
-      ),
+          )
+        },
+      },
     }),
   )
-}
-
-it("carries the gateway's startup deadline into the notice as the panel's own reason", async () => {
-  const store = refusingCreation(ConversationErrorCode.AgentStartupDeadline)
   await store.dispatch(sendDraft({ content: textContent("first message") }))
   const tab = store.getState().conversation.conversations[0]!
-  expect(tab.failure).toBe("agent-startup-deadline")
+  expect(tab.errorCode).toBe(ConversationErrorCode.AgentStartupDeadline)
   expect(tab.turns[0]).toMatchObject({ receipt: "failed" })
-  // The client's own sentence names the remedy at length; the panel keeps it.
-  expect(tab.error).toMatch(/still starting and ran out of time/)
   expect(conversationNotice(tab)).toMatchObject({
     title: "Agent was still starting",
     retry: { kind: "draft" },
   })
-  // A retried send clears the rejection it described, reason and message together.
+  // A retried send clears the rejection it described, code and message together.
   store.dispatch(setDraft({ id: tab.id, draft: textContent("retry") }))
   store.dispatch(
     submissionStarted({
@@ -103,23 +87,7 @@ it("carries the gateway's startup deadline into the notice as the panel's own re
   )
   const retried = store.getState().conversation.conversations[0]!
   expect(retried.error).toBeUndefined()
-  expect(retried.failure).toBeUndefined()
-})
-it("leaves a rejection this build has no word for untyped, and its sentence alone", async () => {
-  // A code no build here knows, whose message is a code this one does. The
-  // client hands back no typed code for it, and nothing downstream may read
-  // one out of the text: the tab carries no reason at all.
-  const store = refusingCreation("quantum_flux")
-  await store.dispatch(sendDraft({ content: textContent("first message") }))
-  const tab = store.getState().conversation.conversations[0]!
-  expect(tab.failure).toBeUndefined()
-  // Refused all the same: nothing was created, so nothing was sent.
-  expect(tab.turns[0]).toMatchObject({ receipt: "failed" })
-  expect(tab.draft).toEqual(textContent("first message"))
-  expect(conversationNotice(tab)).toMatchObject({
-    title: "Message not sent",
-    retry: { kind: "draft" },
-  })
+  expect(retried.errorCode).toBeUndefined()
 })
 it("client loss after cached creation is known unsent rather than an uncertain admission", async () => {
   let client: NessaClient | null = {

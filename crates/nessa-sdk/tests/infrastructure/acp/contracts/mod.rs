@@ -3,7 +3,8 @@
 //! ```text
 //! ACP tests -> shared fixture setup -> Python subprocess
 //!           -> sessions / executions / steering / permissions / audit / restoration
-//!           -> codex: the second profile, against a handler speaking its shapes
+//!           -> codex and opencode: the other profiles, each against a handler
+//!              speaking its own shapes
 //!           -> images (advertised prompt capability, byte source, content blocks)
 //! ```
 //! Arrows show which test layer exercises each feature.
@@ -14,6 +15,7 @@ mod configuration;
 mod executions;
 mod identity;
 mod images;
+mod opencode;
 mod permissions;
 mod prompts;
 mod restoration;

@@ -129,9 +129,9 @@ export function applyView(current: Conversation, view: ConversationView): Conver
     pending: "",
     readError: undefined,
     error: retainedError,
-    // The reason describes `error`; clearing one without the other would leave
-    // a notice branching on a failure the conversation no longer reports.
-    failure: retainedError === undefined ? undefined : current.failure,
+    // The code describes `error`; clearing one without the other would leave a
+    // notice branching on a rejection the conversation no longer reports.
+    errorCode: retainedError === undefined ? undefined : current.errorCode,
     remote: {
       runtime: view.runtime,
       running: view.messages.some((message) => message.status === "running"),

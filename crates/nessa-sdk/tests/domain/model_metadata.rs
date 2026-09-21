@@ -38,6 +38,29 @@ fn verified_on() -> Date {
     Date::new("2026-09-11".into()).unwrap()
 }
 
+/// Every provider's string form, named rather than derived from the enum.
+///
+/// These strings are a wire contract: a catalogue file on disk names its
+/// provider with one of them, and a model already recorded against a
+/// conversation is found again by it. Deriving the list from the enum would
+/// make a renamed variant rename the contract silently, and the failure
+/// would surface as a catalogue that no longer parses on somebody's machine.
+#[test]
+fn every_provider_round_trips_through_the_one_name_it_is_written_as() {
+    for (provider, name) in [
+        (ModelProvider::OpenAi, "openai"),
+        (ModelProvider::Anthropic, "anthropic"),
+        (ModelProvider::Opencode, "opencode"),
+    ] {
+        assert_eq!(provider.as_str(), name, "{provider:?}");
+        assert_eq!(ModelProvider::try_from(name).unwrap(), provider, "{name}");
+    }
+    // Opencode is the gateway, not the harness: a catalogue that named the
+    // harness instead would be asking for a provider this domain has never
+    // heard of, and must be told so rather than resolved to something near it.
+    assert!(ModelProvider::try_from("opencode-zen").is_err());
+}
+
 #[test]
 fn model_identity_is_provider_scoped_and_preserves_exact_ids() {
     assert_ne!(

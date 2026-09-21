@@ -11,7 +11,7 @@ import {
   MAX_SESSION_ATTACHMENT_BYTES,
   type AttachmentResources,
 } from "../adapters/attachment-resources"
-import type { AttachmentRefusal } from "../application/attachment-notice"
+import { windowBudgetMessage } from "../application/upload-image"
 
 const MIB = 1024 * 1024
 
@@ -51,26 +51,7 @@ export function useFileAttachments(
   const pendingConversation = React.useRef<string | null>(null)
   const mounted = React.useRef(true)
   const [reading, setReading] = React.useState(false)
-  /**
-   * Why the last thing offered was not taken, and which conversation it was
-   * said to.
-   *
-   * Typed rather than a sentence: the words, and whether there is anything to
-   * be done, belong to `attachment-notice`.
-   *
-   * A refusal answers one attempt and lives until something answers it back —
-   * and what those things are is written down here as calls to
-   * {@link answerRefusal}, not inferred from the draft afterwards. Inferring
-   * was tried and is wrong in both directions: a comparison taken while the
-   * handler runs is older than the attach happening in the same handler, so a
-   * drop that attached one file and refused another said nothing at all; and a
-   * draft restored after a refused send brings its files back under the same
-   * identities, so a refusal that had been answered came back with them.
-   */
-  const [refused, setRefused] = React.useState<{
-    conversationId: string
-    refusal: AttachmentRefusal
-  } | null>(null)
+  const [error, setError] = React.useState<string | null>(null)
   const [viewed, setViewed] = React.useState<{
     conversationId: string
     file: FileAttachment
@@ -105,36 +86,10 @@ export function useFileAttachments(
   const files = chat.active.draft.filter(
     (part): part is FileAttachment => part.type === "file",
   )
-  /**
-   * Say why something was not taken. Defaults to the active conversation; a
-   * folder walk that finishes after somebody has moved on names the one it was
-   * dropped into, so its refusal is not shown above another draft quoting
-   * another draft's bounds.
-   *
-   * Replaces whatever was there. There is one of these at a time, and it is
-   * always the most recent thing the panel turned away.
-   */
-  const refuse = (refusal: AttachmentRefusal, conversationId = chat.active.id) =>
-    setRefused({ conversationId, refusal })
-  /**
-   * Put down a refusal this conversation has now answered, leaving another
-   * tab's alone. The answers are: files actually attached, a file taken off the
-   * draft, and the draft going to the gateway. Each of them is the person
-   * having moved on from the attempt the refusal was about.
-   *
-   * Written as an update rather than a read, so it is correct from inside an
-   * event handler that is also attaching — which is where the ordering matters:
-   * the drop zone hands over what passed before what it refused, and the
-   * refusal must be what survives the pair.
-   */
-  const answerRefusal = (conversationId: string) =>
-    setRefused((current) => (current?.conversationId === conversationId ? null : current))
-  /** Said only to the conversation it was said about. */
-  const refusal = refused?.conversationId === chat.active.id ? refused.refusal : null
   function addFiles(selected: readonly File[], targetId = chat.active.id) {
     if (!selected.length) return
     if (busyRef.current) {
-      refuse({ reason: "reading-files" }, targetId)
+      setError("Please wait for the selected files to finish loading.")
       return
     }
     const conversationId = targetId
@@ -143,47 +98,34 @@ export function useFileAttachments(
     )
     if (!target) return
     const targetFiles = target.draft.filter((part) => part.type === "file")
-    // Three bounds, told apart, because the advice for each is different and
-    // one of them has no advice at all: a file over the per-file bound is
-    // refused by every route into this composer.
-    const tooLarge = selected.filter((file) => file.size > MAX_ATTACHMENT_BYTES)
-    if (tooLarge.length > 0) {
-      refuse(
-        { reason: "file-too-large", names: tooLarge.map((file) => file.name) },
-        targetId,
-      )
-      return
-    }
-    if (targetFiles.length + selected.length > MAX_DRAFT_ATTACHMENTS) {
-      refuse({ reason: "too-many-files" }, targetId)
-      return
-    }
     if (
+      selected.some((file) => file.size > MAX_ATTACHMENT_BYTES) ||
+      targetFiles.length + selected.length > MAX_DRAFT_ATTACHMENTS ||
       [...targetFiles, ...selected].reduce((total, file) => total + file.size, 0) >
-      MAX_DRAFT_ATTACHMENT_BYTES
+        MAX_DRAFT_ATTACHMENT_BYTES
     ) {
-      refuse({ reason: "draft-too-large" }, targetId)
+      setError(
+        `Attach up to ${MAX_DRAFT_ATTACHMENTS} files, ${MAX_ATTACHMENT_BYTES / MIB} MiB each and ${MAX_DRAFT_ATTACHMENT_BYTES / MIB} MiB total per draft.`,
+      )
       return
     }
     if (!resources.canAdd(selected.reduce((total, file) => total + file.size, 0))) {
-      refuse(
-        {
-          reason: "window-budget",
-          maxMiB: MAX_SESSION_ATTACHMENT_BYTES / MIB,
-          draftsHoldFiles: conversationsRef.current.some((conversation) =>
+      setError(
+        windowBudgetMessage(
+          MAX_SESSION_ATTACHMENT_BYTES / MIB,
+          conversationsRef.current.some((conversation) =>
             conversation.draft.some((part) => part.type === "file"),
           ),
-        },
-        targetId,
+        ),
       )
       return
     }
-    answerRefusal(targetId)
+    setError(null)
     try {
       // Object URLs are ready synchronously; no FileReader or duplicate thumbnail URLs.
       chat.attachFiles(resources.add(selected), conversationId)
     } catch {
-      refuse({ reason: "unreadable-files" }, targetId)
+      setError("The files could not be attached. Please select them again.")
     }
   }
 
@@ -193,7 +135,7 @@ export function useFileAttachments(
     busyRef.current = true
     pendingConversation.current = targetId
     setReading(true)
-    answerRefusal(targetId)
+    setError(null)
     setPending({
       conversationId: targetId,
       files: [{ name: "Image", mimeType: "image/" }],
@@ -208,7 +150,10 @@ export function useFileAttachments(
       setPending(null)
       addFiles([file], targetId)
     } catch {
-      if (mounted.current) refuse({ reason: "unreadable-image-url" }, targetId)
+      if (mounted.current)
+        setError(
+          "The image could not be loaded. Save the image, then drop the file here.",
+        )
     } finally {
       download.current = null
       pendingConversation.current = null
@@ -225,16 +170,8 @@ export function useFileAttachments(
     pendingFiles: pending?.conversationId === chat.active.id ? pending.files : [],
     files,
     reading,
-    refusal,
-    refuse,
-    /**
-     * The draft has gone to the gateway, so whatever was refused before it is
-     * over. Called for a submission that was actually taken — a send the panel
-     * turned away has not moved anybody on, and is usually itself the refusal
-     * being shown.
-     */
-    draftSent: answerRefusal,
-    clearRefusal: () => setRefused(null),
+    error,
+    setError,
     addFiles,
     addImageUrl,
     chooseFiles: () => inputRef.current?.click(),
@@ -243,9 +180,6 @@ export function useFileAttachments(
     close: () => setViewed(null),
     remove: (id: string) => {
       chat.removeFile(id)
-      // Taking a tile off is an answer to "attach fewer" and to "this draft is
-      // too heavy" alike, whichever of them was being said.
-      answerRefusal(chat.active.id)
       if (viewed?.file.id === id) setViewed(null)
     },
   }

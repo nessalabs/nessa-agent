@@ -3,7 +3,7 @@
 This provider guide covers the local Codex harness. Start with the
 [agent execution guide](agent_execution/README.md) for domain ownership, lifecycle,
 permissions, prompts, and shared transport contracts, and read the
-[Claude guide](claude-acp.md) alongside it: everything the two bindings share —
+[Claude guide](claude-acp.md) alongside it: everything the three bindings share —
 process supervision, restoration identity, queueing and steering, the hook
 contract, the credential and context environment split — is stated there and is
 not repeated here. What follows is what is Codex's own. One shared thing this

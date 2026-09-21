@@ -123,41 +123,6 @@ impl SearchPath {
         Self::from_entries(self.0.split(':').filter(|entry| *entry != directory))
     }
 
-    /// This path, then anything in `other` it does not already have.
-    ///
-    /// For combining what one shell reported when asked two different ways.
-    /// bash is the case: no single invocation of it reads both the file a login
-    /// shell uses and the one an interactive shell uses, so a user's tools may
-    /// be in either and the agent should reach both. Order is kept — `self`
-    /// first, entry for entry — because where two answers disagree about which
-    /// directory comes first, the one that matches the terminal the platform
-    /// opens should win.
-    ///
-    /// Entries already present are not repeated: a `PATH` that names the same
-    /// directory twice searches it twice, which is noise in a value that gets
-    /// compared for equality against a registered one.
-    ///
-    /// Refused with [`SearchPathError::TooLong`] if the two together would
-    /// exceed [`SearchPath::LIMIT`], because a value that leaves here has been
-    /// through every rule [`SearchPath::parse`] applies — including that one.
-    /// Two answers each inside the limit can combine to twice it, and a path
-    /// that can be written into a service definition but not read back out of
-    /// it is worse than one that was never widened: the next launch would find
-    /// nothing it recognises and re-register, retiring a healthy gateway.
-    pub fn followed_by(&self, other: &Self) -> Result<Self, SearchPathError> {
-        let mut entries: Vec<&str> = self.0.split(':').collect();
-        for entry in other.0.split(':') {
-            if !entries.contains(&entry) {
-                entries.push(entry);
-            }
-        }
-        let combined = entries.join(":");
-        if combined.len() > Self::LIMIT {
-            return Err(SearchPathError::TooLong);
-        }
-        Ok(Self(combined))
-    }
-
     /// The colon-separated form, for the child's environment.
     pub fn as_str(&self) -> &str {
         &self.0

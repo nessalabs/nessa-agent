@@ -4,14 +4,12 @@ import {
   FolderDropLimitError,
   readDroppedFolder,
 } from "../adapters/dropped-folder"
-import type { AttachmentRefusal } from "../application/attachment-notice"
 
 /** Preserve the receiving draft and block its submission until traversal settles. */
 export function useFolderDrop(
   conversationId: string,
   addFiles: (files: readonly File[], conversationId: string) => void,
-  /** Named, not assumed: a walk can finish after somebody has changed tabs. */
-  refuse: (refusal: AttachmentRefusal, conversationId: string) => void,
+  setError: (message: string) => void,
 ) {
   const pending = React.useRef<{
     controller: AbortController
@@ -20,7 +18,7 @@ export function useFolderDrop(
   React.useEffect(() => () => pending.current?.controller.abort(), [])
   function addFolderEntries(entries: FileSystemEntry[]) {
     if (pending.current) {
-      refuse({ reason: "reading-folder" }, conversationId)
+      setError("Please wait for the dropped folder to finish loading.")
       return
     }
     const controller = new AbortController()
@@ -31,16 +29,12 @@ export function useFolderDrop(
       })
       .catch((error: unknown) => {
         if (!controller.signal.aborted)
-          refuse(
-            {
-              reason:
-                error instanceof FolderDropEmptyError
-                  ? "empty-folder"
-                  : error instanceof FolderDropLimitError
-                    ? "folder-too-large"
-                    : "unreadable-folder",
-            },
-            conversationId,
+          setError(
+            error instanceof FolderDropEmptyError
+              ? "The dropped folders contain no files to attach."
+              : error instanceof FolderDropLimitError
+                ? "Attach up to 20 files; folders must contain at most 1,000 entries."
+                : "The dropped folder could not be read. Please select its files directly.",
           )
       })
       .finally(() => {

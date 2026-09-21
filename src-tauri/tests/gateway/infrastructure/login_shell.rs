@@ -3,7 +3,7 @@
 //! misbehave — the ones that never return, and the ones that never stop talking.
 use super::unix::{between, carried_environment, LoginShell};
 use crate::gateway::application::{LoginShellError, LoginShellPath};
-use crate::gateway::domain::value_objects::{SearchPath, SearchPathError};
+use crate::gateway::domain::value_objects::SearchPathError;
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -49,13 +49,7 @@ fn temporary_directory(name: &str) -> PathBuf {
 /// which is what keeps that warm-up from failing with `ETXTBSY` on Linux; the
 /// reasoning is there.
 fn write_shell(directory: &Path, body: &str) -> PathBuf {
-    write_shell_named(directory, "login-shell", body)
-}
-
-/// The same, under a name of the test's choosing: what a stand-in is called is
-/// what decides how many ways it is asked.
-fn write_shell_named(directory: &Path, name: &str, body: &str) -> PathBuf {
-    let script = directory.join(name);
+    let script = directory.join("login-shell");
     let text = directory.join("login-shell.text");
     fs::write(
         &text,
@@ -134,38 +128,27 @@ fn shell_script(directory: &Path, prelude: &str) -> PathBuf {
     // The pid goes to a path decided here, so what the test reads afterwards
     // does not depend on how the shell was invoked or what it has on its own
     // `PATH` — which is deliberately almost nothing.
-    write_shell(directory, &shell_body(directory, prelude))
-}
-
-/// What a stand-in shell does: record that it started, run its profile, then run
-/// the command it was given.
-///
-/// The command is the last argument rather than `$3`, because how many flags
-/// come before it depends on which way the shell is being asked.
-fn shell_body(directory: &Path, prelude: &str) -> String {
-    format!(
-        "echo \"$$\" >> '{}'\n{prelude}\nfor command in \"$@\"; do :; done\neval \"$command\"",
-        directory.join("pids").display()
+    write_shell(
+        directory,
+        &format!(
+            "echo \"$$\" > '{}'\n{prelude}\neval \"$3\"",
+            directory.join("pid").display()
+        ),
     )
 }
 
-/// Every pid a stand-in shell wrote down, one per time it was run — which it
-/// does before its profile runs, so one line means one shell that started.
+/// The pid the stand-in shell wrote down for itself, which it does before its
+/// profile runs.
 ///
 /// A missing one is not a stricter test, it is a broken one: it means the shell
 /// was killed before it started, so what the deadline ended was a process that
 /// had not yet begun doing the thing the test is about.
-fn shell_pids(directory: &Path) -> Vec<i32> {
-    fs::read_to_string(directory.join("pids"))
-        .expect("the stand-in shell started and recorded its pid")
-        .lines()
-        .map(|pid| pid.trim().parse().expect("a pid"))
-        .collect()
-}
-
-/// The last of them, for a test that runs the shell once.
 fn shell_pid(directory: &Path) -> i32 {
-    *shell_pids(directory).last().expect("a pid")
+    fs::read_to_string(directory.join("pid"))
+        .expect("the stand-in shell started and recorded its pid")
+        .trim()
+        .parse()
+        .expect("a pid")
 }
 
 /// Whether that process is still there. Gone means killed *and* reaped: a
@@ -393,7 +376,10 @@ fn a_real_zsh_reports_the_tools_its_zshrc_adds() {
         .resolve()
         .expect("zsh reports a path");
     assert!(
-        entries(&resolved).contains(&tools),
+        resolved
+            .as_str()
+            .split(':')
+            .any(|entry| Path::new(entry) == tools),
         "{} is not on {}",
         tools.display(),
         resolved.as_str()
@@ -430,7 +416,10 @@ fn a_real_bash_gets_past_the_interactivity_guard_in_a_sourced_bashrc() {
             .resolve()
             .expect("bash reports a path");
     assert!(
-        entries(&resolved).contains(&tools),
+        resolved
+            .as_str()
+            .split(':')
+            .any(|entry| Path::new(entry) == tools),
         "{} is not on {}",
         tools.display(),
         resolved.as_str()
@@ -438,13 +427,13 @@ fn a_real_bash_gets_past_the_interactivity_guard_in_a_sourced_bashrc() {
     let _ = fs::remove_dir_all(&home);
 }
 
-/// The case #78 stayed open for: a bash user whose tools are in `.bashrc` with
-/// nothing sourcing it. No login shell reads that file, so asking bash only the
-/// way a terminal starts it on this platform *succeeded* with a `PATH` missing
-/// their tools — nothing failed, so nothing fell back and nothing was logged.
-/// The interactive probe is what reaches it.
+/// The gap that leaves, written down as a test rather than only as a sentence:
+/// a `.bashrc` nothing sources is not reached, because an interactive *login*
+/// shell does not read it. A user in that position does not have those tools in
+/// their macOS terminal either. If this ever starts passing — a new probe, a
+/// different host — the documentation above it is what needs revisiting.
 #[test]
-fn a_real_bash_reports_the_tools_an_unsourced_bashrc_adds() {
+fn a_bashrc_that_nothing_sources_is_knowingly_not_reached() {
     let Some(bash) = real_shell("bash") else {
         return;
     };
@@ -462,210 +451,13 @@ fn a_real_bash_reports_the_tools_an_unsourced_bashrc_adds() {
             .resolve()
             .expect("bash reports a path");
     assert!(
-        entries(&resolved).contains(&tools),
-        "{} is not on {}",
-        tools.display(),
-        resolved.as_str()
+        !resolved
+            .as_str()
+            .split(':')
+            .any(|entry| Path::new(entry) == tools),
+        "an unsourced .bashrc is now reached; the module's account of bash needs revisiting"
     );
     let _ = fs::remove_dir_all(&home);
-}
-
-/// Both bash files at once, neither sourcing the other: what each adds is
-/// reachable, and the login shell's entries come first, because that is the
-/// shell a terminal opens here and the two should agree about which directory
-/// wins.
-#[test]
-fn a_real_bash_combines_what_each_of_its_startup_files_adds() {
-    let Some(bash) = real_shell("bash") else {
-        return;
-    };
-    let home = temporary_directory("bash-both");
-    let from_bashrc = home.join("from-bashrc");
-    let from_profile = home.join("from-bash-profile");
-    fs::create_dir_all(&from_bashrc).unwrap();
-    fs::create_dir_all(&from_profile).unwrap();
-    fs::write(
-        home.join(".bashrc"),
-        format!("export PATH=\"{}:$PATH\"\n", from_bashrc.display()),
-    )
-    .unwrap();
-    fs::write(
-        home.join(".bash_profile"),
-        format!("export PATH=\"{}:$PATH\"\n", from_profile.display()),
-    )
-    .unwrap();
-
-    let resolved =
-        LoginShell::probing(bash, vec![("HOME", home.clone().into_os_string())], PATIENT)
-            .resolve()
-            .expect("bash reports a path");
-    let found = entries(&resolved);
-    let at = |directory: &PathBuf| {
-        found
-            .iter()
-            .position(|entry| entry == directory)
-            .unwrap_or_else(|| panic!("{} is not on {}", directory.display(), resolved.as_str()))
-    };
-    assert!(
-        at(&from_profile) < at(&from_bashrc),
-        "the login shell's own entries come first: {}",
-        resolved.as_str()
-    );
-    // Combining does not repeat what both answers had: each of these is on
-    // both, since each shell prepends its own to the same system path.
-    for directory in [&from_profile, &from_bashrc] {
-        assert_eq!(
-            found.iter().filter(|entry| *entry == directory).count(),
-            1,
-            "{} appears more than once on {}",
-            directory.display(),
-            resolved.as_str()
-        );
-    }
-    let _ = fs::remove_dir_all(&home);
-}
-
-/// A `.bash_profile` that hangs when it is interactive — the `ssh-agent` or
-/// `exec tmux` shape the fallback exists for — with the user's tools in
-/// `.bashrc`.
-///
-/// The interactive login shell never answers, the interactive one does, and the
-/// answer it gives on its own has read neither `/etc/profile` nor
-/// `.bash_profile`: no `path_helper`, so no Homebrew, and none of the user's
-/// login entries. Returning that as a success would be the thing this whole
-/// change calls the one that hurts, and it would make the registered `PATH`
-/// depend on whether a profile happened to hang — two very different values for
-/// a definition that is compared for equality, so a healthy gateway would be
-/// retired for it.
-#[test]
-fn a_hanging_bash_profile_still_yields_the_login_shell_entries() {
-    let Some(bash) = real_shell("bash") else {
-        return;
-    };
-    let home = temporary_directory("bash-hanging-profile");
-    let from_login = home.join("from-login");
-    let from_rc = home.join("from-rc");
-    fs::create_dir_all(&from_login).unwrap();
-    fs::create_dir_all(&from_rc).unwrap();
-    fs::write(
-        home.join(".bash_profile"),
-        format!(
-            "export PATH=\"{}:$PATH\"\ncase $- in *i*) sleep 600;; esac\n",
-            from_login.display()
-        ),
-    )
-    .unwrap();
-    fs::write(
-        home.join(".bashrc"),
-        format!("export PATH=\"{}:$PATH\"\n", from_rc.display()),
-    )
-    .unwrap();
-
-    let resolved = LoginShell::probing(
-        bash,
-        vec![("HOME", home.clone().into_os_string())],
-        Duration::from_millis(1_500),
-    )
-    .resolve()
-    .expect("bash reports a path");
-    let found = entries(&resolved);
-    assert!(
-        found.contains(&from_rc),
-        "the interactive shell's entries are missing from {}",
-        resolved.as_str()
-    );
-    // `.bash_profile` is read by a login shell and by nothing else, so its own
-    // entry being here is the evidence that the login files were reached — and
-    // it is the evidence that travels. Which *system* directories a login shell
-    // adds on top is the host's business: `path_helper` puts `/usr/local/bin`
-    // on for macOS, while Ubuntu leaves the inherited path alone and appends
-    // `/snap/bin` from `/etc/profile.d`. Asserting either would be asserting
-    // something about the machine rather than about this code.
-    assert!(
-        found.contains(&from_login),
-        "the login shell's entries are missing from {}",
-        resolved.as_str()
-    );
-    let at = |directory: &PathBuf| {
-        found
-            .iter()
-            .position(|entry| entry == directory)
-            .unwrap_or_else(|| panic!("{} is not on {}", directory.display(), resolved.as_str()))
-    };
-    assert!(
-        at(&from_login) < at(&from_rc),
-        "the login shell's entries come first even when its own probe timed out: {}",
-        resolved.as_str()
-    );
-    let _ = fs::remove_dir_all(&home);
-}
-
-/// The budget bounds every attempt together, and it bounds each one: an attempt
-/// gets what is left of it, not its own deadline over again.
-///
-/// The per-attempt clamp is what this measures. With a deadline well past the
-/// budget, an unclamped first attempt would run for the deadline; a clamped one
-/// stops when the budget does.
-#[test]
-fn an_attempt_gets_only_what_is_left_of_the_budget() {
-    let directory = temporary_directory("budget-clamp");
-    let script = write_shell_named(&directory, "bash", &shell_body(&directory, "sleep 600"));
-    let started = Instant::now();
-    let resolved = LoginShell::probing_within(
-        script,
-        vec![],
-        Duration::from_millis(5_000),
-        Duration::from_millis(1_000),
-    )
-    .resolve();
-    assert_eq!(resolved, Err(LoginShellError::TimedOut));
-    // Unclamped, the first attempt alone would be five seconds.
-    assert!(
-        started.elapsed() < Duration::from_secs(3),
-        "{:?}",
-        started.elapsed()
-    );
-    let _ = fs::remove_dir_all(&directory);
-}
-
-/// Every question a shell is asked is a chance to leave a process behind, so
-/// this is the case where all three are asked and all three hang: each shell
-/// starts, each is killed, and each is reaped.
-#[test]
-fn every_attempt_a_shell_is_asked_is_killed_and_reaped() {
-    let directory = temporary_directory("budget-every-attempt");
-    // Called `bash`, so it is asked every way any shell here is asked: two
-    // questions whose answers combine, and then the fallback for the login
-    // files neither of them brought.
-    let script = write_shell_named(&directory, "bash", &shell_body(&directory, "sleep 600"));
-    let started = Instant::now();
-    let resolved = LoginShell::probing_within(
-        script,
-        vec![],
-        Duration::from_millis(300),
-        Duration::from_millis(5_000),
-    )
-    .resolve();
-    assert_eq!(resolved, Err(LoginShellError::TimedOut));
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "{:?}",
-        started.elapsed()
-    );
-    let started_shells = shell_pids(&directory);
-    assert_eq!(started_shells.len(), 3, "{started_shells:?}");
-    for pid in started_shells {
-        assert!(
-            !still_running(pid),
-            "{pid} outlived the attempt that ran it"
-        );
-    }
-    let _ = fs::remove_dir_all(&directory);
-}
-
-/// The directories on a resolved path, in order.
-fn entries(resolved: &SearchPath) -> Vec<PathBuf> {
-    resolved.as_str().split(':').map(PathBuf::from).collect()
 }
 
 #[test]

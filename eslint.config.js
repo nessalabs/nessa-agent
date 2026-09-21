@@ -3,8 +3,6 @@ import reactHooks from "eslint-plugin-react-hooks"
 import globals from "globals"
 import tseslint from "typescript-eslint"
 
-import nessa from "./scripts/eslint/composer-notices.mjs"
-
 const tauriSeam = {
   "no-restricted-imports": [
     "error",
@@ -79,7 +77,6 @@ export default tseslint.config(
   },
   {
     files: ["src/panel/ui/app.tsx"],
-    plugins: { nessa },
     rules: {
       "no-restricted-syntax": [
         "error",
@@ -89,10 +86,6 @@ export default tseslint.config(
           message: "app.tsx renders the panel chrome. Effects belong in a hook.",
         },
       ],
-      // The composer's notices have one box, and it owns both the room they
-      // take and the order they are said in. See the rule for why this is here
-      // rather than in `scripts/architecture`.
-      "nessa/composer-notices": "error",
     },
   },
 )

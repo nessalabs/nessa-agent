@@ -18,6 +18,7 @@ separate proposed work. Local snapshots and submission retry recovery are implem
 | [Transport](transport.md) | ACP dispatch, framing, event delivery, limits, and process cleanup |
 | [Claude provider](../claude-acp.md) | Supported native profile, installation, composition, and live verification |
 | [Codex provider](../codex-acp.md) | What is Codex's own: ordered session configuration, its read-only preset, and what that preset does not buy |
+| [Opencode provider](../opencode-acp.md) | What is Opencode's own: a profile written from a recording, an agent that needs no account, and the permission policy its launch pins |
 
 ## Composition and public modules
 

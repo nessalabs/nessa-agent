@@ -196,6 +196,69 @@
       "maxOutputTokens": 64000,
       "knowledgeCutoff": "2025-02",
       "documentationUrl": "https://platform.claude.com/docs/en/models/haiku-4-5/overview"
+    },
+    {
+      "provider": "opencode",
+      "modelId": "opencode/nemotron-3-ultra-free",
+      "displayName": "Nemotron 3 Ultra Free",
+      "input": {
+        "text": true,
+        "image": false,
+        "audio": false
+      },
+      "output": {
+        "text": true,
+        "image": false,
+        "audio": false
+      },
+      "toolUse": true,
+      "reasoning": true,
+      "maxContextWindowTokens": 1000000,
+      "maxOutputTokens": 128000,
+      "knowledgeCutoff": "2026-02",
+      "documentationUrl": "https://opencode.ai/docs/zen"
+    },
+    {
+      "provider": "opencode",
+      "modelId": "opencode/big-pickle",
+      "displayName": "Big Pickle",
+      "input": {
+        "text": true,
+        "image": false,
+        "audio": false
+      },
+      "output": {
+        "text": true,
+        "image": false,
+        "audio": false
+      },
+      "toolUse": true,
+      "reasoning": true,
+      "maxContextWindowTokens": 200000,
+      "maxOutputTokens": 32000,
+      "knowledgeCutoff": "2025-01",
+      "documentationUrl": "https://opencode.ai/docs/zen"
+    },
+    {
+      "provider": "opencode",
+      "modelId": "opencode/mimo-v2.5-free",
+      "displayName": "MiMo V2.5 Free",
+      "input": {
+        "text": true,
+        "image": true,
+        "audio": true
+      },
+      "output": {
+        "text": true,
+        "image": false,
+        "audio": false
+      },
+      "toolUse": true,
+      "reasoning": true,
+      "maxContextWindowTokens": 200000,
+      "maxOutputTokens": 32000,
+      "knowledgeCutoff": "2024-12",
+      "documentationUrl": "https://opencode.ai/docs/zen"
     }
   ]
 }

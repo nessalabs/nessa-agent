@@ -1,5 +1,4 @@
 use super::super::tools::wire::{self, ObservedTool};
-use super::configuration;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionRequest;
 use crate::application::agent_execution::tools::ToolReviewInput;
@@ -7,7 +6,7 @@ use crate::domain::agent_execution::tools::ToolCallUpdate;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::infrastructure::acp::fields::string;
 use crate::infrastructure::acp::profile::AcpProfile;
-use crate::infrastructure::acp::sessions::AcpConfig;
+use crate::infrastructure::acp::sessions::{configuration, AcpConfig};
 use crate::infrastructure::json_rpc::protocol;
 use serde_json::{json, Value};
 use std::collections::HashMap;

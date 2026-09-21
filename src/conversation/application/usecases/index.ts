@@ -1,5 +1,4 @@
 export { closeConversation } from "./close-conversation"
-export { controlFailureMessage } from "./control-failure"
 export { openConversation } from "./open-conversation"
 export { beginSend, failSend } from "./send-draft"
 export { setActive } from "./set-active"

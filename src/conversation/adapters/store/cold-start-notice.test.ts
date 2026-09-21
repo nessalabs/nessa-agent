@@ -111,9 +111,7 @@ it("tells the user the agent was still starting, after the gateway takes its ful
   expect(conversationNotice(tab)).toMatchObject({
     title: "Agent was still starting",
   })
-  // The gateway's `agent_startup_deadline`, as the one word the panel has for
-  // it. No wire code reaches the tab.
-  expect(tab.failure).toBe("agent-startup-deadline")
+  expect(tab.errorCode).toBe("agent_startup_deadline")
   expect(tab.turns[0]).toMatchObject({ receipt: "failed" })
 })
 
@@ -160,8 +158,8 @@ it("reports unknown delivery when the gateway never answers, inventing no reason
   await sending.catch(() => undefined)
 
   const tab = store.getState().conversation.conversations[0]!
-  // No typed reason, because the gateway rejected nothing.
-  expect(tab.failure).toBeUndefined()
+  // No typed code, because the gateway rejected nothing.
+  expect(tab.errorCode).toBeUndefined()
   expect(tab.turns[0]).toMatchObject({ receipt: "unknown" })
   expect(conversationNotice(tab)).toMatchObject({
     title: "Delivery unknown",

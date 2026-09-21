@@ -14,10 +14,11 @@ import {
   AttachmentStagingError,
   SubmissionRefusedError,
   type ConversationEffects,
+  type SubmissionRefusal,
 } from "../../application/ports"
 import { conversationTabSnapshot } from "../../application/saved-tabs"
 import type { ConversationView } from "../../application/view"
-import type { CommandFailure, FileAttachment, ImageReference } from "../../model"
+import type { FileAttachment, ImageReference } from "../../model"
 import { scenarioEffects } from "../scenario/effects"
 import {
   attachFiles,
@@ -282,7 +283,7 @@ it("retries an uncertain send with the identical images and identities", async (
 
 /** The gateway refusing a send before admitting it, as the effects adapter reports it. */
 const refusing =
-  (reason: CommandFailure): ConversationEffects["send"] =>
+  (reason: SubmissionRefusal): ConversationEffects["send"] =>
   () =>
     Promise.reject(new SubmissionRefusedError(reason))
 

@@ -42,11 +42,6 @@ export function statusLabel(state: SessionState): string {
     case "ready":
       return "Connected"
     case "error":
-      // The state, not the reason. This label sits under the avatar of an
-      // empty conversation, and the reason is already on screen: the
-      // connection notice carries `detail` word for word, and carries the
-      // retry with it. Saying it twice gave a person the same sentence in two
-      // places and something to do in only one of them.
-      return "Not connected"
+      return state.detail || "Could not reach the server. Run just server."
   }
 }

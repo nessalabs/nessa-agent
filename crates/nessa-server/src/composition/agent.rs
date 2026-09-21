@@ -46,7 +46,7 @@ use nessa_sdk::{
 };
 use serde::Deserialize;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     ffi::OsString,
     fs::File,
     path::{Path, PathBuf},
@@ -260,8 +260,19 @@ fn output_tokens() -> u32 {
 ///
 /// `env_clear` is what the bindings launch with, so anything an agent needs
 /// has to be named. The vendor-specific entries are each agent's own
-/// directory variable: naming both for both agents would be shorter and
-/// would also hand each agent a pointer into the other's configuration.
+/// directory variable: naming every one of them for every agent would be
+/// shorter and would also hand each agent a pointer into the others'
+/// configuration.
+///
+/// Opencode's are the XDG ones, because that is what it resolves its own
+/// directories from — config, data, cache and state, and with them its
+/// providers, its plugins and whatever account the person signed in on. Under
+/// `env_clear` an unnamed `XDG_CONFIG_HOME` does not mean "unset", it means
+/// Opencode falls back to `$HOME/.config` and reads a different installation
+/// than the one the readiness probe answered about. They are general-purpose
+/// variables rather than Opencode's own, but they are the person's own paths
+/// and every agent here is already given `HOME`, so nothing is handed over that
+/// was not already reachable.
 ///
 /// Nothing here tells an agent *how* to sign in. Codex's adapter will take a
 /// `DEFAULT_AUTH_REQUEST` and sign itself in from the environment key at
@@ -284,20 +295,37 @@ fn process_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
             std::env::var_os("NESSA_AGENT_PATH"),
             std::env::var_os("PATH"),
         ),
+        |key: &str| std::env::var_os(key),
     )
 }
 
-/// `process_environment` with the search path already decided, so what the
-/// agent is actually launched with can be read back without writing to this
-/// process's own environment.
-fn inherited_environment(agent: AgentId, path: Option<OsString>) -> BTreeMap<OsString, OsString> {
+/// `process_environment` with the search path already decided, and the rest
+/// read through `lookup` rather than from this process.
+///
+/// Both for the same reason: what the agent is actually launched with has to be
+/// readable back without a test writing to the environment every other test is
+/// reading. `path` is the entry `agent_search_path` already settled; `lookup`
+/// is every other key.
+fn inherited_environment(
+    agent: AgentId,
+    path: Option<OsString>,
+    lookup: impl Fn(&str) -> Option<OsString>,
+) -> BTreeMap<OsString, OsString> {
     let mut environment = BTreeMap::new();
-    let vendor = match agent {
-        AgentId::Claude => "CLAUDE_CONFIG_DIR",
-        AgentId::Codex => "CODEX_HOME",
+    let vendor: &[&str] = match agent {
+        AgentId::Claude => &["CLAUDE_CONFIG_DIR"],
+        AgentId::Codex => &["CODEX_HOME"],
+        AgentId::Opencode => &[
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_STATE_HOME",
+        ],
     };
-    for key in ["HOME", "USER", "LOGNAME", "TMPDIR", vendor] {
-        if let Some(value) = std::env::var_os(key) {
+    // `PATH` is not in this list: it is decided above rather than inherited.
+    let shared = ["HOME", "USER", "LOGNAME", "TMPDIR"];
+    for key in shared.into_iter().chain(vendor.iter().copied()) {
+        if let Some(value) = lookup(key) {
             environment.insert(key.into(), value);
         }
     }
@@ -308,11 +336,18 @@ fn inherited_environment(agent: AgentId, path: Option<OsString>) -> BTreeMap<OsS
 }
 
 /// The sign-in this agent is started with, read from this server's own
-/// environment. Named per agent so neither is handed the other's key.
+/// environment. Named per agent so none is handed another's key.
+///
+/// Opencode names none. It reaches the models this binding runs it on without
+/// an account at all, and a key for its gateway is something a person gives
+/// Opencode itself, under `HOME` — so there is no variable here that would
+/// start a signed-in Opencode, and inventing one would put somebody else's key
+/// into its environment.
 fn credential_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
     let keys: &[&str] = match agent {
         AgentId::Claude => &["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
         AgentId::Codex => &["CODEX_API_KEY", "OPENAI_API_KEY"],
+        AgentId::Opencode => &[],
     };
     let mut environment = BTreeMap::new();
     for key in keys {
@@ -347,6 +382,7 @@ fn catalog_provider(agent: AgentId) -> &'static str {
     match agent {
         AgentId::Claude => "anthropic",
         AgentId::Codex => "openai",
+        AgentId::Opencode => "opencode",
     }
 }
 
@@ -432,38 +468,90 @@ fn narrower(held: &ImageInputLimits, other: &ImageInputLimits) -> Option<ImageIn
     .ok()
 }
 
-/// Build a provider for every configured agent.
+/// Build a provider for every configured agent that can be built.
 ///
 /// All of them, not only the selected one: a conversation records the agent it
 /// was created on and is reopened on that same agent afterwards, so a server
 /// that had only built the selected one could not reopen the conversations
 /// already on disk.
+///
+/// Every one that can be, and not every one: an agent whose provider cannot be
+/// built is left out of the map rather than ending the build of the rest. What
+/// [`build::provider`] refuses on is ordinary and local to one agent — a model
+/// the catalog does not serve under that agent's vendor, a command that is not
+/// an existing file, token limits the pair will not take — and none of that is
+/// a statement about the other agents. Failing all of them together meant a
+/// person with Claude installed and Codex merely configured got a gateway that
+/// would not start, with a message about Codex and no way to reach the setup
+/// page that would have fixed it.
+///
+/// Left out is a real answer downstream rather than a silence: the conversation
+/// service refuses an agent it has no provider for with
+/// `ConversationError::AgentNotConfigured`, which reaches a client as
+/// `agent_not_configured` on the one conversation that asked for it. What is
+/// *not* downgraded is the agent the installation is set to use. That one is
+/// still fatal, because a server that cannot start a conversation on the agent
+/// it is set to is not a degraded server.
+///
+/// Most of readiness is answered somewhere else and deliberately stays that
+/// way: `LocalAgentProbe` stats each agent's command on every ask, so an agent
+/// missing here because it is not installed yet still reports `not-installed`
+/// now and `ready` the moment a person installs it. Narrowing the probe to what
+/// was built at startup would freeze that answer to what was true once.
+///
+/// That holds for everything an install can change and for nothing else, which
+/// is why the agents left out come back in two groups rather than one. See
+/// [`ConfiguredAgents::unavailable`].
 #[cfg(unix)]
 pub(super) fn providers(
     config: &AgentsConfig,
     directory: &Path,
     clock: Arc<dyn Clock>,
     images: Arc<dyn UserImageSource>,
-) -> Result<HashMap<AgentId, ConversationAgent>, RunError> {
+) -> Result<ConfiguredAgents, RunError> {
     config.validate()?;
-    let mut agents = HashMap::new();
+    let selected = config.selected()?;
+    let mut providers = HashMap::new();
+    let mut unavailable = HashSet::new();
     for (agent, runtime) in config.agents() {
-        agents.insert(
+        // Every agent is given the source, not only the one whose profile is
+        // known to use it: the runtime sends an image only to an agent that
+        // advertised `promptCapabilities.image`, so an agent that takes none is
+        // offered none without this having to know which those are.
+        let provider = match build::provider(
+            agent,
+            config,
+            runtime,
+            directory,
+            clock.clone(),
+            images.clone(),
+        ) {
+            Ok(provider) => provider,
+            Err(failure) if agent == selected => return Err(failure),
+            Err(failure) => {
+                // Loud, because it is the only place the reason is said. A
+                // person who never opens a conversation on this agent will see
+                // nothing else, and the refusal downstream knows only that
+                // there is no provider.
+                tracing::error!(
+                    agent = agent.name(),
+                    %failure,
+                    "configured agent is unavailable this run; the others are unaffected"
+                );
+                // Asked after the failure rather than before it, because it is
+                // not a second opinion on the failure. It is the one question
+                // about it readiness needs answered: is this something
+                // installing the agent would fix?
+                if build::present(config, runtime) {
+                    unavailable.insert(agent);
+                }
+                continue;
+            }
+        };
+        providers.insert(
             agent,
             ConversationAgent {
-                // Every agent is given the source, not only the one whose
-                // profile is known to use it: the runtime sends an image only
-                // to an agent that advertised `promptCapabilities.image`, so
-                // an agent that takes none is offered none without this having
-                // to know which those are.
-                provider: build::provider(
-                    agent,
-                    config,
-                    runtime,
-                    directory,
-                    clock.clone(),
-                    images.clone(),
-                )?,
+                provider,
                 reserved_output_tokens: runtime.output_tokens,
                 // Filled in by whoever has somewhere to keep warm-up records.
                 // This builds providers and knows nothing about the durable
@@ -472,7 +560,10 @@ pub(super) fn providers(
             },
         );
     }
-    Ok(agents)
+    Ok(ConfiguredAgents {
+        providers,
+        unavailable,
+    })
 }
 #[cfg(not(unix))]
 pub(super) fn providers(
@@ -480,11 +571,36 @@ pub(super) fn providers(
     _: &Path,
     _: Arc<dyn Clock>,
     _: Arc<dyn UserImageSource>,
-) -> Result<HashMap<AgentId, ConversationAgent>, RunError> {
+) -> Result<ConfiguredAgents, RunError> {
     config.validate()?;
     Err(RunError::Agent(
         "ACP agents require Unix process supervision".into(),
     ))
+}
+
+/// What building every configured agent settled.
+pub(super) struct ConfiguredAgents {
+    /// Every agent a conversation can be created on or reopened on this run.
+    pub providers: HashMap<AgentId, ConversationAgent>,
+    /// The configured agents that could not be built although everything they
+    /// launch was already on the machine.
+    ///
+    /// A narrower set than "absent from [`Self::providers`]", and the
+    /// difference is the whole reason it is carried separately. An agent
+    /// missing only because its command is not installed yet is one an install
+    /// fixes, and readiness has to go on saying `not-installed` for it, or
+    /// setup stops offering the install button for the one agent it would help.
+    /// An agent whose command is right there and which still could not be built
+    /// failed on something no amount of installing re-asks: a model its vendor
+    /// does not serve, token limits the pair will not take, a catalog that will
+    /// not parse. Reporting that one `ready` offers a person a conversation
+    /// that cannot be opened, so composition drops it from the launch files the
+    /// probe reads and readiness answers `not-configured` — not set up on this
+    /// installation, which is what happened.
+    ///
+    /// Empty in the ordinary case, including the one this whole path exists
+    /// for: an agent in the configuration that nobody has installed.
+    pub unavailable: HashSet<AgentId>,
 }
 #[cfg(unix)]
 mod build {
@@ -508,7 +624,7 @@ mod build {
         },
         infrastructure::{
             acp::sessions::AcpConfig, claude_acp::sessions::ClaudeAcpProvider,
-            codex_acp::sessions::CodexAcpProvider,
+            codex_acp::sessions::CodexAcpProvider, opencode_acp::sessions::OpencodeAcpProvider,
         },
     };
     use std::{
@@ -548,6 +664,26 @@ mod build {
             )
             .build()
             .map_err(|e| RunError::Agent(e.to_string()))
+    }
+
+    /// Whether everything this agent would launch is on the machine now.
+    ///
+    /// Asked in two places and written once, because the two have to agree.
+    /// [`provider`] refuses when the answer is no, and [`super::providers`] uses
+    /// it to tell that refusal apart from every other one: a command that is not
+    /// there yet becomes a command that is there the moment somebody installs
+    /// it, and nothing else [`provider`] refuses on works that way.
+    ///
+    /// Re-asked of the filesystem each time rather than remembered. That is the
+    /// whole point of it: the answer is allowed to change while the gateway
+    /// runs.
+    pub(super) fn present(config: &AgentsConfig, runtime: &AgentRuntime) -> bool {
+        config
+            .workspace
+            .canonicalize()
+            .is_ok_and(|workspace| workspace.is_dir())
+            && runtime.command.is_file()
+            && runtime.paths().iter().all(|path| path.exists())
     }
 
     /// The launch configuration composition injects, separated from resolving
@@ -611,10 +747,7 @@ mod build {
             .workspace
             .canonicalize()
             .map_err(|_| RunError::Agent("workspace must exist".into()))?;
-        if !workspace.is_dir()
-            || !runtime.command.is_file()
-            || runtime.paths().iter().any(|path| !path.exists())
-        {
+        if !present(config, runtime) {
             return Err(RunError::Agent(format!(
                 "{}: its command must be an existing file and every absolute path it is given must exist; workspace must be a directory",
                 agent.name()
@@ -645,6 +778,18 @@ mod build {
                     .map_err(failed)?
                     .with_system_prompt(prompt),
             ),
+            // No prompt, because there is nowhere to put one that Opencode can
+            // be shown to read: its binding offers no `with_system_prompt` for
+            // exactly that reason, and this arm not calling one is the compiler
+            // enforcing it rather than a convention someone has to remember.
+            // Opencode therefore runs under its own instructions. What keeps
+            // that difference from mattering yet is not the session mode, which
+            // only denies edits, but the permission policy its binding launches
+            // it with: reading and searching allowed, everything else denied,
+            // including this server's own MCP shell tool.
+            AgentId::Opencode => {
+                Arc::new(OpencodeAcpProvider::new(acp, &model, limits, audit).map_err(failed)?)
+            }
         };
         Ok(provider)
     }

@@ -1,11 +1,11 @@
 use super::*;
 
 /// A bundle holding every file `configure` requires, including one harness per
-/// agent Nessa knows about: an installed app that shipped without one of them
-/// is an installed app that cannot offer it.
+/// agent Nessa *bundles*: an installed app that shipped without one of those is
+/// an installed app that cannot offer it.
 fn bundled_runtime(bundle: &Path) {
-    for agent in AgentId::ALL {
-        for name in launch_files(*agent) {
+    for (_, names) in bundled_agents() {
+        for name in names {
             let path = bundle.join(name);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, "fixture").unwrap();
@@ -16,10 +16,18 @@ fn bundled_runtime(bundle: &Path) {
     }
 }
 
-/// The command and the entry script, as two bundle-relative names.
-fn launch_files(agent: AgentId) -> [String; 2] {
-    let (command, entry) = bundled_launch(agent);
-    [command.into(), entry.into()]
+/// Every agent the desktop ships, with its command and entry script as two
+/// bundle-relative names. Not every agent Nessa knows: Opencode is meant to be
+/// fetched onto the machine rather than shipped, so a bundle containing it
+/// would be one nobody builds.
+fn bundled_agents() -> Vec<(AgentId, [String; 2])> {
+    AgentId::ALL
+        .iter()
+        .filter_map(|agent| {
+            let (command, entry) = bundled_launch(*agent)?;
+            Some((*agent, [command.into(), entry.into()]))
+        })
+        .collect()
 }
 
 #[test]
@@ -36,7 +44,9 @@ fn bundle_configuration_is_relocatable_and_does_not_overwrite_user_settings() {
     assert!(agents.workspace.is_dir());
     // Every bundled agent is configured, and the one a new conversation starts
     // on is stated rather than left to be guessed at between them.
-    assert_eq!(agents.agents().len(), AgentId::ALL.len());
+    assert_eq!(agents.agents().len(), bundled_agents().len());
+    // And nothing was configured for the agent the desktop does not ship.
+    assert!(agents.runtime(AgentId::Opencode).is_none());
     assert_eq!(agents.selected().unwrap(), AgentId::Claude);
     agents.workspace = root.path().join("chosen-workspace");
     for (name, model) in [("claude", "chosen-model"), ("codex", "chosen-codex-model")] {
@@ -47,9 +57,8 @@ fn bundle_configuration_is_relocatable_and_does_not_overwrite_user_settings() {
     assert_eq!(agents.workspace, root.path().join("chosen-workspace"));
     assert_eq!(agents.runtimes["claude"].model, "chosen-model");
     assert_eq!(agents.runtimes["codex"].model, "chosen-codex-model");
-    for id in AgentId::ALL {
-        let [command, entry] = launch_files(*id);
-        let runtime = agents.runtime(*id).unwrap();
+    for (id, [command, entry]) in bundled_agents() {
+        let runtime = agents.runtime(id).unwrap();
         assert_eq!(runtime.command, bundle.join(command), "{id:?}");
         assert_eq!(runtime.paths(), [bundle.join(entry)], "{id:?}");
     }
@@ -62,11 +71,11 @@ fn bundle_configuration_is_relocatable_and_does_not_overwrite_user_settings() {
 fn a_bundle_missing_one_agents_harness_is_not_a_runtime_to_start() {
     // Reported as an incomplete bundle rather than quietly configuring the
     // agents that are there: setup would go on offering the missing one.
-    for missing in AgentId::ALL {
+    for (missing, names) in bundled_agents() {
         let root = tempfile::tempdir().unwrap();
         let bundle = root.path().join("runtime");
         bundled_runtime(&bundle);
-        std::fs::remove_file(bundle.join(&launch_files(*missing)[1])).unwrap();
+        std::fs::remove_file(bundle.join(&names[1])).unwrap();
         let data = root.path().join("data");
         nessa_local_storage::create_directory(&data).unwrap();
         assert!(
@@ -109,7 +118,7 @@ fn an_installation_that_only_knew_one_agent_keeps_starting_on_it() {
     configure(&mut settings, &bundle, &data).unwrap();
     let agents = settings.agents.unwrap();
     assert_eq!(agents.selected().unwrap(), AgentId::Codex);
-    assert_eq!(agents.agents().len(), AgentId::ALL.len());
+    assert_eq!(agents.agents().len(), bundled_agents().len());
 }
 #[test]
 fn incomplete_runtime_is_rejected() {

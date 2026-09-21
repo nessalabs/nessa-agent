@@ -7,10 +7,19 @@
  */
 import { describe, expect, it, vi } from "vitest"
 
+// The conversation barrel also exports its components, which need the whole UI
+// package resolved. Its `testing` entry is the same pure functions with no
+// component among them, so the barrel is mocked with that: one definition.
+vi.mock("../../conversation", () => import("../../conversation/testing"))
+
+import { uploadFailureSummary } from "../../conversation/testing"
 import {
+  attachmentNotice,
   MAX_UPLOADS_IN_FLIGHT,
   nextUploads,
   uploadImage,
+  windowBudgetMessage,
+  type NoticedFile,
   type UploadPorts,
 } from "./upload-image"
 
@@ -132,6 +141,88 @@ it("fails as unreadable, and never rejects, when hashing throws", async () => {
   expect(all.stage).not.toHaveBeenCalled()
 })
 
+describe("what the composer says about a draft's files", () => {
+  const stored: NoticedFile = {
+    id: "a",
+    name: "a.png",
+    image: true,
+    upload: { status: "stored" },
+  }
+  it("says nothing when there is nothing to say", () => {
+    expect(attachmentNotice({ files: [], imageInput: false })).toBeNull()
+    expect(attachmentNotice({ files: [stored], imageInput: true })).toBeNull()
+    // Not yet answered is not a no.
+    expect(attachmentNotice({ files: [stored], imageInput: undefined })).toBeNull()
+    expect(
+      attachmentNotice({
+        files: [{ ...stored, upload: { status: "uploading" } }],
+        imageInput: true,
+      }),
+    ).toBeNull()
+  })
+
+  // What each reason says is the conversation's, and tested there. This is the
+  // composing: short, the reason's own sentence, and a retry only for uploads
+  // that trying again could change.
+  it("says a failed upload briefly, and offers the retry only where it can help", () => {
+    const failed = (id: string, reason: "unavailable" | "too-large"): NoticedFile => ({
+      id,
+      name: `${id}.heic`,
+      image: true,
+      upload: { status: "failed", reason },
+    })
+    expect(
+      attachmentNotice({ files: [stored, failed("b", "unavailable")], imageInput: true }),
+    ).toEqual({
+      title: "Image didn't upload",
+      description: uploadFailureSummary("unavailable"),
+      retry: ["b"],
+    })
+    // The gateway's verdict on the image itself would be the same next time.
+    expect(
+      attachmentNotice({ files: [failed("b", "too-large")], imageInput: true }),
+    ).toEqual({
+      title: "Image didn't upload",
+      description: uploadFailureSummary("too-large"),
+      retry: [],
+    })
+    // Several failures are one notification: counted, the first one's reason,
+    // and only the retryable ones behind the action.
+    expect(
+      attachmentNotice({
+        files: [failed("b", "too-large"), failed("c", "unavailable")],
+        imageInput: true,
+      }),
+    ).toEqual({
+      title: "2 images didn't upload",
+      description: uploadFailureSummary("too-large"),
+      retry: ["c"],
+    })
+    // Nothing here names a file or quotes a limit: the tile does that.
+    expect(uploadFailureSummary("unavailable").length).toBeLessThan(40)
+  })
+
+  it("says briefly that a file cannot be sent, or that the agent takes no images", () => {
+    expect(
+      attachmentNotice({
+        files: [
+          { id: "n", name: "notes.pdf", image: false, upload: { status: "not-started" } },
+        ],
+        imageInput: true,
+      }),
+    ).toEqual({
+      title: "File can't be sent",
+      description: "Only images can be sent for now.",
+      retry: [],
+    })
+    expect(attachmentNotice({ files: [stored], imageInput: false })).toEqual({
+      title: "Images not supported",
+      description: "This agent doesn't take images.",
+      retry: [],
+    })
+  })
+})
+
 describe("how many uploads run at once", () => {
   const files = ["a", "b", "c", "d", "e", "f"].map((id) => ({ id }))
 
@@ -152,6 +243,15 @@ describe("how many uploads run at once", () => {
     // The snapshot is older than the call that started it.
     expect(nextUploads(files.slice(0, 2), new Set(["a"]))).toEqual([{ id: "b" }])
     expect(nextUploads(files, new Set(["a", "b", "c", "x"]))).toEqual([])
+  })
+})
+
+describe("why nothing more can be attached", () => {
+  it("advises removing files only when there are files to remove", () => {
+    expect(windowBudgetMessage(256, true)).toMatch(/256 MiB.*Remove files/)
+    const empty = windowBudgetMessage(256, false)
+    expect(empty).toMatch(/256 MiB.*messages still being sent/)
+    expect(empty).not.toMatch(/Remove files/)
   })
 })
 

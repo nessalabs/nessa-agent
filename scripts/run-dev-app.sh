@@ -31,20 +31,6 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Free :1420 before the app is started, not while it is starting.
-#
-# `tauri dev` waits for the dev server to answer before it opens the window,
-# and `pnpm dev` frees the port as its own first step. Run in that order, the
-# wait is satisfied by the *previous* run's vite — still serving, about to be
-# killed — so the window opens, loads its modules from that server, and is left
-# pointing at a dead one the moment the port is freed. Nothing retries: what
-# the person gets is a black rectangle and no error, and the app looks broken
-# when only its page was pulled out from under it.
-#
-# Freeing here makes the port genuinely empty before anything probes it, so the
-# wait can only be satisfied by the vite this run started.
-node "$(dirname "${BASH_SOURCE[0]}")/free-dev-port.mjs"
-
 pnpm app &
 app_pid=$!
 wait "${app_pid}"

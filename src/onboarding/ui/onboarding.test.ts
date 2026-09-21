@@ -61,3 +61,14 @@ describe("the agent picker with nothing to pick", () => {
     expect(chooseAgent(ready, "claude").agent).toBe("claude")
   })
 })
+
+describe("an agent the icon set ships no mark for", () => {
+  it("stands in a monogram rather than a drawing of somebody else's logo", () => {
+    const markup = picker(recordReadiness(asking, { opencode: "ready" }))
+    // The name is there, and so is the entry's tile — with a letter in it. A
+    // fourth path element would mean a logo had been invented for it.
+    expect(markup).toContain("OpenCode")
+    expect(markup).toContain(">O</span>")
+    expect(markup.match(/<path /g)).toHaveLength(2)
+  })
+})

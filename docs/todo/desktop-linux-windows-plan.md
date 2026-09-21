@@ -120,14 +120,6 @@ so the macOS adapter design carries over.
 
 What to build:
 
-- A decision about which shell answer wins for the agent's `PATH`.
-  `gateway/infrastructure/login_shell.rs` asks bash two ways, because no single
-  bash reads both `.bash_profile` and `.bashrc`, and puts the login shell's
-  entries first. That is right on macOS, where a terminal opens a login shell.
-  On Linux a terminal opens an interactive non-login shell, so the same user's
-  `node` comes from the nvm block in `.bashrc` rather than from the login files
-  — with the current order the agent would run the other one. Decide precedence
-  for this host rather than inheriting macOS's.
 - A `Systemd` adapter that writes a unit file under
   `~/.config/systemd/user/`, runs `systemctl --user daemon-reload`, then
   `enable --now`. Health checks reuse the existing loopback logic.

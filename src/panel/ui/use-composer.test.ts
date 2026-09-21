@@ -44,8 +44,6 @@ const editor: ChatComposerEditorHandle = {
   getContent: () => ({ text: "hello", parts: [{ type: "text", text: "hello" }] }),
 }
 
-const sent = vi.fn()
-
 function Surface({
   declines,
   mounted = editor,
@@ -53,7 +51,7 @@ function Surface({
   declines: (conversationId: string) => boolean
   mounted?: ChatComposerEditorHandle | null
 }) {
-  const { setComposerRef, submit } = useComposer(useConversation(), declines, sent)
+  const { setComposerRef, submit } = useComposer(useConversation(), declines)
   React.useEffect(() => setComposerRef(mounted), [setComposerRef, mounted])
   return React.createElement(
     "form",
@@ -100,7 +98,6 @@ function storeWithAttachedFile(connected = true) {
 
 beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-  sent.mockClear()
   container = document.createElement("div")
   document.body.appendChild(container)
   root = createRoot(container)
@@ -119,26 +116,6 @@ it("shows why a draft whose image has not uploaded did not send, and keeps the d
   expect(conversation.draft).toContainEqual(file)
   expect(conversation.turns).toEqual([])
   expect(send).not.toHaveBeenCalled()
-  // Nothing left the composer, so nothing downstream is told that it did. The
-  // panel puts down what it was saying about the draft's files on this, and a
-  // draft that is still here has not answered anything.
-  expect(sent).not.toHaveBeenCalled()
-})
-
-it("names the conversation a draft has actually gone from, and only then", async () => {
-  const store = makeStore(createDependencies({ conversation: scenarioEffects("echo") }))
-  store.dispatch(
-    sessionReady({ hello: {}, health: {} } as Parameters<typeof sessionReady>[0]),
-  )
-  await pressSend(store, () => false)
-  expect(store.getState().conversation.conversations[0]!.draft).toEqual([])
-  expect(sent).toHaveBeenCalledExactlyOnceWith("c0")
-})
-
-it("does not say a draft has gone when the panel itself turned the send away", async () => {
-  const { store } = storeWithAttachedFile()
-  await pressSend(store, () => true)
-  expect(sent).not.toHaveBeenCalled()
 })
 
 it("asks the panel to explain a read still in flight, and submits nothing", async () => {

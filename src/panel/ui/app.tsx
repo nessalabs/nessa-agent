@@ -1,7 +1,8 @@
 import { ComposerDeliveryMode } from "@nessa-ui/react/composer-queue"
 import type { AttachmentResources } from "../adapters/attachment-resources"
+import { attachmentNotice } from "../application/upload-image"
 import * as React from "react"
-import { CircleArrowUp, Download, KeyRound, Link2Off, Square } from "lucide-react"
+import { CircleArrowUp, Download, Square } from "lucide-react"
 import { AgentNotification } from "@nessa-ui/react/agent-notification"
 import {
   ChatComposerAction,
@@ -31,6 +32,9 @@ import {
   Transcript,
   useConversation,
   toEditor,
+  isImageFile,
+  MAX_ATTACHMENT_BYTES,
+  MAX_DRAFT_ATTACHMENTS,
 } from "../../conversation"
 import { host, startResizeFromLeftEdge, type CompositorKind } from "../../host"
 import { useSession } from "../../session"
@@ -41,7 +45,6 @@ import { useHostPanel } from "../adapters/host-panel"
 import { useSurface, type Surface } from "../adapters/surface"
 import { useTabShortcuts } from "../adapters/use-tab-shortcuts"
 import { useUpdate } from "../adapters/use-update"
-import { usePanelLinkNotice } from "../adapters/use-link-notice"
 import { UPDATE_TAB_ID } from "../application/update-surface"
 import { tabAfter, tabAt } from "../application/tab-navigation"
 import { UpdateTab } from "./update-tab"
@@ -50,14 +53,12 @@ import { useFileAttachments } from "./use-file-attachments"
 import { useAttachmentUploads } from "./use-attachment-uploads"
 import { useFolderDrop } from "./use-folder-drop"
 import { useContentDrop } from "./use-content-drop"
+import { FileDropZone } from "@nessa-ui/react/file-drop-zone"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 
 import { AddAttachmentMenu } from "./add-attachment-menu"
-import { AttachmentDropZone } from "./attachment-drop-zone"
-import { AttachmentNotices, AttachmentReadingStatus } from "./attachment-notices"
 import { AttachmentTile } from "./attachment-tile"
 import { AttachmentIcon } from "./attachment-icon"
-import { ComposerNotices } from "./composer-notices"
 import { WaveformIcon } from "./waveform-icon"
 
 // Draft and stream updates must not reparse the unchanged pasted document.
@@ -113,10 +114,20 @@ export function App({
   )
   const attachments = useFileAttachments(chat, attachmentResources)
   const uploads = useAttachmentUploads(chat, attachmentResources, digest)
+  // What the draft's files need said about them now, rather than at send.
+  const fileNotice = attachmentNotice({
+    files: attachments.files.map((file) => ({
+      id: file.id,
+      name: file.name,
+      image: isImageFile(file.mimeType),
+      upload: file.upload,
+    })),
+    imageInput: chat.active.remote?.capabilities.imageInput,
+  })
   const folderDrop = useFolderDrop(
     chat.active.id,
     attachments.addFiles,
-    attachments.refuse,
+    attachments.setError,
   )
   const session = useSession()
   // Panel-level, not conversation-level: an available update is a fact about
@@ -124,9 +135,6 @@ export function App({
   // of its surfaces — the notice over the composer and the tab beside the
   // conversation tabs — are the panel's own chrome.
   const update = useUpdate()
-  // A link leaves the app rather than loading in here, so when one goes
-  // nowhere the click is otherwise indistinguishable from a dead panel.
-  const link = usePanelLinkNotice()
   const {
     expanded,
     changeExpanded,
@@ -140,15 +148,11 @@ export function App({
     changeContent,
     pressChip,
     pasteAttachment,
-  } = useComposer(
-    chat,
-    (id) => {
-      if (!attachments.isPending(id) && !folderDrop.isPending(id)) return false
-      attachments.refuse({ reason: "sending-while-reading" })
-      return true
-    },
-    attachments.draftSent,
-  )
+  } = useComposer(chat, (id) => {
+    if (!attachments.isPending(id) && !folderDrop.isPending(id)) return false
+    attachments.setError("Attachments are still loading. Send again once they finish.")
+    return true
+  })
   const contentDrop = useContentDrop({
     addFolderEntries: folderDrop.addFolderEntries,
     addImageUrl: attachments.addImageUrl,
@@ -289,7 +293,17 @@ export function App({
         onPointerUp={edge.releaseResize}
         className={host.westHandleClass}
       />
-      <AttachmentDropZone onFiles={attachments.addFiles} onRefused={attachments.refuse}>
+      <FileDropZone
+        asChild
+        onFiles={attachments.addFiles}
+        onRejectedFiles={() =>
+          attachments.setError(
+            "Some dropped files could not be attached. Try selecting them with +.",
+          )
+        }
+        maxFiles={MAX_DRAFT_ATTACHMENTS}
+        maxSize={MAX_ATTACHMENT_BYTES}
+      >
         <div
           ref={edge.panelRef}
           data-nessa-root
@@ -460,104 +474,52 @@ export function App({
               draft, the attachments, and the caret are all in here, and a
               detour through an update must not cost somebody their message. */}
           <div className="nessa-composer" hidden={update.viewing || undefined}>
-            {/* Everything said above the pill goes through one box, which owns
-                the order it is said in and the room it may take. A notice added
-                straight to this element instead would be unbounded again, and
-                would put itself wherever it was pasted; the architecture check
-                refuses that. The queue badge and the delivery row stay outside:
-                they are controls rather than statements, they are one short row
-                each, and a control the composer is about to obey must not be
-                somewhere you have to scroll to find. */}
-            <ComposerNotices
-              link={
-                /* The same surface the connection notice uses, carrying a
-                   notice that is not about the connection. `state` is the
-                   component's connection vocabulary, and "disconnected" is the
-                   only one of the four that renders the primary action at all —
-                   so a notice with something to do declares itself disconnected
-                   whatever it is about, exactly as the conversation notices
-                   below already do. The heading, glyphs, and labels here are
-                   all ours; nothing of the connection wording survives. */
-                link.notice ? (
-                  <AgentNotification
-                    className="mb-2"
-                    state="disconnected"
-                    icon={Link2Off}
-                    title={link.notice.title}
-                    description={link.notice.description}
-                    dismissLabel="Dismiss"
-                    onDismiss={link.dismiss}
-                  />
-                ) : null
-              }
-              update={
-                update.notice ? (
-                  <AgentNotification
-                    className="mb-2"
-                    state="disconnected"
-                    icon={CircleArrowUp}
-                    title="Update available"
-                    description={update.notice.version}
-                    retryIcon={Download}
-                    retryLabel={update.notice.installLabel}
-                    onRetry={update.install}
-                    dismissLabel={update.notice.dismissLabel}
-                    onDismiss={update.dismiss}
-                  />
-                ) : null
-              }
-              attachments={
-                /* What the draft's files need said about them, and why the last
-                   thing offered was turned away — both, when both are true. The
-                   tile already marks a failed upload and carries the full
-                   reason, so this does not repeat it; it offers the retry once
-                   for every upload worth retrying. */
-                <AttachmentNotices
-                  refusal={attachments.refusal}
-                  files={attachments.files}
-                  imageInput={chat.active.remote?.capabilities.imageInput}
-                  onRetryUploads={(files) => files.forEach(uploads.retry)}
-                  onChooseFiles={attachments.chooseFiles}
-                  onDismissRefusal={attachments.clearRefusal}
-                />
-              }
-              session={
-                /* Not the connection's own notice below, which the session's
-                   phase owns: this is what the surface around the session could
-                   not do — restoring a sign-in, ending one — and it is said on
-                   the same surface rather than as red text under the composer. */
-                sessionError ? (
-                  <AgentNotification
-                    className="mb-2"
-                    state="disconnected"
-                    // Not the state's own aerial: nothing here is a connection.
-                    // These are sign-ins that could not be restored or ended.
-                    icon={KeyRound}
-                    title="Session needs attention"
-                    description={sessionError}
-                  />
-                ) : null
-              }
-              conversation={
-                <ConversationNotification
-                  conversation={chat.active}
-                  connection={session}
-                  gatewayAvailable={chat.gatewayAvailable}
-                />
-              }
+            {/* The same surface the connection notice uses, carrying a notice
+                that is not about the connection. `state` is the component's
+                connection vocabulary, and "disconnected" is the only one of the
+                four that renders the primary action at all — so a notice with
+                something to do declares itself disconnected whatever it is
+                about, exactly as the conversation notices below already do. The
+                heading, glyphs, and labels here are all ours; nothing of the
+                connection wording survives. */}
+            {update.notice && (
+              <AgentNotification
+                className="mb-2"
+                state="disconnected"
+                icon={CircleArrowUp}
+                title="Update available"
+                description={update.notice.version}
+                retryIcon={Download}
+                retryLabel={update.notice.installLabel}
+                onRetry={update.install}
+                dismissLabel={update.notice.dismissLabel}
+                onDismiss={update.dismiss}
+              />
+            )}
+            {/* One short line about the draft's files. The tile already marks a
+                failed upload and carries the full reason, so this does not repeat
+                it; it offers the retry once for every upload worth retrying. */}
+            {fileNotice && !attachments.error && (
+              <AgentNotification
+                className="mb-2"
+                state="disconnected"
+                title={fileNotice.title}
+                description={fileNotice.description}
+                retryLabel="Retry"
+                onRetry={
+                  fileNotice.retry.length > 0
+                    ? () => fileNotice.retry.forEach(uploads.retry)
+                    : undefined
+                }
+              />
+            )}
+            <ConversationNotification
+              conversation={chat.active}
+              connection={session}
+              gatewayAvailable={chat.gatewayAvailable}
             />
-            {/* Keyed per conversation so the queue is rebuilt rather than
-                carried across a tab change, and named apart from the composer
-                below, which is keyed by the same conversation. Two children of
-                one parent under one key are one child to React. That alone is
-                survivable; here it was not, because the notices above render
-                nothing most of the time, and a falsy sibling earlier in the
-                array makes React leak one subtree per render instead of
-                reusing it. The composer filled with queue chips, each frozen
-                at the count it was born with, none removed when the queue
-                drained. See src/panel/ui/composer-keys.test.tsx. */}
             <ConversationQueue
-              key={`queue:${chat.active.id}`}
+              key={chat.active.id}
               conversation={chat.active}
               gatewayAvailable={chat.gatewayAvailable}
             />
@@ -569,8 +531,23 @@ export function App({
                 disabled={!!chat.active.controlPending}
               />
             )}
+            {sessionError && (
+              <p role="alert" className="px-3 nessa-text-4 text-destructive">
+                {sessionError}
+              </p>
+            )}
+            {attachments.error && (
+              <p role="alert" className="px-3 nessa-text-4 text-destructive">
+                {attachments.error}
+              </p>
+            )}
+            {attachments.reading && (
+              <p role="status" className="px-3 nessa-text-4 text-muted-foreground">
+                Reading files…
+              </p>
+            )}
             <PillComposer
-              key={`composer:${chat.active.id}`}
+              key={chat.active.id}
               expandable={viewedPaste === null && attachments.viewed === null}
               // Controlled, so the pane survives a submit this panel turned
               // away — an attachment still reading, an empty draft — and closes
@@ -580,10 +557,6 @@ export function App({
               generating={false}
               onSubmit={submit}
             >
-              {/* Transient, and not a problem, so it is neither a notice nor a
-                  paragraph beside one: the visible half is the busy tile below,
-                  and this is the same thing for somebody who cannot see it. */}
-              <AttachmentReadingStatus reading={attachments.pendingFiles.length > 0} />
               <ChatComposerAttachments>
                 {attachments.pendingFiles.map((file, index) => (
                   <span
@@ -653,7 +626,7 @@ export function App({
             </PillComposer>
           </div>
         </div>
-      </AttachmentDropZone>
+      </FileDropZone>
     </div>
   )
 }

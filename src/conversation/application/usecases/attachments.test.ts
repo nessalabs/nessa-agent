@@ -27,7 +27,6 @@ import {
   refusalReleasesImages,
   submissionRefusalMessage,
 } from "./send-draft"
-import { controlFailureMessage } from "./control-failure"
 import { boundSentPreviews } from "./release-uploads"
 
 const file = (id: string, size = 1): FileAttachment => ({
@@ -595,109 +594,7 @@ describe("sending a draft that holds images", () => {
     ])
     // The client's own message for these says more than a sentence here could.
     expect(submissionRefusalMessage("agent-not-configured")).toBeUndefined()
-    expect(submissionRefusalMessage("agent-startup-deadline")).toBeUndefined()
     expect(submissionRefusalMessage("invalid-request")).toBeUndefined()
-  })
-
-  const OUTCOMES = ["refused", "applied", "unknown"] as const
-  /** Every reason the vocabulary has, and the absence of one, which is also a case. */
-  const REASONS = [
-    "image-input-unsupported",
-    "attachment-not-found",
-    "attachment-unavailable",
-    "attachment-cleanup-unavailable",
-    "conversation-not-found",
-    "conversation-capacity",
-    "agent-not-configured",
-    "agent-startup-deadline",
-    "invalid-request",
-    undefined,
-  ] as const
-
-  it("leaves a control's news to the control, and a message's to the message", () => {
-    // Two commands, two kinds of news, one vocabulary. A close that could not
-    // let go of its files is the control's to say, whichever way the rest of
-    // the command ended, and is nothing a send can be refused with.
-    for (const outcome of OUTCOMES)
-      expect(controlFailureMessage("attachment-cleanup-unavailable", outcome)).toMatch(
-        /could not release the images/,
-      )
-    expect(submissionRefusalMessage("attachment-cleanup-unavailable")).toBeUndefined()
-  })
-
-  it("says what became of a control whenever the gateway was certain, whatever the reason", () => {
-    // The client has one sentence for every failed control and it claims the
-    // outcome is unknown. Which of the three sentences the panel shows is the
-    // outcome's to decide, never the reason's — a review the gateway left
-    // pending is refused under any code, including one with no word here.
-    for (const reason of REASONS) {
-      if (reason === "attachment-cleanup-unavailable") continue
-      expect(
-        controlFailureMessage(reason, "refused"),
-        `${reason ?? "no reason"} refused`,
-      ).toMatch(/nothing was done/)
-      expect(
-        controlFailureMessage(reason, "applied"),
-        `${reason ?? "no reason"} applied`,
-      ).toMatch(/nothing to answer again/)
-      // Only here is the client's own sentence still the honest one.
-      expect(
-        controlFailureMessage(reason, "unknown"),
-        `${reason ?? "no reason"} unknown`,
-      ).toBeUndefined()
-    }
-  })
-
-  it("adds what the reason is worth to a refusal without needing one", () => {
-    // The reason shapes the sentence and never licenses it, so the ones that
-    // have something specific to add say it, and the rest share a sentence.
-    const named = ["agent-startup-deadline", "agent-not-configured"] as const
-    for (const reason of named)
-      expect(controlFailureMessage(reason, "refused")).not.toBe(
-        controlFailureMessage(undefined, "refused"),
-      )
-    expect(controlFailureMessage("agent-startup-deadline", "refused")).toMatch(
-      /still starting/,
-    )
-    expect(controlFailureMessage("invalid-request", "refused")).toBe(
-      controlFailureMessage(undefined, "refused"),
-    )
-  })
-
-  it("blames this conversation's agent and not the gateway's, when only one is missing", () => {
-    // These two codes mean different things and the server split them so the
-    // panel could say so. An operator with Claude and Codex configured who
-    // drops `codex` and restarts still has a working gateway; pressing Close on
-    // a Codex tab must not send them to a config.json that already configures
-    // an agent. Asserted on the content, because a test that only checks the
-    // two sentences differ stays green through exactly this drift.
-    const one = controlFailureMessage("agent-not-configured", "refused")
-    expect(one).toMatch(/this conversation runs on/i)
-    expect(one).not.toMatch(/(has no|not set up to run|no agent)/i)
-
-    const none = controlFailureMessage("conversations-not-configured", "refused")
-    expect(none).toMatch(/not set up to run conversations/i)
-    expect(none).not.toBe(one)
-  })
-
-  it("offers no remedy for an agent this build cannot open, because there is none to offer", () => {
-    // The agents Nessa can drive are compiled in, so no edit to config.json
-    // adds one — and naming an agent there that has no adapter stops the
-    // gateway starting at all. A panel that says "configure that agent" turns
-    // one stranded conversation into no gateway.
-    const message = controlFailureMessage("agent-unsupported", "refused")
-    expect(message).toMatch(/this version of Nessa cannot open/i)
-    expect(message).not.toMatch(/(configure|config\.json|agents\.runtimes|restart)/i)
-  })
-
-  it("says the same thing about an unopenable agent whether you typed or clicked", () => {
-    // A message refused for this reason falls through to the client's own
-    // sentence; a control is answered here. The same failure saying two
-    // different things depending on which one you did is the bug.
-    expect(submissionRefusalMessage("agent-unsupported")).toBeUndefined()
-    expect(controlFailureMessage("agent-unsupported", "refused")).toMatch(
-      /this version of Nessa cannot open/i,
-    )
   })
 
   it("says something different, and useful, for each refusal", () => {

@@ -43,6 +43,9 @@ fn shipped_catalog_loads_from_a_file_and_contains_only_the_current_lineup() {
             ("anthropic", "claude-opus-5"),
             ("anthropic", "claude-sonnet-5"),
             ("anthropic", "claude-haiku-4-5-20251001"),
+            ("opencode", "opencode/nemotron-3-ultra-free"),
+            ("opencode", "opencode/big-pickle"),
+            ("opencode", "opencode/mimo-v2.5-free"),
         ]
     );
     let haiku = catalog
@@ -55,6 +58,29 @@ fn shipped_catalog_loads_from_a_file_and_contains_only_the_current_lineup() {
     assert!(haiku.input.image);
     assert!(!haiku.input.audio);
 
+    // An OpenCode Zen model is named the way Opencode itself names it, slash
+    // and all, because the binding sends this string back as the session's
+    // `model` option and Opencode matches it against its own list. A bare
+    // `big-pickle` would be a model it does not offer.
+    let pickle = catalog.select("opencode", "opencode/big-pickle").unwrap();
+    assert_eq!(
+        (pickle.max_context_window_tokens, pickle.max_output_tokens),
+        (200_000, 32_000)
+    );
+    // Numbers read out of the pinned 1.18.31 binary's own catalogue, which is
+    // why they are asserted: they are a fact about the release Nessa pins, so
+    // a pin that moves and changes them should fail here rather than quietly
+    // resize somebody's context window.
+    let nemotron = catalog
+        .select("opencode", "opencode/nemotron-3-ultra-free")
+        .unwrap();
+    assert_eq!(
+        (
+            nemotron.max_context_window_tokens,
+            nemotron.max_output_tokens
+        ),
+        (1_000_000, 128_000)
+    );
     // Image limits are recorded for every Claude model and differ only in the
     // resolution the model sees. OpenAI's are not recorded, so those models are
     // offered no images however their modality flag reads.

@@ -1,5 +1,5 @@
 //! Local product dependency factory. Provider choices stay outside route handlers.
-use super::warm_up::PreparedRuntime;
+use super::{agent::AgentsConfig, warm_up::PreparedRuntime};
 use crate::{
     agent_warm_up::{
         application::AgentWarmUp,
@@ -11,7 +11,7 @@ use crate::{
         infrastructure::{AgentLaunchFiles, LocalAgentProbe},
     },
     app::ports::Clock as ServerClock,
-    attachments::infrastructure::ModelImageNormalizer,
+    attachments::{application::AttachmentService, infrastructure::ModelImageNormalizer},
     browser_session::adapters::PersistentSessions,
     conversation::{
         application::{
@@ -37,7 +37,8 @@ use nessa_auth::{
 };
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, LocalFileStorage};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    path::Path,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -69,7 +70,7 @@ pub(super) struct LocalProduct {
 pub(super) fn product_state(
     config: &Environment,
     uptime: Arc<dyn ServerClock>,
-    bundle: Option<&std::path::Path>,
+    bundle: Option<&Path>,
 ) -> Result<LocalProduct, RunError> {
     let directory = config
         .auth_directory
@@ -104,36 +105,22 @@ pub(super) fn product_state(
     let audience = AudienceId::new(identity.gateway_id).map_err(setup_error)?;
     let organization =
         OrganizationId::new(identity.organization_ids[0].clone()).map_err(setup_error)?;
-    // What onboarding is told about the agent is the same fact the launcher
-    // acts on: the configuration resolved above, and whether the two files it
-    // would actually execute are there. A bundled desktop run and a plain
-    // server run answer this the same way, because they answer it from the
-    // same place. Composition settles *which* paths those are and hands them
-    // over; it does not settle whether they exist, because a user can install
-    // the agent long after this runs and setup has a button that says so.
-    // Every agent the configuration describes, not only the one a new
-    // conversation would start on: setup lists them all and a person deciding
-    // between them is entitled to the truth about each.
-    let agent_launch_files: HashMap<AgentId, AgentLaunchFiles> = settings
-        .agents
-        .as_ref()
-        .map(|agents| {
-            agents
-                .agents()
-                .into_iter()
-                .map(|(id, runtime)| {
-                    (
-                        id,
-                        AgentLaunchFiles {
-                            command: runtime.command.clone(),
-                            paths: runtime.paths(),
-                            environment: super::agent::launch_environment(id),
-                        },
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // Built here, before the launch files below, because building it is how
+    // this server finds out which configured agents cannot be started at all,
+    // and that answer belongs in what setup is told. Nothing else between here
+    // and its use depends on the order.
+    let (conversations, unavailable, warm_ups) = match &settings.agents {
+        Some(agents) => {
+            let built = conversations(agents, directory)?;
+            (
+                Some((built.service, built.attachments)),
+                built.unavailable,
+                built.warm_ups,
+            )
+        }
+        None => (None, HashSet::new(), Vec::new()),
+    };
+    let agent_launch_files = launch_files(settings.agents.as_ref(), &unavailable);
     let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
     let admin = Arc::new(LocalAdmin {
         store: store.clone(),
@@ -161,119 +148,188 @@ pub(super) fn product_state(
         .map_err(setup_error)?,
     ));
     product.browser_http_allowed = config.browser_http_allowed();
-    let mut warm_ups = Vec::new();
-    if let Some(agents) = &settings.agents {
-        let root = directory
-            .parent()
-            .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
-            .join("conversations");
-        nessa_local_storage::create_directory(&root)
-            .map_err(|error| RunError::Agent(error.to_string()))?;
-        let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-        let selected = agents.selected()?;
-        // Ownership records come first. A binding needs somewhere to read image
-        // bytes, reading them needs the attachment store, and beginning an
-        // upload needs to ask who owns a conversation: so the repository is
-        // built, then attachments over it, and only then the providers.
-        let metadata = Arc::new(
-            LocalConversationRepository::new(root.join("metadata"))
-                .map_err(|error| RunError::Agent(error.to_string()))?,
-        );
-        let attachments = super::attachments::attachments(
-            &directory
-                .parent()
-                .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
-                .join("attachments"),
-            metadata.clone(),
-            // The image limits from the catalog, which is the one place they
-            // are recorded, taken across every configured agent's model rather
-            // than the selected one's: the store is shared by conversations
-            // that each run on their own agent. Every uploaded image is fitted
-            // to them, using the running system's decoder for the encodings the
-            // image library does not read itself.
-            Arc::new(
-                ModelImageNormalizer::new(
-                    super::agent::image_limits(agents)?.as_ref(),
-                    nessa_images::platform_decoder(),
-                )
-                .map_err(|error| RunError::Agent(format!("model image limits: {error}")))?,
-            ),
-            clock.clone(),
-        )?;
-        let mut configured =
-            super::agent::providers(agents, &root, clock.clone(), attachments.images.clone())?;
-        // One warm-up per configured agent, because each runs its own runtime
-        // and the operating system scans each of them separately on its first
-        // execution. One for the server would leave whichever agent it did not
-        // cover paying that scan inside somebody's first message, which is the
-        // failure this exists to prevent.
-        //
-        // They share one records directory and one audit directory: a record is
-        // stored under a digest of the runtime it describes, so two runtimes
-        // never collide, and a third configured later finds no record of its
-        // own and warms itself.
-        let records = Arc::new(
-            FileWarmUpRecords::new(root.join("warm-up"))
-                .map_err(|error| RunError::Agent(error.to_string()))?,
-        );
-        let warm_up_audit = Arc::new(
-            DurableWarmUpAudit::new(root.join("audit").join("warm-up"))
-                .map_err(|error| RunError::Agent(error.to_string()))?,
-        );
-        for agent in configured.values_mut() {
-            // The provider's own credential-free identity, rather than a
-            // hand-picked list of fields: it already covers the executable, its
-            // arguments, the environment, the workspace, and every MCP server
-            // binary the child will start, and it is computed from raw OS bytes
-            // rather than a lossy path conversion. Anything that changes which
-            // files are executed changes it, which is what a first-execution
-            // scan is paid for.
-            let identity = agent.provider.identity();
-            let runtime =
-                RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context())
-                    .map_err(|error| RunError::Agent(error.to_string()))?;
-            let prepared = AgentWarmUp::new(
-                agent.provider.clone(),
-                // A throwaway context: the warm-up must not leave a snapshot on
-                // disk and must not take an exclusive lease on a conversation a
-                // user owns.
-                Arc::new(InMemoryStorage::new()),
-                records.clone(),
-                warm_up_audit.clone(),
-                clock.clone(),
-                runtime,
-            );
-            agent.readiness = Some(Arc::new(PreparedRuntime(prepared.clone())));
-            warm_ups.push(prepared);
-        }
-        let storage = Arc::new(
-            LocalFileStorage::new(root.join("sessions"))
-                .map_err(|error| RunError::Agent(error.to_string()))?,
-        );
-        let creation_audit = Arc::new(
-            DurableConversationCreationAudit::new(root.join("audit").join("creation"))
-                .map_err(|error| RunError::Agent(error.to_string()))?,
-        );
-        let service = ConversationService::new(
-            ConversationDependencies {
-                agents: ConversationAgents::new(configured, selected)
-                    .map_err(|error| RunError::Agent(error.to_string()))?,
-                storage,
-                metadata,
-                creation_audit,
-                attachments: Some(attachments.conversations),
-                clock,
-            },
-            ConversationLimits::default(),
-            Some(agents.workspace.to_string_lossy().into_owned()),
-        )
-        .map_err(|error| RunError::Agent(error.to_string()))?;
+    if let Some((service, attachments)) = conversations {
         product = product
             .with_conversations(Arc::new(service))
-            .with_attachments(attachments.service);
+            .with_attachments(attachments);
     }
     Ok(LocalProduct {
         routes: product,
+        warm_ups,
+    })
+}
+
+/// What the readiness probe is given to ask about, for every agent it should
+/// answer for.
+///
+/// What onboarding is told about an agent is the same fact the launcher acts
+/// on: the configuration as resolved, and whether the files it would actually
+/// execute are there. A bundled desktop run and a plain server run answer this
+/// the same way, because they answer it from the same place. Composition
+/// settles *which* paths those are and hands them over; it does not settle
+/// whether they exist, because a person can install the agent long after this
+/// runs and setup has a button that says so.
+///
+/// Every agent the configuration describes, not only the one a new conversation
+/// would start on: setup lists them all and a person deciding between them is
+/// entitled to the truth about each.
+///
+/// Except the ones in `unavailable`, which this run already proved it cannot
+/// start with the agent sitting there installed. Those are left out entirely,
+/// so the probe has nothing to stat and readiness reports the agent as not set
+/// up on this installation rather than offering a conversation that would be
+/// refused. See [`super::agent::ConfiguredAgents::unavailable`].
+fn launch_files(
+    agents: Option<&AgentsConfig>,
+    unavailable: &HashSet<AgentId>,
+) -> HashMap<AgentId, AgentLaunchFiles> {
+    agents
+        .map(|agents| {
+            agents
+                .agents()
+                .into_iter()
+                .filter(|(id, _)| !unavailable.contains(id))
+                .map(|(id, runtime)| {
+                    (
+                        id,
+                        AgentLaunchFiles {
+                            command: runtime.command.clone(),
+                            paths: runtime.paths(),
+                            environment: super::agent::launch_environment(id),
+                        },
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Everything building the conversation stack settled.
+struct BuiltConversations {
+    service: ConversationService,
+    attachments: AttachmentService,
+    /// Which configured agents this run cannot start even though they are
+    /// installed. Known only once every provider has been built, and needed
+    /// before the readiness probe is, which is why this is a function rather
+    /// than the tail of [`product_state`]. See
+    /// [`super::agent::ConfiguredAgents`].
+    unavailable: HashSet<AgentId>,
+    /// One per configured agent, each preparing its own runtime. Started by the
+    /// server lifecycle once the gateway is listening, not here.
+    warm_ups: Vec<AgentWarmUp>,
+}
+
+fn conversations(agents: &AgentsConfig, directory: &Path) -> Result<BuiltConversations, RunError> {
+    let mut warm_ups = Vec::new();
+    let root = directory
+        .parent()
+        .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
+        .join("conversations");
+    nessa_local_storage::create_directory(&root)
+        .map_err(|error| RunError::Agent(error.to_string()))?;
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let selected = agents.selected()?;
+    // Ownership records come first. A binding needs somewhere to read image
+    // bytes, reading them needs the attachment store, and beginning an
+    // upload needs to ask who owns a conversation: so the repository is
+    // built, then attachments over it, and only then the providers.
+    let metadata = Arc::new(
+        LocalConversationRepository::new(root.join("metadata"))
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
+    let attachments = super::attachments::attachments(
+        &directory
+            .parent()
+            .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
+            .join("attachments"),
+        metadata.clone(),
+        // The image limits from the catalog, which is the one place they
+        // are recorded, taken across every configured agent's model rather
+        // than the selected one's: the store is shared by conversations
+        // that each run on their own agent. Every uploaded image is fitted
+        // to them, using the running system's decoder for the encodings the
+        // image library does not read itself.
+        Arc::new(
+            ModelImageNormalizer::new(
+                super::agent::image_limits(agents)?.as_ref(),
+                nessa_images::platform_decoder(),
+            )
+            .map_err(|error| RunError::Agent(format!("model image limits: {error}")))?,
+        ),
+        clock.clone(),
+    )?;
+    let mut built =
+        super::agent::providers(agents, &root, clock.clone(), attachments.images.clone())?;
+    // One warm-up per configured agent, because each runs its own runtime
+    // and the operating system scans each of them separately on its first
+    // execution. One for the server would leave whichever agent it did not
+    // cover paying that scan inside somebody's first message, which is the
+    // failure this exists to prevent.
+    //
+    // They share one records directory and one audit directory: a record is
+    // stored under a digest of the runtime it describes, so two runtimes
+    // never collide, and a third configured later finds no record of its
+    // own and warms itself.
+    let records = Arc::new(
+        FileWarmUpRecords::new(root.join("warm-up"))
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
+    let warm_up_audit = Arc::new(
+        DurableWarmUpAudit::new(root.join("audit").join("warm-up"))
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
+    for agent in built.providers.values_mut() {
+        // The provider's own credential-free identity, rather than a
+        // hand-picked list of fields: it already covers the executable, its
+        // arguments, the environment, the workspace, and every MCP server
+        // binary the child will start, and it is computed from raw OS bytes
+        // rather than a lossy path conversion. Anything that changes which
+        // files are executed changes it, which is what a first-execution
+        // scan is paid for.
+        let identity = agent.provider.identity();
+        let runtime =
+            RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context())
+                .map_err(|error| RunError::Agent(error.to_string()))?;
+        let prepared = AgentWarmUp::new(
+            agent.provider.clone(),
+            // A throwaway context: the warm-up must not leave a snapshot on
+            // disk and must not take an exclusive lease on a conversation a
+            // user owns.
+            Arc::new(InMemoryStorage::new()),
+            records.clone(),
+            warm_up_audit.clone(),
+            clock.clone(),
+            runtime,
+        );
+        agent.readiness = Some(Arc::new(PreparedRuntime(prepared.clone())));
+        warm_ups.push(prepared);
+    }
+    let storage = Arc::new(
+        LocalFileStorage::new(root.join("sessions"))
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
+    let creation_audit = Arc::new(
+        DurableConversationCreationAudit::new(root.join("audit").join("creation"))
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: ConversationAgents::new(built.providers, selected)
+                .map_err(|error| RunError::Agent(error.to_string()))?,
+            storage,
+            metadata,
+            creation_audit,
+            attachments: Some(attachments.conversations),
+            clock,
+        },
+        ConversationLimits::default(),
+        Some(agents.workspace.to_string_lossy().into_owned()),
+    )
+    .map_err(|error| RunError::Agent(error.to_string()))?;
+    Ok(BuiltConversations {
+        service,
+        attachments: attachments.service,
+        unavailable: built.unavailable,
         warm_ups,
     })
 }
@@ -325,3 +381,7 @@ impl CredentialAdmin for LocalAdmin {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/composition/local_auth.rs"]
+mod tests;

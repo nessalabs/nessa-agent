@@ -13,12 +13,6 @@ export function useComposer(
   chat: ReturnType<typeof useConversation>,
   /** Says so in the panel, and answers true, while an attachment is still being read. */
   declinesPendingAttachment: (conversationId: string) => boolean,
-  /**
-   * A draft has actually left this composer for the gateway. Only then: a
-   * submission the panel or the conversation turned away leaves everything
-   * where it was, including whatever the panel was already saying about it.
-   */
-  onDraftSent: (conversationId: string) => void,
 ) {
   const composerRef = React.useRef<ChatComposerEditorHandle>(null)
   const setComposerRef = React.useCallback((editor: ChatComposerEditorHandle | null) => {
@@ -78,16 +72,11 @@ export function useComposer(
     // empty, for a whole round trip, and for good against a gateway that
     // accepts the connection and then answers nothing.
     awaitingDraft.current = true
-    const sending = chat.active.id
     void chat.submit(content).then((taken) => {
       // Turned away: the draft is still here, so nothing is waiting for it to
       // go. Left set, the next unrelated emptying of the draft would close a
       // pane nobody asked to close.
-      if (!taken) {
-        awaitingDraft.current = false
-        return
-      }
-      onDraftSent(sending)
+      if (!taken) awaitingDraft.current = false
     })
   }
 

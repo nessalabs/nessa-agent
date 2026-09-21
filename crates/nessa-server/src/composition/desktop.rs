@@ -13,26 +13,44 @@ use std::path::{Path, PathBuf};
 
 /// The agent the desktop starts with when nothing else has been chosen.
 ///
-/// Both agents are bundled, so this decides only which one a caller that names
-/// none runs on. Claude, because that is the agent Nessa shipped with and the
-/// one every conversation already on disk belongs to.
+/// Which agent a caller that names none runs on: Claude, because that is the
+/// agent Nessa shipped with and the one every conversation already on disk
+/// belongs to.
 const DEFAULT_AGENT: AgentId = AgentId::Claude;
 
-/// How the desktop launches each bundled agent, relative to the bundle root.
+/// How the desktop launches one bundled agent, relative to the bundle root, or
+/// nothing for an agent the desktop does not ship.
 ///
 /// A command and its arguments, so an agent that speaks ACP through the bundled
-/// Node runtime and one that would ship as its own executable are both sayable
-/// here. Both agents Nessa bundles today are the first kind.
-fn bundled_launch(agent: AgentId) -> (&'static str, &'static str) {
+/// Node runtime and one that ships as its own executable are both sayable here.
+/// Both agents Nessa bundles today are the first kind.
+///
+/// Opencode is not bundled. It is a whole runtime of its own — nearly two
+/// hundred megabytes, against a few for a Node adapter — and shipping it would
+/// put that in every download for the people who already have an agent. It is
+/// meant to be fetched onto the machine that wants it instead, which is why
+/// this says nothing about where it lives.
+///
+/// Nothing writes that yet, and this comment does not pretend otherwise. The
+/// installer is on another branch and, even there, it unpacks a binary and
+/// prints a report — it does not record a runtime, and no other code turns the
+/// unpacked path into one. So `None` here is the whole truth at this commit:
+/// the desktop does not ship Opencode and nothing else supplies it either.
+/// What is missing between the two is one step, a step that records the
+/// installed launch. The catalog is no longer part of that gap — the shipped
+/// `models.json` now carries OpenCode Zen entries, so a runtime written by
+/// hand starts today.
+fn bundled_launch(agent: AgentId) -> Option<(&'static str, &'static str)> {
     match agent {
-        AgentId::Claude => (
+        AgentId::Claude => Some((
             "node",
             "claude-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js",
-        ),
-        AgentId::Codex => (
+        )),
+        AgentId::Codex => Some((
             "node",
             "codex-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js",
-        ),
+        )),
+        AgentId::Opencode => None,
     }
 }
 
@@ -45,6 +63,14 @@ fn default_model(agent: AgentId) -> &'static str {
     match agent {
         AgentId::Claude => "claude-sonnet-5",
         AgentId::Codex => "gpt-5.6-terra",
+        // Unreachable from here today: this is read for bundled agents, and
+        // Opencode is not one. Named rather than wildcarded so that a new agent
+        // has to say what it starts on, and a real name rather than a
+        // placeholder: the shipped catalog serves it, and
+        // `opencode_builds_against_the_catalog_nessa_ships` holds the two
+        // together. Spelled the way Opencode spells it, slash and all, because
+        // the binding sends this string back as the session's `model` option.
+        AgentId::Opencode => "opencode/big-pickle",
     }
 }
 
@@ -58,11 +84,16 @@ pub(super) fn configure(
     }
     let catalog = bundle.join("models.json");
     let mcp = bundle.join("nessa-mcp");
+    // Only the agents this desktop ships. A bundle checked for files it was
+    // never meant to contain would refuse to start, so an agent with no bundled
+    // launch is skipped here rather than looked for. Skipped is all it is: no
+    // launch is written for it anywhere else yet either, so an unbundled agent
+    // stays unconfigured and the picker says exactly that.
     let launches: Vec<(AgentId, PathBuf, PathBuf)> = AgentId::ALL
         .iter()
-        .map(|agent| {
-            let (command, entry) = bundled_launch(*agent);
-            (*agent, bundle.join(command), bundle.join(entry))
+        .filter_map(|agent| {
+            let (command, entry) = bundled_launch(*agent)?;
+            Some((*agent, bundle.join(command), bundle.join(entry)))
         })
         .collect();
     for path in [&catalog, &mcp].into_iter().chain(

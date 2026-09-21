@@ -2,12 +2,13 @@
 
 The first implemented slice of [ADR 0008](../../docs/adr/todo/0008-agent-client-api.md)
 includes the public Agent entry point, session storage, hooks, queueing/steering,
-idempotent retries, model metadata, and effective capability snapshots. Two local
-ACP adapters implement the execution provider port, one for Claude and one for
-Codex, over one shared runtime. See the [execution guides](docs/agent_execution/README.md) for lifecycle, permissions,
+idempotent retries, model metadata, and effective capability snapshots. Three local
+ACP adapters implement the execution provider port, one each for Claude, Codex
+and Opencode, over one shared runtime. See the [execution guides](docs/agent_execution/README.md) for lifecycle, permissions,
 prompts, and transport; the [Claude guide](docs/claude-acp.md) covers provider setup
-and verified native limits, and the [Codex guide](docs/codex-acp.md) covers what is
-that provider's own.
+and verified native limits, and the [Codex guide](docs/codex-acp.md) and
+[Opencode guide](docs/opencode-acp.md) cover what is each of those providers'
+own.
 Shared conversation coordination and its durable event stream, harness settings
 readers, and gateway/UI integration remain future work; local session snapshots
 are already implemented.
@@ -175,10 +176,15 @@ automatic session storage, hooks, invocation, and UI integration.
 - `infrastructure/claude_acp/`: Claude settings, model limits, system-prompt extension, and tool schemas.
 - `infrastructure/codex_acp/`: Codex's harness identity, its approval preset, and the
   content normalization that keeps its terminal and resource-link updates inside the
-  shared vocabulary. A third agent gets a third sibling here, not a branch inside one
-  of these two.
+  shared vocabulary.
+- `infrastructure/opencode_acp/`: Opencode's recorded profile, the permission policy
+  its launch pins, and the kind-only naming its tool wire records a review under.
+  A fourth agent gets a fourth sibling here, not a branch inside one of these three.
   Shared ACP exchange, JSON-RPC framing, and process supervision live in
-  `infrastructure/acp`, `infrastructure/json_rpc`, and `infrastructure/process.rs`.
+  `infrastructure/acp`, `infrastructure/json_rpc`, and `infrastructure/process.rs`,
+  and so does verification more than one provider needs — ordered session
+  configuration moved up from `codex_acp/` to `acp/sessions/configuration.rs` when
+  Opencode turned out to need the same two options.
 - `infrastructure/session_storage/`: in-memory snapshots and private JSONL session storage,
   exclusive leases, and explicit JSON evidence mapping.
 - `infrastructure/`: JSON parsing into application input DTOs, including required
@@ -298,14 +304,15 @@ combinations, boolean feature restrictions, configuration and input budget
 boundaries, error diagnostics, and snapshot isolation.
 
 Shared ACP execution infrastructure lives in `infrastructure/acp`, with provider
-profiles injected by `infrastructure::claude_acp::sessions::ClaudeAcpProvider` and
-`infrastructure::codex_acp::sessions::CodexAcpProvider`.
+profiles injected by `infrastructure::claude_acp::sessions::ClaudeAcpProvider`,
+`infrastructure::codex_acp::sessions::CodexAcpProvider` and
+`infrastructure::opencode_acp::sessions::OpencodeAcpProvider`.
 `infrastructure::acp::sessions::AcpConfig` supplies
 common launch and runtime limits. JSON-RPC framing reuses the pinned event-stream
 codec; process ownership lives in `infrastructure/process.rs`. See the
 [session and boundary guide](docs/agent_execution/lifecycle.md).
 
-Either provider's `new` requires an injected `ExecutionAudit`. The
+Every provider's `new` requires an injected `ExecutionAudit`. The
 host chooses its storage and durability contract. Answer records retain exact
 decisions and attribution before wire effects, then their delivery observation.
 Cancellation records retain the

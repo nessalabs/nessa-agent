@@ -12,7 +12,6 @@
 //! | Viewport pin | `WKWebView` in the content view | `WebKitWebView` in a `GtkFixed` | webview fills the window |
 //! | Live resize | AppKit notifications | size-allocate + button mask | none |
 //! | Lifecycle | accessory app, stays open when focus moves away | taskbar window, shown on launch | default window |
-//! | Clicked link | `/usr/bin/open` | `xdg-open` | refused, with a reason |
 
 use tauri::{AppHandle, Manager, WebviewWindow, Window, WindowEvent};
 
@@ -113,18 +112,6 @@ pub trait Host: Send + Sync {
 
     /// OS-specific window events. Shared close-to-hide lives in `main`.
     fn on_window_event(&self, _window: &Window, _event: &WindowEvent) {}
-
-    /// Hand a link to whatever the person has set as their browser or mail
-    /// client. Called only for URLs [`crate::links::decide`] has already
-    /// allowed out — this is the effect, not the policy, and it must not be
-    /// given a URL that policy has not looked at.
-    ///
-    /// The default is a refusal rather than a no-op: a host with no way to
-    /// reach a browser should say so on the one line it costs, not swallow
-    /// every link a person clicks.
-    fn open_externally(&self, _url: &str) -> Result<(), String> {
-        Err("this host cannot open a browser".into())
-    }
 }
 
 /// The host for this binary. Compile-time DI: only one of the platform
