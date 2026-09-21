@@ -27,11 +27,13 @@ import * as React from "react"
  * whichever way five JSX blocks happened to be stacked in the panel's chrome.
  * A caller hands each notice to the slot it belongs in and cannot reorder them.
  *
- * The box is a tab stop, the way the transcript's scroller is: a card with
- * nothing to press has nothing inside it to tab to, so without that stop a
- * keyboard alone could not scroll past it. Cards that do have something to
- * press are still reached by tabbing, and the browser scrolls each one into
- * view as it takes focus — a Retry below the fold is one Tab away, not gone.
+ * The box is a tab stop, as the transcript's scroller is: a card with nothing
+ * to press has nothing inside it to tab to, so without that stop a keyboard
+ * alone could not scroll past it. Cards that do have something to press are
+ * still reached by tabbing, and the browser scrolls each one into view as it
+ * takes focus — a Retry below the fold is one Tab away, not gone. Unlike that
+ * scroller, this stop can actually be seen when it is reached; see the class
+ * list below for why those are not the same thing.
  *
  * Empty, it disappears entirely (`:empty` in `styles.css`), so a silent
  * composer has no stop in it and nothing to announce.
@@ -56,7 +58,14 @@ export function ComposerNotices({
 }) {
   return (
     <div
-      className="nessa-composer-notices outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      // No `outline-none` beside the focus utilities, though that is how the
+      // design system's own scroller is written: `outline-none` sets
+      // `--tw-outline-style: none`, and `outline-2` draws with
+      // `outline-style: var(--tw-outline-style)` — so the pair cancels and the
+      // ring never appears. A tab stop that cannot be seen when it is reached
+      // is worse than no tab stop. Without it the variable keeps its `solid`
+      // initial value and the ring is drawn.
+      className="nessa-composer-notices focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       // Grouped and named rather than left as a bare focusable box: the stop
       // exists to scroll this strip, and a stop that announces nothing is a
       // stop nobody can account for.

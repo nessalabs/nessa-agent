@@ -171,6 +171,27 @@ it("keeps every action in the strip, and in tab order behind the strip's own sto
   expect(region().getAttribute("aria-label")).toBe("Notices")
 })
 
+it("draws a ring on the stop it adds", async () => {
+  await React.act(async () => {
+    root.render(worstCase())
+  })
+  // Not a style test — jsdom has no stylesheet — but it does hold the one
+  // pairing that silently makes the ring inert, which this shipped with once.
+  // `outline-none` sets `--tw-outline-style: none`, and every `outline-*` width
+  // utility draws with `outline-style: var(--tw-outline-style)`, so the two
+  // together are a keyboard stop nobody can see when they reach it. The design
+  // system's own scroller carries the pair; this must not copy it.
+  const classes = [...region().classList]
+  expect(classes).not.toContain("outline-none")
+  expect(classes).toEqual(
+    expect.arrayContaining([
+      "focus-visible:outline-2",
+      "focus-visible:outline-offset-2",
+      "focus-visible:outline-ring",
+    ]),
+  )
+})
+
 it("leaves nothing behind when there is nothing to say", async () => {
   await React.act(async () => {
     root.render(
