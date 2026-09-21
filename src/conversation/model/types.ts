@@ -43,25 +43,43 @@ export type CommandFailure =
  * of the ones a command does. Folding the two together would make every switch
  * over a command's reasons answer for a read's, and the other way round.
  *
- * Deliberately three words, because the panel keeps polling and keeps showing
- * the last view whatever went wrong, so a word earns its place only by changing
- * what is said or whether a retry is offered:
+ * Two words, because the panel keeps polling and keeps showing the last view
+ * whatever went wrong, so a word earns its place only by changing what is said
+ * or whether a retry is offered:
  *
- * - `configuration-changed` is the only one that cannot come right. The
- *   conversation was created against an agent configuration the gateway no
- *   longer has, which nothing this window does can change, so it is the one that
- *   withdraws the retry.
- * - `busy` is the only one we can promise will come right on its own: the
- *   gateway had no room, or its agent was still starting. Both mean "not yet".
- * - `unavailable` is everything else, and claims nothing beyond a stale view and
- *   a panel still trying. `conversation_not_found` and `agent_not_configured`
- *   were considered for words of their own and left here: neither is permanent —
- *   a re-authenticated session or a reconfigured gateway makes both succeed —
- *   and neither changes what somebody does next. It is also the sentence a code
- *   this build has never heard of must get, and a sentence good enough for an
- *   unknown answer is good enough for a known one nobody acts on.
+ * - `configuration-changed` is the one the gateway will not serve again. The
+ *   conversation was created against an agent configuration it no longer has,
+ *   which nothing this window does can change, so it withdraws the retry and
+ *   outranks anything else the tab is saying.
+ * - `unavailable` is every other failed read, and claims nothing beyond a stale
+ *   view and a panel still asking.
+ *
+ * A third word for a *transient* failure was written and then withdrawn, because
+ * no code the gateway sends means that. `temporarily_unavailable` and
+ * `agent_startup_deadline` look like "not yet", and usually are — but when a
+ * failed launch cannot be confirmed stopped, `ConversationService` deliberately
+ * retains the conversation's slot (`retryable` is false at
+ * `conversation/application/service.rs`, and the slot is evicted only when it is
+ * true), so every later read is answered from the cached failure and the
+ * provider is never attempted again. Its own test asserts exactly that:
+ * `a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot`. The protocol
+ * text this panel's client is generated from says it too — "a launch whose
+ * process could not be confirmed stopped keeps that conversation blocked" — and
+ * an adapter panic during opening takes the same road to
+ * `temporarily_unavailable`. The gateway cannot tell the two apart in the code
+ * it sends, so neither can the panel, and promising that a conversation which
+ * may be blocked until the gateway restarts "catches up in a moment" would be a
+ * confident falsehood where the honest sentence costs nothing: `unavailable`
+ * already says the panel keeps trying, which is true of all of them.
+ *
+ * `conversation_not_found` and `agent_not_configured` were weighed too, and left
+ * with the rest: neither is permanent — a re-authenticated session or a
+ * reconfigured gateway makes both succeed — and neither changes what somebody
+ * does next. `unavailable` is also the word a code this build has never heard of
+ * must get, and a sentence good enough for an unknown answer is good enough for
+ * a known one nobody can act on.
  */
-export type ReadFailure = "configuration-changed" | "busy" | "unavailable"
+export type ReadFailure = "configuration-changed" | "unavailable"
 
 export type Receipt =
   "sending" | "accepted" | "queued" | "unknown" | "failed" | "delivered"

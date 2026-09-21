@@ -306,7 +306,15 @@ export const refreshConversation = createAsyncThunk<void, string, ThunkConfig>(
         throw new Error("Gateway returned a different conversation identity.")
       dispatch(viewReceived({ id, requestId, serverId, view }))
     } catch (error) {
-      dispatch(readFailed({ id, requestId, reason: readFailure(error) }))
+      const reason = readFailure(error)
+      // The tab keeps the word; this keeps what it was translated from. Two of
+      // these have no other way out: a code this build has no name for, and the
+      // identity check above — a gateway answering about a different
+      // conversation — which the word alone reports as an ordinary stale view.
+      // Reported every time rather than once, because each poll is a separate
+      // request and the cause behind one word can change between them.
+      console.warn("[nessa] a conversation was not refreshed", reason, error)
+      dispatch(readFailed({ id, requestId, reason }))
     }
   },
 )

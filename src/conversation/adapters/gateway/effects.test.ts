@@ -90,15 +90,13 @@ const reading = (error: unknown) =>
 
 it.each([
   // The gateway lost the configuration this conversation was created against:
-  // the one read failure asking again cannot cure.
+  // the one read failure this panel has a separate word for.
   ["conversation_configuration_changed", "configuration-changed"],
-  // Not yet, either way: no room for the request, or an agent still opening.
-  ["temporarily_unavailable", "busy"],
-  ["agent_startup_deadline", "busy"],
   // Known codes with nothing extra to tell somebody watching a stale transcript.
   ["conversation_not_found", "unavailable"],
   ["agent_not_configured", "unavailable"],
   ["conversation_storage_unavailable", "unavailable"],
+  ["conversation_capacity", "unavailable"],
   ["audit_unavailable", "unavailable"],
   ["invalid_request", "unavailable"],
 ] as const)(
@@ -107,9 +105,28 @@ it.each([
     // The gateway sends the code as the message too, which is exactly the
     // coincidence nothing may depend on: the message here names another code
     // entirely and only the typed one is read.
-    const error = await reading(new NessaRpcError(code, "conversation_capacity"))
+    const error = await reading(
+      new NessaRpcError(code, "conversation_configuration_changed"),
+    )
     expect(error).toBeInstanceOf(ConversationReadFailedError)
     expect(error).toMatchObject({ reason })
+  },
+)
+
+it.each([
+  ConversationErrorCode.TemporarilyUnavailable,
+  ConversationErrorCode.AgentStartupDeadline,
+] as const)(
+  "promises no recovery for %s, which the gateway also sends for a blocked conversation",
+  async (code) => {
+    // Both read as "not yet" and usually are. But `ConversationService` retains
+    // a conversation's slot when a failed launch could not be confirmed stopped
+    // — `a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot` asserts
+    // the provider is never attempted again — and an adapter panic during
+    // opening reaches `temporarily_unavailable` the same way. The gateway
+    // cannot tell the two apart in the code it sends, so neither may this.
+    const error = await reading(new NessaRpcError(code, code))
+    expect(error).toMatchObject({ reason: "unavailable" })
   },
 )
 
@@ -153,12 +170,14 @@ it("keeps a failed read from settling the next one, and translates each on its o
   // and answer for a request that was never made.
   const read = vi
     .fn()
-    .mockRejectedValueOnce(new NessaRpcError("temporarily_unavailable", "busy"))
+    .mockRejectedValueOnce(
+      new NessaRpcError("conversation_configuration_changed", "setup changed"),
+    )
     .mockResolvedValueOnce({ conversationId: "server" } as ConversationView)
   const effects = effectsOf(() => ({ conversation: { read } }) as unknown as NessaClient)
   const failed = effects.read("server").catch((error: unknown) => error)
   const following = effects.read("server")
-  expect(await failed).toMatchObject({ reason: "busy" })
+  expect(await failed).toMatchObject({ reason: "configuration-changed" })
   expect(await following).toEqual({ conversationId: "server" })
   expect(read).toHaveBeenCalledTimes(2)
 })

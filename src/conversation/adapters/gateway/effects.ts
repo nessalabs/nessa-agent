@@ -149,22 +149,24 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
  *
  * A separate table from `failures` because a read asks a different question of
  * the same codes. Nothing was submitted and nothing was changed, so "was it
- * applied" has no meaning here; all that is left is whether waiting will help,
- * which is what {@link ReadFailure} answers. Only codes that change that answer
- * are listed, and everything absent — `conversation_not_found`,
- * `agent_not_configured`, `conversation_storage_unavailable`, the socket's own
- * access and routing codes, a transport failure, a view the client would not
- * validate, and any code this build has never heard of — is `unavailable`.
+ * applied" has no meaning here; all that is left is whether the gateway will
+ * ever serve this conversation again, which is what {@link ReadFailure} answers.
+ * One code decides that, so one code is listed. Everything else — every other
+ * code the read path can raise, the socket's own access and routing codes, a
+ * transport failure, a view the client would not validate, and any code this
+ * build has never heard of — is `unavailable`.
  *
- * `agent_startup_deadline` sits with `temporarily_unavailable` rather than on
- * its own: a read waits for the conversation's agent to open, so a restored tab
- * polling a cold gateway meets it routinely, and the news is the same one the
- * gateway's own capacity refusal carries — not yet, ask again shortly.
+ * `temporarily_unavailable` and `agent_startup_deadline` are deliberately not
+ * here, although both read as "not yet". The gateway retains a conversation's
+ * slot when a failed launch could not be confirmed stopped, and answers every
+ * later read from the cached failure without attempting the provider again, so
+ * the same two codes also carry "blocked until this gateway restarts" — and the
+ * gateway cannot tell the two apart in the code it sends. See {@link
+ * ReadFailure} for the evidence. Nothing here may promise a recovery on their
+ * behalf.
  */
 const readFailures: Partial<Record<ConversationErrorCode, ReadFailure>> = {
   conversation_configuration_changed: "configuration-changed",
-  temporarily_unavailable: "busy",
-  agent_startup_deadline: "busy",
 }
 
 /**

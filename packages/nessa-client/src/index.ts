@@ -170,8 +170,8 @@ export type {
   ConversationPermissionSelectionState,
 } from "./generated/product.js"
 export { ConversationErrorCode } from "./generated/product.js"
+export { conversationErrorCode } from "./application/conversation-error-code.js"
 export {
-  conversationErrorCode,
   NessaConversationMutationError,
   NessaConversationControlError,
 } from "./application/conversation-mutation-error.js"

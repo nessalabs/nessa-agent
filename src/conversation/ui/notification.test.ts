@@ -102,15 +102,15 @@ describe("conversation notification", () => {
       retry: null,
     })
   })
-  it("says a gateway that is not ready yet will catch up, and offers the refresh", () => {
+  it("promises no recovery for a gateway that may never serve this conversation again", () => {
     const value = conversation("tab")
-    value.readError = "busy"
+    // `temporarily_unavailable` and `agent_startup_deadline` both land here, and
+    // the gateway sends both for a conversation whose slot it has deliberately
+    // retained. Nothing may say it will catch up.
+    value.readError = "unavailable"
     const notice = conversationNotice(value)
-    expect(notice).toMatchObject({
-      title: "Waiting for the gateway",
-      retry: { kind: "refresh" },
-    })
-    expect(notice?.description).toContain("catches up in a moment")
+    expect(notice?.description).not.toMatch(/catch(es)? up|in a moment|shortly|soon/)
+    expect(notice?.description).toContain("It keeps trying.")
   })
   it("says only that the view is stale when the read failed for a reason it cannot name", () => {
     const value = conversation("tab")
@@ -129,16 +129,54 @@ describe("conversation notification", () => {
   it("lets a command somebody asked for outrank a read that failed behind it", () => {
     const value = conversation("tab")
     // Both states at once: a control failed, and the refresh it triggered failed
-    // too. The command's sentence is the one somebody is waiting for, and the
-    // read's word must not replace or contradict it.
+    // too. The command's sentence is the one somebody is waiting for, and an
+    // ordinary stale view adds nothing to it.
     value.error = "The gateway would not take this action, so nothing was done."
     value.failure = "invalid-request"
-    value.readError = "configuration-changed"
+    value.readError = "unavailable"
     expect(conversationNotice(value)).toEqual({
       title: "Conversation needs attention",
       description: value.error,
       retry: { kind: "refresh" },
     })
+  })
+  it("lets a conversation the gateway will not serve again outrank every other notice", () => {
+    // The exception, and the reason it is one: every other notice on this tab
+    // ends in an action — refresh, resend, retry this submission — that a
+    // conversation the gateway has stopped serving cannot complete. A lost close
+    // acknowledgement asking for a refresh is the concrete case.
+    const lostAcknowledgement = conversation("tab")
+    lostAcknowledgement.error = "Close acknowledgement lost"
+    lostAcknowledgement.readError = "configuration-changed"
+    const unsentDraft = conversation("tab")
+    unsentDraft.error = "offline"
+    unsentDraft.draft = [{ type: "text", text: "draft" }]
+    unsentDraft.turns = [
+      { id: "turn", from: "user", content: [], receipt: "failed", error: "offline" },
+    ]
+    unsentDraft.readError = "configuration-changed"
+    const unknownDelivery = conversation("tab")
+    unknownDelivery.turns = [
+      {
+        id: "turn",
+        from: "user",
+        content: [],
+        receipt: "unknown",
+        executionId: "execution",
+      },
+    ]
+    unknownDelivery.readError = "configuration-changed"
+    for (const value of [lostAcknowledgement, unsentDraft, unknownDelivery])
+      expect(conversationNotice(value)).toEqual({
+        title: "Conversation setup changed",
+        description:
+          "This chat uses a different agent configuration. Start a new conversation with the current setup.",
+        retry: null,
+      })
+    // What became of each message is not lost with the notice slot: the turn
+    // keeps its own receipt, which the transcript renders beside it.
+    expect(unknownDelivery.turns[0]).toMatchObject({ receipt: "unknown" })
+    expect(unsentDraft.turns[0]).toMatchObject({ receipt: "failed" })
   })
   it("does not show a notification for a healthy conversation", () => {
     expect(conversationNotice(conversation("tab"))).toBeNull()

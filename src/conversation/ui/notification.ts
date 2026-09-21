@@ -14,10 +14,9 @@ export type ConversationNotice = {
  * What to tell somebody whose conversation could not be refreshed.
  *
  * A read is the panel's own polling rather than anything anybody asked for, so
- * every one of these says the same two things first: the transcript is older
- * than the gateway's, and Nessa is still asking. What the reason changes is
- * whether asking again is worth anything — which is why a configuration change
- * is the one that offers no retry. Total over the vocabulary, so a word added to
+ * both of these say the same two things first: the transcript is older than the
+ * gateway's, and Nessa is still asking. What the reason changes is whether
+ * asking again is worth anything. Total over the vocabulary, so a word added to
  * it has to be answered here.
  */
 function readNotice(reason: ReadFailure): ConversationNotice {
@@ -32,15 +31,9 @@ function readNotice(reason: ReadFailure): ConversationNotice {
           "This chat uses a different agent configuration. Start a new conversation with the current setup.",
         retry: null,
       }
-    case "busy":
-      return {
-        title: "Waiting for the gateway",
-        description:
-          "The gateway is not ready to answer for this conversation yet, so what is shown may be out of date. Nessa keeps asking, and this normally catches up in a moment.",
-        retry: { kind: "refresh" },
-      }
     // Everything else, including a cause this build has no name for. It claims
-    // only what is certainly true of all of them.
+    // only what is certainly true of all of them — deliberately not that the
+    // gateway will come back, which no code it sends actually means.
     case "unavailable":
       return {
         title: "Conversation not refreshed",
@@ -59,13 +52,22 @@ function readNotice(reason: ReadFailure): ConversationNotice {
  * command somebody asked for, `readError` for the panel's own polling. Neither
  * is a message, and nothing here compares one against a wire code.
  *
- * A command outranks a read. It is the thing somebody was waiting on, and a read
- * that failed behind it adds only that the view is stale — which the command's
- * own sentence is already explaining.
+ * A command otherwise outranks a read. It is the thing somebody was waiting on,
+ * and a read that failed behind it adds only that the view is stale — which the
+ * command's own sentence is already explaining.
  */
 export function conversationNotice(
   conversation: Conversation,
 ): ConversationNotice | null {
+  // Except for the one read failure that is about the conversation rather than
+  // about a request: the gateway will not serve this one again, so every other
+  // notice here ends in an action — refresh, resend, retry this submission —
+  // that cannot now succeed. A lost close acknowledgement inviting a refresh is
+  // the case that makes it concrete: the refresh it asks for is exactly what is
+  // no longer possible. What became of each message is not lost with the slot;
+  // the turn keeps its own receipt, and the transcript still shows it.
+  if (conversation.readError === "configuration-changed")
+    return readNotice("configuration-changed")
   const unknown = conversation.turns.find(
     (turn) => turn.from === "user" && turn.receipt === "unknown" && turn.executionId,
   )
