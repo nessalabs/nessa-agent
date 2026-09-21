@@ -83,6 +83,18 @@ pub enum NotAttached {
     /// The presented ticket was minted, was never spent, and has run out of
     /// time. Choosing the file again mints a new one.
     TicketExpired,
+    /// A dropped folder holds nothing to attach. Its own reason because it is
+    /// the one folder outcome that is not a failure of anything: the folder
+    /// was read perfectly well and there was nothing in it.
+    FolderEmpty,
+    /// A dropped folder holds more files than a draft can, or is deep enough
+    /// that the walk gave up before finding them. One bound rather than two,
+    /// because the advice is the same either way — choose the files inside it
+    /// — and a person cannot act on which of the two they hit.
+    FolderTooLarge,
+    /// A dropped folder could not be listed. The files inside it may be
+    /// perfectly readable, so the advice is to choose them directly.
+    FolderUnreadable,
 }
 
 /// Which file, and why it is not being attached.
@@ -153,6 +165,35 @@ impl FileNotAttached {
             reason: NotAttached::NotARegularFile,
             shown: Some(name.to_string()),
             detail: Some(what.to_string()),
+        }
+    }
+
+    /// A dropped folder with nothing in it.
+    pub(super) fn folder_empty() -> Self {
+        Self {
+            reason: NotAttached::FolderEmpty,
+            shown: None,
+            detail: None,
+        }
+    }
+
+    /// A dropped folder past one of the walk's two bounds. `name` is whatever
+    /// the walk was looking at when it stopped, which is the most useful thing
+    /// it knows.
+    pub(super) fn folder_too_large(name: &str) -> Self {
+        Self {
+            reason: NotAttached::FolderTooLarge,
+            shown: Some(name.to_string()),
+            detail: None,
+        }
+    }
+
+    /// A dropped folder that would not list.
+    pub(super) fn folder_unreadable(name: &str, error: &std::io::Error) -> Self {
+        Self {
+            reason: NotAttached::FolderUnreadable,
+            shown: Some(name.to_string()),
+            detail: Some(error.to_string()),
         }
     }
 
@@ -255,7 +296,7 @@ mod tests {
     /// them nothing at all.
     /// Every reason, and the name it crosses the seam as. Written once so the
     /// two tests below cannot disagree about what the seam carries.
-    const EVERY_REASON: [(&NotAttached, &str); 12] = [
+    const EVERY_REASON: [(&NotAttached, &str); 15] = [
         (&NotAttached::PickerUnavailable, "picker-unavailable"),
         (&NotAttached::PathNotText, "path-not-text"),
         (&NotAttached::PathNamesNoFile, "path-names-no-file"),
@@ -268,6 +309,9 @@ mod tests {
         (&NotAttached::TicketUnknown, "ticket-unknown"),
         (&NotAttached::TicketAlreadyUsed, "ticket-already-used"),
         (&NotAttached::TicketExpired, "ticket-expired"),
+        (&NotAttached::FolderEmpty, "folder-empty"),
+        (&NotAttached::FolderTooLarge, "folder-too-large"),
+        (&NotAttached::FolderUnreadable, "folder-unreadable"),
     ];
 
     #[test]

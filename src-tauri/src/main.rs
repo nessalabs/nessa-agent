@@ -158,6 +158,13 @@ fn main() {
             // leave the panel lifted over the menu bar for the rest of the
             // session — the cleanup below only runs on an actual destroy.
             if window.label() == panel::MAIN_WINDOW {
+                // The drag belongs to the host now: `dragDropEnabled` is on, so
+                // the webview receives no drop of any kind and the paths only
+                // exist here. See `attachments::dropping` for what that buys
+                // and what it costs.
+                if let WindowEvent::DragDrop(drag) = event {
+                    attachments::dropped_on_panel(window.app_handle(), drag);
+                }
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     // With a tray, close dismisses the panel. Without one — Linux
                     // with no StatusNotifierItem — close has to end the process,

@@ -63,6 +63,38 @@ there with a reason that says so. A message naming files is recorded before it
 is admitted, with the paths, the verified caller and the submission it belongs
 to; an audit sink that cannot take that record refuses the send.
 
+**The host owns the drag, so a dropped file is a picked file.** The gesture
+stops mattering only if it stops mattering for *every* gesture, and a webview
+cannot learn a dropped file's path: a DOM `File` deliberately carries none.
+Tauri can, so `dragDropEnabled` is on and the drop arrives in the host, which
+describes the paths and mints their tickets exactly as it does for the picker
+and hands the page `ChosenFile`s. The page never receives a path and hands it
+back — that would make a path a capability again and leave the ticket desk
+decorative.
+
+**What that flag costs, established rather than assumed.** Turning it on takes
+away *every* HTML5 drag event, not only the ones carrying files:
+
+- `wry-0.55.1/src/wkwebview/drag_drop.rs:44-50` calls `super` — the real
+  `WKWebView` handling, which is what produces the DOM events — only when the
+  registered listener returns `false`.
+- `tauri-runtime-wry-2.11.4/src/lib.rs:4862-4896` registers a listener that ends
+  in an unconditional `true`.
+- `tauri-runtime-2.11.3/src/window.rs:97-119` shows `DragDropEvent` carrying
+  `paths` and `position` and nothing else.
+
+So with the flag on, `draggingEntered:` and `performDragOperation:` never reach
+`WKWebView`; dragged text, an image dragged off a web page, and a dropped
+folder's traversal all stop working, and Tauri's event cannot give any of them
+back. All three worked before, so all three are bought back in the host: the
+drag pasteboard is snapshotted when the drag *enters* — the session is
+certainly alive then, where at the drop it is racing its own teardown — and a
+dropped folder is walked by the host under the same two bounds the page's walk
+already used. `dragDropEnabled` was set to `false` in #34 for the opposite
+reason, so that the page could handle drops at all; `tauri.conf.json` is strict
+JSON and cannot say so beside the flag, which is why it is said here and in
+`src-tauri/src/attachments/dropping.rs`.
+
 ## Alternatives considered
 
 **Upload the document and inline it as `embeddedContext`.** This works, and for
@@ -77,6 +109,23 @@ costly in practice, or if the gateway ever stops being local.
 **Send a `resource` with a `blob`.** Never an option: discarded silently at
 `acp-agent.js:7038`. Recorded here so nobody rebuilds it from the shape of the
 protocol.
+
+**Leave `dragDropEnabled` off and match a dropped `File` to a path.** Rejected
+on sight. The page would have to guess which file on disk a name, size and
+timestamp referred to, and a guess that is usually right is the worst possible
+version of this feature: it would send the agent at the wrong file
+occasionally, silently, and with a path the person would have no reason to
+doubt when the permission prompt showed it to them.
+
+**Read the drag pasteboard at the drop rather than when the drag enters.** The
+obvious place, and the wrong one. Tauri posts the drop through its event proxy
+(`tauri-runtime-wry-2.11.4/src/lib.rs:4888-4894`) rather than calling any
+handler inside `performDragOperation:`, so a reader runs at least one run-loop
+iteration after the drag session has begun tearing down. The payload would
+simply be missing when that race was lost, which is a bug that reproduces on
+somebody else's machine and never on yours. `Enter` has no race: it fires while
+the pointer is inside the window, and the drag pasteboard holds the same
+contents for the whole session.
 
 **Validate the path: stat it, resolve symlinks, require the workspace.** Rejected
 on all three counts. A stat here answers a question at the wrong moment — the

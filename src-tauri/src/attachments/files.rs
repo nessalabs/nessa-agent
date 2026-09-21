@@ -147,6 +147,16 @@ pub trait ChosenFiles: Send + Sync {
     /// said instead.
     fn look(&self, path: &Path) -> std::io::Result<OnDisk>;
 
+    /// What a directory holds, one level down, in whatever order the
+    /// filesystem gives them.
+    ///
+    /// Here because a dropped folder is the same filesystem answering about
+    /// the same path at the same moment as the `stat` that said it was a
+    /// directory. A browser answers this one through `webkitGetAsEntry`, which
+    /// a webview that no longer receives the drop cannot call; see
+    /// [`super::dropping`].
+    fn entries(&self, path: &Path) -> std::io::Result<Vec<std::path::PathBuf>>;
+
     /// The file's bytes, reading no more than `most` of them.
     ///
     /// Stopping at `most` is the contract, not a hint: the caller asks for one
@@ -227,6 +237,17 @@ impl ChosenFiles for FilesOnDisk {
             kind: Kind::of(&found),
             size: found.len(),
         })
+    }
+
+    fn entries(&self, path: &Path) -> std::io::Result<Vec<std::path::PathBuf>> {
+        // Sorted, so a folder attaches in the same order twice. `read_dir`
+        // hands back whatever order the filesystem keeps, which on some of
+        // them is insertion order and on others is a hash.
+        let mut held: Vec<std::path::PathBuf> = std::fs::read_dir(path)?
+            .map(|entry| entry.map(|entry| entry.path()))
+            .collect::<std::io::Result<_>>()?;
+        held.sort();
+        Ok(held)
     }
 
     fn bytes(&self, path: &Path, most: u64) -> std::io::Result<Vec<u8>> {

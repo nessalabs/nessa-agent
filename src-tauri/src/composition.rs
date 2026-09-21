@@ -38,7 +38,9 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Manager};
 
-use crate::attachments::{self, AttachmentTickets, ChosenFiles, ContentTypes, FilePicker};
+use crate::attachments::{
+    self, AttachmentTickets, ChosenFiles, ContentTypes, DragBoard, FilePicker,
+};
 use crate::gateway::{self, application::Gateway};
 use crate::local_data;
 use crate::settings::{SettingsFile, SettingsStore};
@@ -86,6 +88,12 @@ pub struct HostDependencies {
     /// desk and presented to another is a ticket nobody has heard of. It is
     /// what stops the webview naming a path of its own to read.
     pub tickets: Arc<dyn AttachmentTickets>,
+    /// What the drag currently over the panel is carrying besides files.
+    ///
+    /// Held here because it is state the host keeps between two window events
+    /// — the snapshot taken when a drag enters, read when it drops. See
+    /// `attachments::dragged` for why it cannot be read at the drop instead.
+    pub dragging: Arc<DragBoard>,
     /// The registered background service, in the builds that have one.
     ///
     /// `None` in a development build: the gateway is a packaged runtime that a
@@ -135,6 +143,7 @@ impl HostDependencies {
             files: attachments::chosen_files(),
             types: attachments::content_types(),
             tickets: attachments::attachment_tickets(),
+            dragging: attachments::drag_board(),
             gateway,
             #[cfg(desktop)]
             releases: updater::release_source(app),

@@ -134,6 +134,24 @@ pub(super) async fn chosen_attachments(
         Picked::Files(paths) => paths,
     };
 
+    describe_each(paths, files, types, tickets, wait).await
+}
+
+/// Describe every path in `paths`, in order, or refuse the lot.
+///
+/// Shared by the picker and by [`super::dropping`], and shared deliberately:
+/// the whole product rule is that a file's type decides its route and the
+/// gesture never does, so a file dropped on the panel and the same file
+/// chosen with `+` must be described by the same code asking the same four
+/// outside things in the same order. Two loops would be two chances to
+/// disagree, which is the defect this feature has already had once.
+pub(super) async fn describe_each(
+    paths: Vec<std::path::PathBuf>,
+    files: Arc<dyn ChosenFiles>,
+    types: Arc<dyn ContentTypes>,
+    tickets: Arc<dyn AttachmentTickets>,
+    wait: Duration,
+) -> Result<Vec<ChosenFile>, FileNotAttached> {
     let mut attached = Vec::with_capacity(paths.len());
     for path in paths {
         let described = {

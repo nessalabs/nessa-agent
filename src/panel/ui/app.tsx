@@ -50,6 +50,7 @@ import { useFileAttachments } from "./use-file-attachments"
 import { useAttachmentUploads } from "./use-attachment-uploads"
 import { useFolderDrop } from "./use-folder-drop"
 import { useContentDrop } from "./use-content-drop"
+import { useHostDrop } from "./use-host-drop"
 import { ChatAttachmentTile } from "@nessa-ui/react/chat-bubbles"
 
 import { AddAttachmentMenu } from "./add-attachment-menu"
@@ -167,6 +168,18 @@ export function App({
     addImageUrl: attachments.addImageUrl,
     focusComposer,
     pasteAttachment,
+  })
+  // Two sources, one at a time. In the app the host owns the drag — it is the
+  // only thing that can learn a dropped file's path — and the page receives no
+  // drop events at all, so `contentDrop`'s handlers never fire. In a browser
+  // there is no host, the page keeps its own drops, and nothing below fires.
+  // Neither is gated on the other: each is silent where the other is live.
+  const hostDrop = useHostDrop({
+    addChosenFiles: (chosen) => void attachments.addChosenFiles(chosen),
+    addImageUrl: (url) => void attachments.addImageUrl(url),
+    focusComposer,
+    pasteAttachment,
+    refuse: attachments.refuse,
   })
   /**
    * Show a conversation, whatever made it the one to show.
@@ -306,7 +319,7 @@ export function App({
         <div
           ref={edge.panelRef}
           data-nessa-root
-          data-content-dragging={contentDrop.dragging || undefined}
+          data-content-dragging={contentDrop.dragging || hostDrop.dragging || undefined}
           {...contentDrop.handlers}
           data-surface={surface}
           data-host={host.kind}

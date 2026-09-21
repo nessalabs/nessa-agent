@@ -322,6 +322,9 @@ export const hostRefusals = [
   "ticket-unknown",
   "ticket-already-used",
   "ticket-expired",
+  "folder-empty",
+  "folder-too-large",
+  "folder-unreadable",
 ] as const
 
 export function pickerRefusal(error: unknown): AttachmentRefusal {
@@ -348,6 +351,16 @@ export function pickerRefusal(error: unknown): AttachmentRefusal {
     case "ticket-already-used":
     case "ticket-expired":
       return { reason: "file-must-be-chosen-again" }
+    // A dropped folder, walked by the host now that the page receives no drop
+    // and so cannot call `webkitGetAsEntry`. Three host reasons onto the three
+    // words this panel already had for them, with the same sentences: the walk
+    // moved, what it can say did not.
+    case "folder-empty":
+      return { reason: "empty-folder" }
+    case "folder-too-large":
+      return { reason: "folder-too-large" }
+    case "folder-unreadable":
+      return { reason: "unreadable-folder" }
     // The host will not read more than the panel would hold. Said with the
     // same words a drop of the same file gets, because it is the same bound.
     case "file-too-large":
@@ -454,19 +467,22 @@ function draftFilesNotice(
     }
   }
   // A file that is neither carried as an image nor nameable as a path cannot
-  // go at all. It arrived by a route that does not say where a file is, which
-  // is a drop or a paste in the app, and every route in a browser.
+  // go at all, and in the app there is no longer any way to acquire one: the
+  // host owns the drag as well as the picker, so a dropped file arrives with
+  // its path exactly as a picked one does. What is left is a paste, which
+  // carries bytes and no location, and a browser, where nothing has a location.
   //
-  // So the sentence and the action both turn on whether there is a picker to
-  // send somebody to. Offering one where the answer would be the browser's own
-  // file input is offering a loop: it hands back another file with no path and
-  // the same refusal appears again.
+  // The sentence used to send everybody to `+`, which was the right advice
+  // when a drop could not say where a file was and is now wrong twice over: in
+  // the app the drop already did, and in a browser `+` is the page's own file
+  // input and hands back another file with no path.
   if (files.some((file) => !file.image && !file.linked))
     return canChoosePaths
       ? {
           kind: "draft-files",
           title: "File can't be sent",
-          description: "Nessa only knows where a file is when you choose it with +.",
+          description:
+            "Pasted bytes have no location, and the agent needs one. Drop the file on Nessa, or choose it with +.",
           action: { kind: "choose-files" },
         }
       : {

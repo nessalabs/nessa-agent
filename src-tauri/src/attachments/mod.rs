@@ -126,6 +126,8 @@ mod choosing;
 mod content_type;
 #[cfg(test)]
 mod doubles;
+mod dragged;
+mod dropping;
 mod files;
 mod picker;
 mod reading;
@@ -150,6 +152,8 @@ pub use choosing::{
     choose_attachment_files,
 };
 pub use content_type::{content_types, ContentTypes};
+pub use dragged::{drag_board, DragBoard};
+pub use dropping::dropped_on_panel;
 pub use files::{chosen_files, ChosenFiles};
 pub use picker::{file_picker, FilePicker};
 pub use reading::{

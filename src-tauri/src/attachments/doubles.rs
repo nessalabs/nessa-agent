@@ -11,6 +11,7 @@
 //! claimed, a pipe, a filesystem that never answers, a random source that has
 //! failed, and a ticket presented twice or too late.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
@@ -59,6 +60,11 @@ pub struct FakeFiles {
     stall: Duration,
     asked: Mutex<Vec<PathBuf>>,
     opened: Mutex<Vec<(PathBuf, u64)>>,
+    /// What each directory holds, for the folder walk. Empty by default: most
+    /// tests here are about one file and have no tree to stage.
+    held: HashMap<PathBuf, Vec<PathBuf>>,
+    /// What each path is, where it differs from this double's one answer.
+    kinds: HashMap<PathBuf, Kind>,
 }
 
 impl FakeFiles {
@@ -131,7 +137,29 @@ impl FakeFiles {
             stall: Duration::ZERO,
             asked: Mutex::new(Vec::new()),
             opened: Mutex::new(Vec::new()),
+            held: HashMap::new(),
+            kinds: HashMap::new(),
         }
+    }
+
+    /// A tree: what each directory holds, and what each path is. Paths not
+    /// named here are ordinary files of the size this double was built with,
+    /// which keeps a folder test to the few paths it is actually about.
+    pub fn tree(mut self, held: &[(&str, &[&str])], kinds: &[(&str, Kind)]) -> Self {
+        self.held = held
+            .iter()
+            .map(|(at, entries)| {
+                (
+                    PathBuf::from(at),
+                    entries.iter().map(PathBuf::from).collect(),
+                )
+            })
+            .collect();
+        self.kinds = kinds
+            .iter()
+            .map(|(at, kind)| (PathBuf::from(at), *kind))
+            .collect();
+        self
     }
 
     /// Every path that was looked at.
@@ -152,7 +180,29 @@ impl ChosenFiles for FakeFiles {
             .expect("the paths asked about")
             .push(path.to_path_buf());
         std::thread::sleep(self.stall);
-        self.looked.map_err(Error::from)
+        match self.kinds.get(path) {
+            Some(kind) => self.looked.map(|on_disk| OnDisk {
+                kind: *kind,
+                ..on_disk
+            }),
+            None => self.looked,
+        }
+        .map_err(Error::from)
+    }
+
+    fn entries(&self, path: &Path) -> std::io::Result<Vec<PathBuf>> {
+        self.asked
+            .lock()
+            .expect("the paths asked about")
+            .push(path.to_path_buf());
+        std::thread::sleep(self.stall);
+        match self.held.get(path) {
+            Some(entries) => Ok(entries.clone()),
+            // A directory this double was not told about reads as empty rather
+            // than as an error: a test that stages one folder should not have
+            // to stage every leaf it does not care about.
+            None => self.looked.map(|_| Vec::new()).map_err(Error::from),
+        }
     }
 
     fn bytes(&self, path: &Path, most: u64) -> std::io::Result<Vec<u8>> {

@@ -19,6 +19,8 @@ const HOST_EVENTS = {
   updateProgress: "nessa://update-progress",
   updateFailed: "nessa://update-failed",
   linkNotOpened: "nessa://link-not-opened",
+  attachmentDropped: "nessa://attachment-dropped",
+  attachmentDragging: "nessa://attachment-dragging",
 } as const
 
 /**
@@ -297,6 +299,79 @@ export async function chooseAttachmentFiles(): Promise<ChosenFile[] | null> {
   if (!inTauri) return null
   const { invoke } = await import("@tauri-apps/api/core")
   return invoke<ChosenFile[]>("choose_attachment_files")
+}
+
+/**
+ * What a drag put on the panel, as the host describes it.
+ *
+ * A drag carries one of the two: `files` for a drag of files, `text` for a
+ * drag of anything else. `refused` says why there is neither.
+ */
+export interface DroppedOnPanel {
+  /**
+   * Files, in the order the operating system gave them, each already described
+   * and ticketed exactly as {@link chooseAttachmentFiles} describes a picked
+   * one — so a dragged file and a picked file are the same thing by the time
+   * the panel sees them, which is the whole product rule.
+   */
+  files: ChosenFile[]
+  /**
+   * What a drag of text or of a web-page image carried, under the names
+   * `DataTransfer` uses, so the panel's existing readers take it unchanged.
+   */
+  text: { plain: string; uriList: string; html: string }
+  /**
+   * Why nothing was attached, in `attachments::FileNotAttached`'s own shape. A
+   * drop is refused whole or not at all.
+   *
+   * `unknown` on purpose: the panel reads it with `pickerRefusal`, which is
+   * the one place that knows the host's reason names, and which takes whatever
+   * arrives rather than trusting a second copy of that vocabulary to have
+   * stayed in step. The same value reaches it here as a payload and from the
+   * picker as a rejection.
+   */
+  refused: unknown
+}
+
+/**
+ * Be told when something is dropped on the panel.
+ *
+ * **The page no longer receives drops of its own.** `dragDropEnabled` is on,
+ * which is the only way a dropped file's path can be known at all, and it costs
+ * the webview every HTML5 drag event — not only the ones carrying files. So
+ * this is the sole source of drops, and everything that used to arrive through
+ * `DataTransfer` arrives here instead.
+ *
+ * **The page is never asked to name a path.** The host describes the dropped
+ * paths itself and mints their tickets, so a dropped file reaches the page in
+ * the same shape a picked one does and the page still cannot ask the host to
+ * open something nobody dropped.
+ */
+export async function onAttachmentDropped(
+  handler: (dropped: DroppedOnPanel) => void,
+): Promise<() => void> {
+  if (!inTauri) return () => {}
+  const { listen } = await import("@tauri-apps/api/event")
+  return listen<DroppedOnPanel>(HOST_EVENTS.attachmentDropped, ({ payload }) =>
+    handler(payload),
+  )
+}
+
+/**
+ * Be told while a drag is over the panel, so the drop target can be drawn.
+ *
+ * The page used to know this from its own `dragenter` and `dragleave`. It
+ * receives neither now, and without the host saying so the panel would accept
+ * a dropped file perfectly well while giving no sign beforehand that it would.
+ */
+export async function onAttachmentDragging(
+  handler: (dragging: boolean) => void,
+): Promise<() => void> {
+  if (!inTauri) return () => {}
+  const { listen } = await import("@tauri-apps/api/event")
+  return listen<boolean>(HOST_EVENTS.attachmentDragging, ({ payload }) =>
+    handler(payload),
+  )
 }
 
 /**

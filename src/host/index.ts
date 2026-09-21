@@ -17,6 +17,8 @@ export {
 export {
   availableUpdate,
   chooseAttachmentFiles,
+  onAttachmentDragging,
+  onAttachmentDropped,
   closeSetupWindow,
   finishSetupWindow,
   retrySetupRecord,
@@ -43,6 +45,7 @@ export {
   windowSurface,
   loadShortcuts,
   type ChosenFile,
+  type DroppedOnPanel,
   type Downloaded,
   type LinkNotOpened,
   type Release,

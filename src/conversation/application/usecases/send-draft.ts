@@ -94,12 +94,12 @@ export function imageRefusalMessage(
   switch (refusal.kind) {
     case "unsupported-file":
       // A file that is not an image and that nothing could say the location of.
-      // In the app that is a file dropped or pasted rather than chosen, and the
-      // sentence names the route that works rather than blaming the surface. In
-      // a browser there is no such route, and saying so is the only honest
-      // answer left.
+      // In the app that is now only a paste: the host owns the drag as well as
+      // the picker, so a dropped file arrives with its path like a picked one.
+      // In a browser nothing has a location and there is no route at all,
+      // which is the only honest thing to say there.
       return canChoosePaths
-        ? `"${refusal.name}" cannot be sent: Nessa only knows where a file is when you choose it with +. Attach it that way, or remove it to send.`
+        ? `"${refusal.name}" cannot be sent: pasted bytes have no location, and the agent needs one. Drop the file on Nessa or choose it with +, or remove it to send.`
         : `"${refusal.name}" cannot be sent: a browser never says where a file is, and the agent needs that. Remove it to send, or send it from the Nessa app.`
     case "upload-failed":
       return `"${refusal.name}" did not upload; its tile says why. Retry it there or remove it, then send again.`

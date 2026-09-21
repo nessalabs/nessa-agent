@@ -117,7 +117,8 @@ describe("what the composer says about a draft's files", () => {
       {
         kind: "draft-files",
         title: "File can't be sent",
-        description: "Nessa only knows where a file is when you choose it with +.",
+        description:
+          "Pasted bytes have no location, and the agent needs one. Drop the file on Nessa, or choose it with +.",
         // Offered, because in the Nessa app it genuinely is the way out: the
         // same file chosen rather than dropped is sendable.
         action: { kind: "choose-files" },
@@ -386,13 +387,18 @@ describe("why something was not attached", () => {
     // macOS package, which is a directory the picker shows as a file — told
     // somebody the picker had not opened, when it demonstrably had.
     const pickerDidNotOpen = refusalNotice({ reason: "picker-unavailable" }, true)
+    // A folder with nothing in it, and one too big to read, are the two the
+    // person cannot answer by choosing again: there is nothing inside the one
+    // and too much inside the other. Every other reason offers the picker.
+    const nothingToPress = ["folder-empty", "folder-too-large"]
     for (const reason of hostRefusals) {
       const refusal = pickerRefusal({ reason, shown: "thing.key", detail: null })
       const notice = refusalNotice(refusal, true)
-      // Every one has words of its own, and an action, because every one of
-      // them is answered by choosing again.
+      // Every one has words of its own.
       expect(notice.description.length).toBeGreaterThan(0)
-      expect(notice.action).toEqual({ kind: "choose-files" })
+      expect(notice.action, reason).toEqual(
+        nothingToPress.includes(reason) ? null : { kind: "choose-files" },
+      )
       if (reason === "picker-unavailable") continue
       // And none of them is told as the one that means something else.
       expect([reason, notice.title]).not.toEqual([reason, pickerDidNotOpen.title])
