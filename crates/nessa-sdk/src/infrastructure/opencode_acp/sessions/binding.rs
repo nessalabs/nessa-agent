@@ -105,17 +105,23 @@ use tokio::process::Command;
 ///
 /// **A launch writes to the machine before any tool runs.** Two effects sit
 /// outside permission evaluation entirely, so no policy reaches them and
-/// nothing here records them. Every config directory in the search is created
-/// and given a `.gitignore` on every config load — under this launch that is
-/// `$XDG_CONFIG_HOME/opencode` and `$HOME/.opencode`, so a person who has
-/// never run Opencode has the directories made for them by Nessa starting it.
-/// Then a detached `npm install` of `@opencode-ai/plugin` runs into each of
-/// them, which writes `node_modules`, a `package.json` and a lockfile and
-/// makes real registry requests. Lifecycle scripts are off upstream and a
-/// directory that cannot be written is a no-op there, but neither of those is
-/// a switch and there is none to set: `OPENCODE_PURE` empties the plugin list
-/// and does not touch this path. Named because this section is where a reader
-/// finds out what a launch costs, not because anything here can prevent it.
+/// nothing here records them. Every directory the config search *returns* is
+/// created and given a `.gitignore`, once per instance rather than on every
+/// read of the configuration. Under this launch the search returns
+/// `$XDG_CONFIG_HOME/opencode` unconditionally, and `$HOME/.opencode` only on
+/// a machine that already has it — the walk up from `$HOME` keeps a path only
+/// where one exists — so a person who has never run Opencode has that single
+/// directory made for them by Nessa starting it. Then a detached
+/// `npm install` of `@opencode-ai/plugin` runs into each directory the search
+/// returned, which writes `node_modules`, a `package.json` and a lockfile and
+/// makes real registry requests. Separately and earlier, the binary creates
+/// seven directories of its own under the XDG roots and the system temporary
+/// directory as its global module loads, before any configuration is read at
+/// all. Lifecycle scripts are off upstream and a directory that cannot be
+/// written is a no-op there, but neither of those is a switch and there is
+/// none to set: `OPENCODE_PURE` empties the plugin list and does not touch
+/// this path. Named because this section is where a reader finds out what a
+/// launch costs, not because anything here can prevent it.
 ///
 /// One rule is appended after this policy: Opencode gives every agent
 /// `external_directory` access to its own `tool-output` directory unless the
@@ -304,6 +310,18 @@ impl OpencodeAcpProvider {
             // binary answers offline from the snapshot built into it, so the
             // request buys a read-and-plan session nothing and is one more
             // thing a launch does that nobody asked for.
+            //
+            // What this pins along with the binary is the list `session/new`
+            // offers: the catalogue is read from the machine's cache first,
+            // then from the snapshot, and suppressing the hourly refresh means
+            // neither is ever renewed. `configuration::offers` requires an
+            // exact match, so a model id retired or renamed upstream after the
+            // pinned build stops being offered and every session is refused
+            // rather than healing itself on the next refresh. That is
+            // fail-closed and the refusal names the cause, and `data/models.json`
+            // would need the same edit regardless — but no test here can go red
+            // when it happens, because the contract fixture states the offered
+            // list rather than asking a live Opencode for it.
             .env("OPENCODE_DISABLE_MODELS_FETCH", "1")
             // The pinned release is the tested one, so a copy that moves on
             // its own is a version this profile's `initialize` check would
