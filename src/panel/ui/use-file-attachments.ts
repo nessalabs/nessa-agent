@@ -57,19 +57,32 @@ export function useFileAttachments(
     files: { name: string; mimeType: string; previewUrl?: string }[]
   } | null>(null)
   /**
-   * Files the host is making readable, by name, against the conversation they
-   * were attached to.
+   * Files the host is making readable: its identity for each one, and what to
+   * put on the tile.
+   *
+   * **Keyed on the host's identity, never on the name.** Two folders can each
+   * hold a `report.pdf`, and a map keyed on the name had one entry for both:
+   * the first to settle took the other's tile away, and the draft became
+   * sendable while the second was still being fetched.
    *
    * Their own state rather than `pending` above, which one call owns from
    * beginning to end. These arrive and leave on the host's schedule, one event
-   * each way, and a file that is still being fetched while somebody opens
-   * another tab has to stay with the draft it belongs to — so the conversation
-   * is stamped on when the host says the file needs a moment, not read later.
-   *
-   * A `Map` because two files can be readied at once and each settles on its
-   * own; a count would not know which tile to take away.
+   * each way.
    */
-  const [readying, setReadying] = React.useState<Map<string, string>>(new Map())
+  const [readying, setReadying] = React.useState<
+    Map<string, { name: string; conversationId: string }>
+  >(new Map())
+  /**
+   * Which conversation each batch of work belongs to.
+   *
+   * Recorded when the *gesture* happens — the drop, or the moment `+` is
+   * pressed — and not when the host finally speaks, which can be three
+   * quarters of a minute later. Reading the open tab then put the tile over
+   * whichever conversation somebody had since switched to: it blocked *that*
+   * draft's send for forty-five seconds for a file it was never going to get,
+   * while the draft the file was actually joining showed nothing at all.
+   */
+  const batches = React.useRef(new Map<string, string>())
   const download = React.useRef<AbortController | null>(null)
   const busyRef = React.useRef(false)
   const pendingConversation = React.useRef<string | null>(null)
@@ -106,23 +119,36 @@ export function useFileAttachments(
       download.current?.abort()
     }
   }, [])
-  // The conversation is read at the moment the host speaks, not when the
-  // subscription was made: a drop lands in whichever tab is open then.
   const activeId = React.useRef(chat.active.id)
   React.useLayoutEffect(() => {
     activeId.current = chat.active.id
   })
+  /**
+   * The conversation a batch belongs to. The host's identity for a waiting
+   * file begins with its batch, so the tile finds its draft through the
+   * gesture that started it rather than through whatever is on screen now.
+   *
+   * A batch nobody recorded falls back to the open tab, which is the best
+   * guess available and is what a `+` selection wants anyway: that gesture
+   * cannot happen in a tab the person is not looking at.
+   */
+  const conversationOf = (id: string) =>
+    batches.current.get(id.split(":")[0] ?? "") ?? activeId.current
+  /** Remember which draft a gesture landed on, at the moment it landed. */
+  const beganBatch = (batch: string, conversationId: string) => {
+    batches.current.set(batch, conversationId)
+  }
   React.useEffect(() => {
     let live = true
-    const subscription = onAttachmentReadying(({ name, readying: waiting }) => {
+    const subscription = onAttachmentReadying(({ id, name, readying: waiting }) => {
       if (!live) return
       setReadying((current) => {
         const next = new Map(current)
         // Settling always removes, whatever the outcome was: the sentence for
         // a file that is not coming is the refusal's, and a tile left spinning
         // beside it would be the panel disagreeing with itself.
-        if (waiting) next.set(name, activeId.current)
-        else next.delete(name)
+        if (waiting) next.set(id, { name, conversationId: conversationOf(id) })
+        else next.delete(id)
         return next
       })
     })
@@ -420,7 +446,7 @@ export function useFileAttachments(
      */
     isPending: (conversationId: string) =>
       pendingConversation.current === conversationId ||
-      [...readying.values()].includes(conversationId),
+      [...readying.values()].some((file) => file.conversationId === conversationId),
     /**
      * Tiles for files that are on their way but not attached. Both kinds
      * together, because they are the same thing to look at and the same thing
@@ -428,9 +454,9 @@ export function useFileAttachments(
      */
     pendingFiles: [
       ...(pending?.conversationId === chat.active.id ? pending.files : []),
-      ...[...readying.entries()]
-        .filter(([, conversationId]) => conversationId === chat.active.id)
-        .map(([name]) => ({ name, mimeType: "", previewUrl: undefined })),
+      ...[...readying.values()]
+        .filter((file) => file.conversationId === chat.active.id)
+        .map((file) => ({ name: file.name, mimeType: "", previewUrl: undefined })),
     ],
     files,
     reading,
@@ -446,6 +472,8 @@ export function useFileAttachments(
     clearRefusal: () => setRefused(null),
     addFiles,
     addImageUrl,
+    beganBatch,
+    conversationOf,
     chooseFiles: () => void chooseFiles(),
     addChosenFiles,
     viewed: viewed?.conversationId === chat.active.id ? viewed.file : null,

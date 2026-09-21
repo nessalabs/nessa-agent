@@ -138,10 +138,12 @@ const filePathPattern = new RegExp(bounds.filePathPattern, "u")
  *
  * A linked file is a path and nothing else: no digest, no media type, and no
  * size, because nothing is uploaded for it and the gateway never opens it. What
- * can be checked here is the published shape of the path — absolute, no control
- * character, no square bracket, because a prompt carries it as a link and a
- * bracket could close that link and open another. The gateway applies the rest
- * of the rule, which is the part a pattern cannot state.
+ * can be checked here is the published shape of the path — absolute, and every
+ * component below the root a name. Nothing here is a rule about markdown: the
+ * gateway writes the path inside a link and encodes both halves down to an
+ * allowlist, so a bracket in a name is the encoder's business and not a
+ * caller's. The gateway applies the rest of the rule, which is the part a
+ * pattern cannot state.
  */
 export function linkedFileProblem(item: unknown): string | undefined {
   if (!item || typeof item !== "object" || Array.isArray(item))
@@ -154,12 +156,12 @@ export function linkedFileProblem(item: unknown): string | undefined {
     return `a path is at most ${MAX_FILE_PATH_BYTES} bytes`
   // One rule, compiled from the published pattern rather than restated: every
   // component below the root is a name, with no control character in it (C0 or
-  // C1), no square bracket, not empty, and not `.` or `..`. Restating it here
-  // is how the client came to accept `\u0085` that the gateway refused — and a
-  // message refused as `invalid_request` shows no sentence of its own, on the
-  // grounds that the client already said something, so that gap was silent.
+  // C1), not empty, and not `.` or `..`. Restating it here is how the client
+  // came to accept `\u0085` that the gateway refused — and a message refused as
+  // `invalid_request` shows no sentence of its own, on the grounds that the
+  // client already said something, so that gap was silent.
   if (!filePathPattern.test(file.path))
-    return "every part of a path must be a name: absolute, no control character, no square bracket, and not . or .."
+    return "every part of a path must be a name: absolute, no control character, and not . or .."
   return undefined
 }
 

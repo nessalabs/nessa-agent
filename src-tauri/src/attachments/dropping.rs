@@ -59,16 +59,23 @@ use tauri::{AppHandle, DragDropEvent, Emitter, Manager};
 
 use super::choosing::{describe_each, ChosenFile};
 use super::content_type::ContentTypes;
-use super::dragged::DraggedContent;
+use super::dragged::{DragBoard, DraggedContent};
 use super::files::{answered_within, ChosenFiles, Kind, NoAnswer};
-use super::readiness::{Announce, Readiness, Telling, LONGEST_READY_WAIT};
+use super::readiness::{next_batch, Announce, Readiness, Telling, LONGEST_READY_WAIT};
 use super::refusal::{named, FileNotAttached};
 use super::tickets::AttachmentTickets;
 
-/// Most files one dropped folder may contribute. The panel's own walk used
-/// twenty and the draft holds twenty, so a folder that fills the draft is the
-/// most a folder can ever be.
-pub(super) const MOST_FOLDER_FILES: usize = 20;
+/// Most files one dropped folder may contribute.
+///
+/// Ten, because ten is what one message can carry: `maxMessageFiles` in the
+/// product protocol, `MAX_SEND_FILES` in the panel, `UserMessage::MAX_FILES`
+/// in the gateway's domain. This was twenty, on the grounds that a draft holds
+/// twenty — which is true and is the wrong bound. A folder of fifteen attached
+/// fifteen tiles and then refused the send, leaving somebody to delete five by
+/// hand. The rule everywhere else on this branch is to refuse while the file
+/// can still be swapped, and a folder is exactly the gesture where the person
+/// did not choose the individual files and cannot be expected to know.
+pub(super) const MOST_FOLDER_FILES: usize = 10;
 
 /// Most entries the walk will look at before giving up, counting directories
 /// as well as files. A tree of ten thousand empty folders holds no files and
@@ -84,6 +91,10 @@ pub(super) const MOST_FOLDER_ENTRIES: usize = 1_000;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Dropped {
+    /// Which drop this is. The panel was told the same name when the gesture
+    /// landed, and binds the two together rather than guessing from whichever
+    /// tab happens to be open now.
+    pub batch: String,
     /// Files, in the order the operating system gave them, each with a ticket.
     pub files: Vec<ChosenFile>,
     /// What the drag carried when it named no files, in the three flavours
@@ -111,17 +122,26 @@ pub(super) fn expand(
     let mut found = Vec::new();
     let mut examined = 0_usize;
     let mut walked = false;
-    let mut queue: Vec<PathBuf> = paths;
+    // Only what came out of a folder counts against the folder's bounds. A
+    // drop of twenty-one loose files is not a folder problem and must not be
+    // told as one: it used to answer "Folder is too big to read" when there
+    // was no folder anywhere in the gesture. The panel has its own words for
+    // too many files, and they are the ones it had before this walk existed.
+    let mut from_folders = 0_usize;
+    let mut queue: Vec<(PathBuf, bool)> = paths.into_iter().map(|path| (path, false)).collect();
     queue.reverse();
-    while let Some(path) = queue.pop() {
+    while let Some((path, inside)) = queue.pop() {
         examined += 1;
         if examined > MOST_FOLDER_ENTRIES {
             return Err(FileNotAttached::folder_too_large(&named(&path)));
         }
         let directory = matches!(files.look(&path), Ok(on_disk) if on_disk.kind == Kind::Directory);
         if !directory {
-            if found.len() >= MOST_FOLDER_FILES {
-                return Err(FileNotAttached::folder_too_large(&named(&path)));
+            if inside {
+                from_folders += 1;
+                if from_folders > MOST_FOLDER_FILES {
+                    return Err(FileNotAttached::folder_too_large(&named(&path)));
+                }
             }
             found.push(path);
             continue;
@@ -133,7 +153,7 @@ pub(super) fn expand(
         };
         // Depth first and in order, so a folder attaches the same way twice.
         held.reverse();
-        queue.extend(held);
+        queue.extend(held.into_iter().map(|path| (path, true)));
     }
     // Only a folder can be empty in a way worth saying. A drop of nothing at
     // all is not something a person did.
@@ -168,6 +188,7 @@ pub(super) async fn dropped(
     with: Describing,
     dragged: &dyn DraggedContent,
     announce: &dyn Announce,
+    batch: &str,
 ) -> Dropped {
     let Describing {
         files,
@@ -179,6 +200,7 @@ pub(super) async fn dropped(
     } = with;
     if paths.is_empty() {
         return Dropped {
+            batch: batch.to_string(),
             text: dragged.entered(),
             ..Dropped::default()
         };
@@ -197,15 +219,19 @@ pub(super) async fn dropped(
         }
     };
     match describe_each(
-        expanded, files, types, tickets, readiness, announce, wait, ready_wait,
+        expanded, files, types, tickets, readiness, announce, batch, wait, ready_wait,
     )
     .await
     {
         Ok(files) => Dropped {
+            batch: batch.to_string(),
             files,
             ..Dropped::default()
         },
-        Err(refused) => refused.into(),
+        Err(refused) => Dropped {
+            batch: batch.to_string(),
+            ..refused.into()
+        },
     }
 }
 
@@ -231,26 +257,54 @@ pub(super) const DRAGGING_EVENT: &str = "nessa://attachment-dragging";
 /// describes whatever was dropped and emits it. Everything slow happens on a
 /// spawned task: this is called from the window-event handler, which runs on
 /// the thread that draws.
+/// What one drag event does to the board.
+///
+/// Split out because it is the whole of what the board's lifecycle is, and
+/// because none of it could be tested while it lived inside a function that
+/// needs a window. Deleting the clear that used to run after a drop left every
+/// test in this crate passing, which is exactly the hole this closes.
+pub(super) fn board_after(event: &DragDropEvent, board: &DragBoard) {
+    match event {
+        // A fresh drag replaces whatever the last one left.
+        DragDropEvent::Enter { .. } => board.entering(),
+        // A drag that went away takes its payload with it.
+        DragDropEvent::Leave => board.left(),
+        // A drop leaves the board exactly as it is. It used to clear it *after
+        // the work finished*, which can be forty seconds later — long enough
+        // for another drag to have entered and filled it, whereupon the late
+        // clear wiped the new drag's payload and that drop found nothing to
+        // paste and said nothing at all. There is no `Leave` to fall back on
+        // either: AppKit sends no `draggingExited:` after a successful drop.
+        _ => {}
+    }
+}
+
 pub fn dropped_on_panel(app: &AppHandle, event: &DragDropEvent) {
     let Some(deps) = crate::composition::resolve(app) else {
         return;
     };
-    let over = |dragging: bool| {
+    // `Some` only on a drop, because only a drop becomes work the panel has to
+    // bind to a draft. A drag that merely passed overhead has nothing to name.
+    let over = |dragging: bool, named: Option<&str>| {
         if let Some(panel) = app.get_webview_window(crate::panel::MAIN_WINDOW) {
-            let _ = panel.emit(DRAGGING_EVENT, dragging);
+            let _ = panel.emit(
+                DRAGGING_EVENT,
+                serde_json::json!({ "dragging": dragging, "batch": named }),
+            );
         }
     };
+    board_after(event, deps.dragging.as_ref());
     match event {
-        DragDropEvent::Enter { .. } => {
-            deps.dragging.entering();
-            over(true);
-        }
-        DragDropEvent::Leave => {
-            deps.dragging.left();
-            over(false);
-        }
+        DragDropEvent::Enter { .. } => over(true, None),
+        DragDropEvent::Leave => over(false, None),
         DragDropEvent::Drop { paths, .. } => {
-            over(false);
+            let batch = next_batch();
+            // The batch reaches the panel *now*, at the gesture, so it can bind
+            // this drop to the draft it landed on. The answer below can be
+            // three quarters of a minute later, by which time the open tab may
+            // be a different one — and binding then put the tile over a draft
+            // the file was never going to join.
+            over(false, Some(&batch));
             let app = app.clone();
             let paths = paths.clone();
             tauri::async_runtime::spawn(async move {
@@ -266,9 +320,19 @@ pub fn dropped_on_panel(app: &AppHandle, event: &DragDropEvent) {
                     },
                     deps.dragging.as_ref(),
                     &Telling(&app),
+                    &batch,
                 )
                 .await;
-                deps.dragging.left();
+                // The board is *not* cleared here. This task can finish forty
+                // seconds after the gesture, and the board is one slot: a drop
+                // of an iCloud file followed by a drag of text would have had
+                // its own late clear wipe the text the new drag had just put
+                // there, and the text drop would then find nothing and emit
+                // nothing at all — no paste, no refusal, no sign. The next
+                // `Enter` replaces the board, and a `Leave` empties it, which
+                // is every way a drag can end. AppKit sends no `draggingExited:`
+                // after a successful drop, so there is nothing else to wait for.
+                //
                 // Nothing at all is not worth telling the panel about: a drag
                 // that carried neither files nor text is something the person
                 // did to another application over this window.
@@ -341,12 +405,27 @@ mod tests {
         of.iter().map(PathBuf::from).collect()
     }
 
+    /// The two events this module reads, built the way Tauri delivers them.
+    fn entering() -> DragDropEvent {
+        DragDropEvent::Enter {
+            paths: Vec::new(),
+            position: tauri::PhysicalPosition::new(0.0, 0.0),
+        }
+    }
+    fn dropping(of: &[&str]) -> DragDropEvent {
+        DragDropEvent::Drop {
+            paths: paths(of),
+            position: tauri::PhysicalPosition::new(0.0, 0.0),
+        }
+    }
+
     fn drop_of(of: &[&str], files: Arc<FakeFiles>, dragged: &dyn DraggedContent) -> Dropped {
         tauri::async_runtime::block_on(dropped(
             paths(of),
             describing(files, PATIENT),
             dragged,
             &Untold,
+            "batch",
         ))
     }
 
@@ -521,6 +600,7 @@ mod tests {
             ),
             &Carrying::nothing(),
             &Untold,
+            "batch",
         ));
 
         let refused = dropped.refused.expect("a mount that is not answering");
@@ -549,12 +629,100 @@ mod tests {
         );
     }
 
+    /// The rule a late clear broke, and which nothing could see.
+    ///
+    /// Drop an iCloud file, then drag text in while it is still being fetched.
+    /// The drop's own task used to clear the board when it finished — after the
+    /// new drag had already filled it — so the text drop read an empty board,
+    /// produced neither files nor text nor a refusal, and the handler returned
+    /// without emitting anything at all. No paste, no sentence, no sign.
+    #[test]
+    fn a_drop_leaves_the_board_for_whatever_drag_comes_next() {
+        let board = DragBoard::reading(|| DraggedText {
+            plain: "some prose".to_string(),
+            ..DraggedText::default()
+        });
+
+        // A drag arrives and is carrying something.
+        board_after(&entering(), &board);
+        assert_eq!(board.entered().plain, "some prose");
+
+        // It is dropped. The board is untouched: the drop's own answer may be
+        // three quarters of a minute away, and the next drag owns the board by
+        // then.
+        board_after(&dropping(&["/Users/dev/a.pdf"]), &board);
+        assert_eq!(board.entered().plain, "some prose");
+    }
+
+    /// And the two events that really do end a drag still empty it, so a drag
+    /// that left cannot paste what it was carrying into the next one.
+    #[test]
+    fn a_drag_that_leaves_empties_the_board_and_a_new_one_replaces_it() {
+        let board = DragBoard::reading(|| DraggedText {
+            plain: "some prose".to_string(),
+            ..DraggedText::default()
+        });
+
+        board_after(&entering(), &board);
+        board_after(&DragDropEvent::Leave, &board);
+        assert_eq!(board.entered(), DraggedText::default());
+
+        board_after(&entering(), &board);
+        assert_eq!(board.entered().plain, "some prose");
+    }
+
+    /// A folder may contribute no more than one message can carry. It used to
+    /// allow twenty because a draft holds twenty — so a folder of fifteen
+    /// attached fifteen tiles and then refused the send, leaving somebody to
+    /// delete five by hand.
+    #[test]
+    fn a_folder_may_not_fill_a_draft_past_what_a_message_carries() {
+        assert_eq!(MOST_FOLDER_FILES, 10, "what one message carries");
+        let held: Vec<String> = (0..=MOST_FOLDER_FILES)
+            .map(|n| format!("/Users/dev/many/{n}.md"))
+            .collect();
+        let held: Vec<&str> = held.iter().map(String::as_str).collect();
+        let files = Arc::new(FakeFiles::holding(8).tree(
+            &[("/Users/dev/many", &held)],
+            &[("/Users/dev/many", Kind::Directory)],
+        ));
+
+        let dropped = drop_of(&["/Users/dev/many"], files, &Carrying::nothing());
+
+        assert_eq!(
+            dropped.refused.map(|refused| refused.reason),
+            Some(NotAttached::FolderTooLarge)
+        );
+    }
+
+    /// And loose files are not a folder. Twenty-one of them with no folder
+    /// anywhere used to answer "Folder is too big to read", which named a thing
+    /// that was not in the gesture; the panel has its own words for too many
+    /// files and they are the ones it had before this walk existed.
+    #[test]
+    fn loose_files_are_never_refused_as_a_folder() {
+        let names: Vec<String> = (0..MOST_FOLDER_FILES * 2 + 1)
+            .map(|n| format!("/Users/dev/{n}.md"))
+            .collect();
+        let loose: Vec<&str> = names.iter().map(String::as_str).collect();
+
+        let dropped = drop_of(
+            &loose,
+            Arc::new(FakeFiles::holding(8)),
+            &Carrying::nothing(),
+        );
+
+        assert_eq!(dropped.refused, None, "{dropped:?}");
+        assert_eq!(dropped.files.len(), loose.len());
+    }
+
     /// The shape the panel reads this by. A field renamed here without the
     /// interface following would leave the page reading `undefined` and
     /// attaching nothing at all.
     #[test]
     fn a_drop_crosses_the_seam_with_the_names_the_panel_reads() {
         let dropped = Dropped {
+            batch: "b3".to_string(),
             files: Vec::new(),
             text: DraggedText {
                 plain: "prose".to_string(),
@@ -566,7 +734,7 @@ mod tests {
 
         assert_eq!(
             serde_json::to_string(&dropped).expect("a drop serializes"),
-            r#"{"files":[],"text":{"plain":"prose","uriList":"https://example.com/","html":"<p>prose</p>"},"refused":null}"#
+            r#"{"batch":"b3","files":[],"text":{"plain":"prose","uriList":"https://example.com/","html":"<p>prose</p>"},"refused":null}"#
         );
     }
 }

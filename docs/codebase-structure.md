@@ -652,18 +652,21 @@ message could name.
 `src-tauri/src/attachments/` is the desktop half: the file a person picks, as
 a path rather than as bytes. `FilePicker` is the operating system's own dialog,
 `ChosenFiles` is the filesystem — a chosen file's kind, length and bytes —
-`ContentTypes` is the platform's own type database, and `AttachmentTickets` is
-the desk the one-shot tickets are minted at and spent. Four ports, because they
-are four outside things: a dialog needs a window server, a disk answers about a
-path, a type database is Launch Services or shared-mime-info answering about a
-format, and a ticket needs the operating system's randomness to mint and its
-clock to expire. The length and the contents stay together because they are the
+`ContentTypes` is the platform's own type database, `AttachmentTickets` is
+the desk the one-shot tickets are minted at and spent, `DragBoard` is the drag
+pasteboard, and `Readiness` is the chooser that decides who can fetch a file
+that is not on this disk yet. Separate ports, because they are separate outside
+things: a dialog needs a window server, a disk answers about a path, a type
+database is Launch Services or shared-mime-info answering about a format, a
+ticket needs the operating system's randomness to mint and its clock to expire,
+a pasteboard belongs to a drag session and is gone when that session is, and a
+cloud service answers about a placeholder on its own schedule. The length and the contents stay together because they are the
 same disk answering at the same moment, and only one double can stage a file
 that turns out longer than it claimed. The ticket desk is a port for the same
 reason and one more: it is where the rule that a page cannot name a path lives,
 so a substitute has to be able to stage the two refusals no real desk can be
 made to produce on demand — a ticket presented twice, and one presented too
-late. All four are built in `composition.rs` and injected.
+late. All of them are built in `composition.rs` and injected.
 
 The content type is what keeps the product rule honest. A dropped file is typed
 by the platform through the browser; a picked one had nothing to type it, so it
@@ -673,6 +676,35 @@ knew and the table lacked — `.ico`, `.jpe`, `.svgz`, `.jp2`, `.xbm`, `.tga`,
 routes ask the platform first and fall back to the table, which is one call with
 one set of inputs. macOS is untested and Linux has never been run; that is
 stated in the module header too.
+
+Dropping is the host's too, for one reason: `dragDropEnabled: true` is the only
+way a dropped file's path can be known, and turning it on costs the webview
+*every* HTML5 drag event rather than only the ones carrying files — wry's
+listener returns `true` and the drop never reaches the DOM. So the page receives
+no drag or drop events at all in the app, and `attachments/dropping.rs` supplies
+what it lost: dropped files go through the same `describe_each` a picker
+selection goes through, dragged text and web-page images are read off the drag
+pasteboard (`attachments/dragged.rs`, snapshotted on `Enter`, because the
+session's payload is gone by the time a drop event reaches a handler), a dropped
+folder is walked here under `MOST_FOLDER_FILES` and `MOST_FOLDER_ENTRIES`
+instead of by the page, and a `dragging` event tells the panel when to draw the
+drop target. Each drop is named, and the panel binds that name to the
+conversation the gesture landed on, because the files can be three quarters of a
+minute behind the drop and the open tab by then may be a different one.
+
+`attachments/readiness.rs` is the seam for a file that is not readable yet. A
+file iCloud is keeping answers a `stat` with a real name, type and length and
+has nothing behind it, and a path handed over for one of those is a path the
+agent fails to open some minutes later with nothing on screen to explain it.
+Handlers claim a file by asking the operating system what it is keeping — the
+dispatch is on the file's *state*, never on its type, since the type already
+decides the route and must go on deciding only that — and each owes a bound, a
+typed outcome, and no history: once the bytes are here it is an ordinary local
+file. There is an iCloud handler and a refusal; other File Provider extensions
+are dataless in the same way and are not handled, because whether they
+materialise on read is theirs to decide and nothing here can find out. While a
+file is being readied the panel shows a named tile that does not claim the file
+is attached and holds the send, and it goes on any outcome.
 
 Nothing that is not a regular file is opened, and both the look and the read
 carry deadlines on plain threads rather than the blocking pool, so a FIFO or a

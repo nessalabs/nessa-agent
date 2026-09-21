@@ -150,44 +150,142 @@ async fn a_submission_identity_is_hashed_rather_than_spelled_into_a_file_name() 
     );
 }
 
+/// The reader both writers are held to, asked directly for each answer it can
+/// give.
+///
+/// It is called at two moments — before publishing, and again by a writer that
+/// lost the race for the name — and the second of those is the one a test
+/// cannot stage through `record`: reaching it means arriving while another
+/// writer holds the name, which is a matter of timing rather than of input.
+/// So the reader is asked here for each of its outcomes on its own, and what
+/// the two callers do with each outcome is then a line each.
+///
+/// The `Absent` answer is why the loser's arm is not a success. A name that is
+/// taken and then gone is not evidence of anything: nothing in this crate
+/// removes a record, so it means something outside did, and a writer that
+/// treated it as agreement would report a durable grant with nothing durable
+/// behind it.
+#[test]
+fn stored_evidence_answers_absent_agrees_or_refuses_and_never_guesses() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path();
+    // Written the way the adapter writes: private and owned by this process.
+    // A record this process could not have written is damage, and is its own
+    // case below.
+    let put = |path: &Path, bytes: &[u8]| {
+        open(path, OpenMode::CreateNew)
+            .unwrap()
+            .write_all(bytes)
+            .unwrap();
+    };
+    let value = serde_json::json!({"recordId": "r", "target": {"paths": ["/tmp/a.pdf"]}, "observedAtMs": 110});
+
+    // Nothing there. The writer before a publish writes; the writer after a
+    // lost publish refuses, because the record it lost to has gone.
+    let missing = directory.join("missing.json");
+    assert!(matches!(
+        stored_evidence(&missing, &value, "r"),
+        Ok(Stored::Absent)
+    ));
+
+    // The same evidence, with the one field two writers may honestly differ
+    // about differing.
+    let same = directory.join("same.json");
+    let mut later = value.clone();
+    later["observedAtMs"] = serde_json::json!(999);
+    put(&same, &serde_json::to_vec(&later).unwrap());
+    assert!(matches!(
+        stored_evidence(&same, &value, "r"),
+        Ok(Stored::Agrees)
+    ));
+
+    // Evidence that contradicts this submission about anything else.
+    let other = directory.join("other.json");
+    let mut different = value.clone();
+    different["target"]["paths"] = serde_json::json!(["/tmp/b.pdf"]);
+    put(&other, &serde_json::to_vec(&different).unwrap());
+    assert!(matches!(
+        stored_evidence(&other, &value, "r"),
+        Err(ConversationError::Audit)
+    ));
+
+    // Bytes that are not the JSON this writes, and bytes larger than any
+    // record this writes. Both are damage rather than disagreement, and both
+    // fail closed rather than being repaired.
+    let junk = directory.join("junk.json");
+    put(&junk, b"not json at all");
+    assert!(matches!(
+        stored_evidence(&junk, &value, "r"),
+        Err(ConversationError::Audit)
+    ));
+    let huge = directory.join("huge.json");
+    put(&huge, &[b'x'; MAX_RECORD_BYTES + 1]);
+    assert!(matches!(
+        stored_evidence(&huge, &value, "r"),
+        Err(ConversationError::Audit)
+    ));
+
+    // And a name that is taken by something that is not a private record at
+    // all is read as damage, not as absence.
+    let folder = directory.join("folder.json");
+    std::fs::create_dir(&folder).unwrap();
+    assert!(matches!(
+        stored_evidence(&folder, &value, "r"),
+        Err(ConversationError::Audit)
+    ));
+}
+
 /// Two writers of the same submission that both find nothing stored. The read
 /// is a courtesy, not the exclusion — what settles it is a create-only publish,
 /// so exactly one record exists afterwards and the loser is held to it rather
 /// than overwriting it.
+///
+/// Repeated, because the losers are the point and they are the half a quiet
+/// machine skips. Every loser reads the winner's record back, and for that read
+/// to answer, the winner's publication must have been complete the instant the
+/// name existed. It once was not: the publish linked the name and released its
+/// own afterwards, and a loser arriving between those two calls found a file
+/// with two links, which local storage refuses as unsafe. The loser then
+/// refused a submission that was perfectly well recorded — on a busy machine,
+/// and nowhere else.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_writers_of_one_submission_leave_exactly_one_record() {
-    let root = tempfile::tempdir().unwrap();
-    let directory = root.path().join("file-links");
-    let audit =
-        std::sync::Arc::new(DurableConversationFileLinkAudit::new(directory.clone()).unwrap());
+    for attempt in 0..32 {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("file-links");
+        let audit =
+            std::sync::Arc::new(DurableConversationFileLinkAudit::new(directory.clone()).unwrap());
 
-    // Started together and released together, so both are past their read
-    // before either has published.
-    let gate = std::sync::Arc::new(tokio::sync::Barrier::new(8));
-    let mut writing = Vec::new();
-    for observed in 0..8 {
-        let audit = audit.clone();
-        let gate = gate.clone();
-        writing.push(tokio::spawn(async move {
-            gate.wait().await;
-            audit.record(linked(&["/tmp/a.pdf"], 100 + observed)).await
-        }));
-    }
-    for finished in futures_util::future::join_all(writing).await {
-        // Every one of them succeeds: the same evidence, agreed, however the
-        // race went. A lost publish is not a failed audit.
-        finished.unwrap().expect("agreeing writers all succeed");
-    }
-    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        // Started together and released together, so all of them are past
+        // their read before any has published.
+        let gate = std::sync::Arc::new(tokio::sync::Barrier::new(8));
+        let mut writing = Vec::new();
+        for observed in 0..8 {
+            let audit = audit.clone();
+            let gate = gate.clone();
+            writing.push(tokio::spawn(async move {
+                gate.wait().await;
+                audit.record(linked(&["/tmp/a.pdf"], 100 + observed)).await
+            }));
+        }
+        for finished in futures_util::future::join_all(writing).await {
+            // Every one of them succeeds: the same evidence, agreed, however
+            // the race went. A lost publish is not a failed audit.
+            finished.unwrap().unwrap_or_else(|error| {
+                panic!("attempt {attempt}: agreeing writers all succeed: {error:?}")
+            });
+        }
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
 
-    // And a disagreeing writer arriving afterwards still fails closed.
-    let mut other = linked(&["/tmp/b.pdf"], 200);
-    other.execution_id = "execution-1".into();
-    assert!(matches!(
-        audit.record(other).await,
-        Err(ConversationError::Audit)
-    ));
-    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        // And a disagreeing writer arriving afterwards still fails closed.
+        let mut other = linked(&["/tmp/b.pdf"], 200);
+        other.execution_id = "execution-1".into();
+        assert!(matches!(
+            audit.record(other).await,
+            Err(ConversationError::Audit)
+        ));
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+    }
 }
 
 /// The case that actually needs a create-only publish: two writers of the same

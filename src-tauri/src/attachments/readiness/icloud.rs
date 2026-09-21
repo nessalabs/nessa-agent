@@ -17,6 +17,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use super::super::files::answered_within;
 use super::{MakeReadable, Readied, ReadyFuture};
 
 /// Where iCloud says a file has got to.
@@ -47,46 +48,77 @@ pub trait ICloudService: Send + Sync {
 pub(super) struct ICloud;
 
 impl MakeReadable for ICloud {
-    fn mine(&self, path: &Path) -> bool {
-        !matches!(system::ICloudFileManager.status(path), Status::NotOurs)
-    }
-
     fn make_ready<'a>(
         &'a self,
         path: &'a Path,
         within: Duration,
         poll: Duration,
     ) -> ReadyFuture<'a> {
-        Box::pin(fetch(path, &system::ICloudFileManager, within, poll))
+        let asked = path.to_path_buf();
+        Box::pin(async move {
+            // One thread, one deadline, for the whole of it — the claim, the
+            // request and every poll. This module's header promises that every
+            // call to the outside happens that way, and this is the only place
+            // that used to break it: the claim ran straight on a runtime worker
+            // and the poll checked its deadline only *after* returning, so a
+            // `getResourceValue` on a stalled mount blocked a worker with
+            // nothing able to stop it. `answered_within` is the same machinery
+            // the `stat` and the read already use, and abandoning its thread is
+            // exactly what a deadline here has to mean.
+            match answered_within(within, move || {
+                fetch(&asked, &system::ICloudFileManager, within, poll)
+            })
+            .await
+            {
+                Ok(answer) => answer,
+                // The thread is still parked in a framework call that will not
+                // come back. Nothing here waits for it; the person is told the
+                // file is still coming, which is the truest thing available.
+                Err(_) => Some(Readied::StillComing),
+            }
+        })
     }
 }
 
 /// Wait for `path`'s bytes, for as long as `within` allows.
 ///
-/// The loop lives here rather than in the adapter so that every outcome is a
-/// line in a test. Asked once before the first sleep as well as after each one,
-/// so a file that is already here costs no wait and no request.
-pub(super) async fn fetch(
+/// Blocking, and called only from inside [`answered_within`] — the same
+/// contract [`super::super::files::ChosenFiles`] states for its own two
+/// methods, and for the same reason: a framework call about a file on a mount
+/// that has stopped answering never returns, and a thread the host has already
+/// decided it can lose is the only safe place to make one.
+///
+/// `None` is "not mine": the file is not one iCloud is keeping, so the chooser
+/// moves on to the next handler. It is answered here rather than by a separate
+/// `mine` call so that the claim and the work share one thread and one
+/// deadline; asking twice meant asking the framework twice, and the first ask
+/// had no deadline at all.
+///
+/// Asked once before the first sleep as well as after each one, so a file that
+/// is already here costs no wait and no request.
+pub(super) fn fetch(
     path: &Path,
     icloud: &dyn ICloudService,
     within: Duration,
     poll: Duration,
-) -> Readied {
+) -> Option<Readied> {
     match icloud.status(path) {
-        Status::Current => return Readied::Ready,
-        // Claimed and then disowned between the two calls. Nothing to wait for.
-        Status::NotOurs => return Readied::Refused("iCloud is not keeping this file".to_string()),
+        Status::Current => return Some(Readied::Ready),
+        // Not iCloud's. The chooser tries the next handler.
+        Status::NotOurs => return None,
         Status::Coming => {}
     }
     if let Err(detail) = icloud.start(path) {
-        return Readied::Refused(detail);
+        return Some(Readied::Refused(detail));
     }
     let started = Instant::now();
     loop {
         match icloud.status(path) {
-            Status::Current => return Readied::Ready,
+            Status::Current => return Some(Readied::Ready),
             Status::NotOurs => {
-                return Readied::Refused("the download stopped being one iCloud knows".to_string())
+                return Some(Readied::Refused(
+                    "the download stopped being one iCloud knows".to_string(),
+                ))
             }
             Status::Coming => {}
         }
@@ -94,13 +126,12 @@ pub(super) async fn fetch(
             // Nothing is held open across this, so there is nothing to release:
             // the request was made, iCloud owns it, and it carries on without
             // anybody waiting. Attaching again finds it landed.
-            return Readied::StillComing;
+            return Some(Readied::StillComing);
         }
-        tokio::time::sleep(poll).await;
+        std::thread::sleep(poll);
     }
 }
 
-#[cfg(target_os = "macos")]
 mod system {
     use std::path::Path;
 
@@ -172,26 +203,6 @@ mod system {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-mod system {
-    use std::path::Path;
-
-    use super::{ICloudService, Status};
-
-    /// No iCloud here. Every file is somebody else's, so this handler claims
-    /// none of them and the fallback answers.
-    pub(super) struct ICloudFileManager;
-
-    impl ICloudService for ICloudFileManager {
-        fn start(&self, _path: &Path) -> Result<(), String> {
-            Err("this platform has no iCloud to ask".to_string())
-        }
-        fn status(&self, _path: &Path) -> Status {
-            Status::NotOurs
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,13 +253,13 @@ mod tests {
         }
     }
 
-    fn wait_for(icloud: &Staged, within: Duration) -> Readied {
-        tauri::async_runtime::block_on(fetch(
+    fn wait_for(icloud: &Staged, within: Duration) -> Option<Readied> {
+        fetch(
             Path::new("/Users/dev/iCloud/amica-document 2.pdf"),
             icloud,
             within,
             Duration::from_millis(1),
-        ))
+        )
     }
 
     /// The case this exists for: a placeholder that lands while somebody waits
@@ -257,7 +268,10 @@ mod tests {
     fn a_download_that_lands_inside_the_deadline_is_ready() {
         let icloud = Staged::answering(&[Status::Coming, Status::Coming], Status::Current);
 
-        assert_eq!(wait_for(&icloud, Duration::from_secs(5)), Readied::Ready);
+        assert_eq!(
+            wait_for(&icloud, Duration::from_secs(5)),
+            Some(Readied::Ready)
+        );
         assert_eq!(
             icloud.asked.lock().unwrap().as_slice(),
             [PathBuf::from("/Users/dev/iCloud/amica-document 2.pdf")]
@@ -270,7 +284,10 @@ mod tests {
     fn a_file_already_here_is_ready_without_asking_for_anything() {
         let icloud = Staged::answering(&[], Status::Current);
 
-        assert_eq!(wait_for(&icloud, Duration::from_secs(5)), Readied::Ready);
+        assert_eq!(
+            wait_for(&icloud, Duration::from_secs(5)),
+            Some(Readied::Ready)
+        );
         assert!(icloud.asked.lock().unwrap().is_empty());
     }
 
@@ -284,7 +301,7 @@ mod tests {
 
         assert_eq!(
             wait_for(&icloud, Duration::from_millis(20)),
-            Readied::StillComing
+            Some(Readied::StillComing)
         );
         assert!(
             started.elapsed() < Duration::from_secs(2),
@@ -301,19 +318,21 @@ mod tests {
 
         assert_eq!(
             wait_for(&icloud, Duration::from_secs(5)),
-            Readied::Refused("The operation couldn’t be completed.".to_string())
+            Some(Readied::Refused(
+                "The operation couldn’t be completed.".to_string()
+            ))
         );
     }
 
-    /// A file iCloud is not keeping is refused at once rather than waited on:
-    /// there is nothing coming.
+    /// A file iCloud is not keeping is passed over at once rather than waited
+    /// on or refused: `None` is "not mine", and the chooser tries the next
+    /// handler. Refusing here would have been this handler deciding for the
+    /// ones after it.
     #[test]
-    fn a_file_icloud_does_not_keep_is_refused_without_a_request() {
+    fn a_file_icloud_does_not_keep_is_passed_over_without_a_request() {
         let icloud = Staged::answering(&[], Status::NotOurs);
 
-        let answer = wait_for(&icloud, Duration::from_secs(5));
-
-        assert!(matches!(answer, Readied::Refused(_)), "{answer:?}");
+        assert_eq!(wait_for(&icloud, Duration::from_secs(5)), None);
         assert!(icloud.asked.lock().unwrap().is_empty());
     }
 
@@ -325,6 +344,6 @@ mod tests {
 
         let answer = wait_for(&icloud, Duration::from_secs(30));
 
-        assert!(matches!(answer, Readied::Refused(_)), "{answer:?}");
+        assert!(matches!(answer, Some(Readied::Refused(_))), "{answer:?}");
     }
 }

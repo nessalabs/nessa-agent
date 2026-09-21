@@ -104,12 +104,20 @@ impl DraggedContent for DragBoard {
     }
 }
 
+impl DragBoard {
+    /// A board that reads what `reader` says. Composition uses the platform's
+    /// pasteboard; a test uses whatever it wants the drag to be carrying.
+    pub(super) fn reading(reader: impl Fn() -> DraggedText + Send + Sync + 'static) -> Self {
+        Self {
+            reader: Arc::new(reader),
+            held: Mutex::new(DraggedText::default()),
+        }
+    }
+}
+
 /// The board composition wires, reading the platform's drag pasteboard.
 pub fn drag_board() -> Arc<DragBoard> {
-    Arc::new(DragBoard {
-        reader: Arc::new(platform::dragged_text),
-        held: Mutex::new(DraggedText::default()),
-    })
+    Arc::new(DragBoard::reading(platform::dragged_text))
 }
 
 #[cfg(target_os = "macos")]
@@ -161,10 +169,7 @@ mod tests {
     use super::*;
 
     fn board(answers: DraggedText) -> DragBoard {
-        DragBoard {
-            reader: Arc::new(move || answers.clone()),
-            held: Mutex::new(DraggedText::default()),
-        }
+        DragBoard::reading(move || answers.clone())
     }
 
     fn prose() -> DraggedText {

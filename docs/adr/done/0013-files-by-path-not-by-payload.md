@@ -292,19 +292,34 @@ side, and which one a file gets is decided by whether it is an image and whether
 a path could be learned; that is one more thing to hold in mind when reading the
 composer.
 
+**One reason covers both the wire and the journal, and it is the same reason
+they are treated differently.** The message shape on the wire changed without a
+version bump or a reader for the old one: a gateway and a client that disagree
+about `files` are a gateway and a client somebody is running from two different
+builds, and the rule is that there is one current contract — so callers, tests
+and fixtures were updated and nothing was kept alive beside them. A journal is
+not that. It is a file this build wrote earlier on this disk and must go on
+reading, and nobody can be asked to update it: it is the record, not a caller.
+Refusing it would lose a person's history over a key whose absence is not
+ambiguous.
+
+So the question for the journal is not "may we accept an old shape" but "does
+the absence of this key mean exactly one thing", and here it does.
+
 **A journal written before this change still loads, and its messages named no
 files.** `user_files` carries `#[serde(default)]`, and that is not the
 compatibility shim this repository forbids. A shim keeps two contracts alive at
-once; there is one contract here, and under it a record with no `user_files` key
-is telling the truth — no message written by that build could name a file, so
-empty is what it meant. It is the same reading the `Option` fields beside it
-already take of their own absence. The line a default must not cross is
-inventing a value a record could have meant something else by, and the path
-itself has none: a record whose `user_files` entry has no `path` is corrupt, not
-empty, and the surrounding `deny_unknown_fields` still refuses a key this build
-does not know. `crates/nessa-sdk/tests/.../journal/decode_bounds.rs` holds both
-halves — an older journal reads as a message that named none, and `[{}]`,
-`[{"path": null}]` and a gutted record are all still `Corrupt`.
+once, reading one shape and writing another; there is one contract here, one
+shape written and one read, and under it a record with no `user_files` key is
+telling the truth — no message written by that build could name a file, so empty
+is what it meant. It is the same reading the `Option` fields beside it already
+take of their own absence. The line a default must not cross is inventing a
+value a record could have meant something else by, and the path itself has none:
+a record whose `user_files` entry has no `path` is corrupt, not empty, and the
+surrounding `deny_unknown_fields` still refuses a key this build does not know.
+`crates/nessa-sdk/tests/.../journal/decode_bounds.rs` holds both halves — an
+older journal reads as a message that named none, and `[{}]`, `[{"path": null}]`
+and a gutted record are all still `Corrupt`.
 
 An earlier draft refused such a journal outright and a migration script was
 written to fix it, which is worth recording so nobody writes either again.
@@ -328,20 +343,42 @@ differently depending on how it was attached. That was rejected on sight: it is
 the kind of split nobody can hold in their head. The cost is that the host has
 to be able to read a chosen file's bytes, which is `read_attachment_bytes`.
 
-What does still depend on the gesture is whether a non-image can be sent at all,
-and that is a capability rather than a choice: only the picker learns where a
-file is. A PDF dropped or pasted has no path, so it is refused with a sentence
-naming the route that works. Closing that needs the webview's own drag-drop
-event in place of the DOM one, which would also take the folder walk and the
-image-URL drop with it; it is a separate change and is not pretended away here.
+Dropping used to depend on the gesture for a reason that was a capability
+rather than a choice: only the picker learned where a file was, so a PDF dropped
+on the panel had no path and was refused with a sentence naming the route that
+worked. That is closed here. `dragDropEnabled: true` gives the host the dropped
+file's path — and takes every HTML5 drag event away from the webview in
+exchange, since wry's listener returns `true` and the drop never reaches the
+DOM. So the host had to supply all of what the page lost, not only the part that
+motivated the change: dropped files through the same description the picker
+uses, dragged text and web-page images read off the drag pasteboard, the folder
+walk moved out of the page and bounded, and a `dragging` event so the drop
+target can still be drawn. Shipping the first of those alone would have left a
+panel that took dropped files and silently ignored dropped text.
+
+Pasting still depends on the gesture, and still for a capability reason: a
+pasteboard image arrives as bytes with no path, and there is nothing to learn.
+An image is uploaded anyway, so what is left is a pasted non-image, which is
+refused with a sentence naming the route that works.
 
 ## How this was built, and what it says about the size
 
-Four adversarial reviews, and each found blocking defects in a *different* area:
+Six adversarial reviews, and each found blocking defects in a *different* area:
 the audit's evidence, then the session journals and the published units, then
-classification and a host hang. Nothing was found twice, which is the useful
-signal — it is not that one part is weak, it is that the change spans more than
-one review can hold at once.
+classification and a host hang, then which draft a slow attach belongs to, and
+finally a race inside local storage's own publish — a record was linked into
+place and made single-linked a moment later, and every reader in that moment was
+told it could not be read. Nothing was found twice, which is the useful signal —
+it is not that one part is weak, it is that the change spans more than one review
+can hold at once.
+
+Two of those reviews also made the same *kind* of comment about the fixes rather
+than the code: a defect closed by listing the cases that trip it will be
+reopened by the next case nobody listed. The markdown-metacharacter rule was
+rewritten twice before it was replaced by encoding the two strings the adapter
+interpolates; the publish above was fixed by removing the moment rather than by
+tolerating a read that fails during it. Both are the same move, and it is the
+one worth keeping.
 
 What kept churning, and what did not, falls along clean lines, so the work is
 being split into three changes that land in order. This record's decision covers

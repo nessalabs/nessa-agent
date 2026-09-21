@@ -29,10 +29,10 @@ use crate::conversation::application::{
 };
 use nessa_local_storage::{create_directory, open, sync_directory, OpenMode, PrivateTempFile};
 use nessa_sdk::domain::common::value_objects::Sha256Digest;
-use serde_json::json;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    io::{Read, Write},
+    io::{self, ErrorKind, Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -111,7 +111,7 @@ impl ConversationFileLinkAudit for DurableConversationFileLinkAudit {
                 // written is the one already there, so it is read back and
                 // held to the same agreement.
                 if let Err(error) = file.publish(&destination) {
-                    if error.kind() != std::io::ErrorKind::AlreadyExists {
+                    if error.kind() != ErrorKind::AlreadyExists {
                         tracing::error!(record = %id, %error, "could not publish a record");
                         return Err(ConversationError::Audit);
                     }
@@ -144,7 +144,7 @@ impl ConversationFileLinkAudit for DurableConversationFileLinkAudit {
 /// submission should not depend on which syscall failed — but a full disk and
 /// evidence that contradicts a submission are very different things to be
 /// looking at afterwards, so they are not the same line in a log.
-fn audit(doing: &'static str) -> impl Fn(std::io::Error) -> ConversationError {
+fn audit(doing: &'static str) -> impl Fn(io::Error) -> ConversationError {
     move |error| {
         tracing::error!(%error, "could not {doing} for file-naming evidence");
         ConversationError::Audit
@@ -185,12 +185,12 @@ enum Stored {
 /// `value` about anything but [`MAY_DIFFER_BETWEEN_WRITERS`].
 fn stored_evidence(
     destination: &Path,
-    value: &serde_json::Value,
+    value: &Value,
     id: &str,
 ) -> Result<Stored, ConversationError> {
     let mut file = match open(destination, OpenMode::Read) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Stored::Absent),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Stored::Absent),
         Err(error) => {
             tracing::error!(record = %id, %error, "could not read stored evidence");
             return Err(ConversationError::Audit);
@@ -205,8 +205,7 @@ fn stored_evidence(
         tracing::error!(record = %id, "a stored record is larger than any this writes");
         return Err(ConversationError::Audit);
     }
-    let stored: serde_json::Value =
-        serde_json::from_slice(&bytes).map_err(|_| ConversationError::Audit)?;
+    let stored: Value = serde_json::from_slice(&bytes).map_err(|_| ConversationError::Audit)?;
     if comparable(stored) != comparable(value.clone()) {
         tracing::error!(
             record = %id,
@@ -218,7 +217,7 @@ fn stored_evidence(
 }
 
 /// `value` with the field two writers may honestly differ on removed.
-fn comparable(mut value: serde_json::Value) -> serde_json::Value {
+fn comparable(mut value: Value) -> Value {
     let _ = value
         .as_object_mut()
         .and_then(|object| object.remove(MAY_DIFFER_BETWEEN_WRITERS));

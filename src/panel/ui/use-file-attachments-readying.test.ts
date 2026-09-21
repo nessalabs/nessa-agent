@@ -41,8 +41,20 @@ import type { ConversationEffects } from "../../conversation/application/ports"
 import { useFileAttachments } from "./use-file-attachments"
 import { createAttachmentResources } from "../adapters/attachment-resources"
 
+/** One file's news from the host, in the shape the event carries. */
+type News = { id: string; name: string; readying: boolean }
 /** What the host said. Captured so a test can speak as the host. */
-let say: (file: { name: string; readying: boolean }) => void
+let said: (file: News) => void
+/**
+ * Speak as the host about one file.
+ *
+ * The host mints the identity and the panel only ever echoes it, so a test that
+ * does not care which file it is gets one derived from the name — and a test
+ * that *does* care, because two files share a name or because a tile has to
+ * find the draft its gesture landed on, passes its own.
+ */
+const say = (file: Omit<News, "id"> & { id?: string }) =>
+  said({ id: file.id ?? `b0:${file.name}`, ...file })
 let hook: ReturnType<typeof useFileAttachments>
 let chat: ReturnType<typeof useConversation>
 let container: HTMLElement
@@ -59,12 +71,10 @@ const names = () => hook.pendingFiles.map((file) => file.name)
 
 beforeEach(async () => {
   onAttachmentReadying.mockReset()
-  onAttachmentReadying.mockImplementation(
-    (handler: (file: { name: string; readying: boolean }) => void) => {
-      say = handler
-      return Promise.resolve(() => {})
-    },
-  )
+  onAttachmentReadying.mockImplementation((handler: (file: News) => void) => {
+    said = handler
+    return Promise.resolve(() => {})
+  })
   container = document.createElement("div")
   document.body.append(container)
   store = makeStore(
@@ -141,7 +151,56 @@ it("refuses a send while a file is still being made ready", async () => {
   expect(hook.isPending(chat.active.id)).toBe(false)
 })
 
-it("leaves the tile with the conversation it was attached to, not the one on screen", async () => {
+it("tells two files of the same name apart, because the host names them apart", async () => {
+  // Two folders, each holding a `report.pdf`. Keyed on the name there was one
+  // entry for both: the first to settle took the other's tile away and the
+  // draft became sendable while the second was still being fetched.
+  await act(async () => {
+    say({ id: "b1:0", name: "report.pdf", readying: true })
+    say({ id: "b1:1", name: "report.pdf", readying: true })
+  })
+  expect(names()).toEqual(["report.pdf", "report.pdf"])
+
+  await act(async () => say({ id: "b1:0", name: "report.pdf", readying: false }))
+
+  // One tile left, and the send is still held.
+  expect(names()).toEqual(["report.pdf"])
+  expect(hook.isPending(chat.active.id)).toBe(true)
+
+  await act(async () => say({ id: "b1:1", name: "report.pdf", readying: false }))
+  expect(names()).toEqual([])
+  expect(hook.isPending(chat.active.id)).toBe(false)
+})
+
+it("leaves the tile with the conversation the gesture landed on, not the one on screen", async () => {
+  // The drop happened here, and was named here — which is the only moment the
+  // panel can bind it, since the file itself is up to forty-five seconds away.
+  const first = chat.active.id
+  await act(async () => hook.beganBatch("b2", first))
+
+  // Another tab opens *before* the host has said anything at all. Reading the
+  // open tab when the news finally comes would put the tile, and the block on
+  // sending, over a draft this file was never going to join.
+  await act(async () => {
+    store.dispatch(openConversation())
+  })
+  expect(chat.active.id).not.toBe(first)
+
+  await act(async () => say({ id: "b2:0", name: "amica-document 2.pdf", readying: true }))
+
+  expect(names()).toEqual([])
+  expect(hook.isPending(first)).toBe(true)
+  expect(hook.isPending(chat.active.id)).toBe(false)
+
+  // And it settles onto the conversation it belonged to rather than the one in
+  // front of somebody now.
+  await act(async () =>
+    say({ id: "b2:0", name: "amica-document 2.pdf", readying: false }),
+  )
+  expect(hook.isPending(first)).toBe(false)
+})
+
+it("leaves the tile with the conversation it was attached to when the tab changes later", async () => {
   const first = chat.active.id
   await act(async () => say({ name: "amica-document 2.pdf", readying: true }))
   expect(names()).toEqual(["amica-document 2.pdf"])
@@ -161,6 +220,16 @@ it("leaves the tile with the conversation it was attached to, not the one on scr
   // front of somebody now.
   await act(async () => say({ name: "amica-document 2.pdf", readying: false }))
   expect(hook.isPending(first)).toBe(false)
+})
+
+it("falls back to the open tab for a batch nobody recorded", async () => {
+  // A `+` selection cannot happen in a tab nobody is looking at, so the open
+  // one is not a guess there — but it must be *this* one and not nothing.
+  const here = chat.active.id
+  await act(async () => say({ id: "unheard-of:0", name: "picked.pdf", readying: true }))
+
+  expect(names()).toEqual(["picked.pdf"])
+  expect(hook.isPending(here)).toBe(true)
 })
 
 it("stops listening when the panel goes, so a late answer reaches nothing", async () => {

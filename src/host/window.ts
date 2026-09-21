@@ -310,6 +310,13 @@ export async function chooseAttachmentFiles(): Promise<ChosenFile[] | null> {
  */
 export interface DroppedOnPanel {
   /**
+   * Which drop this is — the same name {@link onAttachmentDragging} reported
+   * the moment it landed, and the only link back to the conversation the
+   * gesture happened over. The files can be three quarters of a minute behind
+   * the drop, by which time the open tab may be a different one.
+   */
+  batch: string
+  /**
    * Files, in the order the operating system gave them, each already described
    * and ticketed exactly as {@link chooseAttachmentFiles} describes a picked
    * one — so a dragged file and a picked file are the same thing by the time
@@ -373,32 +380,53 @@ export async function onAttachmentDropped(
  * arrives at the end of that, so without this the panel would say nothing at
  * all while it happened, and silence reads as broken.
  *
- * Named per file, not as a count: somebody who dropped five needs to know which
- * one is holding things up. `readying` false means that file has stopped
- * waiting — it arrived, or it will not — and the tile goes either way.
+ * `id` is the identity and `name` is only a label. Two folders can each hold a
+ * `report.pdf`, and a panel keyed on the name kept one entry for both: the
+ * first to settle took the other's tile away and let the draft be sent while
+ * the second was still being fetched. The identity is minted by the host,
+ * where the work is, and begins with the batch the drop announced — so a tile
+ * belongs to the draft the gesture landed on rather than to whichever tab is
+ * open when the host finally speaks.
+ *
+ * `readying` false means that file has stopped waiting — it arrived, or it will
+ * not — and the tile goes either way.
  *
  * Mechanism-free on purpose. This says a file needs a moment and never what is
  * being done about it, so the panel's sentence stays true if a handler that is
  * not iCloud ever answers.
  */
 export async function onAttachmentReadying(
-  handler: (file: { name: string; readying: boolean }) => void,
+  handler: (file: { id: string; name: string; readying: boolean }) => void,
 ): Promise<() => void> {
   if (!inTauri) return () => {}
   const { listen } = await import("@tauri-apps/api/event")
-  return listen<{ name: string; readying: boolean }>(
+  return listen<{ id: string; name: string; readying: boolean }>(
     HOST_EVENTS.attachmentReadying,
     ({ payload }) => handler(payload),
   )
 }
 
+/**
+ * Be told while a drag is over the panel, and which drop it became.
+ *
+ * The page receives no drag events of its own any more, so without this the
+ * drop target could not be drawn at all: the panel would take a dropped file
+ * perfectly well while giving no sign beforehand that it would.
+ *
+ * `batch` arrives with `dragging: false` at the moment a drop lands, and names
+ * that drop. It is the page's only chance to bind the drop to the conversation
+ * it landed on — the files themselves can be three quarters of a minute later,
+ * by which time the open tab may be a different one, and binding then put both
+ * the tile and the attach over a draft the file was never going to join.
+ */
 export async function onAttachmentDragging(
-  handler: (dragging: boolean) => void,
+  handler: (over: { dragging: boolean; batch: string | null }) => void,
 ): Promise<() => void> {
   if (!inTauri) return () => {}
   const { listen } = await import("@tauri-apps/api/event")
-  return listen<boolean>(HOST_EVENTS.attachmentDragging, ({ payload }) =>
-    handler(payload),
+  return listen<{ dragging: boolean; batch: string | null }>(
+    HOST_EVENTS.attachmentDragging,
+    ({ payload }) => handler(payload),
   )
 }
 

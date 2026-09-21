@@ -191,14 +191,42 @@ pub fn replace(from: &Path, to: &Path) -> io::Result<()> {
 }
 /// Publish `from` under the unused name `to`, never replacing an existing one.
 ///
-/// `link` fails with `AlreadyExists` when `to` is taken, so an interrupted or
+/// A rename that refuses to replace: one call, and afterwards `to` is the file
+/// and `from` is gone. `AlreadyExists` when `to` is taken, so an interrupted or
 /// repeated publish cannot overwrite a record another owner already published.
-/// The published name shares the temporary file's inode until that temporary
-/// name is removed; until then the file has two links and fails private-file
-/// verification, so callers must remove their temporary before reporting
-/// success and clear temporaries a crash left behind.
+///
+/// It is a rename rather than a link because a record has to be readable the
+/// instant it exists. Linking the destination and unlinking the temporary
+/// afterwards left a moment — two calls wide, and as long as the scheduler
+/// cared to make it — when the name existed with two links, and
+/// [`verify_file`] refuses a file with two links as unsafe. Every reader of
+/// that name in that moment was told the record could not be read, including
+/// the one reader who most needs it: a writer that lost the race for the name
+/// and reads the winner's record back to check they agree. There is nothing for
+/// such a reader to wait for and no way for it to tell a busy machine from a
+/// tampered file, so the moment is removed instead of tolerated.
+///
+/// `RENAME_EXCL` and `RENAME_NOREPLACE` are the same guarantee under the two
+/// kernels' names for it.
 pub fn publish_new(from: &Path, to: &Path) -> io::Result<()> {
-    fs::hard_link(from, to)
+    let from = CString::new(from.as_os_str().as_bytes()).map_err(|_| unsafe_file())?;
+    let to = CString::new(to.as_os_str().as_bytes()).map_err(|_| unsafe_file())?;
+    #[cfg(target_vendor = "apple")]
+    let renamed = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+    #[cfg(target_os = "linux")]
+    let renamed = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if renamed != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 pub fn replace_beneath(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
     let (from_parent, from_leaf) = open_parent_beneath(root, from)?;

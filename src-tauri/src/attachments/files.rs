@@ -44,8 +44,10 @@
 //! replaced by a pipe in the moment between the `stat` and the open.
 
 use std::fs::{File, Metadata};
-use std::io::Read;
-use std::path::Path;
+use std::io::{self, Read};
+#[cfg(target_os = "macos")]
+use std::os::macos::fs::MetadataExt;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -161,8 +163,6 @@ impl Stored {
     fn of(found: &Metadata) -> Self {
         #[cfg(target_os = "macos")]
         {
-            use std::os::macos::fs::MetadataExt;
-
             /// `sys/stat.h`: "file is dataless object". Not in `libc` 0.2, so
             /// it is written out here with where it came from.
             const SF_DATALESS: u32 = 0x4000_0000;
@@ -219,7 +219,7 @@ pub struct OnDisk {
 pub trait ChosenFiles: Send + Sync {
     /// What the path names and how long it is, or what the operating system
     /// said instead.
-    fn look(&self, path: &Path) -> std::io::Result<OnDisk>;
+    fn look(&self, path: &Path) -> io::Result<OnDisk>;
 
     /// What a directory holds, one level down, in whatever order the
     /// filesystem gives them.
@@ -229,7 +229,7 @@ pub trait ChosenFiles: Send + Sync {
     /// directory. A browser answers this one through `webkitGetAsEntry`, which
     /// a webview that no longer receives the drop cannot call; see
     /// [`super::dropping`].
-    fn entries(&self, path: &Path) -> std::io::Result<Vec<std::path::PathBuf>>;
+    fn entries(&self, path: &Path) -> io::Result<Vec<PathBuf>>;
 
     /// The file's bytes, reading no more than `most` of them.
     ///
@@ -239,7 +239,7 @@ pub trait ChosenFiles: Send + Sync {
     /// that outgrew its own declared length is refused instead of truncated.
     /// An implementation that read the whole file and then trimmed it would
     /// satisfy the signature and defeat the entire point of the parameter.
-    fn bytes(&self, path: &Path, most: u64) -> std::io::Result<Vec<u8>>;
+    fn bytes(&self, path: &Path, most: u64) -> io::Result<Vec<u8>>;
 }
 
 /// Why a question put to the filesystem produced no answer at all.
@@ -305,7 +305,7 @@ pub async fn answered_within<T: Send + 'static>(
 struct FilesOnDisk;
 
 impl ChosenFiles for FilesOnDisk {
-    fn look(&self, path: &Path) -> std::io::Result<OnDisk> {
+    fn look(&self, path: &Path) -> io::Result<OnDisk> {
         let found = std::fs::metadata(path)?;
         Ok(OnDisk {
             kind: Kind::of(&found),
@@ -314,18 +314,18 @@ impl ChosenFiles for FilesOnDisk {
         })
     }
 
-    fn entries(&self, path: &Path) -> std::io::Result<Vec<std::path::PathBuf>> {
+    fn entries(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
         // Sorted, so a folder attaches in the same order twice. `read_dir`
         // hands back whatever order the filesystem keeps, which on some of
         // them is insertion order and on others is a hash.
-        let mut held: Vec<std::path::PathBuf> = std::fs::read_dir(path)?
+        let mut held: Vec<PathBuf> = std::fs::read_dir(path)?
             .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<std::io::Result<_>>()?;
+            .collect::<io::Result<_>>()?;
         held.sort();
         Ok(held)
     }
 
-    fn bytes(&self, path: &Path, most: u64) -> std::io::Result<Vec<u8>> {
+    fn bytes(&self, path: &Path, most: u64) -> io::Result<Vec<u8>> {
         // `take` before `read_to_end`, and an empty `Vec` rather than one sized
         // from the `stat`: the reader stops at `most` whatever the file turns
         // out to contain, and nothing is reserved on the strength of a length

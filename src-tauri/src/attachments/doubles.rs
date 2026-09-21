@@ -304,9 +304,6 @@ impl FakeReadiness {
 
 #[cfg(target_os = "macos")]
 impl MakeReadable for FakeReadiness {
-    fn mine(&self, _path: &Path) -> bool {
-        true
-    }
     fn make_ready<'a>(
         &'a self,
         path: &'a Path,
@@ -318,7 +315,7 @@ impl MakeReadable for FakeReadiness {
             .expect("the paths asked about")
             .push(path.to_path_buf());
         let answer = self.answer.clone();
-        Box::pin(async move { answer })
+        Box::pin(async move { Some(answer) })
     }
 }
 

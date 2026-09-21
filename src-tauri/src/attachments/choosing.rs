@@ -18,17 +18,20 @@
 //! One unusable file refuses the whole selection, because a person who chose
 //! five files and silently got four has been told nothing about the fifth.
 
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use super::content_type::ContentTypes;
 use super::files::{answered_within, ChosenFiles, Kind, OnDisk, Stored, LONGEST_LOOK_WAIT};
 use super::picker::{FilePicker, Picked};
-use super::readiness::{Announce, Readied, Readiness, Telling, LONGEST_READY_WAIT, READY_POLL};
+use super::readiness::{
+    next_batch, Announce, Readied, Readiness, Telling, LONGEST_READY_WAIT, READY_POLL,
+};
 use super::refusal::{named, FileNotAttached, NotAttached};
 use super::tickets::{AttachmentTickets, NoTicket};
 use crate::composition::HostDependencies;
@@ -76,7 +79,7 @@ pub struct ChosenFile {
 /// the module header for why the rest of the order is what it is.
 pub(super) fn attachment(
     path: &Path,
-    looked: std::io::Result<OnDisk>,
+    looked: io::Result<OnDisk>,
     mime: String,
     ticket: impl FnOnce() -> Result<String, NoTicket>,
 ) -> Result<ChosenFile, FileNotAttached> {
@@ -143,6 +146,7 @@ pub(super) async fn chosen_attachments(
     tickets: Arc<dyn AttachmentTickets>,
     readiness: Arc<Readiness>,
     announce: &dyn Announce,
+    batch: &str,
     wait: Duration,
     ready_wait: Duration,
 ) -> Result<Vec<ChosenFile>, FileNotAttached> {
@@ -153,7 +157,7 @@ pub(super) async fn chosen_attachments(
     };
 
     describe_each(
-        paths, files, types, tickets, readiness, announce, wait, ready_wait,
+        paths, files, types, tickets, readiness, announce, batch, wait, ready_wait,
     )
     .await
 }
@@ -168,17 +172,24 @@ pub(super) async fn chosen_attachments(
 /// disagree, which is the defect this feature has already had once.
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn describe_each(
-    paths: Vec<std::path::PathBuf>,
+    paths: Vec<PathBuf>,
     files: Arc<dyn ChosenFiles>,
     types: Arc<dyn ContentTypes>,
     tickets: Arc<dyn AttachmentTickets>,
     readiness: Arc<Readiness>,
     announce: &dyn Announce,
+    batch: &str,
     wait: Duration,
     ready_wait: Duration,
 ) -> Result<Vec<ChosenFile>, FileNotAttached> {
     let mut attached = Vec::with_capacity(paths.len());
-    for path in paths {
+    // One budget for the whole selection, not one per file. Per file, five
+    // placeholders that each take forty seconds held the attach for two
+    // hundred seconds with the composer blocked the whole time — the bound
+    // was on each wait rather than on the waiting, which is not a bound on
+    // anything a person experiences.
+    let spend_by = Instant::now() + ready_wait;
+    for (index, path) in paths.into_iter().enumerate() {
         // `mut` only where something can change it: off macOS nothing is ever
         // a placeholder, so nothing is ever described twice.
         #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
@@ -195,9 +206,15 @@ pub(super) async fn describe_each(
             // that says nothing for that long reads as broken. Told in every
             // case below, including the two that refuse, so no tile is ever
             // left waiting for a file that is not coming.
-            let waiting = named(&path);
-            announce.readying(&waiting);
-            let readied = readiness.make_ready(&path, ready_wait, READY_POLL).await;
+            // The identity is this attach and this file's place in it, not
+            // the file's name: two folders can each hold a `report.pdf`, and a
+            // panel keyed on the name kept one entry for both — the first to
+            // settle took the other's tile away and let the draft be sent
+            // while the second was still being fetched.
+            let waiting = format!("{batch}:{index}");
+            announce.readying(&waiting, &named(&path));
+            let left = spend_by.saturating_duration_since(Instant::now());
+            let readied = readiness.make_ready(&path, left, READY_POLL).await;
             announce.settled(&waiting);
             match readied {
                 // Here now, so this is an ordinary local file and is described
@@ -234,7 +251,7 @@ pub(super) async fn describe_each(
 /// apart because the caller acts on them differently: a stalled disk ends the
 /// whole selection, while a placeholder is something to go and fetch.
 async fn describe_one(
-    path: &std::path::Path,
+    path: &Path,
     files: &Arc<dyn ChosenFiles>,
     types: &Arc<dyn ContentTypes>,
     tickets: &Arc<dyn AttachmentTickets>,
@@ -260,7 +277,7 @@ async fn describe_one(
 /// changed their mind — and is not a failure.
 #[tauri::command]
 pub async fn choose_attachment_files(
-    app: tauri::AppHandle,
+    app: AppHandle,
     deps: State<'_, HostDependencies>,
 ) -> Result<Vec<ChosenFile>, FileNotAttached> {
     let picker = deps.picker.clone();
@@ -271,6 +288,7 @@ pub async fn choose_attachment_files(
         deps.tickets.clone(),
         deps.readiness.clone(),
         &Telling(&app),
+        &next_batch(),
         LONGEST_LOOK_WAIT,
         LONGEST_READY_WAIT,
     )
@@ -286,10 +304,17 @@ mod tests {
     #[cfg(target_os = "macos")]
     use crate::attachments::readiness::Readied;
     use crate::attachments::readiness::{Announce, Readiness, Untold};
+    use crate::attachments::refusal::NotAttached;
+    use crate::attachments::tickets::Redeemed;
+    use std::ffi::OsStr;
+    use std::io::{Error, ErrorKind};
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStrExt;
+    use std::sync::Mutex;
 
     /// Everything the panel was told, in order.
     #[derive(Default)]
-    struct Recording(std::sync::Mutex<Vec<(String, String)>>);
+    struct Recording(Mutex<Vec<(String, String)>>);
 
     impl Recording {
         fn said(&self) -> Vec<(String, String)> {
@@ -304,11 +329,11 @@ mod tests {
     }
 
     impl Announce for Recording {
-        fn readying(&self, name: &str) {
-            self.push("readying", name);
+        fn readying(&self, id: &str, name: &str) {
+            self.push("readying", &format!("{id} {name}"));
         }
-        fn settled(&self, name: &str) {
-            self.push("settled", name);
+        fn settled(&self, id: &str) {
+            self.push("settled", id);
         }
     }
 
@@ -330,18 +355,13 @@ mod tests {
     fn staged_with(handler: FakeReadiness) -> Arc<Readiness> {
         Arc::new(Readiness::new(vec![Arc::new(handler)]))
     }
-    use crate::attachments::refusal::NotAttached;
-    use crate::attachments::tickets::Redeemed;
-    use std::io::{Error, ErrorKind};
-    use std::path::PathBuf;
-
     /// A wait long enough that nothing in these tests reaches it, so a failure
     /// here is about the decision rather than about a slow machine.
     const PATIENT: Duration = Duration::from_secs(30);
 
     fn describe(
         path: &Path,
-        looked: std::io::Result<OnDisk>,
+        looked: io::Result<OnDisk>,
         mime: &str,
     ) -> Result<ChosenFile, FileNotAttached> {
         attachment(
@@ -373,6 +393,7 @@ mod tests {
             tickets,
             nothing_to_ready(),
             &Untold,
+            "batch",
             PATIENT,
             Duration::from_millis(50),
         ))
@@ -395,6 +416,7 @@ mod tests {
             tickets,
             staged_with(handler),
             &Untold,
+            "batch",
             PATIENT,
             // Short, because every outcome here is staged rather than waited
             // for; the seam owns the deadline's own test.
@@ -416,9 +438,6 @@ mod tests {
     /// rather than theoretical: on macOS and Linux a path is bytes.
     #[cfg(unix)]
     fn unnameable() -> PathBuf {
-        use std::ffi::OsStr;
-        use std::os::unix::ffi::OsStrExt;
-
         PathBuf::from(OsStr::from_bytes(b"/Users/dev/Pictures/\xff\xfe.png"))
     }
 
@@ -667,15 +686,22 @@ mod tests {
                 Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
                 staged(answer.clone()),
                 &told,
+                "b7",
                 PATIENT,
                 Duration::from_millis(50),
             ));
 
+            // The identity is the batch and the file's place in it, and both
+            // halves carry it: a panel keyed on the name alone lost one of two
+            // files called the same thing.
             assert_eq!(
                 told.said(),
                 vec![
-                    ("readying".to_string(), "amica-document 2.pdf".to_string()),
-                    ("settled".to_string(), "amica-document 2.pdf".to_string()),
+                    (
+                        "readying".to_string(),
+                        "b7:0 amica-document 2.pdf".to_string()
+                    ),
+                    ("settled".to_string(), "b7:0".to_string()),
                 ],
                 "{answer:?}"
             );
@@ -695,6 +721,7 @@ mod tests {
             Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
             nothing_to_ready(),
             &told,
+            "batch",
             PATIENT,
             Duration::from_millis(50),
         ))
@@ -722,6 +749,7 @@ mod tests {
             Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
             Arc::new(Readiness::new(vec![asked.clone()])),
             &Untold,
+            "batch",
             PATIENT,
             Duration::from_millis(50),
         ))
@@ -959,6 +987,7 @@ mod tests {
             Arc::new(FakeTickets::refusing(Redeemed::Unknown)),
             nothing_to_ready(),
             &Untold,
+            "batch",
             Duration::from_millis(50),
             Duration::from_millis(50),
         ))

@@ -68,6 +68,7 @@
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -114,20 +115,26 @@ pub enum Readied {
 
 /// A future a handler answers with. Boxed because the handlers are behind a
 /// trait object, which is what lets composition choose them.
-pub type ReadyFuture<'a> = Pin<Box<dyn Future<Output = Readied> + Send + 'a>>;
+pub type ReadyFuture<'a> = Pin<Box<dyn Future<Output = Option<Readied>> + Send + 'a>>;
 
 /// Something that can make one class of not-yet-readable file readable.
 pub trait MakeReadable: Send + Sync {
-    /// Whether this handler is the one for `path`.
+    /// Make `path` readable, or answer `None` for a file that is not this
+    /// handler's to make readable.
     ///
-    /// Asked of the operating system rather than inferred from the path: a
-    /// name says nothing about who is keeping a file, and a rule written over
-    /// `~/Library/Mobile Documents` would miss an iCloud folder somebody has
-    /// linked elsewhere and would claim a plain directory with the same name.
-    fn mine(&self, path: &Path) -> bool;
-
-    /// Bring `path`'s bytes here, taking at most `within` and asking every
-    /// `poll`. Must release whatever it is holding when the deadline fires.
+    /// Whether a file is this handler's is asked of the operating system
+    /// rather than inferred from the path: a name says nothing about who is
+    /// keeping a file, and a rule written over `~/Library/Mobile Documents`
+    /// would miss an iCloud folder somebody has linked elsewhere and would
+    /// claim a plain directory with the same name.
+    ///
+    /// It is answered *here*, in the same call as the work, rather than by a
+    /// separate question first. Two calls meant asking the outside twice, and
+    /// the first ask had no deadline over it at all — so a framework call about
+    /// a stalled mount blocked a runtime worker with nothing able to stop it.
+    /// One call, one thread, one `within`.
+    ///
+    /// Must release whatever it is holding when the deadline fires.
     fn make_ready<'a>(
         &'a self,
         path: &'a Path,
@@ -159,8 +166,8 @@ impl Readiness {
         poll: Duration,
     ) -> Readied {
         for handler in &self.handlers {
-            if handler.mine(path) {
-                return handler.make_ready(path, within, poll).await;
+            if let Some(readied) = handler.make_ready(path, within, poll).await {
+                return readied;
             }
         }
         // Unreachable while the last handler claims everything, and an honest
@@ -173,17 +180,41 @@ impl Readiness {
 ///
 /// A port because the panel has to hear it *while* it happens rather than in
 /// the answer at the end: up to [`LONGEST_READY_WAIT`] can pass, and a panel
-/// that says nothing for forty-five seconds reads as broken. Named per file,
-/// not as a count, because somebody who dropped five needs to know which one.
+/// that says nothing for forty-five seconds reads as broken.
+///
+/// **`id` is the whole point, and `name` is only a label.** A name is not an
+/// identity: two folders can each hold a `report.pdf`, and a panel keyed on
+/// the name had one entry for both — the first to settle took the other's tile
+/// away and let a draft be sent while the second was still being fetched. The
+/// identity is minted here, where the work is, and the panel keys everything
+/// on it and never on what the file is called.
 ///
 /// Mechanism-free like the rest of the seam: this says a file needs a moment,
 /// never what is being done about it, so a handler that is not iCloud does not
 /// make the sentence a lie.
 pub trait Announce: Send + Sync {
-    /// This file is being made ready.
-    fn readying(&self, name: &str);
-    /// It is not any more — it arrived, or it will not.
-    fn settled(&self, name: &str);
+    /// This file is being made ready. `id` identifies this waiting, `name` is
+    /// what to put on the tile.
+    fn readying(&self, id: &str, name: &str);
+    /// That waiting is over — the file arrived, or it will not.
+    fn settled(&self, id: &str);
+}
+
+/// One attach, named.
+///
+/// Every `readying` identity is built from it, and the drop that starts it
+/// carries it too, so the panel can bind the whole batch to the conversation
+/// the gesture landed on. Without that the panel had to guess from whichever
+/// tab was open when the host spoke, which is up to forty-five seconds later
+/// — long enough to be a different tab, and it was: the tile appeared over a
+/// draft the file was never going to join, and blocked *its* send.
+///
+/// A counter rather than a random token: it only has to be unique within the
+/// run of one host talking to one page, and a number that cannot repeat is
+/// easier to read in a log than a token that merely should not.
+pub(super) fn next_batch() -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    format!("b{}", NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
 /// The panel's own event name for a file that needs a moment.
@@ -193,22 +224,22 @@ pub(super) const READYING_EVENT: &str = "nessa://attachment-readying";
 pub(super) struct Telling<'a>(pub &'a tauri::AppHandle);
 
 impl Announce for Telling<'_> {
-    fn readying(&self, name: &str) {
-        self.say(name, true);
+    fn readying(&self, id: &str, name: &str) {
+        self.say(id, name, true);
     }
-    fn settled(&self, name: &str) {
-        self.say(name, false);
+    fn settled(&self, id: &str) {
+        self.say(id, "", false);
     }
 }
 
 impl Telling<'_> {
-    fn say(&self, name: &str, readying: bool) {
+    fn say(&self, id: &str, name: &str, readying: bool) {
         use tauri::{Emitter, Manager};
 
         if let Some(panel) = self.0.get_webview_window(crate::panel::MAIN_WINDOW) {
             let _ = panel.emit(
                 READYING_EVENT,
-                serde_json::json!({ "name": name, "readying": readying }),
+                serde_json::json!({ "id": id, "name": name, "readying": readying }),
             );
         }
     }
@@ -224,8 +255,8 @@ pub struct Untold;
 
 #[cfg(test)]
 impl Announce for Untold {
-    fn readying(&self, _name: &str) {}
-    fn settled(&self, _name: &str) {}
+    fn readying(&self, _id: &str, _name: &str) {}
+    fn settled(&self, _id: &str) {}
 }
 
 /// The one that claims what is left.
@@ -237,10 +268,6 @@ impl Announce for Untold {
 pub(super) struct Unhandled;
 
 impl MakeReadable for Unhandled {
-    fn mine(&self, _path: &Path) -> bool {
-        true
-    }
-
     fn make_ready<'a>(
         &'a self,
         _path: &'a Path,
@@ -248,9 +275,9 @@ impl MakeReadable for Unhandled {
         _poll: Duration,
     ) -> ReadyFuture<'a> {
         Box::pin(async {
-            Readied::Refused(
+            Some(Readied::Refused(
                 "the file is kept by a service Nessa cannot make it ready from".to_string(),
-            )
+            ))
         })
     }
 }
@@ -288,21 +315,21 @@ mod tests {
     }
 
     impl MakeReadable for Staged {
-        fn mine(&self, _path: &Path) -> bool {
-            self.claims
-        }
         fn make_ready<'a>(
             &'a self,
             path: &'a Path,
             _within: Duration,
             _poll: Duration,
         ) -> ReadyFuture<'a> {
+            if !self.claims {
+                return Box::pin(async { None });
+            }
             self.asked
                 .lock()
                 .expect("the paths asked about")
                 .push(path.to_path_buf());
             let answer = self.answer.clone();
-            Box::pin(async move { answer })
+            Box::pin(async move { Some(answer) })
         }
     }
 
@@ -366,7 +393,11 @@ mod tests {
         let answer = tauri::async_runtime::block_on(readiness().make_ready(
             // Not a path anything keeps, and not one that exists.
             Path::new("/nowhere/at/all.pdf"),
-            Duration::from_millis(10),
+            // Long enough for a real framework call to answer. The claim now
+            // happens inside the deadline rather than before it, so a budget
+            // shorter than one round trip reports "still coming" about a file
+            // nobody is even fetching.
+            Duration::from_secs(5),
             Duration::from_millis(1),
         ));
 
@@ -385,7 +416,7 @@ mod tests {
             READY_POLL,
         ));
 
-        assert!(matches!(answer, Readied::Refused(_)), "{answer:?}");
+        assert!(matches!(answer, Some(Readied::Refused(_))), "{answer:?}");
         assert!(started.elapsed() < Duration::from_secs(1));
     }
 }

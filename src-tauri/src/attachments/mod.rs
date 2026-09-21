@@ -12,20 +12,41 @@
 //!               ──chosen_files──────▶ ChosenFiles ────┤
 //!               ──content_types─────▶ ContentTypes ───┤
 //!               ──attachment_tickets▶ AttachmentTickets
+//!               ──readiness─────────▶ Readiness ──────┤
+//!               ──drag_board────────▶ DragBoard ──────┤
 //!                                                     │
-//!   panel ──choose_attachment_files──▶ chosen_attachments ──▶ attachment
-//!         ──read_attachment_bytes────▶ redeemed_bytes ──▶ attachment_bytes
+//!   panel ──choose_attachment_files──▶ chosen_attachments ──┐
+//!   OS   ──drag/drop events──────────▶ dropped_on_panel ────┤
+//!                                                     │     └▶ describe_each
+//!   panel ──read_attachment_bytes────▶ redeemed_bytes ──▶ attachment_bytes
 //!                                                     │            │
 //!                                        ChosenFile ◀──┴──▶ Vec<u8>│
 //!                                                     │            │
 //!                                            FileNotAttached ◀─────┘
 //! ```
-//! An arrow means "constructs" or "hands to". The four ports are the only
-//! things here that touch the world: everything the page is told is decided by
+//! An arrow means "constructs" or "hands to". The ports are the only things
+//! here that touch the world: everything the page is told is decided by
 //! [`choosing::attachment`] and [`reading::attachment_bytes`], which take a
 //! path and what the outside said about it as parameters and reach for nothing.
 //!
-//! # Four ports, and why each is its own
+//! # Two ways in, one description
+//!
+//! A file chosen with `+` and a file dropped on the panel are the same thing by
+//! the time the page sees it: both are a `ChosenFile` with a path, a type and a
+//! ticket, and both are produced by [`choosing::describe_each`] — one loop
+//! asking the same outside things in the same order. Two loops would be two
+//! chances to disagree about what an image is, and that disagreement is the
+//! defect this feature has already had once.
+//!
+//! The drop half exists in this crate rather than in the page because
+//! `dragDropEnabled` is on, which is the only way a dropped file's path can be
+//! known and which costs the webview *every* HTML5 drag event rather than only
+//! the ones carrying files. So the host also reads the drag pasteboard for a
+//! drag of text or of a web-page image ([`dragged`]), walks a dropped folder
+//! under bounds, and tells the panel when a drag is overhead so the drop target
+//! can still be drawn. [`dropping`] carries the vendored lines that settle it.
+//!
+//! # Ports, and why each is its own
 //!
 //! [`FilePicker`] is a window the person interacts with: it takes as long as
 //! they take, and its answer is a choice. [`ChosenFiles`] is the filesystem
@@ -52,6 +73,19 @@
 //!
 //! [`AttachmentTickets`] is the host's own memory of what a person chose, and
 //! the reason the panel can no longer name a path to read. See [`tickets`].
+//!
+//! [`Readiness`] is not one outside thing but a choice between several. A file
+//! a cloud service is keeping answers a `stat` with a real name, type and
+//! length and has nothing behind it, and who can do something about that
+//! depends on which service is keeping it. It is a list of handlers, each
+//! claiming the files it knows how to fetch, and it dispatches on the *state*
+//! the file is in rather than on its type — the type decides the route and
+//! must go on deciding only that. See [`readiness`].
+//!
+//! [`DragBoard`] is the drag pasteboard, which is a different outside thing
+//! from the filesystem and has to be read at a different moment: when the drag
+//! *enters*, because the session's payload is gone by the time Tauri's drop
+//! event reaches a handler. See [`dragged`].
 //!
 //! # The rules the whole thing rests on
 //!
@@ -110,6 +144,17 @@
 //! - The ticket desk's adapter reads the clock and asks the operating system
 //!   for randomness; nothing here tests that `getrandom` is random or that
 //!   `Instant::now` advances.
+//! - The drag pasteboard adapter reads AppKit and needs a drag in progress to
+//!   read anything, so nothing here proves that what macOS puts on
+//!   `NSPasteboardNameDrag` is what a browser would have put on a
+//!   `DataTransfer`. What is tested is the remembering, the lifecycle that
+//!   decides which drag a payload belongs to, and every way the panel turns a
+//!   payload into an attachment or a paste.
+//! - The iCloud adapter asks `NSFileManager` to start a download and polls a
+//!   resource key; a test could only assert this machine's own iCloud account
+//!   back at itself. What is tested is the loop around it — every outcome, the
+//!   deadline, and what the panel is told at each end of the wait — against a
+//!   substitute that answers the same three states.
 //!
 //! What *is* tested is every way those answers are read, every refusal the
 //! panel can be given, and the deadline itself — with an ask that never returns,
@@ -144,8 +189,9 @@ mod tickets;
 // stays a list somebody can read.
 //
 // Only what the rest of the host actually names is re-exported: the two
-// commands `main` registers, and the four ports and factories composition
-// wires. `ChosenFile`, `FileNotAttached` and the reasons cross the seam by
+// commands `main` registers, the drop handler `main` installs, and the ports
+// and factories composition wires. `ChosenFile`, `FileNotAttached` and the
+// reasons cross the seam by
 // being serialized rather than by being named anywhere else in this crate, so
 // they stay where they are declared.
 pub use choosing::{

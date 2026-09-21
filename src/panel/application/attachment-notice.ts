@@ -303,7 +303,7 @@ export function refusalNotice(
     case "file-not-linkable":
       return say(
         "File can't be sent from there",
-        `"${refusal.name}" is in a folder Nessa cannot describe to the agent — a square bracket, or a name that is only dots. Move it somewhere else and choose it again.`,
+        `"${refusal.name}" is in a folder Nessa cannot describe to the agent — a name that is only dots, or one with a control character in it. Move it somewhere else and choose it again.`,
         { kind: "choose-files" },
       )
     // A macOS package is the ordinary way to meet this: `.key`, `.app` and

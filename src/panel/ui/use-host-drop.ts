@@ -5,8 +5,12 @@ import { droppedText } from "../adapters/dropped-text"
 import { pickerRefusal, type AttachmentRefusal } from "../application/attachment-notice"
 
 type HostDropActions = {
-  /** The same call the picker's answer goes through. */
-  addChosenFiles: (chosen: readonly ChosenFile[]) => void
+  /** The same call the picker's answer goes through, for a named draft. */
+  addChosenFiles: (chosen: readonly ChosenFile[], conversationId: string) => void
+  /** Remember which draft this drop landed on, while it is still landing. */
+  beganBatch: (batch: string, conversationId: string) => void
+  /** The conversation a batch was bound to when it began. */
+  conversationOf: (batch: string) => string
   addImageUrl: (url: string) => void
   focusComposer: () => void
   pasteAttachment: (text: string) => void
@@ -56,7 +60,7 @@ function asTransfer(text: {
  * The browser keeps its own `useContentDrop`: outside Tauri there is no host
  * to take the drag, the page still gets its events, and nothing here fires.
  */
-export function useHostDrop(actions: HostDropActions) {
+export function useHostDrop(actions: HostDropActions, conversationId: string) {
   const [dragging, setDragging] = React.useState(false)
   // The handlers are read at drop time rather than captured at subscribe time,
   // so a drop lands on the conversation that is open when it happens instead
@@ -65,11 +69,20 @@ export function useHostDrop(actions: HostDropActions) {
   React.useLayoutEffect(() => {
     latest.current = actions
   })
+  const activeId = React.useRef(conversationId)
+  React.useLayoutEffect(() => {
+    activeId.current = conversationId
+  })
   React.useEffect(() => {
     let live = true
     const subscriptions = Promise.all([
-      onAttachmentDragging((over) => {
-        if (live) setDragging(over)
+      onAttachmentDragging(({ dragging: over, batch }) => {
+        if (!live) return
+        setDragging(over)
+        // The drop's own moment. Binding it here is the only chance to bind it
+        // to the draft it landed on: the files can be three quarters of a
+        // minute away, and the open tab by then may be a different one.
+        if (batch) latest.current.beganBatch(batch, activeId.current)
       }),
       onAttachmentDropped((dropped) => {
         if (!live) return
@@ -78,8 +91,9 @@ export function useHostDrop(actions: HostDropActions) {
           latest.current.refuse(pickerRefusal(dropped.refused))
           return
         }
+        const target = latest.current.conversationOf(dropped.batch)
         if (dropped.files.length > 0) {
-          latest.current.addChosenFiles(dropped.files)
+          latest.current.addChosenFiles(dropped.files, target)
           return
         }
         const transfer = asTransfer(dropped.text)
