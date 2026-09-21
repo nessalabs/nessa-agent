@@ -173,19 +173,24 @@ impl LinkedFile {
     pub fn path(&self) -> &str {
         &self.path
     }
-    /// What to call the file: the last component of its path, which the
-    /// constructor established is there. This is a label, not an identity —
-    /// two linked files can share a name and be different files.
+    /// What to call the file: the text after the last separator in its path.
+    /// This is a label, not an identity — two linked files can share a name and
+    /// be different files.
+    ///
+    /// Total, and written so that it is. [`Self::new`] refuses a path that ends
+    /// in a separator and refuses an empty component, so a name is always
+    /// there; but `rsplit('/').next()` hands back an `Option` whose `None` the
+    /// compiler has no way to know is impossible, and the arm written for it
+    /// was an arm no input could reach, no test could cover and no reader could
+    /// check. Walking to the last component has no such arm — `split` yields at
+    /// least one piece for every string there is, and both sides of the loop
+    /// are taken on every call.
     pub fn name(&self) -> &str {
-        Self::file_name(&self.path).unwrap_or_default()
-    }
-    /// The last component of `path`, or `None` when it ends in a separator and
-    /// so names a directory.
-    fn file_name(path: &str) -> Option<&str> {
-        match path.rsplit('/').next() {
-            Some("") | None => None,
-            Some(name) => Some(name),
+        let mut name = "";
+        for component in self.path.split('/') {
+            name = component;
         }
+        name
     }
 }
 
