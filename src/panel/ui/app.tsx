@@ -57,6 +57,7 @@ import { AttachmentDropZone } from "./attachment-drop-zone"
 import { AttachmentNotices, AttachmentReadingStatus } from "./attachment-notices"
 import { AttachmentTile } from "./attachment-tile"
 import { AttachmentIcon } from "./attachment-icon"
+import { ComposerNotices } from "./composer-notices"
 import { WaveformIcon } from "./waveform-icon"
 
 // Draft and stream updates must not reparse the unchanged pasted document.
@@ -459,71 +460,91 @@ export function App({
               draft, the attachments, and the caret are all in here, and a
               detour through an update must not cost somebody their message. */}
           <div className="nessa-composer" hidden={update.viewing || undefined}>
-            {/* The same surface the connection notice uses, carrying a notice
-                that is not about the connection. `state` is the component's
-                connection vocabulary, and "disconnected" is the only one of the
-                four that renders the primary action at all — so a notice with
-                something to do declares itself disconnected whatever it is
-                about, exactly as the conversation notices below already do. The
-                heading, glyphs, and labels here are all ours; nothing of the
-                connection wording survives. */}
-            {link.notice && (
-              <AgentNotification
-                className="mb-2"
-                state="disconnected"
-                icon={Link2Off}
-                title={link.notice.title}
-                description={link.notice.description}
-                dismissLabel="Dismiss"
-                onDismiss={link.dismiss}
-              />
-            )}
-            {update.notice && (
-              <AgentNotification
-                className="mb-2"
-                state="disconnected"
-                icon={CircleArrowUp}
-                title="Update available"
-                description={update.notice.version}
-                retryIcon={Download}
-                retryLabel={update.notice.installLabel}
-                onRetry={update.install}
-                dismissLabel={update.notice.dismissLabel}
-                onDismiss={update.dismiss}
-              />
-            )}
-            {/* What the draft's files need said about them, and why the last
-                thing offered was turned away — both, when both are true. The
-                tile already marks a failed upload and carries the full reason,
-                so this does not repeat it; it offers the retry once for every
-                upload worth retrying. */}
-            <AttachmentNotices
-              refusal={attachments.refusal}
-              files={attachments.files}
-              imageInput={chat.active.remote?.capabilities.imageInput}
-              onRetryUploads={(files) => files.forEach(uploads.retry)}
-              onChooseFiles={attachments.chooseFiles}
-              onDismissRefusal={attachments.clearRefusal}
-            />
-            {/* Not the connection's own notice below, which the session's phase
-                owns: this is what the surface around the session could not do —
-                restoring a sign-in, ending one — and it is said on the same
-                surface rather than as red text under the composer. */}
-            {sessionError && (
-              <AgentNotification
-                className="mb-2"
-                state="disconnected"
-                // Not the state's own aerial: nothing here is a connection.
-                // These are sign-ins that could not be restored or ended.
-                icon={KeyRound}
-                title="Session needs attention"
-                description={sessionError}
-              />
-            )}
-            <ConversationNotification
-              conversation={chat.active}
-              connection={session}
-              gatewayAvailable={chat.gatewayAvailable}
+            {/* Everything said above the pill goes through one box, which owns
+                the order it is said in and the room it may take. A notice added
+                straight to this element instead would be unbounded again, and
+                would put itself wherever it was pasted; the architecture check
+                refuses that. The queue badge and the delivery row stay outside:
+                they are controls rather than statements, they are one short row
+                each, and a control the composer is about to obey must not be
+                somewhere you have to scroll to find. */}
+            <ComposerNotices
+              link={
+                /* The same surface the connection notice uses, carrying a
+                   notice that is not about the connection. `state` is the
+                   component's connection vocabulary, and "disconnected" is the
+                   only one of the four that renders the primary action at all —
+                   so a notice with something to do declares itself disconnected
+                   whatever it is about, exactly as the conversation notices
+                   below already do. The heading, glyphs, and labels here are
+                   all ours; nothing of the connection wording survives. */
+                link.notice ? (
+                  <AgentNotification
+                    className="mb-2"
+                    state="disconnected"
+                    icon={Link2Off}
+                    title={link.notice.title}
+                    description={link.notice.description}
+                    dismissLabel="Dismiss"
+                    onDismiss={link.dismiss}
+                  />
+                ) : null
+              }
+              update={
+                update.notice ? (
+                  <AgentNotification
+                    className="mb-2"
+                    state="disconnected"
+                    icon={CircleArrowUp}
+                    title="Update available"
+                    description={update.notice.version}
+                    retryIcon={Download}
+                    retryLabel={update.notice.installLabel}
+                    onRetry={update.install}
+                    dismissLabel={update.notice.dismissLabel}
+                    onDismiss={update.dismiss}
+                  />
+                ) : null
+              }
+              attachments={
+                /* What the draft's files need said about them, and why the last
+                   thing offered was turned away — both, when both are true. The
+                   tile already marks a failed upload and carries the full
+                   reason, so this does not repeat it; it offers the retry once
+                   for every upload worth retrying. */
+                <AttachmentNotices
+                  refusal={attachments.refusal}
+                  files={attachments.files}
+                  imageInput={chat.active.remote?.capabilities.imageInput}
+                  onRetryUploads={(files) => files.forEach(uploads.retry)}
+                  onChooseFiles={attachments.chooseFiles}
+                  onDismissRefusal={attachments.clearRefusal}
+                />
+              }
+              session={
+                /* Not the connection's own notice below, which the session's
+                   phase owns: this is what the surface around the session could
+                   not do — restoring a sign-in, ending one — and it is said on
+                   the same surface rather than as red text under the composer. */
+                sessionError ? (
+                  <AgentNotification
+                    className="mb-2"
+                    state="disconnected"
+                    // Not the state's own aerial: nothing here is a connection.
+                    // These are sign-ins that could not be restored or ended.
+                    icon={KeyRound}
+                    title="Session needs attention"
+                    description={sessionError}
+                  />
+                ) : null
+              }
+              conversation={
+                <ConversationNotification
+                  conversation={chat.active}
+                  connection={session}
+                  gatewayAvailable={chat.gatewayAvailable}
+                />
+              }
             />
             <ConversationQueue
               key={chat.active.id}
