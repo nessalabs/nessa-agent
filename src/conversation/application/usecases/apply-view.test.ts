@@ -273,6 +273,50 @@ it("a complete queue still keeps unacknowledged local sends and local failures",
 /** A send refused before admission: the message was not taken, so the draft is back. */
 const refused = { kind: "refused", reupload: false } as const
 
+/**
+ * The sentence and the typed reason behind it describe the same failure, so a
+ * view that retires one retires the other. A notice left branching on a reason
+ * the conversation no longer reports would name a cause with nothing to show.
+ */
+it("retires a refusal's reason with its sentence, and keeps both while the failed turn stands", () => {
+  const sent = beginSend(emptyLocalTabs(), {
+    conversationId: "c0",
+    executionId: "run",
+    actionId: "run-action",
+    mode: "queued",
+    content: textContent("read"),
+  })
+  const failed = failSend(
+    sent,
+    "c0",
+    "run",
+    "The agent was still starting and ran out of time.",
+    refused,
+    "agent-startup-deadline",
+  ).conversations[0]!
+  expect(failed.failure).toBe("agent-startup-deadline")
+  // A view that says nothing about this execution leaves the failure standing.
+  const unrelated = applyView(failed, {
+    ...view,
+    messages: [],
+    pending: [],
+    permissions: [],
+    tools: [],
+  })
+  expect(unrelated.error).toBe(failed.error)
+  expect(unrelated.failure).toBe("agent-startup-deadline")
+  // A view that has the turn after all supersedes what the local failure said.
+  const seen = applyView(failed, {
+    ...view,
+    pending: [],
+    permissions: [],
+    tools: [],
+    messages: [{ ...view.messages[0]!, parts: [], status: "queued" }],
+  })
+  expect(seen.error).toBeUndefined()
+  expect(seen.failure).toBeUndefined()
+})
+
 it("stale queued rows no longer hold the conversation in thinking after an offline rejection", () => {
   const { tabs } = stoppedQueue(true)
   const sending = beginSend(tabs, {

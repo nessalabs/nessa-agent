@@ -1,3 +1,4 @@
+import { conversationErrorCode } from "./conversation-error-code.js"
 import { NessaRpcError } from "./rpc-error.js"
 import {
   ConversationErrorCode,
@@ -20,13 +21,6 @@ function permissionSelection(
     ? value
     : undefined
 }
-
-// A gateway that returns a code this build does not know is not reinterpreted
-// as one it does; the caller sees no typed code and keeps the original cause.
-const knownCode = (code: string): ConversationErrorCode | undefined =>
-  (Object.values(ConversationErrorCode) as string[]).includes(code)
-    ? (code as ConversationErrorCode)
-    : undefined
 
 /** Refusals this gateway states outright, and what each one means to a person.
  *
@@ -62,7 +56,7 @@ const REFUSALS: Partial<Record<ConversationErrorCode, string>> = {
  */
 function refusal(cause: unknown): string | undefined {
   if (!(cause instanceof NessaRpcError)) return undefined
-  const code = knownCode(cause.code)
+  const code = conversationErrorCode(cause.code)
   return code === undefined ? undefined : REFUSALS[code]
 }
 
@@ -115,7 +109,8 @@ export class NessaConversationMutationError<T> extends Error {
     private readonly repeat: () => Promise<T>,
   ) {
     super(refusal(cause) ?? "Conversation command failed", { cause })
-    this.code = cause instanceof NessaRpcError ? knownCode(cause.code) : undefined
+    this.code =
+      cause instanceof NessaRpcError ? conversationErrorCode(cause.code) : undefined
     // A refusal is a decision this gateway has already made, so the command
     // never reached an agent and nothing about it is in doubt. Everything else
     // may have been admitted before the failure and is reported as uncertain.
@@ -163,7 +158,8 @@ export class NessaConversationControlError extends Error {
       { cause },
     )
     this.permissionSelection = permissionAnswer ? permissionSelection(cause) : undefined
-    this.code = cause instanceof NessaRpcError ? knownCode(cause.code) : undefined
+    this.code =
+      cause instanceof NessaRpcError ? conversationErrorCode(cause.code) : undefined
     // Still only `pending` and an outright refusal make a control certain. A
     // refusal is stated before the control is applied, which is why it counts;
     // anything else may have been applied already, and replaying a close is

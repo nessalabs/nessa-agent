@@ -33,7 +33,11 @@ export function ConversationNotification({
       <AgentNotification
         className="mb-2"
         state="disconnected"
-        description={connection.detail}
+        // This notice is the only account of the failure: the label under the
+        // avatar names the state and leaves the reason here. An `Error` whose
+        // message is empty reaches `detail` as "", which would leave a Retry
+        // button with nothing said about what it retries.
+        description={connection.detail || "The local server could not be reached."}
         onRetry={connection.retry}
       />
     )
