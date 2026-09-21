@@ -8,6 +8,7 @@ export {
   type Conversation,
   type IdleConversation,
   type Phase,
+  type ReadFailure,
   type Receipt,
   type Turn,
   type UserTurn,

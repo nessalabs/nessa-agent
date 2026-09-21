@@ -16,6 +16,7 @@ import { expect, it, vi } from "vitest"
 import {
   AttachmentStagingError,
   ControlFailedError,
+  ConversationReadFailedError,
   SubmissionRefusedError,
 } from "../../application/ports"
 import {
@@ -127,6 +128,108 @@ it("sends the creation over the session of the moment, not the one checked first
   await effects.create("server")
   expect(retired).not.toHaveBeenCalled()
   expect(live).toHaveBeenCalledOnce()
+})
+
+const reading = (error: unknown) =>
+  effectsOf(
+    () =>
+      ({ conversation: { read: () => Promise.reject(error) } }) as unknown as NessaClient,
+  )
+    .read("server")
+    .catch((error: unknown) => error)
+
+it.each([
+  // The gateway lost the configuration this conversation was created against:
+  // the one read failure this panel has a separate word for.
+  ["conversation_configuration_changed", "configuration-changed"],
+  // Known codes with nothing extra to tell somebody watching a stale transcript.
+  ["conversation_not_found", "unavailable"],
+  ["agent_not_configured", "unavailable"],
+  ["conversation_storage_unavailable", "unavailable"],
+  ["conversation_capacity", "unavailable"],
+  ["audit_unavailable", "unavailable"],
+  ["invalid_request", "unavailable"],
+] as const)(
+  "turns the gateway's failed read %s into the panel's own word",
+  async (code, reason) => {
+    // The gateway sends the code as the message too, which is exactly the
+    // coincidence nothing may depend on: the message here names another code
+    // entirely and only the typed one is read.
+    const error = await reading(
+      new NessaRpcError(code, "conversation_configuration_changed"),
+    )
+    expect(error).toBeInstanceOf(ConversationReadFailedError)
+    expect(error).toMatchObject({ reason })
+  },
+)
+
+it.each([
+  ConversationErrorCode.TemporarilyUnavailable,
+  ConversationErrorCode.AgentStartupDeadline,
+] as const)(
+  "promises no recovery for %s, which the gateway also sends for a blocked conversation",
+  async (code) => {
+    // Both read as "not yet" and usually are. But `ConversationService` retains
+    // a conversation's slot when a failed launch could not be confirmed stopped
+    // — `a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot` asserts
+    // the provider is never attempted again — and an adapter panic during
+    // opening reaches `temporarily_unavailable` the same way. The gateway
+    // cannot tell the two apart in the code it sends, so neither may this.
+    const error = await reading(new NessaRpcError(code, code))
+    expect(error).toMatchObject({ reason: "unavailable" })
+  },
+)
+
+it("does not read a code this build has never heard of as one it has", async () => {
+  for (const cause of [
+    // A code from a newer gateway, whose message is a code the panel *does*
+    // have a word for: nothing about a read is decided by a string.
+    new NessaRpcError("quantum_flux", "conversation_configuration_changed"),
+    new NessaRpcError("", "temporarily_unavailable"),
+    // The reason the wire's code is narrowed before it is looked up, rather
+    // than indexed with as it arrived: these are members of every object, and
+    // the values behind them are truthy and are not reasons.
+    new NessaRpcError("constructor", "constructor"),
+    new NessaRpcError("toString", "toString"),
+  ]) {
+    const error = await reading(cause)
+    expect(error).toBeInstanceOf(ConversationReadFailedError)
+    expect(error).toMatchObject({ reason: "unavailable", cause })
+  }
+})
+
+it("gives a read with no wire answer at all the same honest word", async () => {
+  // A dropped connection, a request that timed out, a view the client would not
+  // validate, and no session to ask: none of them is a view, and none of them
+  // claims more than that.
+  for (const cause of [
+    new Error("connection closed"),
+    new TypeError("Conversation view is malformed"),
+  ]) {
+    expect(await reading(cause)).toMatchObject({ reason: "unavailable", cause })
+  }
+  const offline = await effectsOf(() => null)
+    .read("server")
+    .catch((error: unknown) => error)
+  expect(offline).toBeInstanceOf(ConversationReadFailedError)
+  expect(offline).toMatchObject({ reason: "unavailable" })
+})
+
+it("keeps a failed read from settling the next one, and translates each on its own", async () => {
+  // Reads are serialized through one chain. A rejection must not travel down it
+  // and answer for a request that was never made.
+  const read = vi
+    .fn()
+    .mockRejectedValueOnce(
+      new NessaRpcError("conversation_configuration_changed", "setup changed"),
+    )
+    .mockResolvedValueOnce({ conversationId: "server" } as ConversationView)
+  const effects = effectsOf(() => ({ conversation: { read } }) as unknown as NessaClient)
+  const failed = effects.read("server").catch((error: unknown) => error)
+  const following = effects.read("server")
+  expect(await failed).toMatchObject({ reason: "configuration-changed" })
+  expect(await following).toEqual({ conversationId: "server" })
+  expect(read).toHaveBeenCalledTimes(2)
 })
 
 /** The original bytes, described as they are uploaded. */

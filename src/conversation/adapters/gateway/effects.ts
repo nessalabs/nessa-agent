@@ -1,10 +1,12 @@
 import {
   asImageAttachment,
+  conversationErrorCode,
   IMAGE_ATTACHMENT_TYPES,
   MAX_IMAGE_ATTACHMENT_BYTES,
   NessaAttachmentError,
   NessaConversationControlError,
   NessaConversationMutationError,
+  NessaRpcError,
   type AttachmentBeginRefusal,
   type ConversationErrorCode,
   type NessaClient,
@@ -14,12 +16,13 @@ import type { ConversationView } from "../../application/view"
 import {
   AttachmentStagingError,
   ControlFailedError,
+  ConversationReadFailedError,
   ConversationUnavailableError,
   SubmissionRefusedError,
   type ControlOutcome,
   type ConversationEffects,
 } from "../../application/ports"
-import type { CommandFailure } from "../../model"
+import type { CommandFailure, ReadFailure } from "../../model"
 
 /** Why the gateway declined to issue a ticket, as what the panel can do about it. */
 function beginFailure(refusal: AttachmentBeginRefusal | undefined) {
@@ -141,6 +144,51 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   conversations_not_configured: "conversations-not-configured",
   agent_startup_deadline: "agent-startup-deadline",
   invalid_request: "invalid-request",
+}
+
+/**
+ * The gateway's codes, as the words this panel has for a failed *read*.
+ *
+ * A separate table from `failures` because a read asks a different question of
+ * the same codes. Nothing was submitted and nothing was changed, so "was it
+ * applied" has no meaning here; all that is left is whether the gateway will
+ * ever serve this conversation again, which is what {@link ReadFailure} answers.
+ * One code decides that, so one code is listed. Everything else — every other
+ * code the read path can raise, the socket's own access and routing codes, a
+ * transport failure, a view the client would not validate, and any code this
+ * build has never heard of — is `unavailable`.
+ *
+ * `temporarily_unavailable` and `agent_startup_deadline` are deliberately not
+ * here, although both read as "not yet". The gateway retains a conversation's
+ * slot when a failed launch could not be confirmed stopped, and answers every
+ * later read from the cached failure without attempting the provider again, so
+ * the same two codes also carry "blocked until this gateway restarts" — and the
+ * gateway cannot tell the two apart in the code it sends. See {@link
+ * ReadFailure} for the evidence. Nothing here may promise a recovery on their
+ * behalf.
+ */
+const readFailures: Partial<Record<ConversationErrorCode, ReadFailure>> = {
+  conversation_configuration_changed: "configuration-changed",
+}
+
+/**
+ * Any rejected read, as the one thing the panel knows for certain about it: the
+ * view on screen is older than the gateway's, and here is what that is worth.
+ *
+ * Unlike a command this translates every failure rather than passing unknown
+ * ones on, because there is no second fact to preserve — a read carries no
+ * outcome and no message worth showing — and because the panel has to store
+ * something for every failed read. `conversationErrorCode` is what keeps a code
+ * this build has never heard of from being read as one it has: the table is
+ * consulted only for a code it narrowed, so an arbitrary wire string — `""`, or
+ * `"constructor"`, which every object answers to — cannot become a reason.
+ * Everything it does not recognise lands on `unavailable` with the rest.
+ */
+function readFailure(error: unknown): ConversationReadFailedError {
+  const code =
+    error instanceof NessaRpcError ? conversationErrorCode(error.code) : undefined
+  const named = code === undefined ? undefined : readFailures[code]
+  return new ConversationReadFailedError(named ?? "unavailable", error)
 }
 
 /**
@@ -282,6 +330,11 @@ export function gatewayEffects(
       const request = (previous ?? Promise.resolve())
         .catch(() => undefined)
         .then(() => api().read(conversationId))
+        // The gateway's answer to a read is the last thing it says in its own
+        // vocabulary: from here the panel has a word of its own for it.
+        .catch((error: unknown) => {
+          throw readFailure(error)
+        })
       reads.set(conversationId, request)
       const release = () => {
         if (reads.get(conversationId) === request) reads.delete(conversationId)
