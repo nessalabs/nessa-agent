@@ -90,8 +90,21 @@ function isNessaVite({ pid, command }) {
  * and cannot rule out a shared binary. That is weaker, and it is said out loud
  * rather than left to look the same as the Unix answer.
  */
+/**
+ * Worktrees this repository keeps *inside* itself, which are not this checkout.
+ *
+ * `scripts/worktree.sh` makes siblings, and the prefix test below rules those
+ * out. Agent worktrees land under `.claude/worktrees/`, which is beneath this
+ * root, so the same test called them ours and a run from the main checkout
+ * would SIGTERM — then SIGKILL — a vite belonging to somebody else's session.
+ * Sharing a `target/` symlink makes a worktree's process run this checkout's
+ * binary; it does not make its dev server this checkout's to stop.
+ */
+const NESTED_CHECKOUTS = `${root}/.claude/worktrees/`
+
 function belongsToThisCheckout(pid, command) {
   const cwd = processCwd(pid)
+  if (cwd && cwd.startsWith(NESTED_CHECKOUTS)) return false
   if (cwd)
     return cwd === root || cwd.startsWith(`${root}/`) || cwd.startsWith(`${root}\\`)
   if (process.platform !== "win32") return false

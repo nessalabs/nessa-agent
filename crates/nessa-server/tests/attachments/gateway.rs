@@ -30,12 +30,16 @@ mod attachment_gateway {
     }
 
     #[tokio::test]
-    async fn beginning_an_upload_requires_the_chat_grant_and_a_configured_agent() {
+    async fn beginning_an_upload_requires_the_chat_grant_and_a_gateway_that_runs_conversations() {
         let state = chat_state();
         for (credential, expected) in [
             ("reader", "forbidden"),
             ("foreign", "forbidden"),
-            ("owner-phone", "agent_not_configured"),
+            // Not `agent_not_configured`. The attachment store is composed only
+            // alongside conversations, so its absence says this gateway runs
+            // none — never that one agent is missing from `agents.runtimes`,
+            // which is what that other code now means.
+            ("owner-phone", "conversations_not_configured"),
         ] {
             let session = chat_session(&state, credential).await;
             let reply =

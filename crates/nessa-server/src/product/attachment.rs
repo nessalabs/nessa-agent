@@ -18,10 +18,18 @@ pub(super) async fn dispatch(
 ) -> OutgoingMessage {
     // Uploads exist to be sent to an agent. With none configured nothing is
     // kept, and the answer is the one every conversation method gives.
+    //
+    // Which is `conversations_not_configured` and no longer
+    // `agent_not_configured`: this store is composed only alongside
+    // conversations, so its absence is the gateway-wide fact and never a
+    // statement about one agent. Since `agent_not_configured` came to mean the
+    // narrower thing, sending it from here told somebody attaching an image to
+    // go and add a runtime for the agent their conversation named — on a
+    // gateway that runs no conversations at all.
     let Some(attachments) = state.attachments.as_ref() else {
         return failure(
             &frame.id,
-            ConversationErrorCode::AgentNotConfigured.as_str(),
+            ConversationErrorCode::ConversationsNotConfigured.as_str(),
         );
     };
     let Ok(params) = serde_json::from_value::<AttachmentBeginParams>(frame.params) else {
