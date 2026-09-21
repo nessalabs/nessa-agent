@@ -389,3 +389,69 @@ fn admission_reviews_every_harness_tool_except_denials_and_unconfigured_namespac
     assert_eq!(names.get("denied"), Some(&ObservedTool::Declined));
     assert_eq!(reviewable(&names, "denied"), None);
 }
+
+#[test]
+fn a_full_entry_budget_forgets_a_declined_call_rather_than_refusing_its_frame() {
+    // Refusing the frame here would hand a provider a way to end an execution
+    // by calling denied tools often enough, which is the failure the decline
+    // path exists to remove. A reviewable call still cannot be admitted without
+    // a place to keep it: one that cannot be retained cannot be reviewed.
+    let mut names = HashMap::new();
+    for i in 0..4096 {
+        tool_call(
+            &json!({"toolCallId": format!("{i:0256}"), "_meta":{"claudeCode":{"toolName":"Write"}}}),
+            &mut names,
+        )
+        .unwrap();
+    }
+    assert_eq!(names.len(), 4096);
+    tool_call(
+        &json!({"toolCallId":"denied-at-the-limit","_meta":{"claudeCode":{"toolName":"Bash"}}}),
+        &mut names,
+    )
+    .unwrap();
+    assert_eq!(names.len(), 4096, "a forgotten call must not take a place");
+    assert!(!names.contains_key("denied-at-the-limit"));
+    assert!(tool_call(
+        &json!({"toolCallId":"reviewable-at-the-limit","_meta":{"claudeCode":{"toolName":"Read"}}}),
+        &mut names
+    )
+    .is_err());
+}
+
+#[test]
+fn a_call_cannot_change_between_reviewable_and_declined_under_one_identity() {
+    // What a refused call is not: two different tools wearing one identity.
+    // A declined name is not retained, so a flip between two declined names is
+    // not detectable here — and does not need to be, because neither is
+    // reviewed. A flip across that boundary is what would change the answer.
+    let mut names = HashMap::new();
+    tool_call(
+        &json!({"toolCallId":"a","_meta":{"claudeCode":{"toolName":"Read"}}}),
+        &mut names,
+    )
+    .unwrap();
+    assert!(tool_call(
+        &json!({"toolCallId":"a","_meta":{"claudeCode":{"toolName":"Bash"}}}),
+        &mut names
+    )
+    .is_err());
+    let mut names = HashMap::new();
+    tool_call(
+        &json!({"toolCallId":"b","_meta":{"claudeCode":{"toolName":"Bash"}}}),
+        &mut names,
+    )
+    .unwrap();
+    assert!(tool_call(
+        &json!({"toolCallId":"b","_meta":{"claudeCode":{"toolName":"Read"}}}),
+        &mut names
+    )
+    .is_err());
+    // Declined to declined: accepted, and still declined.
+    tool_call(
+        &json!({"toolCallId":"b","_meta":{"claudeCode":{"toolName":"Artifact"}}}),
+        &mut names,
+    )
+    .unwrap();
+    assert_eq!(names.get("b"), Some(&ObservedTool::Declined));
+}

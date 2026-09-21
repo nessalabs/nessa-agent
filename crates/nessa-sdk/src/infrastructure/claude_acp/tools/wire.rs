@@ -131,6 +131,15 @@ pub(in crate::infrastructure::claude_acp) fn tool_call(
             return Err(protocol("tool identity changed"));
         }
         if names.len() >= 4096 && !names.contains_key(&id) {
+            // A reviewable call that cannot be retained cannot be reviewed, so
+            // that frame is refused. A declined one has nothing to retain: it
+            // is going to be refused anyway, and forgetting it costs only the
+            // precision of the refusal's reason. Refusing the frame instead
+            // would let a provider end an execution purely by calling denied
+            // tools often enough — the failure this path exists to remove.
+            if observed == ObservedTool::Declined {
+                return Ok(update);
+            }
             return Err(protocol("tool count limit exceeded"));
         }
         names.insert(id.clone(), observed);

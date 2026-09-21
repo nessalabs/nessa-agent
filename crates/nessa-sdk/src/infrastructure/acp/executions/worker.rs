@@ -38,8 +38,9 @@ use crate::domain::agent_execution::executions::{
     ExecutionId, ExecutionOutcome, MessageChunk, MessageId,
 };
 use crate::domain::agent_execution::permissions::{
-    PermissionCancellationReason, PermissionCancellationReasonView, PermissionId, ReviewDecline,
-    ReviewDeclineReason,
+    PermissionCancellationReason, PermissionCancellationReasonView, PermissionDecision,
+    PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOptionId, PermissionScope,
+    ReviewDecline, ReviewDeclineReason,
 };
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
@@ -149,6 +150,11 @@ struct Worker<P> {
     /// shape — answered, never registered — so without this it would be
     /// answered twice, and answering one request twice is its own protocol
     /// fault.
+    ///
+    /// One request at a time is all this has to remember, because the
+    /// dispatcher takes it as soon as that request's handler returns. A
+    /// provider that reuses one identifier for two requests is already outside
+    /// JSON-RPC, and is not something this could hold enough state to repair.
     declined: Option<RpcId>,
     shutdown_deadline: Option<Instant>,
     /// True once every request from `session_configuration` has been applied.
@@ -1744,7 +1750,7 @@ impl<P: AcpProfile> Worker<P> {
         tracing::warn!(
             session_id = %session_id.as_str(),
             execution_id = %execution_id.as_str(),
-            tool = decline.tool().unwrap_or("<unnamed>"),
+            tool = decline.declared().unwrap_or("<unnamed>"),
             reason = ?decline.reason(),
             "tool review declined; the agent is told no and the execution continues"
         );
@@ -1762,7 +1768,7 @@ impl<P: AcpProfile> Worker<P> {
         let decided = self
             .record_audit(record(PermissionAnswerDelivery::Selected))
             .await;
-        let response = match rejection_option(params) {
+        let response = match rejection_option(params, &self.config.permissions) {
             Some(option) => permission_wire::selected(&wire_id, &option),
             None => permission_wire::permission_cancel(&wire_id),
         };
@@ -1777,7 +1783,19 @@ impl<P: AcpProfile> Worker<P> {
             Err(error) => PermissionAnswerDelivery::Failed(error.clone()),
         };
         let written = self.record_audit(record(observed)).await;
-        decided.and(written).and(delivery)
+        // Three ways this can fail and three different things a reader needs to
+        // know, so a transport cause is never replaced by a generic audit one.
+        // An answered review keeps them apart the same way.
+        match (decided.and(written), delivery) {
+            (Ok(()), delivery) => delivery,
+            (Err(audit), Ok(())) => Err(audit),
+            (Err(_), Err(delivery_error)) => {
+                Err(AgentError::PermissionAnswerDeliveryAndAuditFailure {
+                    delivery_error: Box::new(delivery_error),
+                    cleanup_error: None,
+                })
+            }
+        }
     }
     async fn record_audit(&mut self, record: ExecutionAuditRecord) -> Result<(), AgentError> {
         let result = catch_worker_panic(async {
@@ -1890,7 +1908,10 @@ impl<P: AcpProfile> Worker<P> {
 
 /// Which of the two things a profile's refusal was saying.
 ///
-/// `Unsupported` is "this binding does not review that tool"; everything else
+/// `Unsupported` is "this binding does not review that tool" — including a
+/// profile that will not review it because the name is not usable as an
+/// identity, which is the same refusal reached one step earlier. Everything
+/// else
 /// is "this binding could not read the request". They lead to the same answer
 /// on the wire and to different records, which is the point of keeping them
 /// apart.
@@ -1915,13 +1936,21 @@ fn declared_tool_name(params: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-/// A rejection the provider offered, if it offered one that says "no" once.
+/// A rejection the provider offered, if it offered one this host allows.
 ///
-/// Read from the frame rather than through the offer policy, because this is
-/// the path taken when that policy could not be applied. Only `reject_once`
-/// qualifies: a persistent refusal would answer for reviews this binding has
-/// not seen, which is not a decision it may make on a host's behalf.
-fn rejection_option(params: &Value) -> Option<String> {
+/// Read from the frame rather than through the offered options, because this is
+/// the path taken when those could not be built. Two limits still apply. Only
+/// `reject_once` qualifies: a persistent refusal would answer for reviews this
+/// binding has not seen. And the configured policy must permit refusing a
+/// single request at all — a host that never offers "deny" has not authorized
+/// this binding to answer one on its behalf, and such a review is cancelled
+/// instead. The identity is validated as a domain option identity, not by a
+/// second rule invented here.
+fn rejection_option(params: &Value, policy: &PermissionOfferPolicy) -> Option<String> {
+    let deny = PermissionDecision::new(PermissionEffect::Deny, PermissionScope::request());
+    if !policy.decisions().contains(&deny) {
+        return None;
+    }
     params
         .get("options")
         .and_then(Value::as_array)?
@@ -1929,8 +1958,8 @@ fn rejection_option(params: &Value) -> Option<String> {
         .find(|option| option.get("kind").and_then(Value::as_str) == Some("reject_once"))
         .and_then(|option| option.get("optionId"))
         .and_then(Value::as_str)
-        .filter(|id| !id.trim().is_empty() && id.len() <= 256)
-        .map(str::to_owned)
+        .and_then(|id| PermissionOptionId::new(id).ok())
+        .map(|id| id.as_str().to_owned())
 }
 
 /// No artificial far-future timestamp: no configured limit means no timer.

@@ -3,7 +3,7 @@ use nessa_sdk::application::agent_execution::{
     executions::{ExecutionController, QueueOrderRecord, SessionClosureRecord},
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,
-        PermissionAnswerDelivery, PermissionAnswerRecord,
+        PermissionAnswerDelivery, PermissionAnswerRecord, ReviewDeclineRecord,
     },
     tools::ToolReviewInput,
 };
@@ -15,7 +15,7 @@ use nessa_sdk::domain::agent_execution::{
     permissions::{
         CustomPermissionCancellationReason, PermissionCancellationReason, PermissionDecision,
         PermissionEffect, PermissionId, PermissionOfferPolicy, PermissionOption,
-        PermissionOptionId, PermissionOptions, PermissionScope,
+        PermissionOptionId, PermissionOptions, PermissionScope, ReviewDecline, ReviewDeclineReason,
     },
     tools::{ToolCallId, ToolCallUpdate},
 };
@@ -233,4 +233,58 @@ fn audit_maps_explicit_close_without_claiming_physical_cleanup() {
         "verified-principal"
     );
     assert!(value.get("resourcesConfirmed").is_none());
+}
+
+#[test]
+fn audit_maps_a_declined_review_as_a_claim_about_a_tool_nobody_was_offered() {
+    let declined = |tool, reason, delivery| {
+        record_value(&ExecutionAuditRecord::ReviewDeclined(
+            ReviewDeclineRecord::new(
+                ExecutionSessionId::new("session").unwrap(),
+                ExecutionId::new("run").unwrap(),
+                ReviewDecline::new(tool, reason),
+                delivery,
+            ),
+        ))
+    };
+    let value = declined(
+        Some("Monitor"),
+        ReviewDeclineReason::ToolNotReviewable,
+        PermissionAnswerDelivery::Selected,
+    );
+    assert_eq!(value["kind"], "review_declined");
+    assert_eq!(value["sessionId"], "session");
+    assert_eq!(value["executionId"], "run");
+    assert_eq!(value["reason"], "tool_not_reviewable");
+    assert_eq!(value["delivery"]["stage"], "selected");
+    assert_eq!(value["origin"]["kind"], "runtime");
+    // The provider's claim about its own frame, named as one. A reader acting
+    // on this should know nobody checked it.
+    assert_eq!(value["declaredTool"], "Monitor");
+    assert!(value.get("tool").is_none());
+    // No request and no actor: a decline happens before either exists.
+    assert!(value.get("request").is_none());
+    assert!(value.get("actor").is_none());
+
+    // Each reason is its own fact, and an unnamed tool says so rather than
+    // being filled in.
+    for (reason, code) in [
+        (ReviewDeclineReason::UnreadableRequest, "unreadable_request"),
+        (ReviewDeclineReason::UnusableOptions, "unusable_options"),
+    ] {
+        let value = declined(None, reason, PermissionAnswerDelivery::Written);
+        assert_eq!(value["reason"], code);
+        assert!(value["declaredTool"].is_null());
+        assert_eq!(value["delivery"]["stage"], "written");
+    }
+    let failed = declined(
+        Some("Monitor"),
+        ReviewDeclineReason::ToolNotReviewable,
+        PermissionAnswerDelivery::Failed(AgentError::Transport("stdin write failed".into())),
+    );
+    assert_eq!(failed["delivery"]["stage"], "failed");
+    assert!(failed["delivery"]["diagnostic"]
+        .as_str()
+        .unwrap()
+        .contains("stdin write failed"));
 }

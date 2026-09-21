@@ -678,7 +678,7 @@ async fn a_declined_review_refuses_the_tool_and_leaves_the_turn_running() {
         for record in &declines {
             assert_eq!(record.execution_id().as_str(), "write");
             assert_eq!(record.decline().reason(), reason, "{mode}");
-            assert_eq!(record.decline().tool(), named, "{mode}");
+            assert_eq!(record.decline().declared(), named, "{mode}");
         }
         assert_eq!(declines[0].delivery(), &PermissionAnswerDelivery::Selected);
         assert_eq!(declines[1].delivery(), &PermissionAnswerDelivery::Written);
@@ -734,4 +734,129 @@ async fn a_refusal_reaches_the_agent_even_when_its_audit_cannot_be_recorded() {
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))
         .await;
+}
+
+/// A refusal that cannot be written is recorded as one that was not delivered.
+///
+/// The decision was still made locally, and the record says both things: that
+/// this binding refused, and that the agent may never have heard it.
+#[tokio::test]
+async fn a_refusal_that_cannot_be_written_keeps_its_decision_and_its_delivery_failure() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_acp_binding_with_audit("declined-write-failure", 16, audit.clone());
+    let mut opened = binding.open(None).await.unwrap();
+    let active = start(&opened, "write").await;
+    assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    let outcome = timeout(Duration::from_secs(5), active)
+        .await
+        .unwrap()
+        .unwrap();
+    let Err(failure) = outcome else {
+        panic!("an undeliverable refusal cannot report success: {outcome:?}");
+    };
+    assert!(matches!(failure, AgentError::Transport(_)), "{failure:?}");
+
+    let declines = audit.declines.lock().unwrap().clone();
+    assert_eq!(declines.len(), 2, "{declines:?}");
+    assert_eq!(declines[0].delivery(), &PermissionAnswerDelivery::Selected);
+    assert_eq!(
+        declines[1].delivery(),
+        &PermissionAnswerDelivery::Failed(failure)
+    );
+    assert_eq!(declines[0].decline(), declines[1].decline());
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+    assert_gone(&root, "pid");
+}
+
+/// Both failures at once keep both causes, as an answered review's do.
+///
+/// An audit that will not take the record must not swallow the reason the agent
+/// never heard the refusal: they are two different problems for two different
+/// people, and a generic label for both helps neither.
+#[tokio::test]
+async fn a_refusal_failing_to_write_and_to_record_preserves_both_causes() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit {
+        reject: true,
+        ..RecordingAudit::default()
+    });
+    let (root, binding) = test_acp_binding_with_audit("declined-write-failure", 16, audit);
+    let mut opened = binding.open(None).await.unwrap();
+    let active = start(&opened, "write").await;
+    assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    let outcome = timeout(Duration::from_secs(5), active)
+        .await
+        .unwrap()
+        .unwrap();
+    // The sink refuses the teardown's own records too, so the refusal's pair of
+    // causes arrives inside that outer failure rather than instead of it. All
+    // three survive, each still saying what it is.
+    let Err(AgentError::OperationAndCleanupFailure {
+        operation_error,
+        cleanup_error,
+    }) = outcome
+    else {
+        panic!("both causes are required: {outcome:?}");
+    };
+    assert_eq!(cleanup_error, Box::new(AgentError::AuditFailure));
+    let AgentError::PermissionAnswerDeliveryAndAuditFailure {
+        delivery_error,
+        cleanup_error,
+    } = *operation_error
+    else {
+        panic!("the refusal must keep both of its own causes");
+    };
+    assert!(matches!(*delivery_error, AgentError::Transport(_)));
+    assert_eq!(cleanup_error, None);
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+    assert_gone(&root, "pid");
+}
+
+/// The recorded name is the provider's claim about its own frame, and the
+/// refusal is not decided from it.
+///
+/// A provider that observes one tool and then asks to review another gets the
+/// answer its observation earned. The record keeps the name it declared, under
+/// a field that says whose claim it is, rather than a name this binding checked.
+#[tokio::test]
+async fn a_declared_name_is_recorded_as_a_claim_and_does_not_decide_the_refusal() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_acp_binding_with_audit("declined-divergent-name", 16, audit.clone());
+    let mut opened = binding.open(None).await.unwrap();
+    let active = start(&opened, "write").await;
+    assert!(matches!(next(&mut opened).await, ExecutionUpdate::Tool(_)));
+    let ExecutionUpdate::Message(chunk) = next(&mut opened).await else {
+        panic!("expected the turn to continue after the decline");
+    };
+    assert_eq!(chunk.as_str(), "declined and carried on");
+    assert_eq!(
+        timeout(Duration::from_secs(3), active)
+            .await
+            .unwrap()
+            .unwrap(),
+        Ok(ExecutionOutcome::Completed)
+    );
+
+    let declines = audit.declines.lock().unwrap().clone();
+    assert_eq!(declines.len(), 2, "{declines:?}");
+    // Refused for what was observed under this identity — a denied tool — and
+    // not for the reviewable name the frame put forward.
+    assert_eq!(
+        declines[0].decline().reason(),
+        ReviewDeclineReason::ToolNotReviewable
+    );
+    assert_eq!(declines[0].decline().declared(), Some("Read"));
+    let _ = opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await;
+    assert_gone(&root, "pid");
 }

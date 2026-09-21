@@ -31,14 +31,22 @@ pub enum ReviewDeclineReason {
 /// A decline is a decision, so it is evidence. It is *not* a permission
 /// cancellation: nothing was pending, because the request never became one,
 /// and there is no permission identity to correlate it with. What it carries
-/// instead is the tool's own
+/// instead is the provider's own
 /// name where that name was readable, which is the only thing that tells a
 /// reader afterwards which tool the agent was refused.
 ///
-/// The name is optional on purpose. A frame that could not be read as a request
-/// may not carry a readable name either, and inventing one — or retaining an
-/// unbounded one so that nothing is lost — would be worse than saying plainly
-/// that the tool could not be named.
+/// That name is the provider's claim, and this binding does not verify it. The
+/// refusal can be decided from what was observed earlier under the same call
+/// identity, while the name comes from the frame asking for the review, and a
+/// provider is free to disagree with itself between the two. Retaining the
+/// observed name instead would mean holding an unbounded one for the rest of
+/// the execution, which is part of what a refused call is refused for. So the
+/// claim is recorded as a claim — [`declared`](Self::declared) says whose it
+/// is — rather than dressed up as something checked.
+///
+/// It is optional for a related reason: a frame that could not be read as a
+/// request may not carry a readable name either, and inventing one would be
+/// worse than saying plainly that the tool could not be named.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReviewDecline {
     tool: Option<Box<str>>,
@@ -50,7 +58,7 @@ impl ReviewDecline {
     ///
     /// `tool` is the provider's own name for it. A name that is empty, longer
     /// than 128 bytes, or not printable on one line is not retained: the
-    /// decline still records its reason, and [`tool`](Self::tool) answers
+    /// decline still records its reason, and [`declared`](Self::declared) answers
     /// `None`. Construction performs no I/O and never fails, because a refusal
     /// must always be recordable — including the refusal of a frame that was
     /// unreadable in the first place.
@@ -61,8 +69,11 @@ impl ReviewDecline {
         }
     }
 
-    /// The provider's name for the refused tool, where it was readable as one.
-    pub fn tool(&self) -> Option<&str> {
+    /// The name the provider gave the refused tool, where it was readable.
+    ///
+    /// Provider-asserted and unverified; the type's own documentation says why
+    /// this binding cannot check it against what it observed.
+    pub fn declared(&self) -> Option<&str> {
         self.tool.as_deref()
     }
 

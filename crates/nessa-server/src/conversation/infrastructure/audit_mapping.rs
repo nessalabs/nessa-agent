@@ -62,16 +62,18 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
 /// A review the binding refused before anyone was offered it.
 ///
 /// There is no request and no actor here, and neither is omitted by accident: a
-/// decline happens before a request exists, and nobody chose it. What the
-/// record does carry is which tool was refused — `null` where the frame named
-/// it in a way not worth retaining — and why.
+/// decline happens before a request exists, and nobody chose it. The tool name
+/// is the provider's claim about its own frame, never checked against what was
+/// observed, so the field says `declaredTool` rather than `tool`: a reader
+/// deciding anything on it should know whose word it is. It is `null` where the
+/// frame named the tool in a way not worth retaining.
 fn declined(record: &ReviewDeclineRecord) -> Value {
     let decline = record.decline();
     json!({
         "kind":"review_declined",
         "sessionId":record.session_id().as_str(),
         "executionId":record.execution_id().as_str(),
-        "tool":decline.tool(),
+        "declaredTool":decline.declared(),
         "reason":match decline.reason() {
             ReviewDeclineReason::ToolNotReviewable => "tool_not_reviewable",
             ReviewDeclineReason::UnreadableRequest => "unreadable_request",

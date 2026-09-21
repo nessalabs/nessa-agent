@@ -12,7 +12,7 @@ fn a_readable_name_is_kept_with_its_reason() {
         ("Read", ReviewDeclineReason::UnreadableRequest),
     ] {
         let decline = ReviewDecline::new(Some(tool), reason);
-        assert_eq!(decline.tool(), Some(tool));
+        assert_eq!(decline.declared(), Some(tool));
         assert_eq!(decline.reason(), reason);
         assert!(decline.named());
     }
@@ -36,7 +36,7 @@ fn an_unreadable_name_leaves_the_reason_standing_and_retains_nothing() {
         Some("delete\u{7f}"),
     ] {
         let decline = ReviewDecline::new(tool, ReviewDeclineReason::UnreadableRequest);
-        assert_eq!(decline.tool(), None, "retained {tool:?}");
+        assert_eq!(decline.declared(), None, "retained {tool:?}");
         assert!(!decline.named());
         assert_eq!(decline.reason(), ReviewDeclineReason::UnreadableRequest);
     }
@@ -47,7 +47,7 @@ fn the_retained_name_is_bounded_at_the_limit_not_past_it() {
     let at_limit = "M".repeat(128);
     let over_limit = "M".repeat(129);
     assert_eq!(
-        ReviewDecline::new(Some(&at_limit), ReviewDeclineReason::ToolNotReviewable).tool(),
+        ReviewDecline::new(Some(&at_limit), ReviewDeclineReason::ToolNotReviewable).declared(),
         Some(at_limit.as_str())
     );
     assert!(!ReviewDecline::new(Some(&over_limit), ReviewDeclineReason::ToolNotReviewable).named());

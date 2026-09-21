@@ -72,7 +72,7 @@ impl ExecutionAudit for TracingExecutionAudit {
                     tracing::info!(
                         session = declined.session_id().as_str(),
                         execution = declined.execution_id().as_str(),
-                        tool = declined.decline().tool().unwrap_or("<unnamed>"),
+                        tool = declined.decline().declared().unwrap_or("<unnamed>"),
                         reason = ?declined.decline().reason(),
                         delivery = ?declined.delivery(),
                         "Review declined without being offered"
