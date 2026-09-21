@@ -9,6 +9,33 @@ use crate::agent_install::domain::AgentName;
 use crate::agent_install::infrastructure::{host_platform, releases_for, ManagedRuntimes};
 use crate::agent_install_test_support::temporary_root;
 
+#[test]
+fn building_a_client_names_the_tls_backend_this_process_uses() {
+    // `reqwest` is taken here without one, so the client it builds either
+    // finds a provider already installed or panics inside the library. This is
+    // that install, asserted from the outside: once a client exists this
+    // process has a default, and it is the implementation this module named
+    // rather than whichever one the build graph happened to leave lying about.
+    //
+    // Compared against *ring*'s own provider rather than merely asserted to
+    // exist, because "some backend is installed" is satisfied by the feature
+    // that chooses `aws-lc-rs` for the whole build graph — which is the thing
+    // this is here to keep out. The comparison is over the suites themselves,
+    // which are statics, so it is the two providers being the same one and not
+    // two lists that read alike.
+    HttpsArchives::new().expect("an https client");
+
+    let installed = rustls::crypto::CryptoProvider::get_default()
+        .expect("this process has a tls backend")
+        .clone();
+
+    assert_eq!(
+        installed.cipher_suites,
+        rustls::crypto::ring::default_provider().cipher_suites,
+        "the tls backend is not the one this module installs"
+    );
+}
+
 /// A staged file in a temporary directory, so the tests below can write into
 /// something real without the store's own rules getting in the way.
 fn staged(directory: &std::path::Path) -> StagedArchive {

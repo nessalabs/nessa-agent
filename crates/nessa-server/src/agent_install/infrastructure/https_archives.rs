@@ -84,6 +84,7 @@ impl HttpsArchives {
     /// Both policies are set rather than inherited. They are reqwest's defaults
     /// today, and a default is not a decision this install can rest on.
     pub fn new() -> Result<Self, NoHttpsClient> {
+        install_tls_backend();
         Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(TRANSFER_TIMEOUT)
@@ -93,6 +94,35 @@ impl HttpsArchives {
             .build()
             .map(|client| Self { client })
             .map_err(|error| NoHttpsClient(error.to_string()))
+    }
+}
+
+/// Name the cryptography this process does TLS with, rather than letting a
+/// crate feature decide it.
+///
+/// `reqwest` is taken here with `rustls-no-provider`, which is how `tauri` and
+/// `tauri-plugin-updater` take it too: the library declines to choose and the
+/// application says. Its `rustls` feature is the alternative, and it chooses
+/// `aws-lc-rs` — not for this client, but for every crate in the build graph
+/// that shares the dependency, because cargo unifies features across a build.
+/// An agent installer is the wrong place for a decision about what the
+/// desktop's updater ships with, and `aws-lc-sys` is a C and assembly build
+/// this gateway has no use for.
+///
+/// *ring* is the implementation already here: `rustls-webpki` verifies
+/// certificates with it whatever else is enabled, and both Tauri crates
+/// install exactly this provider before building their own clients. Naming the
+/// same one is what keeps a whole-workspace build to a single implementation.
+///
+/// Installed only when nothing has been: the default is process-wide and the
+/// first writer wins, so a lost race means somebody else already chose and
+/// their choice stands — which is why the result is dropped rather than
+/// reported. `reqwest` reads that default when it builds a client and falls
+/// back to a panic when there is none, so this runs before the builder rather
+/// than beside it.
+fn install_tls_backend() {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
     }
 }
 
