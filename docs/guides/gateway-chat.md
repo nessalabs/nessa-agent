@@ -213,16 +213,47 @@ send   -> conversation.send { text, attachments: [the returned references] }
   false, and the code itself is reported as a typed `ConversationErrorCode`.
   `adapters/gateway/effects.ts` is where the panel reads that code, and it
   answers in the panel's own vocabulary — a `CommandFailure` such as
-  `agent-startup-deadline`. It is the only place for a command's failure; one
-  read left, in `ui/notification.ts`, still compares a failed *read*'s text
-  against `conversation_configuration_changed`, because a read carries no
-  translated reason yet. That module says so, and giving reads one of their own
-  is the remaining half. The panel marks the turn not sent, says why in a
-  sentence chosen by that reason, and puts the message back in the draft with
-  its images. A code this build has no word for keeps the client's own sentence
-  and carries no reason at all, rather than being read as one it does know. Any
-  other failure after admission was attempted stays uncertain and keeps its
-  explicit retry.
+  `agent-startup-deadline`. It is the only place a wire code is read, for
+  commands and reads alike; nothing anywhere compares an error's text against
+  one. The panel marks the turn not sent, says why in a sentence chosen by that
+  reason, and puts the message back in the draft with its images. A code this
+  build has no word for keeps the client's own sentence and carries no reason at
+  all, rather than being read as one it does know. Any other failure after
+  admission was attempted stays uncertain and keeps its explicit retry.
+- **A failed read has its own vocabulary, because a read is not a command.**
+  Nothing was asked for and nothing changed, so there is no receipt, no draft to
+  hand back and no outcome to be certain about — only a transcript older than the
+  gateway's. `ReadFailure` is two words, and a word earns its place by changing
+  what is said or whether a retry is offered. `configuration-changed` is the one
+  the gateway will not serve again, so it withdraws the retry; `unavailable` is
+  every other failed read, including every code this build has never heard of,
+  and claims only that the view is stale and the panel is still asking. Every
+  rejected read arrives as a `ConversationReadFailedError`, so the store never
+  sees a wire code or a sentence, and `readError` on the tab holds the word
+  rather than text. The cause is not thrown away with the translation: the store
+  reports it to the console beside the word, which is the only place a gateway
+  answering about a *different* conversation can still be read.
+- **No read failure promises that the gateway will come back.** A third word for
+  a transient outage was written and withdrawn, because no code the gateway sends
+  means that. `temporarily_unavailable` and `agent_startup_deadline` normally do
+  mean "not yet" — but when a failed launch cannot be confirmed stopped,
+  `ConversationService` deliberately retains the conversation's slot, answers
+  every later read from the cached failure and never attempts the provider again
+  (`a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot` asserts it, and
+  the protocol text says "a launch whose process could not be confirmed stopped
+  keeps that conversation blocked"). An adapter panic during opening reaches
+  `temporarily_unavailable` the same way. The gateway cannot tell the two apart
+  in the code it sends, so neither can the panel, and "this normally catches up
+  in a moment" would be a confident falsehood for a conversation that is blocked
+  until the gateway restarts. `unavailable` already says the panel keeps trying,
+  which is true of all of them.
+- **A conversation the gateway has stopped serving outranks everything else on
+  its tab.** A command somebody asked for otherwise wins the notice over the
+  panel's own polling. The exception is `configuration-changed`, because every
+  other notice ends in an action — refresh, resend, retry this submission — that
+  the gateway can no longer complete; a lost close acknowledgement inviting a
+  refresh is the concrete case. What became of each message is not lost with the
+  notice slot: the turn keeps its own receipt, which the transcript renders.
 - **A control's failure is translated the same way, and says something else.**
   The client has no sentence of its own for a control: every one of them gets
   the constant "Conversation control did not return a trustworthy

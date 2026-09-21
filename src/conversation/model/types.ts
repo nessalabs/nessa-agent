@@ -29,6 +29,58 @@ export type CommandFailure =
   | "agent-startup-deadline"
   | "invalid-request"
 
+/**
+ * Why the panel could not refresh a conversation's view, in this panel's own
+ * words rather than the gateway's.
+ *
+ * A sibling of {@link CommandFailure} and not a member of it, because a read is
+ * not a command: nothing was asked for and nothing was changed, so there is no
+ * receipt, no draft to hand back, and no outcome to be certain or uncertain
+ * about. What a read failure decides is narrower — which sentence appears under
+ * a transcript that has stopped moving, and whether a retry is worth offering —
+ * and it answers for codes a command never meets
+ * (`conversation_configuration_changed`) while having nothing to say about most
+ * of the ones a command does. Folding the two together would make every switch
+ * over a command's reasons answer for a read's, and the other way round.
+ *
+ * Two words, because the panel keeps polling and keeps showing the last view
+ * whatever went wrong, so a word earns its place only by changing what is said
+ * or whether a retry is offered:
+ *
+ * - `configuration-changed` is the one the gateway will not serve again. The
+ *   conversation was created against an agent configuration it no longer has,
+ *   which nothing this window does can change, so it withdraws the retry and
+ *   outranks anything else the tab is saying.
+ * - `unavailable` is every other failed read, and claims nothing beyond a stale
+ *   view and a panel still asking.
+ *
+ * A third word for a *transient* failure was written and then withdrawn, because
+ * no code the gateway sends means that. `temporarily_unavailable` and
+ * `agent_startup_deadline` look like "not yet", and usually are — but when a
+ * failed launch cannot be confirmed stopped, `ConversationService` deliberately
+ * retains the conversation's slot (`retryable` is false at
+ * `conversation/application/service.rs`, and the slot is evicted only when it is
+ * true), so every later read is answered from the cached failure and the
+ * provider is never attempted again. Its own test asserts exactly that:
+ * `a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot`. The protocol
+ * text this panel's client is generated from says it too — "a launch whose
+ * process could not be confirmed stopped keeps that conversation blocked" — and
+ * an adapter panic during opening takes the same road to
+ * `temporarily_unavailable`. The gateway cannot tell the two apart in the code
+ * it sends, so neither can the panel, and promising that a conversation which
+ * may be blocked until the gateway restarts "catches up in a moment" would be a
+ * confident falsehood where the honest sentence costs nothing: `unavailable`
+ * already says the panel keeps trying, which is true of all of them.
+ *
+ * `conversation_not_found` and `agent_not_configured` were weighed too, and left
+ * with the rest: neither is permanent — a re-authenticated session or a
+ * reconfigured gateway makes both succeed — and neither changes what somebody
+ * does next. `unavailable` is also the word a code this build has never heard of
+ * must get, and a sentence good enough for an unknown answer is good enough for
+ * a known one nobody can act on.
+ */
+export type ReadFailure = "configuration-changed" | "unavailable"
+
 export type Receipt =
   "sending" | "accepted" | "queued" | "unknown" | "failed" | "delivered"
 
@@ -84,7 +136,13 @@ type ConversationState = {
    * a control's outcome was decided before this was stored.
    */
   failure?: CommandFailure
-  readError?: string
+  /**
+   * Why the last read of this conversation failed, in the panel's own words.
+   * Set only while the view on screen is older than the gateway's: any view
+   * that arrives clears it, and it says nothing about `error`, which belongs to
+   * a command somebody asked for rather than to the panel's own polling.
+   */
+  readError?: ReadFailure
   revision?: string
   readRequest?: string
   cancellationStatus?: "cancelling" | "cancelled"

@@ -1,3 +1,4 @@
+import { conversationErrorCode } from "./conversation-error-code.js"
 import { NessaRpcError } from "./rpc-error.js"
 import {
   ConversationErrorCode,
@@ -20,13 +21,6 @@ function permissionSelection(
     ? value
     : undefined
 }
-
-// A gateway that returns a code this build does not know is not reinterpreted
-// as one it does; the caller sees no typed code and keeps the original cause.
-const knownCode = (code: string): ConversationErrorCode | undefined =>
-  (Object.values(ConversationErrorCode) as string[]).includes(code)
-    ? (code as ConversationErrorCode)
-    : undefined
 
 // Codes the gateway only returns after refusing the command outright. A startup
 // deadline belongs here: startup ends before any input reaches the provider.
@@ -92,7 +86,8 @@ export class NessaConversationMutationError<T> extends Error {
     private readonly repeat: () => Promise<T>,
   ) {
     super(rejectionMessage(cause), { cause })
-    this.code = cause instanceof NessaRpcError ? knownCode(cause.code) : undefined
+    this.code =
+      cause instanceof NessaRpcError ? conversationErrorCode(cause.code) : undefined
     this.uncertain = !(
       cause instanceof NessaRpcError && rejectedBeforeAdmission(cause.code)
     )
@@ -127,7 +122,8 @@ export class NessaConversationControlError extends Error {
   ) {
     super("Conversation control did not return a trustworthy acknowledgement", { cause })
     this.permissionSelection = permissionAnswer ? permissionSelection(cause) : undefined
-    this.code = cause instanceof NessaRpcError ? knownCode(cause.code) : undefined
+    this.code =
+      cause instanceof NessaRpcError ? conversationErrorCode(cause.code) : undefined
     this.uncertain =
       this.permissionSelection !== "pending" &&
       !(cause instanceof NessaRpcError && rejectedBeforeApplying(cause.code))

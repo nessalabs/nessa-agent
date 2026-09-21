@@ -4,6 +4,7 @@ import {
   type FileAttachment,
   type ImageReference,
   type MessageContent,
+  type ReadFailure,
   type UploadFailure,
 } from "../model"
 import type { LocalTabs } from "./local-tabs"
@@ -24,6 +25,11 @@ export interface ConversationGateway {
 /** External effects consumed by conversation commands. */
 export interface ConversationEffects {
   create(conversationId: string): Promise<{ conversationId: string }>
+  /**
+   * Read the gateway's current bounded view of a conversation. Rejects with
+   * {@link ConversationReadFailedError}, so no caller has to look at a wire code
+   * or a sentence to find out what went wrong.
+   */
   read(conversationId: string): Promise<ConversationView>
   send(input: Submission): Promise<SubmissionReceipt>
   steer(input: Submission): Promise<SubmissionReceipt>
@@ -80,6 +86,27 @@ export class SubmissionRefusedError extends Error {
   ) {
     super(`The gateway refused this message (${reason}).`, { cause })
     this.name = "SubmissionRefusedError"
+  }
+}
+
+/**
+ * A read did not produce a view this panel can show, and why, in the panel's own
+ * words — never by reading the message.
+ *
+ * Unlike a command's failure this carries no outcome, because a read has none:
+ * it asked the gateway for nothing and changed nothing, so the only fact is that
+ * the view on screen is older than the gateway's. Every rejected read arrives as
+ * one of these, including the ones whose cause this build cannot name — an
+ * unnamed cause is still a stale view, and {@link ReadFailure} has the word for
+ * exactly that.
+ */
+export class ConversationReadFailedError extends Error {
+  constructor(
+    readonly reason: ReadFailure,
+    cause?: unknown,
+  ) {
+    super(`The gateway did not answer with a view (${reason}).`, { cause })
+    this.name = "ConversationReadFailedError"
   }
 }
 
