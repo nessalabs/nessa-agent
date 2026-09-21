@@ -15,7 +15,7 @@
  */
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -53,22 +53,77 @@ function report(run) {
   return JSON.parse(run.stdout)
 }
 
-/** Whether Nessa pins an Opencode build for the machine this is running on.
+/** Whether Nessa pins any Opencode build for this *platform*.
  *
  * Read from the platform, deliberately, and never from what the command said.
- * `install-agent` has two refusals that both open "nessa has no tested
- * opencode release": one for a platform with no pins at all, and one for a
- * platform that has them where none of the builds runs on *this* machine. On
- * Windows the first is the truth. On a runner Nessa does pin for, either
- * sentence can only mean a regression — a pin dropped from
- * `agent-releases.json`, `host_libc` or `host_has_avx2` answering wrongly,
- * `satisfies` broken — and a check that read it as "nothing to install here"
- * would turn every one of those into a green step that verified nothing, with
- * the digest never compared against the registry.
+ * Windows is the one platform `agent-releases.json` holds nothing for at all,
+ * and "nessa installs nothing on Windows" is itself a contract: a Windows pin
+ * arriving without the rest of this working should not be silent, so the
+ * refusal there is asserted rather than skipped past.
  *
- * So there is one platform this skips on, it is named here rather than
- * inferred, and it is the only one. */
+ * Being pinned for is not the same as being served, and this answers only the
+ * first. Every x86-64 pin needs AVX2, so a pinned platform still has machines
+ * none of its builds runs on — `unserved` below is that half of the question,
+ * and it is the half `process.platform` cannot answer. */
 const PINNED = process.platform !== "win32"
+
+/** Whether a refusal is "this platform is pinned, and no build fits this
+ * machine".
+ *
+ * `install-agent` has two refusals that both open "nessa has no tested
+ * opencode release". One names a platform with no pins behind it at all, which
+ * is `PINNED` above. This is the other, and it is the one that depends on more
+ * than the platform: builds exist here, and what they ask for — a C library,
+ * AVX2 — is not what this machine provides.
+ *
+ * Matched on the clause only the second sentence carries, because reading one
+ * as the other is the difference between "a Windows pin appeared" and "this
+ * processor is out of reach". */
+function unserved(stderr) {
+  return stderr.includes("no tested opencode release this machine can run")
+}
+
+/** Whether this processor is one no pinned x86-64 build runs on, asked of the
+ * machine rather than of the command.
+ *
+ * `9ca50a00` dropped the three `-baseline` pins, so every x86-64 build Nessa
+ * pins now needs AVX2 and a pre-AVX2 x86-64 machine is served by none of them.
+ * That machine is correct and so is the refusal it gets; what was wrong was
+ * reading it as a broken install, which is what happens when the platform
+ * alone is taken to decide coverage.
+ *
+ * Read here rather than believed from the refusal, because a refusal taken on
+ * its own word is how `host_has_avx2` answering wrongly — on a machine that
+ * does have AVX2, whose install should have happened — becomes a green step
+ * that verified nothing, with the digest never compared against the registry.
+ * The refusal is accepted only where this agrees with it.
+ *
+ * Answers `false` wherever it cannot tell: an architecture where AVX2 is not a
+ * thing to lack, a platform with neither `/proc/cpuinfo` nor `sysctl`, a probe
+ * that fails. Each of those leaves a refusal uncorroborated and the run red,
+ * which is the direction an unreadable machine should fail in. The
+ * architecture read is Node's own, so a Node and a `nessa` built for different
+ * architectures — an x86-64 binary under Rosetta beside an arm64 Node — is a
+ * red run too, rather than a skip taken on a machine nothing here measured. */
+function withoutAvx2() {
+  if (process.arch !== "x64" && process.arch !== "ia32") return false
+  try {
+    if (process.platform === "linux") {
+      return !/^flags\s*:.*\bavx2\b/m.test(readFileSync("/proc/cpuinfo", "utf8"))
+    }
+    if (process.platform === "darwin") {
+      const probe = spawnSync("/usr/sbin/sysctl", ["-n", "machdep.cpu.leaf7_features"], {
+        encoding: "utf8",
+      })
+      return probe.status === 0 && !/\bAVX2\b/.test(probe.stdout)
+    }
+  } catch {
+    // An unreadable probe is not evidence of anything, and least of all of the
+    // one fact that would let this file stop checking.
+    return false
+  }
+  return false
+}
 
 /** Whether a refusal is this machine having no route to the registry.
  *
@@ -83,39 +138,72 @@ function unreachable(stderr) {
   return stderr.includes("could not reach the release archive")
 }
 
-/** What each failure `install-agent` can report must do to the skip above.
+/** What each refusal `install-agent` can report means to the two readings
+ * above.
  *
- * Held here rather than left to be read, because the fault this guards is a
- * skip condition quietly growing wider than the one thing it is for, and the
- * run where that matters is the run where it stops checking anything. These
- * are the `SourceFailure` and `InstallFailure` sentences as `explain` emits
- * them, retry advice included — the advice is the part that is wider than the
- * fault, so it is present in the ones that must not skip.
+ * Held here rather than left to be read, because the fault this guards is one
+ * of those conditions quietly growing wider than the single thing it is for,
+ * and the run where that matters is the run where it stops checking anything.
+ * Each row is a sentence as the command emits it — the `SourceFailure` and
+ * `InstallFailure` ones with the retry advice `explain` appends, since the
+ * advice is the part that is wider than the fault — followed by what
+ * `unreachable` and then `unserved` must say about it.
+ *
+ * At most one of the two is ever true of a sentence, and the rows where both
+ * are false are the failures this file exists to go red on.
  */
-const SKIP_CASES = [
+const REFUSALS = [
   [
     "could not reach the release archive: connection reset; nothing was installed, try again",
     true,
+    false,
   ],
   [
     "could not store the release archive: No space left on device; nothing was installed, try again",
+    false,
     false,
   ],
   [
     "the release archive was refused with status 404; the pinned release may have been withdrawn (404)",
     false,
+    false,
   ],
   [
     "the archive is not the pinned one; nothing was installed and this is not worth retrying",
     false,
+    false,
+  ],
+  // The machine refusal itself, which is the only sentence that may divert the
+  // run into the unserved branch — and which must never be read as a registry
+  // this machine could not reach, because those are opposite facts about
+  // whether anything was worth downloading.
+  [
+    "nessa has no tested opencode release this machine can run: it is linux-x86_64 with gnu and no avx2, and the opencode builds for linux-x86_64 need gnu and avx2, or musl and avx2",
+    false,
+    true,
+  ],
+  // `explain`'s own unsupported-platform sentence, which says the same thing
+  // in the use case's words. The command cannot emit it today — choosing a
+  // release refuses first, with the sentence above — and if that ever changes
+  // this file should go red and be read rather than quietly take a branch
+  // written for a message it no longer gets.
+  [
+    "no tested release for linux-x86_64 with gnu and no avx2; nothing was installed, and nothing will be until nessa ships a build this machine can run",
+    false,
+    false,
   ],
 ]
 
-for (const [message, skips] of SKIP_CASES) {
+for (const [message, registry, machine] of REFUSALS) {
   assert.equal(
     unreachable(message),
-    skips,
-    `${skips ? "must" : "must not"} be treated as an unreachable registry: ${message}`,
+    registry,
+    `${registry ? "must" : "must not"} be treated as an unreachable registry: ${message}`,
+  )
+  assert.equal(
+    unserved(message),
+    machine,
+    `${machine ? "must" : "must not"} be treated as a machine nothing is pinned for: ${message}`,
   )
 }
 
@@ -154,6 +242,28 @@ try {
     assert.equal(installed.stdout, "", `a refusal wrote to stdout: ${installed.stdout}`)
     console.log(
       `install-agent e2e passed the refusal cases, including that nessa pins no opencode build for ${process.platform}; there was nothing to install, so the report itself was not checked`,
+    )
+  } else if (installed.status !== 0 && unserved(installed.stderr)) {
+    // A platform Nessa pins builds for, and a machine none of them runs on:
+    // at 1.18.31 that is an x86-64 processor without AVX2, which every x86-64
+    // pin needs. The refusal is the right answer here, so it is held to being
+    // a proper one — the agent exit code, stdout untouched — rather than
+    // skipped past, and it is accepted at all only because the processor was
+    // asked separately and said the same thing. A refusal this machine
+    // contradicts is a regression in `host_has_avx2`, `host_libc` or
+    // `satisfies`, and stays a failure.
+    assert.ok(
+      withoutAvx2(),
+      `install-agent refused a machine nothing here found a reason to refuse: ${installed.stderr.trim()}`,
+    )
+    assert.equal(
+      installed.status,
+      25,
+      `expected the agent exit code: ${installed.stderr}`,
+    )
+    assert.equal(installed.stdout, "", `a refusal wrote to stdout: ${installed.stdout}`)
+    console.log(
+      `install-agent e2e passed the refusal cases, including that nessa pins no opencode build this processor can run; there was nothing to install, so the report itself was not checked`,
     )
   } else if (installed.status !== 0 && unreachable(installed.stderr)) {
     // The one skip on a platform that is pinned: no route to the registry.
