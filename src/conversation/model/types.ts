@@ -1,6 +1,35 @@
-import type { ConversationErrorCode } from "@nessa/client"
 import type { ImageReference } from "./attachments"
 import type { MessageContent } from "./content"
+
+/**
+ * Why a conversation command did not do what was asked, in this panel's own
+ * words rather than the gateway's.
+ *
+ * The gateway answers in wire codes. `adapters/gateway/effects.ts` is the one
+ * place those are read, and these are what everything after it says about a
+ * failure: which sentence it shows, and which heading.
+ *
+ * Why, and never whether. A reason says nothing about whether the command ran,
+ * and the same reason means different things for different commands: a message
+ * refused as `conversation-not-found` was certainly not sent, while a control
+ * that met the same code may still have been applied — the gateway can lose
+ * the acknowledgement rather than the command. What happened is a separate
+ * typed fact, carried by the error that names it: `SubmissionRefusedError`
+ * exists only for a message that was not taken, and `ControlFailedError`
+ * carries its own `refused`. Decide from those; use this to speak.
+ */
+export type CommandFailure =
+  | "image-input-unsupported"
+  | "attachment-not-found"
+  | "attachment-unavailable"
+  | "attachment-cleanup-unavailable"
+  | "conversation-not-found"
+  | "conversation-capacity"
+  | "agent-not-configured"
+  | "agent-unsupported"
+  | "conversations-not-configured"
+  | "agent-startup-deadline"
+  | "invalid-request"
 
 export type Receipt =
   "sending" | "accepted" | "queued" | "unknown" | "failed" | "delivered"
@@ -50,8 +79,13 @@ type ConversationState = {
   serverConversationId?: string
   serverReady?: boolean
   error?: string
-  /** Typed gateway rejection behind `error`, when the failure carried one. Notices branch on this, never on the message text. */
-  errorCode?: ConversationErrorCode
+  /**
+   * Typed reason behind `error`, when the failure carried one. It is what a
+   * notice says the failure was, instead of reading the message text. It is not
+   * what happened: the turn's own `receipt` says whether a message went, and
+   * a control's outcome was decided before this was stored.
+   */
+  failure?: CommandFailure
   readError?: string
   revision?: string
   readRequest?: string

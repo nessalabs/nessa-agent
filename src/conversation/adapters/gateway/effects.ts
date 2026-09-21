@@ -3,6 +3,7 @@ import {
   IMAGE_ATTACHMENT_TYPES,
   MAX_IMAGE_ATTACHMENT_BYTES,
   NessaAttachmentError,
+  NessaConversationControlError,
   NessaConversationMutationError,
   type AttachmentBeginRefusal,
   type ConversationErrorCode,
@@ -12,11 +13,13 @@ import {
 import type { ConversationView } from "../../application/view"
 import {
   AttachmentStagingError,
+  ControlFailedError,
   ConversationUnavailableError,
   SubmissionRefusedError,
+  type ControlOutcome,
   type ConversationEffects,
-  type SubmissionRefusal,
 } from "../../application/ports"
+import type { CommandFailure } from "../../model"
 
 /** Why the gateway declined to issue a ticket, as what the panel can do about it. */
 function beginFailure(refusal: AttachmentBeginRefusal | undefined) {
@@ -113,25 +116,38 @@ function storedImageRefusal(stored: StoredAttachment): AttachmentStagingError {
 }
 
 /**
- * The gateway's pre-admission codes this panel has its own word for. A code
- * that refused the send but is not here — a startup deadline, say — keeps the
- * client's own sentence and is still a refusal; only these change what the
- * panel does about it.
+ * The gateway's codes, as the words this panel has for them. One table for
+ * every conversation command, because a code means the same thing whichever
+ * command met it, and this is the one place the wire's vocabulary is read.
+ *
+ * A code that is not here keeps the client's own sentence and reaches the panel
+ * with no typed reason at all, which is what an unknown answer deserves: only
+ * these change what the panel says or does about a failure.
+ *
+ * "Whichever command" is about meaning, not reach: `attachment_cleanup_unavailable`
+ * means the same thing wherever it appears, and the gateway raises it only when
+ * closing a conversation — `ConversationError::AttachmentRelease` is built in
+ * the close path alone, from the arm where the close itself succeeded.
  */
-const refusals: Partial<Record<ConversationErrorCode, SubmissionRefusal>> = {
+const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   image_input_unsupported: "image-input-unsupported",
   attachment_not_found: "attachment-not-found",
   attachment_unavailable: "attachment-unavailable",
+  attachment_cleanup_unavailable: "attachment-cleanup-unavailable",
   conversation_not_found: "conversation-not-found",
   conversation_capacity: "conversation-capacity",
   agent_not_configured: "agent-not-configured",
+  agent_unsupported: "agent-unsupported",
+  conversations_not_configured: "conversations-not-configured",
+  agent_startup_deadline: "agent-startup-deadline",
   invalid_request: "invalid-request",
 }
 
 /**
- * A send that was refused rather than lost, as the application's own typed
- * refusal. Anything else is passed on untouched: a lost acknowledgement is not a
- * refusal, and the store already knows what to do with one.
+ * A conversation, send, or steer that was refused rather than lost, as the
+ * application's own typed refusal. Anything else is passed on untouched: a lost
+ * acknowledgement is not a refusal, and the store already knows what to do with
+ * one.
  *
  * Two things are refusals. The gateway's own pre-admission rejection, and the
  * client refusing the arguments — the client is the one boundary that validates
@@ -142,7 +158,7 @@ const refusals: Partial<Record<ConversationErrorCode, SubmissionRefusal>> = {
 function submissionFailure(error: unknown): unknown {
   const named =
     error instanceof NessaConversationMutationError && !error.uncertain && error.code
-      ? refusals[error.code]
+      ? failures[error.code]
       : undefined
   const refused =
     error instanceof TypeError
@@ -153,6 +169,54 @@ function submissionFailure(error: unknown): unknown {
   if (!refused) return error
   refused.message = (error as Error).message
   return refused
+}
+
+/**
+ * What the gateway said became of a control that failed.
+ *
+ * The review's selection state is read before the diagnostic code, because the
+ * protocol says exactly that: it is "authoritative knowledge of whether the
+ * reviewed option was selected", and "independent of the diagnostic error
+ * code". A consumed option is the gateway stating the choice took effect, which
+ * no error code beside it can withdraw; a pending one is it stating the choice
+ * did not. Only with neither does the code decide, through the client's own
+ * verdict on whether the command was rejected before anything was applied.
+ */
+function controlOutcome(error: NessaConversationControlError): ControlOutcome {
+  if (error.permissionSelection === "consumed") return "applied"
+  if (error.permissionSelection === "pending") return "refused"
+  return error.uncertain ? "unknown" : "refused"
+}
+
+/**
+ * A control the gateway answered with a reason, in the panel's words, and with
+ * what became of it. Anything else is passed on untouched.
+ *
+ * Unlike a message, a control is translated whatever the client's `uncertain`
+ * says, because the reason is worth passing on either way — the case that makes
+ * the difference is `attachment_cleanup_unavailable`, a close that did happen
+ * and whose cleanup did not, which the client can only report as uncertain.
+ *
+ * And the outcome travels even when the reason cannot. A review the gateway
+ * reports as still pending is certainly not applied whatever code came with it,
+ * and it sends an ordinary diagnostic code there rather than a dedicated one —
+ * so discarding the outcome for want of a word would throw away the certain
+ * half of the answer precisely where the panel has nothing else to go on.
+ */
+function controlFailure(error: unknown): unknown {
+  if (!(error instanceof NessaConversationControlError)) return error
+  const named = error.code ? failures[error.code] : undefined
+  const outcome = controlOutcome(error)
+  // Neither a word for the reason nor anything to say about the outcome that
+  // the client's own sentence does not already say. Left exactly as it came.
+  if (!named && outcome === "unknown") return error
+  const failed = new ControlFailedError(named, outcome, error)
+  // The client has one constant for every control — "did not return a
+  // trustworthy acknowledgement" — which names neither the command nor its
+  // cause. Kept as the text to fall back to, and the application decides where
+  // that sentence is still the honest one.
+  failed.message = error.message
+  return failed
 }
 
 /**
@@ -192,6 +256,9 @@ export function gatewayEffects(
     create(conversationId) {
       const existing = creations.get(conversationId)
       if (existing) return existing
+      // A conversation that could not be opened is a message that was not sent,
+      // and a control that never ran: the same refusals, translated the same way.
+      //
       // The transport is checked before the agent is asked for, so a
       // disconnected panel still fails as a disconnected panel rather than
       // waiting on the host first. The handle that check produced is thrown
@@ -201,9 +268,9 @@ export function gatewayEffects(
       api()
       const request = chosenAgent()
         .then((agent) => api().create({ conversationId, agent }))
-        .catch((error) => {
+        .catch((error: unknown) => {
           creations.delete(conversationId)
-          throw error
+          throw submissionFailure(error)
         })
       creations.set(conversationId, request)
       return request
@@ -288,24 +355,44 @@ export function gatewayEffects(
       }
     },
     async reorder(conversationId, executionIds) {
-      return (await api().reorder(conversationId, executionIds)).outcome
+      try {
+        return (await api().reorder(conversationId, executionIds)).outcome
+      } catch (error) {
+        throw controlFailure(error)
+      }
     },
     async remove(conversationId, executionId) {
-      await api().remove(conversationId, executionId)
+      try {
+        await api().remove(conversationId, executionId)
+      } catch (error) {
+        throw controlFailure(error)
+      }
     },
     async answer(conversationId, executionId, permissionId, optionId) {
-      await api().answer(conversationId, executionId, permissionId, optionId)
+      try {
+        await api().answer(conversationId, executionId, permissionId, optionId)
+      } catch (error) {
+        throw controlFailure(error)
+      }
     },
     async cancel(conversationId, executionId, permissionId) {
-      await api().cancel(
-        conversationId,
-        executionId,
-        permissionId,
-        "Dismissed from the conversation panel",
-      )
+      try {
+        await api().cancel(
+          conversationId,
+          executionId,
+          permissionId,
+          "Dismissed from the conversation panel",
+        )
+      } catch (error) {
+        throw controlFailure(error)
+      }
     },
     async close(conversationId) {
-      await api().close(conversationId)
+      try {
+        await api().close(conversationId)
+      } catch (error) {
+        throw controlFailure(error)
+      }
     },
   }
 }

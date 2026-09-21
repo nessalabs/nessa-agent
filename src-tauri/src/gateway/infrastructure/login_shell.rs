@@ -18,32 +18,54 @@
 //!
 //! Two decisions are worth the detail:
 //!
-//! **Interactive first, and what that does and does not reach.** `zsh -l -c`
-//! reads `.zprofile` and never `.zshrc`, and `.zshrc` is where pnpm's installer
-//! and the standard nvm setup put themselves: a non-interactive probe therefore
-//! *succeeds* with a `PATH` missing the tools the user has, which no fallback can
-//! catch, because nothing failed. bash is not the same and it is worth being
-//! exact, because saying otherwise here once already hid a gap. bash reads
-//! `~/.bashrc` when it is interactive and *not* a login shell; `bash -i -l -c`
-//! reads the login files and no more, exactly as `bash -l -c` does. What `-i`
-//! buys for bash is the other half: a `.bashrc` sourced from `.bash_profile`
-//! almost always opens with `case $- in *i*) ;; *) return;; esac`, and only an
-//! interactive shell gets past that to the `PATH` lines below it. So `-i -l -c`
-//! is what a macOS terminal opens — login and interactive — and it is what makes
-//! a sourced `.bashrc` count.
+//! **What each shell is asked, and why bash is asked twice.** A shell only reads
+//! the file the user's tools are in if it is started the way that file is for,
+//! and the shells differ in how much one invocation can cover. Measured against
+//! real shells, one marker per startup file:
 //!
-//! The gap that leaves, said plainly: a bash user whose `.bashrc` holds the
-//! tools and whose `.bash_profile` does not source it is not covered here. Their
-//! macOS terminal does not see those tools either, so the agent matches what
-//! they actually have; on a host where interactive non-login shells are how
-//! terminals start — Linux — covering it means adding a `-i -c` probe, and that
-//! belongs with the host that needs it.
+//! ```text
+//!          │ bash                        │ zsh
+//! ─────────┼─────────────────────────────┼──────────────────────────────────
+//!    -l -c │ .bash_profile               │ .zshenv .zprofile .zlogin
+//! -i -l -c │ .bash_profile               │ .zshenv .zprofile .zlogin .zshrc
+//!    -i -c │ .bashrc                     │ .zshenv .zshrc
+//! ```
+//!
+//! For zsh one invocation covers everything: `-i -l -c` is a superset of both
+//! others, so zsh is asked once. `-l -c` remains as a fallback for a zsh that
+//! cannot be interactive at all.
+//!
+//! For bash there is no such invocation. `.bash_profile` is what a macOS
+//! terminal opens and where a login shell's `PATH` legitimately lives; `.bashrc`
+//! is what a Linux terminal opens and where pnpm's installer and the standard
+//! nvm setup write. Asking only one of them means a user whose tools are in the
+//! other gets a *successful* probe carrying an incomplete `PATH` — nothing
+//! fails, so nothing falls back and nothing is logged, and the agent simply
+//! cannot find their tools. So bash is asked both ways and the answers are
+//! combined: everything the login shell reported, then anything only the
+//! interactive shell adds. Login first because that is the shell a terminal
+//! opens on the platform this ships on, so where the two disagree about which
+//! `node` comes first, the agent agrees with the user's terminal. Where
+//! `.bash_profile` sources `.bashrc` — the common arrangement — the first
+//! answer already contains the second and the combination changes nothing,
+//! which is also why `-i` matters there: a sourced `.bashrc` opens with
+//! `case $- in *i*) ;; *) return;; esac`, and only an interactive shell reaches
+//! the `PATH` lines below it.
 //!
 //! **Markers, not the last line.** An interactive shell prints things: a motd, a
 //! plugin banner, a prompt, a warning about a missing directory. The `PATH` is
 //! written between two markers made of bytes from `/dev/urandom`, and only what
 //! is between them is read — a profile cannot print a convincing answer because
 //! it cannot know what to print, and noise around it does not matter.
+//!
+//! One thing to know before a second host arrives: an entry only the
+//! interactive non-login shell reports lands last, after `/usr/bin` and
+//! `/opt/homebrew/bin`. On this platform that is right — a terminal opens a
+//! login shell, so the agent agrees with what the user sees — but the whole
+//! reason `-i -c` exists is the arrangement a Linux terminal starts, where the
+//! same user's `node` would come from the nvm block in `.bashrc` rather than
+//! from Homebrew. Whoever brings up the Linux host (#70) should decide
+//! precedence for it rather than inherit this one.
 //!
 //! Two things an interactive profile makes likelier, and what is done about
 //! them. It may background something — `ssh-agent`, `gpg-agent`, occasionally an
@@ -109,12 +131,31 @@ mod unix {
     /// Long enough for the version managers people actually have in their
     /// profiles; short enough that a profile which never returns costs a pause
     /// at startup rather than a gateway that never registers.
-    ///
-    /// The worst a caller can be kept waiting is both attempts, each spending
-    /// this and then [`REAP_GRACE`] confirming the kill: 2 × (5 + 2) = 14
-    /// seconds, once per run of the app, and only for a profile that hangs
-    /// twice.
     const DEADLINE: Duration = Duration::from_secs(5);
+
+    /// How long every attempt together may take.
+    ///
+    /// bash is asked twice and can then fall back, so a per-attempt deadline
+    /// alone would let the ceiling grow with the number of probes — and this is
+    /// time the panel spends waiting for `Gateway::wait_ready`, which has no
+    /// deadline of its own: whatever is spent here, the window that asked for a
+    /// credential simply waits. So the whole resolution gets one budget, each
+    /// attempt gets what is left of it, and a shell with more probes buys more
+    /// coverage rather than more waiting.
+    ///
+    /// The worst a caller can be kept waiting is this plus one [`REAP_GRACE`]
+    /// for the last kill to be confirmed: 10 + 2 = 12 seconds, once per run of
+    /// the app, and only for profiles that hang. That is below the 14 seconds
+    /// two attempts could reach before this budget existed.
+    ///
+    /// What it costs: an attempt after one that timed out no longer gets a full
+    /// [`DEADLINE`]. A first attempt that hangs spends 5 seconds and 2 more
+    /// being reaped, so the next gets 3, and a slow-but-answering profile that
+    /// needed 4 is now missed where it used to be reached. That is the trade for
+    /// a ceiling that does not grow with the number of questions, and the
+    /// profile it costs — slow enough to need four seconds, fast enough to
+    /// answer at all — is rarer than the one it protects.
+    const BUDGET: Duration = Duration::from_secs(10);
 
     /// How long to wait for a killed shell to be reaped before reporting the
     /// timeout anyway.
@@ -135,30 +176,83 @@ mod unix {
     /// bytes cannot put words in the shell's mouth.
     const MARKER_BYTES: usize = 16;
 
-    /// How a shell is asked, in the order the answers are preferred.
+    /// How a shell is asked. Which of these a shell gets, and what is done with
+    /// the answers, is [`Plan`].
     #[derive(Clone, Copy, PartialEq, Eq, Debug)]
     pub(super) enum Probe {
-        /// `-i -l -c`: reads the interactive files as well as the login ones.
-        /// Only for shells that distinguish them and survive having no terminal.
+        /// `-i -l -c`: the login files, read by a shell that also considers
+        /// itself interactive. What a terminal opens on this platform.
         InteractiveLogin,
-        /// `-l -c`: the login files. What every shell here understands, and the
-        /// fallback when an interactive profile blocks or fails.
+        /// `-i -c`: interactive and not a login shell, which is the only way
+        /// bash reads `~/.bashrc`.
+        Interactive,
+        /// `-l -c`: the login files, nothing more. What every shell here
+        /// understands, and the fallback when interactive attempts fail.
         Login,
     }
     impl Probe {
         fn arguments(self) -> &'static [&'static str] {
             match self {
                 Self::InteractiveLogin => &["-i", "-l", "-c"],
+                Self::Interactive => &["-i", "-c"],
                 Self::Login => &["-l", "-c"],
             }
         }
         fn describe(self) -> &'static str {
             match self {
                 Self::InteractiveLogin => "interactive login shell",
+                Self::Interactive => "interactive shell",
                 Self::Login => "login shell",
             }
         }
+
+        /// Whether this reads what a login shell reads: `/etc/profile` and the
+        /// account's own login file, which is where `path_helper` and Homebrew
+        /// arrive from. The fallback exists to supply exactly that, so it is
+        /// worth asking whenever nothing else has.
+        fn reads_login_files(self) -> bool {
+            matches!(self, Self::InteractiveLogin | Self::Login)
+        }
+
+        /// Where this probe's entries belong in a combined answer.
+        ///
+        /// What a login shell reported comes first, because that is the shell a
+        /// terminal opens on this platform; what only an interactive non-login
+        /// shell reported comes last. Between the two login-reading probes the
+        /// interactive one is preferred, since it read everything the other
+        /// did and more.
+        fn precedence(self) -> u8 {
+            match self {
+                Self::InteractiveLogin => 0,
+                Self::Login => 1,
+                Self::Interactive => 2,
+            }
+        }
     }
+
+    /// What to ask one shell, and what to do with what comes back.
+    ///
+    /// `combined` is asked in order and every answer contributes, earliest
+    /// first; `fallback` is asked only if none of them answered at all. The
+    /// module documentation says why bash has two of the first kind and the
+    /// others have one.
+    pub(super) struct Plan {
+        combined: &'static [Probe],
+        fallback: &'static [Probe],
+    }
+
+    const BASH: Plan = Plan {
+        combined: &[Probe::InteractiveLogin, Probe::Interactive],
+        fallback: &[Probe::Login],
+    };
+    const INTERACTIVE_LOGIN: Plan = Plan {
+        combined: &[Probe::InteractiveLogin],
+        fallback: &[Probe::Login],
+    };
+    const LOGIN: Plan = Plan {
+        combined: &[Probe::Login],
+        fallback: &[],
+    };
 
     /// The account's login shell, run for its `PATH`.
     pub(in super::super) struct LoginShell {
@@ -167,7 +261,10 @@ mod unix {
         /// environment, by [`LoginShell::for_current_user`]; nothing else of
         /// this process reaches the user's profile.
         environment: Vec<(&'static str, OsString)>,
+        /// What one attempt may take.
         deadline: Duration,
+        /// What every attempt together may take. See [`BUDGET`].
+        budget: Duration,
     }
 
     impl LoginShell {
@@ -184,11 +281,15 @@ mod unix {
                 shell: account_shell(),
                 environment: carried_environment(),
                 deadline: DEADLINE,
+                budget: BUDGET,
             }
         }
 
         /// A shell of the test's choosing, with the environment and deadline it
         /// wants — including the environment this host really builds.
+        ///
+        /// The budget is the deadline twice over, so a test that sets a short
+        /// deadline still gets every attempt its shell is worth.
         #[cfg(test)]
         pub(in super::super) fn probing(
             shell: PathBuf,
@@ -199,31 +300,51 @@ mod unix {
                 shell,
                 environment,
                 deadline,
+                budget: deadline * 2,
             }
         }
 
-        /// How this shell is worth asking, most complete answer first.
+        /// The same, for a test about the budget rather than about a shell.
+        #[cfg(test)]
+        pub(in super::super) fn probing_within(
+            shell: PathBuf,
+            environment: Vec<(&'static str, OsString)>,
+            deadline: Duration,
+            budget: Duration,
+        ) -> Self {
+            Self {
+                shell,
+                environment,
+                deadline,
+                budget,
+            }
+        }
+
+        /// What this shell is worth being asked.
         ///
-        /// zsh and bash are asked interactively first, for reasons that differ
-        /// by shell — zsh reads `.zshrc` only then; bash gets past the
-        /// interactivity guard at the top of a sourced `.bashrc` only then —
-        /// and fall back to a plain login shell. Both are set out in this
-        /// module's own documentation, including what the bash case does not
-        /// reach. Anything else is asked the one way every shell here
+        /// bash needs two questions because no single invocation of it reads
+        /// both the file a login shell uses and the one an interactive shell
+        /// uses; zsh needs one because its interactive login shell reads
+        /// everything. Any other shell is asked the one way every shell here
         /// understands: a `-i` that a shell does not take, or takes badly
-        /// without a terminal, would cost an attempt to learn nothing.
-        fn probes(&self) -> &'static [Probe] {
+        /// without a terminal, would cost an attempt to learn nothing. The
+        /// module documentation has the measurements behind all three.
+        fn plan(&self) -> &'static Plan {
             match self.shell.file_name().and_then(OsStr::to_str) {
-                Some("zsh" | "bash") => &[Probe::InteractiveLogin, Probe::Login],
-                _ => &[Probe::Login],
+                Some("bash") => &BASH,
+                Some("zsh") => &INTERACTIVE_LOGIN,
+                _ => &LOGIN,
             }
         }
 
         /// One attempt: run the shell, read what is between the markers, and
         /// put it through the value object.
-        fn ask(&self, probe: Probe) -> Result<SearchPath, LoginShellError> {
+        ///
+        /// `until` is when the budget for the whole resolution runs out; an
+        /// attempt gets the shorter of its own deadline and what is left.
+        fn ask(&self, probe: Probe, until: Instant) -> Result<SearchPath, LoginShellError> {
             let marker = Marker::random()?;
-            let output = self.report(probe, &marker)?;
+            let output = self.report(probe, &marker, until)?;
             let reported = between(&output, &marker.begin, &marker.end).ok_or_else(|| {
                 LoginShellError::Unavailable(format!("{} printed no marked PATH", probe.describe()))
             })?;
@@ -237,7 +358,12 @@ mod unix {
         /// the output limit, and then never return — so the exit is waited for
         /// under the same clock, and whichever runs out first kills the shell's
         /// process group and reaps it.
-        fn report(&self, probe: Probe, marker: &Marker) -> Result<String, LoginShellError> {
+        fn report(
+            &self,
+            probe: Probe,
+            marker: &Marker,
+            until: Instant,
+        ) -> Result<String, LoginShellError> {
             let unavailable = |error: io::Error| LoginShellError::Unavailable(error.to_string());
             let mut child = Command::new(&self.shell)
                 .args(probe.arguments())
@@ -267,7 +393,7 @@ mod unix {
                 .process_group(0)
                 .spawn()
                 .map_err(unavailable)?;
-            let deadline = Instant::now() + self.deadline;
+            let deadline = (Instant::now() + self.deadline).min(until);
             let group = child.id() as i32;
             let mut output = child
                 .stdout
@@ -363,22 +489,128 @@ mod unix {
     }
 
     impl LoginShellPath for LoginShell {
+        /// Asks this shell everything its plan says it is worth asking, and
+        /// combines what comes back.
+        ///
+        /// Every answer contributes, in [`Probe::precedence`] order rather than
+        /// in the order asked, because for bash the invocations read different
+        /// files and a user's tools may be in either.
+        ///
+        /// The fallback is not "what to do if everything failed" — it is where
+        /// the login files come from, so it runs whenever no answer has brought
+        /// them. That matters for the case it was written for: a `.bash_profile`
+        /// that hangs when it is interactive leaves the interactive non-login
+        /// probe answering on its own, and that answer has read neither
+        /// `/etc/profile` nor `.bash_profile` — no `path_helper`, so no
+        /// Homebrew, and none of the user's login entries. Returning it as a
+        /// success would be the failure this module exists to prevent, and it
+        /// would make the registered path depend on whether a profile happened
+        /// to hang, which a definition compared for equality answers by retiring
+        /// a healthy gateway.
+        ///
+        /// Each failure says which question it was, a partial answer says what
+        /// is missing from it, and the whole thing is bounded by one [`BUDGET`],
+        /// so a shell that is asked more is not a shell that waits longer.
         fn resolve(&self) -> Result<SearchPath, LoginShellError> {
+            let until = Instant::now() + self.budget;
+            let plan = self.plan();
+            let mut answers: Vec<(Probe, SearchPath)> = Vec::new();
+            let mut failed: Vec<Probe> = Vec::new();
             let mut last = None;
-            for probe in self.probes() {
-                match self.ask(*probe) {
-                    Ok(path) => return Ok(path),
+            let mut attempt = |probe: Probe, answers: &mut Vec<(Probe, SearchPath)>| {
+                if Instant::now() >= until {
+                    report_exhausted(probe);
+                    failed.push(probe);
+                    return false;
+                }
+                match self.ask(probe, until) {
+                    Ok(path) => {
+                        answers.push((probe, path));
+                        true
+                    }
                     Err(error) => {
-                        eprintln!(
-                            "[nessa] Reading the {} for the agent's PATH did not work ({error})",
-                            probe.describe()
-                        );
+                        report_failure(probe, &error);
+                        failed.push(probe);
                         last = Some(error);
+                        false
+                    }
+                }
+            };
+            for probe in plan.combined {
+                attempt(*probe, &mut answers);
+            }
+            if !answers.iter().any(|(probe, _)| probe.reads_login_files()) {
+                for probe in plan.fallback {
+                    if attempt(*probe, &mut answers) {
+                        break;
                     }
                 }
             }
-            Err(last.expect("every shell is asked at least once"))
+            if answers.is_empty() {
+                // Nothing to report happens only when the budget was gone
+                // before the first question, which is running out of it.
+                return Err(last.unwrap_or(LoginShellError::TimedOut));
+            }
+            answers.sort_by_key(|(probe, _)| probe.precedence());
+            let mut combined: Option<SearchPath> = None;
+            for (probe, answer) in answers {
+                combined = Some(match combined {
+                    None => answer,
+                    Some(reported) => match reported.followed_by(&answer) {
+                        Ok(both) => both,
+                        Err(error) => {
+                            // Keeping what is already there is the safe half:
+                            // it is the higher-precedence answer, and it is a
+                            // value the service definition can be read back out
+                            // of on the next launch.
+                            eprintln!(
+                                "[nessa] What the {} added to the agent's PATH did not fit ({error})",
+                                probe.describe()
+                            );
+                            reported
+                        }
+                    },
+                });
+            }
+            let combined = combined.expect("an answer was kept");
+            report_partial(&failed, &combined);
+            Ok(combined)
         }
+    }
+
+    /// Says which question did not work and why, because a fallback nobody can
+    /// see is indistinguishable from a tool the user never installed.
+    fn report_failure(probe: Probe, error: &LoginShellError) {
+        eprintln!(
+            "[nessa] Reading the {} for the agent's PATH did not work ({error})",
+            probe.describe()
+        );
+    }
+
+    /// Says which question was never asked, for the same reason.
+    fn report_exhausted(probe: Probe) {
+        eprintln!(
+            "[nessa] No time left to read the {} for the agent's PATH",
+            probe.describe()
+        );
+    }
+
+    /// Says that an answer was returned but is not the whole one.
+    ///
+    /// Without this a partial success reads like a complete one: the per-probe
+    /// line above says a question did not work, and nothing says the answer
+    /// that came back is missing what that question would have added. A user
+    /// whose tools are absent needs the second sentence, not the first.
+    fn report_partial(failed: &[Probe], combined: &SearchPath) {
+        if failed.is_empty() {
+            return;
+        }
+        let missing: Vec<&str> = failed.iter().map(|probe| probe.describe()).collect();
+        eprintln!(
+            "[nessa] The agent's PATH is {}; anything only the {} would have added is missing from it",
+            combined.as_str(),
+            missing.join(" or the ")
+        );
     }
 
     /// What `channel` delivers before `deadline`.

@@ -13,6 +13,7 @@ import {
 } from "./architecture/platform-boundaries.mjs"
 import { overlayPlacementViolations } from "./architecture/overlay-placement.mjs"
 import { setupGatePlacementViolations } from "./architecture/setup-gate-placement.mjs"
+import { standDownPlacementViolations } from "./architecture/stand-down-placement.mjs"
 import {
   normalizedPath,
   rustBoundaryViolations,
@@ -139,6 +140,26 @@ for (const file of walk(src)) {
     ) {
       fail(file, `${feature} model imports nothing outward`)
     }
+    // A client SDK is outward too: a model states product rules in its own
+    // terms, and the adapter that talks to the gateway is where they meet the
+    // wire's. Written as a refusal with named exceptions rather than a list of
+    // features to check, so a vertical that grows a model later is held to this
+    // from its first line instead of from whenever somebody adds it here.
+    //
+    // `session` is design: that model *is* the wire session, and describing it
+    // in other words would be describing something else. `onboarding` is not —
+    // `model/shortcut-display.ts` reads the generated `ShortcutsDocument` to
+    // find the summon accelerator, which is the same leak this rule exists to
+    // stop. It is named here so it stays visible, and so that removing it is a
+    // change to that vertical rather than a precondition for this one.
+    const modelMayReadTheWire = feature === "session" || feature === "onboarding"
+    if (
+      !modelMayReadTheWire &&
+      imports.some(
+        (item) => item === "@nessa/client" || item.startsWith("@nessa/client/"),
+      )
+    )
+      fail(file, `${feature} model does not import the client SDK`)
   }
 
   if (inLayerRules && layer === "application") {
@@ -345,6 +366,16 @@ for (const boundary of portableRuntimeBoundaries) {
       file,
       "runtime incarnation identity is portable health evidence; do not hide it behind a target cfg",
     )
+  }
+}
+
+// A script rather than product source, so it is read by path rather than by
+// the walk over `src/`.
+{
+  const file = join(root, "scripts/dev-agent-config.mjs")
+  const text = readFileSync(file, "utf8")
+  for (const violation of standDownPlacementViolations(rel(file), text)) {
+    fail(file, violation)
   }
 }
 

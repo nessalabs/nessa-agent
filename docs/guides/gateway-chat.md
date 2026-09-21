@@ -293,10 +293,46 @@ send   -> conversation.send { text, attachments: [the returned references] }
   (`invalid_request`, `agent_not_configured`, `agent_startup_deadline`,
   `image_input_unsupported`, `attachment_not_found`, `attachment_unavailable`,
   `conversation_not_found`, `conversation_capacity`): those leave `uncertain`
-  false, and the code itself is reported as a typed `ConversationErrorCode`. The
-  panel marks the turn not sent, says why in a sentence chosen by that code, and
-  puts the message back in the draft with its images. Any other failure after
-  admission was attempted stays uncertain and keeps its explicit retry.
+  false, and the code itself is reported as a typed `ConversationErrorCode`.
+  `adapters/gateway/effects.ts` is where the panel reads that code, and it
+  answers in the panel's own vocabulary — a `CommandFailure` such as
+  `agent-startup-deadline`. It is the only place for a command's failure; one
+  read left, in `ui/notification.ts`, still compares a failed *read*'s text
+  against `conversation_configuration_changed`, because a read carries no
+  translated reason yet. That module says so, and giving reads one of their own
+  is the remaining half. The panel marks the turn not sent, says why in a
+  sentence chosen by that reason, and puts the message back in the draft with
+  its images. A code this build has no word for keeps the client's own sentence
+  and carries no reason at all, rather than being read as one it does know. Any
+  other failure after admission was attempted stays uncertain and keeps its
+  explicit retry.
+- **A control's failure is translated the same way, and says something else.**
+  The client has no sentence of its own for a control: every one of them gets
+  the constant "Conversation control did not return a trustworthy
+  acknowledgement", which names neither the command nor its cause and is only
+  true when the control really may have been applied. So the panel speaks where
+  that would be false. `attachment_cleanup_unavailable` — the single image code
+  that is not a refusal, where the close did happen and only its release of the
+  conversation's uploads did not — says so, and changes nothing the panel does:
+  a draft's stored images are forgotten after any close, acknowledged or not.
+  Which sentence is shown is decided by what became of the control, never by
+  the reason: refused says nothing was done, applied says the choice was
+  recorded, and only a genuinely open outcome keeps the client's constant.
+- **A permission answer reports the review's state, and it is authoritative.** A
+  failed `conversation.answer` carries `selectionState`, which the protocol
+  calls authoritative knowledge of whether the option was selected and
+  independent of the diagnostic code beside it. The gateway sends an ordinary
+  code there — its own test pairs a pending review with `audit_unavailable` —
+  so a review left `pending` is certainly not applied under codes this build
+  has no word for, and the outcome is carried even when the reason cannot be.
+  A `consumed` review is the opposite certainty: the choice took effect and the
+  command failed after it, which the client can only report as uncertain, so
+  the selection state is read before the code rather than after it.
+- **A control carries its reason and its outcome as two facts.** A reason never
+  says whether the command ran: a control refused as `conversation_not_found`
+  and one whose acknowledgement was lost carry the same word. `CommandFailure`
+  is only what the panel *says*; `SubmissionRefusedError` and
+  `ControlFailedError.refused` are what it may *decide* from.
 - **Nor is a message the client would not put on the wire.** The client is the
   one boundary that validates a message's images — the panel's model puts no
   byte bound on a stored reference, because how heavy one image may be is the
@@ -715,10 +751,10 @@ reconciliation: the panel reconciles on every webview load, and a profile edited
 while Nessa is open would otherwise produce a different definition and retire a
 healthy gateway mid-session. A changed profile therefore takes effect the next
 time the app is launched, and that launch re-registers the service. The shell is asked
-interactively where that means something — `zsh -l -c` reads `.zprofile` and
-never `.zshrc`, where pnpm and nvm put themselves, and an interactive bash is
-what gets past the guard at the top of a `.bashrc` its `.bash_profile` sources —
-and the
+the ways that reach the files a user's tools are actually in: zsh once, as an
+interactive login shell, which reads everything it has; bash twice, because no
+single bash reads both `.bash_profile` and `.bashrc`, with the two answers
+combined. And the
 answer comes back between unguessable markers, so a profile that prints a banner
 or tries to answer for the shell does neither. Each attempt is bounded by one
 deadline covering output and exit together, and a shell that overruns it is

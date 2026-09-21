@@ -4,6 +4,7 @@ export {
   conversation,
   type AssistantTurn,
   type BusyConversation,
+  type CommandFailure,
   type Conversation,
   type IdleConversation,
   type Phase,
