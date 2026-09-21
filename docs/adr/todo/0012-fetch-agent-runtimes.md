@@ -41,8 +41,13 @@ A runtime is resolved in this order, at every start:
    its version is one this build supports.
 3. **Not present** — offered, and fetched on demand into `~/.nessa/`.
 
-The application drops from 709 MB of runtime to none, and a person who only
-uses Claude never downloads Codex.
+The application drops by 539 MB — the two dependency trees — and a person who
+only uses Claude never downloads Codex.
+
+It does not drop to nothing, and an earlier draft of this document said it did.
+The runtime directory is 709 MB, of which `node` is 138 MB and the gateway and
+its MCP server are another 33 MB. Node runs the adapters, so it stays. What
+leaves is the 539 MB that is the agents themselves.
 
 ## The part that needs care
 
@@ -89,6 +94,34 @@ tested, verified byte for byte. Nessa is not tied to one version forever — eac
 release moves the pin and may move the floor — and no release ships bytes nobody
 checked.
 
+## The problem this hits, which has to be solved first
+
+**`npm` is not shipped, and this design calls it.**
+
+The application bundles `node` as a single binary. It does not bundle `npm`:
+there is no `npm`, no `npm-cli.js`, nothing in the application that can install
+a package tree. The build ran `npm ci` on a developer's machine, where npm
+exists; moving that install onto the user's machine assumes an npm they may not
+have, and a desktop application cannot require one.
+
+So "run the same `npm ci`, later" is not a design that works as written. Three
+ways out, and this decision is not complete until one is chosen:
+
+1. **Ship npm as well.** It is about 10 MB against 539 MB saved, and it keeps
+   the lockfile's integrity checking exactly as it works today — the guarantee
+   is npm's, and npm is what enforces it.
+2. **Resolve the tree ourselves.** The lockfile already names every package,
+   its URL and its sha512. Fetching those and verifying each one needs no npm,
+   and reuses the machinery `HttpsArchives` already has. It is more code and it
+   is a second implementation of something npm does correctly.
+3. **Publish one archive per agent at release time**, built the way the bundle
+   is built today, and fetch it with a digest like Opencode's. One mechanism
+   for all three agents, at the cost of hosting artefacts we currently do not.
+
+The first is the smallest change and keeps the verification story unchanged.
+The third is the most consistent. The second is the most work for the least
+benefit, and is noted only so the choice is visible.
+
 ## What we are not deciding here
 
 Whether to fetch the newest version within a range, verified against the
@@ -100,7 +133,7 @@ unbundling.
 
 ## Consequences
 
-- The download is 709 MB smaller, and a person downloads only the agent they
+- The download is 539 MB smaller, and a person downloads only the agent they
   pick.
 - First use of an agent costs a fetch. Today that cost is paid by everyone at
   install time whether they use the agent or not.
@@ -110,3 +143,15 @@ unbundling.
   someone who already runs these tools would expect.
 - `agent_install`'s rationale paragraph is rewritten. It currently explains why
   one agent is special, and none is.
+- **Three install paths now exist where there was one, and none of them records
+  what it did.** #102 asks for an audit port covering started, verified,
+  rejected, replaced and rolled back for a single agent's install. This decision
+  triples the surface that lacks one, on a path that writes an executable the
+  application later launches. The port should land with this, not after it.
+- **Running an installer is an effect at the process boundary**, and
+  `AGENTS.md` asks for those behind a caller-owned port with a substitute in
+  tests. Whatever mechanism is chosen above, the call out to it is injected
+  rather than reached for, so a test can exercise a failing install, a partial
+  one, and one that reports success and produces nothing.
+- `docs/codebase-structure.md` gains the new module and loses the bundled
+  harness paths.

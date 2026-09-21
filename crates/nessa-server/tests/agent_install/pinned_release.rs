@@ -351,3 +351,51 @@ fn a_build_that_could_not_exist_is_not_a_release() {
         assert!(ok.is_ok(), "{ok:?} is a build that exists");
     }
 }
+
+/// What a floor accepts, and the trap it exists to avoid.
+mod at_least {
+    use super::*;
+
+    fn version(value: &str) -> ReleaseVersion {
+        ReleaseVersion::parse(value).expect("a version")
+    }
+
+    #[test]
+    fn a_higher_version_clears_a_lower_floor() {
+        assert!(version("1.18.31").at_least(&version("1.18.0")));
+        assert!(version("2.0.0").at_least(&version("1.99.99")));
+    }
+
+    #[test]
+    fn the_floor_itself_clears_it() {
+        assert!(version("0.76.0").at_least(&version("0.76.0")));
+    }
+
+    #[test]
+    fn an_older_version_does_not() {
+        assert!(!version("0.75.9").at_least(&version("0.76.0")));
+        assert!(!version("1.17.99").at_least(&version("1.18.0")));
+    }
+
+    #[test]
+    fn components_are_numbers_and_not_text() {
+        // The reason this method exists. As strings `0.9.0` sorts above
+        // `0.76.0`, so a floor compared that way would accept a runtime sixty
+        // releases too old and find out only when the protocol did not match.
+        assert!("0.9.0" > "0.76.0", "the trap is real at the string level");
+        assert!(!version("0.9.0").at_least(&version("0.76.0")));
+        assert!(version("0.76.0").at_least(&version("0.9.0")));
+    }
+
+    #[test]
+    fn a_missing_component_is_below_a_present_one() {
+        assert!(!version("1.2").at_least(&version("1.2.1")));
+        assert!(version("1.2.1").at_least(&version("1.2")));
+    }
+
+    #[test]
+    fn a_prerelease_is_below_the_release_it_precedes() {
+        assert!(!version("1.2.0-rc1").at_least(&version("1.2.0")));
+        assert!(version("1.2.0").at_least(&version("1.2.0-rc1")));
+    }
+}
