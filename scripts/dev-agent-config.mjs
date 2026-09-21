@@ -52,8 +52,8 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 /** The lowest Node major the Claude ACP harness is exercised on. The bundle ships 26. */
 const MINIMUM_NODE_MAJOR = 20
 
-const HARNESS = "crates/nessa-sdk/harnesses/claude-acp"
-const ACP_ENTRY = `${HARNESS}/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js`
+export const HARNESS = "crates/nessa-sdk/harnesses/claude-acp"
+export const ACP_ENTRY = `${HARNESS}/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js`
 /** The checked-in model catalog, named once: the block points at it and the
  * check below looks for it, and a move that updated only one of those would
  * write a config naming a file that is not there. */

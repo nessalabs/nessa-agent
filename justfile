@@ -2,7 +2,7 @@
 # Windows recipes are written, not yet run on a Windows box.
 #
 #   just          list recipes
-#   just start    desktop app + local nessa server
+#   just start    desktop app + local nessa server (dev; `just start prod` for another stage)
 #   just dev      desktop app in dev mode (falls back to the browser UI)
 #   just server   local nessa server only
 #   just web      UI in a browser only; window controls no-op
@@ -34,16 +34,30 @@ server:
 # load). It restarts a dev server this checkout started and nothing else — see
 # scripts/free-gateway-port.mjs for why a launchd service is not ours to kill.
 [unix]
-start:
+start stage="":
     #!/usr/bin/env bash
     set -euo pipefail
     set -m
-    # The stage the server will actually read, not an assumption of `dev`: it
-    # takes `NESSA_STAGE` from this same environment, and `NESSA_PORT` ahead of
-    # the stage's own. Naming `dev` here freed one socket and then waited for
-    # health on another whenever the caller had selected anything else.
-    stage="$(node -e 'import("./scripts/gateway-port.mjs").then(m => process.stdout.write(m.selectedStage()))')"
-    port="$(node scripts/gateway-port.mjs)"
+    # One stage, resolved once, given to both halves.
+    #
+    # The argument wins, then this environment, then `dev` — so `just start`,
+    # `just start prod`, and `NESSA_STAGE=ci just start` all say one thing. Both
+    # names are exported because the two halves read different ones: the server
+    # and host read `NESSA_STAGE` at run time, the UI is built against
+    # `VITE_NESSA_STAGE`. Setting only one is how a prod UI came to be pointed
+    # at a dev gateway, which the app refused — correctly, in a banner, beside a
+    # picker that span for ever.
+    stage="{{stage}}"
+    if [[ -z "${stage}" ]]; then
+      stage="$(node -e 'import("./scripts/gateway-port.mjs").then(m => process.stdout.write(m.selectedStage()))')"
+    fi
+    export NESSA_STAGE="${stage}"
+    export VITE_NESSA_STAGE="${stage}"
+    # Everything that has to be true before a window is worth opening: the stage
+    # is real, the gateway has an agent to talk to, and the binary exists rather
+    # than being compiled while something waits on it.
+    node scripts/preflight.mjs "${stage}"
+    port="$(node scripts/gateway-port.mjs "${stage}")"
     server_pid=""
     app_pid=""
     # The app goes first, then the gateway it talks to: the other order leaves a

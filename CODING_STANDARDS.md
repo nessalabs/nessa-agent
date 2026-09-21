@@ -110,6 +110,15 @@ that their combination describes a possible execution.
 - For lifecycle changes, name one owner of each transition and test the same
   guarantees across every delivery mode that uses it. A second flag, error walker,
   or cleanup path is not an independent implementation of the same authority.
+- Identity among siblings. A key names an element among the children it sits
+  with, not the data it is about. Two children of one parent under one key are
+  one child to the renderer, which duplicates or drops them rather than refusing;
+  React says so on every render and keeps going. When several elements are keyed
+  by the same value because they concern the same conversation, request, or row,
+  give each a name of its own. Read the whole sibling set, not the line being
+  changed: a defect of this kind exists only in the relationship between lines,
+  so it is invisible in a diff and survives review of the change that introduced
+  it. Treat a renderer's own key warning as a failure, not as noise.
   A stop must be correlated with the affected work's admission; historical cleanup
   cannot become the cancellation cause of a later input. Preserve the first cause
   for each affected owner when later close requests arrive, and distinguish waiting
