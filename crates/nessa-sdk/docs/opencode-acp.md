@@ -113,7 +113,7 @@ see `requires Opencode 1.18.31` with nothing saying why.
 
 ## Verification
 
-Fourteen contract tests in `tests/infrastructure/acp/contracts/opencode.rs` run
+Fifteen contract tests in `tests/infrastructure/acp/contracts/opencode.rs` run
 against `fixtures/opencode_acp_test_handler.py`, which serves the shapes the
 real binary was recorded answering: `agentInfo { name: "OpenCode", version }`,
 no `_meta/steering`, and `session/new` with the `model` and `mode` config
