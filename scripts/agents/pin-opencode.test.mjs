@@ -5,7 +5,6 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
-  linkSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs"
@@ -18,7 +17,10 @@ import {
   EXECUTABLE,
   PLATFORMS,
   agreesWithRegistry,
+  entryName,
   executableDigest,
+  kind,
+  storedName,
   sameBinaryUnderDifferentClaims,
 } from "./pin-opencode.mjs"
 
@@ -69,19 +71,76 @@ test("a package holding it as a symbolic link is not", (t) => {
   })
 })
 
-test("a package holding it as a hard link is not", (t) => {
-  // The kind a listing hides best: both tars print a hard link's own mode
-  // letter and then the name it links to, so the entry reads as a file whose
-  // name is the *target*. Named here rather than left in the "not a file"
-  // fallback, because a release that started hard-linking its binary is a
-  // packaging change to go and read and not a missing executable.
-  const tarball = archive(t, (contents) => {
-    writeFileSync(join(contents, "package/bin/real"), program("binary"))
-    linkSync(join(contents, "package/bin/real"), join(contents, "package/bin/opencode"))
-  })
-  assert.deepEqual(executableDigest(tarball), {
-    refusal: "holds package/bin/opencode as a hard link rather than as a regular file",
-  })
+test("a listing line names its entry whatever kind of entry it is", () => {
+  // The readers under `executableDigest`, asked of lines rather than of an
+  // archive, because which kind of entry tar *writes* is not this file's to
+  // decide. A hard link is the case that showed it: `tar -czf` stores whichever
+  // of two linked files it walks first as the regular one, so an archive built
+  // to hold one is a coin toss across platforms — it came out the other way up
+  // on two CI runners from the way it did locally. The parsing is the claim,
+  // and it is deterministic.
+  //
+  // The GNU lines are `tar (GNU tar) 1.35` output, copied from a real archive.
+  // The BSD ones differ only in the columns before the name — a link count
+  // where GNU writes `owner/group` — which is the difference these readers
+  // exist to be indifferent to.
+  for (const [why, line, name, sort] of [
+    [
+      "a regular file",
+      "-rw-r--r-- root/root         5 2026-09-21 00:48 package/bin/opencode",
+      "package/bin/opencode",
+      null,
+    ],
+    [
+      "a hard link, whose last field is its target",
+      "hrw-r--r-- root/root         0 2026-09-21 00:48 package/bin/opencode link to package/bin/real",
+      "package/bin/opencode",
+      "a hard link",
+    ],
+    [
+      "a hard link as bsd tar prints it",
+      "hrw-r--r--  2 root wheel 0 Sep 21 00:48 package/bin/opencode link to package/bin/real",
+      "package/bin/opencode",
+      "a hard link",
+    ],
+    [
+      "a symbolic link, whose last field is its target",
+      "lrwxrwxrwx root/root         0 2026-09-21 00:48 package/bin/opencode -> real",
+      "package/bin/opencode",
+      "a symbolic link",
+    ],
+    [
+      "a directory, which lists with a trailing slash",
+      "drwxr-xr-x root/root         0 2026-09-21 00:48 package/bin/opencode/",
+      "package/bin/opencode",
+      "a directory",
+    ],
+    [
+      "an archive written as ./package",
+      "-rw-r--r-- root/root         5 2026-09-21 00:48 ./package/bin/opencode",
+      "package/bin/opencode",
+      null,
+    ],
+    [
+      "a name that merely ends in the executable's",
+      "-rw-r--r-- root/root         5 2026-09-21 00:48 package/bin/extra/bin/opencode",
+      "package/bin/extra/bin/opencode",
+      null,
+    ],
+  ]) {
+    assert.equal(entryName(line), name, why)
+    if (sort) assert.equal(kind(line), sort, why)
+  }
+})
+
+test("the name asked of tar is the one the archive stores", () => {
+  // Extraction has to use the stored spelling, not the pin's: asking for
+  // `package/bin/opencode` in an archive written as `./package` comes back
+  // with nothing. The two readers differ by exactly that.
+  const stored = "-rw-r--r-- root/root         5 2026-09-21 00:48 ./package/bin/opencode"
+
+  assert.equal(storedName(stored), "./package/bin/opencode")
+  assert.equal(entryName(stored), "package/bin/opencode")
 })
 
 test("a package holding a directory of that name is not", (t) => {

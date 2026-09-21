@@ -235,7 +235,8 @@ async function digestOf(url, scratch) {
 // no entry at all. That is how a package that swapped its binary for a
 // launcher symlink would be reported as not holding it, which is the one
 // packaging change this refusal most needs to name.
-function storedName(fields) {
+export function storedName(line) {
+  const fields = line.trim().split(/\s+/)
   const arrow = fields.indexOf("->")
   const linked = fields.findIndex(
     (field, at) => field === "link" && fields[at + 1] === "to",
@@ -247,8 +248,8 @@ function storedName(fields) {
 // The same name, in the spelling the pin uses, so the two can be compared.
 // An archive written as `./package` lists every entry that way and a directory
 // lists with a trailing slash; neither is a difference in which entry this is.
-function entryName(fields) {
-  return storedName(fields)?.replace(/^\.\//, "").replace(/\/$/, "")
+export function entryName(line) {
+  return storedName(line)?.replace(/^\.\//, "").replace(/\/$/, "")
 }
 
 // What a listing's mode column says an entry is, for the refusal above.
@@ -256,7 +257,8 @@ function entryName(fields) {
 // Only ever read when the entry is *not* a regular file, so the fallback is
 // every mode both tars can print that this does not name rather than a case
 // believed impossible.
-function kind(mode) {
+export function kind(line) {
+  const mode = line.trim()
   if (mode.startsWith("d")) return "a directory"
   if (mode.startsWith("l")) return "a symbolic link"
   if (mode.startsWith("h")) return "a hard link"
@@ -267,21 +269,18 @@ export function executableDigest(archive) {
   // Listed with the platform's own tar rather than a dependency: this script
   // runs on a maintainer's machine, not in the app.
   const listing = execFileSync("tar", ["-tvzf", archive], { encoding: "utf8" })
-  const entries = listing
-    .split("\n")
-    .map((line) => line.trim().split(/\s+/))
-    .filter((fields) => entryName(fields) === EXECUTABLE)
-  const named = entries.find((fields) => fields[0]?.startsWith("-"))
+  const entries = listing.split("\n").filter((line) => entryName(line) === EXECUTABLE)
+  const named = entries.find((line) => line.trim().startsWith("-"))
   if (!named) {
     // An archive that does not hold the executable and one that holds
     // something else under its name are different things to be told, and the
     // second is the one a maintainer can act on: a release that started
     // shipping a launcher symlink is a packaging change to go and read, not a
     // missing file.
-    const [mode] = entries[0] ?? []
+    const [other] = entries
     return {
-      refusal: mode
-        ? `holds ${EXECUTABLE} as ${kind(mode)} rather than as a regular file`
+      refusal: other
+        ? `holds ${EXECUTABLE} as ${kind(other)} rather than as a regular file`
         : `does not hold ${EXECUTABLE} at all`,
     }
   }
