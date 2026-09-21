@@ -724,10 +724,20 @@ async fn a_refusal_reaches_the_agent_even_when_its_audit_cannot_be_recorded() {
     // The refusal went anyway: the provider recorded the answer it was given.
     // Exactly one answer, and it is the refusal: a request answered twice is
     // its own protocol fault, and the audit failure must not cause one.
+    //
+    // The execution ends on its own audit failure, which says nothing about
+    // whether the provider has read the refusal yet — so wait for the provider
+    // to say so rather than assuming this side's ending ordered the other's.
+    wait_for_file(&root, "permission-outcomes").await;
     let answered = std::fs::read_to_string(root.path().join("permission-outcomes")).unwrap();
+    // Compared as JSON, not as text: which order a serializer writes an
+    // object's keys in is a build's business, not this contract's.
     assert_eq!(
-        answered.lines().collect::<Vec<_>>(),
-        vec![r#"{"optionId": "deny-one", "outcome": "selected"}"#],
+        answered
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .collect::<Vec<_>>(),
+        vec![serde_json::json!({"outcome":"selected","optionId":"deny-one"})],
         "the refusal was not the provider's only answer"
     );
     let _ = opened
@@ -769,7 +779,7 @@ async fn a_refusal_that_cannot_be_written_keeps_its_decision_and_its_delivery_fa
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))
         .await;
-    assert_gone(&root, "pid");
+    wait_until_gone(&root, "pid").await;
 }
 
 /// Both failures at once keep both causes, as an answered review's do.
@@ -816,7 +826,7 @@ async fn a_refusal_failing_to_write_and_to_record_preserves_both_causes() {
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))
         .await;
-    assert_gone(&root, "pid");
+    wait_until_gone(&root, "pid").await;
 }
 
 /// The recorded name is the provider's claim about its own frame, and the
@@ -858,5 +868,5 @@ async fn a_declared_name_is_recorded_as_a_claim_and_does_not_decide_the_refusal(
         .session
         .shutdown(SessionCloseRequest::Explicit(close_action()))
         .await;
-    assert_gone(&root, "pid");
+    wait_until_gone(&root, "pid").await;
 }
