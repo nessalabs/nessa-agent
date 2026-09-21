@@ -30,7 +30,7 @@
  * costs, and both ways out. This runs before it and does not duplicate it.
  */
 import { execFileSync, spawnSync } from "node:child_process"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, realpathSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -54,8 +54,15 @@ function checkStage(stage) {
   return stage
 }
 
+/**
+ * Progress goes to stderr, where this repository's other scripts put it.
+ *
+ * stdout belongs to whatever a command produces for a machine to read. Nothing
+ * here is that: these lines are for the person or agent watching a start, and
+ * a caller piping stdout should get the command's own output, not this.
+ */
 function say(line) {
-  process.stdout.write(`→ ${line}\n`)
+  process.stderr.write(`→ ${line}\n`)
 }
 
 /** A refusal is a thing to run, not a thing to interpret. */
@@ -83,17 +90,23 @@ function checkHarness() {
     say("agent runtime installed")
     return
   }
-  say(`agent runtime missing; installing it into ${HARNESS}`)
+  // Said before it happens, not after. `npm ci` deletes the harness's
+  // `node_modules` outright and then fetches, so somebody who was working in
+  // there deserves to read that on the way past rather than discover it.
+  say(`agent runtime missing; running (cd ${HARNESS} && npm ci --omit=dev)`)
+  let installed = true
   try {
     execFileSync("npm", ["ci", "--omit=dev"], {
       stdio: "inherit",
       cwd: join(root, HARNESS),
     })
   } catch {
-    // Left to the caller: this needs the network, and a machine without one
-    // has a different problem than a missing install.
+    // Kept, rather than swallowed: a failing install and a succeeding one that
+    // produced nothing are different faults, and the message below is the only
+    // place either is reported.
+    installed = false
   }
-  if (!existsSync(join(root, ACP_ENTRY))) {
+  if (!installed || !existsSync(join(root, ACP_ENTRY))) {
     fail(
       "The agent's runtime is not installed, so the gateway would have no agent to talk to.",
       `It belongs at ${ACP_ENTRY}`,
@@ -165,12 +178,11 @@ function checkAgent(stage) {
  * server that would not start. Building first makes the wait mean what it says.
  */
 function checkServer() {
-  const binary = join(root, "target/debug/nessa")
-  if (existsSync(binary)) {
-    say("server binary present")
-    return
-  }
-  say("server not built yet; building it before anything waits on it")
+  // Built every time, not checked for existence. A binary that is present can
+  // still be older than the source, and `cargo run` would then rebuild it
+  // inside the health wait — which is the timeout this check exists to
+  // prevent. Cargo answers in well under a second when there is nothing to do.
+  say("building the gateway, so nothing waits on a compile")
   try {
     execFileSync("cargo", ["build", "-p", "nessa-server"], {
       stdio: "inherit",
@@ -197,4 +209,10 @@ function main() {
   checkServer()
 }
 
-main()
+// Guarded: importing this module must not install packages or build a binary.
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
+  main()
+}

@@ -60,6 +60,11 @@ start stage="":
     # Everything that has to be true before a window is worth opening: the stage
     # is real, the gateway has an agent to talk to, and the binary exists rather
     # than being compiled while something waits on it.
+    # The port before any repair. `just start prod` on a machine with Nessa
+    # installed cannot succeed — its service holds the port — and preflight
+    # would otherwise have written to the installed app's own namespace on the
+    # way to that refusal. Nothing is repaired until there is somewhere to run.
+    node scripts/free-gateway-port.mjs "${stage}"
     node scripts/preflight.mjs "${stage}"
     # No argument on purpose, now that the stage is exported above: with one,
     # this answers the stage's own port and `NESSA_PORT` is ignored, which
@@ -88,7 +93,6 @@ start stage="":
     }
     trap cleanup EXIT INT TERM
 
-    node scripts/free-gateway-port.mjs "${stage}"
 
     echo "→ starting nessa-server"
     pnpm server:run &
