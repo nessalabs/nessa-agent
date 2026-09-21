@@ -64,7 +64,6 @@ function fail(...lines) {
   process.exit(1)
 }
 
-
 /**
  * The agent's own runtime, which a fresh checkout does not have.
  *
@@ -137,10 +136,14 @@ function checkAgent(stage) {
     return
   }
   say(`no agent in ${configPath}; writing one`)
-  const wrote = spawnSync(process.execPath, [join(root, "scripts/dev-agent-config.mjs")], {
-    stdio: "inherit",
-    env: { ...process.env, NESSA_STAGE: stage },
-  })
+  const wrote = spawnSync(
+    process.execPath,
+    [join(root, "scripts/dev-agent-config.mjs")],
+    {
+      stdio: "inherit",
+      env: { ...process.env, NESSA_STAGE: stage },
+    },
+  )
   if (wrote.status !== 0 || !settled()) {
     fail(
       `The gateway would start without an agent, and nothing could be sent to it.`,
@@ -169,7 +172,10 @@ function checkServer() {
   }
   say("server not built yet; building it before anything waits on it")
   try {
-    execFileSync("cargo", ["build", "-p", "nessa-server"], { stdio: "inherit", cwd: root })
+    execFileSync("cargo", ["build", "-p", "nessa-server"], {
+      stdio: "inherit",
+      cwd: root,
+    })
   } catch {
     fail(
       "The gateway could not be built, so there is nothing to start.",
@@ -183,7 +189,9 @@ function checkServer() {
 function main() {
   const stage = checkStage((process.argv[2] ?? "dev").trim())
   const instance = process.env.NESSA_INSTANCE
-  say(`stage ${stage}${instance ? `, instance ${instance}` : ""}, gateway :${gatewayPort(stage)}`)
+  say(
+    `stage ${stage}${instance ? `, instance ${instance}` : ""}, gateway :${gatewayPort(stage)}`,
+  )
   checkHarness()
   checkAgent(stage)
   checkServer()

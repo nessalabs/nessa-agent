@@ -13,7 +13,14 @@ import { describe, expect, it } from "vitest"
 import { statusLabel, type SessionState } from "./types"
 
 function session(over: Partial<SessionState>): SessionState {
-  return { retryRequest: 0, phase: "idle", detail: "", hello: null, health: null, ...over }
+  return {
+    retryRequest: 0,
+    phase: "idle",
+    detail: "",
+    hello: null,
+    health: null,
+    ...over,
+  }
 }
 
 const refusal =

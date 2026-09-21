@@ -101,9 +101,10 @@ export function traceMiddleware(enabled: boolean): Middleware {
       const entry: TracedAction = {
         sequence: sequence++,
         at: Date.now() - began,
-        type: typeof action === "object" && action && "type" in action
-          ? String((action as { type: unknown }).type)
-          : "unknown",
+        type:
+          typeof action === "object" && action && "type" in action
+            ? String((action as { type: unknown }).type)
+            : "unknown",
         after: summarize(api.getState()),
       }
       recorded.push(entry)
