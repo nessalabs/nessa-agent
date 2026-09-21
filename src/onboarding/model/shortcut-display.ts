@@ -86,6 +86,25 @@ const NAMED_KEYS: Readonly<Record<ShortcutPlatform, Readonly<Record<string, stri
   })
 
 /**
+ * The spelling a table gives `token`, or nothing.
+ *
+ * `Object.hasOwn` rather than a plain read, because the token is whatever the
+ * host's shortcut document wrote in an accelerator and a table is an object
+ * like any other. `constructor` and `__proto__` survive `toLowerCase` intact
+ * and every object answers to both, so a binding of `Cmd+constructor` read a
+ * *function* out of this table and put it in a `string[]` — a keycap React
+ * refuses to draw and an accessible name reading
+ * `⌘function Object() { [native code] }`. Only a spelling the table owns is a
+ * spelling.
+ */
+function spelling(
+  table: Readonly<Record<string, string>>,
+  token: string,
+): string | undefined {
+  return Object.hasOwn(table, token) ? table[token] : undefined
+}
+
+/**
  * Split an accelerator into the keys a person presses, written for `platform`.
  *
  * Each entry is one keycap. Tokens with no known spelling are passed through
@@ -99,7 +118,8 @@ export function acceleratorKeys(keys: string, platform: ShortcutPlatform): strin
     .filter((part) => part.length > 0)
     .map((part) => {
       const token = part.toLowerCase()
-      const written = MODIFIERS[platform][token] ?? NAMED_KEYS[platform][token]
+      const written =
+        spelling(MODIFIERS[platform], token) ?? spelling(NAMED_KEYS[platform], token)
       if (written) return written
       return part.length === 1 ? part.toUpperCase() : part
     })

@@ -462,6 +462,34 @@ Use mandatory typed reason/attribution parameters and `#[must_use]` transition
 results to catch omissions early. Run relevant tests and Clippy with `-D warnings`;
 these mechanical checks complement the lifecycle review above, not replace it.
 
+## Tables are read for what they own
+
+A JavaScript object inherits from `Object.prototype`, so `constructor`,
+`toString`, `valueOf`, `hasOwnProperty` and `__proto__` are found on every plain
+object and every imported JSON table. Neither `key in table` nor `table[key]`
+distinguishes them from an entry somebody actually wrote, and both hand back a
+function where a value was declared — past a `=== undefined` check, past a
+truthiness check, and into a `string` that is not one.
+
+Read a table with `Object.hasOwn(table, key)` before indexing it whenever the key
+did not come from inside this module. It is one line, it sits at the read where
+a reviewer can see it, and unlike `Object.create(null)` it works on an imported
+JSON table, which is not ours to give a different prototype.
+
+Where the key names a closed set, narrow it into that union at the boundary it
+arrives at, and let everything downstream take the union. `parseStage` in
+`src/env/gateway-ports.ts` and `conversationErrorCode` in
+`packages/nessa-client` are the two shapes: the first asks the table what it
+owns, the second checks membership of the enum. A type assertion is not
+narrowing — `value as Stage` is what let an unchecked string through in the
+first place, and a key laundered through a cast looks closed to the compiler
+and to any type-aware lint rule.
+
+`nessa/inherited-lookups` refuses `key in table` for a key that is not written
+out at the call site. It is not the whole rule — ESLint does not lint `scripts`,
+and nothing mechanical catches a plain read with a laundered key — so the
+reviewer still has to ask where the key came from.
+
 ## Value objects
 
 Reject in-place mutation APIs (including private mutators, mutable references,

@@ -138,6 +138,3 @@ export const composerNotices = {
     }
   },
 }
-
-/** The plugin `eslint.config.js` registers. One rule, about one file. */
-export default { rules: { "composer-notices": composerNotices } }
