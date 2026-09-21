@@ -1,15 +1,11 @@
 /**
  * That opening a conversation cannot hand out an id already on screen.
  *
- * The tab strip keys every tab by its conversation id, and React duplicates
- * the children under a repeated key rather than refusing it. That is what a
- * panel full of "Queued 1" and "Queued 2" chips was: duplicated children, each
- * frozen at the count of the render that made it, none of them removed when
- * the queue drained.
- *
- * The counter is a separate field from the conversations it names, so these
- * drive it out of step on purpose — which a restore, or anything replacing the
- * list wholesale, can do without meaning to.
+ * Ids key the tab strip, and a repeated key is a defect the renderer will not
+ * refuse — see src/panel/ui/composer-keys.test.tsx for what that costs. No
+ * path builds a counter out of step with its conversations today, so these
+ * drive it there on purpose: the guard is for the state the type permits, not
+ * for one that has been observed.
  */
 import { describe, expect, it } from "vitest"
 
@@ -57,8 +53,15 @@ describe("taking a conversation id", () => {
     expect(tabs.nextConversationId).toBe(2)
   })
 
-  it("moves the counter past what it found, so the next call does not rescan", () => {
-    const { tabs } = takeConversationId(tabsWith(["c0", "c1", "c2"], 0))
-    expect(tabs.nextConversationId).toBe(4)
+  it("does not rescan from the same place twice", () => {
+    // The invariant, not the number: a second call must not walk the ids the
+    // first one already walked, whatever the counter happens to hold.
+    const first = takeConversationId(tabsWith(["c0", "c1", "c2"], 0))
+    const second = takeConversationId({
+      ...first.tabs,
+      conversations: [...first.tabs.conversations, conversation(first.id)],
+    })
+    expect(second.id).not.toBe(first.id)
+    expect(second.tabs.nextConversationId).toBeGreaterThan(first.tabs.nextConversationId)
   })
 })

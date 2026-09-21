@@ -35,7 +35,7 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import { ACP_ENTRY, HARNESS, agentIsSettled, namespaceRoot } from "./dev-agent-config.mjs"
-import { gatewayPort } from "./gateway-port.mjs"
+import { gatewayPort, selectedPort } from "./gateway-port.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 

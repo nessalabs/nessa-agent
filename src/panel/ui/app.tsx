@@ -526,12 +526,15 @@ export function App({
               gatewayAvailable={chat.gatewayAvailable}
             />
             {/* Keyed per conversation so the queue is rebuilt rather than
-                carried across a tab change, and named apart from its siblings:
-                the composer below is keyed by the same conversation, and two
-                children of one parent under one key are not two things to
-                React. It duplicated them instead — a queue chip per render,
-                each frozen at the count it saw, none removed when the queue
-                drained, all of them following the person into the next tab. */}
+                carried across a tab change, and named apart from the composer
+                below, which is keyed by the same conversation. Two children of
+                one parent under one key are one child to React. That alone is
+                survivable; here it was not, because the notices above render
+                nothing most of the time, and a falsy sibling earlier in the
+                array makes React leak one subtree per render instead of
+                reusing it. The composer filled with queue chips, each frozen
+                at the count it was born with, none removed when the queue
+                drained. See src/panel/ui/composer-keys.test.tsx. */}
             <ConversationQueue
               key={`queue:${chat.active.id}`}
               conversation={chat.active}

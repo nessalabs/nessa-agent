@@ -34,6 +34,7 @@ server:
 # load). It restarts a dev server this checkout started and nothing else — see
 # scripts/free-gateway-port.mjs for why a launchd service is not ours to kill.
 [unix]
+[positional-arguments]
 start stage="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -47,7 +48,10 @@ start stage="":
     # `VITE_NESSA_STAGE`. Setting only one is how a prod UI came to be pointed
     # at a dev gateway, which the app refused — correctly, in a banner, beside a
     # picker that span for ever.
-    stage="{{stage}}"
+    # `"$1"`, not `{{stage}}`: just interpolates a recipe argument as text into
+    # this script, so a stage carrying a quote or a `$(…)` would be read as
+    # shell rather than as a name. Positional arguments are passed, not pasted.
+    stage="${1:-}"
     if [[ -z "${stage}" ]]; then
       stage="$(node -e 'import("./scripts/gateway-port.mjs").then(m => process.stdout.write(m.selectedStage()))')"
     fi
@@ -57,7 +61,11 @@ start stage="":
     # is real, the gateway has an agent to talk to, and the binary exists rather
     # than being compiled while something waits on it.
     node scripts/preflight.mjs "${stage}"
-    port="$(node scripts/gateway-port.mjs "${stage}")"
+    # No argument on purpose, now that the stage is exported above: with one,
+    # this answers the stage's own port and `NESSA_PORT` is ignored, which
+    # started the server on one socket and polled another. Without one it reads
+    # the same environment the server will, override included.
+    port="$(node scripts/gateway-port.mjs)"
     server_pid=""
     app_pid=""
     # The app goes first, then the gateway it talks to: the other order leaves a

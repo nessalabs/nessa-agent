@@ -114,7 +114,13 @@ export default defineConfig({
         // opened while another agent worked never finished painting — a blank
         // window, and no sign of why. What happens in another checkout is not
         // a change to this one.
-        "**/.claude/worktrees/**",
+        //
+        // Anchored to this config's own directory rather than written as
+        // `**/.claude/worktrees/**`: a worktree is itself a checkout, its path
+        // contains that segment, and the loose pattern therefore matched the
+        // source of whichever checkout was running — turning HMR off for
+        // exactly the people who work in worktrees.
+        `${resolve(dirname(fileURLToPath(import.meta.url)), ".claude/worktrees")}/**`,
       ],
     },
     // The design system is a symlink that often lives outside this checkout
