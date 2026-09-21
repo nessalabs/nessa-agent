@@ -106,7 +106,7 @@ fn invalid_content_does_not_reserve_a_provider_tool_name() {
 }
 
 #[test]
-fn provider_name_retention_is_bounded_by_allowlist_identity_and_entry_limits() {
+fn provider_name_retention_is_bounded_by_name_identity_and_entry_limits() {
     let mut names = HashMap::new();
     let oversized = "Write".repeat(1024 * 1024);
     for id in ["first", "second"] {
@@ -229,6 +229,50 @@ fn deferred_schema_loading_is_admitted_before_the_tool_it_loads() {
     let review = tool_input("ToolSearch", &args).unwrap();
     assert_eq!(review.name, "ToolSearch");
     assert_eq!(review.arguments_json, args.to_string());
+}
+
+#[test]
+fn execution_and_escaping_tools_are_denied_even_though_admission_is_open() {
+    // Admission is open, so this list is the whole boundary. Each name here is
+    // a way out of what Nessa owns: shell execution outside Shepherd, the
+    // permission mode itself, work that outlives its execution, and effects on
+    // services beyond this machine. A permission prompt is not ownership.
+    let mut names = HashMap::new();
+    for name in [
+        "Bash",
+        "BashOutput",
+        "KillShell",
+        "Monitor",
+        "REPL",
+        "EnterPlanMode",
+        "ExitPlanMode",
+        "Workflow",
+        "CronCreate",
+        "CronDelete",
+        "CronList",
+        "EnterWorktree",
+        "ExitWorktree",
+        "Artifact",
+        "PushNotification",
+        "RemoteTrigger",
+        "SendFeedback",
+    ] {
+        assert!(
+            DISALLOWED_TOOLS.contains(&name),
+            "{name} must stay denied once admission is open"
+        );
+        assert!(!enabled_name(name, &[]), "denied tool {name} was admitted");
+        assert!(matches!(
+            tool_call(
+                &json!({"toolCallId":name,"_meta":{"claudeCode":{"toolName":name}}}),
+                &mut names
+            ),
+            Err(AgentError::Unsupported(_))
+        ));
+        assert!(tool_input(name, &json!({"command":"true"})).is_err());
+    }
+    // Denial reserves no provider name, whatever the caller sends.
+    assert!(names.is_empty());
 }
 
 #[test]

@@ -62,15 +62,25 @@ cleanup. An already-settled invocation keeps its earlier result.
   and the tools of configured MCP servers — is therefore reviewable, and is
   routed to Nessa's permission owner by a single `ask` rule. A built-in this
   adapter has never heard of is reviewed with its input preserved rather than
-  refused; refusing one ended the whole execution. Native file tools retain
+  refused; refusing one ended the whole execution. An unfamiliar *name* is what
+  this covers: a denied name, and a tool result carrying a content block this
+  adapter does not model, still end the execution. Native file tools retain
   schema validation; other tools preserve bounded original JSON review input.
   MCP names must belong to a configured server. Native tool names are bounded
   and provider-validated. Only supplied `allow_once` and `reject_once` choices
   are exposed. Ambiguous permission options fail closed.
-- Native Bash/BashOutput/KillShell are disabled. Nessa-owned tools, including
-  Shepherd-backed shell execution, are exposed through MCP. EnterPlanMode and
-  ExitPlanMode are disabled to preserve default permission mode. Form elicitation,
-  terminal/filesystem client RPCs, provider-side hooks, plugin/settings-source
+- Denied tools are the whole of that boundary, since admission is otherwise
+  open, and they are read against the one pinned harness version startup
+  verifies. Execution Nessa does not own is denied: Bash, BashOutput, KillShell,
+  Monitor — which takes a shell command or a WebSocket — and REPL. Nessa-owned
+  tools, including Shepherd-backed shell execution, are exposed through MCP.
+  EnterPlanMode and ExitPlanMode are denied to preserve default permission mode.
+  Work that would outlive or escape the execution that asked for it is denied
+  too: Workflow, CronCreate/CronDelete/CronList, and EnterWorktree/ExitWorktree.
+  So are effects on services beyond this machine: Artifact, PushNotification,
+  RemoteTrigger and SendFeedback. Reviewing a tool is not the same as owning
+  what it does.
+- Form elicitation, terminal/filesystem client RPCs, provider-side hooks, plugin/settings-source
   loading, explicit reasoning controls and extended context remain unsupported.
   Claude omits tools that require unadvertised client capabilities, such as
   AskUserQuestion. Unsupported incoming client requests receive a protocol error.
@@ -234,8 +244,9 @@ it hopefully.
 
 A `resource_link` is text, not an instruction to open anything. The model may then
 choose to call its own `Read` tool on the path, which is an ordinary tool call:
-under this profile `Read` is in permission `ask`
-(`src/infrastructure/claude_acp/tools/wire.rs:18`), so every such read raises
+under this profile every tool the harness offers is in permission `ask`
+(`REVIEWED_TOOLS_RULE` in `src/infrastructure/claude_acp/tools/wire.rs`), so
+every such read raises
 `session/request_permission`, including a path inside the launch workspace that
 the adapter's own default would have allowed without asking. The workspace is the
 child's working directory, not a sandbox: an approved read outside it succeeds. A
