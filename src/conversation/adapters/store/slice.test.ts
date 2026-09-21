@@ -305,7 +305,9 @@ describe("gateway conversation projection", () => {
     await store.dispatch(refreshConversation("c0"))
     const failed = store.getState().conversation.conversations[0]!
     expect(failed.readRequest).toBeUndefined()
-    expect(failed.readError).toBe("offline")
+    // The panel's own word for a read it could not make sense of, not the
+    // error's text: the scenario substitute rejects with a plain `Error`.
+    expect(failed.readError).toBe("unavailable")
   })
 
   it("routes permission decisions and queue removal with exact targets", async () => {

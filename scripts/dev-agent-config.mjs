@@ -59,7 +59,7 @@ const MINIMUM_NODE_MAJOR = 20
  * rather than written as a path that is not there — the gateway refuses to
  * start on one of those, and a missing Codex should not cost a working Claude.
  */
-const AGENTS = {
+export const AGENTS = {
   claude: {
     harness: "crates/nessa-sdk/harnesses/claude-acp",
     entry:
@@ -79,13 +79,15 @@ const AGENTS = {
  * Claude when it is installed, because that is what a checkout has always
  * started on and what every conversation already on disk belongs to. */
 const PREFERRED = "claude"
+
 /** The checked-in model catalog, named once: the block points at it and the
  * check below looks for it, and a move that updated only one of those would
  * write a config naming a file that is not there. */
 const CATALOG = "crates/nessa-sdk/data/models.json"
 
 /** The command that installs one agent's harness. */
-const installHarness = (name) => `(cd ${AGENTS[name].harness} && npm ci --omit=dev)`
+export const installHarness = (name) =>
+  `(cd ${AGENTS[name].harness} && npm ci --omit=dev)`
 
 function say(message) {
   process.stdout.write(`${message}\n`)
