@@ -197,8 +197,15 @@ async function digestOf(url, scratch) {
   return hash.digest("hex")
 }
 
-// Whether the archive holds the pinned executable as a regular file with bytes
-// in it.
+// The digest of the pinned executable, or the reason this archive has none.
+//
+// Answered as `{ digest }` or `{ refusal }` rather than as a digest or `null`,
+// because there are four ways to have none and they are four different things
+// for the maintainer to do: chase a packaging change, chase a release that
+// shipped a placeholder, chase one whose executable is not a program, or read
+// a listing that no longer looks the way this expects. One message covering
+// all four has to be vague enough to fit the one that is not true of the
+// archive in hand.
 //
 // A name in the listing is not enough. A symbolic link, a hard link and a
 // directory all list under their own name and all carry no data, so an archive
@@ -219,17 +226,65 @@ async function digestOf(url, scratch) {
 // — a hundred and forty bytes of JSON announced as the tested Opencode. Four
 // magic bytes are the whole of the check and they are already in hand here,
 // which is the only moment in this script they are.
+// The name a listing line gives an entry, whatever kind of entry it is.
+//
+// The last field is the name only for a regular file. A directory lists with a
+// trailing slash, a symbolic link lists as `name -> target`, and a hard link
+// as `name link to target`, in both GNU and BSD tar — so reading the last
+// field would compare the executable's name against a link's *target* and find
+// no entry at all. That is how a package that swapped its binary for a
+// launcher symlink would be reported as not holding it, which is the one
+// packaging change this refusal most needs to name.
+function storedName(fields) {
+  const arrow = fields.indexOf("->")
+  const linked = fields.findIndex(
+    (field, at) => field === "link" && fields[at + 1] === "to",
+  )
+  const at = arrow !== -1 ? arrow - 1 : linked !== -1 ? linked - 1 : fields.length - 1
+  return fields[at]
+}
+
+// The same name, in the spelling the pin uses, so the two can be compared.
+// An archive written as `./package` lists every entry that way and a directory
+// lists with a trailing slash; neither is a difference in which entry this is.
+function entryName(fields) {
+  return storedName(fields)?.replace(/^\.\//, "").replace(/\/$/, "")
+}
+
+// What a listing's mode column says an entry is, for the refusal above.
+//
+// Only ever read when the entry is *not* a regular file, so the fallback is
+// every mode both tars can print that this does not name rather than a case
+// believed impossible.
+function kind(mode) {
+  if (mode.startsWith("d")) return "a directory"
+  if (mode.startsWith("l")) return "a symbolic link"
+  if (mode.startsWith("h")) return "a hard link"
+  return "something that is not a file"
+}
+
 export function executableDigest(archive) {
   // Listed with the platform's own tar rather than a dependency: this script
   // runs on a maintainer's machine, not in the app.
   const listing = execFileSync("tar", ["-tvzf", archive], { encoding: "utf8" })
-  const named = listing.split("\n").find((line) => {
-    const fields = line.trim().split(/\s+/)
-    const [mode] = fields
-    if (!mode || !mode.startsWith("-")) return false
-    return fields.at(-1)?.replace(/^\.\//, "") === EXECUTABLE
-  })
-  if (!named) return null
+  const entries = listing
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/))
+    .filter((fields) => entryName(fields) === EXECUTABLE)
+  const named = entries.find((fields) => fields[0]?.startsWith("-"))
+  if (!named) {
+    // An archive that does not hold the executable and one that holds
+    // something else under its name are different things to be told, and the
+    // second is the one a maintainer can act on: a release that started
+    // shipping a launcher symlink is a packaging change to go and read, not a
+    // missing file.
+    const [mode] = entries[0] ?? []
+    return {
+      refusal: mode
+        ? `holds ${EXECUTABLE} as ${kind(mode)} rather than as a regular file`
+        : `does not hold ${EXECUTABLE} at all`,
+    }
+  }
 
   // The size is measured by extracting the entry, not by reading a column out
   // of the listing. GNU tar prints `mode owner/group size date name` and BSD
@@ -240,20 +295,22 @@ export function executableDigest(archive) {
   // Extracted under the name the listing gave, rather than under the pin's
   // spelling of it, so an entry written as `./package/bin/opencode` is asked
   // for the way it is actually stored.
-  const stored = named.trim().split(/\s+/).at(-1)
+  const stored = storedName(named)
   const extracted = mkdtempSync(join(tmpdir(), "nessa-entry-"))
   try {
     execFileSync("tar", ["-xzf", archive, "-C", extracted, stored])
     const entry = join(extracted, stored)
-    if (statSync(entry).size === 0) return null
+    if (statSync(entry).size === 0)
+      return { refusal: `holds ${EXECUTABLE} as an empty file` }
     // Hashed while it is here, because it is the only moment the bytes that
     // will actually be launched exist in this script. The archive digest says
     // nothing about them: two archives can differ in a `package.json` field and
     // hold the same binary, which is the case [`sameBinaryUnderDifferentClaims`]
     // exists to catch.
     const bytes = readFileSync(entry)
-    if (!isProgram(bytes)) return null
-    return createHash("sha256").update(bytes).digest("hex")
+    if (!isProgram(bytes))
+      return { refusal: `holds ${EXECUTABLE}, whose bytes are not a program` }
+    return { digest: createHash("sha256").update(bytes).digest("hex") }
   } finally {
     // The entry is a hundred megabytes, and this runs once per platform.
     rmSync(extracted, { recursive: true, force: true })
@@ -380,17 +437,15 @@ async function pin() {
     // the *same* bytes arrive again, so a bad measurement made here would be
     // pinned permanently and would verify perfectly forever.
     await agreesWithRegistry(scratch, detail.dist, `${platform.package}@${version}`)
-    const executableDigestValue = executableDigest(scratch)
-    if (!executableDigestValue)
-      throw new Error(
-        `${platform.package}@${version} does not contain ${EXECUTABLE} as a file`,
-      )
+    const executable = executableDigest(scratch)
+    if (executable.refusal)
+      throw new Error(`${platform.package}@${version} ${executable.refusal}`)
     rmSync(scratch, { force: true })
     measured.push({
       package: platform.package,
       libc: platform.libc,
       requiresAvx2: platform.requiresAvx2,
-      digest: executableDigestValue,
+      digest: executable.digest,
     })
     releases.push({
       operatingSystem: platform.operatingSystem,

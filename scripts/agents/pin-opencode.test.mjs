@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  linkSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs"
@@ -52,7 +53,7 @@ test("a package holding the executable as a file is pinnable", (t) => {
   const tarball = archive(t, (contents) => {
     writeFileSync(join(contents, "package/bin/opencode"), program("binary"))
   })
-  assert.equal(executableDigest(tarball), sha256(program("binary")))
+  assert.deepEqual(executableDigest(tarball), { digest: sha256(program("binary")) })
 })
 
 test("a package holding it as a symbolic link is not", (t) => {
@@ -62,7 +63,25 @@ test("a package holding it as a symbolic link is not", (t) => {
     writeFileSync(join(contents, "package/bin/real"), "binary")
     symlinkSync("real", join(contents, "package/bin/opencode"))
   })
-  assert.equal(executableDigest(tarball), null)
+  assert.deepEqual(executableDigest(tarball), {
+    refusal:
+      "holds package/bin/opencode as a symbolic link rather than as a regular file",
+  })
+})
+
+test("a package holding it as a hard link is not", (t) => {
+  // The kind a listing hides best: both tars print a hard link's own mode
+  // letter and then the name it links to, so the entry reads as a file whose
+  // name is the *target*. Named here rather than left in the "not a file"
+  // fallback, because a release that started hard-linking its binary is a
+  // packaging change to go and read and not a missing executable.
+  const tarball = archive(t, (contents) => {
+    writeFileSync(join(contents, "package/bin/real"), program("binary"))
+    linkSync(join(contents, "package/bin/real"), join(contents, "package/bin/opencode"))
+  })
+  assert.deepEqual(executableDigest(tarball), {
+    refusal: "holds package/bin/opencode as a hard link rather than as a regular file",
+  })
 })
 
 test("a package holding a directory of that name is not", (t) => {
@@ -70,14 +89,18 @@ test("a package holding a directory of that name is not", (t) => {
     mkdirSync(join(contents, "package/bin/opencode"))
     writeFileSync(join(contents, "package/bin/opencode/inner"), "binary")
   })
-  assert.equal(executableDigest(tarball), null)
+  assert.deepEqual(executableDigest(tarball), {
+    refusal: "holds package/bin/opencode as a directory rather than as a regular file",
+  })
 })
 
 test("a package that does not hold it at all is not", (t) => {
   const tarball = archive(t, (contents) => {
     writeFileSync(join(contents, "package/bin/somethingelse"), "binary")
   })
-  assert.equal(executableDigest(tarball), null)
+  assert.deepEqual(executableDigest(tarball), {
+    refusal: "does not hold package/bin/opencode at all",
+  })
 })
 
 test("a name that merely ends in the executable's is not it", (t) => {
@@ -87,7 +110,9 @@ test("a name that merely ends in the executable's is not it", (t) => {
     })
     writeFileSync(join(contents, "package/bin/extra/bin/opencode"), "binary")
   })
-  assert.equal(executableDigest(tarball), null)
+  assert.deepEqual(executableDigest(tarball), {
+    refusal: "does not hold package/bin/opencode at all",
+  })
 })
 
 test("a package holding it as an empty file is not", (t) => {
@@ -97,7 +122,9 @@ test("a package holding it as an empty file is not", (t) => {
   const tarball = archive(t, (contents) => {
     writeFileSync(join(contents, "package/bin/opencode"), "")
   })
-  assert.equal(executableDigest(tarball), null)
+  assert.deepEqual(executableDigest(tarball), {
+    refusal: "holds package/bin/opencode as an empty file",
+  })
 })
 
 test("a package whose entries are written with a leading ./ is pinnable", (t) => {
@@ -113,7 +140,7 @@ test("a package whose entries are written with a leading ./ is pinnable", (t) =>
   const tarball = join(root, "archive.tgz")
   execFileSync("tar", ["-czf", tarball, "-C", contents, "./package"])
 
-  assert.equal(executableDigest(tarball), sha256(program("binary")))
+  assert.deepEqual(executableDigest(tarball), { digest: sha256(program("binary")) })
 })
 
 test("a package holding a file that is not a program is not pinnable", (t) => {
@@ -126,7 +153,9 @@ test("a package holding a file that is not a program is not pinnable", (t) => {
       JSON.stringify({ name: "opencode", bin: { opencode: "./bin/opencode" } }),
     )
   })
-  assert.equal(executableDigest(tarball), null)
+  assert.deepEqual(executableDigest(tarball), {
+    refusal: "holds package/bin/opencode, whose bytes are not a program",
+  })
 })
 
 test("a program in any of the shapes these platforms ship is pinnable", (t) => {
@@ -142,7 +171,7 @@ test("a program in any of the shapes these platforms ship is pinnable", (t) => {
     const tarball = archive(t, (contents) => {
       writeFileSync(join(contents, "package/bin/opencode"), bytes)
     })
-    assert.equal(executableDigest(tarball), sha256(bytes), `${magic}`)
+    assert.deepEqual(executableDigest(tarball), { digest: sha256(bytes) }, `${magic}`)
   }
 })
 
