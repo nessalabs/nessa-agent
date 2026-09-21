@@ -4,6 +4,8 @@ mod live_resize;
 mod viewport;
 mod webkit;
 
+use std::{process::Command, thread};
+
 use tauri::WebviewWindow;
 
 use crate::host::PanelSize;
@@ -45,5 +47,25 @@ impl Host for Linux {
         if let Err(error) = crate::panel::show(window, settings) {
             eprintln!("[nessa] could not open the panel on launch: {error}");
         }
+    }
+
+    /// `xdg-open` is the desktop-agnostic handler every Linux desktop honours,
+    /// and it is looked up on `PATH` rather than by absolute path because
+    /// distributions do not agree on where it lives. Spawned and left, like
+    /// the macOS opener: the panel does not wait for a browser to start.
+    fn open_externally(&self, url: &str) -> Result<(), String> {
+        let mut child = Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        // Reaped on a thread of its own. The opener returns as soon as it has
+        // told the other app, but waiting here would hold the navigation
+        // decision — and so the window — while a cold browser starts. Left
+        // unwaited it would be a zombie per click, for the life of a menu bar
+        // app that runs for days.
+        thread::spawn(move || {
+            let _ = child.wait();
+        });
+        Ok(())
     }
 }

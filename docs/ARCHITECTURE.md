@@ -40,15 +40,16 @@ opinion rather than the product's.
 | `local_data.rs` | The stage-scoped data root this process reads, mirroring the server's own path rules. |
 | `stage_port.rs` | The loopback port the gateway registers for a stage, from `protocol/defaults/gateway-ports.json`. macOS-only, like the registration that reads it. |
 | `gateway/domain/`, `gateway/application/`, `gateway/infrastructure/` | Retryable background-service reconciliation and native launchd adapters, injected from `main.rs`. The adapter verifies the running runtime fingerprint and owns acknowledged update replacement; gateway lifetime remains independent of the desktop. The domain holds `SearchPath`, the validated `PATH` value; `LoginShellPath` is the port behind which the account's own login shell is read, once per registration, for the path the agent will be given. |
+| `links.rs` | Where a clicked link goes. A pure `decide` allows the app's own origins (`tauri://localhost`, `http://tauri.localhost`, and the dev server in a `tauri dev` build alone), hands `http`, `https` and `mailto` to the OS, and refuses everything else — the panel has no address bar to come back from, and its webview is the one the host's commands are granted to. Applied by a Tauri plugin, because the panel window is declared in `tauri.conf.json`. The module header lists which ways out of a page the navigation policy does not see. |
 | `host.rs` | The host/shell seam: event names and the `PanelSize` payload. The frontend lists the same names in `src/host/window.ts`; a test fails if they drift. |
 | `panel.rs` | The panel frame: opening size, lower-right placement, show/hide. The tray and the shortcut request a toggle; they do not fit the frame. |
 | `tray.rs` | The menu bar extra (macOS) or StatusNotifierItem (Linux), and the surface-toggle request. Creating it is survivable: a desktop with no tray still launches. |
 | `shortcut.rs` | Registers / re-registers the global `panel.summon` accelerator from the shortcuts cache. |
 | `shortcuts.rs` | Stage-scoped `shortcuts.json` cache: seed from bundled protocol defaults. |
 | `settings.rs`, `settings/storage.rs` | The on-disk settings shape (panel geometry) and its defaults, over a `Storage` port that `shortcuts.rs` reads through too. Summon is not here — see `shortcuts.rs`. |
-| `platform/` | The OS host. `Host` is the contract; `current()` injects one implementation for the compiled target. Commands `set_frosted` and `panel_size` live here too. |
-| `platform/macos/` | Accessory app, `NSVisualEffectView` frost, WKWebView pin, AppKit live-resize notifications. The panel stays open when focus moves to another app and joins all desktop Spaces, with fullscreen auxiliary behavior enabled. |
-| `platform/linux/` | WebKit DMA-BUF prep, GtkFixed pin, CSS frost (no-op natively), allocate-based live resize, shown on the taskbar at launch. |
+| `platform/` | The OS host. `Host` is the contract — window shaping, and `open_externally` for a link leaving the app; `current()` injects one implementation for the compiled target. Commands `set_frosted` and `panel_size` live here too. |
+| `platform/macos/` | Accessory app, `/usr/bin/open` for links, `NSVisualEffectView` frost, WKWebView pin, AppKit live-resize notifications. The panel stays open when focus moves to another app and joins all desktop Spaces, with fullscreen auxiliary behavior enabled. |
+| `platform/linux/` | WebKit DMA-BUF prep, `xdg-open` for links, GtkFixed pin, CSS frost (no-op natively), allocate-based live resize, shown on the taskbar at launch. |
 | `platform/other/` | Webview fills the window; size events only. |
 
 **Launch** ([justfile](../justfile)) — `just server` / `just dev` / `just web` / `just release fast` / `just release`. Bundle names and Linux WebKit/GTK checks live in the justfile, not a second host layer. Windows recipes are written, not yet run on a Windows box.
@@ -109,6 +110,7 @@ Chat adapters receive the composition-owned session handle; they do not open ano
 | `adapters/sha256.ts` | The SHA-256 that identifies an upload to the gateway. It reads Web Crypto, so composition injects it and tests substitute their own. |
 | `ui/use-attachment-uploads.ts`, `ui/attachment-tile.tsx` | Start an upload for every draft image that has not had one; paint a tile's upload state with its retry. |
 | `adapters/use-drop-navigation-guard.ts` | Prevent dropped URLs from navigating the webview. |
+| `application/link-notice.ts`, `adapters/use-link-notice.ts` | The sentence for a link the host did not open, and the subscription that carries it. The decision is the host's, in `src-tauri/src/links.rs`; this is what the person reads when a click went nowhere. |
 | `ui/use-file-attachments.ts` | Remote pending previews, originating conversation, viewer state, and the last refusal — a typed reason, never a sentence, kept with the conversation it was said to. It is put down by the things that answer it, named as calls rather than worked out from the draft afterwards: files actually attached, a file removed, and `useComposer` reporting a draft that has gone. Local files use synchronous object URLs. Uploading is not its job. |
 | `adapters/dropped-folder.ts`, `ui/use-folder-drop.ts` | Bounded sequential folder traversal, cancellation, originating draft and pending-send guard. |
 | `ui/use-content-drop.ts`, `ui/use-attachment-menu.ts` | Drop acceptance/routing and menu geometry lifecycle, separate from rendering. |
