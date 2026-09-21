@@ -1,5 +1,6 @@
 import type { ConversationView, Submission, SubmissionReceipt } from "./view"
 import {
+  type CommandFailure,
   type FileAttachment,
   type ImageReference,
   type MessageContent,
@@ -65,32 +66,61 @@ export class ConversationUnavailableError extends Error {
 }
 
 /**
- * Why the gateway refused a message before admitting it. Each is the gateway's
- * own typed answer, carried here so nothing downstream reads a message string.
- * `attachment-not-found` and `attachment-unavailable` mean a named image is no
- * longer there to be sent: its reference is dead and its bytes must go up again.
- */
-export type SubmissionRefusal =
-  | "image-input-unsupported"
-  | "attachment-not-found"
-  | "attachment-unavailable"
-  | "conversation-not-found"
-  | "conversation-capacity"
-  | "agent-not-configured"
-  | "invalid-request"
-
-/**
- * The gateway answered a send or steer with a refusal it decides before
- * admission. Unlike a lost acknowledgement, this proves the message was not
- * taken: the draft can come back, and nothing is left to retry as-is.
+ * The gateway answered a conversation's creation, a send, or a steer with a
+ * refusal it decides before admission. Unlike a lost acknowledgement, this
+ * proves the message was not taken: the draft can come back, and nothing is
+ * left to retry as-is. `attachment-not-found` and `attachment-unavailable` mean
+ * a named image is no longer there to be sent: its reference is dead and its
+ * bytes must go up again.
  */
 export class SubmissionRefusedError extends Error {
   constructor(
-    readonly reason: SubmissionRefusal,
+    readonly reason: CommandFailure,
     cause?: unknown,
   ) {
     super(`The gateway refused this message (${reason}).`, { cause })
     this.name = "SubmissionRefusedError"
+  }
+}
+
+/**
+ * What the gateway said became of a control that failed.
+ *
+ * Three states and not a flag, because a failed control has three honest
+ * answers and two of them are certain. `refused` is the gateway deciding the
+ * command before applying any of it — a code it rejects up front, or a review
+ * whose option it reports as still pending. `applied` is the opposite
+ * certainty: the review's option was consumed, so the choice took effect and
+ * the command failed after that. `unknown` is the only one that leaves it open,
+ * and is what the client's own sentence describes.
+ *
+ * A boolean here would have made `applied` and `unknown` the same answer, which
+ * is the loss this type exists to prevent.
+ */
+export type ControlOutcome = "refused" | "applied" | "unknown"
+
+/**
+ * The gateway answered a conversation control with something worth passing on:
+ * a reason this panel has a word for, a certain outcome, or both.
+ *
+ * Deliberately not named a refusal, because the reason alone does not say the
+ * control was refused: `attachment-cleanup-unavailable` is a close that did
+ * happen and whose release of the conversation's uploads did not. The two facts
+ * do not determine each other — a review still pending is refused under any
+ * code, including one this build has no word for — so both are carried, and the
+ * store reads the conversation again regardless. It never replays a control.
+ */
+export class ControlFailedError extends Error {
+  constructor(
+    /** Undefined when the gateway's code has no word here; the outcome may still be certain. */
+    readonly reason: CommandFailure | undefined,
+    readonly outcome: ControlOutcome,
+    cause?: unknown,
+  ) {
+    super(`The gateway could not complete this control (${reason ?? outcome}).`, {
+      cause,
+    })
+    this.name = "ControlFailedError"
   }
 }
 

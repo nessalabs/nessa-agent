@@ -135,6 +135,26 @@ for (const file of walk(src)) {
     ) {
       fail(file, `${feature} model imports nothing outward`)
     }
+    // A client SDK is outward too: a model states product rules in its own
+    // terms, and the adapter that talks to the gateway is where they meet the
+    // wire's. Written as a refusal with named exceptions rather than a list of
+    // features to check, so a vertical that grows a model later is held to this
+    // from its first line instead of from whenever somebody adds it here.
+    //
+    // `session` is design: that model *is* the wire session, and describing it
+    // in other words would be describing something else. `onboarding` is not —
+    // `model/shortcut-display.ts` reads the generated `ShortcutsDocument` to
+    // find the summon accelerator, which is the same leak this rule exists to
+    // stop. It is named here so it stays visible, and so that removing it is a
+    // change to that vertical rather than a precondition for this one.
+    const modelMayReadTheWire = feature === "session" || feature === "onboarding"
+    if (
+      !modelMayReadTheWire &&
+      imports.some(
+        (item) => item === "@nessa/client" || item.startsWith("@nessa/client/"),
+      )
+    )
+      fail(file, `${feature} model does not import the client SDK`)
   }
 
   if (inLayerRules && layer === "application") {

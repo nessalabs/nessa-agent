@@ -11,7 +11,16 @@ export type ConversationNotice = {
     | null
 }
 
-/** One notification, while individual turns retain their own delivery receipts. */
+/**
+ * One notification, while individual turns retain their own delivery receipts.
+ *
+ * Why a command failed is asked of `conversation.failure`, the panel's own word
+ * for it, which `adapters/gateway/effects.ts` translated from the gateway's.
+ * Reads are the exception still outstanding: a failed read leaves only the
+ * client's sentence in `readError`, and for a changed configuration that
+ * sentence is the gateway's code itself. Giving reads a translated reason of
+ * their own is the remaining half of this; it is not in this change.
+ */
 export function conversationNotice(
   conversation: Conversation,
 ): ConversationNotice | null {
@@ -34,7 +43,7 @@ export function conversationNotice(
   if (unsent)
     return {
       title:
-        conversation.errorCode === ConversationErrorCode.AgentStartupDeadline
+        conversation.failure === "agent-startup-deadline"
           ? "Agent was still starting"
           : "Message not sent",
       description: `${conversation.error} Your draft is still here. Retry sends the current draft.`,
@@ -45,6 +54,8 @@ export function conversationNotice(
     conversation.error ??
     conversation.readError
   if (!error) return null
+  // A read failure has no translated reason: `readError` is the client's text,
+  // and for this one the gateway's text is its own code. See the module note.
   if (error === ConversationErrorCode.ConversationConfigurationChanged)
     return {
       title: "Conversation setup changed",
@@ -54,7 +65,7 @@ export function conversationNotice(
     }
   // A control runs `create` first, so a cold agent reaches this path too, with
   // nothing sent and no failed turn to hang a draft retry on.
-  if (conversation.errorCode === ConversationErrorCode.AgentStartupDeadline)
+  if (conversation.failure === "agent-startup-deadline")
     return {
       title: "Agent was still starting",
       description: error,
