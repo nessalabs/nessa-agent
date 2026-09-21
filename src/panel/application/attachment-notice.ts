@@ -80,6 +80,11 @@ export type AttachmentRefusal =
    * them — another cloud provider's placeholder, or a platform with no iCloud.
    */
   | { reason: "file-not-readable"; name: string | null }
+  /**
+   * This conversation's model takes no images, and an image was attached to
+   * it. Said at attach rather than after an upload that could only fail.
+   */
+  | { reason: "images-not-supported" }
   | { reason: "empty-folder" }
   | { reason: "folder-too-large" }
   | { reason: "unreadable-folder" }
@@ -248,6 +253,14 @@ export function refusalNotice(
         "File is not on this Mac",
         `${named(refusal.name)} is stored in the cloud and has not been downloaded. Open it once in Finder, then attach it.`,
         { kind: "choose-files" },
+      )
+    // The same words the draft notice uses for a draft that is already
+    // holding one, because it is the same fact. What differs is only when it
+    // is said: here, before an upload nobody needed, rather than after one.
+    case "images-not-supported":
+      return say(
+        "Images not supported",
+        "This agent's model doesn't take images, so it wasn't attached. Send it to an agent that does, or attach something else.",
       )
     case "empty-folder":
       return say("Folder has no files", "There is nothing in it to attach.")

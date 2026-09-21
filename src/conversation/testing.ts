@@ -15,6 +15,7 @@
  */
 export {
   attachFiles,
+  bindConversation,
   closeConversation,
   closeTab,
   controlConversation,

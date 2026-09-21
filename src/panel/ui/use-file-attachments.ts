@@ -210,6 +210,26 @@ export function useFileAttachments(
       (conversation) => conversation.id === targetId,
     )
     if (!target) return
+    // Three states, and only one of them refuses. `imageInput` is the
+    // gateway's answer about *this* conversation's model, and `undefined`
+    // means it has not answered yet — which is not "no". Guessing "no" would
+    // turn away images an agent takes; guessing "yes" is what this is fixing,
+    // because an image attached to a model that takes none was uploaded in
+    // full and then shown in red as though the upload had gone wrong. Nothing
+    // had gone wrong: it was never going to work, and it was knowable before
+    // a single byte moved. The send path has taken exactly this care about
+    // `undefined` since images shipped; this is the other half of it.
+    //
+    // Read from the target rather than the active conversation: a folder walk
+    // can finish after somebody has moved on, and the answer that matters is
+    // the one for the draft the files are landing on.
+    if (
+      target.remote?.capabilities.imageInput === false &&
+      held.some((file) => isImageFile(declaredMediaType(file.name, file.type)))
+    ) {
+      refuse({ reason: "images-not-supported" }, targetId)
+      return
+    }
     const targetFiles = target.draft.filter((part) => part.type === "file")
     // Three bounds, told apart, because the advice for each is different and
     // one of them has no advice at all: a file over the per-file bound is
