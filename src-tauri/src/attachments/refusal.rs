@@ -69,6 +69,19 @@ pub enum NotAttached {
     /// [`super::reading::LARGEST_ATTACHMENT_BYTES`]: this is a limit of where the bytes
     /// are going, so it is not something a person can fix by waiting.
     FileTooLarge,
+    /// A file whose bytes are not on this machine: an iCloud, Dropbox, Drive or
+    /// Box placeholder that has never been downloaded.
+    ///
+    /// Its own reason rather than folded into [`NotAttached::FileUnreadable`],
+    /// because it is the only one of these the person can fix in two seconds
+    /// and watch succeed — and because nothing is actually wrong. The file is
+    /// fine, the path is right, and the contents are somewhere else.
+    ///
+    /// This is the assumption the whole feature rests on, caught at the one
+    /// moment it can be: Nessa sends the agent a path rather than the bytes, so
+    /// a path with nothing behind it reaches the agent as a read that fails
+    /// minutes later, with nothing on screen to explain it.
+    FileNotReadable,
     /// The host could not mint the one-shot ticket a chosen file is read
     /// through, so the choice cannot be completed. The operating system's
     /// random source is what failed; nothing about the file is wrong.
@@ -83,6 +96,11 @@ pub enum NotAttached {
     /// The presented ticket was minted, was never spent, and has run out of
     /// time. Choosing the file again mints a new one.
     TicketExpired,
+    /// A file iCloud is fetching that had not arrived before the host's
+    /// deadline. Distinct from [`NotAttached::FileNotReadable`] because the
+    /// answer is different: nothing needs doing, the download is running, and
+    /// attaching again in a moment works.
+    FileNotReadyYet,
     /// A dropped folder holds nothing to attach. Its own reason because it is
     /// the one folder outcome that is not a failure of anything: the folder
     /// was read perfectly well and there was nothing in it.
@@ -165,6 +183,27 @@ impl FileNotAttached {
             reason: NotAttached::NotARegularFile,
             shown: Some(name.to_string()),
             detail: Some(what.to_string()),
+        }
+    }
+
+    /// A file that is not downloaded. `detail` carries what the `stat` said, so
+    /// a report can tell an iCloud placeholder from any other reason this could
+    /// ever fire.
+    pub(super) fn file_not_readable(name: &str, what: &str) -> Self {
+        Self {
+            reason: NotAttached::FileNotReadable,
+            shown: Some(name.to_string()),
+            detail: Some(what.to_string()),
+        }
+    }
+
+    /// A file that is still on its way. `detail` says how long was waited, so
+    /// a report can tell a slow link from a download that never started.
+    pub(super) fn file_not_ready_yet(name: &str, waited: std::time::Duration) -> Self {
+        Self {
+            reason: NotAttached::FileNotReadyYet,
+            shown: Some(name.to_string()),
+            detail: Some(format!("still downloading after {} s", waited.as_secs())),
         }
     }
 
@@ -296,7 +335,7 @@ mod tests {
     /// them nothing at all.
     /// Every reason, and the name it crosses the seam as. Written once so the
     /// two tests below cannot disagree about what the seam carries.
-    const EVERY_REASON: [(&NotAttached, &str); 15] = [
+    const EVERY_REASON: [(&NotAttached, &str); 17] = [
         (&NotAttached::PickerUnavailable, "picker-unavailable"),
         (&NotAttached::PathNotText, "path-not-text"),
         (&NotAttached::PathNamesNoFile, "path-names-no-file"),
@@ -309,6 +348,8 @@ mod tests {
         (&NotAttached::TicketUnknown, "ticket-unknown"),
         (&NotAttached::TicketAlreadyUsed, "ticket-already-used"),
         (&NotAttached::TicketExpired, "ticket-expired"),
+        (&NotAttached::FileNotReadable, "file-not-readable"),
+        (&NotAttached::FileNotReadyYet, "file-not-ready-yet"),
         (&NotAttached::FolderEmpty, "folder-empty"),
         (&NotAttached::FolderTooLarge, "folder-too-large"),
         (&NotAttached::FolderUnreadable, "folder-unreadable"),

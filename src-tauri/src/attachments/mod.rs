@@ -130,6 +130,7 @@ mod dragged;
 mod dropping;
 mod files;
 mod picker;
+mod readiness;
 mod reading;
 mod refusal;
 mod tickets;
@@ -156,6 +157,7 @@ pub use dragged::{drag_board, DragBoard};
 pub use dropping::dropped_on_panel;
 pub use files::{chosen_files, ChosenFiles};
 pub use picker::{file_picker, FilePicker};
+pub use readiness::{readiness, Readiness};
 pub use reading::{
     __cmd__read_attachment_bytes, __tauri_command_name_read_attachment_bytes, read_attachment_bytes,
 };

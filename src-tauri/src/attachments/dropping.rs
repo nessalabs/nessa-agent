@@ -61,6 +61,7 @@ use super::choosing::{describe_each, ChosenFile};
 use super::content_type::ContentTypes;
 use super::dragged::DraggedContent;
 use super::files::{answered_within, ChosenFiles, Kind, NoAnswer};
+use super::readiness::{Readiness, LONGEST_READY_WAIT};
 use super::refusal::{named, FileNotAttached};
 use super::tickets::AttachmentTickets;
 
@@ -151,14 +152,30 @@ pub(super) fn expand(
 /// The whole expansion happens on one thread under one deadline, because a
 /// folder on a mount that has stopped answering hangs on `read_dir` exactly as
 /// a file hangs on `stat`, and the panel must not wait for it.
+pub(super) struct Describing {
+    pub files: Arc<dyn ChosenFiles>,
+    pub types: Arc<dyn ContentTypes>,
+    pub tickets: Arc<dyn AttachmentTickets>,
+    pub readiness: Arc<Readiness>,
+    /// How long the filesystem is given to answer about one path.
+    pub wait: Duration,
+    /// How long a file that is not readable yet is given to become so.
+    pub ready_wait: Duration,
+}
+
 pub(super) async fn dropped(
     paths: Vec<PathBuf>,
-    files: Arc<dyn ChosenFiles>,
-    types: Arc<dyn ContentTypes>,
-    tickets: Arc<dyn AttachmentTickets>,
+    with: Describing,
     dragged: &dyn DraggedContent,
-    wait: Duration,
 ) -> Dropped {
+    let Describing {
+        files,
+        types,
+        tickets,
+        readiness,
+        wait,
+        ready_wait,
+    } = with;
     if paths.is_empty() {
         return Dropped {
             text: dragged.entered(),
@@ -178,7 +195,7 @@ pub(super) async fn dropped(
             return FileNotAttached::no_filesystem_answer(&named(first), &detail).into();
         }
     };
-    match describe_each(expanded, files, types, tickets, wait).await {
+    match describe_each(expanded, files, types, tickets, readiness, wait, ready_wait).await {
         Ok(files) => Dropped {
             files,
             ..Dropped::default()
@@ -234,11 +251,15 @@ pub fn dropped_on_panel(app: &AppHandle, event: &DragDropEvent) {
             tauri::async_runtime::spawn(async move {
                 let answer = dropped(
                     paths,
-                    deps.files.clone(),
-                    deps.types.clone(),
-                    deps.tickets.clone(),
+                    Describing {
+                        files: deps.files.clone(),
+                        types: deps.types.clone(),
+                        tickets: deps.tickets.clone(),
+                        readiness: deps.readiness.clone(),
+                        wait: super::files::LONGEST_LOOK_WAIT,
+                        ready_wait: LONGEST_READY_WAIT,
+                    },
                     deps.dragging.as_ref(),
-                    super::files::LONGEST_LOOK_WAIT,
                 )
                 .await;
                 deps.dragging.left();
@@ -269,7 +290,27 @@ impl From<FileNotAttached> for Dropped {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attachments::doubles::{FakeFiles, FakeTickets, FakeTypes};
+    use crate::attachments::doubles::{FakeFiles, FakeReadiness, FakeTickets, FakeTypes};
+    use crate::attachments::readiness::{Readied, Readiness};
+
+    /// A readiness seam holding one staged handler.
+    fn staged(answer: Readied) -> Arc<Readiness> {
+        Arc::new(Readiness::new(vec![Arc::new(FakeReadiness::answering(
+            answer,
+        ))]))
+    }
+
+    /// Everything a drop is described with, staged around one filesystem.
+    fn describing(files: Arc<FakeFiles>, wait: Duration) -> Describing {
+        Describing {
+            files,
+            types: Arc::new(FakeTypes("text/plain")),
+            tickets: Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
+            readiness: staged(Readied::Ready),
+            wait,
+            ready_wait: Duration::from_millis(50),
+        }
+    }
     use crate::attachments::dragged::DraggedText;
     use crate::attachments::refusal::NotAttached;
     use std::io::ErrorKind;
@@ -296,14 +337,7 @@ mod tests {
     }
 
     fn drop_of(of: &[&str], files: Arc<FakeFiles>, dragged: &dyn DraggedContent) -> Dropped {
-        tauri::async_runtime::block_on(dropped(
-            paths(of),
-            files,
-            Arc::new(FakeTypes("text/plain")),
-            Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
-            dragged,
-            PATIENT,
-        ))
+        tauri::async_runtime::block_on(dropped(paths(of), describing(files, PATIENT), dragged))
     }
 
     /// An ordinary drop of two files is two described files, in order, each
@@ -471,11 +505,11 @@ mod tests {
     fn a_filesystem_that_never_answers_refuses_the_drop_at_the_deadline() {
         let dropped = tauri::async_runtime::block_on(dropped(
             paths(&["/Volumes/gone/holiday.heic"]),
-            Arc::new(FakeFiles::stalling(Duration::from_secs(30))),
-            Arc::new(FakeTypes("image/heic")),
-            Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
+            describing(
+                Arc::new(FakeFiles::stalling(Duration::from_secs(30))),
+                Duration::from_millis(50),
+            ),
             &Carrying::nothing(),
-            Duration::from_millis(50),
         ));
 
         let refused = dropped.refused.expect("a mount that is not answering");

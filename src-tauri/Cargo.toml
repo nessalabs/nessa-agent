@@ -62,6 +62,10 @@ objc2-foundation = { version = "0.3", features = [
   "NSURL",
   "NSString",
   "NSError",
+  # `NSFileManager` is how a file iCloud is keeping elsewhere is asked for:
+  # `startDownloadingUbiquitousItemAtURL:` begins the fetch and
+  # `NSURLUbiquitousItemDownloadingStatusKey` says when it has landed.
+  "NSFileManager",
   "block2",
 ] }
 # The one genuinely new crate here, and the sibling of the objc2 crates above.

@@ -110,6 +110,21 @@ costly in practice, or if the gateway ever stops being local.
 `acp-agent.js:7038`. Recorded here so nobody rebuilds it from the shape of the
 protocol.
 
+**Read a cloud file without materialising it.** Asked, and the answer is no.
+The agent opens a *path*, so the bytes have to exist somewhere local before
+anything can read them — there is no route by which "the file is in iCloud" and
+"the agent reads it" are both true without a download happening. Nessa could
+fetch the bytes itself into a temporary file and link that instead, and it
+would be worse twice over: it is the same download with an extra copy, and it
+wrecks the one thing that makes this design safe to approve. The permission
+prompt shows the path, and a person who chose `amica-document 2.pdf` would be
+asked to approve a read of `/var/folders/qx/T/nessa-3f8a/…`, which they have no
+way to recognise as the file they picked.
+
+So a placeholder is made ready in place, under a deadline, by whoever keeps it
+— `src-tauri/src/attachments/readiness.rs` — and the path the agent is given is
+the path the person chose.
+
 **Leave `dragDropEnabled` off and match a dropped `File` to a path.** Rejected
 on sight. The page would have to guess which file on disk a name, size and
 timestamp referred to, and a guess that is usually right is the worst possible

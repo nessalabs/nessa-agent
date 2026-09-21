@@ -209,6 +209,7 @@ mod tests {
         Ok(OnDisk {
             kind: Kind::Regular,
             size,
+            stored: crate::attachments::files::Stored::Locally,
         })
     }
 

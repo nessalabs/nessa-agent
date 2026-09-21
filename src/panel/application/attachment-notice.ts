@@ -70,6 +70,16 @@ export type AttachmentRefusal =
     }
   | { reason: "draft-too-large" }
   | { reason: "window-budget"; maxMiB: number; draftsHoldFiles: boolean }
+  /**
+   * The file is being fetched and had not arrived before the host gave up
+   * waiting. Nothing is wrong and nothing needs doing: it is still coming.
+   */
+  | { reason: "file-not-ready-yet"; name: string | null }
+  /**
+   * The file's bytes are not on this machine and nothing here can go and get
+   * them — another cloud provider's placeholder, or a platform with no iCloud.
+   */
+  | { reason: "file-not-readable"; name: string | null }
   | { reason: "empty-folder" }
   | { reason: "folder-too-large" }
   | { reason: "unreadable-folder" }
@@ -222,6 +232,23 @@ export function refusalNotice(
         "No room for more files",
         windowBudgetMessage(refusal.maxMiB, refusal.draftsHoldFiles),
       )
+    // Two sentences for one symptom, because the remedies are opposite. The
+    // first is "do nothing, it is coming"; the second is "this one will not
+    // come on its own". Saying either of them for the other case is worse than
+    // saying nothing: one sends somebody to Finder for a file that is already
+    // downloading, and the other leaves them waiting for a file that is not.
+    case "file-not-ready-yet":
+      return say(
+        "Still getting the file ready",
+        `${named(refusal.name)} is being fetched from where it is stored. Attach it again in a moment.`,
+        { kind: "choose-files" },
+      )
+    case "file-not-readable":
+      return say(
+        "File is not on this Mac",
+        `${named(refusal.name)} is stored in the cloud and has not been downloaded. Open it once in Finder, then attach it.`,
+        { kind: "choose-files" },
+      )
     case "empty-folder":
       return say("Folder has no files", "There is nothing in it to attach.")
     case "folder-too-large":
@@ -322,6 +349,8 @@ export const hostRefusals = [
   "ticket-unknown",
   "ticket-already-used",
   "ticket-expired",
+  "file-not-readable",
+  "file-not-ready-yet",
   "folder-empty",
   "folder-too-large",
   "folder-unreadable",
@@ -355,6 +384,13 @@ export function pickerRefusal(error: unknown): AttachmentRefusal {
     // and so cannot call `webkitGetAsEntry`. Three host reasons onto the three
     // words this panel already had for them, with the same sentences: the walk
     // moved, what it can say did not.
+    // A file whose bytes are not on this machine. Two answers, because the
+    // person has two different things to do: nothing at all for one, and a
+    // trip to Finder for the other.
+    case "file-not-ready-yet":
+      return { reason: "file-not-ready-yet", name }
+    case "file-not-readable":
+      return { reason: "file-not-readable", name }
     case "folder-empty":
       return { reason: "empty-folder" }
     case "folder-too-large":

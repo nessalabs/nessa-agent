@@ -20,8 +20,9 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use super::content_type::ContentTypes;
-use super::files::{ChosenFiles, Kind, OnDisk};
+use super::files::{ChosenFiles, Kind, OnDisk, Stored};
 use super::picker::{FilePicker, Picked};
+use super::readiness::{MakeReadable, Readied, ReadyFuture};
 use super::tickets::{AttachmentTickets, NoTicket, Redeemed};
 
 /// A picker that has already made up its mind.
@@ -65,6 +66,10 @@ pub struct FakeFiles {
     held: HashMap<PathBuf, Vec<PathBuf>>,
     /// What each path is, where it differs from this double's one answer.
     kinds: HashMap<PathBuf, Kind>,
+    /// Whether a placeholder becomes an ordinary file after the first look.
+    arrives: bool,
+    /// How many times `look` has been called, for `arrives`.
+    looks: Mutex<usize>,
 }
 
 impl FakeFiles {
@@ -74,6 +79,7 @@ impl FakeFiles {
             Ok(OnDisk {
                 kind: Kind::Regular,
                 size,
+                stored: Stored::Locally,
             }),
             Ok(vec![
                 b'n';
@@ -95,6 +101,7 @@ impl FakeFiles {
             Ok(OnDisk {
                 kind: Kind::Regular,
                 size,
+                stored: Stored::Locally,
             }),
             Err(kind),
         )
@@ -108,9 +115,34 @@ impl FakeFiles {
             Ok(OnDisk {
                 kind: Kind::Regular,
                 size: declared,
+                stored: Stored::Locally,
             }),
             Ok(contents),
         )
+    }
+
+    /// A file the filesystem describes and has no bytes for: an iCloud,
+    /// Dropbox, Drive or Box placeholder. The `stat` answers with its real
+    /// length, which is exactly what makes this dangerous — everything looks
+    /// fine until something tries to read it.
+    pub fn dataless(size: u64) -> Self {
+        Self::new(
+            Ok(OnDisk {
+                kind: Kind::Regular,
+                size,
+                stored: Stored::Elsewhere,
+            }),
+            Ok(Vec::new()),
+        )
+    }
+
+    /// A placeholder that becomes an ordinary file after the first look —
+    /// which is exactly what a file arriving looks like from here.
+    pub fn arriving(size: u64) -> Self {
+        Self {
+            arrives: true,
+            ..Self::dataless(size)
+        }
     }
 
     /// A path that is not an ordinary file at all. The `stat` succeeds and says
@@ -118,7 +150,14 @@ impl FakeFiles {
     /// would have got, so a test can tell "refused on the kind" from "refused
     /// on the read".
     pub fn being(kind: Kind) -> Self {
-        Self::new(Ok(OnDisk { kind, size: 0 }), Ok(Vec::new()))
+        Self::new(
+            Ok(OnDisk {
+                kind,
+                size: 0,
+                stored: Stored::Locally,
+            }),
+            Ok(Vec::new()),
+        )
     }
 
     /// A filesystem that does not come back. Every call parks for `stall`,
@@ -139,6 +178,8 @@ impl FakeFiles {
             opened: Mutex::new(Vec::new()),
             held: HashMap::new(),
             kinds: HashMap::new(),
+            arrives: false,
+            looks: Mutex::new(0),
         }
     }
 
@@ -180,6 +221,9 @@ impl ChosenFiles for FakeFiles {
             .expect("the paths asked about")
             .push(path.to_path_buf());
         std::thread::sleep(self.stall);
+        let mut looks = self.looks.lock().expect("the looks made");
+        *looks += 1;
+        let arrived = self.arrives && *looks > 1;
         match self.kinds.get(path) {
             Some(kind) => self.looked.map(|on_disk| OnDisk {
                 kind: *kind,
@@ -187,6 +231,16 @@ impl ChosenFiles for FakeFiles {
             }),
             None => self.looked,
         }
+        .map(|on_disk| {
+            if arrived {
+                OnDisk {
+                    stored: Stored::Locally,
+                    ..on_disk
+                }
+            } else {
+                on_disk
+            }
+        })
         .map_err(Error::from)
     }
 
@@ -214,6 +268,51 @@ impl ChosenFiles for FakeFiles {
         let mut bytes = self.contents.clone().map_err(Error::from)?;
         bytes.truncate(usize::try_from(most).unwrap_or(usize::MAX));
         Ok(bytes)
+    }
+}
+
+/// A readiness handler with one answer, and a record of what it was asked for.
+///
+/// Claims every file, because a test that stages a handler wants it to run.
+/// The dispatch — which handler claims which file — has its own tests beside
+/// the seam; this is for the callers that only need "it was made ready" or
+/// "it was not".
+pub struct FakeReadiness {
+    answer: Readied,
+    asked: Mutex<Vec<PathBuf>>,
+}
+
+impl FakeReadiness {
+    /// A handler that always answers `answer`.
+    pub fn answering(answer: Readied) -> Self {
+        Self {
+            answer,
+            asked: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Every path it was asked to make ready.
+    pub fn asked(&self) -> Vec<PathBuf> {
+        self.asked.lock().expect("the paths asked about").clone()
+    }
+}
+
+impl MakeReadable for FakeReadiness {
+    fn mine(&self, _path: &Path) -> bool {
+        true
+    }
+    fn make_ready<'a>(
+        &'a self,
+        path: &'a Path,
+        _within: Duration,
+        _poll: Duration,
+    ) -> ReadyFuture<'a> {
+        self.asked
+            .lock()
+            .expect("the paths asked about")
+            .push(path.to_path_buf());
+        let answer = self.answer.clone();
+        Box::pin(async move { answer })
     }
 }
 

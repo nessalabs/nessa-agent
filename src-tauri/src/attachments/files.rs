@@ -114,17 +114,84 @@ impl Kind {
     }
 }
 
+/// Whether a file's bytes are actually on this disk.
+///
+/// A placeholder is the case the whole feature turns on. Nessa sends the agent
+/// a *path*, and the agent opens it — so a path is only worth sending if
+/// something is there to open. A file stored in iCloud Drive, Dropbox, Google
+/// Drive or Box and not yet downloaded answers a `stat` perfectly well, with
+/// its real name, its real type and its real length, and has no contents at
+/// all. Reading it either fails outright or blocks for as long as the download
+/// takes, and both of those happen inside the agent, minutes later, as a string
+/// of opaque failed tool calls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stored {
+    /// The bytes are here.
+    Locally,
+    /// A placeholder: name, size and type, and nothing to read.
+    Elsewhere,
+}
+
+impl Stored {
+    /// What the `stat` says about whether the bytes are here.
+    ///
+    /// **`SF_DATALESS`, not a block count.** `st_blocks == 0 && st_size > 0` is
+    /// the obvious signature and it has a false positive that matters: an
+    /// ordinary sparse file reports zero blocks and a real length, and reads
+    /// back perfectly well. Measured on a macOS 26 APFS volume — a 1 MiB sparse
+    /// file has `blocks=0`, `flags=0x00000000` and reads fine, while a real
+    /// iCloud placeholder alongside it has `blocks=0` and
+    /// `flags=0x40000060`. Refusing the sparse one would turn away a file that
+    /// works.
+    ///
+    /// **And not `NSURLUbiquitousItemDownloadingStatusKey`, although that is
+    /// the documented API.** It answers for iCloud items and only for those, so
+    /// it would have missed a Dropbox or Google Drive placeholder — which
+    /// reaches the disk through File Provider and is dataless in exactly the
+    /// same way. `SF_DATALESS` is the kernel's own materialisation flag,
+    /// covers every provider, and arrives in the `stat` this already makes:
+    /// no second syscall, no second port, and nothing else to hold a deadline
+    /// over.
+    fn of(found: &Metadata) -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            use std::os::macos::fs::MetadataExt;
+
+            /// `sys/stat.h`: "file is dataless object". Not in `libc` 0.2, so
+            /// it is written out here with where it came from.
+            const SF_DATALESS: u32 = 0x4000_0000;
+
+            if found.st_flags() & SF_DATALESS != 0 {
+                return Self::Elsewhere;
+            }
+        }
+        let _ = found;
+        Self::Locally
+    }
+
+    /// The words a refusal puts in its diagnostic.
+    pub fn described(self) -> &'static str {
+        match self {
+            Self::Locally => "on this disk",
+            Self::Elsewhere => "a placeholder with no contents on this disk",
+        }
+    }
+}
+
 /// What one `stat` found out about a chosen path.
 ///
-/// The kind and the length together, from one call, because they have to agree:
-/// a length read separately from the kind is a length that could describe a
-/// different thing than the kind did.
+/// The kind, the length and whether the bytes are here, from one call, because
+/// they have to agree: a length read separately from the kind is a length that
+/// could describe a different thing than the kind did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OnDisk {
     /// What the path names.
     pub kind: Kind,
-    /// Its length in bytes, as the `stat` reported it.
+    /// Its length in bytes, as the `stat` reported it. For a placeholder this
+    /// is the file's real length and none of it is here; see [`Stored`].
     pub size: u64,
+    /// Whether the bytes behind that length are on this disk.
+    pub stored: Stored,
 }
 
 /// What the filesystem says about a file the picker already answered with.
@@ -236,6 +303,7 @@ impl ChosenFiles for FilesOnDisk {
         Ok(OnDisk {
             kind: Kind::of(&found),
             size: found.len(),
+            stored: Stored::of(&found),
         })
     }
 

@@ -26,9 +26,10 @@ use serde::Serialize;
 use tauri::State;
 
 use super::content_type::ContentTypes;
-use super::files::{answered_within, ChosenFiles, Kind, OnDisk, LONGEST_LOOK_WAIT};
+use super::files::{answered_within, ChosenFiles, Kind, OnDisk, Stored, LONGEST_LOOK_WAIT};
 use super::picker::{FilePicker, Picked};
-use super::refusal::{named, FileNotAttached};
+use super::readiness::{Readied, Readiness, LONGEST_READY_WAIT, READY_POLL};
+use super::refusal::{named, FileNotAttached, NotAttached};
 use super::tickets::{AttachmentTickets, NoTicket};
 use crate::composition::HostDependencies;
 
@@ -95,6 +96,19 @@ pub(super) fn attachment(
             on_disk.kind.described(),
         ));
     }
+    // And whether there is anything behind the length, which is the same shape
+    // of question as the kind and asked in the same breath: both are settled
+    // from the `stat`, before anything is opened, because opening is what goes
+    // wrong. A placeholder either fails the read or blocks on a download for as
+    // long as the download takes — and for a linked file neither of those
+    // happens here at all. It happens inside the agent, later, with nothing on
+    // screen to connect it to the file somebody attached.
+    if on_disk.stored != Stored::Locally {
+        return Err(FileNotAttached::file_not_readable(
+            name,
+            on_disk.stored.described(),
+        ));
+    }
     let ticket = match ticket() {
         Ok(ticket) => ticket,
         Err(refused) => return Err(FileNotAttached::ticket_unavailable(name, &refused.detail)),
@@ -126,7 +140,9 @@ pub(super) async fn chosen_attachments(
     files: Arc<dyn ChosenFiles>,
     types: Arc<dyn ContentTypes>,
     tickets: Arc<dyn AttachmentTickets>,
+    readiness: Arc<Readiness>,
     wait: Duration,
+    ready_wait: Duration,
 ) -> Result<Vec<ChosenFile>, FileNotAttached> {
     let paths = match picker.choose().await {
         Picked::Cancelled => return Ok(Vec::new()),
@@ -134,7 +150,7 @@ pub(super) async fn chosen_attachments(
         Picked::Files(paths) => paths,
     };
 
-    describe_each(paths, files, types, tickets, wait).await
+    describe_each(paths, files, types, tickets, readiness, wait, ready_wait).await
 }
 
 /// Describe every path in `paths`, in order, or refuse the lot.
@@ -150,33 +166,70 @@ pub(super) async fn describe_each(
     files: Arc<dyn ChosenFiles>,
     types: Arc<dyn ContentTypes>,
     tickets: Arc<dyn AttachmentTickets>,
+    readiness: Arc<Readiness>,
     wait: Duration,
+    ready_wait: Duration,
 ) -> Result<Vec<ChosenFile>, FileNotAttached> {
     let mut attached = Vec::with_capacity(paths.len());
     for path in paths {
-        let described = {
-            let files = files.clone();
-            let types = types.clone();
-            let tickets = tickets.clone();
-            let asked = path.clone();
-            answered_within(wait, move || {
-                attachment(&asked, files.look(&asked), types.of(&asked), || {
-                    tickets.mint(&asked)
-                })
-            })
-            .await
-        };
-        match described {
-            Ok(described) => attached.push(described?),
-            Err(no_answer) => {
-                return Err(FileNotAttached::no_filesystem_answer(
-                    &named(&path),
-                    &no_answer.detail,
-                ))
+        let mut described = describe_one(&path, &files, &types, &tickets, wait).await?;
+        // A placeholder is fetched rather than refused. Somebody chose this
+        // file; sending them to Finder to open it by hand is the computer
+        // declining to do something it can do. What it may not do is wait
+        // without a bound — see `downloads` for why that is the stalled-mount
+        // hang in different clothes — so the wait is bounded and giving up is
+        // an honest sentence rather than a generic failure.
+        if matches!(&described, Err(refused) if refused.reason == NotAttached::FileNotReadable) {
+            match readiness.make_ready(&path, ready_wait, READY_POLL).await {
+                // Here now, so this is an ordinary local file and is described
+                // again from scratch: nothing downstream knows it was ever a
+                // placeholder, and the type decides its route as it would for
+                // any other file.
+                Readied::Ready => {
+                    described = describe_one(&path, &files, &types, &tickets, wait).await?
+                }
+                Readied::StillComing => {
+                    return Err(FileNotAttached::file_not_ready_yet(
+                        &named(&path),
+                        ready_wait,
+                    ))
+                }
+                // Another provider's placeholder, or iCloud refusing. The
+                // original refusal already says the useful thing — open it once
+                // — and its detail is replaced with what the service said.
+                Readied::Refused(detail) => {
+                    return Err(FileNotAttached::file_not_readable(&named(&path), &detail))
+                }
             }
         }
+        attached.push(described?);
     }
     Ok(attached)
+}
+
+/// One path, described under the filesystem deadline.
+///
+/// The outer `Result` is the deadline and the inner one is the decision, kept
+/// apart because the caller acts on them differently: a stalled disk ends the
+/// whole selection, while a placeholder is something to go and fetch.
+async fn describe_one(
+    path: &std::path::Path,
+    files: &Arc<dyn ChosenFiles>,
+    types: &Arc<dyn ContentTypes>,
+    tickets: &Arc<dyn AttachmentTickets>,
+    wait: Duration,
+) -> Result<Result<ChosenFile, FileNotAttached>, FileNotAttached> {
+    let files = files.clone();
+    let types = types.clone();
+    let tickets = tickets.clone();
+    let asked = path.to_path_buf();
+    answered_within(wait, move || {
+        attachment(&asked, files.look(&asked), types.of(&asked), || {
+            tickets.mint(&asked)
+        })
+    })
+    .await
+    .map_err(|no_answer| FileNotAttached::no_filesystem_answer(&named(path), &no_answer.detail))
 }
 
 /// The files the person chooses, or why there are none.
@@ -194,7 +247,9 @@ pub async fn choose_attachment_files(
         deps.files.clone(),
         deps.types.clone(),
         deps.tickets.clone(),
+        deps.readiness.clone(),
         LONGEST_LOOK_WAIT,
+        LONGEST_READY_WAIT,
     )
     .await
 }
@@ -202,7 +257,19 @@ pub async fn choose_attachment_files(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attachments::doubles::{FakeFiles, FakePicker, FakeTickets, FakeTypes};
+    use crate::attachments::doubles::{
+        FakeFiles, FakePicker, FakeReadiness, FakeTickets, FakeTypes,
+    };
+    use crate::attachments::readiness::{Readied, Readiness};
+
+    /// A readiness seam holding one staged handler, which is what the caller
+    /// takes: the dispatch is tested beside the seam, not here.
+    fn staged(answer: Readied) -> Arc<Readiness> {
+        staged_with(FakeReadiness::answering(answer))
+    }
+    fn staged_with(handler: FakeReadiness) -> Arc<Readiness> {
+        Arc::new(Readiness::new(vec![Arc::new(handler)]))
+    }
     use crate::attachments::refusal::NotAttached;
     use crate::attachments::tickets::Redeemed;
     use std::io::{Error, ErrorKind};
@@ -229,6 +296,7 @@ mod tests {
         Ok(OnDisk {
             kind: Kind::Regular,
             size,
+            stored: Stored::Locally,
         })
     }
 
@@ -238,12 +306,33 @@ mod tests {
         types: &'static str,
         tickets: Arc<FakeTickets>,
     ) -> Result<Vec<ChosenFile>, FileNotAttached> {
+        downloading(
+            picked,
+            files,
+            types,
+            tickets,
+            FakeReadiness::answering(Readied::Ready),
+        )
+    }
+
+    /// The same, with the download service staged too.
+    fn downloading(
+        picked: Picked,
+        files: Arc<FakeFiles>,
+        types: &'static str,
+        tickets: Arc<FakeTickets>,
+        downloads: FakeReadiness,
+    ) -> Result<Vec<ChosenFile>, FileNotAttached> {
         tauri::async_runtime::block_on(chosen_attachments(
             &FakePicker(picked),
             files,
             Arc::new(FakeTypes(types)),
             tickets,
+            staged_with(downloads),
             PATIENT,
+            // Short, because every download outcome here is staged rather than
+            // waited for; `downloads` owns the deadline's own test.
+            Duration::from_millis(50),
         ))
     }
 
@@ -408,6 +497,7 @@ mod tests {
             Ok(OnDisk {
                 kind: Kind::Other,
                 size: 0,
+                stored: Stored::Locally,
             }),
             "",
         )
@@ -435,6 +525,7 @@ mod tests {
             Ok(OnDisk {
                 kind: Kind::Directory,
                 size: 96,
+                stored: Stored::Locally,
             }),
             "inode/directory",
         )
@@ -450,6 +541,103 @@ mod tests {
         );
     }
 
+    /// The case a real user hit. `~/Library/Mobile Documents/…/amica-document
+    /// 2.pdf` was an iCloud placeholder: `blocks=0`, `size=34890`, a perfectly
+    /// good path with nothing behind it. Nessa linked it, the agent tried to
+    /// read it, and a string of opaque failed tool calls was the only sign.
+    ///
+    /// Now the seam is asked, the bytes arrive, and the file is described
+    /// again from scratch — so what the panel finally gets is an ordinary local
+    /// file with a ticket, and nothing about it says it was ever elsewhere.
+    #[test]
+    fn a_placeholder_is_made_ready_and_then_attached_like_any_other_file() {
+        let path: PathBuf = ["/Users/dev/iCloud", "amica-document 2.pdf"]
+            .iter()
+            .collect();
+        // The filesystem says placeholder the first time and ordinary the
+        // second, which is what a landed download looks like from here.
+        let files = Arc::new(FakeFiles::arriving(34_890));
+
+        let attached = downloading(
+            Picked::Files(vec![path.clone()]),
+            files.clone(),
+            "application/pdf",
+            Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
+            FakeReadiness::answering(Readied::Ready),
+        )
+        .expect("a placeholder that arrived is an ordinary file");
+
+        assert_eq!(attached.len(), 1);
+        assert_eq!(attached[0].name, "amica-document 2.pdf");
+        assert_eq!(attached[0].size, 34_890);
+        assert_eq!(attached[0].mime_type, "application/pdf");
+        assert!(!attached[0].ticket.is_empty());
+        // Looked at twice: once to find the placeholder, once after it landed.
+        assert_eq!(files.asked(), vec![path.clone(), path]);
+    }
+
+    /// A file already here never reaches the seam at all. The common path must
+    /// not pay for the uncommon one.
+    #[test]
+    fn an_ordinary_file_never_asks_anybody_to_make_it_ready() {
+        let readiness = FakeReadiness::answering(Readied::Ready);
+        let asked = std::sync::Arc::new(readiness);
+
+        let attached = tauri::async_runtime::block_on(chosen_attachments(
+            &FakePicker(Picked::Files(vec![PathBuf::from("/Users/dev/notes.md")])),
+            Arc::new(FakeFiles::holding(12)),
+            Arc::new(FakeTypes("text/markdown")),
+            Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
+            Arc::new(Readiness::new(vec![asked.clone()])),
+            PATIENT,
+            Duration::from_millis(50),
+        ))
+        .expect("an ordinary file");
+
+        assert_eq!(attached.len(), 1);
+        assert!(
+            asked.asked().is_empty(),
+            "the seam was asked about a local file"
+        );
+    }
+
+    /// The deadline, seen from the caller: a file still coming when the time
+    /// runs out is refused with its own reason, not a generic failure, so the
+    /// panel can say "still on its way, try again" rather than "it broke".
+    #[test]
+    fn a_file_still_on_its_way_at_the_deadline_is_refused_as_that() {
+        let refused = downloading(
+            Picked::Files(vec![PathBuf::from("/Users/dev/iCloud/report.pdf")]),
+            Arc::new(FakeFiles::dataless(34_890)),
+            "application/pdf",
+            Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
+            FakeReadiness::answering(Readied::StillComing),
+        )
+        .expect_err("a file that has not arrived cannot be attached");
+
+        assert_eq!(refused.reason, NotAttached::FileNotReadyYet);
+        assert_eq!(refused.shown.as_deref(), Some("report.pdf"));
+    }
+
+    /// And a placeholder nothing can make ready — another provider's, or one
+    /// on a platform with no iCloud — keeps the reason that tells somebody to
+    /// open it once, with the service's own words in the diagnostics.
+    #[test]
+    fn a_placeholder_nothing_can_fetch_is_refused_with_what_the_service_said() {
+        let refused = downloading(
+            Picked::Files(vec![PathBuf::from("/Users/dev/Dropbox/report.pdf")]),
+            Arc::new(FakeFiles::dataless(34_890)),
+            "application/pdf",
+            Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
+            FakeReadiness::answering(Readied::Refused("not ours to fetch".to_string())),
+        )
+        .expect_err("a placeholder nobody can fetch");
+
+        assert_eq!(refused.reason, NotAttached::FileNotReadable);
+        assert_eq!(refused.shown.as_deref(), Some("report.pdf"));
+        assert_eq!(refused.detail.as_deref(), Some("not ours to fetch"));
+    }
+
     /// Nothing is minted for a file that is being refused. A ticket left behind
     /// for a path nobody can attach is a path the host keeps for ten minutes
     /// for no reason at all.
@@ -461,6 +649,7 @@ mod tests {
             Ok(OnDisk {
                 kind: Kind::Other,
                 size: 0,
+                stored: Stored::Locally,
             }),
             String::new(),
             || {
@@ -633,6 +822,8 @@ mod tests {
             Arc::new(FakeFiles::stalling(Duration::from_secs(30))),
             Arc::new(FakeTypes("image/heic")),
             Arc::new(FakeTickets::refusing(Redeemed::Unknown)),
+            staged(Readied::Ready),
+            Duration::from_millis(50),
             Duration::from_millis(50),
         ))
         .expect_err("a mount that is not answering has nothing to attach");
