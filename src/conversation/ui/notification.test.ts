@@ -6,7 +6,7 @@ describe("conversation notification", () => {
   it("keeps uncertain admission retry tied to its original execution", () => {
     const value = conversation("tab")
     value.error = "Not connected"
-    value.readError = "Not connected"
+    value.readError = "unavailable"
     value.turns = [
       {
         id: "turn",
@@ -90,10 +90,54 @@ describe("conversation notification", () => {
   })
   it("explains a configuration mismatch without offering an ineffective retry", () => {
     const value = conversation("tab")
-    value.readError = "conversation_configuration_changed"
-    expect(conversationNotice(value)).toMatchObject({
+    // The panel's own word, decided in the gateway adapter. Nothing here
+    // compares a message against `conversation_configuration_changed`, so a
+    // gateway that started sending a human sentence beside that code would not
+    // quietly take this notice away.
+    value.readError = "configuration-changed"
+    expect(conversationNotice(value)).toEqual({
       title: "Conversation setup changed",
+      description:
+        "This chat uses a different agent configuration. Start a new conversation with the current setup.",
       retry: null,
+    })
+  })
+  it("says a gateway that is not ready yet will catch up, and offers the refresh", () => {
+    const value = conversation("tab")
+    value.readError = "busy"
+    const notice = conversationNotice(value)
+    expect(notice).toMatchObject({
+      title: "Waiting for the gateway",
+      retry: { kind: "refresh" },
+    })
+    expect(notice?.description).toContain("catches up in a moment")
+  })
+  it("says only that the view is stale when the read failed for a reason it cannot name", () => {
+    const value = conversation("tab")
+    // What a code this build has never heard of becomes. The sentence claims
+    // nothing about the cause, and names no code.
+    value.readError = "unavailable"
+    const notice = conversationNotice(value)
+    expect(notice).toMatchObject({
+      title: "Conversation not refreshed",
+      retry: { kind: "refresh" },
+    })
+    expect(notice?.description).toBe(
+      "Nessa could not read this conversation from the gateway, so what is shown may be out of date. It keeps trying.",
+    )
+  })
+  it("lets a command somebody asked for outrank a read that failed behind it", () => {
+    const value = conversation("tab")
+    // Both states at once: a control failed, and the refresh it triggered failed
+    // too. The command's sentence is the one somebody is waiting for, and the
+    // read's word must not replace or contradict it.
+    value.error = "The gateway would not take this action, so nothing was done."
+    value.failure = "invalid-request"
+    value.readError = "configuration-changed"
+    expect(conversationNotice(value)).toEqual({
+      title: "Conversation needs attention",
+      description: value.error,
+      retry: { kind: "refresh" },
     })
   })
   it("does not show a notification for a healthy conversation", () => {

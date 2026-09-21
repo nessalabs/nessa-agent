@@ -29,6 +29,40 @@ export type CommandFailure =
   | "agent-startup-deadline"
   | "invalid-request"
 
+/**
+ * Why the panel could not refresh a conversation's view, in this panel's own
+ * words rather than the gateway's.
+ *
+ * A sibling of {@link CommandFailure} and not a member of it, because a read is
+ * not a command: nothing was asked for and nothing was changed, so there is no
+ * receipt, no draft to hand back, and no outcome to be certain or uncertain
+ * about. What a read failure decides is narrower — which sentence appears under
+ * a transcript that has stopped moving, and whether a retry is worth offering —
+ * and it answers for codes a command never meets
+ * (`conversation_configuration_changed`) while having nothing to say about most
+ * of the ones a command does. Folding the two together would make every switch
+ * over a command's reasons answer for a read's, and the other way round.
+ *
+ * Deliberately three words, because the panel keeps polling and keeps showing
+ * the last view whatever went wrong, so a word earns its place only by changing
+ * what is said or whether a retry is offered:
+ *
+ * - `configuration-changed` is the only one that cannot come right. The
+ *   conversation was created against an agent configuration the gateway no
+ *   longer has, which nothing this window does can change, so it is the one that
+ *   withdraws the retry.
+ * - `busy` is the only one we can promise will come right on its own: the
+ *   gateway had no room, or its agent was still starting. Both mean "not yet".
+ * - `unavailable` is everything else, and claims nothing beyond a stale view and
+ *   a panel still trying. `conversation_not_found` and `agent_not_configured`
+ *   were considered for words of their own and left here: neither is permanent —
+ *   a re-authenticated session or a reconfigured gateway makes both succeed —
+ *   and neither changes what somebody does next. It is also the sentence a code
+ *   this build has never heard of must get, and a sentence good enough for an
+ *   unknown answer is good enough for a known one nobody acts on.
+ */
+export type ReadFailure = "configuration-changed" | "busy" | "unavailable"
+
 export type Receipt =
   "sending" | "accepted" | "queued" | "unknown" | "failed" | "delivered"
 
@@ -84,7 +118,13 @@ type ConversationState = {
    * a control's outcome was decided before this was stored.
    */
   failure?: CommandFailure
-  readError?: string
+  /**
+   * Why the last read of this conversation failed, in the panel's own words.
+   * Set only while the view on screen is older than the gateway's: any view
+   * that arrives clears it, and it says nothing about `error`, which belongs to
+   * a command somebody asked for rather than to the panel's own polling.
+   */
+  readError?: ReadFailure
   revision?: string
   readRequest?: string
   cancellationStatus?: "cancelling" | "cancelled"

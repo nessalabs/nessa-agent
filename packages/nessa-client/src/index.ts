@@ -171,6 +171,7 @@ export type {
 } from "./generated/product.js"
 export { ConversationErrorCode } from "./generated/product.js"
 export {
+  conversationErrorCode,
   NessaConversationMutationError,
   NessaConversationControlError,
 } from "./application/conversation-mutation-error.js"

@@ -1,5 +1,4 @@
-import { ConversationErrorCode } from "@nessa/client"
-import type { Conversation } from "../model"
+import type { Conversation, ReadFailure } from "../model"
 
 export type ConversationNotice = {
   title: string
@@ -12,14 +11,57 @@ export type ConversationNotice = {
 }
 
 /**
+ * What to tell somebody whose conversation could not be refreshed.
+ *
+ * A read is the panel's own polling rather than anything anybody asked for, so
+ * every one of these says the same two things first: the transcript is older
+ * than the gateway's, and Nessa is still asking. What the reason changes is
+ * whether asking again is worth anything — which is why a configuration change
+ * is the one that offers no retry. Total over the vocabulary, so a word added to
+ * it has to be answered here.
+ */
+function readNotice(reason: ReadFailure): ConversationNotice {
+  switch (reason) {
+    // The conversation was created against an agent configuration the gateway no
+    // longer has. Reading it again asks the same question and gets the same
+    // answer, so the retry is withdrawn rather than offered and disappointed.
+    case "configuration-changed":
+      return {
+        title: "Conversation setup changed",
+        description:
+          "This chat uses a different agent configuration. Start a new conversation with the current setup.",
+        retry: null,
+      }
+    case "busy":
+      return {
+        title: "Waiting for the gateway",
+        description:
+          "The gateway is not ready to answer for this conversation yet, so what is shown may be out of date. Nessa keeps asking, and this normally catches up in a moment.",
+        retry: { kind: "refresh" },
+      }
+    // Everything else, including a cause this build has no name for. It claims
+    // only what is certainly true of all of them.
+    case "unavailable":
+      return {
+        title: "Conversation not refreshed",
+        description:
+          "Nessa could not read this conversation from the gateway, so what is shown may be out of date. It keeps trying.",
+        retry: { kind: "refresh" },
+      }
+  }
+}
+
+/**
  * One notification, while individual turns retain their own delivery receipts.
  *
- * Why a command failed is asked of `conversation.failure`, the panel's own word
- * for it, which `adapters/gateway/effects.ts` translated from the gateway's.
- * Reads are the exception still outstanding: a failed read leaves only the
- * client's sentence in `readError`, and for a changed configuration that
- * sentence is the gateway's code itself. Giving reads a translated reason of
- * their own is the remaining half of this; it is not in this change.
+ * Why anything failed is asked of the panel's own words for it, which
+ * `adapters/gateway/effects.ts` translated from the gateway's: `failure` for a
+ * command somebody asked for, `readError` for the panel's own polling. Neither
+ * is a message, and nothing here compares one against a wire code.
+ *
+ * A command outranks a read. It is the thing somebody was waiting on, and a read
+ * that failed behind it adds only that the view is stale — which the command's
+ * own sentence is already explaining.
  */
 export function conversationNotice(
   conversation: Conversation,
@@ -49,31 +91,17 @@ export function conversationNotice(
       description: `${conversation.error} Your draft is still here. Retry sends the current draft.`,
       retry: conversation.draft.length ? { kind: "draft" } : null,
     }
-  const error =
-    conversation.remote?.permissionViewError ??
-    conversation.error ??
-    conversation.readError
-  if (!error) return null
-  // A read failure has no translated reason: `readError` is the client's text,
-  // and for this one the gateway's text is its own code. See the module note.
-  if (error === ConversationErrorCode.ConversationConfigurationChanged)
+  const error = conversation.remote?.permissionViewError ?? conversation.error
+  if (error)
     return {
-      title: "Conversation setup changed",
-      description:
-        "This chat uses a different agent configuration. Start a new conversation with the current setup.",
-      retry: null,
-    }
-  // A control runs `create` first, so a cold agent reaches this path too, with
-  // nothing sent and no failed turn to hang a draft retry on.
-  if (conversation.failure === "agent-startup-deadline")
-    return {
-      title: "Agent was still starting",
+      // A control runs `create` first, so a cold agent reaches this path too,
+      // with nothing sent and no failed turn to hang a draft retry on.
+      title:
+        conversation.failure === "agent-startup-deadline"
+          ? "Agent was still starting"
+          : "Conversation needs attention",
       description: error,
       retry: { kind: "refresh" },
     }
-  return {
-    title: "Conversation needs attention",
-    description: error,
-    retry: { kind: "refresh" },
-  }
+  return conversation.readError ? readNotice(conversation.readError) : null
 }

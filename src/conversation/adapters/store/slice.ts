@@ -6,6 +6,7 @@ import {
   type CommandFailure,
   type FileAttachment,
   type MessageContent,
+  type ReadFailure,
   type UploadFailure,
 } from "../../model"
 import {
@@ -32,6 +33,7 @@ import { boundSentPreviews } from "../../application/usecases/release-uploads"
 import {
   AttachmentStagingError,
   ControlFailedError,
+  ConversationReadFailedError,
   ConversationUnavailableError,
   SubmissionRefusedError,
   type ConversationEffects,
@@ -103,6 +105,13 @@ const commandFailure = (error: unknown): CommandFailure | undefined =>
   error instanceof SubmissionRefusedError || error instanceof ControlFailedError
     ? error.reason
     : undefined
+
+// The same for a read, which always has a word: the effects port promises one
+// for every rejected read, and this file's own identity check — a view answering
+// about another conversation — is a view the panel cannot use either. Nothing
+// here reads a wire code or a sentence.
+const readFailure = (error: unknown): ReadFailure =>
+  error instanceof ConversationReadFailedError ? error.reason : "unavailable"
 
 /** Capture a tab and logical submission before awaiting any connection or admission. */
 export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
@@ -297,7 +306,7 @@ export const refreshConversation = createAsyncThunk<void, string, ThunkConfig>(
         throw new Error("Gateway returned a different conversation identity.")
       dispatch(viewReceived({ id, requestId, serverId, view }))
     } catch (error) {
-      dispatch(readFailed({ id, requestId, message: detail(error) }))
+      dispatch(readFailed({ id, requestId, reason: readFailure(error) }))
     }
   },
 )
@@ -575,11 +584,11 @@ const conversationSlice = createSlice({
     },
     readFailed(
       state,
-      action: PayloadAction<{ id: string; requestId: string; message: string }>,
+      action: PayloadAction<{ id: string; requestId: string; reason: ReadFailure }>,
     ) {
       const current = state.conversations.find((item) => item.id === action.payload.id)
       if (current?.readRequest === action.payload.requestId) {
-        current.readError = action.payload.message
+        current.readError = action.payload.reason
         current.readRequest = undefined
       }
     },
