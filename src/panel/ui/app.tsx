@@ -546,8 +546,18 @@ export function App({
                 />
               }
             />
+            {/* Keyed per conversation so the queue is rebuilt rather than
+                carried across a tab change, and named apart from the composer
+                below, which is keyed by the same conversation. Two children of
+                one parent under one key are one child to React. That alone is
+                survivable; here it was not, because the notices above render
+                nothing most of the time, and a falsy sibling earlier in the
+                array makes React leak one subtree per render instead of
+                reusing it. The composer filled with queue chips, each frozen
+                at the count it was born with, none removed when the queue
+                drained. See src/panel/ui/composer-keys.test.tsx. */}
             <ConversationQueue
-              key={chat.active.id}
+              key={`queue:${chat.active.id}`}
               conversation={chat.active}
               gatewayAvailable={chat.gatewayAvailable}
             />
@@ -560,7 +570,7 @@ export function App({
               />
             )}
             <PillComposer
-              key={chat.active.id}
+              key={`composer:${chat.active.id}`}
               expandable={viewedPaste === null && attachments.viewed === null}
               // Controlled, so the pane survives a submit this panel turned
               // away — an attachment still reading, an empty draft — and closes
