@@ -169,14 +169,18 @@ writing the full defaults on first launch is buying.
   in `src/styles.css`), and the order they are said in. Nothing is dropped or
   collapsed. The queue badge and the delivery row stay outside the box, pinned
   above the pill, because they are controls rather than statements.
-  `scripts/architecture/composer-notices.mjs` reads the chrome with the
-  TypeScript parser and refuses a notice added as a new direct sibling of the
-  box, or handed to another child that renders it; a notice rendered inside
-  another module is that module's business. It also reads every rule that names
-  the box and refuses a ceiling that has been deleted, overridden by a heavier
-  selector or a media query, beaten by a `min-height`, or left without a
-  scrollbar. It reads selectors, not the cascade: a rule that reaches the box
-  without naming it is beyond it.
+  Two checks hold it up, and they are apart because of where each can run. The
+  JSX half is the `nessa/composer-notices` lint rule
+  (`scripts/eslint/composer-notices.mjs`, on for the chrome alone, tested by
+  `pnpm lint:rules`): it refuses a notice added as a new direct sibling of the
+  box or handed to another child that renders it, and a notice inside another
+  module is that module's business. The stylesheet half is
+  `scripts/architecture/composer-budget.mjs`, which reads every rule that names
+  the box and refuses a ceiling deleted, overridden by a heavier selector or a
+  media query, beaten by a `min-height`, or left without a scrollbar; it reads
+  selectors, not the cascade. It stays pure text because
+  `check-architecture.mjs` runs on the Rust jobs with bare Node and no
+  `node_modules`, where nothing may import a parser.
 - Product commands live in `src/conversation/application/usecases/`. The store
   is a projection: thunks call injected effects and reducers apply returned views.
   The shared tabs are `conversations` + `activeId`. Local id counters live on

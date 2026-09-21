@@ -1,3 +1,8 @@
+/**
+ * Bare Node, no `node_modules`: these run on the Rust jobs alongside
+ * `check-architecture.mjs`, so nothing here may import anything but Node's own
+ * modules. The JSX half of this budget is tested under `pnpm lint:rules`.
+ */
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
@@ -6,143 +11,16 @@ import test from "node:test"
 
 import {
   composerBudgetViolations,
-  composerChildren,
-  composerNoticeViolations,
   declaredCapFallbacks,
   declaredNoticeCap,
   noticeRules,
-} from "./composer-notices.mjs"
+} from "./composer-budget.mjs"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
 const read = (path) => readFileSync(join(root, path), "utf8")
-const chrome = "src/panel/ui/app.tsx"
-
-const composer = (children) => `
-export function App() {
-  return (
-    <div className="nessa-composer" hidden={update.viewing || undefined}>
-      ${children}
-    </div>
-  )
-}
-`
-
-const shipped = `
-    <ComposerNotices
-      link={link.notice ? <AgentNotification title={link.notice.title} /> : null}
-      attachments={<AttachmentNotices refusal={attachments.refusal} />}
-      conversation={<ConversationNotification conversation={chat.active} />}
-    />
-    <ConversationQueue conversation={chat.active} />
-    {generating && <ComposerDeliveryMode value={chat.deliveryMode} />}
-    <PillComposer key={chat.active.id} />
-`
-
-test("a notice handed to the box is inside it, not beside it", () => {
-  const source = composer(shipped)
-  assert.deepEqual(composerChildren(chrome, source), [
-    "ComposerNotices",
-    "ConversationQueue",
-    "ComposerDeliveryMode",
-    "PillComposer",
-  ])
-  assert.deepEqual(composerNoticeViolations(chrome, source), [])
-})
-
-test("a notice pasted in beside the box is refused", () => {
-  const source = composer(`
-    <ComposerNotices link={null} />
-    <AgentNotification title="Something else" />
-    <ConversationQueue />
-    {generating && <ComposerDeliveryMode />}
-    <PillComposer />
-  `)
-  const failures = composerNoticeViolations(chrome, source)
-  assert.match(failures.join("\n"), /the composer holds/)
-  assert.match(failures.join("\n"), /outside ComposerNotices \(line \d+\)/)
-})
-
-test("a fragment cannot end the scan early and let a notice through", () => {
-  // The defect this parser replaced. To a bracket count `<>` is not a tag and
-  // `</>` looks like the end of one, so an ordinary fragment inside the pill
-  // drove the depth to zero, the scan stopped there, and everything after it —
-  // including a notice pasted in beside the box — was never looked at. The
-  // check passed while the rule it exists for was being broken.
-  const source = composer(`
-    <ComposerNotices link={null} />
-    <ConversationQueue />
-    {generating && <ComposerDeliveryMode />}
-    <PillComposer>
-      <>
-        <AttachmentTile />
-        <AttachmentTile />
-      </>
-    </PillComposer>
-    <AgentNotification title="Slipped past" />
-  `)
-  const failures = composerNoticeViolations(chrome, source)
-  assert.match(failures.join("\n"), /outside ComposerNotices/)
-  assert.match(failures.join("\n"), /the composer holds .*AgentNotification/)
-})
-
-test("a fragment in a slot, a generic and a comparison are not a violation", () => {
-  // The same defect in the other direction: each of these truncated the scan
-  // and produced a refusal whose message was a false statement about the file.
-  const source = composer(`
-    <ComposerNotices
-      link={
-        <>
-          <AgentNotification title="One" />
-          <AgentNotification title="Two" />
-        </>
-      }
-    />
-    <ConversationQueue count={waiting.length} />
-    {generating && files.length < 3 && <ComposerDeliveryMode />}
-    <PillComposer onDone={useMemo<Ref<Item>>(() => done, [])} />
-  `)
-  assert.deepEqual(composerNoticeViolations(chrome, source), [])
-})
-
-test("prose about markup is prose", () => {
-  const source = composer(`
-    {/* A notice would go in <ComposerNotices>, never <AgentNotification> here. */}
-    <ComposerNotices link={null} />
-    <ConversationQueue />
-    {generating && <ComposerDeliveryMode />}
-    <PillComposer placeholder="a < b, </div>" />
-  `)
-  assert.deepEqual(composerNoticeViolations(chrome, source), [])
-})
-
-test("a notice handed to something else that renders it is still outside the box", () => {
-  // What the child list alone cannot see: the queue is a permitted child, so a
-  // notice passed to it as a prop keeps the list correct and the column
-  // unbounded.
-  const source = composer(`
-    <ComposerNotices link={null} />
-    <ConversationQueue banner={<AgentNotification title="Hidden here" />} />
-    {generating && <ComposerDeliveryMode />}
-    <PillComposer />
-  `)
-  const failures = composerNoticeViolations(chrome, source)
-  assert.equal(failures.length, 1)
-  assert.match(failures[0], /outside ComposerNotices/)
-})
-
-test("a renamed composer element fails loudly rather than passing empty", () => {
-  const [failure] = composerNoticeViolations(
-    chrome,
-    `const App = () => <div className="nessa-composer-pane"><PillComposer /></div>`,
-  )
-  assert.match(failure, /no longer carries/)
-  // Only the chrome is held to this.
-  assert.deepEqual(composerNoticeViolations("src/panel/ui/other.tsx", "anything"), [])
-})
 
 test("the ceiling holds at every size the window can be", () => {
-  const styles = read("src/styles.css")
-  const cap = declaredNoticeCap(styles)
+  const cap = declaredNoticeCap(read("src/styles.css"))
   assert.notEqual(cap, null, "styles.css no longer caps the notice strip")
   // The real bounds: the window's own configured minimum, the shipped width,
   // and the default height. At each of them the notices get at most a third,
@@ -245,9 +123,4 @@ test("half the panel, a fixed number, and no ceiling at all are refused", () => 
 
   const alwaysThere = `.nessa-composer-notices { max-height: calc(var(--nessa-window-height, 100vh) / 3); overflow-y: auto; }`
   assert.match(composerBudgetViolations(alwaysThere)[0], /display:none/)
-})
-
-test("the chrome and the stylesheet that ship pass their own rules", () => {
-  assert.deepEqual(composerNoticeViolations(chrome, read(chrome)), [])
-  assert.deepEqual(composerBudgetViolations(read("src/styles.css")), [])
 })
