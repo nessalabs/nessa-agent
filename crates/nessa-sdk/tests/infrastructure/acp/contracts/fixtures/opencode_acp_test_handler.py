@@ -75,6 +75,12 @@ assert os.environ["OPENCODE_DISABLE_PROJECT_CONFIG"] == "1"
 # permission policy at all, so the policy cannot be what stops them; this stops
 # them being loaded.
 assert os.environ["OPENCODE_PURE"] == "1"
+# Two things a launch would otherwise do on its own: reach models.opencode.ai
+# at startup and hourly after, and let the pinned binary replace itself. The
+# first buys a read-and-plan session nothing, and the second would move the
+# version this profile's `initialize` check is written against.
+assert os.environ["OPENCODE_DISABLE_MODELS_FETCH"] == "1"
+assert os.environ["OPENCODE_DISABLE_AUTOUPDATE"] == "1"
 assert "CODEX_CONFIG" not in os.environ
 
 (root / "pid").write_text(str(os.getpid()))

@@ -367,6 +367,89 @@ async fn an_answered_permission_is_recorded_against_the_session_and_the_tool_tha
     assert_gone(&root, "pid");
 }
 
+/// A refusal is filed the same way an approval is.
+///
+/// The allow path is the one that lets a tool run, so it was written first.
+/// This is the other half of the same claim, and it is not covered by the
+/// shared lifecycle records: a denial goes through the same `record_answer`
+/// with the same `ToolReviewInput` derived from `opencode_acp::tools::wire`,
+/// so the thing under test here is this profile's naming of the request, not
+/// the runtime's handling of it. "Nobody allowed this" and "somebody refused
+/// this" are different facts, and only one of them is written down if a
+/// binding files approvals alone.
+#[tokio::test]
+async fn a_refused_permission_is_recorded_as_the_refusal_it_was() {
+    let _process_slot = process_test_slot().await;
+    let audit = Arc::new(RecordingAudit::default());
+    let (root, binding) = test_opencode_binding_with_audit("edit-permission", 16, audit.clone());
+    let mut opened = binding.open(None).await.unwrap();
+    let session_id = opened.session.id().clone();
+    let running = start(&opened, "first").await;
+    let ExecutionUpdate::PermissionRequested { id, options, .. } = next(&mut opened).await else {
+        panic!("expected permission");
+    };
+    let deny = options
+        .choices()
+        .iter()
+        .find(|option| option.decision().effect() == PermissionEffect::Deny)
+        .expect("the request offered a refusal")
+        .id()
+        .clone();
+    opened
+        .session
+        .answer_permission(PermissionAnswer {
+            attribution: attribution(),
+            execution_id: ExecutionId::new("first").unwrap(),
+            id,
+            option_id: deny.clone(),
+        })
+        .await
+        .map_err(|failure| failure.into_error())
+        .unwrap();
+    assert_eq!(running.await.unwrap().unwrap(), ExecutionOutcome::Completed);
+
+    let answers = audit.answers.lock().unwrap().clone();
+    // The same two records in the same order as an approval: what was decided,
+    // then that it was delivered. A binding that filed only the answers which
+    // let something happen would have one record here, or none.
+    let [selected, written] = &answers[..] else {
+        panic!(
+            "expected a selected and a written record, got {}",
+            answers.len()
+        );
+    };
+    assert_eq!(selected.delivery(), &PermissionAnswerDelivery::Selected);
+    assert_eq!(written.delivery(), &PermissionAnswerDelivery::Written);
+    for answer in [selected, written] {
+        assert_eq!(answer.session_id(), &session_id);
+        let resolution = answer.resolution();
+        // Named by what it was about, exactly as the approval is: a refusal
+        // recorded against the wrong tool or the wrong arguments says nothing
+        // about what was refused.
+        assert_eq!(resolution.input().name, "edit");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&resolution.input().arguments_json).unwrap(),
+            serde_json::json!({"filePath": "src/main.rs", "newText": "fn main() {}"})
+        );
+    }
+    // And Opencode was told the refusal, rather than the request being left to
+    // time out into one.
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            &std::fs::read_to_string(root.path().join("permission-outcome")).unwrap()
+        )
+        .unwrap(),
+        serde_json::json!({"outcome":"selected","optionId":deny.as_str()})
+    );
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+    assert_gone(&root, "pid");
+}
+
 /// The audit is a precondition of the approval, not a report of it.
 ///
 /// The same rule the Codex binding is held to, on the adapter that admits a

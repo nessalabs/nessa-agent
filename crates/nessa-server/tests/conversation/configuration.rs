@@ -399,6 +399,60 @@ fn opencode_builds_against_the_catalog_nessa_ships() {
     assert!(built.unavailable.is_empty());
 }
 
+/// No Opencode model Nessa ships can be sent an image, and the whole gateway
+/// stops keeping them once one is configured.
+///
+/// Said out loud here because it is invisible everywhere else. The binding
+/// declares image input whenever composition supplies a byte source, which is
+/// the right declaration; the catalogue is what withholds it. All three
+/// `opencode` entries record no `imageInput` limits — `mimo-v2.5-free`
+/// declares `input.image` and records none — and `EffectiveCapabilities`
+/// offers image input only where the limits are, so the effective modality is
+/// text.
+///
+/// The second half is the one that reaches conversations that have nothing to
+/// do with Opencode. `image_limits` fits an upload to the strictest configured
+/// model, and a model recording no limits cannot be met by any image at all,
+/// so the shared attachment store keeps nothing — for Claude conversations in
+/// the same gateway too. Not new with Opencode: the four `openai` entries are
+/// the same shape, so a Claude-plus-Codex installation is already here, and
+/// the durable repair is a domain that refuses `input.image` without limits
+/// rather than an edit to this file.
+///
+/// So this goes red the day somebody records limits for a Zen model, which is
+/// the day the comment on the declaration in `opencode_acp::sessions::binding`
+/// needs reading again. That is the point of it.
+// `image_limits` reads the catalog through `model`, which is Unix-only here.
+#[cfg(unix)]
+#[test]
+fn no_opencode_model_nessa_ships_can_be_sent_an_image() {
+    let shipped = concat!(env!("CARGO_MANIFEST_DIR"), "/../nessa-sdk/data/models.json");
+    for model in [
+        "opencode/nemotron-3-ultra-free",
+        "opencode/big-pickle",
+        "opencode/mimo-v2.5-free",
+    ] {
+        let config: AgentsConfig = serde_json::from_value(serde_json::json!({
+            "catalog": shipped,
+            "workspace": "/workspace",
+            "selected": "opencode",
+            "runtimes": {"opencode": {
+                "command": "/opencode",
+                "args": ["acp"],
+                "model": model,
+                "toolsEnabled": true,
+            }},
+        }))
+        .unwrap();
+
+        assert_eq!(
+            image_limits(&config).unwrap(),
+            None,
+            "{model} records image limits; the binding's docstring says none does"
+        );
+    }
+}
+
 /// The two ways an agent can be left out are told apart, because readiness
 /// needs them apart.
 ///

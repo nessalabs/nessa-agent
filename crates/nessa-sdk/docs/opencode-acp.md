@@ -80,7 +80,11 @@ The policy is pinned at launch instead, where ACP cannot reach it:
 searching, `OPENCODE_DISABLE_PROJECT_CONFIG` takes the opened checkout out of
 the config search, and `OPENCODE_PURE` empties the external plugin list so no
 plugin tool is registered and no plugin hook can rewrite the arguments of a tool
-the policy did allow.
+the policy did allow. Two more close things a launch would otherwise do on its
+own rather than anything a tool can reach: `OPENCODE_DISABLE_MODELS_FETCH` stops
+the models.dev refresh that runs at startup and hourly after, which a session
+whose model Nessa already chose has no use for, and
+`OPENCODE_DISABLE_AUTOUPDATE` keeps the pinned copy pinned.
 
 What that policy does **not** cover is written out on the constant in
 `opencode_acp/sessions/binding.rs`, because a bound believed to be wider than it
@@ -92,17 +96,28 @@ statement that has to sit beside the value it qualifies.
 Opencode is not bundled. It is a runtime of its own, nearly two hundred
 megabytes against a few for a Node adapter, so shipping it would put that in
 every download for people who already have an agent. `bundled_launch` returns
-`None` for it, and the install writes its launch on the machine that wants it.
-The release is pinned, with self-update off, so a copy only moves when Nessa
-ships.
+`None` for it, so Opencode has to already be on the machine: install it by
+hand, and it runs. Nothing on this branch or on the install branch turns an
+installed copy into a launch — the installer unpacks a binary and prints a
+report — so nothing yet writes the `runtimes.opencode` entry a launch is read
+from. That step belongs to the install branch and lands after this one, because
+a gateway whose `AgentId` has no `Opencode` variant refuses to start on a
+config naming it.
+
+The release is pinned and the launch sets `OPENCODE_DISABLE_AUTOUPDATE`, so a
+copy only moves when Nessa ships. Only Opencode's own TUI reaches the upgrade
+path and `acp` never does, so the variable makes that true of the binary rather
+than of the entry point — somebody who also runs the TUI would otherwise
+replace the version this profile's `initialize` check is written against, and
+see `requires Opencode 1.18.31` with nothing saying why.
 
 ## Verification
 
-Eleven contract tests in `tests/infrastructure/acp/contracts/opencode.rs` run
+Fourteen contract tests in `tests/infrastructure/acp/contracts/opencode.rs` run
 against `fixtures/opencode_acp_test_handler.py`, which serves the shapes the
 real binary was recorded answering: `agentInfo { name: "OpenCode", version }`,
 no `_meta/steering`, and `session/new` with the `model` and `mode` config
-options. The fixture also asserts the three launch variables above, so a binding
+options. The fixture also asserts the five launch variables above, so a binding
 that stopped setting one fails a test rather than quietly widening.
 
 Not claimed: a live answer. `models.opencode.ai` is not reachable from the

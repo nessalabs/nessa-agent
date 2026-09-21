@@ -86,16 +86,36 @@ use tokio::process::Command;
 /// `agent.plan.permission` after the top-level rules this variable feeds, so a
 /// config file that names the mode by name wins. As above, the workspace
 /// cannot be that file and the person's own global config still can, and
-/// deliberately still does: `OPENCODE_CONFIG_DIR` would not close it either,
-/// because `$HOME/.opencode` is read whatever that variable says. Not closed
-/// because redirecting the config would cost the person their sign-in —
-/// `auth.json` is resolved from `XDG_DATA_HOME`, not from the config variable,
-/// so it would survive — but because redirecting it does not work.
+/// deliberately still does. Two variables get confused here, so both are named.
+/// `OPENCODE_CONFIG_DIR` closes nothing at all: it is *appended* to the search
+/// rather than replacing it, so the global config directory is read whatever it
+/// says. `XDG_CONFIG_HOME` is the one that decides that directory, and this
+/// binding does pass it through — pointed at an empty directory of Nessa's own
+/// it would close the global half of all three rows that remain. It is not,
+/// and the reason is not sign-in: `auth.json` is resolved from
+/// `XDG_DATA_HOME`, so signing in would survive. The reason is that
+/// `$HOME/.opencode` is read outside both conditionals and would remain open
+/// anyway, and that the person's own Opencode configuration is something this
+/// binding honours on purpose rather than something to discard.
 ///
 /// So the line the three that remain draw is the same one — custom tools, an
 /// MCP server in the person's config, a per-agent override — and it is drawn
 /// at somebody else's repository rather than at the person running Nessa on
 /// their own machine.
+///
+/// **A launch writes to the machine before any tool runs.** Two effects sit
+/// outside permission evaluation entirely, so no policy reaches them and
+/// nothing here records them. Every config directory in the search is created
+/// and given a `.gitignore` on every config load — under this launch that is
+/// `$XDG_CONFIG_HOME/opencode` and `$HOME/.opencode`, so a person who has
+/// never run Opencode has the directories made for them by Nessa starting it.
+/// Then a detached `npm install` of `@opencode-ai/plugin` runs into each of
+/// them, which writes `node_modules`, a `package.json` and a lockfile and
+/// makes real registry requests. Lifecycle scripts are off upstream and a
+/// directory that cannot be written is a no-op there, but neither of those is
+/// a switch and there is none to set: `OPENCODE_PURE` empties the plugin list
+/// and does not touch this path. Named because this section is where a reader
+/// finds out what a launch costs, not because anything here can prevent it.
 ///
 /// One rule is appended after this policy: Opencode gives every agent
 /// `external_directory` access to its own `tool-output` directory unless the
@@ -180,9 +200,29 @@ impl OpencodeAcpProvider {
         // `promptCapabilities.image` together with a byte source, so the
         // capability is deliverable and withholding it is what would be the
         // false statement. Opencode's `initialize` does advertise image
-        // prompts — that was measured against 1.18.31 — and
-        // `opencode/mimo-v2.5-free` in the shipped catalogue takes them, so
-        // this is a model a person can select today.
+        // prompts, measured against 1.18.31.
+        //
+        // No model a person can select today gets one, and the reason is the
+        // catalogue rather than this line. `opencode/mimo-v2.5-free` declares
+        // `input.image` and records no `imageInput` limits, and
+        // `EffectiveCapabilities` offers image input only where the limits
+        // are — without them nothing can prepare an image the model would
+        // accept — so the effective input modality comes out text for all
+        // three Opencode entries. This declaration is still the right one:
+        // the layer that cannot deliver an image is the one that should
+        // withhold it, and a binding that lied about the transport would hide
+        // the catalogue's gap instead of leaving it visible.
+        //
+        // That gap has a cost beyond Opencode, which is the base branch's to
+        // fix rather than this binding's: `composition::agent::image_limits`
+        // keeps no images at all once any configured model records none, and
+        // that value is the one attachment store every conversation shares. So
+        // configuring Opencode turns image attachments off gateway-wide,
+        // Claude conversations included, exactly as configuring Codex already
+        // does — the four `openai` entries record no limits either.
+        // `no_opencode_model_nessa_ships_can_be_sent_an_image` is where that
+        // is said out loud; it goes red the day somebody records limits, which
+        // is the day this comment needs reading again.
         let input = Modalities::new(true, config.images.is_some(), false)
             .expect("text modality is nonempty");
         let restrictions = BindingRestrictions::new(
@@ -257,7 +297,20 @@ impl OpencodeAcpProvider {
             // is reachable by a policy, so the loading is what has to go: this
             // empties the external plugin list. Not the default plugins, which
             // are part of the binary Nessa pinned.
-            .env("OPENCODE_PURE", "1");
+            .env("OPENCODE_PURE", "1")
+            // Opencode refreshes the models.dev catalogue over the network at
+            // startup and every hour after, carrying its version and channel.
+            // Nessa picks the model from its own pinned catalogue and the
+            // binary answers offline from the snapshot built into it, so the
+            // request buys a read-and-plan session nothing and is one more
+            // thing a launch does that nobody asked for.
+            .env("OPENCODE_DISABLE_MODELS_FETCH", "1")
+            // The pinned release is the tested one, so a copy that moves on
+            // its own is a version this profile's `initialize` check would
+            // start refusing with nothing saying why. Only Opencode's TUI
+            // reaches the upgrade path and `acp` never does, so this makes a
+            // sentence that is true of the entry point true of the binary.
+            .env("OPENCODE_DISABLE_AUTOUPDATE", "1");
         command
     }
 }
