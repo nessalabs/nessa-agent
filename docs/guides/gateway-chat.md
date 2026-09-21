@@ -668,10 +668,10 @@ reconciliation: the panel reconciles on every webview load, and a profile edited
 while Nessa is open would otherwise produce a different definition and retire a
 healthy gateway mid-session. A changed profile therefore takes effect the next
 time the app is launched, and that launch re-registers the service. The shell is asked
-interactively where that means something — `zsh -l -c` reads `.zprofile` and
-never `.zshrc`, where pnpm and nvm put themselves, and an interactive bash is
-what gets past the guard at the top of a `.bashrc` its `.bash_profile` sources —
-and the
+the ways that reach the files a user's tools are actually in: zsh once, as an
+interactive login shell, which reads everything it has; bash twice, because no
+single bash reads both `.bash_profile` and `.bashrc`, with the two answers
+combined. And the
 answer comes back between unguessable markers, so a profile that prints a banner
 or tries to answer for the shell does neither. Each attempt is bounded by one
 deadline covering output and exit together, and a shell that overruns it is
