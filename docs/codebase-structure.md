@@ -160,6 +160,17 @@ writing the full defaults on first launch is buying.
   hook; rendering takes props and has no idea where they came from.
   `src/panel/ui/app.tsx` is the chrome. Conversation UI lives in
   `src/conversation/ui/`. Host subscriptions live in `src/panel/adapters/`.
+- The composer's vertical budget belongs to the composer, not to any notice.
+  Five producers say things above the pill — a link that went nowhere, an
+  update, the draft's files, the session, the conversation — and none excludes
+  the others, so the column used to push the pill out of a short window.
+  `src/panel/ui/composer-notices.tsx` owns both halves of that: the room they
+  may have, which is a third of the panel and scrolls (`.nessa-composer-notices`
+  in `src/styles.css`), and the order they are said in. Nothing is dropped or
+  collapsed. The queue badge and the delivery row stay outside the box, pinned
+  above the pill, because they are controls rather than statements.
+  `scripts/architecture/composer-notices.mjs` refuses a notice added beside the
+  box and a stylesheet that has lost the ceiling.
 - Product commands live in `src/conversation/application/usecases/`. The store
   is a projection: thunks call injected effects and reducers apply returned views.
   The shared tabs are `conversations` + `activeId`. Local id counters live on

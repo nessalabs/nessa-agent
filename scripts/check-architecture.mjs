@@ -13,6 +13,10 @@ import {
 } from "./architecture/platform-boundaries.mjs"
 import { overlayPlacementViolations } from "./architecture/overlay-placement.mjs"
 import {
+  composerBudgetViolations,
+  composerNoticeViolations,
+} from "./architecture/composer-notices.mjs"
+import {
   normalizedPath,
   rustBoundaryViolations,
   workspaceRustSourceRoots,
@@ -276,12 +280,23 @@ for (const file of walk(src)) {
     fail(file, "the store must not import the panel chrome")
   }
 
+  for (const violation of composerNoticeViolations(path, text)) {
+    fail(file, violation)
+  }
+
   if ((path === "src/app.tsx" || path.endsWith("/app.tsx")) && /Linux[A-Z]/.test(text)) {
     fail(
       file,
       "host policy belongs in src/host; do not name Linux components in the chrome",
     )
   }
+}
+
+// The ceiling over the composer's notices is a stylesheet rule, so nothing
+// else in this file would notice it being deleted.
+const stylesheet = join(src, "styles.css")
+for (const violation of composerBudgetViolations(readFileSync(stylesheet, "utf8"))) {
+  fail(stylesheet, violation)
 }
 
 const macosRetirementBoundaries = [

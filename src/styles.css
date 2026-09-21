@@ -232,6 +232,13 @@ body {
  * `transparent` on a WebKitGTK layer becomes opaque white. `none` omits
  * paint. The form is unwrapped so its radius cannot own a layer at the
  * panel origin; the row is the capsule.
+ *
+ * This box does not flex: the pill is the point of the panel and it keeps its
+ * height whatever else is happening. That is only safe because everything
+ * above the pill is bounded — the notices by the ceiling below, the queue badge
+ * and the delivery row by being a single 28px row each. Anything added here
+ * that can grow without a bound puts the pill back off the bottom of a short
+ * window, which is what `.nessa-composer-notices` exists to prevent.
  */
 .nessa-composer {
   flex-shrink: 0;
@@ -241,6 +248,50 @@ body {
   transform: none;
   filter: none;
   contain: none;
+}
+
+/*
+ * The room the composer's notices may have, and what happens when they want
+ * more.
+ *
+ * Five producers write here and none excludes the others, so the worst case is
+ * five cards — well over 400px at the shipped 420px width, against a window
+ * whose configured minimum height is 320px (`src-tauri/tauri.conf.json`). The
+ * composer above does not shrink and the transcript's `flex-1` has already
+ * given up everything it has, so without a ceiling that column simply pushed
+ * the pill out of the window.
+ *
+ * A third of the panel, because the cap has to hold at the window's minimum
+ * height and still leave the transcript something at every size above it: at
+ * 320px that is ~106px, about one card and the top of the next, and the
+ * unfinished card is the only honest way a box with no resting scrollbar says
+ * there is more. The panel's height arrives from the host as a custom property
+ * (see `panel-frame.ts`); the fallback is the viewport, which is exactly the
+ * window in a browser preview and an overestimate in the one case where the
+ * host failed to report a size — a case that already logs.
+ *
+ * Scrolling rather than dropping or collapsing: nothing here is redundant, and
+ * a cap that decided which notice to silence would be deciding it without
+ * knowing what any of them say. `overscroll-behavior` keeps a flick in this
+ * box from scrolling the transcript behind it.
+ */
+.nessa-composer-notices {
+  max-height: calc(var(--nessa-window-height, 100vh) / 3);
+  /* `hidden` rather than the `auto` a scrolling y-axis would otherwise force
+     on this one. A dismissed notice leaves by sliding right, and the design
+     system measures that slide against the nearest ancestor that scrolls
+     horizontally — so an `auto` here would shorten the slide to nothing and
+     the card would fade on the spot instead. Hidden is not that ancestor, the
+     slide is measured against the window as before, and this box clips it. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Nothing to say, no box: an empty strip must not leave a tab stop, an
+   announced group, or 8px of gutter above the pill. */
+.nessa-composer-notices:empty {
+  display: none;
 }
 
 /* The pill draws its own outline in the design system (`border-border` on
