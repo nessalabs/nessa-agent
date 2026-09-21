@@ -61,7 +61,7 @@ use super::choosing::{describe_each, ChosenFile};
 use super::content_type::ContentTypes;
 use super::dragged::DraggedContent;
 use super::files::{answered_within, ChosenFiles, Kind, NoAnswer};
-use super::readiness::{Readiness, LONGEST_READY_WAIT};
+use super::readiness::{Announce, Readiness, Telling, LONGEST_READY_WAIT};
 use super::refusal::{named, FileNotAttached};
 use super::tickets::AttachmentTickets;
 
@@ -167,6 +167,7 @@ pub(super) async fn dropped(
     paths: Vec<PathBuf>,
     with: Describing,
     dragged: &dyn DraggedContent,
+    announce: &dyn Announce,
 ) -> Dropped {
     let Describing {
         files,
@@ -195,7 +196,11 @@ pub(super) async fn dropped(
             return FileNotAttached::no_filesystem_answer(&named(first), &detail).into();
         }
     };
-    match describe_each(expanded, files, types, tickets, readiness, wait, ready_wait).await {
+    match describe_each(
+        expanded, files, types, tickets, readiness, announce, wait, ready_wait,
+    )
+    .await
+    {
         Ok(files) => Dropped {
             files,
             ..Dropped::default()
@@ -260,6 +265,7 @@ pub fn dropped_on_panel(app: &AppHandle, event: &DragDropEvent) {
                         ready_wait: LONGEST_READY_WAIT,
                     },
                     deps.dragging.as_ref(),
+                    &Telling(&app),
                 )
                 .await;
                 deps.dragging.left();
@@ -291,7 +297,7 @@ impl From<FileNotAttached> for Dropped {
 mod tests {
     use super::*;
     use crate::attachments::doubles::{FakeFiles, FakeReadiness, FakeTickets, FakeTypes};
-    use crate::attachments::readiness::{Readied, Readiness};
+    use crate::attachments::readiness::{Readied, Readiness, Untold};
 
     /// A readiness seam holding one staged handler.
     fn staged(answer: Readied) -> Arc<Readiness> {
@@ -337,7 +343,12 @@ mod tests {
     }
 
     fn drop_of(of: &[&str], files: Arc<FakeFiles>, dragged: &dyn DraggedContent) -> Dropped {
-        tauri::async_runtime::block_on(dropped(paths(of), describing(files, PATIENT), dragged))
+        tauri::async_runtime::block_on(dropped(
+            paths(of),
+            describing(files, PATIENT),
+            dragged,
+            &Untold,
+        ))
     }
 
     /// An ordinary drop of two files is two described files, in order, each
@@ -510,6 +521,7 @@ mod tests {
                 Duration::from_millis(50),
             ),
             &Carrying::nothing(),
+            &Untold,
         ));
 
         let refused = dropped.refused.expect("a mount that is not answering");

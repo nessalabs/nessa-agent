@@ -18,6 +18,7 @@ export {
   availableUpdate,
   chooseAttachmentFiles,
   onAttachmentDragging,
+  onAttachmentReadying,
   onAttachmentDropped,
   closeSetupWindow,
   finishSetupWindow,

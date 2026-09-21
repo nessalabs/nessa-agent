@@ -10,7 +10,12 @@ import {
   type FileAttachment,
   type useConversation,
 } from "../../conversation"
-import { chooseAttachmentFiles, readAttachmentBytes, type ChosenFile } from "../../host"
+import {
+  chooseAttachmentFiles,
+  onAttachmentReadying,
+  readAttachmentBytes,
+  type ChosenFile,
+} from "../../host"
 import { readDroppedImage } from "../adapters/dropped-image"
 import {
   MAX_SESSION_ATTACHMENT_BYTES,
@@ -51,6 +56,20 @@ export function useFileAttachments(
     conversationId: string
     files: { name: string; mimeType: string; previewUrl?: string }[]
   } | null>(null)
+  /**
+   * Files the host is making readable, by name, against the conversation they
+   * were attached to.
+   *
+   * Their own state rather than `pending` above, which one call owns from
+   * beginning to end. These arrive and leave on the host's schedule, one event
+   * each way, and a file that is still being fetched while somebody opens
+   * another tab has to stay with the draft it belongs to — so the conversation
+   * is stamped on when the host says the file needs a moment, not read later.
+   *
+   * A `Map` because two files can be readied at once and each settles on its
+   * own; a count would not know which tile to take away.
+   */
+  const [readying, setReadying] = React.useState<Map<string, string>>(new Map())
   const download = React.useRef<AbortController | null>(null)
   const busyRef = React.useRef(false)
   const pendingConversation = React.useRef<string | null>(null)
@@ -85,6 +104,31 @@ export function useFileAttachments(
     return () => {
       mounted.current = false
       download.current?.abort()
+    }
+  }, [])
+  // The conversation is read at the moment the host speaks, not when the
+  // subscription was made: a drop lands in whichever tab is open then.
+  const activeId = React.useRef(chat.active.id)
+  React.useLayoutEffect(() => {
+    activeId.current = chat.active.id
+  })
+  React.useEffect(() => {
+    let live = true
+    const subscription = onAttachmentReadying(({ name, readying: waiting }) => {
+      if (!live) return
+      setReadying((current) => {
+        const next = new Map(current)
+        // Settling always removes, whatever the outcome was: the sentence for
+        // a file that is not coming is the refusal's, and a tile left spinning
+        // beside it would be the panel disagreeing with itself.
+        if (waiting) next.set(name, activeId.current)
+        else next.delete(name)
+        return next
+      })
+    })
+    return () => {
+      live = false
+      void subscription.then((stop) => stop())
     }
   }, [])
   React.useEffect(() => {
@@ -348,8 +392,26 @@ export function useFileAttachments(
   }
   return {
     inputRef,
-    isPending: (conversationId: string) => pendingConversation.current === conversationId,
-    pendingFiles: pending?.conversationId === chat.active.id ? pending.files : [],
+    /**
+     * Whether this conversation is waiting on something that has to finish
+     * before a draft can go — an image being fetched from a URL, or a file the
+     * host is still making readable. The composer refuses a send while either
+     * is true, with the words it already has for it.
+     */
+    isPending: (conversationId: string) =>
+      pendingConversation.current === conversationId ||
+      [...readying.values()].includes(conversationId),
+    /**
+     * Tiles for files that are on their way but not attached. Both kinds
+     * together, because they are the same thing to look at and the same thing
+     * to wait for; neither claims the file is on the draft.
+     */
+    pendingFiles: [
+      ...(pending?.conversationId === chat.active.id ? pending.files : []),
+      ...[...readying.entries()]
+        .filter(([, conversationId]) => conversationId === chat.active.id)
+        .map(([name]) => ({ name, mimeType: "", previewUrl: undefined })),
+    ],
     files,
     reading,
     refusal,

@@ -616,7 +616,7 @@ export function App({
                   <span
                     key={index}
                     className="relative m-1 inline-flex"
-                    aria-label={`Reading ${file.name}`}
+                    aria-label={`Getting ${file.name} ready`}
                     aria-busy="true"
                   >
                     <ChatAttachmentTile

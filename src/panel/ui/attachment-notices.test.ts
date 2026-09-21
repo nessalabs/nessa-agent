@@ -199,7 +199,7 @@ it("has the reading region on the page before the reading starts", async () => {
     root.render(React.createElement(AttachmentReadingStatus, { reading: true }))
   })
   expect(container.querySelector("[aria-live]")).toBe(region)
-  expect(region?.textContent).toBe("Reading files…")
+  expect(region?.textContent).toBe("Getting files ready…")
   // It adds no chrome: it is only ever read out.
   expect(region?.className).toContain("sr-only")
 })

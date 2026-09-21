@@ -128,10 +128,20 @@ export function AttachmentNotices({
  * paragraph this replaces. The region is here first and the text arrives into
  * it. The visible half is the busy tile in the composer; this adds no chrome.
  */
+/**
+ * The busy tiles, said out loud.
+ *
+ * "Getting ready" rather than "reading" or "downloading", because the tile
+ * covers three things that are the same to wait for and different underneath:
+ * an image being fetched from a URL, a file being read off the disk, and a
+ * file a cloud service is being asked for. A sentence naming any one of those
+ * mechanisms would be a lie about the other two — and would become a lie about
+ * all of them the day a fourth is added.
+ */
 export function AttachmentReadingStatus({ reading }: { reading: boolean }) {
   return (
     <span role="status" aria-live="polite" className="sr-only">
-      {reading ? "Reading files…" : ""}
+      {reading ? "Getting files ready…" : ""}
     </span>
   )
 }

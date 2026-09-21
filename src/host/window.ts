@@ -21,6 +21,7 @@ const HOST_EVENTS = {
   linkNotOpened: "nessa://link-not-opened",
   attachmentDropped: "nessa://attachment-dropped",
   attachmentDragging: "nessa://attachment-dragging",
+  attachmentReadying: "nessa://attachment-readying",
 } as const
 
 /**
@@ -364,6 +365,33 @@ export async function onAttachmentDropped(
  * receives neither now, and without the host saying so the panel would accept
  * a dropped file perfectly well while giving no sign beforehand that it would.
  */
+/**
+ * Be told while a chosen file is being made readable.
+ *
+ * A file a cloud service is keeping is not on this disk, and the host asks for
+ * it rather than refusing — which can take up to forty-five seconds. The answer
+ * arrives at the end of that, so without this the panel would say nothing at
+ * all while it happened, and silence reads as broken.
+ *
+ * Named per file, not as a count: somebody who dropped five needs to know which
+ * one is holding things up. `readying` false means that file has stopped
+ * waiting — it arrived, or it will not — and the tile goes either way.
+ *
+ * Mechanism-free on purpose. This says a file needs a moment and never what is
+ * being done about it, so the panel's sentence stays true if a handler that is
+ * not iCloud ever answers.
+ */
+export async function onAttachmentReadying(
+  handler: (file: { name: string; readying: boolean }) => void,
+): Promise<() => void> {
+  if (!inTauri) return () => {}
+  const { listen } = await import("@tauri-apps/api/event")
+  return listen<{ name: string; readying: boolean }>(
+    HOST_EVENTS.attachmentReadying,
+    ({ payload }) => handler(payload),
+  )
+}
+
 export async function onAttachmentDragging(
   handler: (dragging: boolean) => void,
 ): Promise<() => void> {

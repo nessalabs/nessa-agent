@@ -28,7 +28,7 @@ use tauri::State;
 use super::content_type::ContentTypes;
 use super::files::{answered_within, ChosenFiles, Kind, OnDisk, Stored, LONGEST_LOOK_WAIT};
 use super::picker::{FilePicker, Picked};
-use super::readiness::{Readied, Readiness, LONGEST_READY_WAIT, READY_POLL};
+use super::readiness::{Announce, Readied, Readiness, Telling, LONGEST_READY_WAIT, READY_POLL};
 use super::refusal::{named, FileNotAttached, NotAttached};
 use super::tickets::{AttachmentTickets, NoTicket};
 use crate::composition::HostDependencies;
@@ -135,12 +135,14 @@ pub(super) fn attachment(
 /// than per selection, and the reason is the refusal: a selection-wide deadline
 /// could only report that *something* stalled, and "one of the files you chose
 /// is on a disk that is not answering" is not a sentence anybody can act on.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn chosen_attachments(
     picker: &dyn FilePicker,
     files: Arc<dyn ChosenFiles>,
     types: Arc<dyn ContentTypes>,
     tickets: Arc<dyn AttachmentTickets>,
     readiness: Arc<Readiness>,
+    announce: &dyn Announce,
     wait: Duration,
     ready_wait: Duration,
 ) -> Result<Vec<ChosenFile>, FileNotAttached> {
@@ -150,7 +152,10 @@ pub(super) async fn chosen_attachments(
         Picked::Files(paths) => paths,
     };
 
-    describe_each(paths, files, types, tickets, readiness, wait, ready_wait).await
+    describe_each(
+        paths, files, types, tickets, readiness, announce, wait, ready_wait,
+    )
+    .await
 }
 
 /// Describe every path in `paths`, in order, or refuse the lot.
@@ -161,12 +166,14 @@ pub(super) async fn chosen_attachments(
 /// chosen with `+` must be described by the same code asking the same four
 /// outside things in the same order. Two loops would be two chances to
 /// disagree, which is the defect this feature has already had once.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn describe_each(
     paths: Vec<std::path::PathBuf>,
     files: Arc<dyn ChosenFiles>,
     types: Arc<dyn ContentTypes>,
     tickets: Arc<dyn AttachmentTickets>,
     readiness: Arc<Readiness>,
+    announce: &dyn Announce,
     wait: Duration,
     ready_wait: Duration,
 ) -> Result<Vec<ChosenFile>, FileNotAttached> {
@@ -180,7 +187,16 @@ pub(super) async fn describe_each(
         // hang in different clothes — so the wait is bounded and giving up is
         // an honest sentence rather than a generic failure.
         if matches!(&described, Err(refused) if refused.reason == NotAttached::FileNotReadable) {
-            match readiness.make_ready(&path, ready_wait, READY_POLL).await {
+            // Said before the wait rather than after it, which is the whole
+            // point: the answer comes up to `ready_wait` later, and a panel
+            // that says nothing for that long reads as broken. Told in every
+            // case below, including the two that refuse, so no tile is ever
+            // left waiting for a file that is not coming.
+            let waiting = named(&path);
+            announce.readying(&waiting);
+            let readied = readiness.make_ready(&path, ready_wait, READY_POLL).await;
+            announce.settled(&waiting);
+            match readied {
                 // Here now, so this is an ordinary local file and is described
                 // again from scratch: nothing downstream knows it was ever a
                 // placeholder, and the type decides its route as it would for
@@ -239,6 +255,7 @@ async fn describe_one(
 /// changed their mind — and is not a failure.
 #[tauri::command]
 pub async fn choose_attachment_files(
+    app: tauri::AppHandle,
     deps: State<'_, HostDependencies>,
 ) -> Result<Vec<ChosenFile>, FileNotAttached> {
     let picker = deps.picker.clone();
@@ -248,6 +265,7 @@ pub async fn choose_attachment_files(
         deps.types.clone(),
         deps.tickets.clone(),
         deps.readiness.clone(),
+        &Telling(&app),
         LONGEST_LOOK_WAIT,
         LONGEST_READY_WAIT,
     )
@@ -260,7 +278,32 @@ mod tests {
     use crate::attachments::doubles::{
         FakeFiles, FakePicker, FakeReadiness, FakeTickets, FakeTypes,
     };
-    use crate::attachments::readiness::{Readied, Readiness};
+    use crate::attachments::readiness::{Announce, Readied, Readiness, Untold};
+
+    /// Everything the panel was told, in order.
+    #[derive(Default)]
+    struct Recording(std::sync::Mutex<Vec<(String, String)>>);
+
+    impl Recording {
+        fn said(&self) -> Vec<(String, String)> {
+            self.0.lock().expect("what was said").clone()
+        }
+        fn push(&self, what: &str, name: &str) {
+            self.0
+                .lock()
+                .expect("what was said")
+                .push((what.to_string(), name.to_string()));
+        }
+    }
+
+    impl Announce for Recording {
+        fn readying(&self, name: &str) {
+            self.push("readying", name);
+        }
+        fn settled(&self, name: &str) {
+            self.push("settled", name);
+        }
+    }
 
     /// A readiness seam holding one staged handler, which is what the caller
     /// takes: the dispatch is tested beside the seam, not here.
@@ -329,6 +372,7 @@ mod tests {
             Arc::new(FakeTypes(types)),
             tickets,
             staged_with(downloads),
+            &Untold,
             PATIENT,
             // Short, because every download outcome here is staged rather than
             // waited for; `downloads` owns the deadline's own test.
@@ -576,6 +620,66 @@ mod tests {
         assert_eq!(files.asked(), vec![path.clone(), path]);
     }
 
+    /// What the panel is told, and when. The answer arrives up to
+    /// `LONGEST_READY_WAIT` after the wait begins, so a panel that only learns
+    /// from the answer says nothing for forty-five seconds — which is the
+    /// silence this closes. Said before the wait, and said again after it in
+    /// every case including the refusals, so no tile is left waiting for a
+    /// file that is not coming.
+    #[test]
+    fn the_panel_is_told_before_the_wait_and_again_when_it_ends() {
+        for answer in [
+            Readied::Ready,
+            Readied::StillComing,
+            Readied::Refused("not ours".to_string()),
+        ] {
+            let told = Recording::default();
+            let _ = tauri::async_runtime::block_on(chosen_attachments(
+                &FakePicker(Picked::Files(vec![PathBuf::from(
+                    "/Users/dev/iCloud/amica-document 2.pdf",
+                )])),
+                Arc::new(FakeFiles::arriving(34_890)),
+                Arc::new(FakeTypes("application/pdf")),
+                Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
+                staged(answer.clone()),
+                &told,
+                PATIENT,
+                Duration::from_millis(50),
+            ));
+
+            assert_eq!(
+                told.said(),
+                vec![
+                    ("readying".to_string(), "amica-document 2.pdf".to_string()),
+                    ("settled".to_string(), "amica-document 2.pdf".to_string()),
+                ],
+                "{answer:?}"
+            );
+        }
+    }
+
+    /// And an ordinary file is never announced at all: a tile that appeared
+    /// for every attachment would be noise, and the common path must not pay
+    /// for the uncommon one.
+    #[test]
+    fn an_ordinary_file_is_never_announced() {
+        let told = Recording::default();
+        let attached = tauri::async_runtime::block_on(chosen_attachments(
+            &FakePicker(Picked::Files(vec![PathBuf::from("/Users/dev/notes.md")])),
+            Arc::new(FakeFiles::holding(12)),
+            Arc::new(FakeTypes("text/markdown")),
+            Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
+            staged(Readied::Ready),
+            &told,
+            PATIENT,
+            Duration::from_millis(50),
+        ))
+        .expect("an ordinary file");
+
+        assert_eq!(attached.len(), 1);
+        assert!(told.said().is_empty(), "{:?}", told.said());
+    }
+
     /// A file already here never reaches the seam at all. The common path must
     /// not pay for the uncommon one.
     #[test]
@@ -589,6 +693,7 @@ mod tests {
             Arc::new(FakeTypes("text/markdown")),
             Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
             Arc::new(Readiness::new(vec![asked.clone()])),
+            &Untold,
             PATIENT,
             Duration::from_millis(50),
         ))
@@ -823,6 +928,7 @@ mod tests {
             Arc::new(FakeTypes("image/heic")),
             Arc::new(FakeTickets::refusing(Redeemed::Unknown)),
             staged(Readied::Ready),
+            &Untold,
             Duration::from_millis(50),
             Duration::from_millis(50),
         ))

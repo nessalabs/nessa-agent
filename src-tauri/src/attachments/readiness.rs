@@ -155,6 +155,65 @@ impl Readiness {
     }
 }
 
+/// Told which file is being made ready, and when it stops.
+///
+/// A port because the panel has to hear it *while* it happens rather than in
+/// the answer at the end: up to [`LONGEST_READY_WAIT`] can pass, and a panel
+/// that says nothing for forty-five seconds reads as broken. Named per file,
+/// not as a count, because somebody who dropped five needs to know which one.
+///
+/// Mechanism-free like the rest of the seam: this says a file needs a moment,
+/// never what is being done about it, so a handler that is not iCloud does not
+/// make the sentence a lie.
+pub trait Announce: Send + Sync {
+    /// This file is being made ready.
+    fn readying(&self, name: &str);
+    /// It is not any more — it arrived, or it will not.
+    fn settled(&self, name: &str);
+}
+
+/// The panel's own event name for a file that needs a moment.
+pub(super) const READYING_EVENT: &str = "nessa://attachment-readying";
+
+/// Telling the panel, which draws a tile for it.
+pub(super) struct Telling<'a>(pub &'a tauri::AppHandle);
+
+impl Announce for Telling<'_> {
+    fn readying(&self, name: &str) {
+        self.say(name, true);
+    }
+    fn settled(&self, name: &str) {
+        self.say(name, false);
+    }
+}
+
+impl Telling<'_> {
+    fn say(&self, name: &str, readying: bool) {
+        use tauri::{Emitter, Manager};
+
+        if let Some(panel) = self.0.get_webview_window(crate::panel::MAIN_WINDOW) {
+            let _ = panel.emit(
+                READYING_EVENT,
+                serde_json::json!({ "name": name, "readying": readying }),
+            );
+        }
+    }
+}
+
+/// Nobody to tell.
+///
+/// Test-only: both real callers — `+` and a drop — have a panel to tell, and
+/// a third that did not would be a file being readied with nothing on screen
+/// saying so, which is the silence this whole port exists to close.
+#[cfg(test)]
+pub struct Untold;
+
+#[cfg(test)]
+impl Announce for Untold {
+    fn readying(&self, _name: &str) {}
+    fn settled(&self, _name: &str) {}
+}
+
 /// The one that claims what is left.
 ///
 /// Every dataless file no other handler took: another provider's placeholder,

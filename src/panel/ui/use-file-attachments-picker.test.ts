@@ -32,6 +32,9 @@ vi.mock("../../host", () => ({
   chooseAttachmentFiles,
   readAttachmentBytes,
   hasNativeHost: () => true,
+  // No file here needs making ready, so the host never speaks. The tile it
+  // would draw has its own tests in `use-file-attachments-readying`.
+  onAttachmentReadying: () => Promise.resolve(() => {}),
 }))
 
 import { createDependencies } from "../../composition/dependencies"
