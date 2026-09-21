@@ -122,11 +122,16 @@ describe("handing setup over to the panel", () => {
   it("hands the host the one fact it does not have, and carries on", async () => {
     const { finishSetupWindow } = await import("./window")
     invoke.mockResolvedValue(landed)
-    await expect(finishSetupWindow(true)).resolves.toEqual({ outcome: "handed-over" })
+    await expect(finishSetupWindow(true, "codex")).resolves.toEqual({
+      outcome: "handed-over",
+    })
     // One call, not three. Showing the panel, writing setup off and closing this
     // window are ordered on the host, in the process that outlives this window.
     expect(invoke).toHaveBeenCalledTimes(1)
-    expect(invoke).toHaveBeenCalledWith("finish_setup", { completed: true })
+    expect(invoke).toHaveBeenCalledWith("finish_setup", {
+      completed: true,
+      agent: "codex",
+    })
     // Nothing closes the window from here any more.
     expect(close).not.toHaveBeenCalled()
   })
@@ -135,8 +140,34 @@ describe("handing setup over to the panel", () => {
     const { finishSetupWindow } = await import("./window")
     invoke.mockResolvedValue(landed)
     await expect(finishSetupWindow(false)).resolves.toEqual({ outcome: "handed-over" })
-    // Leaving stays free to change its mind: the host records nothing for it.
-    expect(invoke).toHaveBeenCalledWith("finish_setup", { completed: false })
+    // Leaving stays free to change its mind: the host records nothing for it,
+    // and there is no choice to carry.
+    expect(invoke).toHaveBeenCalledWith("finish_setup", {
+      completed: false,
+      agent: null,
+    })
+  })
+
+  it("reads back the agent setup chose, and says so when nobody chose one", async () => {
+    const { loadChosenAgent } = await import("./window")
+    invoke.mockResolvedValue("codex")
+    await expect(loadChosenAgent()).resolves.toEqual({
+      outcome: "chosen",
+      agent: "codex",
+    })
+    expect(invoke).toHaveBeenCalledWith("chosen_agent")
+    invoke.mockResolvedValue(null)
+    await expect(loadChosenAgent()).resolves.toEqual({ outcome: "none" })
+  })
+
+  it("keeps a host it could not ask apart from a host with nothing to say", async () => {
+    // Both leave this conversation on the gateway's own default, which is a
+    // worse answer and not a broken panel. They are still different answers: a
+    // host that failed once may answer the next time it is asked, and reporting
+    // that as "nobody chose" is what let a caller remember it as one.
+    const { loadChosenAgent } = await import("./window")
+    invoke.mockRejectedValue(new Error("no settings file"))
+    await expect(loadChosenAgent()).resolves.toEqual({ outcome: "unavailable" })
   })
 
   it("says the panel did not come up rather than closing over nothing", async () => {
@@ -166,22 +197,51 @@ describe("handing setup over to the panel", () => {
     })
   })
 
-  // Survivable: a settings file that would not take the flag costs a second run
-  // of setup, not the panel somebody is waiting on.
-  it("hands over anyway when the completion write was refused", async () => {
+  // Not survivable the way this used to say. The write carries the completion
+  // flag and the chosen agent in one update, so losing it loses the choice, and
+  // every conversation of the launch then runs on the gateway's default while
+  // the screen says the handoff worked.
+  it("reports a refused write rather than a handoff that worked", async () => {
     const { finishSetupWindow } = await import("./window")
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     invoke.mockResolvedValue({
-      setupClosed: true,
+      // The host leaves the window open for exactly this, so the surface has
+      // somewhere to say it and something to offer.
+      setupClosed: false,
       closeError: null,
       recordError: "could not record that setup finished: disk full",
     })
-    await expect(finishSetupWindow(true)).resolves.toEqual({ outcome: "handed-over" })
-    expect(warn).toHaveBeenCalledWith(
-      "[nessa] could not record that setup finished",
-      "could not record that setup finished: disk full",
-    )
-    warn.mockRestore()
+    await expect(finishSetupWindow(true)).resolves.toEqual({
+      outcome: "setup-not-recorded",
+      cause: "could not record that setup finished: disk full",
+    })
+  })
+
+  it("asks for the write alone when saving again, and ends the handoff on it", async () => {
+    const { retrySetupRecord } = await import("./window")
+    invoke.mockResolvedValue({ setupClosed: true, closeError: null, recordError: null })
+    await expect(retrySetupRecord("codex")).resolves.toEqual({ outcome: "handed-over" })
+    // The panel is already up. Asking for the whole handoff again would summon
+    // it a second time, re-anchoring a window somebody may have moved to.
+    expect(invoke).toHaveBeenCalledWith("retry_setup_record", { agent: "codex" })
+  })
+
+  it("leaves the same screen up when saving again is refused again", async () => {
+    const { retrySetupRecord } = await import("./window")
+    invoke.mockResolvedValue({
+      setupClosed: false,
+      closeError: null,
+      recordError: "could not record that setup finished: disk full",
+    })
+    await expect(retrySetupRecord()).resolves.toEqual({
+      outcome: "setup-not-recorded",
+      cause: "could not record that setup finished: disk full",
+    })
+    // A host that cannot be asked at all leaves the same screen, for the same
+    // reason: nothing was written, and pressing it again is still the remedy.
+    invoke.mockRejectedValue(new Error("the host went away"))
+    await expect(retrySetupRecord()).resolves.toMatchObject({
+      outcome: "setup-not-recorded",
+    })
   })
 
   it("has no second window to hand over to outside the desktop host", async () => {

@@ -74,15 +74,34 @@ cpSync(
   join(cache, `node-v${version}-darwin-${process.arch}`, "LICENSE"),
   join(out, "NODE-LICENSE"),
 )
-const harness = join(out, "claude-acp")
-mkdirSync(harness, { recursive: true })
-for (const name of ["package.json", "package-lock.json"])
-  cpSync(join(root, "crates/nessa-sdk/harnesses/claude-acp", name), join(harness, name))
-execFileSync("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], {
-  cwd: harness,
-  stdio: "inherit",
-})
-materializeBinLinks(join(harness, "node_modules"))
+// One harness per agent the gateway can start. A bundle missing any of them is
+// an installation that cannot offer that agent, and the server says so on
+// startup rather than after someone picks it.
+const harnesses = {}
+// Each harness and the one package it exists to pin. Named rather than taken
+// from the manifest, because what goes into the runtime fingerprint has to be
+// the version of a package we chose: reading "whichever dependency is listed
+// first" would silently start fingerprinting something else the day a harness
+// gains a second one.
+const HARNESSES = {
+  "claude-acp": "@agentclientprotocol/claude-agent-acp",
+  "codex-acp": "@agentclientprotocol/codex-acp",
+}
+for (const [name, pinned] of Object.entries(HARNESSES)) {
+  const harness = join(out, name)
+  mkdirSync(harness, { recursive: true })
+  for (const file of ["package.json", "package-lock.json"])
+    cpSync(join(root, "crates/nessa-sdk/harnesses", name, file), join(harness, file))
+  execFileSync("npm", ["ci", "--omit=dev", "--no-audit", "--no-fund"], {
+    cwd: harness,
+    stdio: "inherit",
+  })
+  materializeBinLinks(join(harness, "node_modules"))
+  const manifest = JSON.parse(readFileSync(join(harness, "package.json"), "utf8"))
+  const version = manifest.dependencies?.[pinned]
+  if (!version) throw new Error(`${name} no longer pins ${pinned}`)
+  harnesses[name] = version
+}
 cpSync(join(root, "crates/nessa-sdk/data/models.json"), join(out, "models.json"))
 // Sign the nested executables. Not Tauri's responsibility, whatever the comment
 // that used to be here said: the bundler signs the app and `Contents/MacOS`,
@@ -137,7 +156,8 @@ writeFileSync(
   JSON.stringify(
     {
       node: version,
-      claudeAcp: "0.76.0",
+      claudeAcp: harnesses["claude-acp"],
+      codexAcp: harnesses["codex-acp"],
       target: host,
       fingerprint,
     },

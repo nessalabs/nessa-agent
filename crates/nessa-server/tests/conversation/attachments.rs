@@ -6,9 +6,10 @@ use super::{
     ConversationService, SubmissionMode, SubmittedImage,
 };
 use crate::{
+    agents::domain::AgentId,
     conversation::domain::{Conversation, ConversationId},
     conversation_test_support::{
-        image_fixture, AcceptingCreationAudit, MemoryAttachments, MemoryRepository, Provider,
+        image_fixture, only, AcceptingCreationAudit, MemoryAttachments, MemoryRepository, Provider,
         ProviderFactory, TestClock,
     },
 };
@@ -66,7 +67,7 @@ async fn conversation_holding(
     let (service, provider, _, _) = image_fixture(true, Some(attachments.clone()));
     let id = new_id();
     service
-        .create(id.clone(), caller("panel", "create"))
+        .create(id.clone(), caller("panel", "create"), None)
         .await
         .unwrap();
     for image in held {
@@ -128,7 +129,7 @@ async fn an_image_is_refused_when_the_agent_or_the_gateway_takes_none() {
         let (service, provider, _, _) = image_fixture(image_input, port);
         let id = new_id();
         service
-            .create(id.clone(), caller("panel", "create"))
+            .create(id.clone(), caller("panel", "create"), None)
             .await
             .unwrap();
         attachments.held.lock().unwrap().push((
@@ -167,7 +168,7 @@ async fn an_image_this_conversation_does_not_hold_is_refused_before_anything_is_
     // Held by another conversation of the same owner is not held by this one.
     let other = new_id();
     service
-        .create(other.clone(), caller("panel", "create-other"))
+        .create(other.clone(), caller("panel", "create-other"), None)
         .await
         .unwrap();
     assert!(matches!(
@@ -197,7 +198,7 @@ async fn a_view_echoes_a_turns_images_while_it_waits_once_it_ran_and_after_a_res
     let (service, provider, repository, storage) = image_fixture(true, Some(attachments.clone()));
     let id = new_id();
     service
-        .create(id.clone(), caller("panel", "create"))
+        .create(id.clone(), caller("panel", "create"), None)
         .await
         .unwrap();
     for held in [image(1), image(2), image(3)] {
@@ -253,13 +254,12 @@ async fn a_view_echoes_a_turns_images_while_it_waits_once_it_ran_and_after_a_res
     tokio::task::yield_now().await;
     let restored = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider.clone())),
+            agents: only(Arc::new(Provider(provider.clone()))),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: Some(attachments),
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -363,13 +363,12 @@ async fn a_close_that_never_reached_the_agent_keeps_the_uploads_its_queue_may_st
     let repository = Arc::new(MemoryRepository::default());
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider.clone())),
+            agents: only(Arc::new(Provider(provider.clone()))),
             storage: Arc::new(InMemoryStorage::new()),
             metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: Some(attachments.clone()),
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits {
             max_conversations: 1,
@@ -379,7 +378,7 @@ async fn a_close_that_never_reached_the_agent_keeps_the_uploads_its_queue_may_st
     )
     .unwrap();
     service
-        .create(new_id(), caller("panel", "create"))
+        .create(new_id(), caller("panel", "create"), None)
         .await
         .unwrap();
     let unreachable = new_id();
@@ -392,6 +391,7 @@ async fn a_close_that_never_reached_the_agent_keeps_the_uploads_its_queue_may_st
                 "panel".into(),
                 "create-2".into(),
                 1,
+                AgentId::Claude,
             )
             .unwrap(),
         )
@@ -494,7 +494,7 @@ async fn an_agent_that_advertises_images_in_front_of_a_model_offered_none_takes_
     provider.model_images.store(false, Ordering::SeqCst);
     let id = new_id();
     service
-        .create(id.clone(), caller("panel", "create"))
+        .create(id.clone(), caller("panel", "create"), None)
         .await
         .unwrap();
     attachments.held.lock().unwrap().push((
@@ -523,7 +523,7 @@ async fn an_agent_whose_answer_is_not_known_is_not_told_no_and_the_view_keeps_it
     let (service, provider, _, _) = image_fixture(true, Some(attachments.clone()));
     let id = new_id();
     service
-        .create(id.clone(), caller("panel", "create"))
+        .create(id.clone(), caller("panel", "create"), None)
         .await
         .unwrap();
     attachments.held.lock().unwrap().push((

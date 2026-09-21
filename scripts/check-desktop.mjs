@@ -7,6 +7,8 @@ import { unreachableOffMacos } from "./desktop/platform-gates.mjs"
 const tests = [
   "scripts/ensure-nessa-ui.test.mjs",
   "scripts/dev-agent-config.test.mjs",
+  "scripts/e2e-verdict.test.mjs",
+  "scripts/retrofit-conversation-agents.test.mjs",
   "scripts/gateway-port.test.mjs",
   ...readdirSync("scripts/desktop")
     .filter((name) => name.endsWith(".test.mjs"))

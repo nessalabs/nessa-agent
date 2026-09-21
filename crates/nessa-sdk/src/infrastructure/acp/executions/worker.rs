@@ -44,7 +44,7 @@ use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
 use crate::infrastructure::{
-    json_rpc::{self, Envelope, Reader, RpcId},
+    json_rpc::{self, Envelope, Reader, RpcError, RpcId},
     process::ProcessScope,
 };
 use serde_json::{json, Value};
@@ -62,6 +62,28 @@ use tokio::{
     sync::{mpsc, oneshot, watch},
     time::{timeout, Instant},
 };
+
+/// Turn a provider's error response into this adapter's error, reporting what
+/// the provider said on the way past.
+///
+/// The error itself carries only the code, because the code is what decides
+/// anything. The text is the operator's: `-32000` from a Codex that is not
+/// signed in is indistinguishable from any other provider refusal, and
+/// "Authentication required" is the entire answer. Logged once, here, so every
+/// provider failure says as much as the provider said.
+fn provider_failure(phase: &str, error: RpcError) -> AgentError {
+    match &error.message {
+        Some(message) => {
+            tracing::warn!(code = error.code, phase, %message, "provider refused")
+        }
+        None => tracing::warn!(
+            code = error.code,
+            phase,
+            "provider refused without a message"
+        ),
+    }
+    AgentError::Provider { code: error.code }
+}
 
 type ExecutionReply = oneshot::Sender<ProviderExecutionReply>;
 type SteeringReply = oneshot::Sender<ProviderOperationResult<SteeringOutcome>>;
@@ -119,6 +141,13 @@ struct Worker<P> {
     operation_capabilities: watch::Sender<OperationCapabilities>,
     permissions: HashMap<PermissionId, RpcId>,
     shutdown_deadline: Option<Instant>,
+    /// True once every request from `session_configuration` has been applied.
+    ///
+    /// The session's configuration requests are answered in order, and the
+    /// provider may send `config_option_update` while they are still going out.
+    /// Checking such a notification against the finished state would reject it
+    /// for reporting the state this runtime had not asked for yet.
+    configured: bool,
     closing: bool,
     deferred_outcome: Option<ExecutionOutcome>,
     provider_result: Option<Result<ExecutionOutcome, AgentError>>,
@@ -167,6 +196,7 @@ pub(in crate::infrastructure::acp) async fn run<P: AcpProfile>(
         operation_capabilities,
         permissions: HashMap::new(),
         shutdown_deadline: None,
+        configured: false,
         closing: false,
         deferred_outcome: None,
         provider_result: None,
@@ -585,7 +615,7 @@ impl<P: AcpProfile> Worker<P> {
                 return Err(json_rpc::protocol("unexpected startup response"));
             }
             if let Some(error) = message.error {
-                return Err(AgentError::Provider { code: error.code });
+                return Err(provider_failure("startup", error));
             }
             return message
                 .result
@@ -670,9 +700,22 @@ impl<P: AcpProfile> Worker<P> {
         {
             return Err(json_rpc::protocol("provider resumed a different session"));
         }
+        // Applied in the profile's own order, because a provider can reject a
+        // later selection that an earlier one has not made available yet. Only
+        // the last response is checked as fully configured; the ones before it
+        // are checked against what the profile has settled so far.
+        let configuration = self.profile.session_configuration(execution.id().as_str());
+        // Which makes this result the final state exactly when there is nothing
+        // to apply after it. A profile is allowed to pin everything in its
+        // session parameters and return no requests at all; for such a profile
+        // the loop below never runs, so checking this leniently would mean
+        // publishing ready having never held anything to the settled state —
+        // with every test green, because the two profiles that exist today
+        // return one request and two.
         self.profile
-            .verify_session(&result, &self.capabilities, false)?;
-        if let Some(params) = self.profile.session_configuration(execution.id().as_str()) {
+            .verify_session(&result, &self.capabilities, configuration.is_empty())?;
+        let last = configuration.len().saturating_sub(1);
+        for (step, params) in configuration.into_iter().enumerate() {
             let result = self
                 .rpc(
                     "session/set_config_option",
@@ -683,8 +726,9 @@ impl<P: AcpProfile> Worker<P> {
                 .await
                 .map_err(|error| startup_deadline(error, AgentStartupPhase::Configure, context))?;
             self.profile
-                .verify_session(&result, &self.capabilities, true)?;
+                .verify_session(&result, &self.capabilities, step == last)?;
         }
+        self.configured = true;
         self.operation_capabilities
             .send_replace(OperationCapabilities {
                 negotiated: true,
@@ -1361,7 +1405,7 @@ impl<P: AcpProfile> Worker<P> {
             .is_some_and(|pending| message.id == Some(RpcId::Number(pending.id)))
         {
             let result = match message.error {
-                Some(error) => Err(AgentError::Provider { code: error.code }),
+                Some(error) => Err(provider_failure("steering", error)),
                 None => message
                     .result
                     .ok_or_else(|| json_rpc::protocol("missing steering result"))
@@ -1388,7 +1432,7 @@ impl<P: AcpProfile> Worker<P> {
         }
         if let Some(error) = message.error {
             // Keep the reply until teardown has recorded pending cancellations.
-            let error = AgentError::Provider { code: error.code };
+            let error = provider_failure("prompt", error);
             self.provider_result = Some(Err(error.clone()));
             return Err(error);
         }
@@ -1482,7 +1526,12 @@ impl<P: AcpProfile> Worker<P> {
         let kind = fields::string(update, "sessionUpdate")?;
         match kind {
             "config_option_update" | "current_mode_update" => {
-                return self.profile.verify_update(kind, update, &self.capabilities);
+                return self.profile.verify_update(
+                    kind,
+                    update,
+                    &self.capabilities,
+                    self.configured,
+                );
             }
             "agent_message_chunk" | "agent_thought_chunk" | "tool_call" | "tool_call_update" => {
                 if self.active.is_none() {
@@ -1555,11 +1604,12 @@ impl<P: AcpProfile> Worker<P> {
                 "permission request limit or duplicate ID",
             ));
         }
-        let tool = params
-            .get("toolCall")
-            .ok_or_else(|| json_rpc::protocol("missing permission tool"))?;
-        let input = self.profile.tool_input(tool)?;
-        let tool = self.profile.tool_call(tool)?;
+        let input = self.profile.permission_input(&params)?;
+        let tool = self.profile.tool_call(
+            params
+                .get("toolCall")
+                .ok_or_else(|| json_rpc::protocol("missing permission tool"))?,
+        )?;
         let options = permission_wire::permission_options(&params, &self.config.permissions)?;
         let sequence = self
             .permission_sequence

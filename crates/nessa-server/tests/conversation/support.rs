@@ -1,9 +1,10 @@
 //! Test-only provider and metadata ports; all scheduling runs through the real SDK Agent.
+use crate::agents::domain::AgentId;
 use crate::conversation::application::{
-    AttachmentRelease, ConversationAttachments, ConversationCreation, ConversationCreationAudit,
-    ConversationCreationAuditRecord, ConversationCreationDisposition, ConversationDependencies,
-    ConversationError, ConversationFuture, ConversationLimits, ConversationRepository,
-    ConversationService,
+    AttachmentRelease, ConversationAgent, ConversationAgents, ConversationAttachments,
+    ConversationCreation, ConversationCreationAudit, ConversationCreationAuditRecord,
+    ConversationCreationDisposition, ConversationDependencies, ConversationError,
+    ConversationFuture, ConversationLimits, ConversationRepository, ConversationService,
 };
 use crate::conversation::domain::{Conversation, ConversationId};
 use nessa_auth::domain::OrganizationId;
@@ -194,19 +195,37 @@ pub(crate) fn image_fixture(
     let storage = Arc::new(InMemoryStorage::new());
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider.clone())),
+            agents: only(Arc::new(Provider(provider.clone()))),
             storage: storage.clone(),
             metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits::default(),
         None,
     )
     .unwrap();
     (service, provider, repository, storage)
+}
+/// A service that can start exactly one agent.
+///
+/// Most of these tests are about what happens while a conversation runs, not
+/// about which agent it runs on, so they configure the one agent and let every
+/// creation take it by default.
+pub(crate) fn only(provider: Arc<dyn AgentProvider>) -> ConversationAgents {
+    ConversationAgents::new(
+        HashMap::from([(
+            AgentId::Claude,
+            ConversationAgent {
+                provider,
+                reserved_output_tokens: 4096,
+                readiness: None,
+            },
+        )]),
+        AgentId::Claude,
+    )
+    .expect("one configured agent is its own default")
 }
 pub(crate) fn fixture(
     limits: ConversationLimits,
@@ -221,13 +240,12 @@ pub(crate) fn fixture(
     let storage = Arc::new(InMemoryStorage::new());
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider.clone())),
+            agents: only(Arc::new(Provider(provider.clone()))),
             storage: storage.clone(),
             metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         limits,
         None,

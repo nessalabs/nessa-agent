@@ -28,6 +28,17 @@ pub enum ConversationError {
         release: Box<ConversationError>,
     },
     NotFound,
+    /// The agent asked for is one this server has no configuration to start.
+    /// Kept apart from an invalid request because the request was valid and the
+    /// answer is about this installation, which is something setup can fix.
+    AgentNotConfigured,
+    /// The conversation on disk names an agent this build has no adapter for.
+    ///
+    /// Apart from [`Self::Metadata`] because the record was read perfectly well
+    /// and storage is working: what cannot be done is open it, and never on
+    /// this build. Telling the caller storage was unavailable would invite a
+    /// retry that can only fail the same way.
+    AgentUnsupported,
     Capacity,
     Unavailable,
     Metadata,

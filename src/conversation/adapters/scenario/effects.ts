@@ -1,6 +1,7 @@
 import { imageAttachmentsProblem } from "@nessa/client"
 import {
   AttachmentStagingError,
+  ConversationReadFailedError,
   SubmissionRefusedError,
   type ConversationEffects,
 } from "../../application/ports"
@@ -68,7 +69,16 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
       return { conversationId }
     },
     async read(id) {
-      return structuredClone(get(id))
+      // The port promises a typed reason for every rejected read, and a
+      // substitute that answers with anything else is a substitute the panel
+      // could not have been written against. An offline scenario and a
+      // conversation this one never opened are both "no view, and nothing more
+      // to say about it".
+      try {
+        return structuredClone(get(id))
+      } catch (error) {
+        throw new ConversationReadFailedError("unavailable", error)
+      }
     },
     send,
     steer: send,

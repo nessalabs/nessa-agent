@@ -148,6 +148,25 @@ that their combination describes a possible execution.
   transport rejection, provider settlement, local cancellation, physical cleanup,
   and audit acknowledgement require explicit facts. Exercise identical diagnostics
   with different physical states, and different diagnostics with the same state.
+- Identity among siblings. A key names an element among the children it sits
+  with, not the data it is about. Two children of one parent under one key are
+  one child to the renderer. React warns and does not refuse; what follows
+  depends on the rest of the array, and it is worse than it looks. With a
+  sibling earlier in the same children array that renders nothing — a notice
+  that is usually absent, a conditional block — React 19 leaks one subtree per
+  render rather than reusing it: copies accumulate, each frozen at the state it
+  was born with, none removed when the thing they described goes away, and
+  their effect cleanups never run. Without that sibling the same duplicate keys
+  behave correctly, which is why this survives review: the simplest case a
+  reviewer tries will not reproduce it.
+  So when several elements are keyed by the same value because they concern the
+  same conversation, request, or row, give each a name of its own. Read the
+  whole sibling set rather than the line being changed — a defect of this kind
+  exists only in the relationship between lines and is invisible in a diff.
+  Prove it with a test that renders the real sibling set across several renders
+  and asserts the count, including a case that fails without the fix; the
+  renderer's warning is a development-build console line, so it cannot be the
+  guard.
 - Verify lossless mapping of those facts, including every field of compound
   reports, through persistence and restoration. Test known provider outcomes
   alongside later hook, audit, and storage failures. Shared contract fixtures must

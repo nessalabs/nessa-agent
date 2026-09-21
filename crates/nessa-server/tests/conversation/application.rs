@@ -1,14 +1,18 @@
 //! Shared conversation ownership and admission tests use real SDK scheduling.
 use super::{
-    ConversationCaller, ConversationCreation, ConversationCreationAudit,
-    ConversationCreationAuditRecord, ConversationDependencies, ConversationDisposition,
-    ConversationError, ConversationFuture, ConversationLimits, ConversationMessageStatus,
-    ConversationOwnershipState, ConversationRepository, ConversationService, RuntimeReadiness,
-    SubmissionMode,
+    ConversationAgent, ConversationAgents, ConversationCaller, ConversationCreation,
+    ConversationCreationAudit, ConversationCreationAuditRecord, ConversationDependencies,
+    ConversationDisposition, ConversationError, ConversationFuture, ConversationLimits,
+    ConversationMessageStatus, ConversationOwnershipState, ConversationRepository,
+    ConversationService, RequestedAgent, RuntimeReadiness, SubmissionMode,
 };
 use crate::{
+    agents::domain::AgentId,
     conversation::domain::{Conversation, ConversationId},
-    conversation_test_support::{fixture, AcceptingCreationAudit, Provider, TestClock},
+    conversation_test_support::{
+        fixture, only, AcceptingCreationAudit, MemoryRepository, Provider, ProviderFactory,
+        TestClock,
+    },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::{
@@ -27,6 +31,7 @@ use nessa_sdk::{
     infrastructure::session_storage::InMemoryStorage,
 };
 use std::{
+    collections::HashMap,
     future::Future,
     pin::Pin,
     sync::{
@@ -139,13 +144,12 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider.clone())),
+            agents: only(Arc::new(Provider(provider.clone()))),
             storage,
             metadata: repository.clone(),
             creation_audit: audit.clone(),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -154,7 +158,7 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
     let id = id();
     assert!(matches!(
         service
-            .create(id.clone(), caller("panel", "create-1"))
+            .create(id.clone(), caller("panel", "create-1"), None)
             .await,
         Err(ConversationError::Audit)
     ));
@@ -193,13 +197,12 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider.clone())),
+            agents: only(Arc::new(Provider(provider.clone()))),
             storage,
             metadata: repository.clone(),
             creation_audit: audit.clone(),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -209,7 +212,7 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
 
     assert!(matches!(
         service
-            .create(id.clone(), caller("panel", "create-original"))
+            .create(id.clone(), caller("panel", "create-original"), None)
             .await,
         Err(ConversationError::Audit)
     ));
@@ -217,7 +220,7 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
 
     service
-        .create(id, caller("phone", "create-retry"))
+        .create(id, caller("phone", "create-retry"), None)
         .await
         .unwrap();
 
@@ -290,13 +293,12 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider.clone())),
+            agents: only(Arc::new(Provider(provider.clone()))),
             storage,
             metadata: repository.clone(),
             creation_audit: audit.clone(),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -305,7 +307,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
     let id = id();
     assert!(matches!(
         service
-            .create(id.clone(), caller("panel", "create-1"))
+            .create(id.clone(), caller("panel", "create-1"), None)
             .await,
         Err(ConversationError::Audit)
     ));
@@ -392,13 +394,12 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider.clone())),
+            agents: only(Arc::new(Provider(provider.clone()))),
             storage,
             metadata: repository.clone(),
             creation_audit: audit.clone(),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -406,7 +407,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
     .unwrap();
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create-1"))
+        .create(id.clone(), caller("panel", "create-1"), None)
         .await
         .unwrap();
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
@@ -415,13 +416,12 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
     // A fresh owner map, so the next create must open the provider again.
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider.clone())),
+            agents: only(Arc::new(Provider(provider.clone()))),
             storage: Arc::new(InMemoryStorage::new()),
             metadata: repository,
             creation_audit: audit.clone(),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -432,7 +432,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
     audit.reject_reopen.store(true, Ordering::SeqCst);
     assert!(matches!(
         service
-            .create(id.clone(), caller("phone", "create-2"))
+            .create(id.clone(), caller("phone", "create-2"), None)
             .await,
         Err(ConversationError::Audit)
     ));
@@ -442,7 +442,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
 
     audit.reject_reopen.store(false, Ordering::SeqCst);
     service
-        .create(id, caller("phone", "create-3"))
+        .create(id, caller("phone", "create-3"), None)
         .await
         .unwrap();
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
@@ -479,13 +479,12 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider.clone())),
+            agents: only(Arc::new(Provider(provider.clone()))),
             storage,
             metadata: repository,
             creation_audit: audit.clone(),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -495,7 +494,11 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
     let caller_task = tokio::spawn({
         let service = service.clone();
         let id = id.clone();
-        async move { service.create(id, caller("panel", "caller-lost")).await }
+        async move {
+            service
+                .create(id, caller("panel", "caller-lost"), None)
+                .await
+        }
     });
     audit.started.notified().await;
     caller_task.abort();
@@ -526,6 +529,7 @@ async fn malformed_controls_do_not_open_a_dormant_owned_provider() {
             "panel".into(),
             "create".into(),
             1_700_000_000_123,
+            AgentId::Claude,
         )
         .unwrap(),
     );
@@ -575,7 +579,7 @@ async fn consumed_permission_failure_is_not_reoffered_on_the_immediate_read() {
     *provider.permission_gate.lock().unwrap() = Some(execution_gate);
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"))
+        .create(id.clone(), caller("panel", "create"), None)
         .await
         .unwrap();
     service
@@ -660,6 +664,7 @@ fn ownership_and_creation_context_are_domain_state() {
         "panel".into(),
         "create".into(),
         1_700_000_000_123,
+        AgentId::Claude,
     )
     .unwrap();
     assert!(record.allows(
@@ -684,6 +689,7 @@ fn ownership_and_creation_context_are_domain_state() {
         "\n".into(),
         "create".into(),
         1_700_000_000_123,
+        AgentId::Claude,
     )
     .is_err());
 }
@@ -692,8 +698,8 @@ async fn surfaces_share_one_agent_and_keep_original_creator() {
     let (service, provider, repository, _) = fixture(ConversationLimits::default());
     let id = id();
     let (a, b) = tokio::join!(
-        service.create(id.clone(), caller("panel", "original")),
-        service.create(id.clone(), caller("phone", "retry"))
+        service.create(id.clone(), caller("panel", "original"), None),
+        service.create(id.clone(), caller("phone", "retry"), None)
     );
     a.unwrap();
     b.unwrap();
@@ -724,7 +730,7 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
     });
     let id = id();
     service
-        .create(id.clone(), caller("panel", "original"))
+        .create(id.clone(), caller("panel", "original"), None)
         .await
         .unwrap();
     service.shutdown().await.unwrap();
@@ -733,13 +739,12 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
 
     let restarted = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider.clone())),
+            agents: only(Arc::new(Provider(provider.clone()))),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits {
             max_conversations: 1,
@@ -751,13 +756,13 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
     let mut foreign = caller("other-surface", "foreign-reopen");
     foreign.principal_id = PrincipalId::new("intruder").unwrap();
     assert!(matches!(
-        restarted.create(id.clone(), foreign).await,
+        restarted.create(id.clone(), foreign, None).await,
         Err(ConversationError::NotFound)
     ));
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
 
     restarted
-        .create(id, caller("phone", "owner-reopen"))
+        .create(id, caller("phone", "owner-reopen"), None)
         .await
         .unwrap();
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 2);
@@ -768,7 +773,7 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"))
+        .create(id.clone(), caller("panel", "create"), None)
         .await
         .unwrap();
     let (release, gate) = oneshot::channel();
@@ -842,7 +847,7 @@ async fn caller_loss_does_not_cancel_initialization() {
     let task = tokio::spawn({
         let service = service.clone();
         let id = id.clone();
-        async move { service.create(id, caller("panel", "create")).await }
+        async move { service.create(id, caller("panel", "create"), None).await }
     });
     provider.opening.notified().await;
     task.abort();
@@ -864,6 +869,7 @@ async fn first_read_caller_loss_cannot_leave_an_unstarted_shutdown_slot() {
             "panel".into(),
             "create".into(),
             1_700_000_000_123,
+            AgentId::Claude,
         )
         .unwrap(),
     );
@@ -910,13 +916,12 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider.clone())),
+            agents: only(Arc::new(Provider(provider.clone()))),
             storage: storage.clone(),
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -924,10 +929,15 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
     .unwrap();
     let id = id();
     assert!(matches!(
-        service.create(id.clone(), caller("panel", "create")).await,
+        service
+            .create(id.clone(), caller("panel", "create"), None)
+            .await,
         Err(ConversationError::Storage(StorageError::Io(_)))
     ));
-    service.create(id, caller("panel", "retry")).await.unwrap();
+    service
+        .create(id, caller("panel", "retry"), None)
+        .await
+        .unwrap();
     assert_eq!(storage.attempts.load(Ordering::SeqCst), 2);
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
     service.shutdown().await.unwrap();
@@ -966,13 +976,12 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider)),
+            agents: only(Arc::new(Provider(provider))),
             storage,
             metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -980,14 +989,18 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
     .unwrap();
     let first = id();
     service
-        .create(first.clone(), caller("panel", "first"))
+        .create(first.clone(), caller("panel", "first"), None)
         .await
         .unwrap();
     *repository.gate.lock().unwrap() = Some(gate);
     let second = id();
     let creating = tokio::spawn({
         let service = service.clone();
-        async move { service.create(second, caller("phone", "second")).await }
+        async move {
+            service
+                .create(second, caller("phone", "second"), None)
+                .await
+        }
     });
     repository.started.notified().await;
     tokio::time::timeout(
@@ -1027,13 +1040,12 @@ async fn resource_free_provider_failure_retires_slot_for_retry() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: provider.clone(),
+            agents: only(provider.clone()),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -1041,10 +1053,15 @@ async fn resource_free_provider_failure_retires_slot_for_retry() {
     .unwrap();
     let id = id();
     assert!(matches!(
-        service.create(id.clone(), caller("panel", "first")).await,
+        service
+            .create(id.clone(), caller("panel", "first"), None)
+            .await,
         Err(ConversationError::Agent(AgentError::Deadline))
     ));
-    service.create(id, caller("panel", "retry")).await.unwrap();
+    service
+        .create(id, caller("panel", "retry"), None)
+        .await
+        .unwrap();
     assert_eq!(provider.attempts.load(Ordering::SeqCst), 2);
     service.shutdown().await.unwrap();
 }
@@ -1075,6 +1092,25 @@ impl AgentProvider for UncertainOpenProvider {
 }
 /// Preparation the conversation must wait for, and which records whether the
 /// conversation reached the provider before that wait finished.
+/// One configured agent whose runtime something is preparing.
+fn prepared(
+    provider: Arc<dyn AgentProvider>,
+    readiness: Arc<dyn RuntimeReadiness>,
+) -> ConversationAgents {
+    ConversationAgents::new(
+        HashMap::from([(
+            AgentId::Claude,
+            ConversationAgent {
+                provider,
+                reserved_output_tokens: 4096,
+                readiness: Some(readiness),
+            },
+        )]),
+        AgentId::Claude,
+    )
+    .expect("one configured agent is its own default")
+}
+
 struct GatedReadiness {
     release: Mutex<Option<oneshot::Receiver<()>>>,
     waited: AtomicBool,
@@ -1103,13 +1139,12 @@ async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider(
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider.clone())),
+            agents: prepared(Arc::new(Provider(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: Some(readiness.clone()),
         },
         ConversationLimits::default(),
         None,
@@ -1119,7 +1154,7 @@ async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider(
     let creating = tokio::spawn({
         let service = service.clone();
         let id = id.clone();
-        async move { service.create(id, caller("panel", "first")).await }
+        async move { service.create(id, caller("panel", "first"), None).await }
     });
     // The conversation is held at the gate, so it has not launched a provider:
     // the preparation already in flight is the only launch.
@@ -1155,13 +1190,12 @@ async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparati
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider.clone())),
+            agents: prepared(Arc::new(Provider(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: Some(readiness.clone()),
         },
         ConversationLimits::default(),
         None,
@@ -1169,7 +1203,7 @@ async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparati
     .unwrap();
     let creating = tokio::spawn({
         let service = service.clone();
-        async move { service.create(id(), caller("panel", "first")).await }
+        async move { service.create(id(), caller("panel", "first"), None).await }
     });
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         while !readiness.waited.load(Ordering::SeqCst) {
@@ -1201,7 +1235,7 @@ async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparati
     // conversation this released can be opened again afterwards.
     *readiness.release.lock().unwrap() = None;
     service
-        .create(id(), caller("panel", "after-quit"))
+        .create(id(), caller("panel", "after-quit"), None)
         .await
         .unwrap();
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
@@ -1223,13 +1257,12 @@ async fn retirement_supersedes_a_conversation_waiting_for_runtime_preparation() 
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider.clone())),
+            agents: prepared(Arc::new(Provider(provider.clone())), readiness.clone()),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: Some(readiness.clone()),
         },
         ConversationLimits::default(),
         None,
@@ -1237,7 +1270,7 @@ async fn retirement_supersedes_a_conversation_waiting_for_runtime_preparation() 
     .unwrap();
     let creating = tokio::spawn({
         let service = service.clone();
-        async move { service.create(id(), caller("panel", "first")).await }
+        async move { service.create(id(), caller("panel", "first"), None).await }
     });
     tokio::time::timeout(std::time::Duration::from_secs(3), async {
         while !readiness.waited.load(Ordering::SeqCst) {
@@ -1299,13 +1332,12 @@ async fn a_startup_deadline_releases_its_slot_so_the_same_command_can_retry() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: provider.clone(),
+            agents: only(provider.clone()),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -1313,11 +1345,14 @@ async fn a_startup_deadline_releases_its_slot_so_the_same_command_can_retry() {
     .unwrap();
     let id = id();
     assert!(matches!(
-        service.create(id.clone(), caller("panel", "first")).await,
+        service.create(id.clone(), caller("panel", "first"), None).await,
         Err(ConversationError::Agent(AgentError::StartupDeadline(step)))
             if step.phase() == AgentStartupPhase::Session
     ));
-    service.create(id, caller("panel", "retry")).await.unwrap();
+    service
+        .create(id, caller("panel", "retry"), None)
+        .await
+        .unwrap();
     assert_eq!(provider.attempts.load(Ordering::SeqCst), 2);
     service.shutdown().await.unwrap();
 }
@@ -1352,13 +1387,12 @@ async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: provider.clone(),
+            agents: only(provider.clone()),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -1367,7 +1401,9 @@ async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
     let id = id();
     for action in ["first", "retry"] {
         assert!(matches!(
-            service.create(id.clone(), caller("panel", action)).await,
+            service
+                .create(id.clone(), caller("panel", action), None)
+                .await,
             Err(ConversationError::Agent(AgentError::StartupDeadline(_))),
         ));
     }
@@ -1383,13 +1419,12 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
     });
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: provider.clone(),
+            agents: only(provider.clone()),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -1398,7 +1433,7 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
     let id = id();
     for action in ["first", "retry"] {
         assert!(service
-            .create(id.clone(), caller("panel", action))
+            .create(id.clone(), caller("panel", action), None)
             .await
             .is_err());
     }
@@ -1413,14 +1448,14 @@ async fn rejected_capacity_does_not_write_metadata_even_with_concurrent_creates(
         ..ConversationLimits::default()
     });
     let (a, b) = tokio::join!(
-        service.create(id(), caller("panel", "a")),
-        service.create(id(), caller("phone", "b"))
+        service.create(id(), caller("panel", "a"), None),
+        service.create(id(), caller("phone", "b"), None)
     );
     assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
     assert_eq!(repository.records.lock().unwrap().len(), 1);
     assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
     assert!(matches!(
-        service.create(id(), caller("panel", "c")).await,
+        service.create(id(), caller("panel", "c"), None).await,
         Err(ConversationError::Capacity)
     ));
     assert_eq!(repository.records.lock().unwrap().len(), 1);
@@ -1431,7 +1466,7 @@ async fn restart_restores_saved_messages_without_replaying_input() {
     let (service, provider, repository, storage) = fixture(ConversationLimits::default());
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"))
+        .create(id.clone(), caller("panel", "create"), None)
         .await
         .unwrap();
     service
@@ -1452,13 +1487,12 @@ async fn restart_restores_saved_messages_without_replaying_input() {
     tokio::task::yield_now().await;
     let restored = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider.clone())),
+            agents: only(Arc::new(Provider(provider.clone()))),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -1489,13 +1523,12 @@ async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
     let (_, provider, repository, _) = fixture(ConversationLimits::default());
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider)),
+            agents: only(Arc::new(Provider(provider))),
             storage: Arc::new(PanickingStorage),
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -1504,7 +1537,7 @@ async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
     assert!(matches!(
         tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            service.create(id(), caller("panel", "create"))
+            service.create(id(), caller("panel", "create"), None)
         )
         .await
         .unwrap(),
@@ -1520,7 +1553,7 @@ async fn boundary_steering_can_be_removed_without_dispatch() {
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"))
+        .create(id.clone(), caller("panel", "create"), None)
         .await
         .unwrap();
     let (release, gate) = oneshot::channel();
@@ -1576,7 +1609,7 @@ async fn close_then_replay_does_not_reopen_or_dispatch_and_new_input_still_works
     let (service, provider, _, _) = fixture(ConversationLimits::default());
     let id = id();
     service
-        .create(id.clone(), caller("panel", "create"))
+        .create(id.clone(), caller("panel", "create"), None)
         .await
         .unwrap();
     service
@@ -1650,13 +1683,12 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
     let (_, provider, repository, _) = fixture(ConversationLimits::default());
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider)),
+            agents: only(Arc::new(Provider(provider))),
             storage: Arc::new(HostileStorage),
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: None,
         },
         ConversationLimits::default(),
         None,
@@ -1665,7 +1697,7 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
     assert!(matches!(
         tokio::time::timeout(
             std::time::Duration::from_secs(2),
-            service.create(id(), caller("panel", "create"))
+            service.create(id(), caller("panel", "create"), None)
         )
         .await
         .unwrap(),
@@ -1690,6 +1722,7 @@ async fn changed_configuration_retains_history_and_reports_exact_opening_failure
             "panel".into(),
             "create".into(),
             1_700_000_000_123,
+            AgentId::Claude,
         )
         .unwrap(),
     );
@@ -1730,13 +1763,13 @@ async fn desktop_quit_keeps_gateway_admission_open() {
     let (service, _, _, _) = fixture(ConversationLimits::default());
     let first = id();
     service
-        .create(first, caller("panel", "create-first"))
+        .create(first, caller("panel", "create-first"), None)
         .await
         .unwrap();
     service.stop_active_agents().await.unwrap();
     let next = id();
     service
-        .create(next.clone(), caller("panel", "create-next"))
+        .create(next.clone(), caller("panel", "create-next"), None)
         .await
         .unwrap();
     service
@@ -1751,5 +1784,696 @@ async fn desktop_quit_keeps_gateway_admission_open() {
         .await
         .unwrap();
     completed(&service, &next, 1).await;
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_default() {
+    // Two agents configured, the default being the one the conversation was not
+    // created on. What proves the record decided is which process was opened.
+    let claude = Arc::new(ProviderFactory::default());
+    let codex = Arc::new(ProviderFactory::default());
+    let repository = Arc::new(MemoryRepository::default());
+    let storage = Arc::new(InMemoryStorage::new());
+    // Claude is the default, so a creation naming nothing would go to it.
+    let both = || {
+        ConversationAgents::new(
+            HashMap::from([
+                (
+                    AgentId::Claude,
+                    ConversationAgent {
+                        provider: Arc::new(Provider(claude.clone())),
+                        reserved_output_tokens: 4096,
+                        readiness: None,
+                    },
+                ),
+                (
+                    AgentId::Codex,
+                    ConversationAgent {
+                        provider: Arc::new(Provider(codex.clone())),
+                        reserved_output_tokens: 4096,
+                        readiness: None,
+                    },
+                ),
+            ]),
+            AgentId::Claude,
+        )
+        .unwrap()
+    };
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: both(),
+            storage: storage.clone(),
+            metadata: repository.clone(),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            Some(RequestedAgent::Known(AgentId::Codex)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(codex.open_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(claude.open_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        repository.records.lock().unwrap()[&id].agent(),
+        AgentId::Codex
+    );
+
+    // Reopened after a restart, still on Codex, although a creation that names
+    // nothing would start on Claude.
+    service.shutdown().await.unwrap();
+    drop(service);
+    tokio::task::yield_now().await;
+    let restarted = ConversationService::new(
+        ConversationDependencies {
+            agents: both(),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    restarted
+        .create(id.clone(), caller("panel", "reopen"), None)
+        .await
+        .unwrap();
+    assert_eq!(codex.open_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(claude.open_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_storage() {
+    // The other side of the record deciding: an operator drops an agent from the
+    // configuration and restarts, and every conversation created on it is now
+    // unopenable. It must say so as a refusal nobody should retry, and it must
+    // not take the exclusive storage lease to find that out — the answer is the
+    // same on every attempt and leasing is what a reopen that could work does.
+    let codex = Arc::new(ProviderFactory::default());
+    let claude = Arc::new(ProviderFactory::default());
+    let repository = Arc::new(MemoryRepository::default());
+    let storage = Arc::new(InMemoryStorage::new());
+    let agent = |id, factory: &Arc<ProviderFactory>| {
+        (
+            id,
+            ConversationAgent {
+                provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+                reserved_output_tokens: 4096,
+                readiness: None,
+            },
+        )
+    };
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: ConversationAgents::new(
+                HashMap::from([
+                    agent(AgentId::Claude, &claude),
+                    agent(AgentId::Codex, &codex),
+                ]),
+                AgentId::Claude,
+            )
+            .unwrap(),
+            storage: storage.clone(),
+            metadata: repository.clone(),
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    service
+        .create(
+            id.clone(),
+            caller("panel", "create"),
+            Some(RequestedAgent::Known(AgentId::Codex)),
+        )
+        .await
+        .unwrap();
+    service.shutdown().await.unwrap();
+    drop(service);
+    tokio::task::yield_now().await;
+
+    // Restarted with Codex no longer configured at all.
+    let without_codex = ConversationService::new(
+        ConversationDependencies {
+            agents: ConversationAgents::new(
+                HashMap::from([agent(AgentId::Claude, &claude)]),
+                AgentId::Claude,
+            )
+            .unwrap(),
+            storage: storage.clone(),
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    assert!(matches!(
+        without_codex
+            .create(id.clone(), caller("panel", "reopen"), None)
+            .await,
+        Err(ConversationError::AgentNotConfigured)
+    ));
+    // Never opened on the agent that is still here, and never opened at all.
+    assert_eq!(claude.open_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(codex.open_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_was_given() {
+    // The same operator, one step further on. Every panel tab for the dropped
+    // agent is read once on reconnect, and each of those reads is refused
+    // instantly, having acquired nothing: no lease, no provider, nothing to
+    // clean up. A refusal like that must give its `max_conversations` slot
+    // back, or the panel's own reconnect exhausts the server — at the default
+    // limit, thirty-two dead tabs and no new conversation can be created on the
+    // agent that is still configured.
+    //
+    // "Do not retry this" and "this attempt still owns something" were one flag
+    // when that was true of every permanent failure. It is not true of this one.
+    let codex = Arc::new(ProviderFactory::default());
+    let claude = Arc::new(ProviderFactory::default());
+    let repository = Arc::new(MemoryRepository::default());
+    let storage = Arc::new(InMemoryStorage::new());
+    let agent = |id, factory: &Arc<ProviderFactory>| {
+        (
+            id,
+            ConversationAgent {
+                provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+                reserved_output_tokens: 4096,
+                readiness: None,
+            },
+        )
+    };
+    // One slot, so the leak is one refusal away rather than thirty-two.
+    let limits = ConversationLimits {
+        max_conversations: 1,
+        ..ConversationLimits::default()
+    };
+    let stranded = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    {
+        let service = ConversationService::new(
+            ConversationDependencies {
+                agents: ConversationAgents::new(
+                    HashMap::from([
+                        agent(AgentId::Claude, &claude),
+                        agent(AgentId::Codex, &codex),
+                    ]),
+                    AgentId::Claude,
+                )
+                .unwrap(),
+                storage: storage.clone(),
+                metadata: repository.clone(),
+                creation_audit: Arc::new(AcceptingCreationAudit),
+                attachments: None,
+                clock: Arc::new(TestClock),
+            },
+            limits,
+            None,
+        )
+        .unwrap();
+        service
+            .create(
+                stranded.clone(),
+                caller("panel", "create"),
+                Some(RequestedAgent::Known(AgentId::Codex)),
+            )
+            .await
+            .unwrap();
+        service.shutdown().await.unwrap();
+    }
+    tokio::task::yield_now().await;
+
+    let without_codex = ConversationService::new(
+        ConversationDependencies {
+            agents: ConversationAgents::new(
+                HashMap::from([agent(AgentId::Claude, &claude)]),
+                AgentId::Claude,
+            )
+            .unwrap(),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
+        limits,
+        None,
+    )
+    .unwrap();
+    assert!(matches!(
+        without_codex
+            .read(stranded.clone(), caller("panel", "reopen"))
+            .await,
+        Err(ConversationError::AgentNotConfigured)
+    ));
+    // Refused the same way however many times it is asked: the slot going back
+    // is not a retry reaching a different answer.
+    assert!(matches!(
+        without_codex
+            .read(stranded, caller("panel", "reopen"))
+            .await,
+        Err(ConversationError::AgentNotConfigured)
+    ));
+    // And the one slot is still free for the agent that is still here.
+    let fresh = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    assert!(
+        without_codex
+            .create(fresh, caller("panel", "create"), None)
+            .await
+            .is_ok(),
+        "a refusal that acquired nothing still held its slot",
+    );
+}
+
+#[tokio::test]
+async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_leased() {
+    // Held by someone else, this conversation's storage would answer `Busy` to
+    // anyone who opened it. So a refusal that still says `AgentNotConfigured` is
+    // proof the agent was settled first — and that a conversation no build here
+    // can open stops taking and dropping an exclusive lease on every attempt.
+    let claude = Arc::new(ProviderFactory::default());
+    let codex = Arc::new(ProviderFactory::default());
+    let repository = Arc::new(MemoryRepository::default());
+    let storage = Arc::new(InMemoryStorage::new());
+    let agent = |id, factory: &Arc<ProviderFactory>| {
+        (
+            id,
+            ConversationAgent {
+                provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+                reserved_output_tokens: 4096,
+                readiness: None,
+            },
+        )
+    };
+    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    {
+        let service = ConversationService::new(
+            ConversationDependencies {
+                agents: ConversationAgents::new(
+                    HashMap::from([
+                        agent(AgentId::Claude, &claude),
+                        agent(AgentId::Codex, &codex),
+                    ]),
+                    AgentId::Claude,
+                )
+                .unwrap(),
+                storage: storage.clone(),
+                metadata: repository.clone(),
+                creation_audit: Arc::new(AcceptingCreationAudit),
+                attachments: None,
+                clock: Arc::new(TestClock),
+            },
+            ConversationLimits::default(),
+            None,
+        )
+        .unwrap();
+        service
+            .create(
+                id.clone(),
+                caller("panel", "create"),
+                Some(RequestedAgent::Known(AgentId::Codex)),
+            )
+            .await
+            .unwrap();
+        service.shutdown().await.unwrap();
+    }
+    tokio::task::yield_now().await;
+
+    // Somebody else is holding this conversation's storage.
+    let held = storage
+        .open(SessionId::new(id.to_string()).unwrap())
+        .await
+        .unwrap();
+
+    let without_codex = ConversationService::new(
+        ConversationDependencies {
+            agents: ConversationAgents::new(
+                HashMap::from([agent(AgentId::Claude, &claude)]),
+                AgentId::Claude,
+            )
+            .unwrap(),
+            storage: storage.clone(),
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let refusal = without_codex
+        .create(id.clone(), caller("panel", "reopen"), None)
+        .await;
+    assert!(
+        matches!(refusal, Err(ConversationError::AgentNotConfigured)),
+        "the agent must be settled before the storage lease is asked for, got {refusal:?}"
+    );
+    drop(held);
+}
+
+#[tokio::test]
+async fn an_agent_this_server_cannot_start_is_refused_before_anything_is_written() {
+    let (service, provider, repository, _) = fixture(ConversationLimits::default());
+    let id = ConversationId::new(&uuid::Uuid::new_v4().to_string()).unwrap();
+    assert!(matches!(
+        service
+            .create(
+                id.clone(),
+                caller("panel", "create"),
+                Some(RequestedAgent::Known(AgentId::Codex))
+            )
+            .await,
+        Err(ConversationError::AgentNotConfigured)
+    ));
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+    assert!(!repository.records.lock().unwrap().contains_key(&id));
+}
+
+#[tokio::test]
+async fn reopening_is_never_refused_over_an_agent_that_conversation_does_not_need() {
+    // The panel sends the agent it remembers on every creation, reopens
+    // included. A conversation already on record runs on the agent it was
+    // created with, so a remembered choice this server can no longer start is
+    // nothing to do with it.
+    let (service, provider, _, _) = fixture(ConversationLimits::default());
+    let id = id();
+    service
+        .create(id.clone(), caller("panel", "create"), None)
+        .await
+        .unwrap();
+    service
+        .create(
+            id.clone(),
+            caller("panel", "reopen"),
+            Some(RequestedAgent::Known(AgentId::Codex)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_name_this_build_knows_nothing_about_refuses_a_creation_and_not_a_reopen() {
+    // The same rule one step further out. The host keeps whatever name setup
+    // wrote, on purpose — throwing away an unfamiliar one would throw away a
+    // choice somebody made — so a name from another build, or from one this
+    // machine was rolled back from, reaches every creation the panel sends.
+    // Refused where it was parsed, that failed every send, close, reorder and
+    // permission answer in every existing conversation, none of which needs the
+    // name at all.
+    let (service, provider, _, _) = fixture(ConversationLimits::default());
+    let existing = id();
+    let fresh = id();
+    service
+        .create(existing.clone(), caller("panel", "create"), None)
+        .await
+        .unwrap();
+    service
+        .create(
+            existing,
+            caller("panel", "reopen"),
+            Some(RequestedAgent::Unknown),
+        )
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+
+    // A conversation that does not exist yet has nothing else to be run on, so
+    // the name is refused there — and as the misspelling it is, not as a fact
+    // about what this installation has configured.
+    assert!(matches!(
+        service
+            .create(
+                fresh,
+                caller("panel", "create-unknown"),
+                Some(RequestedAgent::Unknown),
+            )
+            .await,
+        Err(ConversationError::InvalidInput)
+    ));
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_caller_context_too_damaged_to_record_is_refused_on_a_reopen_too() {
+    // A reopen builds no conversation — it writes this caller's surface and
+    // action into the reopen's own audit record instead. `ActionContext`
+    // refuses a blank and bounds the length; it allows control characters,
+    // which the conversation entity does not. So the same context was refused
+    // for a new conversation and accepted for a reopen, where it landed
+    // unvalidated in a durable `correlation_id`.
+    //
+    // Built on a recording audit rather than the fixture's accepting one,
+    // because the refusal is not the whole claim. A check that sat after the
+    // reopen's own `record` would still answer `InvalidInput`, and would have
+    // handed the damaged context to the audit port on the way — refused, and
+    // written down anyway. Only the port can say which happened.
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let audit = Arc::new(RecordingCreationAudit {
+        records: Mutex::new(Vec::new()),
+        reject: false,
+        started: Notify::new(),
+        gate: Mutex::new(None),
+    });
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: only(Arc::new(Provider(provider.clone()))),
+            storage,
+            metadata: repository,
+            creation_audit: audit.clone(),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let existing = id();
+    let fresh = id();
+    service
+        .create(existing.clone(), caller("panel", "create"), None)
+        .await
+        .unwrap();
+    // Whatever an accepted creation writes is the baseline; the claim is that a
+    // refused caller adds nothing to it.
+    let before = audit.records.lock().unwrap().len();
+    let wiped = "reopen\u{0}\u{1b}[2Jwiped";
+    assert!(matches!(
+        service.create(existing, caller("panel", wiped), None).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    // Refused before anything was reopened, so the record never existed to be
+    // written: the same answer this context gets for a new conversation.
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        service.create(fresh, caller("panel", wiped), None).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    // The evidence the finding was actually about: prior evidence unchanged,
+    // and nothing of this caller's written down. Only the first creation's
+    // record is there, and no correlation id carries what it sent.
+    {
+        let records = audit.records.lock().unwrap();
+        assert_eq!(
+            records.len(),
+            before,
+            "a refused caller reached the audit port"
+        );
+        assert!(
+            !records
+                .iter()
+                .any(|record| record.correlation_id.contains('\u{0}')),
+            "a control character was written into durable correlation evidence"
+        );
+    }
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_caller_context_too_damaged_to_record_is_refused_by_every_command() {
+    // The rule belongs to the attribution, not to one command. Every command on
+    // this service writes the caller's surface and action into a durable record
+    // — the execution audit carries the action as `requestId` — so a context
+    // that cannot be written down honestly is refused wherever it arrives, not
+    // only where a conversation happens to be constructed.
+    //
+    // `submit` and `close` stand for the rest: they share the one function that
+    // builds the attribution, so a command that stopped asking would have to
+    // stop calling it.
+    let (service, _, _, _) = fixture(ConversationLimits::default());
+    let id = id();
+    service
+        .create(id.clone(), caller("panel", "create"), None)
+        .await
+        .unwrap();
+    let wiped = "send\u{0}\u{1b}[2Jwiped";
+    assert!(matches!(
+        service
+            .submit(
+                id.clone(),
+                caller("panel", wiped),
+                "execution".into(),
+                "Hello".into(),
+                Vec::new(),
+                SubmissionMode::Queue,
+            )
+            .await,
+        Err(ConversationError::InvalidInput)
+    ));
+    assert!(matches!(
+        service.close(id.clone(), caller("panel", wiped)).await,
+        Err(ConversationError::InvalidInput)
+    ));
+    // And an ordinary context still gets through both, so the rule refuses the
+    // damage rather than the command.
+    service
+        .submit(
+            id.clone(),
+            caller("panel", "send"),
+            "execution".into(),
+            "Hello".into(),
+            Vec::new(),
+            SubmissionMode::Queue,
+        )
+        .await
+        .unwrap();
+    completed(&service, &id, 1).await;
+    service.close(id, caller("panel", "close")).await.unwrap();
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_default_agent_nobody_configured_is_refused_before_any_conversation_exists() {
+    // The pairing is the invariant, not either half of it. A default that is not
+    // among the configured agents would accept a creation naming nothing and
+    // then have nothing to open it with — at which point the conversation is
+    // already on disk.
+    let factory = Arc::new(ProviderFactory::default());
+    let configured = || {
+        HashMap::from([(
+            AgentId::Claude,
+            ConversationAgent {
+                provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+                reserved_output_tokens: 4096,
+                readiness: None,
+            },
+        )])
+    };
+    assert!(matches!(
+        ConversationAgents::new(configured(), AgentId::Codex),
+        Err(ConversationError::InvalidInput)
+    ));
+    assert!(ConversationAgents::new(configured(), AgentId::Claude).is_ok());
+
+    // An agent that reserves no output at all is refused for its own reason: a
+    // submission would be admitted against a budget with nothing left in it.
+    let nothing_reserved = HashMap::from([(
+        AgentId::Claude,
+        ConversationAgent {
+            provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
+            reserved_output_tokens: 0,
+            readiness: None,
+        },
+    )]);
+    assert!(matches!(
+        ConversationAgents::new(nothing_reserved, AgentId::Claude),
+        Err(ConversationError::InvalidInput)
+    ));
+}
+
+/// A conversation waits for its own agent's runtime to be prepared, and for no
+/// other agent's.
+///
+/// The scan being paid for belongs to the runtime this conversation is about to
+/// launch. One readiness for the whole server would have a Codex conversation
+/// park behind Claude's 199 MB binary being scanned — work it gains nothing
+/// from, on the very first message, which is the failure preparation exists to
+/// prevent rather than to relocate.
+#[tokio::test]
+async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
+    let (_, claude, repository, storage) = fixture(ConversationLimits::default());
+    let codex = Arc::new(ProviderFactory::default());
+    // Never released: Claude's runtime is still being scanned for the whole of
+    // this test.
+    let (_release, gate) = oneshot::channel();
+    let claude_readiness = Arc::new(GatedReadiness {
+        release: Mutex::new(Some(gate)),
+        waited: AtomicBool::new(false),
+    });
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: ConversationAgents::new(
+                HashMap::from([
+                    (
+                        AgentId::Claude,
+                        ConversationAgent {
+                            provider: Arc::new(Provider(claude.clone())),
+                            reserved_output_tokens: 4096,
+                            readiness: Some(claude_readiness.clone()),
+                        },
+                    ),
+                    (
+                        AgentId::Codex,
+                        ConversationAgent {
+                            provider: Arc::new(Provider(codex.clone())),
+                            reserved_output_tokens: 4096,
+                            readiness: None,
+                        },
+                    ),
+                ]),
+                AgentId::Claude,
+            )
+            .expect("the default is among the configured agents"),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+
+    // Well inside any budget, so passing is this returning rather than a
+    // timeout expiring and reporting success by another name.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        service.create(
+            id(),
+            caller("panel", "first"),
+            Some(RequestedAgent::Known(AgentId::Codex)),
+        ),
+    )
+    .await
+    .expect("a Codex conversation must not wait for Claude's runtime")
+    .expect("the conversation opens");
+    assert_eq!(codex.open_calls.load(Ordering::SeqCst), 1);
+    // Claude's preparation was neither joined nor started by a conversation
+    // that runs on something else.
+    assert!(!claude_readiness.waited.load(Ordering::SeqCst));
+    assert_eq!(claude.open_calls.load(Ordering::SeqCst), 0);
     service.shutdown().await.unwrap();
 }

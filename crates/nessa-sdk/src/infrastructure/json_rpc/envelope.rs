@@ -33,6 +33,15 @@ pub(crate) struct Envelope {
 #[derive(Deserialize)]
 pub(crate) struct RpcError {
     pub code: i64,
+    /// The provider's own explanation, kept for the log and nothing else.
+    ///
+    /// Never matched on: which error this is remains [`Self::code`]'s to say, so
+    /// a provider rewording its text cannot change how Nessa behaves. But the
+    /// code alone is what an operator is left holding, and a bare `-32000` does
+    /// not tell them Codex is simply not signed in. Read here so the adapter has
+    /// something to report; classification stays with the number.
+    #[serde(default)]
+    pub message: Option<String>,
 }
 pub(crate) fn parse(frame: &[u8]) -> Result<Envelope, AgentError> {
     let mut decoder = serde_json::Deserializer::from_slice(frame);

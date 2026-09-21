@@ -1,13 +1,52 @@
-//! Trusted local provider configuration. Requests never select processes or workspaces.
+//! Trusted local agent configuration.
+//!
+//! A request may name which configured agent it wants, and nothing more: the
+//! executable, its arguments, the workspace and the credentials are this file's
+//! to decide. So a request chooses between processes this machine already
+//! trusts; it never supplies one, and never selects a workspace.
+//!
+//! ```text
+//!   config.json "agents"
+//!     ├── shared:   catalog, workspace, mcpServers
+//!     ├── selected: which agent a caller that names none runs on
+//!     └── runtimes: { "<agent>": { command, args, model,
+//!                                   contextTokens, outputTokens,
+//!                                   toolsEnabled } , ... }
+//! ```
+//!
+//! What every agent on this machine shares is stated once: they work in the
+//! same workspace, against the same model catalog, and are offered the same
+//! Nessa MCP servers, because that is what makes them alternatives rather than
+//! separate installations.
+//!
+//! What differs is how the agent is started, which model it runs, the budget it
+//! runs in, and whether its own tools are on. Started is a command and its arguments rather than a
+//! runtime and an entry script: an agent that speaks ACP through a Node harness
+//! is `(node, [entry.js])` and one that speaks it natively is
+//! `(its own binary, ["acp"])`, and the second cannot be said at all in the
+//! narrower shape. `AcpConfig` has always taken a command and arguments; this
+//! is the configuration catching up with it.
+//!
+//! The agents are a map keyed by name rather than a field per agent, so a new
+//! agent is a new [`AgentId`] and nothing here. A name no adapter exists for is
+//! reported by name rather than ignored.
+//!
+//! An agent absent from the configuration is one this server cannot start.
+//! That is reported where it is asked about — setup says the agent is not set
+//! up here, which is a fact about this installation and not about the machine —
+//! rather than substituted for at startup.
+use crate::agents::domain::AgentId;
+use crate::conversation::application::ConversationAgent;
 use crate::core::RunError;
 use nessa_auth::application::ports::Clock;
 use nessa_sdk::{
-    application::agent_execution::providers::{AgentProvider, UserImageSource},
-    domain::model_metadata::entities::ModelMetadata,
+    application::agent_execution::providers::UserImageSource,
+    domain::model_metadata::{entities::ModelMetadata, value_objects::ImageInputLimits},
     infrastructure::{acp::sessions::StdioMcpServer, model_metadata_json::load_catalog},
 };
 use serde::Deserialize;
 use std::{
+    collections::{BTreeMap, HashMap},
     ffi::OsString,
     fs::File,
     path::{Path, PathBuf},
@@ -16,31 +55,176 @@ use std::{
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(super) struct AgentConfig {
+pub(super) struct AgentsConfig {
     pub catalog: PathBuf,
-    pub node: PathBuf,
-    pub acp_entry: PathBuf,
     pub workspace: PathBuf,
-    pub model: String,
-    #[serde(default)]
-    pub tools_enabled: bool,
     #[serde(default)]
     pub mcp_servers: Vec<StdioMcpServer>,
+    /// The agent a conversation runs on when nothing else names one.
+    ///
+    /// Left out where only one agent is configured, because there is nothing to
+    /// choose between; required where more than one is, because guessing which
+    /// of several configured agents the operator meant is not a default, it is
+    /// a coin toss with someone else's work on it.
+    #[serde(default)]
+    pub selected: Option<String>,
+    /// What this machine can start, by the name each agent is known by.
+    ///
+    /// Kept as written rather than as [`AgentId`] so an unfamiliar name
+    /// survives parsing and can be reported as the name the operator typed.
+    #[serde(default)]
+    pub runtimes: HashMap<String, AgentRuntime>,
+}
+
+/// How one agent is started, within the shared configuration above.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(super) struct AgentRuntime {
+    /// The executable this server runs for this agent.
+    pub command: PathBuf,
+    /// What that executable is handed. A Node harness takes its entry script; an
+    /// agent that speaks ACP itself takes its own subcommand.
+    #[serde(default)]
+    pub args: Vec<String>,
+    pub model: String,
     #[serde(default = "context_tokens")]
     pub context_tokens: u32,
     #[serde(default = "output_tokens")]
     pub output_tokens: u32,
+    /// Whether this agent runs its own tools.
+    ///
+    /// Per agent rather than shared because it is not a preference every agent
+    /// can be asked about the same way: Codex has no text-only mode and refuses
+    /// to be built without it, so one shared `false` — set by someone thinking
+    /// about Claude — would take the whole server down over an agent they were
+    /// not configuring.
+    ///
+    /// Stated rather than defaulted, for the same reason. `false` is the one
+    /// value Codex cannot start on, so a default would have reproduced exactly
+    /// that failure for anyone who simply left the field out — and reproduced it
+    /// as the whole gateway refusing to start, since every configured agent is
+    /// built. Omitting it now fails to parse, naming the field.
+    ///
+    /// Read only where a binding is built, which is Unix alone: the whole point
+    /// of the field is what it tells an agent's binding, and on a platform that
+    /// builds none there is no one to tell. It is still parsed and still
+    /// required there, because a configuration is either well-formed or it is
+    /// not, and that does not vary by host.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub tools_enabled: bool,
 }
-impl AgentConfig {
+
+impl AgentRuntime {
+    /// Every absolute path this server would hand the command.
+    ///
+    /// Exact rather than a guess about arguments: a path this server would pass
+    /// has to be on this machine for the launch to work, and an argument that is
+    /// not a path is the agent's own vocabulary — a subcommand or a flag — which
+    /// is nothing for this machine to be asked about.
+    pub fn paths(&self) -> Vec<PathBuf> {
+        self.args
+            .iter()
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .collect()
+    }
+}
+
+impl AgentsConfig {
+    /// Each configured agent, in the order [`AgentId::ALL`] lists them.
+    ///
+    /// Silent about a name no adapter exists for; [`Self::unknown`] is what
+    /// reports one, so that reading the configuration and refusing it stay
+    /// separate concerns.
+    pub fn agents(&self) -> Vec<(AgentId, &AgentRuntime)> {
+        AgentId::ALL
+            .iter()
+            .filter_map(|agent| self.runtime(*agent).map(|runtime| (*agent, runtime)))
+            .collect()
+    }
+
+    /// What this configuration says about one agent, or nothing when it says
+    /// nothing about it.
+    pub fn runtime(&self, agent: AgentId) -> Option<&AgentRuntime> {
+        self.runtimes.get(agent.name())
+    }
+
+    /// The first configured name this build has no adapter for, if any.
+    ///
+    /// Reported rather than skipped: a typo under `runtimes` would otherwise be
+    /// an agent silently missing from setup, which reads as an agent that is not
+    /// installed on a machine where it is.
+    pub fn unknown(&self) -> Option<&str> {
+        let mut unknown: Vec<&str> = self
+            .runtimes
+            .keys()
+            .map(String::as_str)
+            .filter(|name| AgentId::parse(name).is_none())
+            .collect();
+        // The map has no order of its own, so the same configuration must not
+        // name a different one of its mistakes on each startup.
+        unknown.sort_unstable();
+        unknown.into_iter().next()
+    }
+
+    /// The agent a caller that names none runs on.
+    ///
+    /// # Errors
+    /// Returns [`RunError::Agent`] for a name no adapter exists for, a name with
+    /// no configuration under it, no agents at all, or several agents with no
+    /// choice stated between them.
+    pub fn selected(&self) -> Result<AgentId, RunError> {
+        if let Some(name) = self.unknown() {
+            return Err(RunError::Agent(format!(
+                "configured agent \"{name}\" has no adapter in Nessa"
+            )));
+        }
+        let configured = self.agents();
+        if let Some(name) = &self.selected {
+            let agent = AgentId::parse(name).ok_or_else(|| {
+                RunError::Agent(format!("selected agent \"{name}\" has no adapter in Nessa"))
+            })?;
+            if self.runtime(agent).is_none() {
+                return Err(RunError::Agent(format!(
+                    "selected agent \"{name}\" has no configuration under \"runtimes\""
+                )));
+            }
+            return Ok(agent);
+        }
+        match configured.as_slice() {
+            [(agent, _)] => Ok(*agent),
+            [] => Err(RunError::Agent(
+                "configure at least one agent under \"agents.runtimes\"".into(),
+            )),
+            _ => Err(RunError::Agent(
+                "several agents are configured; name one in \"selected\"".into(),
+            )),
+        }
+    }
+
     fn validate(&self) -> Result<(), RunError> {
-        if [&self.catalog, &self.node, &self.acp_entry, &self.workspace]
+        self.selected()?;
+        if [&self.catalog, &self.workspace]
             .iter()
             .any(|path| !path.is_absolute())
-            || self.model.trim().is_empty()
-            || self.output_tokens == 0
-            || self.context_tokens <= self.output_tokens
         {
-            return Err(RunError::Agent("agent paths must be absolute, model nonempty, and token limits positive with room for input".into()));
+            return Err(RunError::Agent("agent paths must be absolute".into()));
+        }
+        for (agent, runtime) in self.agents() {
+            // Only the command is required to be absolute. A relative argument
+            // is not a path this server resolves at all — it is the agent's own
+            // vocabulary, passed through untouched — so there is nothing here to
+            // reject it for.
+            if !runtime.command.is_absolute()
+                || runtime.model.trim().is_empty()
+                || runtime.output_tokens == 0
+                || runtime.context_tokens <= runtime.output_tokens
+            {
+                return Err(RunError::Agent(format!(
+                    "{}: command must be absolute, model nonempty, and token limits positive with room for input",
+                    agent.name()
+                )));
+            }
         }
         Ok(())
     }
@@ -58,9 +242,6 @@ impl AgentConfig {
 ///
 /// A developer loop has no host and no such variable, and there the process
 /// `PATH` *is* the developer's own shell path, which is the right answer.
-// Only a Unix build supervises an agent process; the rule is still decided and
-// tested here rather than inside that target's branch.
-#[cfg_attr(not(unix), allow(dead_code))]
 fn agent_search_path(resolved: Option<OsString>, inherited: Option<OsString>) -> Option<OsString> {
     resolved
         .filter(|path| !path.is_empty())
@@ -75,66 +256,260 @@ fn output_tokens() -> u32 {
     4096
 }
 
-/// The selected model as the catalog records it. Read once: the provider is
-/// built for it, and uploaded images are fitted to its image limits.
-pub(super) fn model(config: &AgentConfig) -> Result<ModelMetadata, RunError> {
+/// The environment every agent process inherits, beyond its credentials.
+///
+/// `env_clear` is what the bindings launch with, so anything an agent needs
+/// has to be named. The vendor-specific entries are each agent's own
+/// directory variable: naming both for both agents would be shorter and
+/// would also hand each agent a pointer into the other's configuration.
+///
+/// Nothing here tells an agent *how* to sign in. Codex's adapter will take a
+/// `DEFAULT_AUTH_REQUEST` and sign itself in from the environment key at
+/// startup, which makes an environment-only key work — and does it by writing
+/// that key, in plaintext, into the user's own `auth.json` under `CODEX_HOME`,
+/// where it then outlives the variable and is used in preference to it. A
+/// gateway starting an agent must not move the operator's credential onto the
+/// user's disk, so it is not asked for. Setting
+/// `cli_auth_credentials_store = "ephemeral"` does not avoid the write, which
+/// was checked against the pinned adapter rather than assumed.
+fn process_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
+    // `PATH` is the one entry that is not simply inherited: under launchd this
+    // process's own `PATH` is launchd's, not the user's, and an agent given it
+    // cannot find the tools every terminal on that machine can.
+    // `agent_search_path` decides which of the two is handed over; this reads
+    // the two it decides between, and nothing else here knows the rule.
+    inherited_environment(
+        agent,
+        agent_search_path(
+            std::env::var_os("NESSA_AGENT_PATH"),
+            std::env::var_os("PATH"),
+        ),
+    )
+}
+
+/// `process_environment` with the search path already decided, so what the
+/// agent is actually launched with can be read back without writing to this
+/// process's own environment.
+fn inherited_environment(agent: AgentId, path: Option<OsString>) -> BTreeMap<OsString, OsString> {
+    let mut environment = BTreeMap::new();
+    let vendor = match agent {
+        AgentId::Claude => "CLAUDE_CONFIG_DIR",
+        AgentId::Codex => "CODEX_HOME",
+    };
+    for key in ["HOME", "USER", "LOGNAME", "TMPDIR", vendor] {
+        if let Some(value) = std::env::var_os(key) {
+            environment.insert(key.into(), value);
+        }
+    }
+    if let Some(path) = path {
+        environment.insert("PATH".into(), path);
+    }
+    environment
+}
+
+/// The sign-in this agent is started with, read from this server's own
+/// environment. Named per agent so neither is handed the other's key.
+fn credential_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
+    let keys: &[&str] = match agent {
+        AgentId::Claude => &["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+        AgentId::Codex => &["CODEX_API_KEY", "OPENAI_API_KEY"],
+    };
+    let mut environment = BTreeMap::new();
+    for key in keys {
+        if let Some(value) = std::env::var_os(key) {
+            environment.insert((*key).into(), value);
+        }
+    }
+    environment
+}
+
+/// Exactly what a launched agent's environment is, for anything that has to
+/// ask about the agent rather than start it.
+///
+/// The readiness probe runs the agent's own tool to ask whether it is signed
+/// in, and an answer from a different environment is an answer about a
+/// different installation: `CODEX_HOME` decides which account it reads, and the
+/// session-bus variables decide whether a keyring can be opened at all.
+/// Inheriting this server's whole environment would let the probe find a
+/// sign-in the launch then cannot use.
+pub(super) fn launch_environment(agent: AgentId) -> BTreeMap<OsString, OsString> {
+    let mut environment = process_environment(agent);
+    environment.extend(credential_environment(agent));
+    environment
+}
+
+/// Which model catalog entries an agent's harness is allowed to run.
+///
+/// Not a preference: each harness speaks to one vendor's API and is signed in
+/// to it, so a catalog entry from another vendor is a model that agent cannot
+/// reach, and saying so at startup beats a provider refusing every prompt.
+fn catalog_provider(agent: AgentId) -> &'static str {
+    match agent {
+        AgentId::Claude => "anthropic",
+        AgentId::Codex => "openai",
+    }
+}
+
+/// The model this agent runs, as the catalog records it.
+///
+/// Read here rather than inside the provider because two things need it: the
+/// provider is built for it, and uploaded images are fitted to the image
+/// limits it publishes.
+pub(super) fn model(
+    agent: AgentId,
+    config: &AgentsConfig,
+    runtime: &AgentRuntime,
+) -> Result<ModelMetadata, RunError> {
     ModelMetadata::try_from(
         load_catalog(
             File::open(&config.catalog)
                 .map_err(|_| RunError::Agent("cannot read model catalog".into()))?,
         )
         .map_err(|e| RunError::Agent(e.to_string()))?
-        .select("anthropic", &config.model)
+        .select(catalog_provider(agent), &runtime.model)
         .map_err(|e| RunError::Agent(e.to_string()))?,
     )
     .map_err(|e| RunError::Agent(e.to_string()))
 }
 
+/// The image limits every configured agent can meet.
+///
+/// Uploads are kept once and shared: one attachment store, holding images for
+/// conversations that each run on their own agent. So an image is fitted to
+/// what the strictest configured model accepts rather than to the selected
+/// one's — fitting it to one agent's model and sending it to another's is how
+/// an image that uploaded cleanly comes back refused at the moment it is sent,
+/// which is the one place there is nothing left to do about it.
+///
+/// `None` is a gateway that keeps no images: either no configured model
+/// publishes image input, or the models between them share no encoding, and in
+/// both cases there is no image this gateway could store and then send.
+pub(super) fn image_limits(config: &AgentsConfig) -> Result<Option<ImageInputLimits>, RunError> {
+    let mut strictest: Option<ImageInputLimits> = None;
+    for (agent, runtime) in config.agents() {
+        let Some(limits) = model(agent, config, runtime)?.image_input().cloned() else {
+            // A model that takes no images cannot be met by any image at all.
+            return Ok(None);
+        };
+        strictest = Some(match strictest {
+            None => limits,
+            Some(held) => match narrower(&held, &limits) {
+                Some(both) => both,
+                // No encoding both accept, so nothing is storable for both.
+                None => return Ok(None),
+            },
+        });
+    }
+    Ok(strictest)
+}
+
+/// The limits an image has to meet to satisfy both models.
+///
+/// Every figure is the smaller of the two, and the encodings are those both
+/// accept, in the first's published order. `None` when that leaves no encoding.
+/// Taking the smaller of each edge cannot break the rule that neither smaller
+/// edge exceeds the maximum: each model already satisfies it, so the smallest
+/// maximum is at least its own model's smaller edges, and so at least the
+/// smallest of them.
+fn narrower(held: &ImageInputLimits, other: &ImageInputLimits) -> Option<ImageInputLimits> {
+    let media_types: Vec<_> = held
+        .media_types()
+        .iter()
+        .filter(|media_type| other.media_types().contains(media_type))
+        .copied()
+        .collect();
+    if media_types.is_empty() {
+        return None;
+    }
+    ImageInputLimits::new(
+        media_types,
+        held.max_encoded_bytes().min(other.max_encoded_bytes()),
+        held.max_edge_px().min(other.max_edge_px()),
+        held.many_images_max_edge_px()
+            .min(other.many_images_max_edge_px()),
+        held.native_long_edge_px().min(other.native_long_edge_px()),
+    )
+    .ok()
+}
+
+/// Build a provider for every configured agent.
+///
+/// All of them, not only the selected one: a conversation records the agent it
+/// was created on and is reopened on that same agent afterwards, so a server
+/// that had only built the selected one could not reopen the conversations
+/// already on disk.
 #[cfg(unix)]
-pub(super) fn provider(
-    config: &AgentConfig,
-    model: &ModelMetadata,
+pub(super) fn providers(
+    config: &AgentsConfig,
     directory: &Path,
     clock: Arc<dyn Clock>,
     images: Arc<dyn UserImageSource>,
-) -> Result<Arc<dyn AgentProvider>, RunError> {
+) -> Result<HashMap<AgentId, ConversationAgent>, RunError> {
     config.validate()?;
-    build::provider(config, model, directory, clock, images)
+    let mut agents = HashMap::new();
+    for (agent, runtime) in config.agents() {
+        agents.insert(
+            agent,
+            ConversationAgent {
+                // Every agent is given the source, not only the one whose
+                // profile is known to use it: the runtime sends an image only
+                // to an agent that advertised `promptCapabilities.image`, so
+                // an agent that takes none is offered none without this having
+                // to know which those are.
+                provider: build::provider(
+                    agent,
+                    config,
+                    runtime,
+                    directory,
+                    clock.clone(),
+                    images.clone(),
+                )?,
+                reserved_output_tokens: runtime.output_tokens,
+                // Filled in by whoever has somewhere to keep warm-up records.
+                // This builds providers and knows nothing about the durable
+                // directories a warm-up writes to.
+                readiness: None,
+            },
+        );
+    }
+    Ok(agents)
 }
 #[cfg(not(unix))]
-pub(super) fn provider(
-    config: &AgentConfig,
-    _: &ModelMetadata,
+pub(super) fn providers(
+    config: &AgentsConfig,
     _: &Path,
     _: Arc<dyn Clock>,
     _: Arc<dyn UserImageSource>,
-) -> Result<Arc<dyn AgentProvider>, RunError> {
+) -> Result<HashMap<AgentId, ConversationAgent>, RunError> {
     config.validate()?;
-    let profile = if config.tools_enabled {
-        "Claude ACP with native and MCP tools"
-    } else {
-        "Claude ACP"
-    };
-    Err(RunError::Agent(format!(
-        "{profile} requires Unix process supervision"
-    )))
+    Err(RunError::Agent(
+        "ACP agents require Unix process supervision".into(),
+    ))
 }
 #[cfg(unix)]
 mod build {
     use super::super::agent_budgets as budgets;
-    use super::{AgentConfig, ModelMetadata, RunError};
+    use super::{AgentId, AgentRuntime, AgentsConfig, RunError};
     use crate::conversation::infrastructure::DurableExecutionAudit;
     use nessa_auth::application::ports::Clock;
     use nessa_sdk::{
-        application::agent_execution::providers::{AgentProvider, UserImageSource},
+        application::agent_execution::{
+            agents::AgentError,
+            providers::{AgentProvider, UserImageSource},
+        },
         domain::{
             agent_execution::{
                 permissions::PermissionOfferPolicy,
-                prompts::{PromptSource, PromptSourceKind, SystemPromptBuilder, UserMessage},
+                prompts::{
+                    PromptSource, PromptSourceKind, SystemPrompt, SystemPromptBuilder, UserMessage,
+                },
             },
             common::value_objects::TokenLimits,
         },
-        infrastructure::{acp::sessions::AcpConfig, claude_acp::sessions::ClaudeAcpProvider},
+        infrastructure::{
+            acp::sessions::AcpConfig, claude_acp::sessions::ClaudeAcpProvider,
+            codex_acp::sessions::CodexAcpProvider,
+        },
     };
     use std::{
         collections::BTreeMap,
@@ -160,27 +535,44 @@ mod build {
     /// An agent answers in text, so it keeps the mebibyte it had before images.
     const MAX_INCOMING_FRAME_BYTES: usize = 1024 * 1024;
 
+    /// Nessa's own instructions, attributed to Nessa rather than to the agent.
+    ///
+    /// The same text for either agent: it describes what Nessa is and how its
+    /// tools are reached, and none of that changes with the harness underneath.
+    fn system_prompt() -> Result<SystemPrompt, RunError> {
+        SystemPromptBuilder::new()
+            .text(
+                PromptSource::new(PromptSourceKind::Core, "nessa/gateway")
+                    .map_err(|e| RunError::Agent(e.to_string()))?,
+                "You are Nessa, a helpful assistant. Follow the user's request. Use your native tools for file operations and web research. All Nessa tools are provided through MCP. For shell commands use the Nessa MCP shell tool, which tracks execution through Shepherd; never substitute an unmanaged shell path. Report tool failures accurately.",
+            )
+            .build()
+            .map_err(|e| RunError::Agent(e.to_string()))
+    }
+
     /// The launch configuration composition injects, separated from resolving
     /// what goes into it so a test can read back the values actually used.
-    /// Everything here is a decision; nothing here reads the filesystem.
+    /// Everything here is a decision; nothing here reads the filesystem or this
+    /// process's own environment.
     ///
     /// `images` is the one dependency rather than a decision: the source a
     /// binding reads a message's uploads from, and `None` is a binding that
     /// sends none.
     pub(super) fn launch_configuration(
-        config: &AgentConfig,
+        config: &AgentsConfig,
+        runtime: &AgentRuntime,
         workspace: PathBuf,
         environment: BTreeMap<OsString, OsString>,
         credential_environment: BTreeMap<OsString, OsString>,
         images: Option<Arc<dyn UserImageSource>>,
     ) -> AcpConfig {
         AcpConfig {
-            executable: config.node.clone(),
-            arguments: vec![config.acp_entry.clone().into_os_string()],
+            executable: runtime.command.clone(),
+            arguments: runtime.args.iter().map(Into::into).collect(),
             environment,
             credential_environment,
             workspace,
-            tools_enabled: config.tools_enabled,
+            tools_enabled: runtime.tools_enabled,
             mcp_servers: config.mcp_servers.clone(),
             permissions: PermissionOfferPolicy::once_only(),
             // All four from protocol/defaults/agent-startup-budgets.json,
@@ -189,6 +581,10 @@ mod build {
             // Spawning is the operating system's work — a runtime staged by a
             // fresh install is scanned on its first execution — so it has its
             // own, far larger budget than protocol work.
+            //
+            // One table for every agent, because a budget here is the user's
+            // patience with a cold runtime rather than anything a vendor
+            // decides.
             launch_timeout: budgets::launch_timeout(),
             startup_timeout: budgets::startup_timeout(),
             execution_timeout: None,
@@ -202,74 +598,55 @@ mod build {
     }
 
     pub(super) fn provider(
-        config: &AgentConfig,
-        model: &ModelMetadata,
+        agent: AgentId,
+        config: &AgentsConfig,
+        runtime: &AgentRuntime,
         directory: &Path,
         clock: Arc<dyn Clock>,
         images: Arc<dyn UserImageSource>,
     ) -> Result<Arc<dyn AgentProvider>, RunError> {
         let invalid = |error| RunError::Agent(format!("{error}"));
+        let model = super::model(agent, config, runtime)?;
         let workspace = config
             .workspace
             .canonicalize()
             .map_err(|_| RunError::Agent("workspace must exist".into()))?;
         if !workspace.is_dir()
-            || !config.node.is_absolute()
-            || !config.acp_entry.is_absolute()
-            || !config.node.is_file()
-            || !config.acp_entry.is_file()
+            || !runtime.command.is_file()
+            || runtime.paths().iter().any(|path| !path.exists())
         {
-            return Err(RunError::Agent(
-                "node and acpEntry must be existing absolute files; workspace must be a directory"
-                    .into(),
-            ));
+            return Err(RunError::Agent(format!(
+                "{}: its command must be an existing file and every absolute path it is given must exist; workspace must be a directory",
+                agent.name()
+            )));
         }
-        let limits = TokenLimits::new(config.context_tokens, config.output_tokens)
+        let limits = TokenLimits::new(runtime.context_tokens, runtime.output_tokens)
             .map_err(|e| RunError::Agent(e.to_string()))?;
-        let mut environment = BTreeMap::new();
-        for key in ["HOME", "USER", "LOGNAME", "TMPDIR", "CLAUDE_CONFIG_DIR"] {
-            if let Some(value) = std::env::var_os(key) {
-                environment.insert(key.into(), value);
-            }
-        }
-        if let Some(path) = super::agent_search_path(
-            std::env::var_os("NESSA_AGENT_PATH"),
-            std::env::var_os("PATH"),
-        ) {
-            environment.insert("PATH".into(), path);
-        }
-        let mut credential_environment = BTreeMap::new();
-        for key in ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"] {
-            if let Some(value) = std::env::var_os(key) {
-                credential_environment.insert(key.into(), value);
-            }
-        }
         let audit =
             Arc::new(DurableExecutionAudit::new(directory.join("audit"), clock).map_err(invalid)?);
-        let provider = ClaudeAcpProvider::new(
-            launch_configuration(
-                config,
-                workspace,
-                environment,
-                credential_environment,
-                Some(images),
-            ),
-            model,
-            limits,
-            audit,
-        )
-        .map_err(|e| RunError::Agent(e.to_string()))?
-        .with_system_prompt(
-            SystemPromptBuilder::new()
-                .text(
-                    PromptSource::new(PromptSourceKind::Core, "nessa/gateway")
-                        .map_err(|e| RunError::Agent(e.to_string()))?,
-                    "You are Nessa, a helpful assistant. Follow the user's request. Use your native tools for file operations and web research. All Nessa tools are provided through MCP. For shell commands use the Nessa MCP shell tool, which tracks execution through Shepherd; never substitute an unmanaged shell path. Report tool failures accurately.",
-                )
-                .build()
-                .map_err(|e| RunError::Agent(e.to_string()))?,
+        let acp = launch_configuration(
+            config,
+            runtime,
+            workspace,
+            super::process_environment(agent),
+            super::credential_environment(agent),
+            Some(images),
         );
-        Ok(Arc::new(provider))
+        let prompt = system_prompt()?;
+        let failed = |e: AgentError| RunError::Agent(format!("{}: {e}", agent.name()));
+        let provider: Arc<dyn AgentProvider> = match agent {
+            AgentId::Claude => Arc::new(
+                ClaudeAcpProvider::new(acp, &model, limits, audit)
+                    .map_err(failed)?
+                    .with_system_prompt(prompt),
+            ),
+            AgentId::Codex => Arc::new(
+                CodexAcpProvider::new(acp, &model, limits, audit)
+                    .map_err(failed)?
+                    .with_system_prompt(prompt),
+            ),
+        };
+        Ok(provider)
     }
 }
 

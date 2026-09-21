@@ -1,9 +1,8 @@
 //! The gateway log must describe the opening that actually failed.
-use super::{
-    opening_failure_report, report_opening_failure, AgentError, ConversationId, StorageError,
-};
-use nessa_sdk::application::agent_execution::agents::{
-    AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+use super::{opening_failure_report, report_opening_failure, AgentError, ConversationId};
+use nessa_sdk::application::agent_execution::{
+    agents::{AgentStartupContext, AgentStartupPhase, AgentStartupStep},
+    sessions::StorageError,
 };
 use std::sync::{Arc, Mutex, PoisonError};
 

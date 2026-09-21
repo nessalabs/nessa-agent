@@ -78,10 +78,12 @@ export interface Onboarding {
  * Finishing setup is recorded in the state and nowhere else. Persisting it with
  * the host — so a relaunch opens straight into the panel — belongs to whoever
  * hands over to the panel, because it must not outrun a handoff that fails.
- * Only that one fact is ever kept: the chosen agent still lives in memory,
- * because no provider is configured against it and nothing reads it back.
- * Connecting the choice to a gateway is a separate step; keeping it out means
- * this hook cannot imply an agent is ready to run.
+ * The same is true of the chosen agent, which this hook also only holds: it
+ * decides which agent every conversation runs on, and it is carried out of here
+ * by the handover — to the host on the desktop, and to the panel's own
+ * dependencies on a surface that has no host. Keeping the writing out means
+ * this hook cannot imply a choice was kept when the handoff it travels with
+ * failed.
  *
  * The summon shortcut is read from the host's own cache, falling back to the
  * bundled defaults the way the rest of the panel does, so setup teaches the

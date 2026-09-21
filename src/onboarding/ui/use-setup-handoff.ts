@@ -2,6 +2,7 @@ import * as React from "react"
 import {
   closeSetupWindow,
   finishSetupWindow,
+  retrySetupRecord,
   revealSetupWindow,
   type SetupHandoff,
 } from "../../host"
@@ -25,6 +26,8 @@ export interface SetupHandoffCoordination {
   dialog: React.RefObject<HTMLDivElement | null>
   /** Ask for the handoff again, from the beginning. */
   retry: () => void
+  /** Ask for the write alone again, after this machine refused it. */
+  saveAgain: () => void
   /** Close this window without the panel. */
   close: () => void
 }
@@ -45,11 +48,15 @@ export interface SetupHandoffCoordination {
  *
  * @param setupActive Whether setup is still on screen.
  * @param completed Whether setup was finished rather than left. The one fact
- *   the host cannot know, and the only thing the handoff carries.
+ *   the host cannot know, and the first of the two things the handoff carries.
+ * @param agent The agent setup finished on, when it finished on one. The
+ *   second, and absent whenever `completed` is false: a choice made on the way
+ *   out of setup is not a decision, so there is nothing for the host to record.
  */
 export function useSetupHandoff(
   setupActive: boolean,
   completed: boolean,
+  agent?: string,
 ): SetupHandoffCoordination {
   const [state, record] = React.useReducer(applySetupHandoff, noSetupHandoff)
   const dialog = React.useRef<HTMLDivElement>(null)
@@ -82,9 +89,10 @@ export function useSetupHandoff(
   // This sequenced them itself until a completion write issued after an awaited
   // close started losing to the teardown it had just asked for.
   //
-  // What travels is the one fact the host cannot know: whether setup was
-  // finished or left. Leaving stays free to change its mind, so only a finish
-  // is written off; the host will not record it unless the panel came up first.
+  // What travels is what the host cannot know: whether setup was finished or
+  // left, and the agent it was finished on. Leaving stays free to change its
+  // mind, so only a finish is written off; the host will not record it unless
+  // the panel came up first.
   React.useEffect(() => {
     if (!shouldHandOver(state, setupActive) || !gate.claim()) return
     // The attempt this answer belongs to. `finishSetupWindow` cannot be
@@ -97,10 +105,15 @@ export function useSetupHandoff(
       gate.release()
       record({ type: "settled", attempt, outcome })
     }
-    void finishSetupWindow(completed)
-      .then(settle)
-      .catch((cause: unknown) => settle(handoffRejection(cause)))
-  }, [state, setupActive, completed, gate])
+    // Which of the two the attempt is for is the reducer's to say, because it
+    // is decided by the button that was pressed and has to survive the
+    // re-render that button causes. See `SetupHandoffState.resume`.
+    const call =
+      state.resume === "record"
+        ? retrySetupRecord(agent)
+        : finishSetupWindow(completed, agent)
+    void call.then(settle).catch((cause: unknown) => settle(handoffRejection(cause)))
+  }, [state, setupActive, completed, agent, gate])
 
   // What the window has to show for the handoff it got, if anything. Kept by
   // the handoff rather than recomputed every render, so a failed close — which
@@ -120,11 +133,15 @@ export function useSetupHandoff(
   // answered released the gate, so there is nothing to release anyway.
   const retry = React.useCallback(() => record({ type: "retry" }), [])
 
+  // Saving again is the same fresh attempt, pointed at the write alone. Only
+  // reachable from the screen a refused write leaves, where the panel is up.
+  const saveAgain = React.useCallback(() => record({ type: "save-again" }), [])
+
   // Closing without the panel. Every way this can fail is a value rather than a
   // rejection, so the screen can say what happened and keep its buttons.
   const close = React.useCallback(() => {
     void closeSetupWindow().then((close) => record({ type: "closed", close }))
   }, [])
 
-  return { recovery, closeFailed: state.closeFailed, dialog, retry, close }
+  return { recovery, closeFailed: state.closeFailed, dialog, retry, saveAgain, close }
 }

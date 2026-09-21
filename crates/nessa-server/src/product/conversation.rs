@@ -12,8 +12,11 @@ use super::{
     state::ProductRouteState,
 };
 use crate::{
+    agents::domain::AgentId,
     conversation::{
-        application::{ConversationCaller, ConversationError, SubmissionMode, SubmittedImage},
+        application::{
+            ConversationCaller, ConversationError, RequestedAgent, SubmissionMode, SubmittedImage,
+        },
         domain::ConversationId,
     },
     protocol::{OutgoingMessage, RequestFrame},
@@ -29,10 +32,17 @@ pub(super) async fn dispatch(
     session: &AuthenticatedSession,
     frame: RequestFrame,
 ) -> OutgoingMessage {
+    // This build runs no conversations at all, which is not the same fact as a
+    // caller naming an agent this one is not configured for. Sharing a code
+    // between them made the panel tell someone with a working Claude that the
+    // gateway has no agent configured.
     let Some(service) = state.conversations.as_ref() else {
+        // Not `agent_not_configured`: this gateway runs no conversations at
+        // all, and telling a user with a working agent to go configure one
+        // sends them to change something that was never the problem.
         return failure(
             &frame.id,
-            ConversationErrorCode::AgentNotConfigured.as_str(),
+            ConversationErrorCode::ConversationsNotConfigured.as_str(),
         );
     };
     macro_rules! params {
@@ -60,6 +70,7 @@ pub(super) async fn dispatch(
                     .create(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id),
+                        requested_agent(params.agent.as_deref()),
                     )
                     .await?;
                 Ok(success(
@@ -244,6 +255,8 @@ fn error_code(error: &ConversationError) -> ConversationErrorCode {
         // stays in the typed error and the log, not in a second wire code.
         ConversationError::CloseIncomplete { agent, .. } => error_code(agent),
         ConversationError::NotFound => ConversationErrorCode::ConversationNotFound,
+        ConversationError::AgentNotConfigured => ConversationErrorCode::AgentNotConfigured,
+        ConversationError::AgentUnsupported => ConversationErrorCode::AgentUnsupported,
         ConversationError::Capacity => ConversationErrorCode::ConversationCapacity,
         ConversationError::Unavailable
         | ConversationError::Retirement(_)
@@ -293,6 +306,20 @@ fn error_code(error: &ConversationError) -> ConversationErrorCode {
 
 fn conversation_id(value: &str) -> Result<ConversationId, ConversationError> {
     ConversationId::new(value).map_err(|_| ConversationError::InvalidInput)
+}
+
+/// The agent a creation names, if it names one.
+///
+/// A name no adapter exists for is carried inward rather than refused here. It
+/// is still refused — a misspelling is not the installation fact the service's
+/// "not configured for that agent" states, so it keeps its own code — but only
+/// at the point the name would be used, which is never for a conversation that
+/// already exists. The wire says as much: `agent` is "Ignored when the
+/// conversation already exists". Refusing it here made one stale remembered
+/// name fail every send, close, reorder and permission answer in every
+/// conversation on the machine, because the panel sends it on all of them.
+fn requested_agent(value: Option<&str>) -> Option<RequestedAgent> {
+    value.map(|name| AgentId::parse(name).map_or(RequestedAgent::Unknown, RequestedAgent::Known))
 }
 
 #[cfg(test)]

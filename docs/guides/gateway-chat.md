@@ -9,7 +9,7 @@ cannot impersonate another surface or principal.
 
 ```text
 Panel Send -> NessaClient.conversation.send -> authorized gateway command
-  -> shared ConversationService -> Agent.enqueue -> Claude ACP process
+  -> shared ConversationService -> Agent.enqueue -> this conversation's ACP process
   <- bounded conversation.read view <- live SDK observations + saved history
 ```
 
@@ -35,27 +35,98 @@ From a checkout, `just server` writes this section for you
 an existing one alone; everything below is the deliberate path, and the contract
 that script writes to.
 
-Add `agent` to the private namespace `config.json` (beside `auth/`):
+Add `agents` to the private namespace `config.json` (beside `auth/`). What every
+agent on this machine shares is stated once; what differs between them — how the
+agent is started, the model, the budgets, whether its own tools are on — goes
+under that agent's name in `runtimes`:
 
 ```json
 {
-  "agent": {
+  "agents": {
     "catalog": "/absolute/path/to/models.json",
-    "node": "/absolute/path/to/node",
-    "acpEntry": "/absolute/path/to/claude-acp/dist/index.js",
     "workspace": "/absolute/path/to/your/project",
-    "model": "exact-model-id-from-catalog",
-    "toolsEnabled": true,
     "mcpServers": [{
       "name": "nessa",
       "command": "/absolute/path/to/nessa-agent/target/debug/nessa-mcp",
       "args": ["--workspace", "/absolute/path/to/your/project", "--audit-directory", "/absolute/path/to/private/process-audit"]
     }],
-    "contextTokens": 100000,
-    "outputTokens": 4096
+    "selected": "claude",
+    "runtimes": {
+      "claude": {
+        "command": "/absolute/path/to/node",
+        "args": ["/absolute/path/to/claude-acp/dist/index.js"],
+        "model": "exact-anthropic-model-id-from-catalog",
+        "toolsEnabled": true,
+        "contextTokens": 100000,
+        "outputTokens": 4096
+      },
+      "codex": {
+        "command": "/absolute/path/to/node",
+        "args": ["/absolute/path/to/codex-acp/dist/index.js"],
+        "model": "exact-openai-model-id-from-catalog",
+        "toolsEnabled": true,
+        "contextTokens": 100000,
+        "outputTokens": 4096
+      }
+    }
   }
 }
 ```
+
+An agent is started by a command and the arguments handed to it, rather than by a
+shared Node and a per-agent entry script. Both agents this build has an adapter
+for run under Node, so both are `"command": ".../node"` with an entry script in
+`args`. The pair is wider than that on purpose: an agent that speaks ACP itself
+would be its own executable taking its own subcommand in `args`, which the older
+runtime-plus-entry-script shape could not describe at all. No such agent has an
+adapter here yet, so there is no example of one to copy. Only the arguments that
+are absolute paths are looked for on this machine — anything else is the agent's
+own vocabulary and is passed through untouched.
+
+This replaces the earlier `agent` key with its `node`, `acpEntry` and per-agent
+sections, and there is no compatibility shim: a `config.json` written against the
+old shape fails startup naming the key it no longer knows, rather than starting
+with settings silently ignored. Rewrite it as above.
+
+Configure only the agents you have. An agent absent from here is one this server
+cannot start; setup reports it as not set up here rather than as not installed,
+because installing it would change nothing — it may already be on the machine.
+`selected` names the agent a conversation is created on when the caller does not
+name one; it may be left out when only one agent is configured, and is required
+once more than one is — guessing which of two the operator meant is a coin toss
+with somebody's next conversation on it. A name under `runtimes` that Nessa has
+no adapter for fails startup by name, rather than being skipped.
+
+A conversation records the agent it was created on and is reopened on that same
+agent for the rest of its life, so changing `selected` moves new conversations
+only. Records written before this server knew a second agent name no agent, and
+are refused rather than read as Claude's: the reader that assumed an agent is
+what "One current contract" forbids. Bring them to the current shape once, with
+the gateway stopped:
+
+```bash
+node scripts/retrofit-conversation-agents.mjs            # --dry-run to look first
+node scripts/retrofit-conversation-agents.mjs --help     # what it takes
+```
+
+It names Claude, which is honest rather than a guess — Claude was the only agent
+that could have written a record without the field — and it leaves every record
+that already states its agent exactly as it is. Until it has been run, such a
+conversation is refused as `agent_unsupported`.
+
+An entry it cannot read or write is reported by name and the rest are converted,
+so a directory is never left half migrated with nothing saying which half. It
+exits non-zero when that happens; running it again once the obstruction is gone
+is a no-op on everything already done.
+
+Each agent's model must come from its own vendor's entries
+in the catalog: Codex is signed in to OpenAI and cannot reach an Anthropic model,
+and the mismatch is reported at startup rather than by a provider refusing every
+prompt. `toolsEnabled` is asked of each agent separately and has to be stated:
+Codex has no text-only mode and refuses to start without its own tools, so
+neither turning them off for Claude nor leaving the field out should be able to
+take the whole server down over an agent you were not configuring. Omitting it
+fails to parse, naming the field.
 
 The installed desktop supplies an agent automatically. Its unattached workspace is
 `~/.nessa/workspaces/default`; its directories are created below the private Nessa
@@ -66,13 +137,25 @@ only after the user explicitly attaches or configures that folder. Because macOS
 protects folders such as Documents, configuring one of those paths can produce a
 system access prompt.
 
-Use the SDK's [Claude ACP harness setup](../../crates/nessa-sdk/README.md)
-for the pinned process. Provider credentials stay in the server environment or
-Claude's configured credential directory. Requests cannot supply executables,
-workspaces, environment variables or tokens. Missing agent configuration keeps
-authentication/health available and returns `agent_not_configured` for chat.
-Invalid supplied configuration fails startup. Claude process supervision currently
-requires Unix; there is no production test-provider fallback.
+Use the SDK's [harness setup](../../crates/nessa-sdk/README.md) for the pinned
+processes. Provider credentials stay in the server environment or in each agent's
+own configured credential directory, and neither agent is handed the other's.
+Which of those two places counts as a sign-in is the agent's own answer rather
+than a rule Nessa applies to both: Codex builds its authentication with the
+environment key switched off, so a key in the server environment signs Claude in
+and leaves Codex signed out, and readiness reports it that way. Signing Codex in
+is done with `codex login`, and Nessa never does it on the user's behalf.
+Requests cannot supply executables, workspaces, environment variables or tokens.
+A gateway with no conversation service at all keeps authentication/health
+available and returns `conversations_not_configured` for chat. A request naming
+an agent this server has no configuration for returns `agent_not_configured`.
+They are separate codes because they are separate situations, and only the
+second is about the agent that was asked for. A conversation already on disk that names an agent this
+build has no adapter for, or that predates the field entirely, returns
+`agent_unsupported` — its own code, not a
+storage failure, because storage is fine and retrying cannot change the answer. Invalid supplied configuration fails startup. Process
+supervision currently requires Unix; there is no production test-provider
+fallback.
 
 Build `cargo build -p nessa-server -p nessa-mcp` before starting the gateway.
 `toolsEnabled: true` exposes Claude's native tool preset, including WebSearch and
@@ -210,10 +293,77 @@ send   -> conversation.send { text, attachments: [the returned references] }
   (`invalid_request`, `agent_not_configured`, `agent_startup_deadline`,
   `image_input_unsupported`, `attachment_not_found`, `attachment_unavailable`,
   `conversation_not_found`, `conversation_capacity`): those leave `uncertain`
-  false, and the code itself is reported as a typed `ConversationErrorCode`. The
-  panel marks the turn not sent, says why in a sentence chosen by that code, and
-  puts the message back in the draft with its images. Any other failure after
+  false, and the code itself is reported as a typed `ConversationErrorCode`.
+  `adapters/gateway/effects.ts` is where the panel reads that code, and it
+  answers in the panel's own vocabulary — a `CommandFailure` such as
+  `agent-startup-deadline`. It is the only place a wire code is read, for
+  commands and reads alike; nothing anywhere compares an error's text against
+  one. The panel marks the turn not sent, says why in a sentence chosen by that
+  reason, and puts the message back in the draft with its images. A code this
+  build has no word for keeps the client's own sentence and carries no reason at
+  all, rather than being read as one it does know. Any other failure after
   admission was attempted stays uncertain and keeps its explicit retry.
+- **A failed read has its own vocabulary, because a read is not a command.**
+  Nothing was asked for and nothing changed, so there is no receipt, no draft to
+  hand back and no outcome to be certain about — only a transcript older than the
+  gateway's. `ReadFailure` is two words, and a word earns its place by changing
+  what is said or whether a retry is offered. `configuration-changed` is the one
+  the gateway will not serve again, so it withdraws the retry; `unavailable` is
+  every other failed read, including every code this build has never heard of,
+  and claims only that the view is stale and the panel is still asking. Every
+  rejected read arrives as a `ConversationReadFailedError`, so the store never
+  sees a wire code or a sentence, and `readError` on the tab holds the word
+  rather than text. The cause is not thrown away with the translation: the store
+  reports it to the console beside the word, which is the only place a gateway
+  answering about a *different* conversation can still be read.
+- **No read failure promises that the gateway will come back.** A third word for
+  a transient outage was written and withdrawn, because no code the gateway sends
+  means that. `temporarily_unavailable` and `agent_startup_deadline` normally do
+  mean "not yet" — but when a failed launch cannot be confirmed stopped,
+  `ConversationService` deliberately retains the conversation's slot, answers
+  every later read from the cached failure and never attempts the provider again
+  (`a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot` asserts it, and
+  the protocol text says "a launch whose process could not be confirmed stopped
+  keeps that conversation blocked"). An adapter panic during opening reaches
+  `temporarily_unavailable` the same way. The gateway cannot tell the two apart
+  in the code it sends, so neither can the panel, and "this normally catches up
+  in a moment" would be a confident falsehood for a conversation that is blocked
+  until the gateway restarts. `unavailable` already says the panel keeps trying,
+  which is true of all of them.
+- **A conversation the gateway has stopped serving outranks everything else on
+  its tab.** A command somebody asked for otherwise wins the notice over the
+  panel's own polling. The exception is `configuration-changed`, because every
+  other notice ends in an action — refresh, resend, retry this submission — that
+  the gateway can no longer complete; a lost close acknowledgement inviting a
+  refresh is the concrete case. What became of each message is not lost with the
+  notice slot: the turn keeps its own receipt, which the transcript renders.
+- **A control's failure is translated the same way, and says something else.**
+  The client has no sentence of its own for a control: every one of them gets
+  the constant "Conversation control did not return a trustworthy
+  acknowledgement", which names neither the command nor its cause and is only
+  true when the control really may have been applied. So the panel speaks where
+  that would be false. `attachment_cleanup_unavailable` — the single image code
+  that is not a refusal, where the close did happen and only its release of the
+  conversation's uploads did not — says so, and changes nothing the panel does:
+  a draft's stored images are forgotten after any close, acknowledged or not.
+  Which sentence is shown is decided by what became of the control, never by
+  the reason: refused says nothing was done, applied says the choice was
+  recorded, and only a genuinely open outcome keeps the client's constant.
+- **A permission answer reports the review's state, and it is authoritative.** A
+  failed `conversation.answer` carries `selectionState`, which the protocol
+  calls authoritative knowledge of whether the option was selected and
+  independent of the diagnostic code beside it. The gateway sends an ordinary
+  code there — its own test pairs a pending review with `audit_unavailable` —
+  so a review left `pending` is certainly not applied under codes this build
+  has no word for, and the outcome is carried even when the reason cannot be.
+  A `consumed` review is the opposite certainty: the choice took effect and the
+  command failed after it, which the client can only report as uncertain, so
+  the selection state is read before the code rather than after it.
+- **A control carries its reason and its outcome as two facts.** A reason never
+  says whether the command ran: a control refused as `conversation_not_found`
+  and one whose acknowledgement was lost carry the same word. `CommandFailure`
+  is only what the panel *says*; `SubmissionRefusedError` and
+  `ControlFailedError.refused` are what it may *decide* from.
 - **Nor is a message the client would not put on the wire.** The client is the
   one boundary that validates a message's images — the panel's model puts no
   byte bound on a stored reference, because how heavy one image may be is the
@@ -578,11 +728,11 @@ or unsupported sharing actions. Rename does not change gateway conversation IDs.
 ## Installed macOS runtime
 
 The DMG contains `Nessa.app` with the gateway, `nessa-mcp` (including Shepherd),
-an official Node runtime, the locked Claude ACP harness and its dependencies,
+an official Node runtime, one locked ACP harness per agent with its dependencies,
 and the model catalog under `Contents/Resources/runtime`. Install the app in
 Applications before launching it. No repository checkout, Cargo, npm, or Homebrew
-Node is needed at runtime. Claude credentials remain in the user's local Claude
-configuration; credentials and chat history are never shipped inside the app.
+Node is needed at runtime. Each agent's credentials remain in that agent's own
+local configuration; credentials and chat history are never shipped inside the app.
 
 Before changing any service, the desktop stages its bundled runtime under
 `~/Library/Application Support/Nessa/gateway-runtimes/<service-label>/<fingerprint>/`.
@@ -632,10 +782,10 @@ reconciliation: the panel reconciles on every webview load, and a profile edited
 while Nessa is open would otherwise produce a different definition and retire a
 healthy gateway mid-session. A changed profile therefore takes effect the next
 time the app is launched, and that launch re-registers the service. The shell is asked
-interactively where that means something — `zsh -l -c` reads `.zprofile` and
-never `.zshrc`, where pnpm and nvm put themselves, and an interactive bash is
-what gets past the guard at the top of a `.bashrc` its `.bash_profile` sources —
-and the
+the ways that reach the files a user's tools are actually in: zsh once, as an
+interactive login shell, which reads everything it has; bash twice, because no
+single bash reads both `.bash_profile` and `.bashrc`, with the two answers
+combined. And the
 answer comes back between unguessable markers, so a profile that prints a banner
 or tries to answer for the shell does neither. Each attempt is bounded by one
 deadline covering output and exit together, and a shell that overruns it is

@@ -2,8 +2,10 @@
 //!
 //! Setup offers a choice of agent, and an offer the runtime cannot honour is
 //! worse than no offer: it fails later, somewhere the person cannot connect
-//! back to the choice they made. So the choice is made against what is
-//! installed and signed in on this machine.
+//! back to the choice they made. So the choice is made against what this server
+//! is configured to launch, and what is installed and signed in on this machine
+//! — different facts, and only the last two are changed by anything the person
+//! does here.
 //!
 //! The server answers rather than the desktop shell, because the server is the
 //! process that would actually launch the agent — what it can see is what will

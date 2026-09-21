@@ -12,7 +12,9 @@
 //! allocation; `decoding_budget.rs` tests exact limits and ignored metadata.
 mod envelope;
 mod transport;
-pub(crate) use envelope::{notification, parse, request, success, unsupported, Envelope, RpcId};
+pub(crate) use envelope::{
+    notification, parse, request, success, unsupported, Envelope, RpcError, RpcId,
+};
 pub(crate) use transport::{encode, large_frame_allowance, send_encoded, write_allowance, Reader};
 mod error;
 pub(crate) use error::protocol;

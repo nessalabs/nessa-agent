@@ -361,6 +361,8 @@ pub struct ConversationView {
 pub struct ConversationCreateParams {
     pub conversation_id: String,
     pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -497,6 +499,8 @@ pub struct ConversationPart {
 #[serde(rename_all = "snake_case")]
 pub enum ConversationErrorCode {
     AgentNotConfigured,
+    AgentUnsupported,
+    ConversationsNotConfigured,
     UnknownMethod,
     InvalidRequest,
     ConversationNotFound,
@@ -522,6 +526,8 @@ impl ConversationErrorCode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::AgentNotConfigured => "agent_not_configured",
+            Self::AgentUnsupported => "agent_unsupported",
+            Self::ConversationsNotConfigured => "conversations_not_configured",
             Self::UnknownMethod => "unknown_method",
             Self::InvalidRequest => "invalid_request",
             Self::ConversationNotFound => "conversation_not_found",

@@ -98,6 +98,7 @@ async fn blocked_worker(
         operation_capabilities,
         permissions: HashMap::new(),
         shutdown_deadline: None,
+        configured: true,
         closing: false,
         deferred_outcome: None,
         provider_result: None,

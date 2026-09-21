@@ -9,11 +9,10 @@ const AGENTS_PATH = "/onboarding/agents"
  * `not-supported` and `unknown` are deliberately not accepted here: the first
  * is a fact about Nessa's own listing and the second is the absence of an
  * answer. Neither is something a runtime gets to assert. */
+const REPORTABLE = ["ready", "needs-authentication", "not-installed", "not-configured"]
 function known(value: unknown): AgentReadiness | undefined {
-  return value === "ready" ||
-    value === "needs-authentication" ||
-    value === "not-installed"
-    ? value
+  return typeof value === "string" && REPORTABLE.includes(value)
+    ? (value as AgentReadiness)
     : undefined
 }
 

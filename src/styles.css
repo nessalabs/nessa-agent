@@ -232,6 +232,13 @@ body {
  * `transparent` on a WebKitGTK layer becomes opaque white. `none` omits
  * paint. The form is unwrapped so its radius cannot own a layer at the
  * panel origin; the row is the capsule.
+ *
+ * This box does not flex: the pill is the point of the panel and it keeps its
+ * height whatever else is happening. That is only safe because everything
+ * above the pill is bounded — the notices by the ceiling below, the queue badge
+ * and the delivery row by being a single 28px row each. Anything added here
+ * that can grow without a bound puts the pill back off the bottom of a short
+ * window, which is what `.nessa-composer-notices` exists to prevent.
  */
 .nessa-composer {
   flex-shrink: 0;
@@ -241,6 +248,73 @@ body {
   transform: none;
   filter: none;
   contain: none;
+}
+
+/*
+ * The room the composer's notices may have, and what happens when they want
+ * more.
+ *
+ * Five producers write here and none excludes the others, so the worst case is
+ * five cards — well over 400px at the shipped 420px width, against a window
+ * whose configured minimum height is 320px (`src-tauri/tauri.conf.json`). The
+ * composer above does not shrink and the transcript's `flex-1` has already
+ * given up everything it has, so without a ceiling that column simply pushed
+ * the pill out of the window.
+ *
+ * A third of the panel, because the cap has to hold at the window's minimum
+ * height and still leave the transcript something at every size above it: at
+ * 320px that is ~106px, about one card and the top of the next, and the
+ * unfinished card is the only honest way a box with no resting scrollbar says
+ * there is more. The panel's height arrives from the host as a custom property
+ * (see `panel-frame.ts`), which is why the ceiling is written against it rather
+ * than as one number that is right at 900px and useless at 320px.
+ *
+ * Scrolling rather than dropping or collapsing: nothing here is redundant, and
+ * a cap that decided which notice to silence would be deciding it without
+ * knowing what any of them say. `overscroll-behavior` keeps a flick in this
+ * box from scrolling the transcript behind it.
+ *
+ * The box spans the composer's gutter and hands it straight back as padding, so
+ * the cards sit exactly where they did. What that buys is room on the right: a
+ * dismissed notice leaves by sliding towards it, and a clipping box whose edge
+ * is the card's own edge clips every pixel of that slide — the notice would
+ * fade on the spot. With the gutter inside the box the slide has the same 16px
+ * to cross that the panel's own frame used to give it.
+ */
+.nessa-composer-notices {
+  max-height: calc(var(--nessa-window-height, 100vh) / 3);
+  margin-inline: -16px;
+  padding-inline: 16px;
+  /* `hidden`, not the `auto` a scrolling y-axis would otherwise force on this
+     axis. The design system shortens a card's exit slide to fit the nearest
+     ancestor that scrolls horizontally, and this box is not one, so the slide
+     is measured against the window as before and clipped by the gutter above. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/*
+ * Before the host has said how big its window is.
+ *
+ * `100vh` is the right answer in a browser preview, where the viewport is the
+ * window. It is the wrong one in the app: the webview is sized to the display's
+ * work area and never smaller than the window, so on a 320px panel `100vh` is
+ * the screen and a third of the screen is taller than the whole panel — no cap
+ * at all for the frames before `windowSize()` resolves. The window's configured
+ * minimum is the honest floor to guess with, and the same repair the panel's
+ * own width already makes a few rules above.
+ */
+.nessa-panel[data-host="linux"] .nessa-composer-notices,
+.nessa-panel[data-host="macos"] .nessa-composer-notices {
+  max-height: calc(var(--nessa-window-height, 320px) / 3);
+}
+
+/* Nothing to say, no box: an empty strip must not leave a tab stop or an
+   announced group. The 8px between cards is each card's own margin, so an
+   empty box is already 0px tall; what this removes is the stop and the group. */
+.nessa-composer-notices:empty {
+  display: none;
 }
 
 /* The pill draws its own outline in the design system (`border-border` on
