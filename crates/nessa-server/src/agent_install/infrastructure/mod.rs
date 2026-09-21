@@ -11,7 +11,9 @@
 //! application layer between the fetch and the unpack.
 mod https_archives;
 mod managed_runtimes;
+mod node_harnesses;
 mod pinned_releases;
 pub use https_archives::{HttpsArchives, NoHttpsClient};
 pub use managed_runtimes::ManagedRuntimes;
+pub use node_harnesses::{HarnessFailure, NodeHarnesses};
 pub use pinned_releases::{host_platform, releases_for, PinFileError};

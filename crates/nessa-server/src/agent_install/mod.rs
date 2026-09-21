@@ -1,10 +1,16 @@
 //! Getting an agent's own runtime onto this machine.
 //!
-//! Nessa drives coding agents it does not ship. Claude and Codex are expected
-//! to be installed already — someone who uses them has them. Opencode is the
-//! one Nessa offers to fetch, because it is the agent a first-time user can
-//! reach with nothing signed in, and telling that person to go and install
-//! something first is the whole of what this context exists to avoid.
+//! Nessa drives coding agents it does not write, and fetching one is how any of
+//! them arrives.
+//!
+//! Opencode was the first, on a reason that turned out to be false: it was
+//! taken to be the agent a first-time user could reach with nothing signed in.
+//! Its free models are refused outside OpenCode's own application, so it needs
+//! an account like the other two, and there is nothing special about it. What
+//! is left is the part that was always true — telling somebody to go and
+//! install something before they can use this is the thing this context exists
+//! to avoid — and that applies to every agent equally. See
+//! `docs/adr/todo/0012-fetch-agent-runtimes.md`.
 //!
 //! What is deliberately *not* here: keeping a runtime up to date. Nessa
 //! installs the version it has tested and leaves it there. An agent that
