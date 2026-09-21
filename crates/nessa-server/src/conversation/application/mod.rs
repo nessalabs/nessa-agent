@@ -13,7 +13,7 @@ pub use ports::{
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreation,
     ConversationCreationAudit, ConversationCreationAuditRecord, ConversationCreationCause,
     ConversationCreationDisposition, ConversationFuture, ConversationOwnershipState,
-    ConversationRepository, SubmittedImage,
+    ConversationRepository, RuntimeReadiness, SubmittedImage,
 };
 pub use service::{
     ConversationCaller, ConversationDependencies, ConversationLimits, ConversationService,

@@ -43,6 +43,9 @@ fn the_budgets_injected_are_the_ones_the_shared_table_states() {
         BTreeMap::new(),
         None,
     );
+    // The largest of the four, and the one the warm-up turns on: 120 s of the
+    // 170 s one-launch worst case the client's deadline is derived from.
+    assert_eq!(injected.launch_timeout, millis(&table, "launchMs"));
     assert_eq!(injected.startup_timeout, millis(&table, "startupMs"));
     assert_eq!(injected.shutdown_grace, millis(&table, "shutdownGraceMs"));
     assert_eq!(injected.kill_timeout, millis(&table, "killTimeoutMs"));
@@ -60,6 +63,7 @@ fn every_injected_budget_is_a_positive_interval() {
         None,
     );
     for budget in [
+        injected.launch_timeout,
         injected.startup_timeout,
         injected.shutdown_grace,
         injected.kill_timeout,

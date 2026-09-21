@@ -1,5 +1,6 @@
 //! Nessa gateway with mandatory credential authentication and per-operation authorization.
 pub mod agent_install;
+pub mod agent_warm_up;
 pub mod agents;
 pub mod app;
 pub mod attachments;

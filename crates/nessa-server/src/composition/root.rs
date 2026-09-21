@@ -93,8 +93,10 @@ impl CompositionRoot {
             super::provisioning::ensure_local_credentials(&config)?;
         }
         let dependencies = runtime_dependencies(&config);
-        let product =
-            super::local_auth::product_state(&config, dependencies.clock.clone(), bundle)?;
+        let super::local_auth::LocalProduct {
+            routes: product,
+            warm_up,
+        } = super::local_auth::product_state(&config, dependencies.clock.clone(), bundle)?;
         let conversations = product.conversations.clone();
         #[cfg(target_os = "macos")]
         let retirement_clock = product.clock.clone();
@@ -147,6 +149,13 @@ impl CompositionRoot {
             stage = config.stage.as_str(),
             "nessa server listening",
         );
+
+        // Only now: the runtime's first launch is slow because the operating
+        // system scans it, and that wait belongs here, with the window already
+        // up, rather than inside the user's first message.
+        if let Some(warm_up) = &warm_up {
+            warm_up.start();
+        }
 
         #[cfg(target_os = "macos")]
         if bundle.is_some() {

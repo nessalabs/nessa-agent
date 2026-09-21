@@ -597,7 +597,14 @@ impl<P: AcpProfile> Worker<P> {
         restore: Option<ExecutionSessionId>,
         execution: &mut Option<ExecutionController>,
     ) -> Result<(), AgentError> {
-        let deadline = Instant::now() + self.config.startup_timeout;
+        // Two budgets, because the two halves of startup are not ours in the
+        // same way. Everything up to the child's first answer is the operating
+        // system's: exec, its first-execution scan of a freshly written
+        // executable, and the runtime's own boot. That is `launch_timeout`,
+        // and it is generous. Protocol work afterwards is the provider
+        // answering questions it is already running to answer, and keeps the
+        // tighter `startup_timeout`.
+        let spawn_deadline = Instant::now() + self.config.launch_timeout;
         // Whether saved context is being restored is decided before any step
         // runs, so every step's deadline reports it. Reading it off the step
         // would call a restoration that expired during `initialize` new.
@@ -607,9 +614,13 @@ impl<P: AcpProfile> Worker<P> {
             AgentStartupContext::New
         };
         let init = self.rpc("initialize", json!({"protocolVersion":1,"clientInfo":{"name":"nessa-sdk","version":env!("CARGO_PKG_VERSION")},
-            "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}), deadline, None)
+            "clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}), spawn_deadline, None)
             .await
             .map_err(|error| startup_deadline(error, AgentStartupPhase::Initialize, context))?;
+        // The child has answered, so it is running and scanned. Start the
+        // protocol budget here rather than carrying the remainder of a budget
+        // that was sized for the operating system's work.
+        let deadline = Instant::now() + self.config.startup_timeout;
         if init.get("protocolVersion").and_then(Value::as_u64) != Some(1) {
             return Err(json_rpc::protocol("requires ACP protocol 1"));
         }

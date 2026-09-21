@@ -5,8 +5,8 @@ use super::{
         ConversationPendingMode, ConversationReorderOutcome, ConversationRuntime, ConversationView,
         SubmissionReceipt,
     },
-    AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationError,
-    ConversationRepository, SubmittedImage,
+    AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreationAudit,
+    ConversationError, ConversationRepository, RuntimeReadiness, SubmittedImage,
 };
 use crate::conversation::domain::{Conversation, ConversationId};
 use futures_util::{future::join_all, FutureExt};
@@ -45,7 +45,7 @@ use std::{
         Arc, OnceLock,
     },
 };
-use tokio::sync::{Mutex, Notify, OnceCell, RwLock, RwLockReadGuard};
+use tokio::sync::{watch, Mutex, Notify, OnceCell, RwLock, RwLockReadGuard};
 use uuid::Uuid;
 
 /// Authenticated identity and stable logical action supplied by the gateway boundary.
@@ -107,7 +107,7 @@ struct Inner {
     provider: Arc<dyn AgentProvider>,
     storage: Arc<dyn SessionStorage>,
     metadata: Arc<dyn ConversationRepository>,
-    creation_audit: Arc<dyn super::ConversationCreationAudit>,
+    creation_audit: Arc<dyn ConversationCreationAudit>,
     attachments: Option<Arc<dyn ConversationAttachments>>,
     clock: Arc<dyn Clock>,
     limits: ConversationLimits,
@@ -115,6 +115,15 @@ struct Inner {
     creation: Mutex<()>,
     retirement: OnceLock<ActionContext>,
     admission: RwLock<()>,
+    // Counts stop passes, bumped the moment one is decided and before it waits
+    // for anything. An opening parked waiting for the runtime has to learn about
+    // teardown from something other than the lock it is blocking, and a count
+    // rather than a flag means a transient stop can pass through without
+    // leaving the gateway permanently fenced.
+    stops: watch::Sender<u64>,
+    // None when nothing prepares the runtime, which is an explicit no-op rather
+    // than a wrapper that always returns immediately.
+    readiness: Option<Arc<dyn RuntimeReadiness>>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -181,15 +190,22 @@ fn retryable_agent_open(error: &AgentError) -> bool {
             | AgentError::Storage(StorageError::Corrupt(_) | StorageError::IdentityMismatch)
     )
 }
-/// Every port the service calls, constructed by composition and substituted in tests.
+/// Every port the service calls, constructed by composition and substituted in
+/// tests. Grouped rather than passed one by one, so that adding one does not
+/// add another positional argument at every call site.
 pub struct ConversationDependencies {
     pub provider: Arc<dyn AgentProvider>,
     pub storage: Arc<dyn SessionStorage>,
     pub metadata: Arc<dyn ConversationRepository>,
-    pub creation_audit: Arc<dyn super::ConversationCreationAudit>,
+    pub creation_audit: Arc<dyn ConversationCreationAudit>,
     /// `None` when this gateway keeps no uploads: every image is then refused.
     pub attachments: Option<Arc<dyn ConversationAttachments>>,
     pub clock: Arc<dyn Clock>,
+    /// Joins one-time runtime preparation before a provider is opened on a
+    /// request path. `None` means nothing prepares the runtime, so the first
+    /// conversation pays the operating system's first-execution scan itself;
+    /// that is an explicit no-op rather than a wrapper that returns at once.
+    pub readiness: Option<Arc<dyn RuntimeReadiness>>,
 }
 impl ConversationService {
     pub fn new(
@@ -204,6 +220,7 @@ impl ConversationService {
             creation_audit,
             attachments,
             clock,
+            readiness,
         } = dependencies;
         if workspace.as_ref().is_some_and(|value| value.len() > 4096)
             || limits.max_conversations == 0
@@ -227,6 +244,8 @@ impl ConversationService {
                 creation: Mutex::new(()),
                 retirement: OnceLock::new(),
                 admission: RwLock::new(()),
+                stops: watch::channel(0).0,
+                readiness,
             }),
         })
     }
@@ -479,6 +498,37 @@ impl ConversationService {
                                 let retryable = matches!(error, StorageError::Busy | StorageError::Io(_));
                                 OpeningFailure { cause: ConversationError::Storage(error), _cleanup: None, retryable }
                             })?;
+                            // Join any one-time preparation already paying for
+                            // the operating system's first-execution scan. This
+                            // is after the storage lease is held and before the
+                            // provider is launched, so the conversation neither
+                            // starts a second cold launch nor loses its place.
+                            //
+                            // Any stop supersedes the wait, whether it fences
+                            // the gateway or only stops the agents. Preparation
+                            // has no deadline of its own, and the caller holds a
+                            // shared admission guard while this runs, so an
+                            // opening that waited through a stop would stall
+                            // that pass for its whole budget and then launch a
+                            // provider the pass has already walked past.
+                            if let Some(readiness) = &service.inner.readiness {
+                                // Subscribing here marks stops that finished
+                                // before this opening began as already seen:
+                                // they closed agents this one does not have.
+                                let mut stops = service.inner.stops.subscribe();
+                                if service.inner.retirement.get().is_none() {
+                                    tokio::select! {
+                                        () = readiness.wait() => {}
+                                        _ = stops.changed() => return Err(service.stopped()),
+                                    }
+                                }
+                            }
+                            // A stop can also arrive for an opening that never
+                            // had to wait, so this is checked again rather than
+                            // only on the waiting path.
+                            if service.inner.retirement.get().is_some() {
+                                return Err(service.stopped());
+                            }
                             let agent = Agent::new(service.inner.provider.clone(), manager)
                                 .await
                                 .map_err(|error| {
@@ -1045,7 +1095,26 @@ impl ConversationService {
             ActionContext::new("gateway", "desktop_quit", Uuid::new_v4().to_string())
                 .expect("gateway attribution")
         });
+        // Same signal as retirement, for the same reason: an opening parked on
+        // the runtime would otherwise hold this pass for its full per-owner
+        // budget and then launch a provider nothing is left to close. Admission
+        // stays open, so the count is bumped and nothing is fenced — a
+        // conversation stopped this way can be opened again.
+        self.inner.stops.send_modify(|count| *count += 1);
         self.close_agents(&actor).await
+    }
+
+    /// A stop reached this opening before it had a provider.
+    ///
+    /// Retryable unless the gateway is retired: stopping the agents leaves
+    /// admission open, so the conversation may be opened again, while a
+    /// retirement is permanent and the cached failure is the honest answer.
+    fn stopped(&self) -> OpeningFailure {
+        OpeningFailure {
+            cause: ConversationError::Unavailable,
+            _cleanup: None,
+            retryable: self.inner.retirement.get().is_none(),
+        }
     }
 
     /// Permanently fence new operations, join admitted commands, then stop owned agents.
@@ -1066,6 +1135,11 @@ impl ConversationService {
         proposed: ActionContext,
     ) -> Result<(), ConversationError> {
         let actor = self.inner.retirement.get_or_init(|| proposed);
+        // Before waiting for exclusive admission, not after: a request parked
+        // waiting for the runtime holds a shared admission guard, and this is
+        // what tells it to stop so that guard can be released. The fence itself
+        // is `retirement`, set above; this only wakes the waiters.
+        self.inner.stops.send_modify(|count| *count += 1);
         // Close can interrupt an admitted provider control. If admission cannot
         // drain, still attempt every owner, but retain that uncertainty and never
         // acknowledge retirement. A later request joins the retained ownership.
