@@ -11,6 +11,6 @@ mod pinned_release;
 pub use agent_name::{AgentName, NotAnAgentName};
 pub use host_platform::{HostPlatform, Libc, ReleaseRequirements};
 pub use pinned_release::{
-    ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveUrl, PinRejected, PinnedRelease,
-    ReleasePlatform, ReleaseVersion,
+    preferred_release, ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveUrl, PinRejected,
+    PinnedRelease, ReleasePlatform, ReleaseVersion,
 };

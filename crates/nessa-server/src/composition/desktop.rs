@@ -3,10 +3,12 @@
 //! The credentials this app needs are created by
 //! [`super::provisioning::ensure_local_credentials`], which the developer loop
 //! asks for by the same name; nothing here provisions separately.
+use super::installed_launch::{installed_arguments, installed_launch};
 use super::{
     agent::{AgentRuntime, AgentsConfig},
     runtime_config::RuntimeConfig,
 };
+use crate::agent_install::infrastructure::{host_platform, ManagedRuntimes};
 use crate::{agents::domain::AgentId, core::RunError, desktop_runtime::domain::RunningRuntime};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -31,16 +33,12 @@ const DEFAULT_AGENT: AgentId = AgentId::Claude;
 /// meant to be fetched onto the machine that wants it instead, which is why
 /// this says nothing about where it lives.
 ///
-/// Nothing writes that yet, and this comment does not pretend otherwise. The
-/// installer is on another branch and, even there, it unpacks a binary and
-/// prints a report — it does not record a runtime, and no other code turns the
-/// unpacked path into one. So `None` here is the whole truth at this commit:
-/// the desktop does not ship Opencode and nothing else supplies it either.
-/// What is missing between the two is one step, a step that records the
-/// installed launch. The catalog is no longer part of that gap — the shipped
-/// `models.json` now carries OpenCode Zen entries, so a runtime written by
-/// hand starts today.
-fn bundled_launch(agent: AgentId) -> Option<(&'static str, &'static str)> {
+/// `None` here still means the desktop does not ship it, and that is now the
+/// whole of what it means. The launch comes from
+/// [`super::installed_launch::installed_launch`] instead, which asks the
+/// runtime store at every start what is actually installed — so an agent
+/// somebody fetched is configured, and one they have not is not offered.
+pub(super) fn bundled_launch(agent: AgentId) -> Option<(&'static str, &'static str)> {
     match agent {
         AgentId::Claude => Some((
             "node",
@@ -161,6 +159,52 @@ pub(super) fn configure(
                 context_tokens: 100_000,
                 output_tokens: 4096,
             });
+    }
+    // Agents Nessa installs rather than ships, asked about at every start.
+    //
+    // The bundled loop above writes a launch this build already knows. These
+    // are only knowable by asking what is on the disk now: somebody can install
+    // Opencode while the app is closed, and a new build can pin a version the
+    // installed one is not. `installed_launch` answers from the store's own
+    // record and says "not installed" for anything that is not exactly the
+    // artifact the current pin names.
+    //
+    // The `None` arm removes rather than leaves. A launch written by a previous
+    // build keeps working after the pin moves — superseded artifacts stay where
+    // they are — so leaving one behind would offer an agent whose executable
+    // this build never tested, and say it was ready.
+    let store = ManagedRuntimes::new(data.join("agents"));
+    let host = host_platform();
+    for agent in AgentId::ALL.iter().copied() {
+        if bundled_launch(agent).is_some() {
+            continue;
+        }
+        let launch = installed_launch(agent, &host, &store).map_err(unusable_runtime)?;
+        match launch {
+            Some(command) => {
+                let args = installed_arguments();
+                agents
+                    .runtimes
+                    .entry(agent.name().into())
+                    // As above: the launch is ours to keep current, the model
+                    // and its budgets are the user's.
+                    .and_modify(|runtime| {
+                        runtime.command = command.clone();
+                        runtime.args = args.clone();
+                    })
+                    .or_insert_with(|| AgentRuntime {
+                        command,
+                        args,
+                        model: default_model(agent).into(),
+                        tools_enabled: true,
+                        context_tokens: 100_000,
+                        output_tokens: 4096,
+                    });
+            }
+            None => {
+                agents.runtimes.remove(agent.name());
+            }
+        }
     }
     // Only the Nessa-owned server is replaced. User-configured MCP servers retain their settings.
     agents.mcp_servers.retain(|server| server.name != "nessa");

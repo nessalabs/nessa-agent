@@ -508,6 +508,34 @@ impl PinnedRelease {
     }
 }
 
+/// The best of `releases` for `host`, if any of them runs on it at all.
+///
+/// A decision about pinned releases and a machine, so it lives with them rather
+/// than at either place that asks. Two do: the install command, deciding what
+/// to fetch, and the desktop composition, deciding what an already-installed
+/// runtime would have been. Those two must agree — a machine that installed the
+/// AVX2 build and is then offered the baseline one at launch has no runtime, on
+/// a disk where one is sitting — and the surest way for them to agree is for
+/// there to be one rule.
+///
+/// Takes the releases rather than reading them, so the answer cannot depend on
+/// the order the pin file happens to list them in, and a test can ask about a
+/// set the compiled-in file does not contain.
+///
+/// Several pinned archives can run on one machine at once: a vendor publishes a
+/// build that needs AVX2 and one that does not, and a machine with AVX2 runs
+/// either. [`ReleaseRequirements::demand`] ranks how much of a machine a build
+/// asks for, and that ranking is total over any set a single machine can run.
+pub fn preferred_release(
+    releases: Vec<PinnedRelease>,
+    host: &HostPlatform,
+) -> Option<PinnedRelease> {
+    releases
+        .into_iter()
+        .filter(|release| release.runs_on(host))
+        .max_by_key(|release| release.requirements().demand())
+}
+
 #[cfg(test)]
 #[path = "../../../../tests/agent_install/pinned_release.rs"]
 mod tests;

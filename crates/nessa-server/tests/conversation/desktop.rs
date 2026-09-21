@@ -239,3 +239,79 @@ fn several_configured_agents_with_no_choice_between_them_is_not_the_desktops_to_
     assert_eq!(agents.selected, None);
     assert!(agents.selected().is_err());
 }
+
+/// What an agent Nessa installs rather than ships gets out of `configure`.
+///
+/// The bundled agents above are written from paths this build already knows.
+/// Opencode is only knowable by asking the store what is on the disk now, and
+/// these are the three answers that matters: nothing installed, something
+/// installed, and something that *was* installed but is no longer the artifact
+/// the current pin names.
+mod installed_agents {
+    use super::*;
+
+    /// The agent the desktop does not bundle, whichever one that is.
+    fn unbundled() -> Option<AgentId> {
+        AgentId::ALL
+            .iter()
+            .copied()
+            .find(|agent| bundled_launch(*agent).is_none())
+    }
+
+    #[test]
+    fn an_agent_nobody_installed_is_left_unconfigured() {
+        let Some(agent) = unbundled() else { return };
+        let root = tempfile::tempdir().unwrap();
+        let bundle = root.path().join("Nessa.app/runtime");
+        bundled_runtime(&bundle);
+        let data = root.path().join("data");
+        nessa_local_storage::create_directory(&data).unwrap();
+        let mut settings = RuntimeConfig::default();
+
+        configure(&mut settings, &bundle, &data).unwrap();
+
+        let agents = settings.agents.as_ref().unwrap();
+        assert!(
+            !agents.runtimes.contains_key(agent.name()),
+            "an agent with no installed runtime must not be offered: the picker \
+             would say it was ready and every conversation on it would fail"
+        );
+    }
+
+    #[test]
+    fn a_runtime_this_build_no_longer_pins_is_removed_rather_than_left() {
+        // The half that is easy to forget. A launch written by an earlier build
+        // keeps working after the pin moves, because superseded artifacts are
+        // left on the disk — so a stale entry is not a broken one, it is a
+        // quietly wrong one: the agent Nessa tested replaced by an agent it
+        // never saw, with nothing on screen saying so.
+        let Some(agent) = unbundled() else { return };
+        let root = tempfile::tempdir().unwrap();
+        let bundle = root.path().join("Nessa.app/runtime");
+        bundled_runtime(&bundle);
+        let data = root.path().join("data");
+        nessa_local_storage::create_directory(&data).unwrap();
+        let mut settings = RuntimeConfig::default();
+        configure(&mut settings, &bundle, &data).unwrap();
+        let agents = settings.agents.as_mut().unwrap();
+        agents.runtimes.insert(
+            agent.name().into(),
+            AgentRuntime {
+                command: PathBuf::from("/somewhere/an/older/build/installed"),
+                args: vec!["acp".into()],
+                model: "opencode/big-pickle".into(),
+                tools_enabled: true,
+                context_tokens: 100_000,
+                output_tokens: 4096,
+            },
+        );
+
+        configure(&mut settings, &bundle, &data).unwrap();
+
+        let agents = settings.agents.as_ref().unwrap();
+        assert!(
+            !agents.runtimes.contains_key(agent.name()),
+            "a runtime the current pin does not describe must be taken back out"
+        );
+    }
+}

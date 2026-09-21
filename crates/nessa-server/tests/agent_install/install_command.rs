@@ -505,7 +505,7 @@ fn the_more_demanding_build_is_preferred_whichever_order_it_is_listed_in() {
             vec![baseline.clone(), fast.clone()],
         ),
     ] {
-        let chosen = preferred(releases, &host).expect("both builds run here");
+        let chosen = preferred_release(releases, &host).expect("both builds run here");
         assert_eq!(
             chosen.archive_digest(),
             fast.archive_digest(),
@@ -520,7 +520,8 @@ fn a_machine_that_cannot_take_the_demanding_build_gets_the_other_one() {
     let fast = build(Some(Libc::Gnu), true, 'a');
     let baseline = build(Some(Libc::Gnu), false, 'b');
 
-    let chosen = preferred(vec![fast, baseline.clone()], &host).expect("one build runs here");
+    let chosen =
+        preferred_release(vec![fast, baseline.clone()], &host).expect("one build runs here");
 
     assert_eq!(chosen.archive_digest(), baseline.archive_digest());
 }
@@ -530,7 +531,7 @@ fn a_machine_no_build_runs_on_is_offered_none() {
     let host = machine("linux", "x86_64", Some(Libc::Musl), true);
 
     assert_eq!(
-        preferred(
+        preferred_release(
             vec![
                 build(Some(Libc::Gnu), true, 'a'),
                 build(Some(Libc::Gnu), false, 'b')
