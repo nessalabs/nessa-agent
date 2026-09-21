@@ -75,8 +75,12 @@ pub struct ChosenFile {
 ///
 /// `ticket` is a function rather than a value because minting has an effect
 /// that outlives this call: the host remembers a path for every ticket it
-/// mints, and a file that is about to be refused must not leave one behind. See
-/// the module header for why the rest of the order is what it is.
+/// mints, and *this* file, if it is about to be refused, must not leave one
+/// behind. See the module header for why the rest of the order is what it is.
+///
+/// That is a promise about one file, and the selection it belongs to is a
+/// separate matter — see [`describe_each`], which is where a refusal throws
+/// away the files it had already described.
 pub(super) fn attachment(
     path: &Path,
     looked: io::Result<OnDisk>,
@@ -155,6 +159,12 @@ pub(super) async fn chosen_attachments(
         Picked::Unavailable(detail) => return Err(FileNotAttached::picker_unavailable(&detail)),
         Picked::Files(paths) => paths,
     };
+    // The gesture's moment for `+`: the person has chosen, and nothing has
+    // been looked at yet. Said after the picker rather than before it so a
+    // cancelled selection leaves the panel nothing to remember, and said at
+    // all because the tab can change during the fetch that follows — the
+    // picker is modal, so it cannot change before this line.
+    announce.began(batch);
 
     describe_each(
         paths, files, types, tickets, readiness, announce, batch, wait, ready_wait,
@@ -163,6 +173,25 @@ pub(super) async fn chosen_attachments(
 }
 
 /// Describe every path in `paths`, in order, or refuse the lot.
+///
+/// **A refused selection leaves live tickets for the files it got through, and
+/// that is the resolution rather than an oversight.** Each of those files was
+/// described successfully, so [`attachment`] minted for it before a later file
+/// refused the lot; the port has no `revoke` and is not being given one.
+///
+/// The reason is that nobody can redeem them. The refusal returns `Err`, so the
+/// whole `Vec<ChosenFile>` built so far is dropped here — the ticket strings
+/// were never serialized, never crossed the command boundary, and exist only in
+/// the desk's own map. An unguessable secret that no party ever received is not
+/// a capability anybody holds; it is a map entry, one of at most
+/// [`super::tickets::MOST_TICKETS`], expiring on its own in ten minutes like
+/// every other.
+///
+/// A `revoke` would add a call to an outside seam, a partial-revoke path that
+/// can itself fail, and a second way for a ticket to become unusable that every
+/// reader of the desk would then have to hold in mind — to tidy something no
+/// caller can reach. The bound and the expiry already say what happens to a
+/// ticket nobody spends, and they say it for every route, not just this one.
 ///
 /// Shared by the picker and by [`super::dropping`], and shared deliberately:
 /// the whole product rule is that a file's type decides its route and the
@@ -329,6 +358,9 @@ mod tests {
     }
 
     impl Announce for Recording {
+        fn began(&self, batch: &str) {
+            self.push("began", batch);
+        }
         fn readying(&self, id: &str, name: &str) {
             self.push("readying", &format!("{id} {name}"));
         }
@@ -691,12 +723,15 @@ mod tests {
                 Duration::from_millis(50),
             ));
 
-            // The identity is the batch and the file's place in it, and both
-            // halves carry it: a panel keyed on the name alone lost one of two
-            // files called the same thing.
+            // The batch comes first, before anything has been looked at, so
+            // the panel binds this selection to the draft `+` was pressed in.
+            // The identity of each waiting is that batch and the file's place
+            // in it, and both halves carry it: a panel keyed on the name alone
+            // lost one of two files called the same thing.
             assert_eq!(
                 told.said(),
                 vec![
+                    ("began".to_string(), "b7".to_string()),
                     (
                         "readying".to_string(),
                         "b7:0 amica-document 2.pdf".to_string()
@@ -708,11 +743,12 @@ mod tests {
         }
     }
 
-    /// And an ordinary file is never announced at all: a tile that appeared
-    /// for every attachment would be noise, and the common path must not pay
-    /// for the uncommon one.
+    /// And an ordinary file gets no tile: one that appeared for every
+    /// attachment would be noise, and the common path must not pay for the
+    /// uncommon one. The batch is still named, because which draft a selection
+    /// belongs to is not a question about how slow it was.
     #[test]
-    fn an_ordinary_file_is_never_announced() {
+    fn an_ordinary_file_names_its_batch_and_nothing_else() {
         let told = Recording::default();
         let attached = tauri::async_runtime::block_on(chosen_attachments(
             &FakePicker(Picked::Files(vec![PathBuf::from("/Users/dev/notes.md")])),
@@ -728,7 +764,39 @@ mod tests {
         .expect("an ordinary file");
 
         assert_eq!(attached.len(), 1);
-        assert!(told.said().is_empty(), "{:?}", told.said());
+        assert_eq!(
+            told.said(),
+            vec![("began".to_string(), "batch".to_string())]
+        );
+    }
+
+    /// A cancelled `+` names no batch.
+    ///
+    /// Said after the picker rather than before it precisely so this holds:
+    /// somebody who opens the picker and changes their mind has begun nothing,
+    /// and a panel that remembered a batch for every press would accumulate one
+    /// entry per cancellation for the life of the window.
+    #[test]
+    fn a_cancelled_selection_names_no_batch() {
+        for picked in [
+            Picked::Cancelled,
+            Picked::Unavailable("no window server".to_string()),
+        ] {
+            let told = Recording::default();
+            let _ = tauri::async_runtime::block_on(chosen_attachments(
+                &FakePicker(picked),
+                Arc::new(FakeFiles::holding(12)),
+                Arc::new(FakeTypes("text/markdown")),
+                Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
+                nothing_to_ready(),
+                &told,
+                "batch",
+                PATIENT,
+                Duration::from_millis(50),
+            ));
+
+            assert!(told.said().is_empty(), "{:?}", told.said());
+        }
     }
 
     /// A file already here never reaches the seam at all. The common path must

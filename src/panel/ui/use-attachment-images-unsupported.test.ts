@@ -26,6 +26,7 @@ vi.mock("../../host", () => ({
   readAttachmentBytes: () => Promise.resolve(null),
   hasNativeHost: () => true,
   onAttachmentReadying: () => Promise.resolve(() => {}),
+  onAttachmentBatch: () => Promise.resolve(() => {}),
 }))
 
 import { createDependencies } from "../../composition/dependencies"

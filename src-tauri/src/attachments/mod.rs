@@ -46,6 +46,23 @@
 //! under bounds, and tells the panel when a drag is overhead so the drop target
 //! can still be drawn. [`dropping`] carries the vendored lines that settle it.
 //!
+//! # Both gestures name themselves
+//!
+//! An attach can finish three quarters of a minute after the gesture that
+//! started it, and by then the open tab is no evidence of which draft it
+//! belongs to. So each gesture is named — `readiness::next_batch` mints it and
+//! [`readiness::Announce::began`] says it, a drop when it lands and a `+`
+//! selection the moment the picker's answer comes back — and everything
+//! afterwards carries that name: each waiting file's identity, and the
+//! `Dropped` the panel is finally handed.
+//!
+//! Both, and they are worth saying together, because for a while only the drop
+//! said it. A `+` selection of two placeholders describes them one after
+//! another, so the second could be announced long after somebody had moved on,
+//! and its tile landed on a draft the file was never going to join and blocked
+//! *that* draft's send. It was the same defect the drop had already been fixed
+//! for, living on the other gesture.
+//!
 //! # Ports, and why each is its own
 //!
 //! [`FilePicker`] is a window the person interacts with: it takes as long as

@@ -22,6 +22,7 @@ const HOST_EVENTS = {
   attachmentDropped: "nessa://attachment-dropped",
   attachmentDragging: "nessa://attachment-dragging",
   attachmentReadying: "nessa://attachment-readying",
+  attachmentBatch: "nessa://attachment-batch",
 } as const
 
 /**
@@ -407,26 +408,49 @@ export async function onAttachmentReadying(
 }
 
 /**
- * Be told while a drag is over the panel, and which drop it became.
+ * Be told while a drag is over the panel, and nothing else.
  *
  * The page receives no drag events of its own any more, so without this the
  * drop target could not be drawn at all: the panel would take a dropped file
  * perfectly well while giving no sign beforehand that it would.
  *
- * `batch` arrives with `dragging: false` at the moment a drop lands, and names
- * that drop. It is the page's only chance to bind the drop to the conversation
- * it landed on — the files themselves can be three quarters of a minute later,
- * by which time the open tab may be a different one, and binding then put both
- * the tile and the attach over a draft the file was never going to join.
+ * Naming the drop rode along here for a while. It made one event two facts
+ * with two audiences, and left the picker — which never drags — no way to say
+ * the same thing, so every `+` selection went on guessing its draft. That is
+ * {@link onAttachmentBatch} now, for both gestures.
  */
 export async function onAttachmentDragging(
-  handler: (over: { dragging: boolean; batch: string | null }) => void,
+  handler: (dragging: boolean) => void,
 ): Promise<() => void> {
   if (!inTauri) return () => {}
   const { listen } = await import("@tauri-apps/api/event")
-  return listen<{ dragging: boolean; batch: string | null }>(
-    HOST_EVENTS.attachmentDragging,
-    ({ payload }) => handler(payload),
+  return listen<{ dragging: boolean }>(HOST_EVENTS.attachmentDragging, ({ payload }) =>
+    handler(payload.dragging),
+  )
+}
+
+/**
+ * Be told that an attach has begun, and what it is called.
+ *
+ * Said at the gesture — the drop, or the moment the picker's answer comes back
+ * — and before the host has looked at anything. It is the page's only chance
+ * to bind that attach to the conversation it belongs to: the files themselves
+ * can be three quarters of a minute later, by which time the open tab may be a
+ * different one, and binding then put the tile and the attach over a draft the
+ * files were never going to join.
+ *
+ * Both gestures say it, because both can be slow. Only the drop did once, and
+ * a `+` selection of two placeholders therefore put its second tile on
+ * whichever tab was open when the second file finished — blocking that draft's
+ * send for a file that had gone somewhere else entirely.
+ */
+export async function onAttachmentBatch(
+  handler: (batch: string) => void,
+): Promise<() => void> {
+  if (!inTauri) return () => {}
+  const { listen } = await import("@tauri-apps/api/event")
+  return listen<{ batch: string }>(HOST_EVENTS.attachmentBatch, ({ payload }) =>
+    handler(payload.batch),
   )
 }
 

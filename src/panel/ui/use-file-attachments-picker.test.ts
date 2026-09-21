@@ -35,10 +35,12 @@ vi.mock("../../host", () => ({
   // No file here needs making ready, so the host never speaks. The tile it
   // would draw has its own tests in `use-file-attachments-readying`.
   onAttachmentReadying: () => Promise.resolve(() => {}),
+  onAttachmentBatch: () => Promise.resolve(() => {}),
 }))
 
 import { createDependencies } from "../../composition/dependencies"
 import {
+  closeConversation,
   openConversation,
   scenarioEffects,
   useConversation,
@@ -83,8 +85,10 @@ const resources: AttachmentResources = {
 
 /** What the hook answered, kept where the test can drive it. */
 let hook: ReturnType<typeof useFileAttachments>
+/** Which conversation is showing, for the tests that close one. */
+let chat: ReturnType<typeof useConversation>
 function Surface() {
-  const chat = useConversation()
+  chat = useConversation()
   hook = useFileAttachments(chat, resources)
   return React.createElement("div")
 }
@@ -472,4 +476,38 @@ it("still falls back to the extension when the platform has no answer", async ()
   // And the one the table does not know travels as its path, unread.
   expect(document).toMatchObject({ name: "report.pdf", path: "/Users/ada/report.pdf" })
   expect(readAttachmentBytes).not.toHaveBeenCalledWith("k-pdf")
+})
+
+it("says so when the draft a slow selection was for has been closed", async () => {
+  // A placeholder can be forty-five seconds behind the gesture, and a tab can
+  // be closed in forty-five seconds. The files arrive perfectly well and there
+  // is nothing left to put them on.
+  const going = chat.active.id
+  const chosen = [
+    {
+      path: "/Users/ada/report.pdf",
+      name: "report.pdf",
+      size: 4,
+      mimeType: "application/pdf",
+      ticket: `k${ticketCount++}`,
+    },
+  ]
+  await act(async () => {
+    store.dispatch(closeConversation(going))
+  })
+  expect(chat.active.id).not.toBe(going)
+
+  await act(async () => {
+    await hook.addChosenFiles(chosen, going)
+  })
+
+  // Said where the person is looking, because the conversation it is about is
+  // gone and saying it there would be saying it to nobody. Said at all because
+  // the alternative is the silence this module refuses everywhere else: three
+  // files chosen, none attached, and not a word about any of them. It used to
+  // return here without one.
+  expect(hook.refusal).toEqual({ reason: "conversation-closed" })
+  expect(draftFiles()).toHaveLength(0)
+  // And the bytes were never spent: the draft was gone before the upload.
+  expect(readAttachmentBytes).not.toHaveBeenCalled()
 })

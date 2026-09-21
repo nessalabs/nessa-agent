@@ -85,6 +85,16 @@ export type AttachmentRefusal =
    * it. Said at attach rather than after an upload that could only fail.
    */
   | { reason: "images-not-supported" }
+  /**
+   * The conversation these files were attached to was closed while the host
+   * was still describing them. Nothing is wrong with the files and choosing
+   * them again works; there is simply no draft left to put them on.
+   *
+   * Said on whichever conversation is open, because the one it is about is
+   * gone. Its own reason rather than one of the "could not be read" ones: the
+   * files were read perfectly well.
+   */
+  | { reason: "conversation-closed" }
   | { reason: "empty-folder" }
   | { reason: "folder-too-large" }
   | { reason: "unreadable-folder" }
@@ -261,6 +271,12 @@ export function refusalNotice(
       return say(
         "Images not supported",
         "This agent's model doesn't take images, so it wasn't attached. Send it to an agent that does, or attach something else.",
+      )
+    case "conversation-closed":
+      return say(
+        "That conversation was closed",
+        "The files were ready, but the draft they were for is gone. Attach them to this one to send them.",
+        { kind: "choose-files" },
       )
     case "empty-folder":
       return say("Folder has no files", "There is nothing in it to attach.")

@@ -207,24 +207,56 @@ pub fn replace(from: &Path, to: &Path) -> io::Result<()> {
 /// tampered file, so the moment is removed instead of tolerated.
 ///
 /// `RENAME_EXCL` and `RENAME_NOREPLACE` are the same guarantee under the two
-/// kernels' names for it.
+/// kernels' names for it. Not every filesystem implements either: SMB and AFP
+/// mounts answer `ENOTSUP`, and NFS, eCryptfs and many FUSE mounts answer
+/// `EINVAL` or `EOPNOTSUPP`. That is the one failure here a person could
+/// actually act on — move the data to a local volume — and the errno alone
+/// does not say so, so it is named. There is deliberately no fallback to the
+/// link-and-unlink this replaced: it would silently reopen the gap above on
+/// exactly the volumes where a network round trip makes it widest.
+///
+/// # Errors
+///
+/// `AlreadyExists` when `to` is taken, [`io::ErrorKind::Unsupported`] with a
+/// sentence naming the volume when the filesystem has no exclusive rename, and
+/// any other platform failure unchanged.
 pub fn publish_new(from: &Path, to: &Path) -> io::Result<()> {
-    let from = CString::new(from.as_os_str().as_bytes()).map_err(|_| unsafe_file())?;
-    let to = CString::new(to.as_os_str().as_bytes()).map_err(|_| unsafe_file())?;
+    let source = CString::new(from.as_os_str().as_bytes()).map_err(|_| unsafe_file())?;
+    let destination = CString::new(to.as_os_str().as_bytes()).map_err(|_| unsafe_file())?;
     #[cfg(target_vendor = "apple")]
-    let renamed = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+    let renamed =
+        unsafe { libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) };
     #[cfg(target_os = "linux")]
     let renamed = unsafe {
         libc::renameat2(
             libc::AT_FDCWD,
-            from.as_ptr(),
+            source.as_ptr(),
             libc::AT_FDCWD,
-            to.as_ptr(),
+            destination.as_ptr(),
             libc::RENAME_NOREPLACE,
         )
     };
     if renamed != 0 {
-        return Err(io::Error::last_os_error());
+        let error = io::Error::last_os_error();
+        // Compared rather than matched: Linux defines `ENOTSUP` and
+        // `EOPNOTSUPP` as the same number and macOS does not, so as patterns
+        // they are an unreachable arm on one platform and two necessary arms on
+        // the other. This says what it means on both.
+        let unsupported = error.raw_os_error().is_some_and(|code| {
+            code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::EINVAL
+        });
+        return Err(if unsupported {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "the filesystem holding {} cannot publish a file without replacing one; \
+                     local data has to live on a volume that can, not a network or FUSE mount",
+                    to.display()
+                ),
+            )
+        } else {
+            error
+        });
     }
     Ok(())
 }

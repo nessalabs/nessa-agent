@@ -59,7 +59,7 @@ use tauri::{AppHandle, DragDropEvent, Emitter, Manager};
 
 use super::choosing::{describe_each, ChosenFile};
 use super::content_type::ContentTypes;
-use super::dragged::{DragBoard, DraggedContent};
+use super::dragged::{DragBoard, DraggedContent, DraggedText};
 use super::files::{answered_within, ChosenFiles, Kind, NoAnswer};
 use super::readiness::{next_batch, Announce, Readiness, Telling, LONGEST_READY_WAIT};
 use super::refusal::{named, FileNotAttached};
@@ -88,7 +88,7 @@ pub(super) const MOST_FOLDER_ENTRIES: usize = 1_000;
 /// page has to be told which: a drag of files has no text, and a drag of text
 /// has no files. `refused` rides along rather than replacing them, because a
 /// selection is refused whole — there is never a partial `files` beside it.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Dropped {
     /// Which drop this is. The panel was told the same name when the gesture
@@ -100,9 +100,48 @@ pub struct Dropped {
     /// What the drag carried when it named no files, in the three flavours
     /// `DataTransfer` names them by, so the panel's existing readers take it
     /// unchanged.
-    pub text: super::dragged::DraggedText,
+    pub text: DraggedText,
     /// Why nothing was attached, when that is the answer.
     pub refused: Option<FileNotAttached>,
+}
+
+/// Every way a drop can answer, each of which has to name the drop it is.
+///
+/// No `Default` and no `From<FileNotAttached>`: both let a `Dropped` be built
+/// with `..` and an empty batch, and two of the five answers were built that
+/// way — every folder-walk refusal and the stalled filesystem, which are the
+/// slowest paths and so the ones most likely to outlive the tab they started
+/// on. The panel resolved an empty batch by falling back to whatever was open,
+/// which is the guess the batch exists to remove. A refusal cannot be
+/// constructed here without saying whose it is.
+impl Dropped {
+    /// A drag that carried no files: whatever was on the pasteboard.
+    fn carrying(batch: &str, text: DraggedText) -> Self {
+        Self {
+            batch: batch.to_string(),
+            files: Vec::new(),
+            text,
+            refused: None,
+        }
+    }
+    /// A drag of files, all of them described.
+    fn attaching(batch: &str, files: Vec<ChosenFile>) -> Self {
+        Self {
+            batch: batch.to_string(),
+            files,
+            text: DraggedText::default(),
+            refused: None,
+        }
+    }
+    /// A drop refused whole, and why.
+    fn refusing(batch: &str, refused: FileNotAttached) -> Self {
+        Self {
+            batch: batch.to_string(),
+            files: Vec::new(),
+            text: DraggedText::default(),
+            refused: Some(refused),
+        }
+    }
 }
 
 /// Every file under `paths`, with folders walked one level at a time.
@@ -199,11 +238,7 @@ pub(super) async fn dropped(
         ready_wait,
     } = with;
     if paths.is_empty() {
-        return Dropped {
-            batch: batch.to_string(),
-            text: dragged.entered(),
-            ..Dropped::default()
-        };
+        return Dropped::carrying(batch, dragged.entered());
     }
     let expanded = {
         let files = files.clone();
@@ -212,10 +247,13 @@ pub(super) async fn dropped(
     };
     let expanded = match expanded {
         Ok(Ok(expanded)) => expanded,
-        Ok(Err(refused)) => return refused.into(),
+        Ok(Err(refused)) => return Dropped::refusing(batch, refused),
         Err(NoAnswer { detail }) => {
             let first = paths.first().map(PathBuf::as_path).unwrap_or(Path::new(""));
-            return FileNotAttached::no_filesystem_answer(&named(first), &detail).into();
+            return Dropped::refusing(
+                batch,
+                FileNotAttached::no_filesystem_answer(&named(first), &detail),
+            );
         }
     };
     match describe_each(
@@ -223,15 +261,8 @@ pub(super) async fn dropped(
     )
     .await
     {
-        Ok(files) => Dropped {
-            batch: batch.to_string(),
-            files,
-            ..Dropped::default()
-        },
-        Err(refused) => Dropped {
-            batch: batch.to_string(),
-            ..refused.into()
-        },
+        Ok(files) => Dropped::attaching(batch, files),
+        Err(refused) => Dropped::refusing(batch, refused),
     }
 }
 
@@ -243,7 +274,7 @@ pub(super) async fn dropped(
 /// timer.
 pub(super) const DROPPED_EVENT: &str = "nessa://attachment-dropped";
 
-/// Whether a drag is currently over the panel.
+/// Whether a drag is currently over the panel, and nothing else.
 ///
 /// The webview used to know this from its own `dragenter`/`dragleave` and drew
 /// the drop target from it. It receives neither any more, so the host says so:
@@ -283,20 +314,21 @@ pub fn dropped_on_panel(app: &AppHandle, event: &DragDropEvent) {
     let Some(deps) = crate::composition::resolve(app) else {
         return;
     };
-    // `Some` only on a drop, because only a drop becomes work the panel has to
-    // bind to a draft. A drag that merely passed overhead has nothing to name.
-    let over = |dragging: bool, named: Option<&str>| {
-        if let Some(panel) = app.get_webview_window(crate::panel::MAIN_WINDOW) {
-            let _ = panel.emit(
-                DRAGGING_EVENT,
-                serde_json::json!({ "dragging": dragging, "batch": named }),
-            );
-        }
+    // One fact: whether a drag is overhead. Naming the drop rode along here for
+    // a while, which made this event two facts with two audiences and left the
+    // picker — which never drags — no way to say the same thing. It is
+    // `Announce::began` for both gestures now.
+    let over = |dragging: bool| {
+        let _ = app.emit_to(
+            crate::panel::MAIN_WINDOW,
+            DRAGGING_EVENT,
+            serde_json::json!({ "dragging": dragging }),
+        );
     };
     board_after(event, deps.dragging.as_ref());
     match event {
-        DragDropEvent::Enter { .. } => over(true, None),
-        DragDropEvent::Leave => over(false, None),
+        DragDropEvent::Enter { .. } => over(true),
+        DragDropEvent::Leave => over(false),
         DragDropEvent::Drop { paths, .. } => {
             let batch = next_batch();
             // The batch reaches the panel *now*, at the gesture, so it can bind
@@ -304,7 +336,8 @@ pub fn dropped_on_panel(app: &AppHandle, event: &DragDropEvent) {
             // three quarters of a minute later, by which time the open tab may
             // be a different one — and binding then put the tile over a draft
             // the file was never going to join.
-            over(false, Some(&batch));
+            Telling(app).began(&batch);
+            over(false);
             let app = app.clone();
             let paths = paths.clone();
             tauri::async_runtime::spawn(async move {
@@ -348,15 +381,6 @@ pub fn dropped_on_panel(app: &AppHandle, event: &DragDropEvent) {
     }
 }
 
-impl From<FileNotAttached> for Dropped {
-    fn from(refused: FileNotAttached) -> Self {
-        Self {
-            refused: Some(refused),
-            ..Self::default()
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,7 +404,6 @@ mod tests {
             ready_wait: Duration::from_millis(50),
         }
     }
-    use crate::attachments::dragged::DraggedText;
     use crate::attachments::refusal::NotAttached;
     use std::io::ErrorKind;
 
@@ -427,6 +450,92 @@ mod tests {
             &Untold,
             "batch",
         ))
+    }
+
+    /// Every answer a drop can give names the drop it is, refusals included.
+    ///
+    /// Two of the five used to reach the panel with an empty batch — both
+    /// built with `..Default::default()` through a `From<FileNotAttached>`
+    /// that had no batch to give. They were the folder walk's refusals and the
+    /// filesystem that stopped answering: the slowest paths, and so the ones
+    /// most likely to land after the tab has changed. An empty batch made the
+    /// panel fall back to whatever was open, which is the guess the batch
+    /// exists to remove — a person would have seen a file they never dropped
+    /// refused on a conversation that had nothing to do with it, while the
+    /// draft they did drop it on said nothing.
+    ///
+    /// Written as one list rather than an assertion inside each test, so that
+    /// a sixth answer added later is a compile error here if it is built any
+    /// other way.
+    #[test]
+    fn every_answer_a_drop_gives_names_the_drop_it_is() {
+        let huge: Vec<String> = (0..=MOST_FOLDER_FILES)
+            .map(|n| format!("/Users/dev/many/{n}.md"))
+            .collect();
+        let huge: Vec<&str> = huge.iter().map(String::as_str).collect();
+
+        let answers = [
+            // Files described.
+            (
+                "files",
+                drop_of(
+                    &["/Users/dev/a.swift"],
+                    Arc::new(FakeFiles::holding(64)),
+                    &Carrying::nothing(),
+                ),
+            ),
+            // A drag carrying no files at all: whatever was on the pasteboard.
+            (
+                "text",
+                drop_of(
+                    &[],
+                    Arc::new(FakeFiles::holding(64)),
+                    &Carrying(DraggedText {
+                        plain: "some prose".to_string(),
+                        ..DraggedText::default()
+                    }),
+                ),
+            ),
+            // The folder walk refusing.
+            (
+                "folder",
+                drop_of(
+                    &["/Users/dev/many"],
+                    Arc::new(FakeFiles::holding(8).tree(
+                        &[("/Users/dev/many", &huge)],
+                        &[("/Users/dev/many", Kind::Directory)],
+                    )),
+                    &Carrying::nothing(),
+                ),
+            ),
+            // The filesystem not answering the walk at all.
+            (
+                "stalled",
+                tauri::async_runtime::block_on(dropped(
+                    paths(&["/Users/dev/a.swift"]),
+                    describing(
+                        Arc::new(FakeFiles::stalling(Duration::from_secs(30))),
+                        Duration::from_millis(20),
+                    ),
+                    &Carrying::nothing(),
+                    &Untold,
+                    "batch",
+                )),
+            ),
+            // One file refusing, which refuses the selection.
+            (
+                "described",
+                drop_of(
+                    &["/Users/dev/gone.md"],
+                    Arc::new(FakeFiles::refusing(ErrorKind::NotFound)),
+                    &Carrying::nothing(),
+                ),
+            ),
+        ];
+
+        for (which, answer) in answers {
+            assert_eq!(answer.batch, "batch", "{which}: {answer:?}");
+        }
     }
 
     /// An ordinary drop of two files is two described files, in order, each

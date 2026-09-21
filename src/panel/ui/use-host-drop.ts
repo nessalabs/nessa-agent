@@ -7,14 +7,21 @@ import { pickerRefusal, type AttachmentRefusal } from "../application/attachment
 type HostDropActions = {
   /** The same call the picker's answer goes through, for a named draft. */
   addChosenFiles: (chosen: readonly ChosenFile[], conversationId: string) => void
-  /** Remember which draft this drop landed on, while it is still landing. */
-  beganBatch: (batch: string, conversationId: string) => void
   /** The conversation a batch was bound to when it began. */
   conversationOf: (batch: string) => string
   addImageUrl: (url: string) => void
   focusComposer: () => void
   pasteAttachment: (text: string) => void
-  refuse: (refusal: AttachmentRefusal) => void
+  /**
+   * Say why nothing was attached, on a named draft.
+   *
+   * Named for the same reason the attach is. A drop refused forty seconds
+   * later used to land on whichever tab was open by then: the draft it was
+   * really about lost its tile with no explanation, and a different draft was
+   * told about a file it had never seen. The panel's own refusals have always
+   * carried their conversation; only the host's lost it.
+   */
+  refuse: (refusal: AttachmentRefusal, conversationId: string) => void
 }
 
 /**
@@ -60,38 +67,34 @@ function asTransfer(text: {
  * The browser keeps its own `useContentDrop`: outside Tauri there is no host
  * to take the drag, the page still gets its events, and nothing here fires.
  */
-export function useHostDrop(actions: HostDropActions, conversationId: string) {
+export function useHostDrop(actions: HostDropActions) {
   const [dragging, setDragging] = React.useState(false)
   // The handlers are read at drop time rather than captured at subscribe time,
-  // so a drop lands on the conversation that is open when it happens instead
-  // of the one that was open when the panel mounted.
+  // so a drop reaches whatever the panel's current handlers are rather than
+  // the ones that existed when it mounted. *Which draft* it lands on is not
+  // read here at all: that is the drop's own name, resolved by
+  // `conversationOf`, and nothing in this hook consults the open tab.
   const latest = React.useRef(actions)
   React.useLayoutEffect(() => {
     latest.current = actions
   })
-  const activeId = React.useRef(conversationId)
-  React.useLayoutEffect(() => {
-    activeId.current = conversationId
-  })
   React.useEffect(() => {
     let live = true
     const subscriptions = Promise.all([
-      onAttachmentDragging(({ dragging: over, batch }) => {
-        if (!live) return
-        setDragging(over)
-        // The drop's own moment. Binding it here is the only chance to bind it
-        // to the draft it landed on: the files can be three quarters of a
-        // minute away, and the open tab by then may be a different one.
-        if (batch) latest.current.beganBatch(batch, activeId.current)
+      onAttachmentDragging((over) => {
+        if (live) setDragging(over)
       }),
       onAttachmentDropped((dropped) => {
         if (!live) return
         setDragging(false)
+        // One lookup, before the branch, because every answer a drop gives is
+        // about the same draft — the one the drop landed on. The refusal
+        // branch used to skip it and land on whatever was open.
+        const target = latest.current.conversationOf(dropped.batch)
         if (dropped.refused) {
-          latest.current.refuse(pickerRefusal(dropped.refused))
+          latest.current.refuse(pickerRefusal(dropped.refused), target)
           return
         }
-        const target = latest.current.conversationOf(dropped.batch)
         if (dropped.files.length > 0) {
           latest.current.addChosenFiles(dropped.files, target)
           return

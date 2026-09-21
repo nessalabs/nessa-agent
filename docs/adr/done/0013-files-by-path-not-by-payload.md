@@ -363,7 +363,7 @@ refused with a sentence naming the route that works.
 
 ## How this was built, and what it says about the size
 
-Six adversarial reviews, and each found blocking defects in a *different* area:
+Seven adversarial reviews, and each found blocking defects in a *different* area:
 the audit's evidence, then the session journals and the published units, then
 classification and a host hang, then which draft a slow attach belongs to, and
 finally a race inside local storage's own publish â€” a record was linked into
@@ -372,13 +372,24 @@ told it could not be read. Nothing was found twice, which is the useful signal â
 it is not that one part is weak, it is that the change spans more than one review
 can hold at once.
 
-Two of those reviews also made the same *kind* of comment about the fixes rather
-than the code: a defect closed by listing the cases that trip it will be
+The seventh found one defect at four edges, and its shape is worth recording:
+the attach had been given a name so that a slow one could find its own draft,
+and the name was wired into half the paths. The picker minted one and never
+said it; the refusal branch had it in hand and read the open tab instead; two of
+five `Dropped` answers were built through a `..Default::default()` that supplied
+an empty one. Each edge reproduced the original bug exactly. The lesson is not
+"wire it everywhere" but that a value which must always be present should not be
+constructible absent: `Dropped` lost its `Default` and its `From`, and every
+answer now goes through a constructor that demands the name.
+
+Three of those reviews also made the same *kind* of comment about the fixes
+rather than the code: a defect closed by listing the cases that trip it will be
 reopened by the next case nobody listed. The markdown-metacharacter rule was
 rewritten twice before it was replaced by encoding the two strings the adapter
-interpolates; the publish above was fixed by removing the moment rather than by
-tolerating a read that fails during it. Both are the same move, and it is the
-one worth keeping.
+interpolates; the publish was fixed by removing the moment rather than by
+tolerating a read that fails during it; the batch was fixed by making an
+unnamed answer impossible to build rather than by finding the sites that built
+one. All three are the same move, and it is the one worth keeping.
 
 What kept churning, and what did not, falls along clean lines, so the work is
 being split into three changes that land in order. This record's decision covers

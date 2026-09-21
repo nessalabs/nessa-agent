@@ -174,19 +174,15 @@ export function App({
   // drop events at all, so `contentDrop`'s handlers never fire. In a browser
   // there is no host, the page keeps its own drops, and nothing below fires.
   // Neither is gated on the other: each is silent where the other is live.
-  const hostDrop = useHostDrop(
-    {
-      addChosenFiles: (chosen, conversationId) =>
-        void attachments.addChosenFiles(chosen, conversationId),
-      addImageUrl: (url) => void attachments.addImageUrl(url),
-      beganBatch: attachments.beganBatch,
-      conversationOf: attachments.conversationOf,
-      focusComposer,
-      pasteAttachment,
-      refuse: attachments.refuse,
-    },
-    chat.active.id,
-  )
+  const hostDrop = useHostDrop({
+    addChosenFiles: (chosen, conversationId) =>
+      void attachments.addChosenFiles(chosen, conversationId),
+    addImageUrl: (url) => void attachments.addImageUrl(url),
+    conversationOf: attachments.conversationOf,
+    focusComposer,
+    pasteAttachment,
+    refuse: attachments.refuse,
+  })
   /**
    * Show a conversation, whatever made it the one to show.
    *

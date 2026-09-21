@@ -230,6 +230,55 @@ mod tests {
         assert!(open(&path, OpenMode::Read).is_err());
     }
 
+    /// The one failure here somebody can act on, said so they can.
+    ///
+    /// An exclusive rename is not universal: SMB and AFP answer `ENOTSUP`, and
+    /// NFS, eCryptfs and many FUSE mounts answer `EINVAL` or `EOPNOTSUPP`. The
+    /// link-and-unlink this replaced worked on all of them, so the blast radius
+    /// is new, and the errno alone would reach a person as "conversation could
+    /// not be created" with nothing to do about it.
+    ///
+    /// There is no fallback on purpose: falling back to the link would reopen
+    /// the two-linked gap on exactly the volumes where a network round trip
+    /// makes it widest. What a caller gets instead is a kind it can tell apart
+    /// from a taken name, and a sentence naming the volume.
+    ///
+    /// Asserted through the kinds rather than by mounting one of those
+    /// filesystems, which no test here can do: what is pinned is that the three
+    /// outcomes stay distinguishable, since one is ordinary and one is fatal to
+    /// every write this crate makes.
+    #[cfg(unix)]
+    #[test]
+    fn a_volume_that_cannot_publish_is_told_apart_from_a_name_already_taken() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("private");
+        create_directory(&directory).unwrap();
+        let path = directory.join("record");
+
+        let mut first = PrivateTempFile::new_in(&directory).unwrap();
+        first.as_file_mut().write_all(b"owner").unwrap();
+        first.publish(&path).unwrap();
+
+        let mut second = PrivateTempFile::new_in(&directory).unwrap();
+        second.as_file_mut().write_all(b"impostor").unwrap();
+        let taken = second.publish(&path).unwrap_err();
+        assert_eq!(
+            taken.kind(),
+            io::ErrorKind::AlreadyExists,
+            "a taken name is the ordinary case and must not read as a broken volume"
+        );
+
+        // And a destination whose directory does not exist is neither: an
+        // unexpected failure keeps the platform's own error rather than being
+        // dressed up as one of the two a caller branches on.
+        let mut third = PrivateTempFile::new_in(&directory).unwrap();
+        third.as_file_mut().write_all(b"nowhere").unwrap();
+        let elsewhere = third
+            .publish(&directory.join("no-such/record"))
+            .unwrap_err();
+        assert_eq!(elsewhere.kind(), io::ErrorKind::NotFound);
+    }
+
     #[test]
     fn publication_never_replaces_a_taken_name_and_stale_temporaries_are_released() {
         let root = tempfile::tempdir().unwrap();

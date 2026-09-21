@@ -12,6 +12,7 @@ import {
 } from "../../conversation"
 import {
   chooseAttachmentFiles,
+  onAttachmentBatch,
   onAttachmentReadying,
   readAttachmentBytes,
   type ChosenFile,
@@ -24,6 +25,22 @@ import {
 import { pickerRefusal, type AttachmentRefusal } from "../application/attachment-notice"
 
 const MIB = 1024 * 1024
+
+/**
+ * How many gestures the panel remembers the conversation of.
+ *
+ * One entry is two short strings, and nothing removes one when its attach
+ * finishes — an attach can end in files, in a refusal, or in a conversation
+ * that has since closed, and only the first of those comes back here. Rather
+ * than three cleanup paths that a fourth outcome would quietly escape, the map
+ * is a window over the most recent gestures.
+ *
+ * Far more than can ever be in flight: the longest an attach waits is
+ * forty-five seconds, and nobody drops sixty-four times in forty-five seconds.
+ * An entry evicted while still in flight falls back to the open tab, which is
+ * what the panel did for every gesture before any of this existed.
+ */
+const MOST_REMEMBERED_BATCHES = 64
 
 /** Coordinates local file selection and preview against the originating conversation. */
 /**
@@ -128,18 +145,32 @@ export function useFileAttachments(
    * file begins with its batch, so the tile finds its draft through the
    * gesture that started it rather than through whatever is on screen now.
    *
-   * A batch nobody recorded falls back to the open tab, which is the best
-   * guess available and is what a `+` selection wants anyway: that gesture
-   * cannot happen in a tab the person is not looking at.
+   * A batch nobody recorded falls back to the open tab. That is a real
+   * fallback rather than the ordinary path — both gestures announce
+   * themselves — and it covers the panel having reloaded mid-attach, where
+   * the open tab is the only thing left to go on.
    */
   const conversationOf = (id: string) =>
     batches.current.get(id.split(":")[0] ?? "") ?? activeId.current
-  /** Remember which draft a gesture landed on, at the moment it landed. */
-  const beganBatch = (batch: string, conversationId: string) => {
-    batches.current.set(batch, conversationId)
-  }
   React.useEffect(() => {
     let live = true
+    // The gesture's own moment, for both gestures. Everything after it can be
+    // three quarters of a minute later, and the open tab is no longer evidence
+    // of anything by then.
+    const batch = onAttachmentBatch((named) => {
+      if (!live) return
+      // Bounded: the oldest are dropped once there are more than a window's
+      // worth of gestures in flight, because nothing removes an entry when an
+      // attach finishes and a long session would otherwise keep one string
+      // pair per drop and per `+` for as long as the window lives. Insertion
+      // order is age here — the host's counter never reuses a name.
+      const held = batches.current
+      held.set(named, activeId.current)
+      for (const oldest of held.keys()) {
+        if (held.size <= MOST_REMEMBERED_BATCHES) break
+        held.delete(oldest)
+      }
+    })
     const subscription = onAttachmentReadying(({ id, name, readying: waiting }) => {
       if (!live) return
       setReadying((current) => {
@@ -154,6 +185,7 @@ export function useFileAttachments(
     })
     return () => {
       live = false
+      void batch.then((stop) => stop())
       void subscription.then((stop) => stop())
     }
   }, [])
@@ -235,7 +267,18 @@ export function useFileAttachments(
     const target = conversationsRef.current.find(
       (conversation) => conversation.id === targetId,
     )
-    if (!target) return
+    // The draft these were for is gone — closed during a fetch that can take
+    // three quarters of a minute. There is nothing to attach them to, and
+    // saying so on the conversation that no longer exists would be saying it
+    // to nobody, so it is said where the person is looking.
+    //
+    // It is said at all because the alternative is the silence this module
+    // refuses everywhere else: a person who chose five files and got none has
+    // been told nothing about any of them. This used to `return` here.
+    if (!target) {
+      refuse({ reason: "conversation-closed" }, activeId.current)
+      return
+    }
     // Three states, and only one of them refuses. `imageInput` is the
     // gateway's answer about *this* conversation's model, and `undefined`
     // means it has not answered yet — which is not "no". Guessing "no" would
@@ -472,7 +515,6 @@ export function useFileAttachments(
     clearRefusal: () => setRefused(null),
     addFiles,
     addImageUrl,
-    beganBatch,
     conversationOf,
     chooseFiles: () => void chooseFiles(),
     addChosenFiles,

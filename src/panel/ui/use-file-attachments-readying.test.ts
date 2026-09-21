@@ -17,14 +17,19 @@ import * as React from "react"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 
-const { onAttachmentReadying, chooseAttachmentFiles, readAttachmentBytes } = vi.hoisted(
-  () => ({
-    onAttachmentReadying: vi.fn(),
-    chooseAttachmentFiles: vi.fn(),
-    readAttachmentBytes: vi.fn(),
-  }),
-)
+const {
+  onAttachmentBatch,
+  onAttachmentReadying,
+  chooseAttachmentFiles,
+  readAttachmentBytes,
+} = vi.hoisted(() => ({
+  onAttachmentBatch: vi.fn(),
+  onAttachmentReadying: vi.fn(),
+  chooseAttachmentFiles: vi.fn(),
+  readAttachmentBytes: vi.fn(),
+}))
 vi.mock("../../host", () => ({
+  onAttachmentBatch,
   onAttachmentReadying,
   chooseAttachmentFiles,
   readAttachmentBytes,
@@ -45,6 +50,15 @@ import { createAttachmentResources } from "../adapters/attachment-resources"
 type News = { id: string; name: string; readying: boolean }
 /** What the host said. Captured so a test can speak as the host. */
 let said: (file: News) => void
+/**
+ * The host naming a gesture, which it does for `+` and for a drop alike.
+ *
+ * Captured because it is the only moment the panel can learn which draft an
+ * attach belongs to. The host says it before it has looked at anything, so
+ * whatever tab is open when a test calls this is the tab the gesture happened
+ * in.
+ */
+let began: (batch: string) => void
 /**
  * Speak as the host about one file.
  *
@@ -73,6 +87,11 @@ beforeEach(async () => {
   onAttachmentReadying.mockReset()
   onAttachmentReadying.mockImplementation((handler: (file: News) => void) => {
     said = handler
+    return Promise.resolve(() => {})
+  })
+  onAttachmentBatch.mockReset()
+  onAttachmentBatch.mockImplementation((handler: (batch: string) => void) => {
+    began = handler
     return Promise.resolve(() => {})
   })
   container = document.createElement("div")
@@ -173,10 +192,11 @@ it("tells two files of the same name apart, because the host names them apart", 
 })
 
 it("leaves the tile with the conversation the gesture landed on, not the one on screen", async () => {
-  // The drop happened here, and was named here — which is the only moment the
-  // panel can bind it, since the file itself is up to forty-five seconds away.
+  // The gesture happened here, and the host named it here — which is the only
+  // moment the panel can bind it, since the file itself is up to forty-five
+  // seconds away.
   const first = chat.active.id
-  await act(async () => hook.beganBatch("b2", first))
+  await act(async () => began("b2"))
 
   // Another tab opens *before* the host has said anything at all. Reading the
   // open tab when the news finally comes would put the tile, and the block on
@@ -222,14 +242,65 @@ it("leaves the tile with the conversation it was attached to when the tab change
   expect(hook.isPending(first)).toBe(false)
 })
 
-it("falls back to the open tab for a batch nobody recorded", async () => {
-  // A `+` selection cannot happen in a tab nobody is looking at, so the open
-  // one is not a guess there — but it must be *this* one and not nothing.
+it("binds a picker selection the same way, because a `+` can be slow too", async () => {
+  // This is the half that was missing, and the reason it was missing is that
+  // the batch was announced by the drop alone. A `+` selection that picks two
+  // placeholders describes them one after another, so the second can be
+  // announced forty seconds after the first — long after somebody has moved
+  // on. The gesture is what binds it, not the announcement.
+  const first = chat.active.id
+  await act(async () => began("p4"))
+  await act(async () => say({ id: "p4:0", name: "one.pdf", readying: true }))
+
+  await act(async () => {
+    store.dispatch(openConversation())
+  })
+  expect(chat.active.id).not.toBe(first)
+
+  // The second file of the same selection, announced from the new tab.
+  await act(async () => say({ id: "p4:1", name: "two.pdf", readying: true }))
+
+  // Both belong to the draft `+` was pressed in. Reading the open tab put this
+  // one on a conversation that had nothing to do with it and blocked its send.
+  expect(names()).toEqual([])
+  expect(hook.isPending(first)).toBe(true)
+  expect(hook.isPending(chat.active.id)).toBe(false)
+})
+
+it("falls back to the open tab for a batch it never heard named", async () => {
+  // Not the ordinary path any more — both gestures announce themselves — but
+  // a panel that reloaded mid-attach has nothing else to go on, and the open
+  // tab is better than dropping the tile on the floor.
   const here = chat.active.id
   await act(async () => say({ id: "unheard-of:0", name: "picked.pdf", readying: true }))
 
   expect(names()).toEqual(["picked.pdf"])
   expect(hook.isPending(here)).toBe(true)
+})
+
+it("remembers a bounded number of gestures, so a long session does not grow one", async () => {
+  // Nothing removes an entry when an attach ends — it can end in files, in a
+  // refusal, or in a conversation that has since closed — so the map is a
+  // window rather than a set of cleanup paths a fourth outcome could escape.
+  const first = chat.active.id
+  await act(async () => began("old"))
+  await act(async () => {
+    for (let n = 0; n < 64; n += 1) began(`b${n}`)
+  })
+  await act(async () => {
+    store.dispatch(openConversation())
+  })
+
+  // The oldest was evicted, so it falls back to the open tab — which is what
+  // the panel did for every gesture before any of this existed.
+  await act(async () => say({ id: "old:0", name: "evicted.pdf", readying: true }))
+  expect(names()).toEqual(["evicted.pdf"])
+  expect(hook.isPending(first)).toBe(false)
+
+  // And one still inside the window is still bound to where it began.
+  await act(async () => say({ id: "b63:0", name: "kept.pdf", readying: true }))
+  expect(names()).toEqual(["evicted.pdf"])
+  expect(hook.isPending(first)).toBe(true)
 })
 
 it("stops listening when the panel goes, so a late answer reaches nothing", async () => {

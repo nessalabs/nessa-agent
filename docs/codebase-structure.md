@@ -688,9 +688,20 @@ pasteboard (`attachments/dragged.rs`, snapshotted on `Enter`, because the
 session's payload is gone by the time a drop event reaches a handler), a dropped
 folder is walked here under `MOST_FOLDER_FILES` and `MOST_FOLDER_ENTRIES`
 instead of by the page, and a `dragging` event tells the panel when to draw the
-drop target. Each drop is named, and the panel binds that name to the
-conversation the gesture landed on, because the files can be three quarters of a
-minute behind the drop and the open tab by then may be a different one.
+drop target.
+
+Both gestures name themselves, through `Announce::began` — a drop when it lands,
+a `+` selection the moment the picker's answer comes back — and the panel binds
+that name to the conversation showing at the time. Everything afterwards is
+routed by the name: the files, the tile that holds the draft's send, and the
+refusal. The batch exists because an attach can be three quarters of a minute
+behind its gesture, and by then the open tab is no evidence of anything. Only the
+drop announced itself for a while, so a `+` selection of two placeholders put its
+second tile on whichever tab was open when the second file finished; and the
+refusal branch read the open tab even for a drop that had a name, so a folder
+refused late took a tile off one draft and told a different one about a file it
+had never seen. Neither guesses now, and a `Dropped` cannot be constructed
+without its name.
 
 `attachments/readiness.rs` is the seam for a file that is not readable yet. A
 file iCloud is keeping answers a `stat` with a real name, type and length and

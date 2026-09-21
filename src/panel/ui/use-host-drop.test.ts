@@ -27,16 +27,20 @@ import { useHostDrop } from "./use-host-drop"
 
 type Dropped = Parameters<Parameters<typeof onAttachmentDropped>[0]>[0]
 
-/** Where the panel says it is, which `Surface` re-reads on every render. */
-let here = "c1"
-/** What `beganBatch` recorded, which is the whole of what it is for. */
-const bound = new Map<string, string>()
+/**
+ * Which draft each drop was bound to, standing in for the attachments hook.
+ *
+ * The hook learns this from the host at the gesture and has its own tests for
+ * it; what is tested here is that every answer a drop gives is routed by that
+ * name rather than by whatever is on screen when the answer arrives.
+ */
+const bound = new Map<string, string>([
+  ["b1", "c1"],
+  ["b2", "c2"],
+])
 const actions = {
   addChosenFiles: vi.fn(),
-  beganBatch: vi.fn((batch: string, conversationId: string) => {
-    bound.set(batch, conversationId)
-  }),
-  conversationOf: vi.fn((batch: string) => bound.get(batch) ?? here),
+  conversationOf: vi.fn((batch: string) => bound.get(batch) ?? "whatever-is-open"),
   addImageUrl: vi.fn(),
   focusComposer: vi.fn(),
   pasteAttachment: vi.fn(),
@@ -44,13 +48,13 @@ const actions = {
 }
 /** The handler the hook registered, once it has subscribed. */
 let deliver: (dropped: Dropped) => void
-let drag: (over: { dragging: boolean; batch: string | null }) => void
+let drag: (over: boolean) => void
 let container: HTMLElement
 let root: Root
 let dragging: boolean
 
 function Surface() {
-  dragging = useHostDrop(actions, here).dragging
+  dragging = useHostDrop(actions).dragging
   return null
 }
 
@@ -71,17 +75,13 @@ const dropOf = (dropped: Partial<Dropped>): Dropped => ({
 })
 
 beforeEach(async () => {
-  here = "c1"
-  bound.clear()
   for (const action of Object.values(actions)) action.mockClear()
   onAttachmentDragging.mockReset()
   onAttachmentDropped.mockReset()
-  onAttachmentDragging.mockImplementation(
-    (handler: (over: { dragging: boolean; batch: string | null }) => void) => {
-      drag = handler
-      return Promise.resolve(() => {})
-    },
-  )
+  onAttachmentDragging.mockImplementation((handler: (over: boolean) => void) => {
+    drag = handler
+    return Promise.resolve(() => {})
+  })
   onAttachmentDropped.mockImplementation((handler: (dropped: Dropped) => void) => {
     deliver = handler
     return Promise.resolve(() => {})
@@ -148,20 +148,29 @@ it("downloads an image dragged off a web page, which also has no other route", a
   expect(actions.pasteAttachment).not.toHaveBeenCalled()
 })
 
-it("says why a drop was turned away, in the panel's own words", async () => {
-  // The host's reason, through the one function that knows its vocabulary.
+it("says why a drop was turned away, in the panel's own words and on its own draft", async () => {
+  // The host's reason, through the one function that knows its vocabulary —
+  // and on the conversation the drop landed on. A folder refused forty seconds
+  // later used to land on whichever tab was open by then: the draft it was
+  // really about lost its tile with no explanation, and a different draft was
+  // told about a file it had never seen.
   await act(async () =>
-    deliver(dropOf({ refused: { reason: "folder-empty", shown: null, detail: null } })),
+    deliver(
+      dropOf({
+        batch: "b1",
+        refused: { reason: "folder-empty", shown: null, detail: null },
+      }),
+    ),
   )
 
-  expect(actions.refuse).toHaveBeenCalledWith({ reason: "empty-folder" })
+  expect(actions.refuse).toHaveBeenCalledWith({ reason: "empty-folder" }, "c1")
   expect(actions.addChosenFiles).not.toHaveBeenCalled()
 })
 
 it("draws the drop target while a drag is over the panel, and stops on the drop", async () => {
   expect(dragging).toBe(false)
 
-  await act(async () => drag({ dragging: true, batch: null }))
+  await act(async () => drag(true))
   expect(dragging).toBe(true)
 
   // The drop itself puts it down, rather than waiting for a `leave` that a
@@ -185,52 +194,25 @@ it("answers the handlers that are current when the drop lands", async () => {
   expect(later).toHaveBeenCalled()
 })
 
-it("attaches to the conversation the drop landed on, not the one open when it finishes", async () => {
-  // The gesture's moment: a drag ends over `c1`, and the host names the drop.
-  await act(async () => drag({ dragging: false, batch: "b7" }))
-  expect(actions.beganBatch).toHaveBeenCalledWith("b7", "c1")
-
-  // Three quarters of a minute of fetching later, somebody is reading another
-  // conversation. The files finally arrive.
-  await act(async () => {
-    here = "c2"
-    root.render(React.createElement(Surface))
-  })
-  await act(async () =>
-    deliver(dropOf({ batch: "b7", files: [file("a.pdf", "application/pdf")] })),
-  )
-
-  // They join the draft they were dropped on. Reading the open tab here put
-  // them — and the tile that blocks its send — over a draft they were never
-  // going to join, while the one they belonged to showed nothing.
-  expect(actions.addChosenFiles).toHaveBeenCalledWith(
-    [file("a.pdf", "application/pdf")],
-    "c1",
-  )
-})
-
-it("binds each drop to its own conversation, so two in flight do not swap drafts", async () => {
-  await act(async () => drag({ dragging: false, batch: "b1" }))
-  await act(async () => {
-    here = "c2"
-    root.render(React.createElement(Surface))
-  })
-  await act(async () => drag({ dragging: false, batch: "b2" }))
-
-  // Out of order, which is what two fetches of different sizes do.
+it("routes every answer by the drop's own name, whatever arrives when", async () => {
+  // Two drops on two drafts, answering out of order — which is what two
+  // fetches of different sizes do, one of them forty-five seconds long. Files
+  // and refusals alike belong to the drop that produced them, not to the tab
+  // in front of somebody when the answer lands.
   await act(async () => deliver(dropOf({ batch: "b2", files: [file("b.pdf", "")] })))
+  await act(async () =>
+    deliver(
+      dropOf({
+        batch: "b1",
+        refused: { reason: "folder-empty", shown: null, detail: null },
+      }),
+    ),
+  )
   await act(async () => deliver(dropOf({ batch: "b1", files: [file("a.pdf", "")] })))
 
   expect(actions.addChosenFiles.mock.calls.map(([, target]) => target)).toEqual([
     "c2",
     "c1",
   ])
-})
-
-it("does not bind a drag that is only passing over the panel", async () => {
-  // Only a drop is named. An entering drag has no batch, and binding the open
-  // tab to a drop that never happened would leave a dead entry behind.
-  await act(async () => drag({ dragging: true, batch: null }))
-
-  expect(actions.beganBatch).not.toHaveBeenCalled()
+  expect(actions.refuse).toHaveBeenCalledWith({ reason: "empty-folder" }, "c1")
 })

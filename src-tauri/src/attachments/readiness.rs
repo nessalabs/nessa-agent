@@ -72,6 +72,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use tauri::{AppHandle, Emitter};
+
 // Apple's, whole. Everything above and below this line is about *whether* a
 // file is readable and who might fix it, which every platform has; the module
 // is about iCloud, which only one has. Gated rather than left compiled-but-
@@ -193,6 +195,20 @@ impl Readiness {
 /// never what is being done about it, so a handler that is not iCloud does not
 /// make the sentence a lie.
 pub trait Announce: Send + Sync {
+    /// An attach has begun, and this is what it is called.
+    ///
+    /// Said at the *gesture* — the drop, or the moment the picker's answer
+    /// comes back — and before any work, because that is the only instant the
+    /// panel can be sure which draft this attach belongs to. Everything after
+    /// it can be three quarters of a minute later, by which time the open tab
+    /// may be a different one.
+    ///
+    /// Both gestures say it. Only the drop did, and a `+` selection therefore
+    /// fell back to whatever tab was open when the host finally spoke: pick two
+    /// placeholders, switch tabs during the first one's fetch, and the second
+    /// file's tile landed on the wrong draft and blocked *its* send while the
+    /// file itself went to the right one.
+    fn began(&self, batch: &str);
     /// This file is being made ready. `id` identifies this waiting, `name` is
     /// what to put on the tile.
     fn readying(&self, id: &str, name: &str);
@@ -220,10 +236,16 @@ pub(super) fn next_batch() -> String {
 /// The panel's own event name for a file that needs a moment.
 pub(super) const READYING_EVENT: &str = "nessa://attachment-readying";
 
+/// The panel's own event name for an attach that has just begun.
+pub(super) const BATCH_EVENT: &str = "nessa://attachment-batch";
+
 /// Telling the panel, which draws a tile for it.
-pub(super) struct Telling<'a>(pub &'a tauri::AppHandle);
+pub(super) struct Telling<'a>(pub &'a AppHandle);
 
 impl Announce for Telling<'_> {
+    fn began(&self, batch: &str) {
+        self.tell(BATCH_EVENT, serde_json::json!({ "batch": batch }));
+    }
     fn readying(&self, id: &str, name: &str) {
         self.say(id, name, true);
     }
@@ -234,14 +256,19 @@ impl Announce for Telling<'_> {
 
 impl Telling<'_> {
     fn say(&self, id: &str, name: &str, readying: bool) {
-        use tauri::{Emitter, Manager};
-
-        if let Some(panel) = self.0.get_webview_window(crate::panel::MAIN_WINDOW) {
-            let _ = panel.emit(
-                READYING_EVENT,
-                serde_json::json!({ "id": id, "name": name, "readying": readying }),
-            );
-        }
+        self.tell(
+            READYING_EVENT,
+            serde_json::json!({ "id": id, "name": name, "readying": readying }),
+        );
+    }
+    /// To the panel, and to the panel only.
+    ///
+    /// `emit_to` rather than `emit`: `emit` broadcasts to every window, and the
+    /// `get_webview_window` above it read like a target while doing nothing of
+    /// the sort. Nothing else listens for these today, which is exactly why it
+    /// was invisible.
+    fn tell(&self, event: &str, payload: serde_json::Value) {
+        let _ = self.0.emit_to(crate::panel::MAIN_WINDOW, event, payload);
     }
 }
 
@@ -255,6 +282,7 @@ pub struct Untold;
 
 #[cfg(test)]
 impl Announce for Untold {
+    fn began(&self, _batch: &str) {}
     fn readying(&self, _id: &str, _name: &str) {}
     fn settled(&self, _id: &str) {}
 }
