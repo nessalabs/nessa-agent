@@ -62,10 +62,29 @@ function nothingWasDone(
   switch (reason) {
     case "agent-startup-deadline":
       return "The agent was still starting and ran out of time, so nothing was done. Starting it is slowest the first time after an install or update; once the runtime is warm this normally works."
+    // This conversation's agent specifically, and not the gateway's agents in
+    // general: a gateway that runs none at all answers
+    // `conversations-not-configured` below, and this code is raised only for an
+    // agent a conversation named that `agents.runtimes` does not. Saying the
+    // gateway has no agent configured is the exact confusion the server split
+    // these two codes to prevent — it tells somebody with a working Claude, who
+    // pressed Close on a Codex tab, to go and configure an agent they already
+    // have.
     case "agent-not-configured":
-      return "The gateway has no agent configured, so nothing was done. Configure one and restart the gateway."
+      return 'This gateway is not set up for the agent this conversation runs on, so nothing was done. Any other agent here is unaffected. Add a runtime for it under "agents.runtimes" and restart the gateway.'
+    // No remedy offered, because none of the ones a panel could name is true.
+    // The agents this build can drive are compiled in, so no edit to
+    // `config.json` adds one — and naming an agent there that has no adapter
+    // stops the gateway starting at all, which turns one stranded conversation
+    // into no gateway. The two real repairs belong to whoever runs the server:
+    // `scripts/retrofit-conversation-agents.mjs` for a record written before
+    // conversations named their agent, and a newer build for a name written by
+    // one. Same news as the client's own sentence for this code, so the panel
+    // says the same thing whether you typed or clicked.
     case "agent-unsupported":
-      return "This conversation runs on an agent this gateway cannot start, so nothing was done. Configure that agent and restart the gateway."
+      return "This conversation runs on an agent this version of Nessa cannot open, so nothing was done."
+    // The gateway-wide fact, and the only arm here that is about the gateway
+    // having no agent rather than about this conversation's.
     case "conversations-not-configured":
       return "This gateway is not set up to run conversations, so nothing was done. Configure an agent and restart it."
     case "conversation-not-found":
