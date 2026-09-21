@@ -8,6 +8,7 @@
 //! Arrows mean filtering review choices and describing their eventual resolution.
 mod identity;
 mod permission;
+mod review_decline;
 pub use identity::{
     PermissionApplicationId, PermissionId, PermissionOptionId, PermissionSessionId,
 };
@@ -16,3 +17,4 @@ pub use permission::{
     PermissionCancellationReasonView, PermissionDecision, PermissionEffect, PermissionOfferPolicy,
     PermissionOption, PermissionOptions, PermissionScope, PermissionScopeView,
 };
+pub use review_decline::{ReviewDecline, ReviewDeclineReason};

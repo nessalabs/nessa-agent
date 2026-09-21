@@ -97,6 +97,7 @@ async fn blocked_worker(
         agent_accepts_images: false,
         operation_capabilities,
         permissions: HashMap::new(),
+        declined: None,
         shutdown_deadline: None,
         configured: true,
         closing: false,

@@ -1,13 +1,17 @@
 //! Explicit mapping retains target, transition, cause, actor, and delivery separately.
 use nessa_sdk::application::agent_execution::{
     executions::{ExecutionAuditRecord, QueueOrderCause},
-    permissions::{ActionContext, ApprovalBasis, CancellationOrigin, PermissionAnswerDelivery},
+    permissions::{
+        ActionContext, ApprovalBasis, CancellationOrigin, PermissionAnswerDelivery,
+        ReviewDeclineRecord,
+    },
 };
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionOutcome, InvocationKind},
     permissions::{
         PermissionCancellationReason, PermissionCancellationReasonView, PermissionDecision,
         PermissionEffect, PermissionRequest, PermissionScopeView, PermissionStateView,
+        ReviewDeclineReason,
     },
 };
 use serde_json::{json, Value};
@@ -49,14 +53,43 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
                     json!({"kind":"rule","ruleId":rule.rule_id(),"revision":rule.revision(),"grantedBy":actor(rule.granted_by())})
                 }
             };
-            let delivery = match record.delivery() {
-                PermissionAnswerDelivery::Selected => json!({"stage":"selected"}),
-                PermissionAnswerDelivery::Written => json!({"stage":"written"}),
-                PermissionAnswerDelivery::Failed(error) => {
-                    json!({"stage":"failed","diagnostic":error.to_string()})
-                }
-            };
+            let delivery = delivery(record.delivery());
             json!({"kind":"permission_answered","sessionId":record.session_id().as_str(),"request":permission(resolution.request()),"input":{"name":resolution.input().name,"argumentsJson":resolution.input().arguments_json},"actor":actor(resolution.attribution().actor()),"basis":basis,"delivery":delivery})
+        }
+        ExecutionAuditRecord::ReviewDeclined(record) => declined(record),
+    }
+}
+/// A review the binding refused before anyone was offered it.
+///
+/// There is no request and no actor here, and neither is omitted by accident: a
+/// decline happens before a request exists, and nobody chose it. The tool name
+/// is the provider's claim about its own frame, never checked against what was
+/// observed, so the field says `declaredTool` rather than `tool`: a reader
+/// deciding anything on it should know whose word it is. It is `null` where the
+/// frame named the tool in a way not worth retaining.
+fn declined(record: &ReviewDeclineRecord) -> Value {
+    let decline = record.decline();
+    json!({
+        "kind":"review_declined",
+        "sessionId":record.session_id().as_str(),
+        "executionId":record.execution_id().as_str(),
+        "declaredTool":decline.declared(),
+        "reason":match decline.reason() {
+            ReviewDeclineReason::ToolNotReviewable => "tool_not_reviewable",
+            ReviewDeclineReason::UnreadableRequest => "unreadable_request",
+            ReviewDeclineReason::UnusableOptions => "unusable_options",
+        },
+        "delivery":delivery(record.delivery()),
+        "origin":{"kind":"runtime"},
+    })
+}
+/// One vocabulary for how a decision reached the provider, answered or refused.
+fn delivery(value: &PermissionAnswerDelivery) -> Value {
+    match value {
+        PermissionAnswerDelivery::Selected => json!({"stage":"selected"}),
+        PermissionAnswerDelivery::Written => json!({"stage":"written"}),
+        PermissionAnswerDelivery::Failed(error) => {
+            json!({"stage":"failed","diagnostic":error.to_string()})
         }
     }
 }

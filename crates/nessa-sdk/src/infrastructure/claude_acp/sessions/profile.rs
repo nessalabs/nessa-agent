@@ -16,7 +16,7 @@ use std::collections::HashMap;
 /// The pinned Claude harness's configuration contract and built-in tool schemas.
 #[derive(Clone)]
 pub(super) struct ClaudeProfile {
-    tool_names: HashMap<String, String>,
+    tool_names: HashMap<String, wire::ObservedTool>,
     system_prompt: Option<SystemPrompt>,
     mcp_prefixes: Vec<String>,
 }
@@ -138,10 +138,20 @@ impl AcpProfile for ClaudeProfile {
             .get("toolCall")
             .ok_or_else(|| protocol("missing permission tool"))?;
         let id = identifier(tool, "toolCallId")?;
-        let name = self
+        let name = match self
             .tool_names
             .get(id)
-            .ok_or_else(|| protocol("permission has no observed tool"))?;
+            .ok_or_else(|| protocol("permission has no observed tool"))?
+        {
+            wire::ObservedTool::Reviewable(name) => name,
+            // Observed, and refused. Answering the review is the caller's, and
+            // it is an answer about this tool rather than about the execution.
+            wire::ObservedTool::Declined => {
+                return Err(AgentError::Unsupported(
+                    "tool is outside the configured tool profile".into(),
+                ))
+            }
+        };
         wire::tool_input(
             name,
             tool.get("rawInput")
