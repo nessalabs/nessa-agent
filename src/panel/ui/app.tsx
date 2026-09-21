@@ -525,8 +525,15 @@ export function App({
               connection={session}
               gatewayAvailable={chat.gatewayAvailable}
             />
+            {/* Keyed per conversation so the queue is rebuilt rather than
+                carried across a tab change, and named apart from its siblings:
+                the composer below is keyed by the same conversation, and two
+                children of one parent under one key are not two things to
+                React. It duplicated them instead — a queue chip per render,
+                each frozen at the count it saw, none removed when the queue
+                drained, all of them following the person into the next tab. */}
             <ConversationQueue
-              key={chat.active.id}
+              key={`queue:${chat.active.id}`}
               conversation={chat.active}
               gatewayAvailable={chat.gatewayAvailable}
             />
@@ -539,7 +546,7 @@ export function App({
               />
             )}
             <PillComposer
-              key={chat.active.id}
+              key={`composer:${chat.active.id}`}
               expandable={viewedPaste === null && attachments.viewed === null}
               // Controlled, so the pane survives a submit this panel turned
               // away — an attachment still reading, an empty draft — and closes
