@@ -179,6 +179,9 @@ pub(super) async fn describe_each(
 ) -> Result<Vec<ChosenFile>, FileNotAttached> {
     let mut attached = Vec::with_capacity(paths.len());
     for path in paths {
+        // `mut` only where something can change it: off macOS nothing is ever
+        // a placeholder, so nothing is ever described twice.
+        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
         let mut described = describe_one(&path, &files, &types, &tickets, wait).await?;
         // A placeholder is fetched rather than refused. Somebody chose this
         // file; sending them to Finder to open it by hand is the computer
@@ -201,9 +204,11 @@ pub(super) async fn describe_each(
                 // again from scratch: nothing downstream knows it was ever a
                 // placeholder, and the type decides its route as it would for
                 // any other file.
+                #[cfg(target_os = "macos")]
                 Readied::Ready => {
                     described = describe_one(&path, &files, &types, &tickets, wait).await?
                 }
+                #[cfg(target_os = "macos")]
                 Readied::StillComing => {
                     return Err(FileNotAttached::file_not_ready_yet(
                         &named(&path),
@@ -275,10 +280,12 @@ pub async fn choose_attachment_files(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attachments::doubles::{
-        FakeFiles, FakePicker, FakeReadiness, FakeTickets, FakeTypes,
-    };
-    use crate::attachments::readiness::{Announce, Readied, Readiness, Untold};
+    #[cfg(target_os = "macos")]
+    use crate::attachments::doubles::FakeReadiness;
+    use crate::attachments::doubles::{FakeFiles, FakePicker, FakeTickets, FakeTypes};
+    #[cfg(target_os = "macos")]
+    use crate::attachments::readiness::Readied;
+    use crate::attachments::readiness::{Announce, Readiness, Untold};
 
     /// Everything the panel was told, in order.
     #[derive(Default)]
@@ -305,11 +312,21 @@ mod tests {
         }
     }
 
+    /// A seam with no handler at all, which is what every test but the
+    /// placeholder ones wants: nothing they attach is ever not ready, so there
+    /// is nothing to answer. Also exactly the shape a platform without a
+    /// readiness handler ships.
+    fn nothing_to_ready() -> Arc<Readiness> {
+        Arc::new(Readiness::new(Vec::new()))
+    }
+
     /// A readiness seam holding one staged handler, which is what the caller
     /// takes: the dispatch is tested beside the seam, not here.
+    #[cfg(target_os = "macos")]
     fn staged(answer: Readied) -> Arc<Readiness> {
         staged_with(FakeReadiness::answering(answer))
     }
+    #[cfg(target_os = "macos")]
     fn staged_with(handler: FakeReadiness) -> Arc<Readiness> {
         Arc::new(Readiness::new(vec![Arc::new(handler)]))
     }
@@ -349,33 +366,38 @@ mod tests {
         types: &'static str,
         tickets: Arc<FakeTickets>,
     ) -> Result<Vec<ChosenFile>, FileNotAttached> {
-        downloading(
-            picked,
+        tauri::async_runtime::block_on(chosen_attachments(
+            &FakePicker(picked),
             files,
-            types,
+            Arc::new(FakeTypes(types)),
             tickets,
-            FakeReadiness::answering(Readied::Ready),
-        )
+            nothing_to_ready(),
+            &Untold,
+            PATIENT,
+            Duration::from_millis(50),
+        ))
     }
 
-    /// The same, with the download service staged too.
-    fn downloading(
+    /// The same, with a readiness handler staged. Only a platform that has
+    /// one can be asked what it would answer.
+    #[cfg(target_os = "macos")]
+    fn readying(
         picked: Picked,
         files: Arc<FakeFiles>,
         types: &'static str,
         tickets: Arc<FakeTickets>,
-        downloads: FakeReadiness,
+        handler: FakeReadiness,
     ) -> Result<Vec<ChosenFile>, FileNotAttached> {
         tauri::async_runtime::block_on(chosen_attachments(
             &FakePicker(picked),
             files,
             Arc::new(FakeTypes(types)),
             tickets,
-            staged_with(downloads),
+            staged_with(handler),
             &Untold,
             PATIENT,
-            // Short, because every download outcome here is staged rather than
-            // waited for; `downloads` owns the deadline's own test.
+            // Short, because every outcome here is staged rather than waited
+            // for; the seam owns the deadline's own test.
             Duration::from_millis(50),
         ))
     }
@@ -593,6 +615,7 @@ mod tests {
     /// Now the seam is asked, the bytes arrive, and the file is described
     /// again from scratch — so what the panel finally gets is an ordinary local
     /// file with a ticket, and nothing about it says it was ever elsewhere.
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_placeholder_is_made_ready_and_then_attached_like_any_other_file() {
         let path: PathBuf = ["/Users/dev/iCloud", "amica-document 2.pdf"]
@@ -602,7 +625,7 @@ mod tests {
         // second, which is what a landed download looks like from here.
         let files = Arc::new(FakeFiles::arriving(34_890));
 
-        let attached = downloading(
+        let attached = readying(
             Picked::Files(vec![path.clone()]),
             files.clone(),
             "application/pdf",
@@ -626,6 +649,7 @@ mod tests {
     /// silence this closes. Said before the wait, and said again after it in
     /// every case including the refusals, so no tile is left waiting for a
     /// file that is not coming.
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_panel_is_told_before_the_wait_and_again_when_it_ends() {
         for answer in [
@@ -669,7 +693,7 @@ mod tests {
             Arc::new(FakeFiles::holding(12)),
             Arc::new(FakeTypes("text/markdown")),
             Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
-            staged(Readied::Ready),
+            nothing_to_ready(),
             &told,
             PATIENT,
             Duration::from_millis(50),
@@ -682,6 +706,10 @@ mod tests {
 
     /// A file already here never reaches the seam at all. The common path must
     /// not pay for the uncommon one.
+    ///
+    /// Only where there is a handler to consult: a platform without one has an
+    /// empty seam, and "it asked nobody" is true of it by construction.
+    #[cfg(target_os = "macos")]
     #[test]
     fn an_ordinary_file_never_asks_anybody_to_make_it_ready() {
         let readiness = FakeReadiness::answering(Readied::Ready);
@@ -709,9 +737,10 @@ mod tests {
     /// The deadline, seen from the caller: a file still coming when the time
     /// runs out is refused with its own reason, not a generic failure, so the
     /// panel can say "still on its way, try again" rather than "it broke".
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_file_still_on_its_way_at_the_deadline_is_refused_as_that() {
-        let refused = downloading(
+        let refused = readying(
             Picked::Files(vec![PathBuf::from("/Users/dev/iCloud/report.pdf")]),
             Arc::new(FakeFiles::dataless(34_890)),
             "application/pdf",
@@ -727,9 +756,10 @@ mod tests {
     /// And a placeholder nothing can make ready — another provider's, or one
     /// on a platform with no iCloud — keeps the reason that tells somebody to
     /// open it once, with the service's own words in the diagnostics.
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_placeholder_nothing_can_fetch_is_refused_with_what_the_service_said() {
-        let refused = downloading(
+        let refused = readying(
             Picked::Files(vec![PathBuf::from("/Users/dev/Dropbox/report.pdf")]),
             Arc::new(FakeFiles::dataless(34_890)),
             "application/pdf",
@@ -927,7 +957,7 @@ mod tests {
             Arc::new(FakeFiles::stalling(Duration::from_secs(30))),
             Arc::new(FakeTypes("image/heic")),
             Arc::new(FakeTickets::refusing(Redeemed::Unknown)),
-            staged(Readied::Ready),
+            nothing_to_ready(),
             &Untold,
             Duration::from_millis(50),
             Duration::from_millis(50),

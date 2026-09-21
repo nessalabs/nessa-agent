@@ -71,6 +71,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+// Apple's, whole. Everything above and below this line is about *whether* a
+// file is readable and who might fix it, which every platform has; the module
+// is about iCloud, which only one has. Gated rather than left compiled-but-
+// unreachable, because a handler that cannot be constructed is dead code, and
+// this repository builds with `-D warnings` on three platforms.
+#[cfg(target_os = "macos")]
 pub(super) mod icloud;
 
 /// How long a file is given to become readable before the attach gives up.
@@ -87,12 +93,20 @@ pub(super) const LONGEST_READY_WAIT: Duration = Duration::from_secs(45);
 pub(super) const READY_POLL: Duration = Duration::from_millis(250);
 
 /// What became of the attempt.
+///
+/// Two of the three are a handler's to report, and a platform with no handler
+/// reaches neither: `Unhandled` answers `Refused` and nothing else. They are
+/// gated to the platforms that have a handler rather than left compiled and
+/// unreachable, because `-D warnings` is right about them — a state nothing
+/// can produce is not a state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Readied {
     /// The bytes are here. The caller looks at the path again and carries on.
+    #[cfg(target_os = "macos")]
     Ready,
     /// The deadline passed with the work still going. Attaching again in a
     /// moment is the answer, and nothing needs doing in between.
+    #[cfg(target_os = "macos")]
     StillComing,
     /// Nothing was fetched, and why in the service's own words.
     Refused(String),
@@ -244,6 +258,7 @@ impl MakeReadable for Unhandled {
 /// The readiness seam composition wires.
 pub fn readiness() -> Arc<Readiness> {
     Arc::new(Readiness::new(vec![
+        #[cfg(target_os = "macos")]
         Arc::new(icloud::ICloud),
         Arc::new(Unhandled),
     ]))
@@ -301,6 +316,7 @@ mod tests {
 
     /// The first handler that claims the file is the one that runs, and the
     /// ones after it are never asked.
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_first_handler_that_claims_a_file_is_the_one_that_runs() {
         let first = Staged::new(true, Readied::Ready);
@@ -316,7 +332,10 @@ mod tests {
     /// through to the handler that says so.
     #[test]
     fn a_handler_that_does_not_claim_a_file_is_passed_over() {
-        let icloud = Staged::new(false, Readied::Ready);
+        // What it would have answered does not matter; it is never asked. Said
+        // with an outcome every platform has, so the dispatch rule is tested
+        // wherever there is a dispatch to test.
+        let icloud = Staged::new(false, Readied::Refused("not me".to_string()));
         let unhandled = Staged::new(true, Readied::Refused("nothing to be done".to_string()));
 
         assert_eq!(
@@ -328,6 +347,7 @@ mod tests {
 
     /// Every outcome a handler can give reaches the caller unchanged: the
     /// panel answers all three by name and none of them may be flattened here.
+    #[cfg(target_os = "macos")]
     #[test]
     fn every_outcome_reaches_the_caller_as_itself() {
         for answer in [

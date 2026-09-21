@@ -129,6 +129,12 @@ pub enum Stored {
     /// The bytes are here.
     Locally,
     /// A placeholder: name, size and type, and nothing to read.
+    ///
+    /// Answered from `SF_DATALESS`, which is Apple's. No other platform this
+    /// runs on has a portable way to ask, so no other platform can produce
+    /// this — and a variant nothing can produce is gated rather than left to
+    /// look like a state the code handles.
+    #[cfg(target_os = "macos")]
     Elsewhere,
 }
 
@@ -173,6 +179,7 @@ impl Stored {
     pub fn described(self) -> &'static str {
         match self {
             Self::Locally => "on this disk",
+            #[cfg(target_os = "macos")]
             Self::Elsewhere => "a placeholder with no contents on this disk",
         }
     }

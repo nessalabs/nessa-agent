@@ -96,10 +96,17 @@ pub enum NotAttached {
     /// The presented ticket was minted, was never spent, and has run out of
     /// time. Choosing the file again mints a new one.
     TicketExpired,
-    /// A file iCloud is fetching that had not arrived before the host's
+    /// A file being fetched that had not arrived before the host's
     /// deadline. Distinct from [`NotAttached::FileNotReadable`] because the
     /// answer is different: nothing needs doing, the download is running, and
     /// attaching again in a moment works.
+    ///
+    /// Only a platform with a readiness handler can send this: one with none
+    /// refuses a placeholder outright and never waits on anything, so there is
+    /// nothing for it to be still coming *from*. The panel answers the word on
+    /// every platform regardless — it is one page, and which host it is talking
+    /// to is not its business.
+    #[cfg(target_os = "macos")]
     FileNotReadyYet,
     /// A dropped folder holds nothing to attach. Its own reason because it is
     /// the one folder outcome that is not a failure of anything: the folder
@@ -198,7 +205,8 @@ impl FileNotAttached {
     }
 
     /// A file that is still on its way. `detail` says how long was waited, so
-    /// a report can tell a slow link from a download that never started.
+    /// a report can tell a slow link from a fetch that never started.
+    #[cfg(target_os = "macos")]
     pub(super) fn file_not_ready_yet(name: &str, waited: std::time::Duration) -> Self {
         Self {
             reason: NotAttached::FileNotReadyYet,
@@ -335,6 +343,39 @@ mod tests {
     /// them nothing at all.
     /// Every reason, and the name it crosses the seam as. Written once so the
     /// two tests below cannot disagree about what the seam carries.
+    /// Every name this seam has, whatever platform is at the other end.
+    ///
+    /// Strings rather than variants, and ungated, because the vocabulary is
+    /// the contract between the host and the page and the page is the same
+    /// everywhere. One platform cannot send `file-not-ready-yet` — it has no
+    /// handler to still be waiting on — and that is a fact about that host,
+    /// not about what the panel must be able to say.
+    ///
+    /// `EVERY_REASON` below holds the variants that this build can actually
+    /// construct, and a test keeps the two from drifting apart.
+    const EVERY_NAME: [&str; 17] = [
+        "picker-unavailable",
+        "path-not-text",
+        "path-names-no-file",
+        "size-unreadable",
+        "not-a-regular-file",
+        "filesystem-stalled",
+        "file-unreadable",
+        "file-too-large",
+        "ticket-unavailable",
+        "ticket-unknown",
+        "ticket-already-used",
+        "ticket-expired",
+        "file-not-readable",
+        "file-not-ready-yet",
+        "folder-empty",
+        "folder-too-large",
+        "folder-unreadable",
+    ];
+
+    /// The reasons this build can construct, each with the name it crosses as.
+    /// One shorter where a platform has no readiness handler.
+    #[cfg(target_os = "macos")]
     const EVERY_REASON: [(&NotAttached, &str); 17] = [
         (&NotAttached::PickerUnavailable, "picker-unavailable"),
         (&NotAttached::PathNotText, "path-not-text"),
@@ -354,6 +395,49 @@ mod tests {
         (&NotAttached::FolderTooLarge, "folder-too-large"),
         (&NotAttached::FolderUnreadable, "folder-unreadable"),
     ];
+
+    #[cfg(not(target_os = "macos"))]
+    const EVERY_REASON: [(&NotAttached, &str); 16] = [
+        (&NotAttached::PickerUnavailable, "picker-unavailable"),
+        (&NotAttached::PathNotText, "path-not-text"),
+        (&NotAttached::PathNamesNoFile, "path-names-no-file"),
+        (&NotAttached::SizeUnreadable, "size-unreadable"),
+        (&NotAttached::NotARegularFile, "not-a-regular-file"),
+        (&NotAttached::FilesystemStalled, "filesystem-stalled"),
+        (&NotAttached::FileUnreadable, "file-unreadable"),
+        (&NotAttached::FileTooLarge, "file-too-large"),
+        (&NotAttached::TicketUnavailable, "ticket-unavailable"),
+        (&NotAttached::TicketUnknown, "ticket-unknown"),
+        (&NotAttached::TicketAlreadyUsed, "ticket-already-used"),
+        (&NotAttached::TicketExpired, "ticket-expired"),
+        (&NotAttached::FileNotReadable, "file-not-readable"),
+        (&NotAttached::FolderEmpty, "folder-empty"),
+        (&NotAttached::FolderTooLarge, "folder-too-large"),
+        (&NotAttached::FolderUnreadable, "folder-unreadable"),
+    ];
+
+    /// The two lists cannot drift: every reason this build can send is a name
+    /// the vocabulary has, and the vocabulary has nothing this build invented.
+    #[test]
+    fn every_reason_this_build_sends_is_in_the_vocabulary() {
+        for (_, name) in EVERY_REASON {
+            assert!(
+                EVERY_NAME.contains(&name),
+                "{name} is not in the vocabulary"
+            );
+        }
+        // And the only names a build may be missing are the ones a platform
+        // without a readiness handler cannot reach.
+        let missing: Vec<&str> = EVERY_NAME
+            .iter()
+            .filter(|name| !EVERY_REASON.iter().any(|(_, sent)| sent == *name))
+            .copied()
+            .collect();
+        #[cfg(target_os = "macos")]
+        assert!(missing.is_empty(), "{missing:?}");
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(missing, ["file-not-ready-yet"]);
+    }
 
     #[test]
     fn each_reason_crosses_the_seam_as_its_own_name() {
@@ -386,23 +470,28 @@ mod tests {
             .split_once(']')
             .expect("that list closes")
             .0;
-        for (reason, name) in EVERY_REASON {
-            let quoted = format!("\"{name}\"");
+        // The whole vocabulary, not only what this build can construct: the
+        // panel is one page and answers whichever host it is talking to, so a
+        // word a platform without a readiness handler cannot send is still a
+        // word the panel must have.
+        for name in EVERY_NAME {
             assert!(
-                listed.contains(&quoted),
+                listed.contains(&format!("\"{name}\"")),
                 "the panel does not answer {name}, so it would be told as something else"
             );
-            // And the name really is the one that crosses, not one written
-            // twice and drifted.
+        }
+        // And each name this build *can* send really is the one that crosses,
+        // rather than one written twice and drifted.
+        for (reason, name) in EVERY_REASON {
             assert_eq!(
                 serde_json::to_string(reason).expect("a reason serializes"),
-                quoted
+                format!("\"{name}\"")
             );
         }
-        // Nothing on the panel's list that this cannot send: a name answered
+        // Nothing on the panel's list that no host can send: a name answered
         // here and never sent is a sentence nobody will ever read.
         let answered = listed.matches('"').count() / 2;
-        assert_eq!(answered, EVERY_REASON.len(), "{listed}");
+        assert_eq!(answered, EVERY_NAME.len(), "{listed}");
     }
 
     /// No two reasons share a name. A duplicate would compile, serialize, and

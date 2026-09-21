@@ -22,6 +22,7 @@ use std::time::Duration;
 use super::content_type::ContentTypes;
 use super::files::{ChosenFiles, Kind, OnDisk, Stored};
 use super::picker::{FilePicker, Picked};
+#[cfg(target_os = "macos")]
 use super::readiness::{MakeReadable, Readied, ReadyFuture};
 use super::tickets::{AttachmentTickets, NoTicket, Redeemed};
 
@@ -125,6 +126,7 @@ impl FakeFiles {
     /// Dropbox, Drive or Box placeholder. The `stat` answers with its real
     /// length, which is exactly what makes this dangerous — everything looks
     /// fine until something tries to read it.
+    #[cfg(target_os = "macos")]
     pub fn dataless(size: u64) -> Self {
         Self::new(
             Ok(OnDisk {
@@ -138,6 +140,7 @@ impl FakeFiles {
 
     /// A placeholder that becomes an ordinary file after the first look —
     /// which is exactly what a file arriving looks like from here.
+    #[cfg(target_os = "macos")]
     pub fn arriving(size: u64) -> Self {
         Self {
             arrives: true,
@@ -277,11 +280,13 @@ impl ChosenFiles for FakeFiles {
 /// The dispatch — which handler claims which file — has its own tests beside
 /// the seam; this is for the callers that only need "it was made ready" or
 /// "it was not".
+#[cfg(target_os = "macos")]
 pub struct FakeReadiness {
     answer: Readied,
     asked: Mutex<Vec<PathBuf>>,
 }
 
+#[cfg(target_os = "macos")]
 impl FakeReadiness {
     /// A handler that always answers `answer`.
     pub fn answering(answer: Readied) -> Self {
@@ -297,6 +302,7 @@ impl FakeReadiness {
     }
 }
 
+#[cfg(target_os = "macos")]
 impl MakeReadable for FakeReadiness {
     fn mine(&self, _path: &Path) -> bool {
         true

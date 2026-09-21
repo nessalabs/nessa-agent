@@ -296,14 +296,13 @@ impl From<FileNotAttached> for Dropped {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attachments::doubles::{FakeFiles, FakeReadiness, FakeTickets, FakeTypes};
-    use crate::attachments::readiness::{Readied, Readiness, Untold};
+    use crate::attachments::doubles::{FakeFiles, FakeTickets, FakeTypes};
+    use crate::attachments::readiness::{Readiness, Untold};
 
-    /// A readiness seam holding one staged handler.
-    fn staged(answer: Readied) -> Arc<Readiness> {
-        Arc::new(Readiness::new(vec![Arc::new(FakeReadiness::answering(
-            answer,
-        ))]))
+    /// A seam with no handler: nothing a drop test attaches is ever waiting on
+    /// anything, and this is also the shape a platform without a handler ships.
+    fn nothing_to_ready() -> Arc<Readiness> {
+        Arc::new(Readiness::new(Vec::new()))
     }
 
     /// Everything a drop is described with, staged around one filesystem.
@@ -312,7 +311,7 @@ mod tests {
             files,
             types: Arc::new(FakeTypes("text/plain")),
             tickets: Arc::new(FakeTickets::for_path("a-ticket", Path::new("/unused"))),
-            readiness: staged(Readied::Ready),
+            readiness: nothing_to_ready(),
             wait,
             ready_wait: Duration::from_millis(50),
         }
