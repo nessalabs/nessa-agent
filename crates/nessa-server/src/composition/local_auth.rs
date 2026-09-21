@@ -1,6 +1,11 @@
 //! Local product dependency factory. Provider choices stay outside route handlers.
-use super::agent::AgentsConfig;
+use super::{agent::AgentsConfig, warm_up::PreparedRuntime};
 use crate::{
+    agent_warm_up::{
+        application::AgentWarmUp,
+        domain::RuntimeFingerprint,
+        infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
+    },
     agents::{
         domain::AgentId,
         infrastructure::{AgentLaunchFiles, LocalAgentProbe},
@@ -30,7 +35,7 @@ use nessa_auth::{
     },
     domain::{AudienceId, OrganizationId, ResourceId},
 };
-use nessa_sdk::infrastructure::session_storage::LocalFileStorage;
+use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, LocalFileStorage};
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
@@ -50,12 +55,23 @@ impl Clock for SystemClock {
     }
 }
 
+/// Everything composition built that the server lifecycle, rather than a route,
+/// has to own. The warm-up is started once the gateway is listening, so it
+/// cannot be started here.
+pub(super) struct LocalProduct {
+    pub(super) routes: ProductRouteState,
+    /// One per configured agent, each preparing its own runtime. Empty when no
+    /// agent is configured, which is the same gateway that serves no
+    /// conversations.
+    pub(super) warm_ups: Vec<AgentWarmUp>,
+}
+
 /// Construct the guarded product route from a previously initialized local registry.
 pub(super) fn product_state(
     config: &Environment,
     uptime: Arc<dyn ServerClock>,
     bundle: Option<&Path>,
-) -> Result<ProductRouteState, RunError> {
+) -> Result<LocalProduct, RunError> {
     let directory = config
         .auth_directory
         .as_ref()
@@ -93,12 +109,16 @@ pub(super) fn product_state(
     // this server finds out which configured agents cannot be started at all,
     // and that answer belongs in what setup is told. Nothing else between here
     // and its use depends on the order.
-    let (conversations, unavailable) = match &settings.agents {
+    let (conversations, unavailable, warm_ups) = match &settings.agents {
         Some(agents) => {
-            let (service, attachments, unavailable) = conversations(agents, directory)?;
-            (Some((service, attachments)), unavailable)
+            let built = conversations(agents, directory)?;
+            (
+                Some((built.service, built.attachments)),
+                built.unavailable,
+                built.warm_ups,
+            )
         }
-        None => (None, HashSet::new()),
+        None => (None, HashSet::new(), Vec::new()),
     };
     let agent_launch_files = launch_files(settings.agents.as_ref(), &unavailable);
     let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
@@ -133,7 +153,10 @@ pub(super) fn product_state(
             .with_conversations(Arc::new(service))
             .with_attachments(attachments);
     }
-    Ok(product)
+    Ok(LocalProduct {
+        routes: product,
+        warm_ups,
+    })
 }
 
 /// What the readiness probe is given to ask about, for every agent it should
@@ -181,42 +204,51 @@ fn launch_files(
         .unwrap_or_default()
 }
 
-/// The conversation service and the attachment service beside it, and which
-/// configured agents this run cannot start even though they are installed.
-///
-/// That last part is the reason this is a function rather than the tail of
-/// [`product_state`]: it has to be known before the readiness probe is built,
-/// and it is only known once every provider has been built. See
-/// [`super::agent::ConfiguredAgents`].
-fn conversations(
-    agents: &AgentsConfig,
-    directory: &Path,
-) -> Result<(ConversationService, AttachmentService, HashSet<AgentId>), RunError> {
-    let namespace = directory
+/// Everything building the conversation stack settled.
+struct BuiltConversations {
+    service: ConversationService,
+    attachments: AttachmentService,
+    /// Which configured agents this run cannot start even though they are
+    /// installed. Known only once every provider has been built, and needed
+    /// before the readiness probe is, which is why this is a function rather
+    /// than the tail of [`product_state`]. See
+    /// [`super::agent::ConfiguredAgents`].
+    unavailable: HashSet<AgentId>,
+    /// One per configured agent, each preparing its own runtime. Started by the
+    /// server lifecycle once the gateway is listening, not here.
+    warm_ups: Vec<AgentWarmUp>,
+}
+
+fn conversations(agents: &AgentsConfig, directory: &Path) -> Result<BuiltConversations, RunError> {
+    let mut warm_ups = Vec::new();
+    let root = directory
         .parent()
-        .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?;
-    let root = namespace.join("conversations");
+        .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
+        .join("conversations");
     nessa_local_storage::create_directory(&root)
         .map_err(|error| RunError::Agent(error.to_string()))?;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let selected = agents.selected()?;
     // Ownership records come first. A binding needs somewhere to read image
-    // bytes, reading them needs the attachment store, and beginning an upload
-    // needs to ask who owns a conversation: so the repository is built, then
-    // attachments over it, and only then the providers.
+    // bytes, reading them needs the attachment store, and beginning an
+    // upload needs to ask who owns a conversation: so the repository is
+    // built, then attachments over it, and only then the providers.
     let metadata = Arc::new(
         LocalConversationRepository::new(root.join("metadata"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
     let attachments = super::attachments::attachments(
-        &namespace.join("attachments"),
+        &directory
+            .parent()
+            .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
+            .join("attachments"),
         metadata.clone(),
-        // The image limits from the catalog, which is the one place they are
-        // recorded, taken across every configured agent's model rather than the
-        // selected one's: the store is shared by conversations that each run on
-        // their own agent. Every uploaded image is fitted to them, using the
-        // running system's decoder for the encodings the image library does not
-        // read itself.
+        // The image limits from the catalog, which is the one place they
+        // are recorded, taken across every configured agent's model rather
+        // than the selected one's: the store is shared by conversations
+        // that each run on their own agent. Every uploaded image is fitted
+        // to them, using the running system's decoder for the encodings the
+        // image library does not read itself.
         Arc::new(
             ModelImageNormalizer::new(
                 super::agent::image_limits(agents)?.as_ref(),
@@ -226,7 +258,52 @@ fn conversations(
         ),
         clock.clone(),
     )?;
-    let built = super::agent::providers(agents, &root, clock.clone(), attachments.images.clone())?;
+    let mut built =
+        super::agent::providers(agents, &root, clock.clone(), attachments.images.clone())?;
+    // One warm-up per configured agent, because each runs its own runtime
+    // and the operating system scans each of them separately on its first
+    // execution. One for the server would leave whichever agent it did not
+    // cover paying that scan inside somebody's first message, which is the
+    // failure this exists to prevent.
+    //
+    // They share one records directory and one audit directory: a record is
+    // stored under a digest of the runtime it describes, so two runtimes
+    // never collide, and a third configured later finds no record of its
+    // own and warms itself.
+    let records = Arc::new(
+        FileWarmUpRecords::new(root.join("warm-up"))
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
+    let warm_up_audit = Arc::new(
+        DurableWarmUpAudit::new(root.join("audit").join("warm-up"))
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
+    for agent in built.providers.values_mut() {
+        // The provider's own credential-free identity, rather than a
+        // hand-picked list of fields: it already covers the executable, its
+        // arguments, the environment, the workspace, and every MCP server
+        // binary the child will start, and it is computed from raw OS bytes
+        // rather than a lossy path conversion. Anything that changes which
+        // files are executed changes it, which is what a first-execution
+        // scan is paid for.
+        let identity = agent.provider.identity();
+        let runtime =
+            RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context())
+                .map_err(|error| RunError::Agent(error.to_string()))?;
+        let prepared = AgentWarmUp::new(
+            agent.provider.clone(),
+            // A throwaway context: the warm-up must not leave a snapshot on
+            // disk and must not take an exclusive lease on a conversation a
+            // user owns.
+            Arc::new(InMemoryStorage::new()),
+            records.clone(),
+            warm_up_audit.clone(),
+            clock.clone(),
+            runtime,
+        );
+        agent.readiness = Some(Arc::new(PreparedRuntime(prepared.clone())));
+        warm_ups.push(prepared);
+    }
     let storage = Arc::new(
         LocalFileStorage::new(root.join("sessions"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -249,7 +326,12 @@ fn conversations(
         Some(agents.workspace.to_string_lossy().into_owned()),
     )
     .map_err(|error| RunError::Agent(error.to_string()))?;
-    Ok((service, attachments.service, built.unavailable))
+    Ok(BuiltConversations {
+        service,
+        attachments: attachments.service,
+        unavailable: built.unavailable,
+        warm_ups,
+    })
 }
 
 fn setup_error(error: impl std::fmt::Display) -> RunError {

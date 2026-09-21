@@ -4,7 +4,7 @@ use super::{
     ConversationCreationAudit, ConversationCreationAuditRecord, ConversationDependencies,
     ConversationDisposition, ConversationError, ConversationFuture, ConversationLimits,
     ConversationMessageStatus, ConversationOwnershipState, ConversationRepository,
-    ConversationService, RequestedAgent, SubmissionMode,
+    ConversationService, RequestedAgent, RuntimeReadiness, SubmissionMode,
 };
 use crate::{
     agents::domain::AgentId,
@@ -30,10 +30,14 @@ use nessa_sdk::{
     domain::agent_execution::sessions::{ExecutionSessionId, SessionId},
     infrastructure::session_storage::InMemoryStorage,
 };
-use std::collections::HashMap;
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc, Mutex,
+use std::{
+    collections::HashMap,
+    future::Future,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 use tokio::sync::{oneshot, Notify};
 
@@ -1086,6 +1090,213 @@ impl AgentProvider for UncertainOpenProvider {
         })
     }
 }
+/// Preparation the conversation must wait for, and which records whether the
+/// conversation reached the provider before that wait finished.
+/// One configured agent whose runtime something is preparing.
+fn prepared(
+    provider: Arc<dyn AgentProvider>,
+    readiness: Arc<dyn RuntimeReadiness>,
+) -> ConversationAgents {
+    ConversationAgents::new(
+        HashMap::from([(
+            AgentId::Claude,
+            ConversationAgent {
+                provider,
+                reserved_output_tokens: 4096,
+                readiness: Some(readiness),
+            },
+        )]),
+        AgentId::Claude,
+    )
+    .expect("one configured agent is its own default")
+}
+
+struct GatedReadiness {
+    release: Mutex<Option<oneshot::Receiver<()>>>,
+    waited: AtomicBool,
+}
+impl RuntimeReadiness for GatedReadiness {
+    fn wait(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        Box::pin(async move {
+            self.waited.store(true, Ordering::SeqCst);
+            let release = self.release.lock().unwrap().take();
+            if let Some(release) = release {
+                let _ = release.await;
+            }
+        })
+    }
+}
+
+/// A first message arriving while the runtime is still being prepared waits for
+/// that work instead of launching a second cold provider of its own.
+#[tokio::test]
+async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    let (release, gate) = oneshot::channel();
+    let readiness = Arc::new(GatedReadiness {
+        release: Mutex::new(Some(gate)),
+        waited: AtomicBool::new(false),
+    });
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: prepared(Arc::new(Provider(provider.clone())), readiness.clone()),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let id = id();
+    let creating = tokio::spawn({
+        let service = service.clone();
+        let id = id.clone();
+        async move { service.create(id, caller("panel", "first"), None).await }
+    });
+    // The conversation is held at the gate, so it has not launched a provider:
+    // the preparation already in flight is the only launch.
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while !readiness.waited.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the opening gate waits for preparation");
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+    release.send(()).unwrap();
+    creating.await.unwrap().unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    service.shutdown().await.unwrap();
+}
+
+/// The desktop quit path is the same guarantee in another delivery mode.
+///
+/// It stops agents without fencing admission, so it never set the signal a
+/// parked opening watches: quit spent its whole per-owner budget waiting for an
+/// opening that was itself waiting for the runtime, reported the owner as
+/// uncleaned, and then let that opening launch a provider the pass had already
+/// walked past — a Claude Code process tree left behind by quitting.
+#[tokio::test]
+async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparation() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    // Never released: this stands in for a cold launch still in progress.
+    let (_release, gate) = oneshot::channel();
+    let readiness = Arc::new(GatedReadiness {
+        release: Mutex::new(Some(gate)),
+        waited: AtomicBool::new(false),
+    });
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: prepared(Arc::new(Provider(provider.clone())), readiness.clone()),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let creating = tokio::spawn({
+        let service = service.clone();
+        async move { service.create(id(), caller("panel", "first"), None).await }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while !readiness.waited.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the opening gate waits for preparation");
+    // Well inside the 10s per-owner budget, so passing is not that timeout
+    // expiring and reporting success by another name.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        service.stop_active_agents(),
+    )
+    .await
+    .expect("quit must not wait out a preparation with no deadline")
+    .unwrap();
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), creating)
+            .await
+            .expect("the parked request is released")
+            .unwrap(),
+        Err(ConversationError::Unavailable)
+    ));
+    // Nothing was launched past the stop, so quit leaves no provider behind.
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+
+    // And admission is untouched: stopping the agents is not retirement, so the
+    // conversation this released can be opened again afterwards.
+    *readiness.release.lock().unwrap() = None;
+    service
+        .create(id(), caller("panel", "after-quit"), None)
+        .await
+        .unwrap();
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 1);
+    service.shutdown().await.unwrap();
+}
+
+/// Preparation has no deadline of its own, and a conversation waiting for it
+/// holds a shared admission guard. Teardown therefore has to supersede the
+/// wait, or shutdown waits out its own admission budget and reports unconfirmed
+/// cleanup for an ordinary boot-time race.
+#[tokio::test]
+async fn retirement_supersedes_a_conversation_waiting_for_runtime_preparation() {
+    let (_, provider, repository, storage) = fixture(ConversationLimits::default());
+    // Never released: this stands in for a cold launch still in progress.
+    let (_release, gate) = oneshot::channel();
+    let readiness = Arc::new(GatedReadiness {
+        release: Mutex::new(Some(gate)),
+        waited: AtomicBool::new(false),
+    });
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: prepared(Arc::new(Provider(provider.clone())), readiness.clone()),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+    let creating = tokio::spawn({
+        let service = service.clone();
+        async move { service.create(id(), caller("panel", "first"), None).await }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while !readiness.waited.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the opening gate waits for preparation");
+    // Well inside the 10s admission budget, so this passing is not the timeout
+    // expiring and reporting success by another name.
+    tokio::time::timeout(std::time::Duration::from_secs(3), service.shutdown())
+        .await
+        .expect("shutdown must not wait out a preparation with no deadline")
+        .unwrap();
+    // The waiting request is released rather than left parked, and no provider
+    // is launched past the fence for nothing to close.
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), creating)
+            .await
+            .expect("the parked request is released")
+            .unwrap(),
+        Err(ConversationError::Unavailable)
+    ));
+    assert_eq!(provider.open_calls.load(Ordering::SeqCst), 0);
+}
+
 fn startup_deadline() -> AgentError {
     AgentError::StartupDeadline(AgentStartupStep::new(
         AgentStartupPhase::Session,
@@ -1593,6 +1804,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
                     ConversationAgent {
                         provider: Arc::new(Provider(claude.clone())),
                         reserved_output_tokens: 4096,
+                        readiness: None,
                     },
                 ),
                 (
@@ -1600,6 +1812,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
                     ConversationAgent {
                         provider: Arc::new(Provider(codex.clone())),
                         reserved_output_tokens: 4096,
+                        readiness: None,
                     },
                 ),
             ]),
@@ -1679,6 +1892,7 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
             ConversationAgent {
                 provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
                 reserved_output_tokens: 4096,
+                readiness: None,
             },
         )
     };
@@ -1766,6 +1980,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
             ConversationAgent {
                 provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
                 reserved_output_tokens: 4096,
+                readiness: None,
             },
         )
     };
@@ -1866,6 +2081,7 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
             ConversationAgent {
                 provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
                 reserved_output_tokens: 4096,
+                readiness: None,
             },
         )
     };
@@ -2161,6 +2377,7 @@ async fn a_default_agent_nobody_configured_is_refused_before_any_conversation_ex
             ConversationAgent {
                 provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
                 reserved_output_tokens: 4096,
+                readiness: None,
             },
         )])
     };
@@ -2177,10 +2394,86 @@ async fn a_default_agent_nobody_configured_is_refused_before_any_conversation_ex
         ConversationAgent {
             provider: Arc::new(Provider(factory.clone())) as Arc<dyn AgentProvider>,
             reserved_output_tokens: 0,
+            readiness: None,
         },
     )]);
     assert!(matches!(
         ConversationAgents::new(nothing_reserved, AgentId::Claude),
         Err(ConversationError::InvalidInput)
     ));
+}
+
+/// A conversation waits for its own agent's runtime to be prepared, and for no
+/// other agent's.
+///
+/// The scan being paid for belongs to the runtime this conversation is about to
+/// launch. One readiness for the whole server would have a Codex conversation
+/// park behind Claude's 199 MB binary being scanned — work it gains nothing
+/// from, on the very first message, which is the failure preparation exists to
+/// prevent rather than to relocate.
+#[tokio::test]
+async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
+    let (_, claude, repository, storage) = fixture(ConversationLimits::default());
+    let codex = Arc::new(ProviderFactory::default());
+    // Never released: Claude's runtime is still being scanned for the whole of
+    // this test.
+    let (_release, gate) = oneshot::channel();
+    let claude_readiness = Arc::new(GatedReadiness {
+        release: Mutex::new(Some(gate)),
+        waited: AtomicBool::new(false),
+    });
+    let service = ConversationService::new(
+        ConversationDependencies {
+            agents: ConversationAgents::new(
+                HashMap::from([
+                    (
+                        AgentId::Claude,
+                        ConversationAgent {
+                            provider: Arc::new(Provider(claude.clone())),
+                            reserved_output_tokens: 4096,
+                            readiness: Some(claude_readiness.clone()),
+                        },
+                    ),
+                    (
+                        AgentId::Codex,
+                        ConversationAgent {
+                            provider: Arc::new(Provider(codex.clone())),
+                            reserved_output_tokens: 4096,
+                            readiness: None,
+                        },
+                    ),
+                ]),
+                AgentId::Claude,
+            )
+            .expect("the default is among the configured agents"),
+            storage,
+            metadata: repository,
+            creation_audit: Arc::new(AcceptingCreationAudit),
+            attachments: None,
+            clock: Arc::new(TestClock),
+        },
+        ConversationLimits::default(),
+        None,
+    )
+    .unwrap();
+
+    // Well inside any budget, so passing is this returning rather than a
+    // timeout expiring and reporting success by another name.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        service.create(
+            id(),
+            caller("panel", "first"),
+            Some(RequestedAgent::Known(AgentId::Codex)),
+        ),
+    )
+    .await
+    .expect("a Codex conversation must not wait for Claude's runtime")
+    .expect("the conversation opens");
+    assert_eq!(codex.open_calls.load(Ordering::SeqCst), 1);
+    // Claude's preparation was neither joined nor started by a conversation
+    // that runs on something else.
+    assert!(!claude_readiness.waited.load(Ordering::SeqCst));
+    assert_eq!(claude.open_calls.load(Ordering::SeqCst), 0);
+    service.shutdown().await.unwrap();
 }

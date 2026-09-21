@@ -21,6 +21,7 @@ const BUDGETS_JSON: &str = include_str!("../../../../protocol/defaults/agent-sta
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentBudgets {
+    launch_ms: u64,
     startup_ms: u64,
     shutdown_grace_ms: u64,
     kill_timeout_ms: u64,
@@ -36,7 +37,13 @@ static BUDGETS: LazyLock<Budgets> = LazyLock::new(|| {
         .expect("protocol/defaults/agent-startup-budgets.json must parse")
 });
 
-/// Total deadline for the ACP startup handshake.
+/// Deadline for the child to answer `initialize`, which is mostly the operating
+/// system's first-execution scan rather than protocol work.
+pub(super) fn launch_timeout() -> Duration {
+    Duration::from_millis(BUDGETS.agent.launch_ms)
+}
+
+/// Deadline for protocol work after the child has answered.
 pub(super) fn startup_timeout() -> Duration {
     Duration::from_millis(BUDGETS.agent.startup_ms)
 }

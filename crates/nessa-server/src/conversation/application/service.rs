@@ -5,8 +5,8 @@ use super::{
         ConversationPendingMode, ConversationReorderOutcome, ConversationRuntime, ConversationView,
         SubmissionReceipt,
     },
-    AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationError,
-    ConversationRepository, SubmittedImage,
+    AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreationAudit,
+    ConversationError, ConversationRepository, RuntimeReadiness, SubmittedImage,
 };
 use crate::agents::domain::AgentId;
 use crate::conversation::domain::{Conversation, ConversationId};
@@ -46,7 +46,7 @@ use std::{
         Arc, OnceLock,
     },
 };
-use tokio::sync::{Mutex, Notify, OnceCell, RwLock, RwLockReadGuard};
+use tokio::sync::{watch, Mutex, Notify, OnceCell, RwLock, RwLockReadGuard};
 use uuid::Uuid;
 
 /// Authenticated identity and stable logical action supplied by the gateway boundary.
@@ -132,6 +132,14 @@ pub struct ConversationAgent {
     pub provider: Arc<dyn AgentProvider>,
     /// The output budget every submission to this agent reserves.
     pub reserved_output_tokens: u32,
+    /// Joins this agent's one-time runtime preparation before its provider is
+    /// opened on a request path. Per agent rather than one for the server,
+    /// because the first-execution scan being paid for belongs to the runtime
+    /// this provider launches; a conversation on one agent gains nothing by
+    /// waiting for another agent's binary to be scanned. `None` means nothing
+    /// prepares this runtime, so the first conversation on it pays the scan
+    /// itself — an explicit no-op rather than a wrapper that returns at once.
+    pub readiness: Option<Arc<dyn RuntimeReadiness>>,
 }
 
 /// Every agent this server can start, and the one a caller who names none gets.
@@ -232,7 +240,7 @@ struct Inner {
     agents: ConversationAgents,
     storage: Arc<dyn SessionStorage>,
     metadata: Arc<dyn ConversationRepository>,
-    creation_audit: Arc<dyn super::ConversationCreationAudit>,
+    creation_audit: Arc<dyn ConversationCreationAudit>,
     attachments: Option<Arc<dyn ConversationAttachments>>,
     clock: Arc<dyn Clock>,
     limits: ConversationLimits,
@@ -240,6 +248,12 @@ struct Inner {
     creation: Mutex<()>,
     retirement: OnceLock<ActionContext>,
     admission: RwLock<()>,
+    // Counts stop passes, bumped the moment one is decided and before it waits
+    // for anything. An opening parked waiting for the runtime has to learn about
+    // teardown from something other than the lock it is blocking, and a count
+    // rather than a flag means a transient stop can pass through without
+    // leaving the gateway permanently fenced.
+    stops: watch::Sender<u64>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -297,13 +311,15 @@ fn report_opening_failure(id: &ConversationId, error: &AgentError) {
         report.message
     );
 }
-/// Every port the service calls, constructed by composition and substituted in tests.
+/// Every port the service calls, constructed by composition and substituted in
+/// tests. Grouped rather than passed one by one, so that adding one does not
+/// add another positional argument at every call site.
 pub struct ConversationDependencies {
     /// Every configured agent, and the one a caller that names none gets.
     pub agents: ConversationAgents,
     pub storage: Arc<dyn SessionStorage>,
     pub metadata: Arc<dyn ConversationRepository>,
-    pub creation_audit: Arc<dyn super::ConversationCreationAudit>,
+    pub creation_audit: Arc<dyn ConversationCreationAudit>,
     /// `None` when this gateway keeps no uploads: every image is then refused.
     pub attachments: Option<Arc<dyn ConversationAttachments>>,
     pub clock: Arc<dyn Clock>,
@@ -344,6 +360,7 @@ impl ConversationService {
                 creation: Mutex::new(()),
                 retirement: OnceLock::new(),
                 admission: RwLock::new(()),
+                stops: watch::channel(0).0,
             }),
         })
     }
@@ -644,6 +661,43 @@ impl ConversationService {
                                 tracing::error!(conversation_id = %id, %error, "conversation storage opening failed");
                                 OpeningFailure { cause: ConversationError::Storage(error), _cleanup: None, holds: false }
                             })?;
+                            // Join any one-time preparation already paying for
+                            // the operating system's first-execution scan. This
+                            // is after the storage lease is held and before the
+                            // provider is launched, so the conversation neither
+                            // starts a second cold launch nor loses its place.
+                            //
+                            // The wait is this conversation's own agent's, not
+                            // every configured agent's: the scan being paid for
+                            // is the one this provider is about to trigger, and
+                            // a Codex conversation has nothing to gain by
+                            // waiting behind Claude's binary being scanned.
+                            //
+                            // Any stop supersedes the wait, whether it fences
+                            // the gateway or only stops the agents. Preparation
+                            // has no deadline of its own, and the caller holds a
+                            // shared admission guard while this runs, so an
+                            // opening that waited through a stop would stall
+                            // that pass for its whole budget and then launch a
+                            // provider the pass has already walked past.
+                            if let Some(readiness) = &configured.readiness {
+                                // Subscribing here marks stops that finished
+                                // before this opening began as already seen:
+                                // they closed agents this one does not have.
+                                let mut stops = service.inner.stops.subscribe();
+                                if service.inner.retirement.get().is_none() {
+                                    tokio::select! {
+                                        () = readiness.wait() => {}
+                                        _ = stops.changed() => return Err(service.stopped()),
+                                    }
+                                }
+                            }
+                            // A stop can also arrive for an opening that never
+                            // had to wait, so this is checked again rather than
+                            // only on the waiting path.
+                            if service.inner.retirement.get().is_some() {
+                                return Err(service.stopped());
+                            }
                             let agent = Agent::new(configured.provider.clone(), manager)
                                 .await
                                 .map_err(|error| {
@@ -1217,7 +1271,28 @@ impl ConversationService {
             ActionContext::new("gateway", "desktop_quit", Uuid::new_v4().to_string())
                 .expect("gateway attribution")
         });
+        // Same signal as retirement, for the same reason: an opening parked on
+        // the runtime would otherwise hold this pass for its full per-owner
+        // budget and then launch a provider nothing is left to close. Admission
+        // stays open, so the count is bumped and nothing is fenced — a
+        // conversation stopped this way can be opened again.
+        self.inner.stops.send_modify(|count| *count += 1);
         self.close_agents(&actor).await
+    }
+
+    /// A stop reached this opening before it had a provider.
+    ///
+    /// It therefore holds nothing, so its slot goes back and its answer is not
+    /// cached: stopping the agents leaves admission open, and the conversation
+    /// may be opened again. A retirement needs no cached refusal to stay
+    /// refused — `create` checks it before any of this — so the same answer is
+    /// right whether or not the gateway is retiring.
+    fn stopped(&self) -> OpeningFailure {
+        OpeningFailure {
+            cause: ConversationError::Unavailable,
+            _cleanup: None,
+            holds: false,
+        }
     }
 
     /// Permanently fence new operations, join admitted commands, then stop owned agents.
@@ -1238,6 +1313,11 @@ impl ConversationService {
         proposed: ActionContext,
     ) -> Result<(), ConversationError> {
         let actor = self.inner.retirement.get_or_init(|| proposed);
+        // Before waiting for exclusive admission, not after: a request parked
+        // waiting for the runtime holds a shared admission guard, and this is
+        // what tells it to stop so that guard can be released. The fence itself
+        // is `retirement`, set above; this only wakes the waiters.
+        self.inner.stops.send_modify(|count| *count += 1);
         // Close can interrupt an admitted provider control. If admission cannot
         // drain, still attempt every owner, but retain that uncertainty and never
         // acknowledge retirement. A later request joins the retained ownership.

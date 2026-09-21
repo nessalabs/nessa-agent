@@ -53,6 +53,21 @@ pub enum ConversationCreationCause {
 pub trait ConversationCreationAudit: Send + Sync {
     fn record(&self, record: ConversationCreationAuditRecord) -> ConversationFuture<'_, ()>;
 }
+/// Waits for one-time runtime preparation to finish before this context opens a
+/// provider on a request path.
+///
+/// The first launch of a newly installed runtime is scanned by the operating
+/// system, and that cost belongs to whoever pays it first. When something else
+/// is already paying it, a conversation joins that work instead of starting a
+/// second cold launch of its own.
+///
+/// Waiting is all this promises. Preparation failing is not evidence that this
+/// conversation's launch will fail, so there is no failure to return: the
+/// conversation opens its provider and reports its own outcome either way.
+pub trait RuntimeReadiness: Send + Sync {
+    fn wait(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+}
+
 /// Stores only conversation ownership. The SDK stores execution history separately.
 pub trait ConversationRepository: Send + Sync {
     fn load(&self, id: &ConversationId) -> ConversationFuture<'_, Option<Conversation>>;

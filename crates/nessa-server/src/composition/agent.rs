@@ -553,6 +553,10 @@ pub(super) fn providers(
             ConversationAgent {
                 provider,
                 reserved_output_tokens: runtime.output_tokens,
+                // Filled in by whoever has somewhere to keep warm-up records.
+                // This builds providers and knows nothing about the durable
+                // directories a warm-up writes to.
+                readiness: None,
             },
         );
     }
@@ -707,11 +711,17 @@ mod build {
             tools_enabled: runtime.tools_enabled,
             mcp_servers: config.mcp_servers.clone(),
             permissions: PermissionOfferPolicy::once_only(),
-            // From protocol/defaults/agent-startup-budgets.json, which the
-            // client compiles in too: a client that gives up before the gateway
-            // has finished failing never sees the typed answer. One table for
-            // every agent, because the budget is the user's patience with a
-            // cold runtime rather than anything a vendor decides.
+            // All four from protocol/defaults/agent-startup-budgets.json,
+            // which the client compiles in too: a client that gives up before
+            // the gateway has finished failing never sees the typed answer.
+            // Spawning is the operating system's work — a runtime staged by a
+            // fresh install is scanned on its first execution — so it has its
+            // own, far larger budget than protocol work.
+            //
+            // One table for every agent, because a budget here is the user's
+            // patience with a cold runtime rather than anything a vendor
+            // decides.
+            launch_timeout: budgets::launch_timeout(),
             startup_timeout: budgets::startup_timeout(),
             execution_timeout: None,
             shutdown_grace: budgets::shutdown_grace(),
