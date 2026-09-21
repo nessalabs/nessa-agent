@@ -16,38 +16,35 @@ use crate::server::entrypoint::origin;
 pub struct AgentReadinessView {
     /// The agent's name, as the interface knows it.
     id: &'static str,
-    /// `ready`, `needs-authentication`, or `not-installed`.
+    /// `ready`, `needs-authentication`, `not-installed`, or `not-configured`.
     readiness: &'static str,
 }
 
-/// Every agent this server would be able to start.
+/// Every agent Nessa has an adapter for, each with what stands between it and
+/// running here — including the ones this server is not configured for, which
+/// are reported as exactly that rather than left out.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentsReadinessView {
     agents: Vec<AgentReadinessView>,
 }
 
-/// The name this agent is known by on the wire and in the interface.
-///
-/// The domain has no opinion about this; a rename here is a wire change, not a
-/// change to what an agent is.
-fn agent_name(agent: AgentId) -> &'static str {
-    match agent {
-        AgentId::Claude => "claude",
-    }
-}
-
 /// The name a readiness is reported under.
 ///
-/// The wire has three names. A sign-in this machine could not determine is
+/// The wire has four names. A sign-in this machine could not determine is
 /// reported as one that is needed: signing in is the one action that settles
 /// the question either way, and it is better advice than silence. The
 /// distinction survives in the domain for an interface that wants to say more.
+///
+/// An agent this server is not configured for keeps its own name rather than
+/// joining "not installed": the one thing a person must not be told is to go
+/// and install what is already sitting on their machine.
 fn readiness_name(readiness: Readiness) -> &'static str {
     match readiness {
         Readiness::Ready => "ready",
         Readiness::NeedsAuthentication | Readiness::AuthenticationUnknown => "needs-authentication",
         Readiness::NotInstalled => "not-installed",
+        Readiness::NotConfigured => "not-configured",
     }
 }
 
@@ -58,8 +55,8 @@ fn readiness_name(readiness: Readiness) -> &'static str {
 /// authenticate with — so requiring a session would make it unanswerable
 /// exactly when it is needed.
 ///
-/// What it discloses is bounded to make that safe: three names and three
-/// states, no paths, no versions, no account, and never a credential. To
+/// What it discloses is bounded to make that safe: a name and a state per
+/// agent, no paths, no versions, no account, and never a credential. To
 /// anything that can already reach this port, "an agent is installed here" is
 /// not a secret worth a handshake.
 /// What this costs is bounded by [`SharedAgentReadiness`], which runs one probe
@@ -101,9 +98,10 @@ pub(crate) async fn handle_http_agents(
 /// This server was asked and would not say.
 ///
 /// A 503 rather than a 200 carrying some readiness, because there is no honest
-/// readiness to carry. The wire's three names are all *claims about the agent* —
-/// `not-installed` and `needs-authentication` each tell the person to go and do
-/// something — and this server did not find any of them out; it declined to ask.
+/// readiness to carry. Every name the wire has is a *claim* — `not-installed`
+/// and `needs-authentication` tell the person to go and do something,
+/// `not-configured` tells them this build will not run it — and this server did
+/// not find any of them out; it declined to ask.
 /// Saying so as a status keeps "could not determine" from being dressed up as a
 /// fact, and setup already reports a gateway with no answer as a gateway with no
 /// answer. Retrying is the right response, so the person's "check again" is too.
@@ -116,7 +114,7 @@ fn view(agents: Vec<(AgentId, Readiness)>) -> Vec<AgentReadinessView> {
     agents
         .into_iter()
         .map(|(agent, state)| AgentReadinessView {
-            id: agent_name(agent),
+            id: agent.name(),
             readiness: readiness_name(state),
         })
         .collect()

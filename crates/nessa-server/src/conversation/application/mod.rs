@@ -16,8 +16,8 @@ pub use ports::{
     ConversationRepository, RuntimeReadiness, SubmittedImage,
 };
 pub use service::{
-    ConversationCaller, ConversationDependencies, ConversationLimits, ConversationService,
-    SubmissionMode,
+    ConversationAgent, ConversationAgents, ConversationCaller, ConversationDependencies,
+    ConversationLimits, ConversationService, RequestedAgent, SubmissionMode,
 };
 pub use view::{
     ConversationAttachment, ConversationCapabilities, ConversationDisposition, ConversationMessage,

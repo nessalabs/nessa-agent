@@ -3,12 +3,12 @@
 //! ```text
 //! host config -> ClaudeAcpProvider -> profile -> ACP session
 //!                                     |
-//!                               configuration checks / context fingerprint
+//!                             Claude configuration checks
 //! ```
-//! Arrows show construction and validation. Process startup and resume remain
-//! shared ACP responsibilities, not provider-specific lifecycle implementations.
+//! Arrows show construction and validation. Process startup, resume, and the
+//! launch-input fingerprint that identifies a restorable context remain shared
+//! ACP responsibilities, not provider-specific lifecycle implementations.
 mod binding;
 mod configuration;
-mod identity;
 mod profile;
 pub use binding::ClaudeAcpProvider;

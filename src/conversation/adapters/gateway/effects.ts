@@ -140,6 +140,8 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   conversation_not_found: "conversation-not-found",
   conversation_capacity: "conversation-capacity",
   agent_not_configured: "agent-not-configured",
+  agent_unsupported: "agent-unsupported",
+  conversations_not_configured: "conversations-not-configured",
   agent_startup_deadline: "agent-startup-deadline",
   invalid_request: "invalid-request",
 }
@@ -279,6 +281,12 @@ export function gatewayEffects(
   client: () => NessaClient | null,
   /** Resolves after `ms`. Composition supplies the real clock; tests resolve it by hand. */
   wait: (ms: number) => Promise<void>,
+  /** The agent every conversation this panel creates runs on, as setup recorded
+   * it. Asked once and remembered with the creation it was asked for, because
+   * the answer comes from the host rather than from the conversation. Resolving
+   * to nothing leaves the choice to the gateway's own default, which is what a
+   * browser and a setup nobody finished both are. */
+  chosenAgent: () => Promise<string | undefined> = async () => undefined,
 ): ConversationEffects {
   const creations = new Map<string, Promise<{ conversationId: string }>>()
   const reads = new Map<string, Promise<ConversationView>>()
@@ -298,8 +306,16 @@ export function gatewayEffects(
       if (existing) return existing
       // A conversation that could not be opened is a message that was not sent,
       // and a control that never ran: the same refusals, translated the same way.
-      const request = api()
-        .create({ conversationId })
+      //
+      // The transport is checked before the agent is asked for, so a
+      // disconnected panel still fails as a disconnected panel rather than
+      // waiting on the host first. The handle that check produced is thrown
+      // away rather than held across the await: asking the host is a round
+      // trip, and a session that was retired inside it must not be the one
+      // this create is sent over.
+      api()
+      const request = chosenAgent()
+        .then((agent) => api().create({ conversationId, agent }))
         .catch((error: unknown) => {
           creations.delete(conversationId)
           throw submissionFailure(error)

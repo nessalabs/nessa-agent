@@ -9,8 +9,10 @@ use crate::agent_warm_up::application::{
     AgentWarmUp, WarmUpAudit, WarmUpAuditRecord, WarmUpFuture, WarmUpRecords,
 };
 use crate::agent_warm_up::domain::RuntimeFingerprint;
+use crate::agents::domain::AgentId;
 use crate::conversation::application::{
-    ConversationCaller, ConversationDependencies, ConversationLimits, ConversationService,
+    ConversationAgent, ConversationAgents, ConversationCaller, ConversationDependencies,
+    ConversationLimits, ConversationService,
 };
 use crate::conversation::domain::ConversationId;
 use crate::conversation_test_support::{
@@ -18,6 +20,7 @@ use crate::conversation_test_support::{
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
+use std::collections::HashMap;
 use std::sync::{atomic::Ordering, Arc, Mutex};
 use tokio::sync::oneshot;
 
@@ -81,13 +84,23 @@ async fn a_first_message_joins_the_warm_up_rather_than_launching_beside_it() {
     );
     let service = ConversationService::new(
         ConversationDependencies {
-            provider: Arc::new(Provider(provider.clone())),
+            agents: ConversationAgents::new(
+                HashMap::from([(
+                    AgentId::Claude,
+                    ConversationAgent {
+                        provider: Arc::new(Provider(provider.clone())),
+                        reserved_output_tokens: 4096,
+                        readiness: Some(Arc::new(PreparedRuntime(warm_up.clone()))),
+                    },
+                )]),
+                AgentId::Claude,
+            )
+            .expect("one configured agent is its own default"),
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
             attachments: None,
             clock: Arc::new(TestClock),
-            readiness: Some(Arc::new(PreparedRuntime(warm_up.clone()))),
         },
         ConversationLimits::default(),
         None,
@@ -103,7 +116,7 @@ async fn a_first_message_joins_the_warm_up_rather_than_launching_beside_it() {
 
     let creating = tokio::spawn({
         let service = service.clone();
-        async move { service.create(conversation_id(), caller()).await }
+        async move { service.create(conversation_id(), caller(), None).await }
     });
     wait_for_waiting_conversation(&provider).await;
     // One launch so far, and it is the warm-up's.

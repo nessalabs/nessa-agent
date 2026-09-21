@@ -18,10 +18,19 @@ pub enum ProbeFailure {
 
 /// What the host can be asked about an agent, and nothing more.
 ///
-/// Two questions rather than one answer, so that the rule turning them into a
-/// readiness lives in the domain — and so that an adapter cannot decide policy
-/// by reporting a state directly.
+/// Separate questions rather than one answer, so that the rule turning them
+/// into a readiness lives in the domain — and so that an adapter cannot decide
+/// policy by reporting a state directly.
 pub trait AgentProbe: Send + Sync {
+    /// Whether this server has anything configured to launch for this agent.
+    ///
+    /// Answered from the configuration alone, so it never fails: the
+    /// configuration is in memory and has already been read. Asked apart from
+    /// [`Self::installed`] because "this build was not set up for it" and "it
+    /// is not on this machine" are different facts, and only one of them is
+    /// fixed by installing anything.
+    fn configured(&self, agent: AgentId) -> bool;
+
     /// Whether the agent's adapter is installed with this server.
     fn installed(&self, agent: AgentId) -> Result<bool, ProbeFailure>;
 

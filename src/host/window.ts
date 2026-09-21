@@ -301,6 +301,14 @@ export type SetupHandoff =
   | { outcome: "no-native-host" }
   /** The panel did not come up. This window is still on screen. */
   | { outcome: "panel-unavailable"; cause: unknown }
+  /**
+   * The panel is up and setup is over, but this machine did not write it down.
+   * The host deliberately leaves this window open for it: the write carries the
+   * completion flag and the chosen agent in one update, so losing it loses the
+   * choice too, and every conversation of this launch would run on the
+   * gateway's default while the screen said the handoff worked.
+   */
+  | { outcome: "setup-not-recorded"; cause: unknown }
   /** The panel is up; this window is the only thing that did not go. */
   | { outcome: "setup-close-failed"; panelShown: true; cause: unknown }
 
@@ -358,7 +366,8 @@ interface NativeSetupHandoff {
  *
  * `completed` is how setup ended: a finish, or somebody leaving. Only a finish
  * is written off for good, which is the host's rule to apply — this carries the
- * fact, not the decision.
+ * fact, not the decision. `agent` is what was chosen, recorded with it, because
+ * the panel is a different window and cannot be handed anything this one knows.
  *
  * Outside Tauri there is no second window, so this is a no-op and the caller
  * simply carries on rendering the panel in place.
@@ -367,25 +376,68 @@ interface NativeSetupHandoff {
  * from is gone before the answer gets back. Everything that had to happen has
  * happened by then.
  */
-export async function finishSetupWindow(completed: boolean): Promise<SetupHandoff> {
+export async function finishSetupWindow(
+  completed: boolean,
+  agent?: string,
+): Promise<SetupHandoff> {
   if (!inTauri) return { outcome: "no-native-host" }
   const { invoke } = await import("@tauri-apps/api/core")
   let handoff: NativeSetupHandoff
   try {
-    handoff = await invoke<NativeSetupHandoff>("finish_setup", { completed })
+    handoff = await invoke<NativeSetupHandoff>("finish_setup", {
+      completed,
+      agent: agent ?? null,
+    })
   } catch (cause) {
     // The one step that abandons the handoff. Nothing was written and this
     // window is still on screen, which is what the surface has to say.
     return { outcome: "panel-unavailable", cause }
   }
+  // Not survivable in the way this used to claim. The host writes the
+  // completion and the agent in one update, so a failure loses both:
+  // `chosen_agent` then truthfully says nobody chose, the panel rightly
+  // declines to remember that, and every conversation of this launch runs on
+  // the gateway's default — the same failure the in-place handover exists to
+  // prevent, reached by a different road. The host leaves this window up for
+  // it, and the surface offers the write again.
   if (handoff.recordError) {
-    // Survivable, and already logged on the host's side. It costs the next
-    // launch's straight start, not this one's panel.
-    console.warn("[nessa] could not record that setup finished", handoff.recordError)
+    return { outcome: "setup-not-recorded", cause: handoff.recordError }
   }
   // The panel is up. A window that will not close is not a panel failure and is
   // no longer reported as one — the surface says what actually happened and
   // offers a close rather than another handoff.
+  if (!handoff.setupClosed) {
+    return { outcome: "setup-close-failed", panelShown: true, cause: handoff.closeError }
+  }
+  return { outcome: "handed-over" }
+}
+
+/**
+ * Write setup off again, after a handoff whose write the host refused.
+ *
+ * The panel is already up, so this asks for the write and the close alone.
+ * Asking for the whole handoff again would summon a panel that is on screen,
+ * which re-anchors and refits a window somebody may have moved to.
+ *
+ * The agent travels again because nothing was recorded for the host to read it
+ * back from, and this window still has the choice setup finished on.
+ */
+export async function retrySetupRecord(agent?: string): Promise<SetupHandoff> {
+  if (!inTauri) return { outcome: "no-native-host" }
+  const { invoke } = await import("@tauri-apps/api/core")
+  let handoff: NativeSetupHandoff
+  try {
+    handoff = await invoke<NativeSetupHandoff>("retry_setup_record", {
+      agent: agent ?? null,
+    })
+  } catch (cause) {
+    // The host could not be asked at all. Nothing was written, and the screen
+    // that asked is still the right one: it offers this again.
+    return { outcome: "setup-not-recorded", cause }
+  }
+  if (handoff.recordError) {
+    return { outcome: "setup-not-recorded", cause: handoff.recordError }
+  }
   if (!handoff.setupClosed) {
     return { outcome: "setup-close-failed", panelShown: true, cause: handoff.closeError }
   }
@@ -408,6 +460,52 @@ export async function revealSetupWindow() {
   if (!inTauri) return
   const { invoke } = await import("@tauri-apps/api/core")
   await invoke("reveal_setup_window")
+}
+
+/**
+ * What the host has to say about the agent first-run setup chose.
+ *
+ * `"unavailable"` is kept apart from `"none"` on purpose. Both leave this
+ * conversation on the gateway's own default, but only one of them is an answer:
+ * a host that could not be asked may answer perfectly well a moment later, and
+ * treating that as "nobody chose" is how a saved choice gets dropped for good.
+ */
+export type ChosenAgent =
+  /** Setup recorded this agent, and every conversation should run on it. */
+  | { outcome: "chosen"; agent: string }
+  /** Nobody has chosen: a first run still in progress, a setup that was left,
+   *  or a browser with no host to ask. */
+  | { outcome: "none" }
+  /** The host could not be asked. Not an answer, and not one to remember. */
+  | { outcome: "unavailable" }
+
+/**
+ * The agent first-run setup chose, as the host recorded it.
+ *
+ * Read rather than remembered: setup runs in its own window, which is gone by
+ * the time the panel needs the answer.
+ *
+ * Never rejects. A host that cannot be read is survivable — the conversation
+ * starts on the gateway's default, which is a worse answer and not a broken
+ * panel — but it is reported as the failure it is, because a caller that
+ * remembers answers must not remember this one.
+ */
+export async function loadChosenAgent(): Promise<ChosenAgent> {
+  if (!inTauri) return { outcome: "none" }
+  try {
+    // The import is inside the try with the call it makes. Loading the host
+    // module is a fetch like any other and can fail on its own; left outside,
+    // that failure would come back as a rejection from a function whose whole
+    // contract is that it answers.
+    const { invoke } = await import("@tauri-apps/api/core")
+    const agent = await invoke<string | null>("chosen_agent")
+    return agent === null || agent === undefined
+      ? { outcome: "none" }
+      : { outcome: "chosen", agent }
+  } catch (cause) {
+    console.warn("[nessa] could not read the agent setup chose", cause)
+    return { outcome: "unavailable" }
+  }
 }
 
 /** Whether this page runs inside the trusted desktop host. */

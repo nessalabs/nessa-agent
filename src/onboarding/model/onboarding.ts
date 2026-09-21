@@ -1,10 +1,11 @@
 /** First-run setup: which agent runs a conversation, and how far setup has got.
  *
  * This is the panel's own chrome state, not product state: it decides what the
- * window shows before a conversation exists. The choice is recorded here and
- * nothing else — connecting the selected agent to a live gateway is a separate
- * step that does not exist yet, so nothing in this module claims an agent is
- * ready to run.
+ * window shows before a conversation exists. The choice made here is what the
+ * panel later starts conversations on — the host records it on the way out of
+ * setup and the panel reads it back — so this module decides which agent runs,
+ * and says nothing about whether that agent is working. Readiness is the
+ * gateway's answer, asked for separately and never inferred from a choice.
  */
 
 /** An agent Nessa can be set up against. */
@@ -26,6 +27,10 @@ export type AgentReadiness =
   | "needs-authentication"
   /** Nothing to sign in to: the agent's own runtime is not on this machine. */
   | "not-installed"
+  /** The agent is one Nessa supports, and this installation of Nessa was not
+   * set up to run it. Apart from `not-installed` because installing the agent
+   * would change nothing: it may already be on the machine. */
+  | "not-configured"
   /** Nessa has no adapter for this agent at all. The one reason that will not
    * change by doing anything on this machine. */
   | "not-supported"
@@ -57,9 +62,11 @@ export interface AgentChoice {
 
 /** The agents offered at first run, in presentation order.
  *
- * Codex is listed and explicitly unavailable rather than hidden: the roadmap is
- * part of the choice, and an unavailable entry cannot be selected, so the panel
- * never offers a capability the runtime lacks.
+ * Both have an adapter now, so neither is listed as unavailable. What is left
+ * between an entry and being chosen is what this machine reports about it —
+ * installed, signed in — which is a different answer and one somebody can act
+ * on. `supported` stays, because the day a third agent is listed before its
+ * adapter exists it is the only honest thing to say about it.
  */
 export const AGENT_CHOICES: readonly AgentChoice[] = Object.freeze([
   Object.freeze({
@@ -70,7 +77,7 @@ export const AGENT_CHOICES: readonly AgentChoice[] = Object.freeze([
   Object.freeze({
     id: "codex" as const,
     name: "Codex",
-    supported: false,
+    supported: true,
   }),
 ])
 

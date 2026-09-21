@@ -35,6 +35,9 @@ function fixture(t, reverse = false) {
       "claude-acp/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude",
       "provider",
     ],
+    ["codex-acp/package-lock.json", "lock"],
+    ["codex-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js", "adapter"],
+    ["codex-acp/node_modules/@openai/codex/bin/codex", "provider"],
   ]
   for (const [name, content] of reverse ? files.toReversed() : files) {
     const path = join(root, name)

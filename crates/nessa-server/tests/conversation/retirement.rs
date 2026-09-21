@@ -60,6 +60,7 @@ async fn retirement_keeps_failed_owner_and_audit_errors_separate() {
                 surface_id: "panel".into(),
                 action_id: "create".into(),
             },
+            None,
         )
         .await
         .unwrap();
@@ -102,6 +103,7 @@ async fn failed_audit_does_not_prevent_cleanup_and_both_failures_are_returned() 
                 surface_id: "panel".into(),
                 action_id: "create".into(),
             },
+            None,
         )
         .await
         .unwrap();
@@ -154,6 +156,7 @@ async fn process_shutdown_still_attempts_cleanup_when_admission_cannot_drain() {
                 surface_id: "panel".into(),
                 action_id: "create".into(),
             },
+            None,
         )
         .await
         .unwrap();
@@ -184,6 +187,7 @@ async fn retirement_joins_an_opening_owner_even_after_its_caller_disconnects() {
                     surface_id: "panel".into(),
                     action_id: "create".into(),
                 },
+                None,
             )
             .await
     });
@@ -222,6 +226,7 @@ async fn stalled_owner_cannot_starve_other_cleanup_and_retry_retains_original_ca
                     surface_id: "panel".into(),
                     action_id: "create".into(),
                 },
+                None,
             )
             .await
             .unwrap();
@@ -268,6 +273,7 @@ async fn stalled_opening_owner_cannot_prevent_another_owner_cleanup_or_later_ret
         .create(
             ConversationId::new(&Uuid::new_v4().to_string()).unwrap(),
             actor.clone(),
+            None,
         )
         .await
         .unwrap();
@@ -277,7 +283,7 @@ async fn stalled_opening_owner_cannot_prevent_another_owner_cleanup_or_later_ret
     *provider.open_gate.lock().unwrap() = Some(stalled);
     let creating = service.clone();
     let creating_id = blocked_id.clone();
-    let create = tokio::spawn(async move { creating.create(creating_id, actor).await });
+    let create = tokio::spawn(async move { creating.create(creating_id, actor, None).await });
     provider.opening.notified().await;
     let error = service
         .retire("gateway_upgrade", "opening-upgrade")

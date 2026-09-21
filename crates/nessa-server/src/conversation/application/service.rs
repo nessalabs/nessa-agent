@@ -8,6 +8,7 @@ use super::{
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreationAudit,
     ConversationError, ConversationRepository, RuntimeReadiness, SubmittedImage,
 };
+use crate::agents::domain::AgentId;
 use crate::conversation::domain::{Conversation, ConversationId};
 use futures_util::{future::join_all, FutureExt};
 use nessa_auth::application::ports::Clock;
@@ -23,7 +24,7 @@ use nessa_sdk::application::agent_execution::{
         PermissionCancellationRequest, PermissionSelectionState,
     },
     providers::AgentProvider,
-    sessions::{SessionManager, SessionSnapshot, SessionStorage, StorageError},
+    sessions::{SessionManager, SessionSnapshot, SessionStorage},
 };
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, InvocationStage},
@@ -57,7 +58,20 @@ pub struct ConversationCaller {
     pub action_id: String,
 }
 impl ConversationCaller {
+    /// The attribution every command on this service records, validated once.
+    ///
+    /// `ActionContext` bounds the length and refuses a blank, and permits
+    /// control characters; `Conversation::check_creator_context` does not. Both
+    /// rules are asked here rather than only where a conversation is
+    /// constructed, because every one of these commands writes this surface and
+    /// action into a durable record — `audit_mapping` carries the action as
+    /// `requestId` — and what gets written down must not rewrite a terminal or
+    /// split a log line whichever command wrote it. The conversation entity
+    /// still asks the same question of its own fields, through the same
+    /// function, so there is one rule and not two that have to agree.
     fn actor(&self) -> Result<ActionContext, ConversationError> {
+        Conversation::check_creator_context(&self.surface_id, &self.action_id)
+            .map_err(|_| ConversationError::InvalidInput)?;
         ActionContext::new(
             self.principal_id.as_str(),
             &self.surface_id,
@@ -66,20 +80,106 @@ impl ConversationCaller {
         .map_err(|_| ConversationError::InvalidInput)
     }
 }
+/// What a creation said about the agent it wants.
+///
+/// Three cases rather than two, because a name this build has no adapter for is
+/// not the same as no name at all and must not be turned into one. It is kept
+/// as a case instead of being refused where the request is parsed, because a
+/// creation for a conversation that already exists reopens it on the agent its
+/// own record names and never looks at this at all: the panel sends its
+/// remembered choice on every send, close, reorder and permission answer, so
+/// refusing the name outright made a name from another build — or from a
+/// rolled-back one — fail every one of those in every existing conversation,
+/// with no way back but editing the host's settings by hand.
+///
+/// A misspelling is still not an installation fact, so it keeps its own
+/// refusal. It is simply given at the point the name would have been used.
+#[derive(Clone, Copy)]
+pub enum RequestedAgent {
+    /// A name this build has an adapter for.
+    Known(AgentId),
+    /// A name it has none for.
+    Unknown,
+}
+
 /// Server-selected admission limits. Clients cannot choose provider budgets or owner capacity.
+///
+/// What is here is the same for every agent. The output budget a submission
+/// reserves is not: it is the ceiling that agent was configured with, so it
+/// travels with the agent, in [`ConversationAgent`].
 #[derive(Clone, Copy)]
 pub struct ConversationLimits {
     pub max_conversations: usize,
     pub max_input_bytes: usize,
-    pub reserved_output_tokens: u32,
 }
 impl Default for ConversationLimits {
     fn default() -> Self {
         Self {
             max_conversations: 32,
             max_input_bytes: 8192,
-            reserved_output_tokens: 4096,
         }
+    }
+}
+
+/// One agent this server can run conversations on.
+///
+/// Composition builds one of these per configured agent and the service keeps
+/// them all: a conversation is reopened on the agent it was created on, so the
+/// agent nobody has selected is still the agent yesterday's conversations need.
+#[derive(Clone)]
+pub struct ConversationAgent {
+    /// What opens an execution session for it.
+    pub provider: Arc<dyn AgentProvider>,
+    /// The output budget every submission to this agent reserves.
+    pub reserved_output_tokens: u32,
+    /// Joins this agent's one-time runtime preparation before its provider is
+    /// opened on a request path. Per agent rather than one for the server,
+    /// because the first-execution scan being paid for belongs to the runtime
+    /// this provider launches; a conversation on one agent gains nothing by
+    /// waiting for another agent's binary to be scanned. `None` means nothing
+    /// prepares this runtime, so the first conversation on it pays the scan
+    /// itself — an explicit no-op rather than a wrapper that returns at once.
+    pub readiness: Option<Arc<dyn RuntimeReadiness>>,
+}
+
+/// Every agent this server can start, and the one a caller who names none gets.
+///
+/// One value rather than two parameters, because the two are only valid
+/// together: a default that is not among the configured agents would accept a
+/// creation this server can never open. Checked here, so that no code holding a
+/// [`ConversationAgents`] has to consider the pairing invalid.
+#[derive(Clone)]
+pub struct ConversationAgents {
+    agents: HashMap<AgentId, ConversationAgent>,
+    default_agent: AgentId,
+}
+impl ConversationAgents {
+    /// # Errors
+    /// Returns [`ConversationError::InvalidInput`] when `default_agent` is not
+    /// among `agents`, or when any agent reserves no output at all.
+    pub fn new(
+        agents: HashMap<AgentId, ConversationAgent>,
+        default_agent: AgentId,
+    ) -> Result<Self, ConversationError> {
+        if !agents.contains_key(&default_agent)
+            || agents
+                .values()
+                .any(|agent| agent.reserved_output_tokens == 0)
+        {
+            return Err(ConversationError::InvalidInput);
+        }
+        Ok(Self {
+            agents,
+            default_agent,
+        })
+    }
+    /// What runs this agent, or nothing where this server cannot start it.
+    fn get(&self, agent: AgentId) -> Option<&ConversationAgent> {
+        self.agents.get(&agent)
+    }
+    /// The agent a creation that names none is made on.
+    fn default_agent(&self) -> AgentId {
+        self.default_agent
     }
 }
 #[derive(Clone, Copy)]
@@ -89,13 +189,44 @@ pub enum SubmissionMode {
 }
 struct LiveConversation {
     agent: Agent,
+    /// The configured output reservation of the agent this conversation runs
+    /// on, read once when it was opened.
+    reserved_output_tokens: u32,
     projection: Mutex<Projection>,
     watched: Mutex<HashSet<String>>,
 }
+/// A first opening that did not produce a live conversation.
+///
+/// `holds` is the one thing this has to say about such a failure: does the
+/// attempt still own something — a provider part-way through initialization, or
+/// a state nothing can describe after a panic — so that the
+/// `max_conversations` slot it was given has to stay taken. A failure that
+/// acquired nothing gives its slot back.
+///
+/// This was a `retryable` flag until now, which is a different question, and
+/// one only the caller asks; [`ConversationError`] already answers it at the
+/// wire. The two agreed for as long as every permanent failure had genuinely
+/// retained something, and parted company at the first one that acquired
+/// nothing at all: an agent dropped from the configuration refuses each of its
+/// conversations instantly and permanently, and thirty-two such refusals used
+/// to leave the server unable to create any conversation at all.
+///
+/// Giving the slot back means giving up the answer with it, which is the second
+/// thing this flag changed and the one that costs something. A slot is where
+/// the attempt is remembered, so a failure that releases it is not cached: the
+/// next call for that conversation runs the whole opening again — `metadata`
+/// load, the audit reconcile, `SessionManager::open`, and a provider spawn —
+/// and fails the same way. A panel polls, and a tab polls per tab, so a runtime
+/// pointed at a binary that is not there spawns once per poll per tab rather
+/// than once. That is accepted deliberately: the alternative is a cached
+/// refusal that survives the user installing the binary, and a wrong answer
+/// held forever is worse than a right one paid for repeatedly. A failure that
+/// did retain something keeps its slot and so keeps its answer, which is why
+/// the expensive case is exactly the cheap one to redo.
 struct OpeningFailure {
     cause: ConversationError,
     _cleanup: Option<AgentInitializationError>,
-    retryable: bool,
+    holds: bool,
 }
 struct Slot {
     value: OnceCell<Result<Arc<LiveConversation>, OpeningFailure>>,
@@ -104,7 +235,9 @@ struct Slot {
 }
 struct Inner {
     workspace: Option<String>,
-    provider: Arc<dyn AgentProvider>,
+    /// Every agent this server can start, and which of them a creation that
+    /// names none is made on.
+    agents: ConversationAgents,
     storage: Arc<dyn SessionStorage>,
     metadata: Arc<dyn ConversationRepository>,
     creation_audit: Arc<dyn ConversationCreationAudit>,
@@ -121,9 +254,6 @@ struct Inner {
     // rather than a flag means a transient stop can pass through without
     // leaving the gateway permanently fenced.
     stops: watch::Sender<u64>,
-    // None when nothing prepares the runtime, which is an explicit no-op rather
-    // than a wrapper that always returns immediately.
-    readiness: Option<Arc<dyn RuntimeReadiness>>,
 }
 /// Owns Agents independently of authenticated socket lifetimes. Clones share all owners.
 #[derive(Clone)]
@@ -181,59 +311,45 @@ fn report_opening_failure(id: &ConversationId, error: &AgentError) {
         report.message
     );
 }
-fn retryable_agent_open(error: &AgentError) -> bool {
-    !matches!(
-        error,
-        AgentError::Configuration(_)
-            | AgentError::Unsupported(_)
-            | AgentError::InvalidInput(_)
-            | AgentError::Storage(StorageError::Corrupt(_) | StorageError::IdentityMismatch)
-    )
-}
 /// Every port the service calls, constructed by composition and substituted in
 /// tests. Grouped rather than passed one by one, so that adding one does not
 /// add another positional argument at every call site.
 pub struct ConversationDependencies {
-    pub provider: Arc<dyn AgentProvider>,
+    /// Every configured agent, and the one a caller that names none gets.
+    pub agents: ConversationAgents,
     pub storage: Arc<dyn SessionStorage>,
     pub metadata: Arc<dyn ConversationRepository>,
     pub creation_audit: Arc<dyn ConversationCreationAudit>,
     /// `None` when this gateway keeps no uploads: every image is then refused.
     pub attachments: Option<Arc<dyn ConversationAttachments>>,
     pub clock: Arc<dyn Clock>,
-    /// Joins one-time runtime preparation before a provider is opened on a
-    /// request path. `None` means nothing prepares the runtime, so the first
-    /// conversation pays the operating system's first-execution scan itself;
-    /// that is an explicit no-op rather than a wrapper that returns at once.
-    pub readiness: Option<Arc<dyn RuntimeReadiness>>,
 }
 impl ConversationService {
+    /// Own every configured agent, and the one a caller gets by default.
     pub fn new(
         dependencies: ConversationDependencies,
         limits: ConversationLimits,
         workspace: Option<String>,
     ) -> Result<Self, ConversationError> {
         let ConversationDependencies {
-            provider,
+            agents,
             storage,
             metadata,
             creation_audit,
             attachments,
             clock,
-            readiness,
         } = dependencies;
         if workspace.as_ref().is_some_and(|value| value.len() > 4096)
             || limits.max_conversations == 0
             || limits.max_input_bytes == 0
             || limits.max_input_bytes > 8192
-            || limits.reserved_output_tokens == 0
         {
             return Err(ConversationError::InvalidInput);
         }
         Ok(Self {
             inner: Arc::new(Inner {
                 workspace,
-                provider,
+                agents,
                 storage,
                 metadata,
                 creation_audit,
@@ -245,33 +361,35 @@ impl ConversationService {
                 retirement: OnceLock::new(),
                 admission: RwLock::new(()),
                 stops: watch::channel(0).0,
-                readiness,
             }),
         })
     }
     /// Persist ownership before opening a provider. Repeating the same UUID never changes its owner.
+    ///
+    /// `agent` is the agent the conversation runs on for the rest of its life;
+    /// `None` takes this server's configured default. It is only consulted for
+    /// a conversation that does not exist yet: repeating a UUID reopens the
+    /// conversation on record, on the agent it was created with, whatever this
+    /// caller asked for.
     pub async fn create(
         &self,
         id: ConversationId,
         caller: ConversationCaller,
+        agent: Option<RequestedAgent>,
     ) -> Result<(), ConversationError> {
         let service = self.clone();
         supervised(async move {
             let _admission = service.admit().await?;
+            // Asked of every creation, not only the ones that build a
+            // conversation, and before the record is loaded so neither branch
+            // can record a caller nobody validated. A reopen writes this
+            // caller's surface and action into its own audit record, so the
+            // same context has to be fit to record on both branches.
             caller.actor()?;
             if service.inner.retirement.get().is_some() {
                 return Err(ConversationError::Unavailable);
             }
             let requested_at_ms = service.inner.clock.unix_milliseconds();
-            let proposed = Conversation::new(
-                id.clone(),
-                caller.organization_id.clone(),
-                caller.principal_id.clone(),
-                caller.surface_id.clone(),
-                caller.action_id.clone(),
-                requested_at_ms,
-            )
-            .map_err(|_| ConversationError::InvalidInput)?;
             // Serialize create/reopen decisions without holding the live-owner map
             // across repository or audit I/O. Existing ownership is checked before
             // this request can reserve capacity or open a provider.
@@ -310,6 +428,31 @@ impl ConversationService {
                 service.resolve(&id, &caller).await?;
                 return Ok(());
             }
+            // Only now does the agent this caller asked for matter. Checking it
+            // before the record above would have refused to reopen somebody's
+            // existing Claude conversation because the panel's remembered choice
+            // names an agent this server is no longer configured for — a
+            // conversation that does not need that agent at all. The same is
+            // true of a name no adapter exists for, which is why that one is
+            // carried this far instead of being refused where it was parsed.
+            let agent = match agent {
+                Some(RequestedAgent::Known(agent)) => agent,
+                Some(RequestedAgent::Unknown) => return Err(ConversationError::InvalidInput),
+                None => service.inner.agents.default_agent(),
+            };
+            if service.inner.agents.get(agent).is_none() {
+                return Err(ConversationError::AgentNotConfigured);
+            }
+            let proposed = Conversation::new(
+                id.clone(),
+                caller.organization_id.clone(),
+                caller.principal_id.clone(),
+                caller.surface_id.clone(),
+                caller.action_id.clone(),
+                requested_at_ms,
+                agent,
+            )
+            .map_err(|_| ConversationError::InvalidInput)?;
             {
                 let owners = service.inner.conversations.lock().await;
                 if service.inner.retirement.get().is_some() {
@@ -472,11 +615,11 @@ impl ConversationService {
                                 .metadata
                                 .load(&id)
                                 .await
-                                .map_err(|cause| OpeningFailure { cause, _cleanup: None, retryable: true })?
+                                .map_err(|cause| OpeningFailure { cause, _cleanup: None, holds: false })?
                                 .ok_or(OpeningFailure {
                                     cause: ConversationError::NotFound,
                                     _cleanup: None,
-                                    retryable: false,
+                                    holds: false,
                                 })?;
                             service
                                 .reconcile_creation_audit(&record)
@@ -484,7 +627,28 @@ impl ConversationService {
                                 .map_err(|cause| OpeningFailure {
                                     cause,
                                     _cleanup: None,
-                                    retryable: true,
+                                    holds: false,
+                                })?;
+                            // The agent the record names, never this server's
+                            // current default: a conversation restores a
+                            // provider session that belongs to one agent, and
+                            // reopening it on another would hand that session
+                            // to a harness that never wrote it.
+                            //
+                            // Settled before the storage lease is taken. A
+                            // conversation this build cannot open is refused the
+                            // same way on every attempt, and there is no reason
+                            // for each of those attempts to acquire the
+                            // exclusive lease and drop it again.
+                            let configured = service
+                                .inner
+                                .agents
+                                .get(record.agent())
+                                .cloned()
+                                .ok_or(OpeningFailure {
+                                    cause: ConversationError::AgentNotConfigured,
+                                    _cleanup: None,
+                                    holds: false,
                                 })?;
                             let session_id =
                                 SessionId::new(id.to_string()).expect("UUID session key");
@@ -495,14 +659,19 @@ impl ConversationService {
                             .await
                             .map_err(|error| {
                                 tracing::error!(conversation_id = %id, %error, "conversation storage opening failed");
-                                let retryable = matches!(error, StorageError::Busy | StorageError::Io(_));
-                                OpeningFailure { cause: ConversationError::Storage(error), _cleanup: None, retryable }
+                                OpeningFailure { cause: ConversationError::Storage(error), _cleanup: None, holds: false }
                             })?;
                             // Join any one-time preparation already paying for
                             // the operating system's first-execution scan. This
                             // is after the storage lease is held and before the
                             // provider is launched, so the conversation neither
                             // starts a second cold launch nor loses its place.
+                            //
+                            // The wait is this conversation's own agent's, not
+                            // every configured agent's: the scan being paid for
+                            // is the one this provider is about to trigger, and
+                            // a Codex conversation has nothing to gain by
+                            // waiting behind Claude's binary being scanned.
                             //
                             // Any stop supersedes the wait, whether it fences
                             // the gateway or only stops the agents. Preparation
@@ -511,7 +680,7 @@ impl ConversationService {
                             // opening that waited through a stop would stall
                             // that pass for its whole budget and then launch a
                             // provider the pass has already walked past.
-                            if let Some(readiness) = &service.inner.readiness {
+                            if let Some(readiness) = &configured.readiness {
                                 // Subscribing here marks stops that finished
                                 // before this opening began as already seen:
                                 // they closed agents this one does not have.
@@ -529,15 +698,21 @@ impl ConversationService {
                             if service.inner.retirement.get().is_some() {
                                 return Err(service.stopped());
                             }
-                            let agent = Agent::new(service.inner.provider.clone(), manager)
+                            let agent = Agent::new(configured.provider.clone(), manager)
                                 .await
                                 .map_err(|error| {
                                 report_opening_failure(&id, error.cause());
-                                let retryable = !error.needs_cleanup() && retryable_agent_open(error.cause());
+                                // The one question that decides ownership: a
+                                // provider left part-way through initialization
+                                // is this slot's to finish closing. Whether the
+                                // caller may retry is already carried to the
+                                // wire by `ConversationError`, so it is not a
+                                // second fact for this slot to hold.
+                                let holds = error.needs_cleanup();
                                 OpeningFailure {
                                     cause: ConversationError::Agent(error.cause().clone()),
                                     _cleanup: Some(error),
-                                    retryable,
+                                    holds,
                                 }
                             })?;
                             let mut events = agent.subscribe();
@@ -552,13 +727,14 @@ impl ConversationService {
                             let mut projection =
                                 Projection::new(id.to_string(), capabilities, snapshot.as_ref());
                             if let Some(workspace) = &service.inner.workspace {
-                                let identity = service.inner.provider.identity();
+                                let identity = configured.provider.identity();
                                 projection.view.runtime = Some(ConversationRuntime {
                                     model: identity.model_id().into(), provider: identity.name().into(), workspace: workspace.clone(),
                                 });
                             }
                             let live = Arc::new(LiveConversation {
                                 agent,
+                                reserved_output_tokens: configured.reserved_output_tokens,
                                 projection: Mutex::new(projection),
                                 watched: Mutex::new(HashSet::new()),
                             });
@@ -586,13 +762,16 @@ impl ConversationService {
                                 // An adapter panic payload may itself panic on drop.
                                 // Publish failure before allowing any waiter to hang.
                                 mem::forget(payload);
-                                Err(OpeningFailure { cause: ConversationError::Unavailable, _cleanup: None, retryable: false })
+                                // Nothing can say what the panic left behind,
+                                // so the slot stays taken rather than being
+                                // handed to an opening that assumes it is free.
+                                Err(OpeningFailure { cause: ConversationError::Unavailable, _cleanup: None, holds: true })
                             }
                         }
                     })
                     .await;
                 owner.ready.notify_waiters();
-                if result.as_ref().is_err_and(|failure| failure.retryable) {
+                if result.as_ref().is_err_and(|failure| !failure.holds) {
                     let mut owners = service.inner.conversations.lock().await;
                     if owners
                         .get(&id)
@@ -618,7 +797,7 @@ impl ConversationService {
                     .as_ref()
                     .cloned()
                     .map_err(|failure| failure.cause.clone());
-                if result.as_ref().is_err_and(|failure| failure.retryable) {
+                if result.as_ref().is_err_and(|failure| !failure.holds) {
                     let mut owners = self.inner.conversations.lock().await;
                     if owners
                         .get(id)
@@ -733,18 +912,15 @@ impl ConversationService {
             // ACP owns hidden context/tokenization; this is a conservative admission
             // reservation, not a claim about actual token usage or provider billing.
             let limits = live.agent.capabilities().limits();
-            if service.inner.limits.reserved_output_tokens > limits.max_output()
-                || service.inner.limits.reserved_output_tokens >= limits.max_context_window()
-            {
+            let reserved = live.reserved_output_tokens;
+            if reserved > limits.max_output() || reserved >= limits.max_context_window() {
                 return Err(ConversationError::InvalidInput);
             }
             let request = ExecutionRequest {
                 execution_id: execution,
                 user_message: message.clone(),
-                estimated_input_tokens: u64::from(
-                    limits.max_context_window() - service.inner.limits.reserved_output_tokens,
-                ),
-                reserved_output_tokens: service.inner.limits.reserved_output_tokens,
+                estimated_input_tokens: u64::from(limits.max_context_window() - reserved),
+                reserved_output_tokens: reserved,
             };
             let receipt = match mode {
                 SubmissionMode::Queue => Some(live.agent.enqueue(request, actor).await?),
@@ -1106,14 +1282,16 @@ impl ConversationService {
 
     /// A stop reached this opening before it had a provider.
     ///
-    /// Retryable unless the gateway is retired: stopping the agents leaves
-    /// admission open, so the conversation may be opened again, while a
-    /// retirement is permanent and the cached failure is the honest answer.
+    /// It therefore holds nothing, so its slot goes back and its answer is not
+    /// cached: stopping the agents leaves admission open, and the conversation
+    /// may be opened again. A retirement needs no cached refusal to stay
+    /// refused — `create` checks it before any of this — so the same answer is
+    /// right whether or not the gateway is retiring.
     fn stopped(&self) -> OpeningFailure {
         OpeningFailure {
             cause: ConversationError::Unavailable,
             _cleanup: None,
-            retryable: self.inner.retirement.get().is_none(),
+            holds: false,
         }
     }
 

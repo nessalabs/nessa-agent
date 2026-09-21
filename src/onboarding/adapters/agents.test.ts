@@ -44,6 +44,22 @@ describe("asking the gateway which agents can start", () => {
     })
   })
 
+  it("carries an agent this gateway was not set up for as its own answer", async () => {
+    // Not folded into "not installed". The agent may be sitting on the machine
+    // already, and telling someone to install it is advice that cannot work
+    // however many times they take it.
+    const fetch = answering({
+      agents: [
+        { id: "claude", readiness: "ready" },
+        { id: "codex", readiness: "not-configured" },
+      ],
+    })
+    await expect(httpAgentReadiness({ baseUrl: "", fetch }).read()).resolves.toEqual({
+      ok: true,
+      agents: { claude: "ready", codex: "not-configured" },
+    })
+  })
+
   it("drops an entry whose readiness this build does not understand", async () => {
     // A newer gateway naming a state this build cannot act on is not a reason
     // to discard the states it can.

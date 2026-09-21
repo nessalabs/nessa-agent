@@ -47,6 +47,12 @@ jobs:
       - run: cargo test -p nessa-images
       - run: cargo clippy -p nessa-images --all-targets -- -D warnings
       - run: node scripts/check-architecture.mjs
+      # The repository's own scripts had tests that nothing ran: a developer
+      # setup script and a one-time data migration, both of which change a
+      # user's files. Here rather than in the matrix job because they are
+      # plain Node with no dependency to install, and their Unix-only cases
+      # guard themselves rather than being skipped on a whole runner.
+      - run: node --test scripts/*.test.mjs
       # The official client and protocol checks do not require the desktop UI's
       # separate repository. Install only their tooling in an isolated harness.
       - name: Prepare gateway contract harness

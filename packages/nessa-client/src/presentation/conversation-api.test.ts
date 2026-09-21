@@ -428,18 +428,88 @@ it("never treats permission details as state for a different control", async () 
   expect(error).toMatchObject({ permissionSelection: undefined, uncertain: true })
 })
 
-it("reports missing provider as a known rejection rather than unknown delivery", async () => {
-  const request = vi
-    .fn()
-    .mockRejectedValue(new NessaRpcError("agent_not_configured", "agent_not_configured"))
-  const ids = [conversationId, "identity"]
-  let next = 0
-  const api = createConversationApi({ request }, () => ids[next++]!)
-  const error = await api.create().catch((error) => error)
-  expect(error).toBeInstanceOf(NessaConversationMutationError)
-  expect(error.uncertain).toBe(false)
-  expect(error.message).toContain("started without an agent")
-  // The remedy is named, not just the symptom.
+it.each([
+  // Three different situations, and only one of them is fixed by configuring
+  // anything. A caller told the wrong one goes and changes what was never the
+  // problem — so each states its own, and none of them is uncertain: the
+  // gateway refused before the command reached an agent.
+  ["conversations_not_configured", "not set up to run conversations"],
+  ["agent_not_configured", "not set up for the agent"],
+  ["agent_unsupported", "this version of Nessa cannot open"],
+])(
+  "reports %s as its own known rejection rather than unknown delivery",
+  async (code, said) => {
+    const request = vi.fn().mockRejectedValue(new NessaRpcError(code, code))
+    const ids = [conversationId, "identity"]
+    let next = 0
+    const api = createConversationApi({ request }, () => ids[next++]!)
+    const error = await api.create().catch((error) => error)
+    expect(error).toBeInstanceOf(NessaConversationMutationError)
+    expect(error.uncertain).toBe(false)
+    expect(error.message).toContain(said)
+  },
+)
+
+it.each(["toString", "constructor", "valueOf", "__proto__", "hasOwnProperty"])(
+  "treats a gateway answering %s as a failure it cannot explain",
+  async (code) => {
+    // The code is wire text, and the refusal table is an object, so asking it
+    // whether it holds a key answered for every name on `Object.prototype`.
+    // A frame saying `toString` was read as a refusal this gateway had stated
+    // — certain, so the panel would say the command was never admitted — with
+    // a native function printed where the explanation belongs.
+    const request = vi.fn().mockRejectedValue(new NessaRpcError(code, code))
+    const ids = [conversationId, "identity"]
+    let next = 0
+    const api = createConversationApi({ request }, () => ids[next++]!)
+    const error = await api.create().catch((error) => error)
+    expect(error).toBeInstanceOf(NessaConversationMutationError)
+    expect(error.uncertain).toBe(true)
+    expect(error.message).toBe("Conversation command failed")
+  },
+)
+
+it.each([
+  // Every control resolves the conversation before it is dispatched, so each
+  // meets exactly the refusals a creation meets. Saying "we do not know what
+  // happened" for those is true of the delivery and useless to the person: the
+  // reason is the whole fix, and the gateway had already given it.
+  ["conversations_not_configured", "not set up to run conversations"],
+  ["agent_not_configured", "not set up for the agent"],
+  ["agent_unsupported", "this version of Nessa cannot open"],
+])(
+  "explains %s to a control, the way it explains it to a creation",
+  async (code, said) => {
+    const request = vi.fn().mockRejectedValue(new NessaRpcError(code, code))
+    const api = createConversationApi({ request }, () => "identity")
+    for (const failed of [
+      await api.close(conversationId).catch((error) => error),
+      await api
+        .cancel(conversationId, "execution", "permission", "no longer needed")
+        .catch((error) => error),
+      await api.remove(conversationId, "execution").catch((error) => error),
+      await api
+        .answer(conversationId, "execution", "permission", "option")
+        .catch((error) => error),
+    ]) {
+      expect(failed).toBeInstanceOf(NessaConversationControlError)
+      expect(failed.message).toContain(said)
+      expect(failed.uncertain).toBe(false)
+    }
+  },
+)
+
+it("names the remedy for a gateway missing the agent, not just the symptom", () => {
+  // A person told only that the agent is not set up has nowhere to go. This is
+  // the one refusal with an answer short enough to state, so it states it.
+  const error = new NessaConversationMutationError(
+    conversationId,
+    "identity",
+    undefined,
+    new NessaRpcError("agent_not_configured", "agent_not_configured"),
+    async () => undefined,
+  )
+  expect(error.message).toContain("agents.runtimes")
   expect(error.message).toContain("just server")
 })
 it("reports invalid requests as known pre-admission rejections", async () => {
@@ -608,6 +678,51 @@ it("rejects reorder acknowledgements with wrong action or unknown outcome", asyn
       NessaConversationControlError,
     )
   }
+})
+it.each([
+  ["a blank name", ""],
+  ["a name over 32 bytes in ASCII", "x".repeat(33)],
+  ["a name over 32 bytes in emoji", "\u{1f600}".repeat(9)],
+])(
+  "hands %s to the gateway to refuse, rather than throwing out of the call",
+  async (_case, agent) => {
+    // The agent is usually remembered rather than typed, so a bad one used to
+    // throw a bare TypeError before `mutate` was entered and fail every command
+    // of the launch with no reason and no retry. The gateway refuses a name it
+    // does not run, and that refusal is what the caller gets.
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new NessaRpcError("agent_not_configured", "no runtime"))
+      .mockResolvedValueOnce({ conversationId })
+    const api = createConversationApi({ request }, () => "identity")
+    const error = await api.create({ conversationId, agent }).catch((error) => error)
+    expect(error).toBeInstanceOf(NessaConversationMutationError)
+    expect(error.uncertain).toBe(false)
+    expect(error.message).toContain("agents.runtimes")
+    expect(request.mock.calls[0][1]).toEqual({
+      conversationId,
+      requestId: "identity",
+      agent,
+    })
+    // The same command, unchanged, is what a retry sends.
+    expect(await error.retry()).toEqual({ conversationId })
+    expect(request.mock.calls[1]).toEqual(request.mock.calls[0])
+  },
+)
+it("sends a usable agent name as the creation's own parameter", async () => {
+  const request = vi.fn().mockResolvedValue({ conversationId })
+  const api = createConversationApi({ request }, () => "identity")
+  expect(await api.create({ conversationId, agent: "codex" })).toEqual({
+    conversationId,
+  })
+  expect(request.mock.calls[0][1]).toEqual({
+    conversationId,
+    requestId: "identity",
+    agent: "codex",
+  })
+  // Omitted stays omitted: the gateway's default is not a name the client invents.
+  await api.create({ conversationId })
+  expect(request.mock.calls[1][1]).toEqual({ conversationId, requestId: "identity" })
 })
 
 const image = {

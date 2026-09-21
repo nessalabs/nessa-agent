@@ -1,6 +1,7 @@
 //! The adapters other contexts reach attachments through, each against the
 //! port it implements.
 use super::*;
+use crate::agents::domain::AgentId;
 use crate::{
     attachments::application::{AttachmentLimits, AttachmentStore, ConversationOwnership},
     attachments_test_support::{
@@ -141,6 +142,7 @@ async fn ownership_is_the_conversation_contexts_own_rule_read_without_opening_an
                 "panel".into(),
                 "create".into(),
                 1,
+                AgentId::Claude,
             )
             .unwrap(),
         )

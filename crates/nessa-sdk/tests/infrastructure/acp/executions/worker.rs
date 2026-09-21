@@ -85,6 +85,7 @@ async fn worker_initial_and_fallback_cancellation_share_grace_with_a_full_pipe()
             operation_capabilities,
             permissions: HashMap::new(),
             shutdown_deadline: None,
+            configured: true,
             closing: true,
             deferred_outcome: None,
             provider_result: None,

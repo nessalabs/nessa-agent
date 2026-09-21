@@ -34,7 +34,13 @@ import { existsSync, readFileSync, realpathSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-import { ACP_ENTRY, HARNESS, agentIsSettled, namespaceRoot } from "./dev-agent-config.mjs"
+import {
+  AGENTS,
+  agentIsSettled,
+  installHarness,
+  installedAgents,
+  namespaceRoot,
+} from "./dev-agent-config.mjs"
 import { gatewayPort, selectedPort } from "./gateway-port.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
@@ -72,50 +78,60 @@ function fail(...lines) {
 }
 
 /**
- * The agent's own runtime, which a fresh checkout does not have.
+ * The agents' own runtimes, which a fresh checkout does not have.
  *
- * It is installed by `npm ci` inside the harness rather than by this
- * repository's `pnpm install`, so every new worktree starts without it. The
- * config step then refuses — correctly — to write an agent block pointing at
- * files that are not there, says so, and exits 0. That warning scrolls past,
- * the gateway starts with no agent, and the panel reports the agent as not
- * installed. Which it is. Nothing in that chain is wrong except that a warning
- * carried the weight of a failure.
+ * Each is installed by `npm ci` inside its own harness rather than by this
+ * repository's `pnpm install`, so every new worktree starts without any of
+ * them. The config step then refuses — correctly — to write an agent block
+ * pointing at files that are not there, says so, and exits 0. That warning
+ * scrolls past, the gateway starts with no agent, and the panel reports the
+ * agent as not installed. Which it is. Nothing in that chain is wrong except
+ * that a warning carried the weight of a failure.
  *
- * Installing it is this checkout's own business, so it is done rather than
+ * Installing them is this checkout's own business, so it is done rather than
  * reported.
  */
 function checkHarness() {
-  if (existsSync(join(root, ACP_ENTRY))) {
-    say("agent runtime installed")
-    return
-  }
-  // Said before it happens, not after. `npm ci` deletes the harness's
-  // `node_modules` outright and then fetches, so somebody who was working in
-  // there deserves to read that on the way past rather than discover it.
-  say(`agent runtime missing; running (cd ${HARNESS} && npm ci --omit=dev)`)
-  let installed = true
-  try {
-    execFileSync("npm", ["ci", "--omit=dev"], {
-      stdio: "inherit",
-      cwd: join(root, HARNESS),
-    })
-  } catch {
-    // Kept, rather than swallowed: a failing install and a succeeding one that
-    // produced nothing are different faults, and the message below is the only
-    // place either is reported.
-    installed = false
-  }
-  if (!installed || !existsSync(join(root, ACP_ENTRY))) {
-    fail(
-      "The agent's runtime is not installed, so the gateway would have no agent to talk to.",
-      `It belongs at ${ACP_ENTRY}`,
-      "",
-      "Install it, then start again:",
-      `  (cd ${HARNESS} && npm ci --omit=dev)`,
+  // Each agent separately, because the gateway is configured for each one
+  // separately: an agent whose harness is absent is left out of the config
+  // rather than written as a path that is not there, so a missing Codex costs
+  // a working Claude nothing. Only a checkout with no agent at all is the
+  // failure this step exists to prevent.
+  for (const name of Object.keys(AGENTS)) {
+    if (existsSync(join(root, AGENTS[name].entry))) {
+      say(`${name} runtime installed`)
+      continue
+    }
+    // Said before it happens, not after. `npm ci` deletes the harness's
+    // `node_modules` outright and then fetches, so somebody who was working in
+    // there deserves to read that on the way past rather than discover it.
+    say(`${name} runtime missing; running ${installHarness(name)}`)
+    try {
+      execFileSync("npm", ["ci", "--omit=dev"], {
+        stdio: "inherit",
+        cwd: join(root, AGENTS[name].harness),
+      })
+    } catch {
+      // Not fatal on its own, and not swallowed either: the agent is simply
+      // reported as not installed, and the verdict below decides whether that
+      // leaves the gateway with nothing to talk to.
+    }
+    say(
+      existsSync(join(root, AGENTS[name].entry))
+        ? `${name} runtime installed`
+        : `${name} runtime still missing; the gateway will be configured without it`,
     )
   }
-  say("agent runtime installed")
+
+  if (installedAgents(root).length === 0) {
+    fail(
+      "No agent runtime is installed, so the gateway would have no agent to talk to.",
+      ...Object.keys(AGENTS).map((name) => `${name} belongs at ${AGENTS[name].entry}`),
+      "",
+      "Install at least one, then start again:",
+      ...Object.keys(AGENTS).map((name) => `  ${installHarness(name)}`),
+    )
+  }
 }
 
 /**

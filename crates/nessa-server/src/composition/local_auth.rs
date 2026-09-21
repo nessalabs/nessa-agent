@@ -6,12 +6,17 @@ use crate::{
         domain::RuntimeFingerprint,
         infrastructure::{DurableWarmUpAudit, FileWarmUpRecords},
     },
-    agents::infrastructure::{AgentLaunchFiles, LocalAgentProbe},
+    agents::{
+        domain::AgentId,
+        infrastructure::{AgentLaunchFiles, LocalAgentProbe},
+    },
     app::ports::Clock as ServerClock,
     attachments::infrastructure::ModelImageNormalizer,
     browser_session::adapters::PersistentSessions,
     conversation::{
-        application::{ConversationDependencies, ConversationLimits, ConversationService},
+        application::{
+            ConversationAgents, ConversationDependencies, ConversationLimits, ConversationService,
+        },
         infrastructure::{DurableConversationCreationAudit, LocalConversationRepository},
     },
     core::RunError,
@@ -32,6 +37,7 @@ use nessa_auth::{
 };
 use nessa_sdk::infrastructure::session_storage::{InMemoryStorage, LocalFileStorage};
 use std::{
+    collections::HashMap,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -53,7 +59,10 @@ impl Clock for SystemClock {
 /// cannot be started here.
 pub(super) struct LocalProduct {
     pub(super) routes: ProductRouteState,
-    pub(super) warm_up: Option<AgentWarmUp>,
+    /// One per configured agent, each preparing its own runtime. Empty when no
+    /// agent is configured, which is the same gateway that serves no
+    /// conversations.
+    pub(super) warm_ups: Vec<AgentWarmUp>,
 }
 
 /// Construct the guarded product route from a previously initialized local registry.
@@ -102,10 +111,29 @@ pub(super) fn product_state(
     // same place. Composition settles *which* paths those are and hands them
     // over; it does not settle whether they exist, because a user can install
     // the agent long after this runs and setup has a button that says so.
-    let agent_launch_files = settings.agent.as_ref().map(|agent| AgentLaunchFiles {
-        runtime: agent.node.clone(),
-        entry: agent.acp_entry.clone(),
-    });
+    // Every agent the configuration describes, not only the one a new
+    // conversation would start on: setup lists them all and a person deciding
+    // between them is entitled to the truth about each.
+    let agent_launch_files: HashMap<AgentId, AgentLaunchFiles> = settings
+        .agents
+        .as_ref()
+        .map(|agents| {
+            agents
+                .agents()
+                .into_iter()
+                .map(|(id, runtime)| {
+                    (
+                        id,
+                        AgentLaunchFiles {
+                            command: runtime.command.clone(),
+                            paths: runtime.paths(),
+                            environment: super::agent::launch_environment(id),
+                        },
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let policy = Arc::new(CedarPolicyEvaluator::new().map_err(setup_error)?);
     let admin = Arc::new(LocalAdmin {
         store: store.clone(),
@@ -133,8 +161,8 @@ pub(super) fn product_state(
         .map_err(setup_error)?,
     ));
     product.browser_http_allowed = config.browser_http_allowed();
-    let mut warm_up = None;
-    if let Some(agent) = &settings.agent {
+    let mut warm_ups = Vec::new();
+    if let Some(agents) = &settings.agents {
         let root = directory
             .parent()
             .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
@@ -142,11 +170,11 @@ pub(super) fn product_state(
         nessa_local_storage::create_directory(&root)
             .map_err(|error| RunError::Agent(error.to_string()))?;
         let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-        let model = super::agent::model(agent)?;
-        // Ownership records come first. The provider needs somewhere to read
-        // image bytes, reading them needs the attachment store, and beginning
-        // an upload needs to ask who owns a conversation: so the repository is
-        // built, then attachments over it, and only then the provider.
+        let selected = agents.selected()?;
+        // Ownership records come first. A binding needs somewhere to read image
+        // bytes, reading them needs the attachment store, and beginning an
+        // upload needs to ask who owns a conversation: so the repository is
+        // built, then attachments over it, and only then the providers.
         let metadata = Arc::new(
             LocalConversationRepository::new(root.join("metadata"))
                 .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -157,23 +185,67 @@ pub(super) fn product_state(
                 .ok_or_else(|| RunError::Agent("invalid namespace directory".into()))?
                 .join("attachments"),
             metadata.clone(),
-            // The model's own image limits, from the catalog: the one place
-            // they are recorded. Every uploaded image is fitted to them, using
-            // the running system's decoder for the encodings the image library
-            // does not read itself.
+            // The image limits from the catalog, which is the one place they
+            // are recorded, taken across every configured agent's model rather
+            // than the selected one's: the store is shared by conversations
+            // that each run on their own agent. Every uploaded image is fitted
+            // to them, using the running system's decoder for the encodings the
+            // image library does not read itself.
             Arc::new(
-                ModelImageNormalizer::new(model.image_input(), nessa_images::platform_decoder())
-                    .map_err(|error| RunError::Agent(format!("model image limits: {error}")))?,
+                ModelImageNormalizer::new(
+                    super::agent::image_limits(agents)?.as_ref(),
+                    nessa_images::platform_decoder(),
+                )
+                .map_err(|error| RunError::Agent(format!("model image limits: {error}")))?,
             ),
             clock.clone(),
         )?;
-        let provider = super::agent::provider(
-            agent,
-            &model,
-            &root,
-            clock.clone(),
-            attachments.images.clone(),
-        )?;
+        let mut configured =
+            super::agent::providers(agents, &root, clock.clone(), attachments.images.clone())?;
+        // One warm-up per configured agent, because each runs its own runtime
+        // and the operating system scans each of them separately on its first
+        // execution. One for the server would leave whichever agent it did not
+        // cover paying that scan inside somebody's first message, which is the
+        // failure this exists to prevent.
+        //
+        // They share one records directory and one audit directory: a record is
+        // stored under a digest of the runtime it describes, so two runtimes
+        // never collide, and a third configured later finds no record of its
+        // own and warms itself.
+        let records = Arc::new(
+            FileWarmUpRecords::new(root.join("warm-up"))
+                .map_err(|error| RunError::Agent(error.to_string()))?,
+        );
+        let warm_up_audit = Arc::new(
+            DurableWarmUpAudit::new(root.join("audit").join("warm-up"))
+                .map_err(|error| RunError::Agent(error.to_string()))?,
+        );
+        for agent in configured.values_mut() {
+            // The provider's own credential-free identity, rather than a
+            // hand-picked list of fields: it already covers the executable, its
+            // arguments, the environment, the workspace, and every MCP server
+            // binary the child will start, and it is computed from raw OS bytes
+            // rather than a lossy path conversion. Anything that changes which
+            // files are executed changes it, which is what a first-execution
+            // scan is paid for.
+            let identity = agent.provider.identity();
+            let runtime =
+                RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context())
+                    .map_err(|error| RunError::Agent(error.to_string()))?;
+            let prepared = AgentWarmUp::new(
+                agent.provider.clone(),
+                // A throwaway context: the warm-up must not leave a snapshot on
+                // disk and must not take an exclusive lease on a conversation a
+                // user owns.
+                Arc::new(InMemoryStorage::new()),
+                records.clone(),
+                warm_up_audit.clone(),
+                clock.clone(),
+                runtime,
+            );
+            agent.readiness = Some(Arc::new(PreparedRuntime(prepared.clone())));
+            warm_ups.push(prepared);
+        }
         let storage = Arc::new(
             LocalFileStorage::new(root.join("sessions"))
                 .map_err(|error| RunError::Agent(error.to_string()))?,
@@ -182,59 +254,27 @@ pub(super) fn product_state(
             DurableConversationCreationAudit::new(root.join("audit").join("creation"))
                 .map_err(|error| RunError::Agent(error.to_string()))?,
         );
-        // The provider's own credential-free identity, rather than a
-        // hand-picked list of fields: it already covers the executable, its
-        // arguments, the environment, the workspace, and every MCP server
-        // binary the child will start, and it is computed from raw OS bytes
-        // rather than a lossy path conversion. Anything that changes which
-        // files are executed changes it, which is what a first-execution scan
-        // is paid for.
-        let identity = provider.identity();
-        let runtime =
-            RuntimeFingerprint::new(identity.name(), identity.model_id(), identity.context())
-                .map_err(|error| RunError::Agent(error.to_string()))?;
-        let prepared = AgentWarmUp::new(
-            provider.clone(),
-            // A throwaway context: the warm-up must not leave a snapshot on
-            // disk and must not take an exclusive lease on a conversation a
-            // user owns.
-            Arc::new(InMemoryStorage::new()),
-            Arc::new(
-                FileWarmUpRecords::new(root.join("warm-up"))
-                    .map_err(|error| RunError::Agent(error.to_string()))?,
-            ),
-            Arc::new(
-                DurableWarmUpAudit::new(root.join("audit").join("warm-up"))
-                    .map_err(|error| RunError::Agent(error.to_string()))?,
-            ),
-            clock.clone(),
-            runtime,
-        );
         let service = ConversationService::new(
             ConversationDependencies {
-                provider,
+                agents: ConversationAgents::new(configured, selected)
+                    .map_err(|error| RunError::Agent(error.to_string()))?,
                 storage,
                 metadata,
                 creation_audit,
                 attachments: Some(attachments.conversations),
                 clock,
-                readiness: Some(Arc::new(PreparedRuntime(prepared.clone()))),
             },
-            ConversationLimits {
-                reserved_output_tokens: agent.output_tokens,
-                ..ConversationLimits::default()
-            },
-            Some(agent.workspace.to_string_lossy().into_owned()),
+            ConversationLimits::default(),
+            Some(agents.workspace.to_string_lossy().into_owned()),
         )
         .map_err(|error| RunError::Agent(error.to_string()))?;
-        warm_up = Some(prepared);
         product = product
             .with_conversations(Arc::new(service))
             .with_attachments(attachments.service);
     }
     Ok(LocalProduct {
         routes: product,
-        warm_up,
+        warm_ups,
     })
 }
 

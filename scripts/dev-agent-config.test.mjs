@@ -1,11 +1,13 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs"
@@ -14,7 +16,7 @@ import { dirname, join, resolve } from "node:path"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 
-import { agentBlock, namespaceRoot } from "./dev-agent-config.mjs"
+import { agentsBlock, installedAgents, namespaceRoot } from "./dev-agent-config.mjs"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const script = join(root, "scripts/dev-agent-config.mjs")
@@ -65,6 +67,21 @@ function withStdout(into, body) {
   }
 }
 
+/**
+ * An agents block that launches Claude from `entry`.
+ *
+ * The lock tests care about which run's block reaches the file, not what is in
+ * one, so they vary the entry script alone and share the rest.
+ */
+function agentsLaunching(entry) {
+  return {
+    catalog: "/checkout/models.json",
+    workspace: "/data/dev/workspaces/default",
+    selected: "claude",
+    runtimes: { claude: { command: "/usr/bin/node", args: [entry] } },
+  }
+}
+
 test("the namespace matches the server's stage and instance layout", unixOnly, () => {
   assert.equal(
     namespaceRoot({ NESSA_DATA_DIR: "/data", NESSA_STAGE: "dev" }),
@@ -84,21 +101,25 @@ test("the namespace matches the server's stage and instance layout", unixOnly, (
 })
 
 test("every configured path is absolute and the MCP server is opt-in", unixOnly, () => {
-  const without = agentBlock({
+  const without = agentsBlock({
     checkout: "/checkout",
     namespace: "/data/dev",
     node: "/usr/bin/node",
     mcpBinary: undefined,
+    agents: ["claude"],
   })
-  for (const key of ["catalog", "node", "acpEntry", "workspace"])
+  for (const key of ["catalog", "workspace"])
     assert.ok(without[key].startsWith("/"), `${key} is absolute`)
+  assert.ok(without.runtimes.claude.command.startsWith("/"))
+  assert.ok(without.runtimes.claude.args[0].startsWith("/"))
   assert.equal(without.mcpServers, undefined)
   assert.equal(without.workspace, "/data/dev/workspaces/default")
-  const with_ = agentBlock({
+  const with_ = agentsBlock({
     checkout: "/checkout",
     namespace: "/data/dev",
     node: "/usr/bin/node",
     mcpBinary: "/checkout/target/debug/nessa-mcp",
+    agents: ["claude"],
   })
   assert.equal(with_.mcpServers[0].command, "/checkout/target/debug/nessa-mcp")
   assert.deepEqual(with_.mcpServers[0].args, [
@@ -109,25 +130,72 @@ test("every configured path is absolute and the MCP server is opt-in", unixOnly,
   ])
 })
 
+test("the agent to run on is stated whenever there is a choice to make", unixOnly, () => {
+  // The gateway refuses to guess between configured agents, so a block that
+  // named two and chose neither would fail every dev launch — and the developer
+  // would be answering a question this script never told them it had asked.
+  const both = agentsBlock({
+    checkout: "/checkout",
+    namespace: "/data/dev",
+    node: "/usr/bin/node",
+    mcpBinary: undefined,
+    agents: ["claude", "codex"],
+  })
+  assert.deepEqual(Object.keys(both.runtimes).sort(), ["claude", "codex"])
+  assert.equal(both.selected, "claude")
+  assert.equal(both.runtimes.codex.model, "gpt-5.6-terra")
+  assert.equal(both.runtimes.claude.model, "claude-sonnet-5")
+
+  // Claude absent, Codex installed: the one that is there is the one chosen.
+  const codexOnly = agentsBlock({
+    checkout: "/checkout",
+    namespace: "/data/dev",
+    node: "/usr/bin/node",
+    mcpBinary: undefined,
+    agents: ["codex"],
+  })
+  assert.equal(codexOnly.selected, "codex")
+})
+
+test("an agent whose harness is not installed is left out entirely", unixOnly, () => {
+  // Writing it anyway would name a path that is not there, and the gateway
+  // refuses to start on one of those — so a Codex nobody installed would cost
+  // the developer their working Claude, not just Codex.
+  const entries = []
+  const present = installedAgents("/checkout", (path) => {
+    entries.push(path)
+    return path.includes("claude-acp")
+  })
+  assert.deepEqual(present, ["claude"])
+  assert.ok(entries.some((path) => path.includes("codex-acp")))
+})
+
 test(
   "a fresh namespace gets a private config the workspace of which exists",
   unixOnly,
   (t) => {
-    if (!existsSync(join(root, "crates/nessa-sdk/harnesses/claude-acp/node_modules")))
-      return t.skip("the Claude ACP harness is not installed in this checkout")
+    const present = installedAgents(root, existsSync)
+    if (present.length === 0)
+      return t.skip("no ACP harness is installed in this checkout")
     const data = temporaryRoot()
     const output = run(data)
-    assert.match(output, /dev agent configured/)
+    assert.match(output, /dev agents configured/)
     const path = join(data, "dev/config.json")
     const config = JSON.parse(readFileSync(path, "utf8"))
-    assert.equal(config.agent.model, "claude-sonnet-5")
-    assert.ok(existsSync(config.agent.node))
-    assert.ok(existsSync(config.agent.acpEntry))
-    assert.ok(existsSync(config.agent.catalog))
-    assert.ok(statSync(config.agent.workspace).isDirectory())
+    // Exactly the agents whose harness is on disk, each launchable as written
+    // and running on a model, with the choice between them already made.
+    assert.deepEqual(Object.keys(config.agents.runtimes).sort(), [...present].sort())
+    for (const [name, runtime] of Object.entries(config.agents.runtimes)) {
+      assert.ok(existsSync(runtime.command), `${name} launches something that is there`)
+      assert.ok(existsSync(runtime.args[0]), `${name} runs an entry that is there`)
+      assert.ok(runtime.model, `${name} names a model`)
+    }
+    assert.ok(present.includes(config.agents.selected), "the chosen agent is installed")
+    assert.ok(existsSync(config.agents.catalog))
+    assert.ok(statSync(config.agents.workspace).isDirectory())
     // The gateway refuses to read anything under this root that others can see.
     assert.equal(statSync(path).mode & 0o077, 0)
-    assert.equal(statSync(config.agent.workspace).mode & 0o077, 0)
+    assert.equal(statSync(config.agents.workspace).mode & 0o077, 0)
 
     // Running the dev loop again must not churn the file.
     const before = readFileSync(path, "utf8")
@@ -140,8 +208,8 @@ test(
   "settings a developer wrote are preserved, and their own agent is never replaced",
   unixOnly,
   (t) => {
-    if (!existsSync(join(root, "crates/nessa-sdk/harnesses/claude-acp/node_modules")))
-      return t.skip("the Claude ACP harness is not installed in this checkout")
+    if (installedAgents(root, existsSync).length === 0)
+      return t.skip("no ACP harness is installed in this checkout")
     const data = temporaryRoot()
     mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
     const path = join(data, "dev/config.json")
@@ -151,15 +219,205 @@ test(
     run(data)
     const merged = JSON.parse(readFileSync(path, "utf8"))
     assert.equal(merged.session.writeTimeoutMs, 75)
-    assert.ok(merged.agent)
+    assert.ok(merged.agents)
 
-    const mine = { agent: { node: "/nowhere/node", acpEntry: "/nowhere/index.js" } }
+    const mine = {
+      agents: {
+        catalog: "/nowhere/models.json",
+        runtimes: { claude: { command: "/nowhere/node", args: ["/nowhere/index.js"] } },
+      },
+    }
     writeFileSync(path, JSON.stringify(mine), { mode: 0o600 })
     const output = run(data)
     assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), mine)
     // A hand-written block that cannot launch is reported rather than repaired.
-    assert.match(output, /points at files that are not there/)
+    assert.match(output, /point at files that are not there/)
     assert.match(output, /\/nowhere\/node/)
+  },
+)
+
+test(
+  "a config carrying both the retired key and the new one has the retired one taken out",
+  unixOnly,
+  () => {
+    // What a developer who ran the dev loop on this branch before the retirement
+    // landed now has on disk. The `agents` block answers the question this
+    // script asks, so it writes no block of its own — and used to stand down
+    // saying the file was fine, while `deny_unknown_fields` refused to start
+    // the gateway on the `agent` key still sitting beside it.
+    //
+    // That key is this script's own and nothing reads it, so it is removed
+    // rather than reported as a chore. The `agents` answer beside it belongs to
+    // whoever wrote it and comes back exactly as it went in.
+    const data = temporaryRoot()
+    mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+    const path = join(data, "dev/config.json")
+    const agents = agentsLaunching("/checkout/dist/index.js")
+    writeFileSync(
+      path,
+      JSON.stringify({
+        agent: { node: "/old/node", acpEntry: "/old/entry.js" },
+        agents,
+        session: { writeTimeoutMs: 75 },
+      }),
+      { mode: 0o600 },
+    )
+
+    const output = run(data)
+
+    assert.match(output, /retired "agent" block/)
+    const saved = JSON.parse(readFileSync(path, "utf8"))
+    assert.equal(saved.agent, undefined, "the gateway still refuses to start on this")
+    assert.deepEqual(saved.agents, agents, "somebody else's answer was rewritten")
+    // Only the key this script owned. Another setting in the same file is not
+    // its to tidy either.
+    assert.equal(saved.session.writeTimeoutMs, 75)
+
+    // And a second run has nothing left to say about it.
+    assert.doesNotMatch(run(data), /retired "agent" block/)
+  },
+)
+
+test(
+  "publishing onto that config repairs it in the caller's process rather than ending it",
+  unixOnly,
+  async () => {
+    // `publish` asks the same question again under the lock, and this suite
+    // calls it here, in the process running the tests. Whatever that path
+    // decides, it must not end the process the way the stand-down path does: a
+    // regression there would stop this file at whichever test reached it first
+    // and report the tests that did run as a pass.
+    const { publish } = await import("./dev-agent-config.mjs")
+    const data = temporaryRoot()
+    mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+    const path = join(data, "dev/config.json")
+    const agents = agentsLaunching("/checkout/dist/index.js")
+    writeFileSync(path, JSON.stringify({ agent: { node: "/old/node" }, agents }), {
+      mode: 0o600,
+    })
+
+    const wrote = publish({
+      configPath: path,
+      agents,
+      node: agents.runtimes.claude.command,
+    })
+
+    assert.equal(wrote, false, "somebody else's answer was replaced")
+    const saved = JSON.parse(readFileSync(path, "utf8"))
+    assert.equal(saved.agent, undefined)
+    assert.deepEqual(saved.agents, agents)
+  },
+)
+
+test(
+  "a repair that cannot be written fails the caller instead of reporting success",
+  {
+    // One reason, not two options merged: spreading `unixOnly` and then naming
+    // `skip` again replaced its answer with `false`, so this ran on Windows and
+    // failed there while every other test in the file was skipped.
+    //
+    // Root writes through a read-only directory, so the write cannot be made to
+    // fail as root either. It fails for an ordinary user, which is what the
+    // Linux and macOS runners are.
+    skip:
+      unixOnly.skip ??
+      (process.getuid?.() === 0 ? "run as root; a write here cannot fail" : false),
+  },
+  async () => {
+    // The one path left that reports a configuration the gateway will refuse,
+    // and it throws rather than exiting, for the reason the test above gives.
+    //
+    // The directory is closed from `interrupt`, which runs with the lock
+    // already held — closing it before `publish` is called would only stop the
+    // lock being taken, and that is a different answer entirely.
+    const { publish } = await import("./dev-agent-config.mjs")
+    const data = temporaryRoot()
+    const directory = join(data, "dev")
+    mkdirSync(directory, { recursive: true, mode: 0o700 })
+    const path = join(directory, "config.json")
+    const agents = agentsLaunching("/checkout/dist/index.js")
+    writeFileSync(path, JSON.stringify({ agent: { node: "/old/node" }, agents }), {
+      mode: 0o600,
+    })
+
+    try {
+      assert.throws(
+        () =>
+          publish({
+            configPath: path,
+            agents,
+            node: agents.runtimes.claude.command,
+            interrupt: () => chmodSync(directory, 0o500),
+          }),
+        /could not be repaired/,
+      )
+      // Said, and not half done: the key is still there for the next run.
+      assert.notEqual(JSON.parse(readFileSync(path, "utf8")).agent, undefined)
+    } finally {
+      chmodSync(directory, 0o700)
+    }
+  },
+)
+
+test(
+  "a generated document the gateway would refuse fails the caller, not the run",
+  unixOnly,
+  async () => {
+    // The guards that check what this script itself produced, reached on the
+    // path where `agents` is absent so a document is actually built. They are
+    // bug reports, not stand-downs, and they run in whatever process called
+    // `publish` — so a regression in the retirement that feeds them must fail
+    // the caller rather than end its run with the status a stand-down carries.
+    const { publish } = await import("./dev-agent-config.mjs")
+    const data = temporaryRoot()
+    mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+    const path = join(data, "dev/config.json")
+    const agents = agentsLaunching("/checkout/dist/index.js")
+    // Only the retired key, so the question is still open and the document is
+    // built — which is the path the retirement, and its round-trip guard, are
+    // on. A file holding `agents` too stands down long before this.
+    writeFileSync(path, JSON.stringify({ agent: { node: "/old/node" } }), {
+      mode: 0o600,
+    })
+
+    // The ordinary run retires it and says so.
+    assert.equal(
+      publish({ configPath: path, agents, node: agents.runtimes.claude.command }),
+      true,
+    )
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).agent, undefined)
+  },
+)
+
+test(
+  "standing down does not end the process that called it either",
+  unixOnly,
+  async () => {
+    // The same rule as the guard above, for the other answer. `skip` is the
+    // stand-down, and a stand-down that exited would end a caller's run at
+    // whichever line reached it, carrying the status that says all was well.
+    // Reached here through the lock, which is also the release this throw lets
+    // run: an exit from under it left the lock file behind.
+    const { publish } = await import("./dev-agent-config.mjs")
+    const data = temporaryRoot()
+    const directory = join(data, "dev")
+    mkdirSync(directory, { recursive: true, mode: 0o700 })
+    const path = join(directory, "config.json")
+    const agents = agentsLaunching("/checkout/dist/index.js")
+
+    assert.throws(
+      () =>
+        publish({
+          configPath: path,
+          agents,
+          node: agents.runtimes.claude.command,
+          // Somebody removed the directory out from under the run, so the write
+          // cannot happen and there is no agent configured.
+          interrupt: () => rmSync(directory, { recursive: true }),
+        }),
+      /dev agent not configured|could not write/,
+    )
+    assert.equal(existsSync(`${path}.lock`), false, "the lock was left behind")
   },
 )
 
@@ -196,27 +454,34 @@ test(
         env: { ...process.env, NESSA_DATA_DIR: data, NESSA_STAGE: "dev" },
       },
     )
-    assert.match(output, /harness is not installed/)
-    assert.match(output, /npm ci --omit=dev/)
+    assert.match(output, /no ACP harness is installed/)
+    // Every agent it could have configured is named, so the developer knows
+    // both are a `npm ci` away rather than only the one this script prefers.
+    for (const agent of ["claude-acp", "codex-acp"])
+      assert.match(output, new RegExp(`${agent} && npm ci --omit=dev`))
     assert.equal(existsSync(join(data, "dev/config.json")), false)
   },
 )
 
-test("a config that says agent is null is an answer, not a gap to fill", unixOnly, () => {
-  // The server reads `agent` as an Option, so null is a gateway with no agent
-  // — a configuration that starts. Before, it reached `agent.node` and took
-  // `pnpm server:run` down with it, because the two are chained with `&&`.
-  const data = temporaryRoot()
-  mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
-  const path = join(data, "dev/config.json")
-  writeFileSync(path, `{"agent": null}`, { mode: 0o600 })
+test(
+  "a config that says agents is null is an answer, not a gap to fill",
+  unixOnly,
+  () => {
+    // The server reads `agents` as an Option, so null is a gateway with no agents
+    // — a configuration that starts. Before, it reached into the block and took
+    // `pnpm server:run` down with it, because the two are chained with `&&`.
+    const data = temporaryRoot()
+    mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+    const path = join(data, "dev/config.json")
+    writeFileSync(path, `{"agents": null}`, { mode: 0o600 })
 
-  const output = run(data)
+    const output = run(data)
 
-  assert.match(output, /"agent": null/)
-  assert.match(output, /left as it is/)
-  assert.equal(readFileSync(path, "utf8"), `{"agent": null}`)
-})
+    assert.match(output, /"agents": null/)
+    assert.match(output, /left as it is/)
+    assert.equal(readFileSync(path, "utf8"), `{"agents": null}`)
+  },
+)
 
 /**
  * The window between reading the configuration and writing it back is real:
@@ -232,7 +497,7 @@ test(
     const data = temporaryRoot()
     mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
     const path = join(data, "dev/config.json")
-    const agent = { node: "/usr/bin/node", acpEntry: "/checkout/dist/index.js" }
+    const agents = agentsLaunching("/checkout/dist/index.js")
 
     // A setting written after this run read the file, and before it writes.
     writeFileSync(path, JSON.stringify({ session: { writeTimeoutMs: 75 } }), {
@@ -240,9 +505,8 @@ test(
     })
     const wrote = publish({
       configPath: path,
-      agent,
-      acpEntry: agent.acpEntry,
-      node: agent.node,
+      agents,
+      node: agents.runtimes.claude.command,
       interrupt: () =>
         writeFileSync(path, JSON.stringify({ session: { writeTimeoutMs: 321 } }), {
           mode: 0o600,
@@ -252,22 +516,71 @@ test(
     assert.equal(wrote, true)
     const saved = JSON.parse(readFileSync(path, "utf8"))
     assert.equal(saved.session.writeTimeoutMs, 321, "the newer setting survives")
-    assert.deepEqual(saved.agent, agent)
+    assert.deepEqual(saved.agents, agents)
 
     // And an agent that arrived in that window is theirs, not this run's.
     writeFileSync(path, JSON.stringify({}), { mode: 0o600 })
-    const theirs = { node: "/their/node", acpEntry: "/their/entry.js" }
+    const theirs = {
+      catalog: "/their/models.json",
+      runtimes: { claude: { command: "/their/node", args: ["/their/entry.js"] } },
+    }
     const second = publish({
       configPath: path,
-      agent,
-      acpEntry: agent.acpEntry,
-      node: agent.node,
+      agents,
+      node: agents.runtimes.claude.command,
       interrupt: () =>
-        writeFileSync(path, JSON.stringify({ agent: theirs }), { mode: 0o600 }),
+        writeFileSync(path, JSON.stringify({ agents: theirs }), { mode: 0o600 }),
     })
 
     assert.equal(second, false, "nothing was written over them")
-    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")).agent, theirs)
+    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")).agents, theirs)
+  },
+)
+
+/**
+ * Every checkout that ran the dev loop before agents became a map has an
+ * `agent` block in its `config.json`. The server reads its configuration with
+ * `deny_unknown_fields`, so that key left in place is a gateway that will not
+ * start — and the run that left it there says it configured the dev agents.
+ *
+ * This script wrote that block, so retiring it is this script's job: local
+ * development data brought to the current shape by the tool that owns it, which
+ * is what the standard asks for instead of a reader in the server.
+ */
+test(
+  "the agent block an older version wrote is retired, not left beside",
+  unixOnly,
+  async () => {
+    const { publish } = await import("./dev-agent-config.mjs")
+    const data = temporaryRoot()
+    mkdirSync(join(data, "dev"), { recursive: true, mode: 0o700 })
+    const path = join(data, "dev/config.json")
+    const agents = agentsLaunching("/checkout/dist/index.js")
+
+    // Exactly what the previous version of this script left behind, beside a
+    // setting that has nothing to do with it.
+    writeFileSync(
+      path,
+      JSON.stringify({
+        agent: { node: "/old/node", acpEntry: "/old/entry.js" },
+        session: { writeTimeoutMs: 75 },
+      }),
+      { mode: 0o600 },
+    )
+
+    const wrote = publish({
+      configPath: path,
+      agents,
+      node: agents.runtimes.claude.command,
+    })
+
+    assert.equal(wrote, true)
+    const saved = JSON.parse(readFileSync(path, "utf8"))
+    assert.deepEqual(saved.agents, agents)
+    assert.equal(saved.agent, undefined, "the old block would refuse the gateway")
+    assert.deepEqual(Object.keys(saved).sort(), ["agents", "session"])
+    // Only the key this script owned. Somebody else's settings are not its to tidy.
+    assert.equal(saved.session.writeTimeoutMs, 75)
   },
 )
 
@@ -287,30 +600,28 @@ test(
     const path = join(data, "dev/config.json")
     writeFileSync(path, JSON.stringify({}), { mode: 0o600 })
 
-    const mine = { node: "/usr/bin/node", acpEntry: "/mine/index.js" }
-    const theirs = { node: "/usr/bin/node", acpEntry: "/theirs/index.js" }
+    const mine = agentsLaunching("/mine/index.js")
+    const theirs = agentsLaunching("/theirs/index.js")
     let second
 
     // The other run happens while this one holds the lock, which is exactly the
     // interleaving that used to lose a write.
     const first = publish({
       configPath: path,
-      agent: mine,
-      acpEntry: mine.acpEntry,
-      node: mine.node,
+      agents: mine,
+      node: mine.runtimes.claude.command,
       interrupt: () => {
         second = publish({
           configPath: path,
-          agent: theirs,
-          acpEntry: theirs.acpEntry,
-          node: theirs.node,
+          agents: theirs,
+          node: theirs.runtimes.claude.command,
         })
       },
     })
 
     assert.equal(first, true, "the run holding the lock writes")
     assert.equal(second, false, "the run that could not take it stands down")
-    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")).agent, mine)
+    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")).agents, mine)
   },
 )
 
@@ -332,14 +643,13 @@ test("a lock whose owner is gone is reported, not taken", unixOnly, async () => 
   const holder = "2147483647 stale-token 2026-01-01T00:00:00.000Z\n"
   writeFileSync(`${path}.lock`, holder, { mode: 0o600 })
 
-  const agent = { node: "/usr/bin/node", acpEntry: "/mine/index.js" }
+  const agents = agentsLaunching("/mine/index.js")
   const said = []
   const wrote = withStdout(said, () =>
     publish({
       configPath: path,
-      agent,
-      acpEntry: agent.acpEntry,
-      node: agent.node,
+      agents,
+      node: agents.runtimes.claude.command,
     }),
   )
 
@@ -367,13 +677,14 @@ test("two runs finding the same stale lock do not both write", unixOnly, async (
   const holder = "2147483647 stale-token 2026-01-01T00:00:00.000Z\n"
   writeFileSync(`${path}.lock`, holder, { mode: 0o600 })
 
-  const attempt = (entry) =>
-    publish({
+  const attempt = (entry) => {
+    const agents = agentsLaunching(entry)
+    return publish({
       configPath: path,
-      agent: { node: "/usr/bin/node", acpEntry: entry },
-      acpEntry: entry,
-      node: "/usr/bin/node",
+      agents,
+      node: agents.runtimes.claude.command,
     })
+  }
 
   const said = []
   const [first, second] = withStdout(said, () => [
@@ -395,14 +706,13 @@ test("releasing does not remove somebody else's lock", unixOnly, async () => {
   const path = join(data, "dev/config.json")
   writeFileSync(path, JSON.stringify({}), { mode: 0o600 })
 
-  const agent = { node: "/usr/bin/node", acpEntry: "/mine/index.js" }
+  const agents = agentsLaunching("/mine/index.js")
   const theirs = `${process.pid + 1} their-token 2026-01-01T00:00:00.000Z\n`
 
   const wrote = publish({
     configPath: path,
-    agent,
-    acpEntry: agent.acpEntry,
-    node: agent.node,
+    agents,
+    node: agents.runtimes.claude.command,
     // Somebody clears the lock by hand and another run takes it, while this run
     // is between acquiring and writing.
     interrupt: () => writeFileSync(`${path}.lock`, theirs, { mode: 0o600 }),

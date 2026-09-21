@@ -50,3 +50,31 @@ fn reports_every_agent_it_knows() {
     assert_eq!(all.len(), AgentId::ALL.len());
     assert_eq!(all[0], (AgentId::Claude, Readiness::Ready));
 }
+
+#[test]
+fn an_agent_with_nothing_to_launch_is_not_asked_about_this_machine() {
+    // Both other questions are about the machine, and neither was ever about
+    // this agent: nothing would be launched for it. Asking anyway would put two
+    // "could not answer" lines in the log on every check, about a machine that
+    // was never the problem — and answering from them would tell someone who
+    // has the agent to go and install it.
+    struct NothingConfigured;
+    impl AgentProbe for NothingConfigured {
+        fn configured(&self, _: AgentId) -> bool {
+            false
+        }
+        fn installed(&self, _: AgentId) -> Result<bool, ProbeFailure> {
+            panic!("an unconfigured agent must not be asked about this machine")
+        }
+        fn authenticated(&self, _: AgentId) -> Result<bool, ProbeFailure> {
+            panic!("an unconfigured agent must not be asked about this machine")
+        }
+    }
+    assert_eq!(
+        ReadAgentReadiness {
+            probe: &NothingConfigured
+        }
+        .execute(AgentId::Claude),
+        Readiness::NotConfigured
+    );
+}

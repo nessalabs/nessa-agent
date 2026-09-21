@@ -664,6 +664,42 @@ describe("sending a draft that holds images", () => {
     )
   })
 
+  it("blames this conversation's agent and not the gateway's, when only one is missing", () => {
+    // These two codes mean different things and the server split them so the
+    // panel could say so. An operator with Claude and Codex configured who
+    // drops `codex` and restarts still has a working gateway; pressing Close on
+    // a Codex tab must not send them to a config.json that already configures
+    // an agent. Asserted on the content, because a test that only checks the
+    // two sentences differ stays green through exactly this drift.
+    const one = controlFailureMessage("agent-not-configured", "refused")
+    expect(one).toMatch(/this conversation runs on/i)
+    expect(one).not.toMatch(/(has no|not set up to run|no agent)/i)
+
+    const none = controlFailureMessage("conversations-not-configured", "refused")
+    expect(none).toMatch(/not set up to run conversations/i)
+    expect(none).not.toBe(one)
+  })
+
+  it("offers no remedy for an agent this build cannot open, because there is none to offer", () => {
+    // The agents Nessa can drive are compiled in, so no edit to config.json
+    // adds one — and naming an agent there that has no adapter stops the
+    // gateway starting at all. A panel that says "configure that agent" turns
+    // one stranded conversation into no gateway.
+    const message = controlFailureMessage("agent-unsupported", "refused")
+    expect(message).toMatch(/this version of Nessa cannot open/i)
+    expect(message).not.toMatch(/(configure|config\.json|agents\.runtimes|restart)/i)
+  })
+
+  it("says the same thing about an unopenable agent whether you typed or clicked", () => {
+    // A message refused for this reason falls through to the client's own
+    // sentence; a control is answered here. The same failure saying two
+    // different things depending on which one you did is the bug.
+    expect(submissionRefusalMessage("agent-unsupported")).toBeUndefined()
+    expect(controlFailureMessage("agent-unsupported", "refused")).toMatch(
+      /this version of Nessa cannot open/i,
+    )
+  })
+
   it("says something different, and useful, for each refusal", () => {
     const messages = [
       imageRefusalMessage({ kind: "unsupported-file", name: "notes.pdf" }),

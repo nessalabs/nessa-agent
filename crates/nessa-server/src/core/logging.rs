@@ -17,8 +17,17 @@ pub fn init() {
     subscriber(std::io::stderr, std::io::stderr().is_terminal(), filter()).init();
 }
 
+/// What is logged when the environment names nothing.
+///
+/// The SDK is where an agent actually runs, so its warnings and errors are the
+/// operator's to see: a provider refusing to start, an audit sink rejecting
+/// evidence, cleanup it could not confirm. Filtered to this crate alone, all of
+/// that was dropped before it reached a terminal, and a gateway that could not
+/// open a conversation said so only as a code. The SDK's info and debug lines
+/// stay off, because those are a developer's.
 fn filter() -> EnvFilter {
-    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("nessa_server=info"))
+    EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("nessa_server=info,nessa_sdk=warn"))
 }
 
 /// The subscriber `init` installs, over any writer, so what it writes can be

@@ -329,7 +329,7 @@ impl AcpProfile for PanicProfile {
     ) -> Value {
         self.inner.new_session_params(config, capabilities)
     }
-    fn session_configuration(&self, id: &str) -> Option<Value> {
+    fn session_configuration(&self, id: &str) -> Vec<Value> {
         self.inner.session_configuration(id)
     }
     fn verify_session(
@@ -348,8 +348,10 @@ impl AcpProfile for PanicProfile {
         kind: &str,
         value: &Value,
         capabilities: &EffectiveCapabilities,
+        configured: bool,
     ) -> Result<(), AgentError> {
-        self.inner.verify_update(kind, value, capabilities)
+        self.inner
+            .verify_update(kind, value, capabilities, configured)
     }
     fn validate_execution(
         &self,
@@ -364,8 +366,8 @@ impl AcpProfile for PanicProfile {
     fn tool_call(&mut self, value: &Value) -> Result<ToolCallUpdate, AgentError> {
         self.inner.tool_call(value)
     }
-    fn tool_input(&self, value: &Value) -> Result<ToolReviewInput, AgentError> {
-        self.inner.tool_input(value)
+    fn permission_input(&self, request: &Value) -> Result<ToolReviewInput, AgentError> {
+        self.inner.permission_input(request)
     }
 }
 #[tokio::test]

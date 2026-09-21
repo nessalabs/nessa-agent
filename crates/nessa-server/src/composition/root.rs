@@ -94,7 +94,7 @@ impl CompositionRoot {
         let dependencies = runtime_dependencies(&config);
         let super::local_auth::LocalProduct {
             routes: product,
-            warm_up,
+            warm_ups,
         } = super::local_auth::product_state(&config, dependencies.clock.clone(), bundle)?;
         let conversations = product.conversations.clone();
         #[cfg(target_os = "macos")]
@@ -152,7 +152,7 @@ impl CompositionRoot {
         // Only now: the runtime's first launch is slow because the operating
         // system scans it, and that wait belongs here, with the window already
         // up, rather than inside the user's first message.
-        if let Some(warm_up) = &warm_up {
+        for warm_up in &warm_ups {
             warm_up.start();
         }
 

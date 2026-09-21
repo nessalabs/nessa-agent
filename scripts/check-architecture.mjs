@@ -12,6 +12,8 @@ import {
   hasNoImmediateCfg,
 } from "./architecture/platform-boundaries.mjs"
 import { overlayPlacementViolations } from "./architecture/overlay-placement.mjs"
+import { setupGatePlacementViolations } from "./architecture/setup-gate-placement.mjs"
+import { standDownPlacementViolations } from "./architecture/stand-down-placement.mjs"
 import { composerBudgetViolations } from "./architecture/composer-budget.mjs"
 import {
   normalizedPath,
@@ -92,6 +94,9 @@ for (const file of walk(src)) {
   const path = rel(file)
   const imports = importedPaths(text)
   const inComposition = path.startsWith("src/composition/")
+  for (const violation of setupGatePlacementViolations(path, text)) {
+    fail(file, violation)
+  }
   // A vertical's `testing.ts` is how another vertical's tests reach what they
   // need without importing internals. Product code has no business there: it
   // would be a second, unchecked public surface.
@@ -401,6 +406,16 @@ for (const boundary of portableRuntimeBoundaries) {
       file,
       "runtime incarnation identity is portable health evidence; do not hide it behind a target cfg",
     )
+  }
+}
+
+// A script rather than product source, so it is read by path rather than by
+// the walk over `src/`.
+{
+  const file = join(root, "scripts/dev-agent-config.mjs")
+  const text = readFileSync(file, "utf8")
+  for (const violation of standDownPlacementViolations(rel(file), text)) {
+    fail(file, violation)
   }
 }
 

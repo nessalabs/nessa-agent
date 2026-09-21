@@ -18,6 +18,7 @@ import type { SetupHandoff, SetupWindowClose } from "../../host"
 const host = vi.hoisted(() => ({
   revealSetupWindow: vi.fn<() => Promise<void>>(),
   finishSetupWindow: vi.fn<(completed: boolean) => Promise<SetupHandoff>>(),
+  retrySetupRecord: vi.fn<(agent?: string) => Promise<SetupHandoff>>(),
   closeSetupWindow: vi.fn<() => Promise<SetupWindowClose>>(),
 }))
 vi.mock("../../host", () => host)
@@ -40,16 +41,19 @@ function deferred<T>() {
 function Surface({
   setupActive,
   completed,
+  agent,
 }: {
   setupActive: boolean
   completed: boolean
+  agent?: string
 }) {
-  const handoff = useSetupHandoff(setupActive, completed)
+  const handoff = useSetupHandoff(setupActive, completed, agent)
   if (!handoff.recovery) return null
   return React.createElement(HandoffFailed, {
     ref: handoff.dialog,
     recovery: handoff.recovery,
     onRetry: handoff.retry,
+    onSaveAgain: handoff.saveAgain,
     onClose: handoff.close,
     closeFailed: handoff.closeFailed,
   })
@@ -65,7 +69,11 @@ async function flush() {
   })
 }
 
-async function render(props: { setupActive: boolean; completed: boolean }) {
+async function render(props: {
+  setupActive: boolean
+  completed: boolean
+  agent?: string
+}) {
   await React.act(async () => {
     root.render(
       React.createElement(React.StrictMode, null, React.createElement(Surface, props)),
@@ -93,6 +101,7 @@ beforeEach(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   host.revealSetupWindow.mockReset().mockResolvedValue(undefined)
   host.finishSetupWindow.mockReset()
+  host.retrySetupRecord.mockReset()
   host.closeSetupWindow.mockReset()
   container = document.createElement("div")
   document.body.appendChild(container)
@@ -133,7 +142,17 @@ describe("handing over once setup is over", () => {
   it.each([true, false])("carries how setup ended (completed=%s)", async (completed) => {
     host.finishSetupWindow.mockReturnValue(deferred<SetupHandoff>().promise)
     await render({ setupActive: false, completed })
-    expect(host.finishSetupWindow).toHaveBeenCalledWith(completed)
+    expect(host.finishSetupWindow).toHaveBeenCalledWith(completed, undefined)
+  })
+
+  it("carries the agent setup finished on, and nothing when it did not finish", async () => {
+    // The second of the two things the host cannot know. A gateway configured
+    // for more than one agent has no default worth guessing at, so a choice
+    // that does not travel here is a choice the user made and the server never
+    // hears about.
+    host.finishSetupWindow.mockReturnValue(deferred<SetupHandoff>().promise)
+    await render({ setupActive: false, completed: true, agent: "codex" })
+    expect(host.finishSetupWindow).toHaveBeenCalledWith(true, "codex")
   })
 
   it("leaves nothing on screen when the panel came up and this window is going", async () => {
@@ -192,7 +211,7 @@ describe("the screen a failed handoff leaves", () => {
 
     await press("Try again")
     expect(host.finishSetupWindow).toHaveBeenCalledTimes(2)
-    expect(host.finishSetupWindow).toHaveBeenLastCalledWith(true)
+    expect(host.finishSetupWindow).toHaveBeenLastCalledWith(true, undefined)
     // The screen is gone while the new attempt is outstanding.
     expect(container.querySelector('[role="alertdialog"]')).toBeNull()
 
@@ -218,5 +237,55 @@ describe("the screen a failed handoff leaves", () => {
     expect(document.activeElement).toBe(button("Close this window"))
     // A failed close is not a reason to hand over again.
     expect(host.finishSetupWindow).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("the screen a refused write leaves", () => {
+  /** A handoff whose panel came up and whose write this machine refused. */
+  async function refuseTheWrite(agent?: string) {
+    host.finishSetupWindow.mockResolvedValueOnce({
+      outcome: "setup-not-recorded",
+      cause: "could not record that setup finished: disk full",
+    })
+    await render({ setupActive: false, completed: true, agent })
+    await flush()
+  }
+
+  it("asks for the write alone, carrying the agent setup finished on", async () => {
+    // The join worth a DOM: the button is wired to the host call that records
+    // without summoning. Pointing it back at `finishSetupWindow` would summon
+    // a panel already on screen, and every assertion about the screen itself
+    // would still pass.
+    await refuseTheWrite("codex")
+    host.retrySetupRecord.mockResolvedValueOnce({ outcome: "handed-over" })
+
+    await press("Save again")
+    await flush()
+
+    expect(host.retrySetupRecord).toHaveBeenCalledTimes(1)
+    expect(host.retrySetupRecord).toHaveBeenCalledWith("codex")
+    expect(host.finishSetupWindow).toHaveBeenCalledTimes(1)
+    // It worked, so the window is on its way out and there is nothing left.
+    expect(container.innerHTML).toBe("")
+  })
+
+  it("puts the same screen back when saving again is refused again", async () => {
+    await refuseTheWrite()
+    host.retrySetupRecord.mockResolvedValueOnce({
+      outcome: "setup-not-recorded",
+      cause: "could not record that setup finished: disk full",
+    })
+
+    await press("Save again")
+    await flush()
+
+    expect(container.textContent).toContain("Nessa is open, but setup was not saved")
+    // And it can be pressed again: the gate was released by the call it was
+    // claimed for, so a second attempt is not held out.
+    host.retrySetupRecord.mockResolvedValueOnce({ outcome: "handed-over" })
+    await press("Save again")
+    await flush()
+    expect(host.retrySetupRecord).toHaveBeenCalledTimes(2)
+    expect(container.innerHTML).toBe("")
   })
 })

@@ -34,13 +34,15 @@ const RECOVERY_BUTTON =
 export function HandoffFailed({
   recovery,
   onRetry,
+  onSaveAgain,
   onClose,
   closeFailed,
   ref,
 }: {
-  /** What happened, and whether the panel is up. */
+  /** What happened, and the one thing worth pressing about it. */
   recovery: SetupRecovery
   onRetry: () => void
+  onSaveAgain: () => void
   onClose: () => void
   /** True once a close was asked for and the window system did not do it. */
   closeFailed: boolean
@@ -69,11 +71,16 @@ export function HandoffFailed({
         </h1>
         <p className="nessa-text-3 text-muted-foreground">{recovery.detail}</p>
         <div className="flex flex-wrap items-center justify-center gap-3">
-          {recovery.panelShown ? null : (
+          {recovery.offer === "hand-over-again" ? (
             <button type="button" className={RECOVERY_BUTTON} onClick={onRetry}>
               Try again
             </button>
-          )}
+          ) : null}
+          {recovery.offer === "save-again" ? (
+            <button type="button" className={RECOVERY_BUTTON} onClick={onSaveAgain}>
+              Save again
+            </button>
+          ) : null}
           <button type="button" className={RECOVERY_BUTTON} onClick={onClose}>
             Close this window
           </button>
@@ -111,6 +118,7 @@ export function HandoffFailed({
 export function SetupGate({
   agents,
   children,
+  onHandOver,
 }: {
   /** Where setup asks what each agent's runtime can do. Injected, so a test
    * substitutes an answer instead of a network. */
@@ -118,16 +126,46 @@ export function SetupGate({
   /** The panel, for a surface that has to become it in place. Omitted by the
    * desktop setup window, which closes instead. */
   children?: React.ReactNode
+  /**
+   * The agent setup finished on, told to whoever becomes the panel in place.
+   *
+   * For a surface with no host this is the only record the choice will get:
+   * nothing writes it down and nothing reads it back, so a picker whose
+   * selection is not carried here is a control that decides nothing. Omitted
+   * by the desktop setup window, where the host keeps it and a different
+   * window reads it.
+   */
+  onHandOver?: (agent: string) => void
 }) {
   const onboarding = useOnboarding(agents)
   useIntroSound(onboarding.active)
   // What the end of setup does to this window, and what it leaves on screen.
   // Kept out here so everything below is a function of what it reports, and
   // after the sound so the effect order is the one this surface always had.
-  const handoff = useSetupHandoff(
-    onboarding.active,
-    isOnboardingCompleted(onboarding.state),
-  )
+  const completed = isOnboardingCompleted(onboarding.state)
+  // The agent travels with the finish, and only with a finish: a choice made on
+  // the way out of setup is not a decision, and `completeOnboarding` is what
+  // keeps it. The panel reads it back from the host, because this window is
+  // gone by the time it asks.
+  const finishedOn = completed ? onboarding.state.agent : undefined
+  const handoff = useSetupHandoff(onboarding.active, completed, finishedOn)
+
+  // And told in place to a surface that has no host to write it to. Only on a
+  // finish, which is the same rule the handoff applies: a choice made on the
+  // way out of setup is not a decision. From an effect rather than from the
+  // branch below, so rendering stays a function of what setup reports.
+  //
+  // Which means the panel is mounted, and its own effects have run, before
+  // this one does: React runs a child's effects before its parent's. Nothing
+  // rests on that ordering. What makes the handover safe is that the receiving
+  // side treats a later answer as later — a host read still in flight when
+  // this fires no longer clears what it wrote — so a creation that beat this
+  // effect is the only thing the window costs, and that is the same window a
+  // conversation created mid-setup already lives in.
+  React.useEffect(() => {
+    if (onboarding.active || finishedOn === undefined) return
+    onHandOver?.(finishedOn)
+  }, [onboarding.active, finishedOn, onHandOver])
 
   if (!onboarding.active) {
     // A surface that becomes the panel in place does so now.
@@ -141,6 +179,7 @@ export function SetupGate({
           ref={handoff.dialog}
           recovery={handoff.recovery}
           onRetry={handoff.retry}
+          onSaveAgain={handoff.saveAgain}
           onClose={handoff.close}
           closeFailed={handoff.closeFailed}
         />

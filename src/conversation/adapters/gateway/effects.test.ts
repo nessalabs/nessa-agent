@@ -51,6 +51,10 @@ it("joins concurrent creation and forwards exact stable submission IDs", async (
   )
   const first = effects.create("server")
   const second = effects.create("server")
+  // The agent setup chose is asked for before the creation goes out, so the
+  // call lands a turn later; joining it does not wait for that.
+  expect(first).toBe(second)
+  await Promise.resolve()
   expect(create).toHaveBeenCalledOnce()
   gate.resolve({ conversationId: "server" })
   await Promise.all([first, second])
@@ -78,6 +82,52 @@ it("serializes opaque-revision reads, including overlapping manual refreshes", a
   first.resolve({ conversationId: "server" } as ConversationView)
   await Promise.all([pending, following])
   expect(read).toHaveBeenCalledTimes(2)
+})
+
+it("asks the host again after a failed answer instead of keeping the failure", async () => {
+  // Every conversation is created through this, so a remembered rejection is
+  // not one lost answer — it is a panel that can no longer start, send, close
+  // or answer a permission until it is restarted.
+  const create = vi.fn(async ({ conversationId }: { conversationId: string }) => ({
+    conversationId,
+  }))
+  let asked = 0
+  const chosenAgent = async () => {
+    asked += 1
+    if (asked === 1) throw new Error("the host module would not load")
+    return "codex"
+  }
+  const effects = gatewayEffects(
+    () => ({ conversation: { create } }) as unknown as NessaClient,
+    unexpectedWait,
+    chosenAgent,
+  )
+  await expect(effects.create("server")).rejects.toThrow("the host module would not load")
+  expect(create).not.toHaveBeenCalled()
+  await effects.create("server")
+  expect(asked).toBe(2)
+  expect(create).toHaveBeenCalledWith({ conversationId: "server", agent: "codex" })
+})
+
+it("sends the creation over the session of the moment, not the one checked first", async () => {
+  // Asking the host is a round trip, and a session retired inside it must not
+  // be the one this create goes out on.
+  const retired = vi.fn()
+  const live = vi.fn(async ({ conversationId }: { conversationId: string }) => ({
+    conversationId,
+  }))
+  let current = retired
+  const effects = gatewayEffects(
+    () => ({ conversation: { create: current } }) as unknown as NessaClient,
+    unexpectedWait,
+    async () => {
+      current = live
+      return undefined
+    },
+  )
+  await effects.create("server")
+  expect(retired).not.toHaveBeenCalled()
+  expect(live).toHaveBeenCalledOnce()
 })
 
 const reading = (error: unknown) =>
@@ -351,14 +401,41 @@ const answerError = (code: string, selectionState: string) =>
     true,
   )
 
+/** What the client says about a control it refused, by wire code.
+ *
+ * A control resolves its conversation before anything is dispatched, so it
+ * meets exactly the refusals a creation meets and meets them just as early:
+ * `conversation_not_found` is therefore `refused` — the gateway does not have
+ * this conversation, so nothing was done — rather than an outcome nobody can
+ * describe. `attachment_cleanup_unavailable` is the one that genuinely stays
+ * unknown, because the close itself may already have applied.
+ *
+ * The message is the refusal's own sentence where the client has one, and the
+ * general one where it does not: `invalid_request` has nothing to add beyond
+ * what the sentence already says, and a cleanup failure is not a refusal at
+ * all.
+ */
+const CONTROL_REFUSED =
+  "Conversation control did not return a trustworthy acknowledgement"
+
 it.each([
-  ["attachment_cleanup_unavailable", "attachment-cleanup-unavailable", "unknown"],
-  ["agent_startup_deadline", "agent-startup-deadline", "refused"],
-  ["conversation_not_found", "conversation-not-found", "unknown"],
-  ["invalid_request", "invalid-request", "refused"],
+  [
+    "attachment_cleanup_unavailable",
+    "attachment-cleanup-unavailable",
+    "unknown",
+    CONTROL_REFUSED,
+  ],
+  [
+    "agent_startup_deadline",
+    "agent-startup-deadline",
+    "refused",
+    "The agent was still starting and ran out of time, so nothing was sent. Starting it is slowest the first time after an install or update, while the operating system scans the runtime. Retry normally succeeds once the runtime is warm.",
+  ],
+  ["conversation_not_found", "conversation-not-found", "refused", CONTROL_REFUSED],
+  ["invalid_request", "invalid-request", "refused", CONTROL_REFUSED],
 ] as const)(
   "turns the gateway's control failure %s into the panel's own word for it, with its outcome",
-  async (code, reason, outcome) => {
+  async (code, reason, outcome, message) => {
     const refuse = () => Promise.reject(controlError(code))
     const effects = effectsOf(
       () =>
@@ -385,12 +462,11 @@ it.each([
       // The reason and the outcome, as two facts: the same reason can arrive
       // either way, so neither may be read out of the other.
       expect(error).toMatchObject({ reason, outcome })
-      // The client says the same thing about every control that fails, naming
-      // neither the command nor its cause. Kept as the fallback text all the
-      // same; what the panel does with it is the application's to decide.
-      expect((error as Error).message).toBe(
-        "Conversation control did not return a trustworthy acknowledgement",
-      )
+      // A control the gateway refused says why, in the client's own words,
+      // where the client has a sentence for that refusal. Where it has none,
+      // the general text stands; what the panel does with either is the
+      // application's to decide.
+      expect((error as Error).message).toBe(message)
     }
   },
 )

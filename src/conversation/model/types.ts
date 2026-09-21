@@ -26,6 +26,8 @@ export type CommandFailure =
   | "conversation-not-found"
   | "conversation-capacity"
   | "agent-not-configured"
+  | "agent-unsupported"
+  | "conversations-not-configured"
   | "agent-startup-deadline"
   | "invalid-request"
 

@@ -2,7 +2,7 @@
 /**
  * Give a dev gateway an agent, from the checkout that knows where its pieces are.
  *
- * `settings.agent` in the namespace's `config.json` is the only thing that makes
+ * `settings.agents` in the namespace's `config.json` is the only thing that makes
  * `nessa server` able to run a conversation. A packaged install gets one from
  * its bundle (`crates/nessa-server/src/composition/desktop.rs`), which a
  * checkout does not have — so a developer could connect and authenticate, then
@@ -18,14 +18,14 @@
  *
  * Guarantees, in the order they matter:
  *
- * - **An existing `agent` block is never touched.** Not merged, not repaired,
+ * - **An existing `agents` block is never touched.** Not merged, not repaired,
  *   not reordered. Someone who wrote one by hand owns it; all this does then is
- *   check that its two executables are still there and say so if they are not.
+ *   check that the files it names are still there and say so if they are not.
  * - **Never leaves a broken file.** `config.json` beside `auth/` fails the
  *   gateway at startup when it is malformed, so the merged document is parsed
  *   back before anything is renamed into place, and an existing file that does
  *   not parse is left exactly as it is.
- * - **Idempotent.** A second run finds the `agent` block and writes nothing.
+ * - **Idempotent.** A second run finds the `agents` block and writes nothing.
  * - **Degrades honestly.** Anything missing is reported with the command that
  *   fixes it, and the exit status stays 0 — a gateway with no agent is still a
  *   gateway worth starting, and blocking the dev loop would help nobody.
@@ -49,29 +49,95 @@ import { fileURLToPath } from "node:url"
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
-/** The lowest Node major the Claude ACP harness is exercised on. The bundle ships 26. */
+/** The lowest Node major the ACP harnesses are exercised on. The bundle ships 26. */
 const MINIMUM_NODE_MAJOR = 20
 
-export const HARNESS = "crates/nessa-sdk/harnesses/claude-acp"
-export const ACP_ENTRY = `${HARNESS}/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js`
+/** Every agent this checkout can point a dev gateway at.
+ *
+ * Keyed by the name the gateway knows the agent by, which is the same key the
+ * `runtimes` map uses. An agent whose harness is not installed is left out
+ * rather than written as a path that is not there — the gateway refuses to
+ * start on one of those, and a missing Codex should not cost a working Claude.
+ */
+export const AGENTS = {
+  claude: {
+    harness: "crates/nessa-sdk/harnesses/claude-acp",
+    entry:
+      "crates/nessa-sdk/harnesses/claude-acp/node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js",
+    model: "claude-sonnet-5",
+  },
+  codex: {
+    harness: "crates/nessa-sdk/harnesses/codex-acp",
+    entry:
+      "crates/nessa-sdk/harnesses/codex-acp/node_modules/@agentclientprotocol/codex-acp/dist/index.js",
+    model: "gpt-5.6-terra",
+  },
+}
+
+/** The agent a dev gateway runs on when the developer names none.
+ *
+ * Claude when it is installed, because that is what a checkout has always
+ * started on and what every conversation already on disk belongs to. */
+const PREFERRED = "claude"
+
 /** The checked-in model catalog, named once: the block points at it and the
  * check below looks for it, and a move that updated only one of those would
  * write a config naming a file that is not there. */
 const CATALOG = "crates/nessa-sdk/data/models.json"
 
-const INSTALL_HARNESS = `(cd ${HARNESS} && npm ci --omit=dev)`
+/** The command that installs one agent's harness. */
+export const installHarness = (name) =>
+  `(cd ${AGENTS[name].harness} && npm ci --omit=dev)`
 
 function say(message) {
   process.stdout.write(`${message}\n`)
 }
 
-/** Report why there is no agent, and leave the gateway to start without one. */
+/** A configuration the gateway will refuse to start on. */
+class UnusableConfiguration extends Error {}
+
+/**
+ * Report a configuration the gateway will refuse, and fail.
+ *
+ * Distinct from [`skip`], which is for a machine that has no agent: there the
+ * gateway starts and says so when somebody sends a message. Here it does not
+ * start at all, so a zero exit would be this script reporting success for a
+ * file it knows is broken.
+ *
+ * Throws rather than exiting, which `skip` can afford to do and this cannot.
+ * `publish` is exported and the test suite calls it in its own process, so an
+ * exit here would end the whole `node --test` run at the first test that
+ * reached it — and a regression in the very thing this guard watches would
+ * read as a suite that stopped early rather than one that failed. `main`
+ * turns the throw into the nonzero exit a dev loop needs.
+ */
+function stop(reason, remedy) {
+  say(`→ dev agent configuration is unusable: ${reason}`)
+  const lines = Array.isArray(remedy) ? remedy : [remedy]
+  for (const line of lines.filter(Boolean)) say(`  ${line}`)
+  throw new UnusableConfiguration(reason)
+}
+
+/** A machine with no agent to configure. The gateway still starts. */
+class StoodDown extends Error {}
+
+/**
+ * Report why there is no agent, and leave the gateway to start without one.
+ *
+ * Throws, for the same reason [`stop`] does and not only on the paths a test
+ * happens to reach today: `publish` is exported and called in other processes,
+ * and a stand-down that exited would end the caller's run at whichever line
+ * reached it — silently, and with the success status a stand-down carries.
+ * `main` turns this into that status. Throwing also lets the configuration
+ * lock's `finally` run, which an exit from under it skipped, leaving a lock
+ * file behind for the next run to report as somebody else's.
+ */
 function skip(reason, remedy) {
   say(`→ dev agent not configured: ${reason}`)
   const lines = Array.isArray(remedy) ? remedy : [remedy]
   for (const line of lines.filter(Boolean)) say(`  ${line}`)
   say("  the gateway will start, but sending a message will report no agent")
-  process.exit(0)
+  throw new StoodDown(reason)
 }
 
 /**
@@ -108,24 +174,49 @@ export function namespaceRoot(env = process.env, home = homedir()) {
 }
 
 /**
- * The agent block this checkout would write.
+ * Which agents this checkout can actually launch, by name.
+ *
+ * An agent is here only when its harness is on disk. A name written with a path
+ * that is not there fails the whole gateway at startup, not just that agent, so
+ * a Codex nobody installed would cost a developer their working Claude.
+ *
+ * @returns {string[]} installed agent names, in a stable order
+ */
+export function installedAgents(checkout, exists = existsSync) {
+  return Object.keys(AGENTS).filter((name) => exists(join(checkout, AGENTS[name].entry)))
+}
+
+/**
+ * The agents block this checkout would write.
  *
  * Every path is absolute and checked here rather than left to fail inside
- * provider construction, where the message is about "node and acpEntry" and not
- * about the thing a developer forgot to install.
+ * provider construction, where the message is about a command and its arguments
+ * and not about the thing a developer forgot to install.
  *
- * @returns {object} the `agent` value, ready to merge
+ * `selected` is stated whenever more than one agent is configured, because the
+ * gateway refuses to guess between them — and a developer who never chose would
+ * otherwise be told to answer a question they did not know they were asked.
+ *
+ * @returns {object} the `agents` value, ready to merge
  */
-export function agentBlock({ checkout, namespace, node, mcpBinary }) {
+export function agentsBlock({ checkout, namespace, node, mcpBinary, agents }) {
+  const workspace = join(namespace, "workspaces/default")
+  const runtimes = {}
+  for (const name of agents) {
+    runtimes[name] = {
+      command: node,
+      args: [join(checkout, AGENTS[name].entry)],
+      model: AGENTS[name].model,
+      toolsEnabled: true,
+      contextTokens: 100000,
+      outputTokens: 4096,
+    }
+  }
   return {
     catalog: join(checkout, CATALOG),
-    node,
-    acpEntry: join(checkout, ACP_ENTRY),
-    workspace: join(namespace, "workspaces/default"),
-    model: "claude-sonnet-5",
-    toolsEnabled: true,
-    contextTokens: 100000,
-    outputTokens: 4096,
+    workspace,
+    selected: agents.includes(PREFERRED) ? PREFERRED : agents[0],
+    runtimes,
     ...(mcpBinary
       ? {
           mcpServers: [
@@ -134,7 +225,7 @@ export function agentBlock({ checkout, namespace, node, mcpBinary }) {
               command: mcpBinary,
               args: [
                 "--workspace",
-                join(namespace, "workspaces/default"),
+                workspace,
                 "--audit-directory",
                 join(namespace, "process-audit"),
               ],
@@ -163,7 +254,7 @@ function chooseNode() {
   const major = Number.parseInt(process.versions.node.split(".")[0], 10)
   if (!Number.isInteger(major) || major < MINIMUM_NODE_MAJOR)
     skip(
-      `this script is running on Node ${process.versions.node}; the Claude ACP harness needs ${MINIMUM_NODE_MAJOR} or newer`,
+      `this script is running on Node ${process.versions.node}; the ACP harnesses need ${MINIMUM_NODE_MAJOR} or newer`,
       "install a supported Node and run the dev loop again",
     )
   if (!existsSync(path)) skip(`the running Node (${path}) is not a readable file`, "")
@@ -220,42 +311,100 @@ function readExisting(path) {
 /**
  * Whether a configuration already answers the agent question.
  *
- * The server reads `agent` as an `Option<AgentConfig>`, so an explicit `null`
- * is a valid configuration that means "no agent" — the gateway starts and says
+ * The server reads `agents` as an `Option<AgentsConfig>`, so an explicit `null`
+ * is a valid configuration that means "no agents" — the gateway starts and says
  * so when a message is sent. Absent is the only state this script fills in;
  * `null` is somebody's answer and is left alone, the same as a block they
  * wrote themselves.
  */
 export function agentIsSettled(existing) {
-  return existing.agent !== undefined
+  return existing.agents !== undefined
 }
 
-/** Warn about an agent someone else owns whose executables have gone missing. */
-function checkExisting(agent, path) {
-  if (agent === null) {
-    say(`→ ${path} sets "agent": null, which is a gateway with no agent`)
-    say('  it was left as it is; remove the "agent" line and rerun to have one written')
-    return
+/**
+ * Report on a configuration this script is not going to write into.
+ *
+ * Both readers of an already-settled file come through here — the early answer
+ * and the one taken under the lock — because they have the same thing to say
+ * and only one of them used to say all of it.
+ */
+function checkExisting(existing, path, { held = false } = {}) {
+  // First, because nothing else about the file matters if the gateway will not
+  // read it. The `agents` answer beside it is somebody else's and stands, but
+  // this key is this script's own and the gateway refuses to start while it is
+  // there, so it is taken back out rather than reported as a chore.
+  //
+  // Only with the lock held. The early reader has not taken it, so it says what
+  // it found and returns `false`, and the caller goes and takes the lock — the
+  // same right every other write to this file is made under.
+  if (existing.agent !== undefined) {
+    if (!held) {
+      say(`→ ${path} still has the retired "agent" block beside "agents"`)
+      say("  taking the lock to remove it")
+      return false
+    }
+    retireAgentKey(existing, path)
   }
-  const missing = [agent.node, agent.acpEntry, agent.catalog].filter(
-    (value) => typeof value === "string" && !existsSync(value),
-  )
+  const agents = existing.agents
+  if (agents === null) {
+    say(`→ ${path} sets "agents": null, which is a gateway with no agents`)
+    say('  it was left as it is; remove the "agents" line and rerun to have one written')
+    return true
+  }
+  // Every absolute path the configuration would hand this machine. A relative
+  // argument is the agent's own vocabulary — a subcommand or a flag — and is
+  // nothing for this script to go looking for, the same rule the gateway uses.
+  const runtimes = agents.runtimes ?? {}
+  const missing = [agents.catalog]
+    .concat(
+      Object.values(runtimes).flatMap((runtime) => [
+        runtime?.command,
+        ...(Array.isArray(runtime?.args) ? runtime.args : []),
+      ]),
+    )
+    .filter(
+      (value) => typeof value === "string" && value.startsWith("/") && !existsSync(value),
+    )
   if (missing.length === 0) {
-    say(`→ dev agent already configured in ${path}; left as it is`)
+    const named = Object.keys(runtimes)
+    say(
+      `→ dev agents already configured in ${path} (${named.join(", ") || "none named"}); left as it is`,
+    )
+    return true
+  }
+  say(`→ dev agents in ${path} point at files that are not there:`)
+  for (const value of missing) say(`    ${value}`)
+  say('  it was left untouched. Reinstall what moved, or remove the "agents" block')
+  say("  and run the dev loop again to have one written, after installing a harness:")
+  for (const name of Object.keys(AGENTS)) say(`    ${installHarness(name)}`)
+  return true
+}
+
+/**
+ * Take the lock solely to report on, and repair, a file already settled.
+ *
+ * The ordinary path reaches the lock through `publish`, which needs a generated
+ * block to write. Here there is nothing to generate — the question is answered
+ * — and the one thing that still has to happen is a write, so the lock is taken
+ * for that alone rather than by computing a block nobody will use.
+ */
+function checkUnderLock(configPath) {
+  const lock = lockFor(configPath)
+  if ("held" in lock) {
+    say(`→ not repairing ${configPath}: its lock is held by ${lock.held}`)
     return
   }
-  say(`→ dev agent in ${path} points at files that are not there:`)
-  for (const value of missing) say(`    ${value}`)
-  say('  it was left untouched. Reinstall what moved, or remove the "agent" block')
-  say(
-    `  and run the dev loop again to have one written (${INSTALL_HARNESS} installs the harness)`,
-  )
+  try {
+    checkExisting(readExisting(configPath), configPath, { held: true })
+  } finally {
+    lock.release()
+  }
 }
 
 function main() {
   if (process.platform === "win32")
     skip(
-      "Claude ACP needs Unix process supervision, so a Windows checkout has no agent to configure",
+      "ACP agents need Unix process supervision, so a Windows checkout has none to configure",
       "",
     )
   let namespace
@@ -269,15 +418,15 @@ function main() {
   // An early answer, so the work below is skipped entirely. `publish` asks
   // again at the end, because this one goes stale while that work happens.
   if (agentIsSettled(existing)) {
-    checkExisting(existing.agent, configPath)
+    if (!checkExisting(existing, configPath)) checkUnderLock(configPath)
     return
   }
 
   const checkout = realpathSync(root)
-  const acpEntry = join(checkout, ACP_ENTRY)
-  if (!existsSync(acpEntry))
-    skip("the Claude ACP harness is not installed in this checkout", [
-      `run: ${INSTALL_HARNESS}`,
+  const agents = installedAgents(checkout)
+  if (agents.length === 0)
+    skip("no ACP harness is installed in this checkout", [
+      ...Object.keys(AGENTS).map((name) => `run: ${installHarness(name)}`),
       "then start the dev loop again",
     ])
   const catalog = join(checkout, CATALOG)
@@ -293,13 +442,13 @@ function main() {
   // The namespace and the agent's workspace must exist, with the private
   // permissions the gateway insists on for everything under this root.
   mkdirSync(join(namespace, "workspaces/default"), { recursive: true, mode: 0o700 })
-  const agent = agentBlock({ checkout, namespace, node, mcpBinary })
+  const block = agentsBlock({ checkout, namespace, node, mcpBinary, agents })
 
-  publish({ configPath, agent, acpEntry, node, mcpBinary })
+  publish({ configPath, agents: block, node, mcpBinary })
 }
 
 /**
- * Writes the agent into whatever the file says at this moment.
+ * Writes the agents into whatever the file says at this moment.
  *
  * The configuration is read again here rather than reused from the start of
  * the run. Everything between the two reads takes real time — locating a node,
@@ -392,38 +541,14 @@ function readHolder(lock) {
   }
 }
 
-export function publish({ configPath, agent, acpEntry, node, mcpBinary, interrupt }) {
-  const lock = lockFor(configPath)
-  if ("held" in lock) {
-    say(`→ not configuring ${configPath}: its lock is held by ${lock.held}`)
-    return false
-  }
-  try {
-    return underLock({ configPath, agent, acpEntry, node, mcpBinary, interrupt })
-  } finally {
-    lock.release()
-  }
-}
-
-/** The read, the decision and the write, with the right to do them held. */
-function underLock({ configPath, agent, acpEntry, node, mcpBinary, interrupt }) {
-  interrupt?.()
-  const existing = readExisting(configPath)
-  // Somebody answered the question while this was working. Theirs stands —
-  // the same courtesy an agent block already in the file gets.
-  if (agentIsSettled(existing)) {
-    checkExisting(existing.agent, configPath)
-    return false
-  }
-
-  const merged = { ...existing, agent }
-  const text = `${JSON.stringify(merged, null, 2)}\n`
-  // Parse it back before it can become the file the gateway reads. A config.json
-  // that does not parse is not a missing agent, it is a server that will not start.
-  const round = JSON.parse(text)
-  if (round.agent.acpEntry !== acpEntry || round.agent.node !== node)
-    skip("the generated configuration did not survive a round trip", "please report this")
-
+/**
+ * Replace the configuration's bytes, never leaving a half-written one in place.
+ *
+ * Throws rather than reporting, because the two callers owe different answers:
+ * a dev loop that could not write the block it generated stands down, and one
+ * that could not remove a key the gateway refuses to start on has failed.
+ */
+function writeConfig(configPath, text) {
   // Random, not the pid. A run killed between the write and the rename leaves
   // the temp file behind, and a later run that happens to get the same pid then
   // fails `wx` with EEXIST — reported as "check the namespace's permissions",
@@ -439,20 +564,114 @@ function underLock({ configPath, agent, acpEntry, node, mcpBinary, interrupt }) 
     } catch {
       // Nothing to clean up.
     }
+    throw error
+  }
+}
+
+/**
+ * Take the retired `agent` key back out of a file this script is not otherwise
+ * writing into.
+ *
+ * This script wrote that key, nothing reads it now, and the server refuses to
+ * start on a file that still carries it — so bringing it to the current shape
+ * is what the standard asks of the tool that wrote it, on this path as much as
+ * on the one where the block is generated. Only that key is touched; the
+ * `agents` answer beside it is somebody else's and is written back exactly as
+ * it was read.
+ *
+ * Called only with the configuration lock held, because it is a write.
+ */
+function retireAgentKey(existing, path) {
+  const { agent: _retired, ...rest } = existing
+  try {
+    writeConfig(path, `${JSON.stringify(rest, null, 2)}\n`)
+  } catch (error) {
+    stop(`${path} still has the retired "agent" block and could not be repaired`, [
+      error.message,
+      "the gateway refuses to start on it: `agent` is an unknown field now",
+      'delete the "agent" key by hand and run the dev loop again',
+    ])
+  }
+  say(`→ ${path} carried the retired "agent" block beside "agents"`)
+  say("    retired    the block an earlier version of this script wrote")
+  say("               the gateway refuses to start while it is there")
+}
+
+export function publish({ configPath, agents, node, mcpBinary, interrupt }) {
+  const lock = lockFor(configPath)
+  if ("held" in lock) {
+    say(`→ not configuring ${configPath}: its lock is held by ${lock.held}`)
+    return false
+  }
+  try {
+    return underLock({ configPath, agents, node, mcpBinary, interrupt })
+  } finally {
+    lock.release()
+  }
+}
+
+/** The read, the decision and the write, with the right to do them held. */
+function underLock({ configPath, agents, node, mcpBinary, interrupt }) {
+  interrupt?.()
+  const existing = readExisting(configPath)
+  // Somebody answered the question while this was working. Theirs stands —
+  // the same courtesy an agent block already in the file gets.
+  if (agentIsSettled(existing)) {
+    checkExisting(existing, configPath, { held: true })
+    return false
+  }
+
+  // The previous version of this script wrote an `agent` block, and the server
+  // reads its configuration with `deny_unknown_fields`. Left beside the `agents`
+  // written here, that old key is a gateway that refuses to start, reported as
+  // an unknown field rather than as anything to do with the dev loop — and
+  // produced by a run that has just said it succeeded.
+  //
+  // So it is retired here. This script owned that block, it is local
+  // development data, and bringing it to the current shape is what the standard
+  // asks of the tool that wrote it. Nothing reads it any more.
+  const { agent: retired, ...rest } = existing
+  const merged = { ...rest, agents }
+  const text = `${JSON.stringify(merged, null, 2)}\n`
+  // Parse it back before it can become the file the gateway reads. A config.json
+  // that does not parse is not a missing agent, it is a server that will not start.
+  const round = JSON.parse(text)
+  // Not a stand-down: this script generated a document the gateway will refuse
+  // to start on, which is a bug here and not a machine without an agent.
+  if (round.agent !== undefined)
+    stop(
+      "the generated configuration still holds the retired agent block",
+      "please report this",
+    )
+  const survived = Object.entries(agents.runtimes).every(
+    ([name, runtime]) =>
+      round.agents.runtimes[name]?.command === node &&
+      round.agents.runtimes[name]?.args?.[0] === runtime.args[0],
+  )
+  if (!survived || round.agents.selected !== agents.selected)
+    stop("the generated configuration did not survive a round trip", "please report this")
+
+  try {
+    writeConfig(configPath, text)
+  } catch (error) {
     skip(
       `could not write ${configPath} (${error.message})`,
       "check the namespace's permissions",
     )
   }
 
-  say(`→ dev agent configured in ${configPath}`)
+  say(`→ dev agents configured in ${configPath}`)
+  if (retired !== undefined)
+    say('    retired    the "agent" block an earlier version of this script wrote')
   say(`    node       ${node}`)
-  say(`    acpEntry   ${acpEntry}`)
-  say(`    workspace  ${agent.workspace}`)
+  for (const [name, runtime] of Object.entries(agents.runtimes))
+    say(`    ${name.padEnd(10)} ${runtime.args[0]}`)
+  say(`    selected   ${agents.selected}`)
+  say(`    workspace  ${agents.workspace}`)
   say(
     mcpBinary
       ? `    nessa MCP  ${mcpBinary}`
-      : '    nessa MCP  not built; omitted (cargo build -p nessa-mcp, then delete the "agent" block and rerun)',
+      : '    nessa MCP  not built; omitted (cargo build -p nessa-mcp, then delete the "agents" block and rerun)',
   )
   return true
 }
@@ -461,4 +680,15 @@ function underLock({ configPath, agent, acpEntry, node, mcpBinary, interrupt }) 
 // through symlinks and `/var` → `/private/var`, but leaves `argv[1]` as typed,
 // and a script that silently did nothing would be the worst failure here.
 const invoked = process.argv[1] ? realpathSync(process.argv[1]) : ""
-if (invoked === realpathSync(fileURLToPath(import.meta.url))) main()
+if (invoked === realpathSync(fileURLToPath(import.meta.url))) {
+  try {
+    main()
+  } catch (error) {
+    // The two answers this script gives about itself. Anything else is a bug
+    // here and keeps its stack, because a dev loop that hides one is worse
+    // than one that prints it.
+    if (error instanceof StoodDown) process.exit(0)
+    if (!(error instanceof UnusableConfiguration)) throw error
+    process.exit(1)
+  }
+}
