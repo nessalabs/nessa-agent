@@ -4,6 +4,8 @@ use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 
+use rustls::crypto::CryptoProvider;
+
 use crate::agent_install::application::{InstallAgentRuntime, RuntimeStore};
 use crate::agent_install::domain::AgentName;
 use crate::agent_install::infrastructure::{host_platform, releases_for, ManagedRuntimes};
@@ -25,7 +27,7 @@ fn building_a_client_names_the_tls_backend_this_process_uses() {
     // two lists that read alike.
     HttpsArchives::new().expect("an https client");
 
-    let installed = rustls::crypto::CryptoProvider::get_default()
+    let installed = CryptoProvider::get_default()
         .expect("this process has a tls backend")
         .clone();
 

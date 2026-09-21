@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use reqwest::blocking::Client;
 use reqwest::redirect::Policy;
+use rustls::crypto::CryptoProvider;
 
 use crate::agent_install::application::{ArchiveSource, SourceFailure, StagedArchive};
 
@@ -121,7 +122,7 @@ impl HttpsArchives {
 /// back to a panic when there is none, so this runs before the builder rather
 /// than beside it.
 fn install_tls_backend() {
-    if rustls::crypto::CryptoProvider::get_default().is_none() {
+    if CryptoProvider::get_default().is_none() {
         let _ = rustls::crypto::ring::default_provider().install_default();
     }
 }
