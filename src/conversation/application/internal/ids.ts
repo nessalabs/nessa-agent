@@ -36,13 +36,27 @@ export function takeConversationId(tabs: LocalTabs): {
   }
 }
 
+/**
+ * A turn id no turn in this conversation already answers to.
+ *
+ * The same guard as above, for the same reason: turn ids key the transcript's
+ * rows. Restoration resets `nextTurnId` to 1 while dropping every local turn,
+ * so the counter and the turns cannot disagree today — but that is a coupling
+ * between two files rather than a property of either, and the file that would
+ * break it is not this one.
+ */
 export function takeTurnId(tabs: LocalTabs): {
   tabs: LocalTabs
   id: string
 } {
+  const taken = new Set(
+    tabs.conversations.flatMap((item) => item.turns.map((turn) => turn.id)),
+  )
+  let next = tabs.nextTurnId
+  while (taken.has(`t${next}`)) next += 1
   return {
-    tabs: { ...tabs, nextTurnId: tabs.nextTurnId + 1 },
-    id: `t${tabs.nextTurnId}`,
+    tabs: { ...tabs, nextTurnId: next + 1 },
+    id: `t${next}`,
   }
 }
 
