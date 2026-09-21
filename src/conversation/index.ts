@@ -28,7 +28,10 @@ export {
   MAX_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENTS,
+  declaredMediaType,
   isImageFile,
+  linkablePath,
+  linkedFile,
   previewableImage,
   validDraftAttachments,
 } from "./model"

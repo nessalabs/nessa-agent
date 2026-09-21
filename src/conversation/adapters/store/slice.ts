@@ -1,6 +1,7 @@
 import {
   contentText,
   MAX_SENT_PREVIEW_BYTES,
+  messageFiles,
   messageImages,
   storedImages,
   type CommandFailure,
@@ -49,7 +50,15 @@ import { localConversationGateway as gateway } from "../gateway/local"
 
 type ThunkConfig = {
   state: { conversation: LocalTabs }
-  extra: { conversation: ConversationEffects }
+  extra: {
+    conversation: ConversationEffects
+    /**
+     * Whether this surface can say where a file is, which decides what a
+     * message refused over an unsendable file is told. Injected because the
+     * conversation vertical does not talk to the host; composition answers it.
+     */
+    canChoosePaths: boolean
+  }
 }
 export type SendDraftArg = {
   content: MessageContent
@@ -128,7 +137,7 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
     // Every other local reason a draft is declined is decided in one pure
     // place and said in one place here, so "was this draft taken" has one
     // answer and not eight — the composer's full-pane editor rests on it.
-    const decline = declineReason(conv, input)
+    const decline = declineReason(conv, input, extra.canChoosePaths)
     if (decline) {
       if (decline.askAgain) void dispatch(refreshConversation(id))
       if (decline.message) dispatch(showError({ id, message: decline.message }))
@@ -137,6 +146,7 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
     const content = draftMessage(conv, input.content)
     const text = contentText(content)
     const images = storedImages(content)
+    const files = messageFiles(content)
     const serverId = conv.serverConversationId ?? crypto.randomUUID()
     const executionId = crypto.randomUUID()
     const actionId = crypto.randomUUID()
@@ -162,6 +172,7 @@ export const sendDraft = createAsyncThunk<void, SendDraftArg, ThunkConfig>(
         actionId,
         text,
         attachments: images,
+        files,
       }
       admissionAttempted = true
       const receipt = await (input.steering
@@ -396,12 +407,18 @@ export const controlConversation = createAsyncThunk<
         if (!turn || turn.from !== "user" || !turn.actionId || turn.receipt !== "unknown")
           return
         // The turn's content has not changed since it was sent, so this names
-        // the same images: one execution ID stays one message.
+        // the same images and the same paths: one execution ID stays one
+        // message.
         const images = messageImages(turn.content)
         if (!images.ok) {
           // Not reachable from a turn this window sent — it only became a turn
           // because its images could go. Said rather than skipped all the same.
-          dispatch(showError({ id, message: imageRefusalMessage(images.refusal) }))
+          dispatch(
+            showError({
+              id,
+              message: imageRefusalMessage(images.refusal, extra.canChoosePaths),
+            }),
+          )
           return
         }
         const input = {
@@ -410,6 +427,7 @@ export const controlConversation = createAsyncThunk<
           actionId: turn.actionId,
           text: contentText(turn.content),
           attachments: images.images,
+          files: messageFiles(turn.content),
         }
         const receipt = await (turn.mode === "steering"
           ? extra.conversation.steer(input)

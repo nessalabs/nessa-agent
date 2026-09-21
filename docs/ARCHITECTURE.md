@@ -36,6 +36,7 @@ opinion rather than the product's.
 | `main.rs` | The entry point. Assembles `HostDependencies` in `setup`, wires the tray, shortcut, and window, and hands the bundle on. It never mentions macOS or Linux: OS behaviour is injected through `platform::current()`. |
 | `composition.rs` | The composition root: the one place the host's outside things are constructed — settings, shortcuts, the surface credential, the gateway, the release source — and the bundle every command and menu is given. Nothing below it reaches back for a dependency. |
 | `updater.rs` | Whether a newer Nessa is published and installing it. `ReleaseSource`, `CheckOutcome`, `Installer` and `Restarter` are its ports; the decisions are pure and tested, and the module header states which adapters are not. |
+| `attachments/` | Choosing files to attach, and reading the ones that turn out to be images. Four ports, because they are four different outside things: `FilePicker` is the OS dialog, `ChosenFiles` is the filesystem (a chosen file's kind, length and bytes, which fail the same ways at the same moment), `AttachmentTickets` is the desk that mints and spends the one-shot tickets — the operating system's randomness and clock, and the port that carries the rule that a page cannot name a path — and `ContentTypes` is the platform's type database — Launch Services on macOS, shared-mime-info on Linux, nothing elsewhere — so a `.ico` or `.svgz` is recognised as an image without this app keeping a list of formats. That answer goes where a dropped file's `type` goes, which is what keeps one file from taking two routes. Anything that is not a regular file is refused before it is opened, and both the look and the read have deadlines on their own threads, so a FIFO or a stalled mount cannot wedge the panel. A read is authorised by a one-shot ticket the picker minted, never by a path the page names. The page calls `choose_attachment_files` and `read_attachment_bytes`; the host calls the dialog plugin, so `capabilities/` grants the webview nothing. |
 | `surface_credential.rs` | The bundled panel's token: where it lives for a stage, and `CredentialRefusal` for why there is not one. Only the bundled window may ask. |
 | `local_data.rs` | The stage-scoped data root this process reads, mirroring the server's own path rules. |
 | `stage_port.rs` | The loopback port the gateway registers for a stage, from `protocol/defaults/gateway-ports.json`. macOS-only, like the registration that reads it. |
@@ -75,7 +76,7 @@ opinion rather than the product's.
 | `adapters/gateway/local.ts` | In-process draft/tab projection. Remote effects live in `adapters/gateway/effects.ts` and use the shared authenticated client; staging is begin, then upload of the original bytes only when a ticket was issued; it answers with the reference the gateway stored, and maps the client's failure codes to the panel's typed reasons. |
 | `adapters/store/` | Redux projection and command thunks. Thunks invoke injected effects; reducers apply local UI state and returned views. |
 | `ui/` | Transcript, thinking pill, `useConversation`. Paints and dispatches. `message-images.tsx` paints a sent turn's images: the local preview when this window has one, a labelled placeholder when only a reference is known. |
-| `model/attachments.ts` | File parts with their upload state (a stored file carries the gateway's whole returned reference), reference-only image parts, the preview budgets, and the message rules counted over stored references (10 images, 10 MiB together). No per-image byte or pixel limit lives here: that is the gateway's, per model. `messageImages` decides which parts of a message go as image references, or the one reason none can. `declaredMediaType` names a file the browser gave no type (camera RAW, some HEIC) by its extension, and `previewableImage` says which images a webview can paint. |
+| `model/attachments.ts` | File parts with their upload state (a stored file carries the gateway's whole returned reference), reference-only image parts, the preview budgets, and the message rules counted over stored references (10 images, 10 MiB together). No per-image byte or pixel limit lives here: that is the gateway's, per model. `messageImages` decides which parts of a message go as image references, or the one reason none can, and `messageFiles` the paths it points the agent at. Which of the two a file takes is `linkedFile`: an image is carried, and anything else the host named a path for is pointed at. A file with neither — a browser gave the bytes and nothing could say where they came from — cannot be sent, and the byte budgets are counted over held bytes alone, so a video attached by path is bound only by how many files a draft shows. `declaredMediaType` names a file the browser gave no type (camera RAW, some HEIC) by its extension, and `previewableImage` says which images a webview can paint. |
 | `application/usecases/attachments.ts` | Attach to the originating conversation, remove individual draft files, and own every step of a draft file's upload state; a result for a removed file changes nothing. |
 | `application/usecases/release-uploads.ts` | Forget a draft's stored images once the gateway conversation that held them has been closed, and bound how many already-sent originals are kept to paint the transcript. |
 | `application/usecases/upload-failure.ts` | Why an upload failed, in words, and whether a retry could end differently. One owner for both, so the tile and the composer's notice cannot drift apart; exported through the barrel for the panel. |
@@ -103,7 +104,7 @@ Chat adapters receive the composition-owned session handle; they do not open ano
 | `model/` | `Surface` — frosted or clear. |
 | `adapters/` | Host subscriptions: colour scheme, edge reveal, panel frame, frost, remembered surface, compositor flush, config-driven tab shortcuts. |
 | `ui/app.tsx` | The chrome: stage, glow, resize handle, tab strip, composer. Renders; no effects. |
-| `adapters/attachment-resources.ts`, `adapters/dropped-image.ts`, `adapters/dropped-text.ts` | Bounded object-URL resources that also hold each file's original bytes for upload and stop counting a file once its message has been taken, remote image reads, and external drop representations. |
+| `adapters/attachment-resources.ts`, `adapters/dropped-image.ts`, `adapters/dropped-text.ts` | Bounded object-URL resources that also hold each file's original bytes for upload and stop counting a file once its message has been taken, remote image reads, and external drop representations. `addChosen` is the other way in: a file the host's picker named by path, which this window holds nothing of and which spends none of the budget. |
 | `application/upload-image.ts` | The order of one upload — hash the original, then stage it, checking after the wait that the tile is still there — and which waiting images start next (three in flight per window). No image processing, which is the gateway's. |
 | `application/attachment-notice.ts`, `ui/attachment-notices.tsx` | Everything the composer says about attachments. One typed refusal per way the panel turns something away, and two subjects that are never ranked against each other: what the draft is holding, and what was just turned away. Both render when both are true, the refusal nearest the composer; one action at most, being the uploads worth retrying or the file picker where choosing again could end differently. The words for a failed upload are the conversation's. Rendered through `AgentNotification`, like every other notice in this pane; no notice is red text beside the composer, and the reading status is a live region mounted before there is anything to read. |
 | `ui/attachment-drop-zone.tsx` | The drop zone's bounds and both halves of a drop: what passed, and one refusal naming the rule that refused the rest. A component rather than props on the chrome, so the wiring the report's oversized file travels through is exercised by a test. |
@@ -111,7 +112,7 @@ Chat adapters receive the composition-owned session handle; they do not open ano
 | `ui/use-attachment-uploads.ts`, `ui/attachment-tile.tsx` | Start an upload for every draft image that has not had one; paint a tile's upload state with its retry. |
 | `adapters/use-drop-navigation-guard.ts` | Prevent dropped URLs from navigating the webview. |
 | `application/link-notice.ts`, `adapters/use-link-notice.ts` | The sentence for a link the host did not open, and the subscription that carries it. The decision is the host's, in `src-tauri/src/links.rs`; this is what the person reads when a click went nowhere. |
-| `ui/use-file-attachments.ts` | Remote pending previews, originating conversation, viewer state, and the last refusal — a typed reason, never a sentence, kept with the conversation it was said to. It is put down by the things that answer it, named as calls rather than worked out from the draft afterwards: files actually attached, a file removed, and `useComposer` reporting a draft that has gone. Local files use synchronous object URLs. Uploading is not its job. |
+| `ui/use-file-attachments.ts` | Remote pending previews, originating conversation, viewer state, and the last refusal — a typed reason, never a sentence, kept with the conversation it was said to. It is put down by the things that answer it, named as calls rather than worked out from the draft afterwards: files actually attached, a file removed, and `useComposer` reporting a draft that has gone. Local files use synchronous object URLs. Uploading is not its job. `chooseFiles` asks the host's picker for paths and falls back to the page's own file input when there is no host; `pickerRefusal` turns what the host would not hand over into one of this composer's typed reasons, so a selection is never quietly one file short. |
 | `adapters/dropped-folder.ts`, `ui/use-folder-drop.ts` | Bounded sequential folder traversal, cancellation, originating draft and pending-send guard. |
 | `ui/use-content-drop.ts`, `ui/use-attachment-menu.ts` | Drop acceptance/routing and menu geometry lifecycle, separate from rendering. |
 | `ui/attachment-preview.tsx`, `ui/attachment-icon.tsx`, `ui/add-attachment-menu.tsx` | Lazy shared file preview, file-kind icons, and composer Add menu. |
@@ -327,8 +328,34 @@ is derived from the message's image budget. Closing a conversation releases its
 holds, with audit evidence for every transition. See the
 [attachments module map](../crates/nessa-server/src/attachments/mod.rs).
 
+What happens to an attached file is decided by its type and never by the
+gesture that attached it: an image is uploaded and normalised wherever it came
+from, and anything else is named. That rule is `declaredMediaType`, and it is
+why a file chosen through the host's picker — which reads nothing, so its name
+is the only evidence — has its images read back through `read_attachment_bytes`
+before they are uploaded.
+
+A file that is not an image does not travel at all. The gateway, the agent and
+the panel are on one machine, so the message names an absolute path and the
+agent opens it itself — as a `resource_link` block, which the adapter writes into
+the prompt as a link and which the model may then read with its own file tool, or
+not. The gateway checks only what makes a path mean the file that was chosen
+(absolute, no control character, every component below the root a name) and
+deliberately does not ask whether the file is there, what it is, or whether it
+is inside the workspace. It checks nothing about markdown: the two strings the
+adapter interpolates into that link are constrained where they are built — the
+URI percent-encoded to an allowlist, the label backslash-escaped over ASCII
+punctuation — rather than by constraining what a person may call a file, after
+three successive attempts to name the dangerous characters each missed one. The
+agent's own `Read` is in permission `ask`, so the person approves each read and
+sees the path they are approving. A message naming files is recorded before it is
+admitted, with the paths, the verified caller and the submission — evidence of
+the naming, which is intent, and never of a read or even of an admission. An
+audit sink that cannot take that record refuses the send. This is local-only
+by construction. See [ADR 0013](adr/done/0013-files-by-path-not-by-payload.md).
+
 ADRs 0009 and 0011's exact replay and broader collaboration remain proposed work.
-Remote TLS/device provisioning, files other than images in a message, and more
+Remote TLS/device provisioning, audio and video in a message, and more
 provider adapters remain separate features. Existing design proposals do not replace the implemented Agent contract.
 
 **Identity/access contracts** (`crates/nessa-auth`) — reusable library, no binary.

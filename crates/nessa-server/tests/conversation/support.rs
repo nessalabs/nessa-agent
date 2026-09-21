@@ -4,7 +4,8 @@ use crate::conversation::application::{
     AttachmentRelease, ConversationAgent, ConversationAgents, ConversationAttachments,
     ConversationCreation, ConversationCreationAudit, ConversationCreationAuditRecord,
     ConversationCreationDisposition, ConversationDependencies, ConversationError,
-    ConversationFuture, ConversationLimits, ConversationRepository, ConversationService,
+    ConversationFileLinkAudit, ConversationFileLinkAuditRecord, ConversationFuture,
+    ConversationLimits, ConversationRepository, ConversationService,
 };
 use crate::conversation::domain::{Conversation, ConversationId};
 use nessa_auth::domain::OrganizationId;
@@ -107,6 +108,29 @@ impl ConversationCreationAudit for AcceptingCreationAudit {
     }
 }
 
+/// Keeps every file-link record it is given, and can refuse instead, so a
+/// submission's behaviour when its evidence cannot be committed is testable.
+#[derive(Default)]
+pub(crate) struct RecordingFileLinkAudit {
+    pub(crate) records: Mutex<Vec<ConversationFileLinkAuditRecord>>,
+    pub(crate) refuses: AtomicBool,
+}
+impl ConversationFileLinkAudit for RecordingFileLinkAudit {
+    fn record(&self, record: ConversationFileLinkAuditRecord) -> ConversationFuture<'_, ()> {
+        let refuses = self.refuses.load(Ordering::SeqCst);
+        Box::pin(async move {
+            if refuses {
+                return Err(ConversationError::Audit);
+            }
+            self.records
+                .lock()
+                .expect("no test poisons this")
+                .push(record);
+            Ok(())
+        })
+    }
+}
+
 pub(crate) struct TestClock;
 impl nessa_auth::application::ports::Clock for TestClock {
     fn unix_milliseconds(&self) -> u64 {
@@ -199,6 +223,7 @@ pub(crate) fn image_fixture(
             storage: storage.clone(),
             metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments,
             clock: Arc::new(TestClock),
         },
@@ -244,6 +269,7 @@ pub(crate) fn fixture(
             storage: storage.clone(),
             metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },

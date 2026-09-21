@@ -1,4 +1,4 @@
-import { imageAttachmentsProblem } from "@nessa/client"
+import { imageAttachmentsProblem, linkedFilesProblem } from "@nessa/client"
 import {
   AttachmentStagingError,
   ConversationReadFailedError,
@@ -27,12 +27,19 @@ export function scenarioEffects(scenario: "echo" | "offline"): ConversationEffec
       refused.message = `Invalid message attachments: ${problem}`
       throw refused
     }
+    const pathProblem = linkedFilesProblem(input.files)
+    if (pathProblem) {
+      const refused = new SubmissionRefusedError("invalid-request")
+      refused.message = `Invalid message files: ${pathProblem}`
+      throw refused
+    }
     const view = get(input.conversationId)
     if (!view.messages.some((message) => message.executionId === input.executionId)) {
       view.messages.push({
         executionId: input.executionId,
         userText: input.text,
         attachments: input.attachments,
+        files: input.files,
         parts: [
           { offset: 0, kind: "thought", text: "", toolId: "" },
           { offset: 1, kind: "text", text: input.text, toolId: "" },

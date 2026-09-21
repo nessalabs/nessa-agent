@@ -46,6 +46,7 @@ const file = (
   mimeType,
   size: 3,
   previewUrl: "blob:test",
+  path: null,
   upload,
 })
 
@@ -60,6 +61,7 @@ async function show(input: {
   await React.act(async () => {
     root.render(
       React.createElement(AttachmentNotices, {
+        canChoosePaths: true,
         refusal: input.refusal ?? null,
         files: input.files ?? [],
         imageInput: input.imageInput,
@@ -108,7 +110,12 @@ it("says nothing at all when there is nothing to say", async () => {
 })
 
 it("announces the title and the line through a live region", async () => {
-  await show({ refusal: { reason: "file-too-large", names: ["holiday.mp4"] } })
+  await show({
+    refusal: {
+      reason: "file-too-large",
+      files: [{ name: "holiday.mp4", type: "video/mp4" }],
+    },
+  })
   const region = container.querySelector("[aria-live]")
   expect(region?.getAttribute("aria-live")).toBe("polite")
   // Atomic, so the heading and the line are read as one thing rather than
@@ -116,9 +123,9 @@ it("announces the title and the line through a live region", async () => {
   expect(region?.getAttribute("aria-atomic")).toBe("true")
   expect(region?.textContent).toContain("File is too large")
   expect(region?.textContent).toContain("64 MiB")
-  // Nothing to be done about the weight, so nothing is offered — above all not
-  // the picker, which holds the file to the same bound.
-  expect(buttons("Choose files")).toHaveLength(0)
+  // A video does not have to be carried at all, so the picker is a real answer
+  // to its weight and is offered. Nothing else is.
+  expect(buttons("Choose files")).toHaveLength(1)
   expect(buttons("Retry")).toHaveLength(0)
   // A refusal is the panel's own memory, and can be put away.
   expect(button("Dismiss notification")).toBeDefined()
@@ -129,7 +136,10 @@ it("shows a refusal and a failed upload together, each keeping its own action", 
   // vanished: first the upload's notice and its Retry, then — had the order
   // simply been reversed — a 720 MB file refused with nothing on screen moving.
   await show({
-    refusal: { reason: "file-too-large", names: ["holiday.mp4"] },
+    refusal: {
+      reason: "file-too-large",
+      files: [{ name: "holiday.mp4", type: "video/mp4" }],
+    },
     files: [file("b", { status: "failed", reason: "unavailable" })],
     imageInput: true,
   })

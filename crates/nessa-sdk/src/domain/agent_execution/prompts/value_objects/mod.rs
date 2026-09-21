@@ -8,10 +8,13 @@
 //! PromptContributionView borrows each attributed range without copying text.
 //!
 //! ```text
-//! PromptText + ImageReference(Sha256Digest, ImageMediaType, size) --> UserMessage
+//! PromptText + ImageReference(Sha256Digest, ImageMediaType, size)
+//!             + LinkedFile(absolute path)                --> UserMessage
 //! ```
 //!
-//! A user message refers to its images by digest and never holds their bytes.
+//! A user message refers to its images by digest and never holds their bytes,
+//! and to its files by path, which it never opens. The two are separate because
+//! an image's bytes travel with the message and a file's stay where they are.
 mod prompt;
 pub use prompt::{
     PromptContribution, PromptContributionView, PromptSource, PromptSourceKind, PromptText,
@@ -19,4 +22,4 @@ pub use prompt::{
 };
 
 mod user_message;
-pub use user_message::{ImageReference, UserMessage};
+pub use user_message::{ImageReference, LinkedFile, UserMessage};

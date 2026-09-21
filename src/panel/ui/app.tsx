@@ -89,11 +89,24 @@ function panelClass(surface: Surface, compositor: CompositorKind): string {
 
 export function App({
   attachmentResources,
+  canChoosePaths,
   digest,
   onSignOut,
   sessionError,
 }: {
   attachmentResources: AttachmentResources
+  /**
+   * Whether this surface has a picker that can say where a file is. False in a
+   * browser, where every route hands over bytes and none says their location.
+   *
+   * Taken rather than asked for. The chrome used to put the question to the
+   * host itself while composition put it again for the send refusal, and one
+   * fact with two readers is a seam that generates the disagreement it was
+   * supposed to prevent — which it did: a browser was told to press `+` by one
+   * of them and that `+` would not work by the other. `check-architecture`
+   * keeps the question in composition.
+   */
+  canChoosePaths: boolean
   /** How an upload's bytes are identified. Composition owns the Web Crypto one. */
   digest: (bytes: Blob) => Promise<string>
   onSignOut?: () => void
@@ -513,6 +526,7 @@ export function App({
                    reason, so this does not repeat it; it offers the retry once
                    for every upload worth retrying. */
                 <AttachmentNotices
+                  canChoosePaths={canChoosePaths}
                   refusal={attachments.refusal}
                   files={attachments.files}
                   imageInput={chat.active.remote?.capabilities.imageInput}

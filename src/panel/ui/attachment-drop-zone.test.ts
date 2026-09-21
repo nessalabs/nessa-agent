@@ -75,7 +75,7 @@ it("refuses an oversized file by its weight, and never sends it to the picker", 
   await drop([weighing("holiday.mp4", MAX_ATTACHMENT_BYTES + 1)])
   expect(onRefused).toHaveBeenCalledExactlyOnceWith({
     reason: "file-too-large",
-    names: ["holiday.mp4"],
+    files: [{ name: "holiday.mp4", type: "video/mp4" }],
   })
   expect(onFiles).not.toHaveBeenCalled()
 })
@@ -86,7 +86,7 @@ it("attaches what passed and refuses the rest of the same drop", async () => {
   expect(onFiles).toHaveBeenCalledExactlyOnceWith([small])
   expect(onRefused).toHaveBeenCalledExactlyOnceWith({
     reason: "file-too-large",
-    names: ["holiday.mp4"],
+    files: [{ name: "holiday.mp4", type: "video/mp4" }],
   })
 })
 

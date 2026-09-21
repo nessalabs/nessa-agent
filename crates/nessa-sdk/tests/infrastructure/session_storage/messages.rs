@@ -167,6 +167,7 @@ async fn image_references_survive_file_storage_in_order_with_and_without_text() 
         value.invocations[0].request.user_message = UserMessage::new(
             text.map(|text| PromptText::new(text).unwrap()),
             images.clone(),
+            Vec::new(),
         )
         .unwrap();
         let lease = storage.open(value.id.clone()).await.unwrap();
@@ -206,7 +207,7 @@ async fn saved_image_references_are_restored_through_the_message_rules() {
     let storage = LocalFileStorage::new(directory.clone()).unwrap();
     let mut value = snapshot("image-rules");
     value.invocations[0].request.user_message =
-        UserMessage::new(None, vec![image(1, ImageMediaType::Png, 1)]).unwrap();
+        UserMessage::new(None, vec![image(1, ImageMediaType::Png, 1)], Vec::new()).unwrap();
     let lease = storage.open(value.id.clone()).await.unwrap();
     lease.save(value.clone()).await.unwrap();
     let path = journal_path(&directory, "image-rules");
@@ -250,6 +251,84 @@ async fn saved_image_references_are_restored_through_the_message_rules() {
         );
         assert_eq!(std::fs::read(&path).unwrap(), bytes, "{pointer}");
     }
+    std::fs::write(&path, original).unwrap();
+    assert_same(&lease.load().await.unwrap().unwrap(), &value);
+}
+
+#[tokio::test]
+async fn saved_file_links_survive_a_round_trip_and_are_restored_through_the_domain() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("private");
+    private::create_directory(&directory).unwrap();
+    let storage = LocalFileStorage::new(directory.clone()).unwrap();
+    let mut value = snapshot("file-rules");
+    // A path with a space and a bracketless parenthesis: exactly what survives
+    // the domain, so exactly what has to survive storage unchanged.
+    value.invocations[0].request.user_message = UserMessage::new(
+        Some(PromptText::new("read this").unwrap()),
+        Vec::new(),
+        vec![LinkedFile::new("/Users/ada/report (final).pdf".into()).unwrap()],
+    )
+    .unwrap();
+    let lease = storage.open(value.id.clone()).await.unwrap();
+    lease.save(value.clone()).await.unwrap();
+    assert_same(&lease.load().await.unwrap().unwrap(), &value);
+
+    let path = journal_path(&directory, "file-rules");
+    let original = std::fs::read(&path).unwrap();
+    let valid: Value = snapshot_json(&original).unwrap();
+    // The path is saved whole and by itself: no name beside it to disagree.
+    assert_eq!(
+        valid.pointer("/invocations/0/user_files/0").unwrap(),
+        &serde_json::json!({ "path": "/Users/ada/report (final).pdf" })
+    );
+
+    let one = valid
+        .pointer("/invocations/0/user_files/0")
+        .unwrap()
+        .clone();
+    let long = format!("/{}", "a".repeat(LinkedFile::MAX_PATH_BYTES));
+    let corruptions: Vec<(&str, Value)> = vec![
+        // Every domain rule is applied again on the way back in, so a journal
+        // edited by hand cannot hand the agent a path it would have refused.
+        ("/invocations/0/user_files/0/path", "report.pdf".into()),
+        ("/invocations/0/user_files/0/path", "/tmp/a\nb.pdf".into()),
+        (
+            "/invocations/0/user_files/0/path",
+            "/tmp/../etc/passwd".into(),
+        ),
+        ("/invocations/0/user_files/0/path", "/tmp//a.pdf".into()),
+        ("/invocations/0/user_files/0/path", "/tmp/".into()),
+        ("/invocations/0/user_files/0/path", "".into()),
+        ("/invocations/0/user_files/0/path", long.into()),
+        (
+            "/invocations/0/user_files",
+            vec![one; UserMessage::MAX_FILES + 1].into(),
+        ),
+    ];
+    for (pointer, replacement) in corruptions {
+        let mut invalid = valid.clone();
+        *invalid.pointer_mut(pointer).unwrap() = replacement;
+        let bytes = journal_bytes(&invalid).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(
+            matches!(lease.load().await, Err(StorageError::Corrupt(_))),
+            "{pointer}"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "{pointer}");
+    }
+
+    // Removing the only file leaves a message of text alone, which is valid.
+    let mut without = valid.clone();
+    *without.pointer_mut("/invocations/0/user_files").unwrap() = serde_json::json!([]);
+    std::fs::write(&path, journal_bytes(&without).unwrap()).unwrap();
+    let loaded = lease.load().await.unwrap().unwrap();
+    assert!(loaded.invocations[0]
+        .request
+        .user_message
+        .files()
+        .is_empty());
+
     std::fs::write(&path, original).unwrap();
     assert_same(&lease.load().await.unwrap().unwrap(), &value);
 }

@@ -1,4 +1,10 @@
-import type { FileAttachment, ImageReference, ImageReferencePart } from "./attachments"
+import type {
+  FileAttachment,
+  ImageReference,
+  ImageReferencePart,
+  LinkedFile,
+  LinkedFileReferencePart,
+} from "./attachments"
 
 /** Ordered message content; pasted payloads remain literal and independently viewable. */
 export type MessagePart =
@@ -6,6 +12,7 @@ export type MessagePart =
   | { type: "pasted-text"; id: string; text: string }
   | FileAttachment
   | ImageReferencePart
+  | LinkedFileReferencePart
 
 export type MessageContent = MessagePart[]
 
@@ -25,12 +32,14 @@ export function textContent(text: string): MessageContent {
 }
 
 /**
- * A message as the gateway reports it: its text, then its images by reference.
- * This window never held those bytes, so the parts carry nothing to preview.
+ * A message as the gateway reports it: its text, its images by reference, then
+ * the files it pointed the agent at. This window never held any of those bytes
+ * — and for a linked file nobody did — so the parts carry nothing to preview.
  */
 export function referencedContent(
   text: string,
   images: readonly ImageReference[],
+  files: readonly LinkedFile[] = [],
 ): MessageContent {
   return [
     ...textContent(text),
@@ -40,5 +49,6 @@ export function referencedContent(
       mimeType: image.mimeType,
       size: image.size,
     })),
+    ...files.map((file) => ({ type: "file-reference" as const, path: file.path })),
   ]
 }

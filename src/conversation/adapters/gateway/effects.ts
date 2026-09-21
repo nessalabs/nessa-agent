@@ -143,6 +143,7 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
   agent_unsupported: "agent-unsupported",
   conversations_not_configured: "conversations-not-configured",
   agent_startup_deadline: "agent-startup-deadline",
+  conversation_state_unreadable: "conversation-state-unreadable",
   invalid_request: "invalid-request",
 }
 
@@ -167,8 +168,48 @@ const failures: Partial<Record<ConversationErrorCode, CommandFailure>> = {
  * ReadFailure} for the evidence. Nothing here may promise a recovery on their
  * behalf.
  */
-const readFailures: Partial<Record<ConversationErrorCode, ReadFailure>> = {
+const readFailures: Record<ConversationErrorCode, ReadFailure> = {
   conversation_configuration_changed: "configuration-changed",
+  // Listed for the same reason as the one above it, and not for the reason the
+  // two named below the table are left out: the gateway is certain about this
+  // one. It could not read the saved state, it caches that, and every later
+  // read is answered from the cache — so "it keeps trying" would be false and
+  // the refresh it offers could only ever return this again.
+  conversation_state_unreadable: "state-unreadable",
+  // Every other code, written out rather than defaulted. `Partial` would let
+  // the next permanent failure join the vocabulary and land silently on "Nessa
+  // keeps trying", which is the shape of the defect this very word caused a
+  // layer above: a member added, nobody asked, and a refresh offered for a
+  // conversation that will never answer differently. A total map asks.
+  agent_not_configured: "unavailable",
+  agent_operation_failed: "unavailable",
+  // These two are arguably permanent — a gateway running no conversations, and
+  // a conversation naming an agent this build cannot open — and "Nessa keeps
+  // trying" is not quite true of either. `unavailable` is what they already got
+  // by falling through a partial table, so this changes nothing; what it does
+  // is put the choice where somebody can disagree with it. Giving them a word
+  // of their own means a new `ReadFailure` member and a notice, which belongs
+  // to whoever owns those codes.
+  agent_unsupported: "unavailable",
+  conversations_not_configured: "unavailable",
+  agent_startup_deadline: "unavailable",
+  attachment_capacity: "unavailable",
+  attachment_cleanup_unavailable: "unavailable",
+  attachment_not_found: "unavailable",
+  attachment_storage_unavailable: "unavailable",
+  attachment_unavailable: "unavailable",
+  audit_unavailable: "unavailable",
+  conversation_capacity: "unavailable",
+  conversation_closed: "unavailable",
+  conversation_not_found: "unavailable",
+  conversation_storage_unavailable: "unavailable",
+  image_input_unsupported: "unavailable",
+  invalid_request: "unavailable",
+  stale_permission: "unavailable",
+  submission_conflict: "unavailable",
+  submission_unresolved: "unavailable",
+  temporarily_unavailable: "unavailable",
+  unknown_method: "unavailable",
 }
 
 /**
@@ -182,7 +223,12 @@ const readFailures: Partial<Record<ConversationErrorCode, ReadFailure>> = {
  * this build has never heard of from being read as one it has: the table is
  * consulted only for a code it narrowed, so an arbitrary wire string — `""`, or
  * `"constructor"`, which every object answers to — cannot become a reason.
- * Everything it does not recognise lands on `unavailable` with the rest.
+ * A code this build has no name for is the one thing the table cannot answer,
+ * and it lands on `unavailable` with the rest. So does an index TypeScript
+ * will not promise is there: `noUncheckedIndexedAccess` widens every lookup,
+ * which is why the `??` survives a table that is now total. The table's own
+ * type is what asks the question — a `Record` over the whole vocabulary does
+ * not compile with a code missing from it.
  */
 function readFailure(error: unknown): ConversationReadFailedError {
   const code =
@@ -344,20 +390,26 @@ export function gatewayEffects(
     },
     async send(input) {
       try {
-        return await api().send(input.conversationId, input.text, input.attachments, {
-          executionId: input.executionId,
-          requestId: input.actionId,
-        })
+        return await api().send(
+          input.conversationId,
+          input.text,
+          input.attachments,
+          input.files,
+          { executionId: input.executionId, requestId: input.actionId },
+        )
       } catch (error) {
         throw submissionFailure(error)
       }
     },
     async steer(input) {
       try {
-        return await api().steer(input.conversationId, input.text, input.attachments, {
-          executionId: input.executionId,
-          requestId: input.actionId,
-        })
+        return await api().steer(
+          input.conversationId,
+          input.text,
+          input.attachments,
+          input.files,
+          { executionId: input.executionId, requestId: input.actionId },
+        )
       } catch (error) {
         throw submissionFailure(error)
       }

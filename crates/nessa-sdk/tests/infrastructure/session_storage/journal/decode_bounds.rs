@@ -36,7 +36,7 @@ impl Seek for CountDecode {
 }
 fn metadata() -> Value {
     json!({
-        "submission":"Immediate", "execution_id":"active", "user_message":"input", "user_images":[],
+        "submission":"Immediate", "execution_id":"active", "user_message":"input", "user_images":[], "user_files":[],
         "estimated_input_tokens":1, "reserved_output_tokens":1,
         "actor":{"principal_id":"user","surface_id":"test","request_id":"invoke"},
         "provider_report":null,"local_outcome":null,"cancellation":null,"result":null
@@ -334,4 +334,60 @@ fn saved_image_fields_are_bounded_before_their_text_is_built() {
             "saved image {field} was decoded before its bound: {decoded}/{length}"
         );
     }
+}
+
+/// A journal written before a message could point at files has no `user_files`
+/// key, and it loads: the message named none, which is what empty says.
+///
+/// That is the true historical meaning rather than a compatibility fiction —
+/// no message could name a file — so this is one contract reading its own
+/// earlier records, not a second reader kept alive beside a first. Six
+/// `Option` fields in the same struct already take that reading of their own
+/// absence.
+///
+/// The line a default must not cross is inventing a value a record could have
+/// meant something else by, and the test below walks right up to it: a `path`
+/// has no default, so a file entry without one is corrupt and stays corrupt.
+#[test]
+fn a_journal_written_before_files_reads_as_a_message_that_named_none() {
+    let mut value = record();
+    let metadata = value["invocations"][0]["metadata"].as_object_mut().unwrap();
+    assert!(
+        metadata.remove("user_files").is_some(),
+        "the fixture must carry the field this test removes"
+    );
+    let loaded = load(encoded(&value)).0.expect("an older journal loads");
+    let restored = loaded.snapshot.expect("the snapshot is there");
+    let message = &restored.invocations[0].request.user_message;
+    assert!(message.files().is_empty());
+    // And nothing else about the record moved.
+    assert_eq!(message.text_str(), "input");
+    assert!(message.images().is_empty());
+
+    // The default stops at the field it is on. A file entry is still a path
+    // and nothing else, so one without a path names nothing and is refused
+    // rather than quietly becoming an empty string.
+    let mut missing = record();
+    missing["invocations"][0]["metadata"]["user_files"] = json!([{}]);
+    assert!(matches!(
+        load(encoded(&missing)).0,
+        Err(StorageError::Corrupt(_))
+    ));
+    let mut nulled = record();
+    nulled["invocations"][0]["metadata"]["user_files"] = json!([{ "path": null }]);
+    assert!(matches!(
+        load(encoded(&nulled)).0,
+        Err(StorageError::Corrupt(_))
+    ));
+    // As does a record whose own required fields are gone: defaulting one
+    // field is not defaulting the struct.
+    let mut gutted = record();
+    let metadata = gutted["invocations"][0]["metadata"]
+        .as_object_mut()
+        .unwrap();
+    metadata.remove("user_images");
+    assert!(matches!(
+        load(encoded(&gutted)).0,
+        Err(StorageError::Corrupt(_))
+    ));
 }

@@ -16,7 +16,12 @@ export function makeStore(dependencies: AppDependencies = createDependencies()) 
   const store = configureStore({
     middleware: (getDefaultMiddleware) =>
       getDefaultMiddleware({
-        thunk: { extraArgument: { conversation: dependencies.conversation } },
+        thunk: {
+          extraArgument: {
+            conversation: dependencies.conversation,
+            canChoosePaths: dependencies.canChoosePaths,
+          },
+        },
       }),
     reducer: {
       conversation: conversationReducer,

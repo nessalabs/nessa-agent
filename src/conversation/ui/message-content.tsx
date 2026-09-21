@@ -22,7 +22,12 @@ function pastedDocument(content: MessageContent) {
   const source = content
     .map((part, index) => {
       // Files and images are not Markdown; `MessageImages` paints them below.
-      if (part.type === "file" || part.type === "image-reference") return ""
+      if (
+        part.type === "file" ||
+        part.type === "image-reference" ||
+        part.type === "file-reference"
+      )
+        return ""
       if (part.type === "text") return part.text
       const token = `${prefix}${index}z`
       pastes.set(token, part.text)

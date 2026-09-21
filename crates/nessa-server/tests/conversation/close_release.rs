@@ -36,6 +36,7 @@ fn invocation(
                 ImageReference::new(Sha256Digest::from_bytes([7; 32]), ImageMediaType::Png, 1024)
                     .unwrap(),
             ],
+            Vec::new(),
         )
         .unwrap()
     } else {

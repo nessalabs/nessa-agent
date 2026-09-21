@@ -16,7 +16,7 @@ use crate::conversation::application::{
 };
 use crate::conversation::domain::ConversationId;
 use crate::conversation_test_support::{
-    fixture, AcceptingCreationAudit, Provider, ProviderFactory, TestClock,
+    fixture, AcceptingCreationAudit, Provider, ProviderFactory, RecordingFileLinkAudit, TestClock,
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
 use nessa_sdk::infrastructure::session_storage::InMemoryStorage;
@@ -99,6 +99,7 @@ async fn a_first_message_joins_the_warm_up_rather_than_launching_beside_it() {
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },

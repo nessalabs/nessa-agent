@@ -17,7 +17,10 @@ use crate::{
         application::{
             ConversationAgents, ConversationDependencies, ConversationLimits, ConversationService,
         },
-        infrastructure::{DurableConversationCreationAudit, LocalConversationRepository},
+        infrastructure::{
+            DurableConversationCreationAudit, DurableConversationFileLinkAudit,
+            LocalConversationRepository,
+        },
     },
     core::RunError,
     env::Environment,
@@ -312,6 +315,10 @@ fn conversations(agents: &AgentsConfig, directory: &Path) -> Result<BuiltConvers
         DurableConversationCreationAudit::new(root.join("audit").join("creation"))
             .map_err(|error| RunError::Agent(error.to_string()))?,
     );
+    let file_link_audit = Arc::new(
+        DurableConversationFileLinkAudit::new(root.join("audit").join("file-links"))
+            .map_err(|error| RunError::Agent(error.to_string()))?,
+    );
     let service = ConversationService::new(
         ConversationDependencies {
             agents: ConversationAgents::new(built.providers, selected)
@@ -319,6 +326,7 @@ fn conversations(agents: &AgentsConfig, directory: &Path) -> Result<BuiltConvers
             storage,
             metadata,
             creation_audit,
+            file_link_audit,
             attachments: Some(attachments.conversations),
             clock,
         },

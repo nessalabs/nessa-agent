@@ -101,8 +101,12 @@ fn reference(bytes: &[u8], media_type: ImageMediaType) -> ImageReference {
 fn message(id: &str, text: Option<&str>, images: Vec<ImageReference>) -> ExecutionRequest {
     ExecutionRequest {
         execution_id: ExecutionId::new(id).unwrap(),
-        user_message: UserMessage::new(text.map(|text| PromptText::new(text).unwrap()), images)
-            .unwrap(),
+        user_message: UserMessage::new(
+            text.map(|text| PromptText::new(text).unwrap()),
+            images,
+            Vec::new(),
+        )
+        .unwrap(),
         estimated_input_tokens: 10,
         reserved_output_tokens: 100,
     }

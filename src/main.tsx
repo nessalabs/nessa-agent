@@ -30,7 +30,11 @@ if (!container) throw new Error("missing #root")
 // and mounting it here would start a second session in a window that is closing.
 const panel = (
   <Provider store={store}>
-    <App attachmentResources={dependencies.attachments} digest={dependencies.digest} />
+    <App
+      attachmentResources={dependencies.attachments}
+      canChoosePaths={dependencies.canChoosePaths}
+      digest={dependencies.digest}
+    />
     {dependencies.usesLocalSession && <SessionLifecycle dependencies={dependencies} />}
   </Provider>
 )

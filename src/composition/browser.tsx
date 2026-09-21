@@ -101,6 +101,7 @@ function BrowserSession({
       />
       <App
         attachmentResources={scope.dependencies.attachments}
+        canChoosePaths={scope.dependencies.canChoosePaths}
         digest={scope.dependencies.digest}
         onSignOut={onDisconnect}
         sessionError={error}

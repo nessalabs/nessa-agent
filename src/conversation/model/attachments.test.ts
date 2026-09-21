@@ -4,6 +4,9 @@ import {
   humanSize,
   imageReferenceLabel,
   isImageFile,
+  linkablePath,
+  linkedFile,
+  messageFiles,
   messageImages,
   messageLabel,
   previewableImage,
@@ -11,6 +14,8 @@ import {
   validImageReference,
   MAX_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENT_BYTES,
+  MAX_FILE_PATH_BYTES,
+  MAX_SEND_FILES,
   MAX_SEND_IMAGES,
   MAX_SEND_TOTAL_IMAGE_BYTES,
   type FileAttachment,
@@ -40,6 +45,7 @@ function image(
     previewUrl: `blob:${id}`,
     size: 3,
     upload,
+    path: null,
     ...change,
   }
 }
@@ -53,6 +59,7 @@ it("accepts empty files and exact file limit, rejects invalid byte sizes", () =>
     previewUrl: "blob:test-empty",
     size: 0,
     upload: { status: "not-started" },
+    path: null,
   }
   expect(validDraftAttachments([file])).toBe(true)
   expect(validDraftAttachments([{ ...file, size: MAX_ATTACHMENT_BYTES }])).toBe(true)
@@ -85,6 +92,67 @@ describe("which parts of a message can go as images", () => {
       ok: true,
       images: [reference(), stored],
     })
+  })
+
+  it("never hands back something inherited instead of a media type", () => {
+    // Every object inherits `constructor`, `toString` and the rest, so a bare
+    // index into the extension table returned a function for these names and
+    // threw on the first `startsWith`. The picker route depends on this table,
+    // so a file could crash the composer by being called the wrong thing.
+    for (const name of [
+      "photo.constructor",
+      "photo.toString",
+      "photo.valueOf",
+      "photo.hasOwnProperty",
+      "photo.__proto__",
+    ]) {
+      const declared = declaredMediaType(name, "")
+      expect(typeof declared).toBe("string")
+      expect(declared).toBe("application/octet-stream")
+      expect(isImageFile(declared)).toBe(false)
+    }
+  })
+
+  it("classifies a file the same way whether the platform typed it or a drop did", () => {
+    // The class the earlier test could not see, because it used only `.png`
+    // and `.heic` — both in the extension table, so both routes agreed by
+    // accident. These are image formats the platform knows and the table does
+    // not, and they used to split: dropped they uploaded, picked they became a
+    // path behind a per-read approval and a different bound.
+    //
+    // They agree now because neither route consults the table first. Both ask
+    // the platform and fall back to the table, which is one call with one set
+    // of inputs, so there is no longer a second place for them to disagree.
+    const platformTypes: Record<string, string> = {
+      "icon.ico": "image/vnd.microsoft.icon",
+      "photo.jpe": "image/jpeg",
+      "diagram.svgz": "image/svg+xml",
+      "scan.jp2": "image/jp2",
+      "scan.jpf": "image/jpx",
+      "cursor.xbm": "image/x-xbitmap",
+      "art.tga": "image/x-tga",
+      "old.dib": "image/bmp",
+    }
+    for (const [name, platform] of Object.entries(platformTypes)) {
+      // The drop route: the browser supplies the type.
+      const dropped = declaredMediaType(name, platform)
+      // The picker route: the host supplies the same type for the same path.
+      const picked = declaredMediaType(name, platform)
+      expect([name, dropped]).toEqual([name, picked])
+      expect(isImageFile(dropped)).toBe(true)
+      // And the table alone — what the picker used to have — does not know
+      // any of them, which is why it can never be the first question.
+      expect(isImageFile(declaredMediaType(name, ""))).toBe(false)
+    }
+  })
+
+  it("keeps the extension table as the fallback it is, not a second opinion", () => {
+    // A platform that knows nothing still gets the table's answer, which is
+    // the case it exists for: a browser reports most RAW files as nothing.
+    expect(declaredMediaType("holiday.cr3", "")).toBe("image/x-canon-cr3")
+    // And a platform answer always wins, even one the table would disagree
+    // with, because the platform looked at the file and the table read a name.
+    expect(declaredMediaType("holiday.cr3", "video/mp4")).toBe("video/mp4")
   })
 
   it("treats any image/* file as an image, and nothing else", () => {
@@ -310,5 +378,162 @@ describe("a file the browser could not name", () => {
     // A single file may be as heavy as the upload path takes, and a draft holds
     // two of those. The file bound itself is the protocol's, checked there.
     expect(MAX_DRAFT_ATTACHMENT_BYTES).toBe(2 * MAX_ATTACHMENT_BYTES)
+  })
+})
+
+describe("files a message points at", () => {
+  const document = (id: string, path: string | null) =>
+    image(
+      id,
+      { status: "not-started" },
+      { name: `${id}.pdf`, mimeType: "application/pdf", path },
+    )
+
+  it("sends a file by path when the host said where it is, and refuses one when nobody could", () => {
+    const linked = document("report", "/Users/ada/report.pdf")
+    expect(linkedFile(linked)).toBe(true)
+    expect(messageFiles([linked])).toEqual([{ path: "/Users/ada/report.pdf" }])
+    // Nothing was uploaded for it, and it is not an image, so the message's
+    // image rules have nothing to say about it.
+    expect(messageImages([linked])).toEqual({ ok: true, images: [] })
+
+    // The same file from a browser: no path, nothing to send, and the refusal
+    // names it rather than leaving it silently behind.
+    const unnameable = document("report", null)
+    expect(linkedFile(unnameable)).toBe(false)
+    expect(messageFiles([unnameable])).toEqual([])
+    expect(messageImages([unnameable])).toEqual({
+      ok: false,
+      refusal: { kind: "unsupported-file", name: "report.pdf" },
+    })
+  })
+
+  it("keeps a linked file out of every image rule, including the ones about waiting", () => {
+    // An upload still in flight holds the whole message back. A linked file is
+    // never uploading, so it never does — the two must not be confused.
+    const waiting = image("a", { status: "uploading" })
+    expect(messageImages([waiting, document("d", "/a.pdf")])).toEqual({
+      ok: false,
+      refusal: { kind: "upload-in-flight" },
+    })
+    expect(messageImages([document("d", "/a.pdf")])).toEqual({ ok: true, images: [] })
+
+    // An image whose path is known is still carried as an image: a path would
+    // leave it to the model to decide whether to look at it.
+    const withPath = image("photo", undefined, { path: "/Users/ada/photo.png" })
+    expect(linkedFile(withPath)).toBe(false)
+    expect(messageFiles([withPath])).toEqual([])
+    expect(messageImages([withPath]).ok).toBe(true)
+  })
+
+  it("keeps attachment order and bounds how many files one message points at", () => {
+    const content: MessageContent = [
+      document("b", "/b.pdf"),
+      document("a", "/a.pdf"),
+      document("c", "/c.pdf"),
+    ]
+    expect(messageFiles(content)).toEqual([
+      { path: "/b.pdf" },
+      { path: "/a.pdf" },
+      { path: "/c.pdf" },
+    ])
+
+    const many = (count: number): MessageContent =>
+      Array.from({ length: count }, (_, index) => document(`f${index}`, `/f${index}.pdf`))
+    expect(messageImages(many(MAX_SEND_FILES)).ok).toBe(true)
+    expect(messageImages(many(MAX_SEND_FILES + 1))).toEqual({
+      ok: false,
+      refusal: { kind: "too-many-files" },
+    })
+  })
+})
+
+describe("which paths can be carried to the agent", () => {
+  it("accepts the ordinary names a picker really hands over", () => {
+    for (const path of [
+      "/a",
+      "/Users/ada/report.pdf",
+      "/Users/ada/report (final) 100%.pdf",
+      `/Users/ada/it's a "quoted" name.pdf`,
+      "/Users/ada/2026-09-20 10:30.txt",
+      "/Users/ada/\u043e\u0442\u0447\u0451\u0442.pdf",
+      "/Users/ada/.zshrc",
+      "/Users/ada/...",
+      "/Users/ada/emoji \u{1f600}.pdf",
+      `/${"a".repeat(MAX_FILE_PATH_BYTES - 1)}`,
+    ])
+      expect(linkablePath(path)).toBe(true)
+  })
+
+  it("counts the length in bytes, which is the only unit the gateway counts", () => {
+    // Three units were in play and only one of them is the rule. `maxLength`
+    // in the schema counts code points, `path.length` here counted UTF-16 code
+    // units, and the gateway counts UTF-8 bytes. These two paths have the same
+    // number of characters and the same `.length`; only one of them fits, and
+    // the other used to be accepted here and refused after it was sent.
+    const ascii = `/${"a".repeat(MAX_FILE_PATH_BYTES - 1)}`
+    const multibyte = `/${"\u3042".repeat(MAX_FILE_PATH_BYTES - 1)}`
+    expect([...ascii].length).toBe([...multibyte].length)
+    expect(ascii.length).toBe(multibyte.length)
+    expect(new TextEncoder().encode(multibyte).length).toBeGreaterThan(
+      MAX_FILE_PATH_BYTES,
+    )
+    expect(linkablePath(ascii)).toBe(true)
+    expect(linkablePath(multibyte)).toBe(false)
+
+    // Exactly at the bound, in bytes, with a multibyte character in it.
+    const exact = `/\u3042${"a".repeat(MAX_FILE_PATH_BYTES - 4)}`
+    expect(new TextEncoder().encode(exact).length).toBe(MAX_FILE_PATH_BYTES)
+    expect(linkablePath(exact)).toBe(true)
+    expect(linkablePath(`${exact}a`)).toBe(false)
+  })
+
+  it("refuses every path the gateway would, so nothing is refused after it is sent", () => {
+    for (const path of [
+      "",
+      "report.pdf",
+      "./report.pdf",
+      "~/report.pdf",
+      // Control characters, C0 and C1 alike. C1 is the one the published
+      // pattern used to let through while the gateway refused it.
+      "/Users/ada/a\nb.pdf",
+      "/Users/ada/a\u0000b.pdf",
+      "/Users/ada/a\u0085b.pdf",
+      "/Users/ada/a\u009fb.pdf",
+      "/Users/ada/a\u007fb.pdf",
+      // Components that do not survive being written as a URI.
+      "/",
+      "/Users/ada/",
+      "//Users/ada/report.pdf",
+      "/Users//ada/report.pdf",
+      "/Users/ada/.",
+      "/Users/ada/..",
+      "/Users/../etc/passwd",
+      "/Users/./ada/report.pdf",
+      `/${"a".repeat(MAX_FILE_PATH_BYTES)}`,
+    ])
+      expect(linkablePath(path)).toBe(false)
+  })
+
+  it("carries a path holding the characters a markdown link is made of", () => {
+    // These were refused, because the gateway hands the path to the agent
+    // inside `[@name](uri)` and a bracket could close it. That rule named one
+    // of the three characters that can — `)` ends a destination and `\`
+    // escapes whatever follows it — and both of the others were found later,
+    // in production code, by someone else. It is gone rather than extended a
+    // third time: the gateway's adapter now percent-encodes the URI down to an
+    // allowlist and escapes every ASCII punctuation character in the label, so
+    // nothing here depends on what a person may call a file.
+    for (const path of [
+      "/Users/ada/[draft] notes.pdf",
+      "/Users/ada/a]b.pdf",
+      "/Users/ada/](file:/etc/passwd) [x/report.pdf",
+      "/Users/ada/back\\slash.pdf",
+      "/Users/ada/trailing\\",
+      "/Users/ada/report).pdf",
+      "/Users/ada/`code`.pdf",
+      "/Users/ada/<b>bold</b>.pdf",
+    ])
+      expect(linkablePath(path), path).toBe(true)
   })
 })

@@ -271,6 +271,11 @@ pub struct ImageAttachment {
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LinkedFile {
+    pub path: String,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AttachmentBeginParams {
     pub conversation_id: String,
     pub request_id: String,
@@ -295,6 +300,7 @@ pub struct ConversationMessage {
     pub execution_id: String,
     pub user_text: String,
     pub attachments: Vec<ImageAttachment>,
+    pub files: Vec<LinkedFile>,
     pub status: ConversationMessageStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -310,6 +316,7 @@ pub struct ConversationPending {
     pub execution_id: String,
     pub text: String,
     pub attachments: Vec<ImageAttachment>,
+    pub files: Vec<LinkedFile>,
     pub mode: ConversationPendingMode,
 }
 #[derive(Deserialize, Serialize)]
@@ -382,6 +389,7 @@ pub struct ConversationSendParams {
     pub execution_id: String,
     pub text: String,
     pub attachments: Vec<ImageAttachment>,
+    pub files: Vec<LinkedFile>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -507,6 +515,7 @@ pub enum ConversationErrorCode {
     ConversationCapacity,
     ConversationClosed,
     ConversationConfigurationChanged,
+    ConversationStateUnreadable,
     ConversationStorageUnavailable,
     TemporarilyUnavailable,
     AuditUnavailable,
@@ -534,6 +543,7 @@ impl ConversationErrorCode {
             Self::ConversationCapacity => "conversation_capacity",
             Self::ConversationClosed => "conversation_closed",
             Self::ConversationConfigurationChanged => "conversation_configuration_changed",
+            Self::ConversationStateUnreadable => "conversation_state_unreadable",
             Self::ConversationStorageUnavailable => "conversation_storage_unavailable",
             Self::TemporarilyUnavailable => "temporarily_unavailable",
             Self::AuditUnavailable => "audit_unavailable",

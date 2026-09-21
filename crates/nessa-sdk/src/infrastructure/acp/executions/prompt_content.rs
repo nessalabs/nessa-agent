@@ -56,6 +56,10 @@ const TEXT_BLOCK_BYTES: u64 = 24;
 /// `{"type":"image","mimeType":"","data":""}`, the comma after it, and the
 /// media type, generously.
 const IMAGE_BLOCK_BYTES: u64 = 64;
+/// `{"type":"resource_link","uri":"","name":""}` and the comma after it. The
+/// URI and the name are measured for real, because both come from a path whose
+/// length is the caller's.
+const RESOURCE_LINK_BLOCK_BYTES: u64 = 48;
 
 /// Image blocks ready to send, in the message's attachment order. Each was
 /// read, checked against its reference, and encoded before this existed.
@@ -123,7 +127,16 @@ pub(in crate::infrastructure::acp) fn fits_one_frame(
         .iter()
         .map(|image| IMAGE_BLOCK_BYTES + image.size().div_ceil(3) * 4)
         .sum();
-    let encoded_bytes = REQUEST_ALLOWANCE_BYTES + text + images;
+    let files: u64 = message
+        .files()
+        .iter()
+        .map(|file| {
+            RESOURCE_LINK_BLOCK_BYTES
+                + json_string_bytes(&file_uri(file.path()))
+                + json_string_bytes(&markdown_label(file.name()))
+        })
+        .sum();
+    let encoded_bytes = REQUEST_ALLOWANCE_BYTES + text + images + files;
     let max_bytes = max_frame_bytes as u64;
     if encoded_bytes > max_bytes {
         return Err(AgentError::MessageTooLarge {
@@ -235,8 +248,102 @@ async fn read_one(
     .await
 }
 
+/// What a `file://` URI built here may be written in: the RFC 3986 unreserved
+/// set, the `/` that separates its segments, and the `%` that introduces an
+/// escape. The scheme adds `:`.
+///
+/// This is an allowlist and it is the claim, not a summary of one. Every other
+/// byte of a path — every reserved character, every delimiter, every byte of
+/// every character outside ASCII — is written as `%XX`, so what may appear in
+/// a URI does not depend on what a person may name a file.
+pub(super) const URI_ALPHABET: &str =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/%:";
+
+/// The `file://` URI naming `path`, percent-encoded down to [`URI_ALPHABET`].
+///
+/// Built here rather than through `Url::from_file_path`, which asks the
+/// compiled target what an absolute path looks like: these paths are the
+/// agent's, the agent runs on Unix, and this must answer the same on every
+/// target the crate compiles for.
+///
+/// **Why an allowlist and not a list of characters to escape.** The adapter
+/// interpolates this into `[@label](uri)`, so the URI sits inside a markdown
+/// link's destination. Twice now a rule of the form "escape the characters
+/// that matter" has been written here and been wrong about which ones matter:
+/// first `)`, which ends a destination at the first unmatched one, and then
+/// `\`, which escapes whatever follows it and so can consume the adapter's own
+/// closing parenthesis. Both were found after shipping. An allowlist does not
+/// require knowing markdown's grammar: the unreserved set contains no markdown
+/// metacharacter at all, and nothing outside it survives, so no future reading
+/// of the grammar can turn a path into syntax.
+///
+/// `/` keeps its meaning — it is the segment separator, and the domain has
+/// already refused an empty, `.` or `..` segment, which are the only ones that
+/// would not survive. Nothing else is left as itself.
+fn file_uri(path: &str) -> String {
+    let mut uri = String::with_capacity("file://".len() + path.len());
+    uri.push_str("file://");
+    for byte in path.bytes() {
+        match byte {
+            b'/' | b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                uri.push(char::from(byte));
+            }
+            other => {
+                uri.push('%');
+                uri.push(char::from(b"0123456789ABCDEF"[usize::from(other >> 4)]));
+                uri.push(char::from(b"0123456789ABCDEF"[usize::from(other & 0x0f)]));
+            }
+        }
+    }
+    debug_assert!(
+        uri.chars()
+            .all(|character| URI_ALPHABET.contains(character)),
+        "a URI left its own alphabet: {uri}"
+    );
+    uri
+}
+
+/// `name` as the label of a markdown link: every ASCII punctuation character
+/// backslash-escaped, everything else left as itself.
+///
+/// The label is the other string the adapter interpolates, into `[@label]`, and
+/// it is a display name we choose rather than a path we must preserve. So it is
+/// constrained here instead of constraining what a person may call a file.
+///
+/// CommonMark defines exactly one escape: a backslash before an ASCII
+/// punctuation character stands for that character, and a backslash anywhere
+/// else is a literal backslash. Escaping *all* of ASCII punctuation — the same
+/// set, which [`char::is_ascii_punctuation`] is — makes the label contain no
+/// unescaped ASCII punctuation at all. Every character in it is then either
+/// text that no grammar built out of ASCII can read as syntax, or an escape
+/// that stands for one. There is nothing left to enumerate: this does not need
+/// to know which characters delimit a label, only that whichever they are, they
+/// are ASCII punctuation.
+///
+/// Escaping only the three that matter today — `\`, `[`, `]` — would render
+/// more prettily and would be the third version of the rule that was right
+/// about the characters it thought of. A file named `report.pdf` reaches the
+/// model as `report\.pdf` in the raw prompt and as `report.pdf` once rendered;
+/// that is the price, and it is paid once per attachment.
+fn markdown_label(name: &str) -> String {
+    let mut label = String::with_capacity(name.len());
+    for character in name.chars() {
+        if character.is_ascii_punctuation() {
+            label.push('\\');
+        }
+        label.push(character);
+    }
+    label
+}
+
 /// The content blocks for `message`: its text, then its images in attachment
-/// order. `images` must be what [`read_images`] answered for this message.
+/// order, then a link to each of its files. `images` must be what
+/// [`read_images`] answered for this message.
+///
+/// A file becomes a `resource_link`, which is one of the two block kinds every
+/// ACP agent accepts. It carries no content: the agent puts the link in the
+/// text the model reads, and the model opens the file with its own file tool or
+/// does not. Nothing here waits to find out, and nothing here reads the file.
 ///
 /// # Errors
 ///
@@ -251,14 +358,25 @@ pub(in crate::infrastructure::acp) fn content_blocks(
             "resolved image blocks do not match the message".into(),
         ));
     }
-    let mut blocks = Vec::with_capacity(1 + images.blocks.len());
+    let mut blocks = Vec::with_capacity(1 + images.blocks.len() + message.files().len());
     if let Some(text) = message.text() {
         blocks.push(json!({"type":"text","text":text.as_str()}));
     }
     blocks.extend(images.blocks);
+    for file in message.files() {
+        blocks.push(json!({
+            "type": "resource_link",
+            "uri": file_uri(file.path()),
+            "name": markdown_label(file.name()),
+        }));
+    }
     Ok(blocks)
 }
 
 #[cfg(test)]
 #[path = "../../../../tests/infrastructure/acp/executions/prompt_content.rs"]
 mod tests;
+
+#[cfg(all(test, unix))]
+#[path = "../../../../tests/infrastructure/acp/executions/prompt_link_attacks.rs"]
+mod link_attack_tests;

@@ -1,6 +1,7 @@
 // The release build is a menu bar app with no console window on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod attachments;
 mod composition;
 mod gateway;
 mod host;
@@ -54,6 +55,8 @@ fn main() {
             shortcuts::apply_shortcuts,
             updater::available_update,
             updater::install_update,
+            attachments::choose_attachment_files,
+            attachments::read_attachment_bytes,
         ])
         .setup(|app| {
             // Registered here rather than in the builder chain because there is
@@ -63,6 +66,17 @@ fn main() {
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
+
+            // Registered here for the same reason, and with the same shape: a
+            // phone hands an app a document through its own share sheet rather
+            // than a path somebody browsed to, so attaching a file by path is a
+            // desktop question. Registered before the bundle is assembled,
+            // because the picker composition builds asks this plugin to put the
+            // dialog on screen. The webview is granted nothing by this — it calls
+            // `choose_attachment_files`, which is Nessa's own command, and the
+            // host calls the plugin.
+            #[cfg(desktop)]
+            app.handle().plugin(tauri_plugin_dialog::init())?;
 
             // The composition root. Every outside thing the host talks to is
             // built here, once, and handed down from here: the settings file,

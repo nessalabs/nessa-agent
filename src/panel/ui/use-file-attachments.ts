@@ -1,17 +1,22 @@
 import * as React from "react"
 import {
+  declaredMediaType,
+  isImageFile,
+  linkablePath,
+  linkedFile,
   MAX_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENTS,
   type FileAttachment,
   type useConversation,
 } from "../../conversation"
+import { chooseAttachmentFiles, readAttachmentBytes, type ChosenFile } from "../../host"
 import { readDroppedImage } from "../adapters/dropped-image"
 import {
   MAX_SESSION_ATTACHMENT_BYTES,
   type AttachmentResources,
 } from "../adapters/attachment-resources"
-import type { AttachmentRefusal } from "../application/attachment-notice"
+import { pickerRefusal, type AttachmentRefusal } from "../application/attachment-notice"
 
 const MIB = 1024 * 1024
 
@@ -131,13 +136,32 @@ export function useFileAttachments(
     setRefused((current) => (current?.conversationId === conversationId ? null : current))
   /** Said only to the conversation it was said about. */
   const refusal = refused?.conversationId === chat.active.id ? refused.refusal : null
-  function addFiles(selected: readonly File[], targetId = chat.active.id) {
-    if (!selected.length) return
+  /**
+   * Put files on a draft, whatever route they came in by.
+   *
+   * `held` are files this window has the bytes of and `linked` are files it
+   * knows only the location of, and the split between them is the file's type
+   * and never the gesture: an image is uploaded and everything else is pointed
+   * at by path. Both lists are attached in one call, so a selection lands whole
+   * or not at all.
+   *
+   * Which bound applies to which is the whole reason they are told apart. The
+   * per-file, per-draft and per-window byte budgets all exist because this
+   * window would otherwise be holding those bytes, so they are counted over
+   * `held` alone — a 700 MB video that travels as a path is an ordinary
+   * attachment. How many files one draft shows at once is about the draft, and
+   * counts both.
+   */
+  function attach(
+    held: readonly File[],
+    linked: readonly ChosenFile[],
+    targetId: string,
+  ) {
+    if (!held.length && !linked.length) return
     if (busyRef.current) {
       refuse({ reason: "reading-files" }, targetId)
       return
     }
-    const conversationId = targetId
     const target = conversationsRef.current.find(
       (conversation) => conversation.id === targetId,
     )
@@ -145,27 +169,31 @@ export function useFileAttachments(
     const targetFiles = target.draft.filter((part) => part.type === "file")
     // Three bounds, told apart, because the advice for each is different and
     // one of them has no advice at all: a file over the per-file bound is
-    // refused by every route into this composer.
-    const tooLarge = selected.filter((file) => file.size > MAX_ATTACHMENT_BYTES)
+    // refused by every route that carries bytes.
+    const tooLarge = held.filter((file) => file.size > MAX_ATTACHMENT_BYTES)
     if (tooLarge.length > 0) {
       refuse(
-        { reason: "file-too-large", names: tooLarge.map((file) => file.name) },
+        {
+          reason: "file-too-large",
+          files: tooLarge.map((file) => ({ name: file.name, type: file.type })),
+        },
         targetId,
       )
       return
     }
-    if (targetFiles.length + selected.length > MAX_DRAFT_ATTACHMENTS) {
+    if (targetFiles.length + held.length + linked.length > MAX_DRAFT_ATTACHMENTS) {
       refuse({ reason: "too-many-files" }, targetId)
       return
     }
+    const carrying = targetFiles.filter((file) => !linkedFile(file))
     if (
-      [...targetFiles, ...selected].reduce((total, file) => total + file.size, 0) >
+      [...carrying, ...held].reduce((total, file) => total + file.size, 0) >
       MAX_DRAFT_ATTACHMENT_BYTES
     ) {
       refuse({ reason: "draft-too-large" }, targetId)
       return
     }
-    if (!resources.canAdd(selected.reduce((total, file) => total + file.size, 0))) {
+    if (!resources.canAdd(held.reduce((total, file) => total + file.size, 0))) {
       refuse(
         {
           reason: "window-budget",
@@ -181,10 +209,109 @@ export function useFileAttachments(
     answerRefusal(targetId)
     try {
       // Object URLs are ready synchronously; no FileReader or duplicate thumbnail URLs.
-      chat.attachFiles(resources.add(selected), conversationId)
+      chat.attachFiles([...resources.add(held), ...resources.addChosen(linked)], targetId)
     } catch {
       refuse({ reason: "unreadable-files" }, targetId)
     }
+  }
+
+  function addFiles(selected: readonly File[], targetId = chat.active.id) {
+    attach(selected, [], targetId)
+  }
+
+  /**
+   * Ask for files to attach, through the host's own picker where there is one.
+   *
+   * The picker is the only thing that can say where a file is, and that is what
+   * makes a file that is not an image sendable at all. Its answer is a list of
+   * paths, so the images among them still have to be read before they can be
+   * uploaded — the type decides the route, and a picked image is as much an
+   * image as a dropped one.
+   *
+   * Without a host — a browser, `pnpm dev` — there is no picker, and the page's
+   * own file input is used instead. That reads bytes and never says where they
+   * came from, so images work there and nothing else can be sent.
+   */
+  async function chooseFiles() {
+    const targetId = chat.active.id
+    let chosen
+    try {
+      chosen = await chooseAttachmentFiles()
+    } catch (error) {
+      refuse(pickerRefusal(error), targetId)
+      return
+    }
+    if (chosen === null) {
+      inputRef.current?.click()
+      return
+    }
+    await addChosenFiles(chosen, targetId)
+  }
+
+  /**
+   * Attach what the picker chose: read the images, point at everything else.
+   *
+   * Reading is why this waits. A selection is attached whole or not at all, so
+   * one image that will not read turns the whole selection away with its
+   * reason rather than leaving a draft short of what was picked.
+   */
+  async function addChosenFiles(
+    chosen: readonly ChosenFile[],
+    targetId = chat.active.id,
+  ) {
+    if (!chosen.length) return
+    if (busyRef.current) {
+      refuse({ reason: "reading-files" }, targetId)
+      return
+    }
+    // The platform's own answer first, the extension table only as the
+    // fallback — the same call, with the same inputs, that a dropped or pasted
+    // file goes through. Classifying a picked file from the table alone was how
+    // `.ico`, `.jpe`, `.svgz`, `.jp2`, `.xbm`, `.tga` and `.dib` came to upload
+    // when dropped and travel as a path when picked: one file, two routes,
+    // which is the one thing this rule forbids.
+    const image = (file: ChosenFile) =>
+      isImageFile(declaredMediaType(file.name, file.mimeType))
+    const images = chosen.filter(image)
+    const linked = chosen.filter((file) => !image(file))
+    // A path the gateway would refuse is refused here instead, while the file
+    // can still be swapped, rather than at send.
+    const unusable = linked.find((file) => !linkablePath(file.path))
+    if (unusable) {
+      refuse({ reason: "file-not-linkable", name: unusable.name }, targetId)
+      return
+    }
+    if (!images.length) {
+      attach([], linked, targetId)
+      return
+    }
+    busyRef.current = true
+    setReading(true)
+    let held: File[]
+    try {
+      held = await Promise.all(
+        images.map(async (image) => {
+          // The ticket, never the path: the host holds what it minted one for,
+          // so this page cannot ask it to open a file nobody chose.
+          const bytes = await readAttachmentBytes(image.ticket)
+          if (bytes === null) throw new Error("no native host to read a file with")
+          return new File([bytes], image.name, {
+            type: declaredMediaType(image.name, image.mimeType),
+          })
+        }),
+      )
+    } catch (error) {
+      busyRef.current = false
+      if (mounted.current) {
+        setReading(false)
+        refuse(pickerRefusal(error), targetId)
+      }
+      return
+    }
+    busyRef.current = false
+    if (!mounted.current) return
+    setReading(false)
+    attach(held, linked, targetId)
   }
 
   async function addImageUrl(url: string) {
@@ -237,7 +364,8 @@ export function useFileAttachments(
     clearRefusal: () => setRefused(null),
     addFiles,
     addImageUrl,
-    chooseFiles: () => inputRef.current?.click(),
+    chooseFiles: () => void chooseFiles(),
+    addChosenFiles,
     viewed: viewed?.conversationId === chat.active.id ? viewed.file : null,
     open: (file: FileAttachment) => setViewed({ conversationId: chat.active.id, file }),
     close: () => setViewed(null),

@@ -238,6 +238,105 @@ export async function installUpdate(): Promise<void> {
   await invoke("install_update")
 }
 
+/** One file the person chose in the host's picker. Matches `attachments::ChosenFile`. */
+export interface ChosenFile {
+  /** The absolute path, as the operating system spells it. */
+  path: string
+  /** The final component of that path. */
+  name: string
+  /** The file's length in bytes. */
+  size: number
+  /**
+   * What the operating system says this file is: lowercase, no parameters, in
+   * the same shape a browser puts in `File.type`.
+   *
+   * It goes exactly where a dropped or pasted file's `type` goes, which is the
+   * point of it being here — what becomes of an attachment is decided by its
+   * type and never by the gesture that attached it, so a file picked through
+   * the host and the same file dropped on the panel must take the same route.
+   * macOS answers from the path's Uniform Type Identifier and Linux from
+   * shared-mime-info, so a format this app's extension table has never heard of
+   * (`.ico`, `.svgz`, `.jp2`, `.xbm`) is still recognised as an image.
+   *
+   * Empty where the platform has no answer — Windows always, and macOS for a
+   * type it knows and has no MIME name for. The host never guesses one from the
+   * extension: that is the caller's fallback, and it must not also be the
+   * host's, or the two could disagree.
+   */
+  mimeType: string
+  /**
+   * The one-shot ticket {@link readAttachmentBytes} reads this file with.
+   *
+   * Opaque, unguessable, and good exactly once. It is what authorises a read —
+   * `path` is not, and has not been since the host stopped opening whatever
+   * path the page named. Hand it back unchanged and do not keep it after it has
+   * been used: a second presentation rejects with `ticket-already-used`.
+   */
+  ticket: string
+}
+
+/**
+ * Ask the host for the paths of files to attach.
+ *
+ * `null` outside Tauri, where there is no picker and no filesystem to name: the
+ * caller falls back to the browser's own file input, which can read a file's
+ * bytes but never learn where it came from.
+ *
+ * An empty array is a cancellation — the picker opened and nothing was chosen —
+ * and is not a failure. A file the host cannot carry faithfully rejects with
+ * `attachments::FileNotAttached` rather than arriving renamed or quietly
+ * missing from the array: a path that is not valid UTF-8 (`path-not-text`),
+ * something that is not an ordinary file such as a directory or a named pipe
+ * (`not-a-regular-file`), or a disk that never answered (`filesystem-stalled`).
+ * One unusable file refuses the whole selection.
+ *
+ * Every file comes back with a {@link ChosenFile.ticket}. Keep it: it is the
+ * only way to read that file's bytes, and it is good once.
+ */
+export async function chooseAttachmentFiles(): Promise<ChosenFile[] | null> {
+  if (!inTauri) return null
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<ChosenFile[]>("choose_attachment_files")
+}
+
+/**
+ * Read the bytes of a file the picker already handed back.
+ *
+ * What happens to an attached file is decided by its type, not by how it was
+ * attached: an image is uploaded and normalised wherever it came from, so one
+ * chosen through the host picker still needs its bytes, and the filesystem is
+ * the host's to read.
+ *
+ * **Takes the `ticket` from {@link ChosenFile}, never a path.** The host holds
+ * the paths it minted tickets for and resolves the ticket itself, so this page
+ * cannot name a file the host did not already agree to remember. A ticket is
+ * good exactly once: presenting it again rejects with `ticket-already-used`,
+ * one the host has no record of rejects with `ticket-unknown`, and one left
+ * unread for ten minutes rejects with `ticket-expired`. All three are refusals
+ * about the ticket and say nothing about any file — picking the file again is
+ * the way out of the last two.
+ *
+ * `null` outside Tauri, where there is nothing to read a file with — the caller
+ * there already has the bytes from the browser's own file input.
+ *
+ * This is deliberately a second read of that file, taken however long after the
+ * choice the person spent composing. It may have been moved, replaced,
+ * truncated or deleted in between, so the rejection is a typed
+ * `attachments::FileNotAttached` — `file-unreadable` for a file that will not
+ * read, `file-too-large` for one past what the panel will hold,
+ * `not-a-regular-file` for a path that has become a directory or a pipe, and
+ * `filesystem-stalled` for a disk that stopped answering — rather than an
+ * assumption that a file once chosen still opens.
+ *
+ * An `ArrayBuffer` rather than an array of numbers: the host answers with
+ * `tauri::ipc::Response`, which crosses as binary.
+ */
+export async function readAttachmentBytes(ticket: string): Promise<ArrayBuffer | null> {
+  if (!inTauri) return null
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<ArrayBuffer>("read_attachment_bytes", { ticket })
+}
+
 /** Why a clicked link did nothing. Matches `host::NotOpened`. */
 export type NotOpenedReason = "refused" | "opener-failed"
 

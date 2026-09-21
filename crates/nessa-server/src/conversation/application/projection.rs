@@ -1,5 +1,5 @@
 use super::view::{
-    ConversationAttachment, ConversationCapabilities, ConversationMessage,
+    ConversationAttachment, ConversationCapabilities, ConversationLinkedFile, ConversationMessage,
     ConversationMessageStatus, ConversationPart, ConversationPending, ConversationPendingMode,
     ConversationPermission, ConversationPermissionOption, ConversationTool, ConversationView,
 };
@@ -112,6 +112,7 @@ impl Projection {
             execution_id: id.into(),
             user_text: String::new(),
             attachments: Vec::new(),
+            files: Vec::new(),
             steering_target: None,
             status: ConversationMessageStatus::Running,
             error: None,
@@ -122,6 +123,7 @@ impl Projection {
         let text = input.text_str();
         let attachments: Vec<ConversationAttachment> =
             input.images().iter().map(Into::into).collect();
+        let files: Vec<ConversationLinkedFile> = input.files().iter().map(Into::into).collect();
         let existed = self
             .view
             .messages
@@ -131,6 +133,7 @@ impl Projection {
         let message = &mut self.view.messages[index];
         message.user_text = clipped(text, MAX_TEXT);
         message.attachments = attachments.clone();
+        message.files = files.clone();
         if !existed {
             message.status = ConversationMessageStatus::Queued;
         }
@@ -146,6 +149,7 @@ impl Projection {
                     execution_id: id.into(),
                     text: clipped(text, MAX_TEXT),
                     attachments,
+                    files,
                     mode,
                 });
             } else {
@@ -514,6 +518,13 @@ impl Projection {
             .request
             .user_message
             .images()
+            .iter()
+            .map(Into::into)
+            .collect();
+        self.view.messages[index].files = record
+            .request
+            .user_message
+            .files()
             .iter()
             .map(Into::into)
             .collect();

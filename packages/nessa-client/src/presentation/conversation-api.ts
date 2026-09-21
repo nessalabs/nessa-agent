@@ -12,8 +12,12 @@ import type {
   ConversationMutationResult,
   ConversationReorderResult,
   ImageAttachment,
+  LinkedFile,
 } from "../generated/product.js"
-import { imageAttachmentsProblem } from "../protocol/attachment-validate.js"
+import {
+  imageAttachmentsProblem,
+  linkedFilesProblem,
+} from "../protocol/attachment-validate.js"
 import {
   conversationId,
   conversationView,
@@ -55,13 +59,20 @@ export type ConversationApi = {
   /** Read current output, queue, tools, and complete actionable permission choices. */
   read: (conversationId: string) => Promise<ConversationView>
   /**
-   * Queue a message for this conversation: text, images, or both.
-   * @param text - At most 8 KiB UTF-8. May be blank only when `attachments` is not empty.
+   * Queue a message for this conversation: text, images, linked files, or any
+   * combination of them.
+   * @param text - At most 8 KiB UTF-8. May be blank only when the message
+   * carries an image or points at a file.
    * @param attachments - The references `client.attachments` returned for
    * images staged into this conversation, in order: at most 10, and 10 MiB
-   * together. Omit it, or pass `[]`, for a message of text alone. A retry
-   * re-sends the same list, so the same execution ID always names the same
-   * message.
+   * together. Omit it, or pass `[]`, for a message that carries no image. A
+   * retry re-sends the same list, so the same execution ID always names the
+   * same message.
+   * @param files - Absolute paths on the machine the gateway runs on, in order,
+   * at most 10. Nothing is uploaded for these and nothing is read here: the
+   * message names where each file is, and the agent opens it itself if it
+   * decides to, which under the gateway's permission policy asks the reader
+   * first. A path means nothing to a gateway running anywhere else.
    * @param options - Optional IDs support optimistic UI correlation.
    * @throws TypeError before anything is sent when the message breaks these bounds.
    */
@@ -69,6 +80,7 @@ export type ConversationApi = {
     conversationId: string,
     text: string,
     attachments?: readonly ImageAttachment[],
+    files?: readonly LinkedFile[],
     options?: ConversationSendOptions,
   ) => Promise<ConversationSubmission>
   /** Submit steering input using the agent's supported steering behavior. Takes the same message as `send`, under the same bounds. */
@@ -76,6 +88,7 @@ export type ConversationApi = {
     conversationId: string,
     text: string,
     attachments?: readonly ImageAttachment[],
+    files?: readonly LinkedFile[],
     options?: ConversationSendOptions,
   ) => Promise<ConversationSubmission>
   /** Remove the identified waiting input before provider dispatch. */
@@ -135,7 +148,11 @@ export function createConversationApi(
     method: string,
     params: { conversationId: string; requestId: string; executionId?: string } & Record<
       string,
-      string | readonly string[] | readonly ImageAttachment[] | undefined
+      | string
+      | readonly string[]
+      | readonly ImageAttachment[]
+      | readonly LinkedFile[]
+      | undefined
     >,
     validate: (value: unknown) => T,
     retryable = true,
@@ -175,6 +192,7 @@ export function createConversationApi(
     conversationId: string,
     text: string,
     attachments: readonly ImageAttachment[] = [],
+    linked: readonly LinkedFile[] = [],
     options: ConversationSendOptions = {},
   ) {
     validConversationId(conversationId)
@@ -182,8 +200,12 @@ export function createConversationApi(
     const requestId = boundedText(options.requestId ?? newId(), "Request ID", 256)
     const problem = imageAttachmentsProblem(attachments)
     if (problem) throw new TypeError(`Invalid message attachments: ${problem}`)
-    // Text may be blank only beside an image: the message has to say something.
-    if (attachments.length === 0) boundedText(text, "Message", 8192)
+    const filesProblem = linkedFilesProblem(linked)
+    if (filesProblem) throw new TypeError(`Invalid message files: ${filesProblem}`)
+    // Text may be blank only beside an image or a linked file: the message has
+    // to say something.
+    if (attachments.length === 0 && linked.length === 0)
+      boundedText(text, "Message", 8192)
     else if (typeof text !== "string" || utf8.encode(text).byteLength > 8192)
       throw new TypeError("Message must contain at most 8192 UTF-8 bytes")
     // Copied and frozen with the command, so editing the caller's list between a
@@ -193,9 +215,10 @@ export function createConversationApi(
         Object.freeze({ digest, mimeType, size }),
       ),
     )
+    const files = Object.freeze(linked.map(({ path }) => Object.freeze({ path })))
     return mutate(
       method,
-      { conversationId, executionId, requestId, text, attachments: images },
+      { conversationId, executionId, requestId, text, attachments: images, files },
       (value) => ({
         ...conversationReceipt(value, executionId),
         requestId,
@@ -251,10 +274,10 @@ export function createConversationApi(
         ),
         id,
       ),
-    send: (id, text, attachments, options) =>
-      submit(ProductMethod.ConversationSend, id, text, attachments, options),
-    steer: (id, text, attachments, options) =>
-      submit(ProductMethod.ConversationSteer, id, text, attachments, options),
+    send: (id, text, attachments, files, options) =>
+      submit(ProductMethod.ConversationSend, id, text, attachments, files, options),
+    steer: (id, text, attachments, files, options) =>
+      submit(ProductMethod.ConversationSteer, id, text, attachments, files, options),
     remove: (id, executionId, options) =>
       action(ProductMethod.ConversationRemove, id, { executionId }, options),
     reorder: async (id, executionIds, options = {}) => {

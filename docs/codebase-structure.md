@@ -299,6 +299,23 @@ A message refers to images by digest, never by bytes: the service asks its
 accepts the message, and `close` releases what the conversation holds in the
 closer's name, reporting a failed release without hiding a failed agent close.
 The [attachments context](#attachments) implements that port.
+A message may also point at files on this machine by path, which is how anything
+that is not an image travels: nothing is uploaded, so there is no hold to check
+and no ownership to verify, and the whole of what the gateway checks is that the
+path means the file that was chosen, through the SDK's `LinkedFile` — absolute,
+no control character, no component that a URI would drop or resolve away. It
+checks nothing about the markdown link the agent is handed the path inside;
+`prompt_content.rs` owns that, by encoding the two strings it interpolates
+rather than by naming characters a path may not hold. What it records instead is who
+pointed the agent there — `ConversationFileLinkAudit` and its
+`DurableConversationFileLinkAudit` adapter, one record per conversation and
+submission, committed before the message is admitted and written only for a
+submission the agent has not already seen — a repeat is the SDK's to settle, and
+recording one would let a conflicting retry write evidence naming paths it never
+delivered. The record is evidence of the naming, which is intent: not a read,
+not a delivery, not even an admission. A sink that cannot take it refuses the
+send, and a sink already holding different paths for that submission refuses it
+too. See [ADR 0013](adr/done/0013-files-by-path-not-by-payload.md).
 The floating panel uses injected conversation effects and NessaClient; neither
 owns SDK scheduling. See [gateway chat](guides/gateway-chat.md).
 
@@ -632,6 +649,54 @@ for it, and `ImageNormalizer::offers_images` says so before a ticket is issued:
 an `image/*` `attachment.begin` on such a gateway is refused with
 `image_input_unsupported` rather than answered with a ticket for bytes no
 message could name.
+`src-tauri/src/attachments/` is the desktop half: the file a person picks, as
+a path rather than as bytes. `FilePicker` is the operating system's own dialog,
+`ChosenFiles` is the filesystem — a chosen file's kind, length and bytes —
+`ContentTypes` is the platform's own type database, and `AttachmentTickets` is
+the desk the one-shot tickets are minted at and spent. Four ports, because they
+are four outside things: a dialog needs a window server, a disk answers about a
+path, a type database is Launch Services or shared-mime-info answering about a
+format, and a ticket needs the operating system's randomness to mint and its
+clock to expire. The length and the contents stay together because they are the
+same disk answering at the same moment, and only one double can stage a file
+that turns out longer than it claimed. The ticket desk is a port for the same
+reason and one more: it is where the rule that a page cannot name a path lives,
+so a substitute has to be able to stage the two refusals no real desk can be
+made to produce on demand — a ticket presented twice, and one presented too
+late. All four are built in `composition.rs` and injected.
+
+The content type is what keeps the product rule honest. A dropped file is typed
+by the platform through the browser; a picked one had nothing to type it, so it
+was classified from a 24-entry extension table and every format the platform
+knew and the table lacked — `.ico`, `.jpe`, `.svgz`, `.jp2`, `.xbm`, `.tga`,
+`.dib` — uploaded when dropped and travelled as a path when picked. Now both
+routes ask the platform first and fall back to the table, which is one call with
+one set of inputs. macOS is untested and Linux has never been run; that is
+stated in the module header too.
+
+Nothing that is not a regular file is opened, and both the look and the read
+carry deadlines on plain threads rather than the blocking pool, so a FIFO or a
+stalled mount costs one thread instead of wedging the panel for the session. A
+read is authorised by a one-shot ticket the picker minted, not by a path the
+page names.
+`attachment` and `attachment_bytes` are the whole rule and are pure: an absolute
+path with its final component and its length, or bytes within the bound, or a
+typed `NotAttached` refusal. A path that is not valid UTF-8 is refused rather
+than lossily renamed, a file past `LARGEST_ATTACHMENT_BYTES` is refused before
+it is allocated, and one unusable file refuses the whole selection instead of
+shortening it silently; cancelling is an empty answer, not a failure. The page
+calls `choose_attachment_files` and, with the ticket it answered with,
+`read_attachment_bytes` through `src/host/window.ts`, and the host calls the dialog plugin, so
+`src-tauri/capabilities/` stays as it was — the same arrangement as
+`install_update`.
+
+The reading exists because the file's type decides its route and the gesture
+never does. An image is uploaded and normalised however it was attached, so the
+images among a picker's answers are read back before they are staged, while
+everything else travels as the path alone. `src/conversation/model/attachments.ts`
+owns that decision in `declaredMediaType`, which for a file nobody opened has
+only the name to go on.
+
 Holds live until their conversation closes; what expires on its own is an unused
 ticket. Tests under `tests/attachments/` split domain rules, the service over
 doubles, the real store on a real filesystem, audit records, the adapters, the

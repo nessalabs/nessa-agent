@@ -1,4 +1,4 @@
-import { bounds, type ImageAttachment } from "../generated/product.js"
+import { bounds, type ImageAttachment, type LinkedFile } from "../generated/product.js"
 
 /**
  * Bounds the protocol schema puts on these values, named here for what they
@@ -14,6 +14,10 @@ export const MAX_MESSAGE_IMAGES = bounds.maxMessageImages
 export const MAX_MESSAGE_IMAGE_BYTES = bounds.maxMessageImageBytes
 /** `AttachmentBeginParams.size` maximum: what the upload path takes, whatever it becomes. */
 export const MAX_UPLOAD_BYTES = bounds.maxUploadBytes
+/** `files` maxItems on send, steer, messages, and pending input. */
+export const MAX_MESSAGE_FILES = bounds.maxMessageFiles
+/** `LinkedFile.path` maximum, in UTF-8 bytes. */
+export const MAX_FILE_PATH_BYTES = bounds.maxFilePathBytes
 
 /**
  * The four encodings a message's image may be in — `ImageAttachment.mimeType`.
@@ -124,6 +128,62 @@ export function imageAttachments(value: unknown, where: string): ImageAttachment
   const problem = imageAttachmentsProblem(value)
   if (problem) throw new Error(`Invalid conversation ${where}: ${problem}`)
   return value as ImageAttachment[]
+}
+
+/** The published shape of a path, compiled once from the schema. */
+const filePathPattern = new RegExp(bounds.filePathPattern, "u")
+
+/**
+ * Why a value is not one file a message may point at, or undefined when it is.
+ *
+ * A linked file is a path and nothing else: no digest, no media type, and no
+ * size, because nothing is uploaded for it and the gateway never opens it. What
+ * can be checked here is the published shape of the path — absolute, no control
+ * character, no square bracket, because a prompt carries it as a link and a
+ * bracket could close that link and open another. The gateway applies the rest
+ * of the rule, which is the part a pattern cannot state.
+ */
+export function linkedFileProblem(item: unknown): string | undefined {
+  if (!item || typeof item !== "object" || Array.isArray(item))
+    return "a linked file must be an object"
+  const file = item as Record<string, unknown>
+  if (Object.keys(file).some((key) => key !== "path"))
+    return "a linked file has unknown fields"
+  if (typeof file.path !== "string") return "a linked file must name a path"
+  if (new TextEncoder().encode(file.path).length > MAX_FILE_PATH_BYTES)
+    return `a path is at most ${MAX_FILE_PATH_BYTES} bytes`
+  // One rule, compiled from the published pattern rather than restated: every
+  // component below the root is a name, with no control character in it (C0 or
+  // C1), no square bracket, not empty, and not `.` or `..`. Restating it here
+  // is how the client came to accept `\u0085` that the gateway refused — and a
+  // message refused as `invalid_request` shows no sentence of its own, on the
+  // grounds that the client already said something, so that gap was silent.
+  if (!filePathPattern.test(file.path))
+    return "every part of a path must be a name: absolute, no control character, no square bracket, and not . or .."
+  return undefined
+}
+
+/**
+ * Why a list is not a message's files, or undefined when it is. One rule for
+ * both directions, as for images: the client refuses to send what the gateway
+ * would refuse, and refuses to believe a reply the gateway could not have built.
+ */
+export function linkedFilesProblem(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return "files must be a list"
+  if (value.length > MAX_MESSAGE_FILES)
+    return `a message points at at most ${MAX_MESSAGE_FILES} files`
+  for (const item of value as unknown[]) {
+    const problem = linkedFileProblem(item)
+    if (problem) return problem
+  }
+  return undefined
+}
+
+/** A reply's linked files, or an error. */
+export function linkedFiles(value: unknown, where: string): LinkedFile[] {
+  const problem = linkedFilesProblem(value)
+  if (problem) throw new Error(`Invalid conversation ${where}: ${problem}`)
+  return value as LinkedFile[]
 }
 
 /**

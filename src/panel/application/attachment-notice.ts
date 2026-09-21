@@ -1,4 +1,6 @@
 import {
+  declaredMediaType,
+  isImageFile,
   MAX_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENT_BYTES,
   MAX_DRAFT_ATTACHMENTS,
@@ -14,6 +16,11 @@ export type NoticedFile = {
   id: string
   name: string
   image: boolean
+  /**
+   * Whether the message can say where this file is. A file that is not an
+   * image goes as a path, so this is what decides whether it can go at all.
+   */
+  linked: boolean
   upload:
     | { status: "not-started" | "uploading" | "stored" }
     | {
@@ -46,8 +53,21 @@ export type AttachmentRefusal =
   | { reason: "reading-folder" }
   | { reason: "sending-while-reading" }
   | { reason: "too-many-files" }
-  /** What the files over the per-file bound were called, in the order dropped. */
-  | { reason: "file-too-large"; names: readonly string[] }
+  /**
+   * The files over the per-file bound, in the order dropped, each with the
+   * platform's own type beside its name.
+   *
+   * The type is carried rather than worked out from the name here, because
+   * working it out is what made this notice disagree with the route it was
+   * advising: a `.jp2` classified from the extension table alone is not an
+   * image, so the notice offered the picker — and the picker, which asks the
+   * platform, made it an image and refused it at the same bound. Two clicks,
+   * forever. Whatever decides the route has to see what the route will see.
+   */
+  | {
+      reason: "file-too-large"
+      files: readonly { name: string; type: string }[]
+    }
   | { reason: "draft-too-large" }
   | { reason: "window-budget"; maxMiB: number; draftsHoldFiles: boolean }
   | { reason: "empty-folder" }
@@ -55,6 +75,33 @@ export type AttachmentRefusal =
   | { reason: "unreadable-folder" }
   | { reason: "unreadable-files" }
   | { reason: "unreadable-image-url" }
+  /** The host's picker did not open, so nothing was chosen. */
+  | { reason: "picker-unavailable" }
+  /**
+   * A chosen file's path is not text Nessa can pass on, so the message could
+   * not say where it is. `name` is a rendering of it good enough to point at
+   * the file and never good enough to be used as a path; null when even that
+   * could not be had.
+   */
+  | { reason: "file-not-nameable"; name: string | null }
+  /** A chosen file could not be read enough to describe it. */
+  | { reason: "file-unreadable"; name: string | null }
+  /**
+   * A chosen file is somewhere the agent could not be pointed at. Refused here,
+   * while the file can still be swapped, rather than at send.
+   */
+  | { reason: "file-not-linkable"; name: string }
+  /** What was picked is not a file: a directory, a package, a pipe, a device. */
+  | { reason: "file-not-a-file"; name: string | null }
+  /** The filesystem did not answer about it in time. */
+  | { reason: "file-unresponsive"; name: string | null }
+  /**
+   * The host no longer holds a read for this file. Its own reason rather than
+   * one of the two above, because nothing is wrong with the file: the ticket
+   * that authorised reading it is used, unknown, expired, or was evicted, and
+   * picking the file again mints a new one.
+   */
+  | { reason: "file-must-be-chosen-again" }
 
 /**
  * What the notification offers to do, where there is something worth doing.
@@ -96,13 +143,23 @@ export function windowBudgetMessage(maxMiB: number, draftsHoldFiles: boolean): s
 }
 
 /** "photo.png is" for one, "3 files are" for several. */
-function subject(names: readonly string[]): string {
-  const [only] = names
-  return names.length === 1 && only ? `${only} is` : `${names.length} files are`
+function subject(files: readonly { name: string }[]): string {
+  const [only] = files
+  return files.length === 1 && only ? `${only.name} is` : `${files.length} files are`
 }
 
-/** The notification for one refusal. Every refusal has one; none is left unsaid. */
-export function refusalNotice(refusal: AttachmentRefusal): AttachmentNotice {
+/**
+ * The notification for one refusal. Every refusal has one; none is left unsaid.
+ *
+ * `canChoosePaths` has no default on purpose. It used to default to `true` —
+ * the desktop's answer — so a caller that had not been told simply told a
+ * browser to press `+`, which is the loop this argument exists to close. An
+ * omitted argument is a type error instead.
+ */
+export function refusalNotice(
+  refusal: AttachmentRefusal,
+  canChoosePaths: boolean,
+): AttachmentNotice {
   const say = (
     title: string,
     description: string,
@@ -128,13 +185,33 @@ export function refusalNotice(refusal: AttachmentRefusal): AttachmentNotice {
         "Too many files",
         `A draft holds up to ${MAX_DRAFT_ATTACHMENTS} files at a time. Attach fewer, or send what is here first.`,
       )
-    // No action, and deliberately none. The + picker holds a file to this same
-    // bound, so sending somebody there is sending them to be refused again.
-    case "file-too-large":
+    // The bound is about carrying bytes, so the way out is a route that does
+    // not carry them — and there is one for anything that is not an image,
+    // because the picker learns where a file is and the message names that
+    // instead. For an image there is no way out: it has to be uploaded, and
+    // the picker holds it to this same bound, so sending somebody there would
+    // be sending them to be refused again.
+    case "file-too-large": {
+      const overSized =
+        refusal.files.length === 1 ? "File is too large" : "Files are too large"
+      // Two conditions, and both have been wrong once. There has to be a
+      // picker to send somebody to — a browser's file input hands back another
+      // file with no location and the same refusal returns — and the file has
+      // to be one the picker would route differently, judged the way the
+      // picker judges it: the platform's type first, the table only after.
+      const anyLinkable =
+        canChoosePaths &&
+        refusal.files.some(
+          (file) => !isImageFile(declaredMediaType(file.name, file.type)),
+        )
       return say(
-        refusal.names.length === 1 ? "File is too large" : "Files are too large",
-        `${subject(refusal.names)} over ${MAX_ATTACHMENT_BYTES / MIB} MiB, the most one attachment can weigh.`,
+        overSized,
+        anyLinkable
+          ? `${subject(refusal.files)} over ${MAX_ATTACHMENT_BYTES / MIB} MiB, which is as much as a drop can carry. Choose it with + instead and Nessa will tell the agent where it is, whatever it weighs.`
+          : `${subject(refusal.files)} over ${MAX_ATTACHMENT_BYTES / MIB} MiB, the most one image can weigh.`,
+        anyLinkable ? { kind: "choose-files" } : null,
       )
+    }
     case "draft-too-large":
       return say(
         "Draft is too large",
@@ -165,6 +242,123 @@ export function refusalNotice(refusal: AttachmentRefusal): AttachmentNotice {
         "Image could not be loaded",
         "Save the image first, then drop the file here.",
       )
+    case "picker-unavailable":
+      return say("The file picker did not open", "Try choosing files again.", {
+        kind: "choose-files",
+      })
+    // Said rather than skipped. A selection quietly one file short is the
+    // failure this whole feature is built to avoid.
+    case "file-not-nameable":
+      return say(
+        "File could not be attached",
+        `${named(refusal.name)} is named in characters Nessa cannot pass on to the agent. Rename it, then choose it again.`,
+        { kind: "choose-files" },
+      )
+    case "file-unreadable":
+      return say(
+        "File could not be attached",
+        `${named(refusal.name)} could not be read just now. Choose it again.`,
+        { kind: "choose-files" },
+      )
+    case "file-not-linkable":
+      return say(
+        "File can't be sent from there",
+        `"${refusal.name}" is in a folder Nessa cannot describe to the agent — a square bracket, or a name that is only dots. Move it somewhere else and choose it again.`,
+        { kind: "choose-files" },
+      )
+    // A macOS package is the ordinary way to meet this: `.key`, `.app` and
+    // `.rtfd` are directories the picker shows as single files.
+    case "file-not-a-file":
+      return say(
+        "That is not a file",
+        `${named(refusal.name)} is a folder or a package rather than a file. Choose a file inside it.`,
+        { kind: "choose-files" },
+      )
+    case "file-unresponsive":
+      return say(
+        "File did not respond",
+        `${named(refusal.name)} is somewhere that did not answer — a disconnected drive or a network share. Reconnect it, or choose a file somewhere else.`,
+        { kind: "choose-files" },
+      )
+    case "file-must-be-chosen-again":
+      return say(
+        "Choose the file again",
+        "Nessa no longer has permission to read that file. Choosing it again is all it needs.",
+        { kind: "choose-files" },
+      )
+  }
+}
+
+/** How to refer to a file when its own name may be unusable or absent. */
+function named(name: string | null): string {
+  return name === null ? "One of the files chosen" : `"${name}"`
+}
+
+/**
+ * What the host said when it would not hand over a chosen file, in this
+ * composer's own words.
+ *
+ * The host answers with a typed reason, both for choosing a file and for
+ * reading one, and every name it can send has a case here. `default:` is for
+ * something that is not one of them — a transport fault, a command that is not
+ * there — and the sentence it gives says only that the picker did not work,
+ * which is all that can honestly be claimed then. It had been catching six real
+ * host reasons as well, so somebody attaching a `.key` was told the picker had
+ * not opened, when it demonstrably had.
+ *
+ * `hostRefusals` is what keeps that from happening again: it lists every name
+ * the seam can carry, and a test walks it.
+ */
+export const hostRefusals = [
+  "picker-unavailable",
+  "path-not-text",
+  "path-names-no-file",
+  "size-unreadable",
+  "not-a-regular-file",
+  "filesystem-stalled",
+  "file-unreadable",
+  "file-too-large",
+  "ticket-unavailable",
+  "ticket-unknown",
+  "ticket-already-used",
+  "ticket-expired",
+] as const
+
+export function pickerRefusal(error: unknown): AttachmentRefusal {
+  const answer =
+    error && typeof error === "object" ? (error as Record<string, unknown>) : {}
+  const name = typeof answer.shown === "string" ? answer.shown : null
+  switch (answer.reason) {
+    case "path-not-text":
+      return { reason: "file-not-nameable", name }
+    case "path-names-no-file":
+    case "size-unreadable":
+    case "file-unreadable":
+      return { reason: "file-unreadable", name }
+    case "not-a-regular-file":
+      return { reason: "file-not-a-file", name }
+    case "filesystem-stalled":
+      return { reason: "file-unresponsive", name }
+    // Four host reasons, one sentence, because the panel does the same thing
+    // for all four and saying otherwise would be inventing a distinction a
+    // person cannot act on. They are separate on the host because *it* acts on
+    // them differently; this is the boundary where that stops being true.
+    case "ticket-unavailable":
+    case "ticket-unknown":
+    case "ticket-already-used":
+    case "ticket-expired":
+      return { reason: "file-must-be-chosen-again" }
+    // The host will not read more than the panel would hold. Said with the
+    // same words a drop of the same file gets, because it is the same bound.
+    case "file-too-large":
+      // The host refused to read it, so there is no platform type to carry and
+      // no picker left to advise: this file already came from one.
+      return {
+        reason: "file-too-large",
+        files: name === null ? [] : [{ name, type: "" }],
+      }
+    default:
+      return { reason: "picker-unavailable" }
   }
 }
 
@@ -175,7 +369,8 @@ export function refusalNotice(refusal: AttachmentRefusal): AttachmentNotice {
  * compiling here.
  */
 export type DroppedFileRejection = {
-  file: { name: string }
+  /** The platform's `type` travels with the name; see `file-too-large`. */
+  file: { name: string; type: string }
   reason: "type" | "size" | "count" | "folder"
 }
 
@@ -210,7 +405,10 @@ export function droppedFilesRefusal(
   if (tooLarge.length > 0)
     return {
       reason: "file-too-large",
-      names: tooLarge.map((rejection) => rejection.file.name),
+      files: tooLarge.map((rejection) => ({
+        name: rejection.file.name,
+        type: rejection.file.type,
+      })),
     }
   if (named("count").length > 0) return { reason: "too-many-files" }
   if (named("folder").length > 0) return { reason: "empty-folder" }
@@ -235,6 +433,7 @@ export function droppedFilesRefusal(
 function draftFilesNotice(
   files: readonly NoticedFile[],
   imageInput: boolean | undefined,
+  canChoosePaths: boolean,
 ): AttachmentNotice | null {
   const failed = files.flatMap((file) =>
     file.upload.status === "failed" ? [{ id: file.id, reason: file.upload.reason }] : [],
@@ -254,14 +453,30 @@ function draftFilesNotice(
       action: retry.length > 0 ? { kind: "retry-uploads", files: retry } : null,
     }
   }
-  if (files.some((file) => !file.image))
-    return {
-      kind: "draft-files",
-      title: "File can't be sent",
-      description: "Only images can be sent for now.",
-      action: null,
-    }
-  if (files.length > 0 && imageInput === false)
+  // A file that is neither carried as an image nor nameable as a path cannot
+  // go at all. It arrived by a route that does not say where a file is, which
+  // is a drop or a paste in the app, and every route in a browser.
+  //
+  // So the sentence and the action both turn on whether there is a picker to
+  // send somebody to. Offering one where the answer would be the browser's own
+  // file input is offering a loop: it hands back another file with no path and
+  // the same refusal appears again.
+  if (files.some((file) => !file.image && !file.linked))
+    return canChoosePaths
+      ? {
+          kind: "draft-files",
+          title: "File can't be sent",
+          description: "Nessa only knows where a file is when you choose it with +.",
+          action: { kind: "choose-files" },
+        }
+      : {
+          kind: "draft-files",
+          title: "File can't be sent",
+          description:
+            "A browser never says where a file is, and the agent needs that. Send this one from the Nessa app.",
+          action: null,
+        }
+  if (files.some((file) => file.image) && imageInput === false)
     return {
       kind: "draft-files",
       title: "Images not supported",
@@ -302,10 +517,16 @@ export function attachmentNotices(input: {
   refusal: AttachmentRefusal | null
   files: readonly NoticedFile[]
   imageInput: boolean | undefined
+  /**
+   * Whether this surface has a picker that can say where a file is. False in a
+   * browser, where every route hands over bytes and none says their location —
+   * so there is nothing to send somebody to, and saying otherwise is a loop.
+   */
+  canChoosePaths: boolean
 }): AttachmentNotice[] {
-  const draft = draftFilesNotice(input.files, input.imageInput)
+  const draft = draftFilesNotice(input.files, input.imageInput, input.canChoosePaths)
   return [
     ...(draft ? [draft] : []),
-    ...(input.refusal ? [refusalNotice(input.refusal)] : []),
+    ...(input.refusal ? [refusalNotice(input.refusal, input.canChoosePaths)] : []),
   ]
 }

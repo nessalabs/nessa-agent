@@ -15,6 +15,7 @@ const view: ConversationView = {
       executionId: "run",
       userText: "read",
       attachments: [],
+      files: [],
       parts: [
         { offset: 0, kind: "thought", text: "reasoning", toolId: "" },
         { offset: 1, kind: "text", text: "streaming text", toolId: "" },
@@ -22,7 +23,15 @@ const view: ConversationView = {
       status: "running",
     },
   ],
-  pending: [{ executionId: "next", text: "follow up", attachments: [], mode: "queued" }],
+  pending: [
+    {
+      executionId: "next",
+      text: "follow up",
+      attachments: [],
+      files: [],
+      mode: "queued",
+    },
+  ],
   permissions: [
     {
       executionId: "run",
@@ -116,7 +125,9 @@ it("replaces server-only queue rows when the next complete view removes them", (
 it("labels confirmed waiting work as queued without inventing an assistant message", () => {
   const projected = applyView(conversation("tab"), {
     ...view,
-    pending: [{ executionId: "run", text: "read", attachments: [], mode: "queued" }],
+    pending: [
+      { executionId: "run", text: "read", attachments: [], files: [], mode: "queued" },
+    ],
     messages: [{ ...view.messages[0]!, parts: [], status: "queued" }],
   })
   expect(projected.turns).toHaveLength(1)
@@ -155,6 +166,7 @@ function stoppedQueue(queueComplete: boolean) {
       executionId,
       text: executionId,
       attachments: [],
+      files: [],
       mode: "queued" as const,
     })),
   })
@@ -175,6 +187,7 @@ function stoppedQueue(queueComplete: boolean) {
         executionId: "three",
         userText: "three",
         attachments: [],
+        files: [],
         parts: [],
         status: "cancelled",
       },
@@ -343,6 +356,7 @@ it("shows a turn it never held the bytes for as text plus image references", () 
         executionId: "captioned",
         userText: "what is this?",
         attachments: [picture],
+        files: [],
         parts: [],
         status: "completed",
       },
@@ -351,6 +365,7 @@ it("shows a turn it never held the bytes for as text plus image references", () 
         executionId: "bare",
         userText: "",
         attachments: [picture, { ...picture, mimeType: "image/jpeg" }],
+        files: [],
         parts: [],
         status: "queued",
       },
@@ -360,9 +375,16 @@ it("shows a turn it never held the bytes for as text plus image references", () 
         executionId: "bare",
         text: "",
         attachments: [picture, { ...picture, mimeType: "image/jpeg" }],
+        files: [],
         mode: "queued",
       },
-      { executionId: "waiting", text: "", attachments: [picture], mode: "queued" },
+      {
+        executionId: "waiting",
+        text: "",
+        attachments: [picture],
+        files: [],
+        mode: "queued",
+      },
     ],
   })
   const users = applied.turns.filter((turn) => turn.from === "user")
@@ -393,6 +415,7 @@ it("keeps a sent turn's local previews when the gateway echoes it by reference",
       status: "stored" as const,
       image: { digest: DIGEST, mimeType: "image/png" as const, size: 2048 },
     },
+    path: null,
   }
   const base = emptyLocalTabs()
   const tabs = {
@@ -416,6 +439,7 @@ it("keeps a sent turn's local previews when the gateway echoes it by reference",
         executionId: "mine",
         userText: "",
         attachments: [{ digest: DIGEST, mimeType: "image/png", size: 2048 }],
+        files: [],
         parts: [],
         status: "running",
       },

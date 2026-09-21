@@ -75,11 +75,63 @@ for (const invalid of [
   if (validateSend(invalid))
     throw new Error("Product conversation schema accepts oversized attachments")
 }
+// A linked file names a path and carries no bytes, so what the schema can
+// refuse is the shape of the path. The gateway's domain refuses the rest.
+const files = (paths) => paths.map((path) => ({ path }))
+for (const invalid of [
+  { ...send, files: files(["report.pdf"]) },
+  { ...send, files: files(["./report.pdf"]) },
+  { ...send, files: files([""]) },
+  { ...send, files: files(["/tmp/a\nb.pdf"]) },
+  { ...send, files: files(["/tmp/a\u0000b.pdf"]) },
+  // C1 controls and DEL, which the gateway refuses with `char::is_control`.
+  { ...send, files: files(["/tmp/a\u0085b.pdf"]) },
+  { ...send, files: files(["/tmp/a\u009fb.pdf"]) },
+  { ...send, files: files(["/tmp/a\u007fb.pdf"]) },
+  // Components that do not survive being written as a URI.
+  { ...send, files: files(["/tmp/"]) },
+  { ...send, files: files(["/"]) },
+  { ...send, files: files(["//tmp/a.pdf"]) },
+  { ...send, files: files(["/tmp//a.pdf"]) },
+  { ...send, files: files(["/tmp/."]) },
+  { ...send, files: files(["/tmp/.."]) },
+  { ...send, files: files(["/tmp/../etc/passwd"]) },
+  { ...send, files: files(["/tmp/./a.pdf"]) },
+  { ...send, files: files([`/${"a".repeat(4096)}`]) },
+  // Over the bound in bytes while under it in code points, which is the only
+  // case that tells the two apart: `maxLength` counts code points and takes
+  // this, so `x-utf8MaxBytes` is the rule doing the work, and it has to be the
+  // same rule the gateway applies.
+  { ...send, files: files([`/${"\u0451".repeat(2048)}`]) },
+  { ...send, files: files(Array.from({ length: 11 }, (_, i) => `/tmp/${i}.pdf`)) },
+  { ...send, files: [{ path: "/tmp/a.pdf", name: "a.pdf" }] },
+]) {
+  if (validateSend(invalid))
+    throw new Error(
+      `Product conversation schema accepts an unusable file path: ${JSON.stringify(invalid.files)}`,
+    )
+}
 for (const valid of [
   { ...send, executionId: "😀".repeat(64) },
   { ...send, requestId: "😀".repeat(64) },
   { ...send, text: "😀".repeat(2048) },
   { ...send, attachments: images(10, 1024 * 1024) },
+  { ...send, files: [] },
+  // Spaces, parentheses, quotes, and non-Latin names are ordinary file names.
+  { ...send, files: files([`/tmp/it's a "report" (final) 100%.pdf`, "/tmp/отчёт.pdf"]) },
+  // So are brackets and backslashes. The gateway hands the path to the agent
+  // inside a markdown link and encodes both halves of that link down to an
+  // allowlist, so nothing downstream depends on a path not holding one.
+  {
+    ...send,
+    files: files(["/tmp/[draft] notes.pdf", "/tmp/a]b.pdf", "/tmp/back\\slash"]),
+  },
+  { ...send, files: files([`/${"a".repeat(4095)}`]) },
+  // Exactly 4096 bytes and only 2049 code points: the bound is bytes.
+  { ...send, files: files([`/${"\u0451".repeat(2047)}a`]) },
+  // A leading dot is a hidden file and a name of three dots is a name.
+  { ...send, files: files(["/Users/ada/.zshrc", "/Users/ada/...", "/tmp/a:b.pdf"]) },
+  { ...send, files: files(Array.from({ length: 10 }, (_, i) => `/tmp/${i}.pdf`)) },
 ]) {
   if (!validateSend(valid))
     throw new Error(

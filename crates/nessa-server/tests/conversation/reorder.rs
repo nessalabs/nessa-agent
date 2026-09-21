@@ -1,7 +1,7 @@
 //! Queue moves cross the authenticated service and actual SDK runner.
 use super::{
     ConversationCaller, ConversationLimits, ConversationMessageStatus, ConversationReorderOutcome,
-    SubmissionMode,
+    SubmissionMode, SubmittedMessage,
 };
 use crate::{conversation::domain::ConversationId, conversation_test_support::fixture};
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -31,8 +31,11 @@ async fn reordered_view_matches_real_dispatch_and_stale_order_cannot_resubmit() 
             id.clone(),
             caller("a"),
             "a".into(),
-            "first".into(),
-            Vec::new(),
+            SubmittedMessage {
+                text: "first".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
             SubmissionMode::Queue,
         )
         .await
@@ -49,8 +52,11 @@ async fn reordered_view_matches_real_dispatch_and_stale_order_cannot_resubmit() 
                 id.clone(),
                 caller(execution),
                 execution.into(),
-                execution.into(),
-                Vec::new(),
+                SubmittedMessage {
+                    text: execution.into(),
+                    images: Vec::new(),
+                    files: Vec::new(),
+                },
                 SubmissionMode::Queue,
             )
             .await

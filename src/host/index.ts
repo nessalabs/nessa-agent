@@ -16,6 +16,7 @@ export {
 } from "./accelerator"
 export {
   availableUpdate,
+  chooseAttachmentFiles,
   closeSetupWindow,
   finishSetupWindow,
   retrySetupRecord,
@@ -34,12 +35,14 @@ export {
   onUpdateFailed,
   onUpdateProgress,
   onWindowResize,
+  readAttachmentBytes,
   revealSetupWindow,
   setFrosted,
   startResizeFromLeftEdge,
   windowSize,
   windowSurface,
   loadShortcuts,
+  type ChosenFile,
   type Downloaded,
   type LinkNotOpened,
   type Release,
