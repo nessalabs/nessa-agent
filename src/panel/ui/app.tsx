@@ -1,7 +1,7 @@
 import { ComposerDeliveryMode } from "@nessa-ui/react/composer-queue"
 import type { AttachmentResources } from "../adapters/attachment-resources"
 import * as React from "react"
-import { CircleArrowUp, Download, KeyRound, Square } from "lucide-react"
+import { CircleArrowUp, Download, KeyRound, Link2Off, Square } from "lucide-react"
 import { AgentNotification } from "@nessa-ui/react/agent-notification"
 import {
   ChatComposerAction,
@@ -41,6 +41,7 @@ import { useHostPanel } from "../adapters/host-panel"
 import { useSurface, type Surface } from "../adapters/surface"
 import { useTabShortcuts } from "../adapters/use-tab-shortcuts"
 import { useUpdate } from "../adapters/use-update"
+import { usePanelLinkNotice } from "../adapters/use-link-notice"
 import { UPDATE_TAB_ID } from "../application/update-surface"
 import { tabAfter, tabAt } from "../application/tab-navigation"
 import { UpdateTab } from "./update-tab"
@@ -122,6 +123,9 @@ export function App({
   // of its surfaces — the notice over the composer and the tab beside the
   // conversation tabs — are the panel's own chrome.
   const update = useUpdate()
+  // A link leaves the app rather than loading in here, so when one goes
+  // nowhere the click is otherwise indistinguishable from a dead panel.
+  const link = usePanelLinkNotice()
   const {
     expanded,
     changeExpanded,
@@ -463,6 +467,17 @@ export function App({
                 about, exactly as the conversation notices below already do. The
                 heading, glyphs, and labels here are all ours; nothing of the
                 connection wording survives. */}
+            {link.notice && (
+              <AgentNotification
+                className="mb-2"
+                state="disconnected"
+                icon={Link2Off}
+                title={link.notice.title}
+                description={link.notice.description}
+                dismissLabel="Dismiss"
+                onDismiss={link.dismiss}
+              />
+            )}
             {update.notice && (
               <AgentNotification
                 className="mb-2"

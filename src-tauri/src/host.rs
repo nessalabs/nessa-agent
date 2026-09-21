@@ -44,6 +44,68 @@ pub const UPDATE_PROGRESS: &str = "nessa://update-progress";
 /// asked for.
 pub const UPDATE_FAILED: &str = "nessa://update-failed";
 
+/// A link the person clicked did not open, and nothing on screen changed. The
+/// payload is [`LinkNotOpened`]. Sent to the window the click happened in: a
+/// click that does nothing needs a sentence, and on a packaged app stderr is
+/// not one — macOS sends it nowhere a person looks, and the release Windows
+/// build has no console at all.
+pub const LINK_NOT_OPENED: &str = "nessa://link-not-opened";
+
+/// Why a clicked link did nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NotOpened {
+    /// The scheme is not one a link in a panel may reach — `file:`, `data:`,
+    /// `javascript:`, an editor's custom scheme. Handing it to the OS is the
+    /// risk, so it was handed nowhere.
+    Refused,
+    /// It was a web or mail address, and the browser or mail client could not
+    /// be started.
+    OpenerFailed,
+}
+
+impl NotOpened {
+    /// The host's own half-line for its diagnostics. The sentence a person
+    /// reads is the panel's, in `src/panel/application/link-notice.ts`.
+    pub fn as_sentence(self) -> &'static str {
+        match self {
+            Self::Refused => "refused to open",
+            Self::OpenerFailed => "could not open",
+        }
+    }
+}
+
+/// Which link, and why it did nothing. The URL is carried so the panel can
+/// show the person what they clicked; `detail` is the opener's own error, which
+/// is technical and belongs with the diagnostics rather than on screen.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct LinkNotOpened {
+    pub url: String,
+    pub reason: NotOpened,
+    pub detail: Option<String>,
+}
+
+impl LinkNotOpened {
+    /// A scheme a panel may not reach. There is no opener error to carry:
+    /// nothing was attempted.
+    pub fn refused(url: &str) -> Self {
+        Self {
+            url: url.into(),
+            reason: NotOpened::Refused,
+            detail: None,
+        }
+    }
+
+    /// The browser or mail client could not be started, and why.
+    pub fn failed(url: &str, detail: &str) -> Self {
+        Self {
+            url: url.into(),
+            reason: NotOpened::OpenerFailed,
+            detail: Some(detail.into()),
+        }
+    }
+}
+
 /// Points, which are CSS pixels: the webview does its own scaling, so no device
 /// ratio enters into it.
 #[derive(Clone, serde::Serialize)]

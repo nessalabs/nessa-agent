@@ -4,6 +4,7 @@
 mod composition;
 mod gateway;
 mod host;
+mod links;
 mod local_data;
 mod panel;
 mod platform;
@@ -35,6 +36,11 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // Before any window exists, so it covers the panel `tauri.conf.json`
+        // declares as well as the setup window built later: a link clicked in
+        // a Nessa window goes to the person's browser, and never turns the
+        // floating bar into a web page.
+        .plugin(links::init())
         .invoke_handler(tauri::generate_handler![
             platform::set_frosted,
             platform::panel_size,
