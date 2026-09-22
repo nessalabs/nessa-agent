@@ -13,108 +13,162 @@
 //! not that Opencode sends them.
 use super::support::*;
 use crate::domain::agent_execution::tools::ToolContent;
-use crate::infrastructure::model_metadata_json::load_catalog;
-use std::{
-    fs::File,
-    io::Read,
-    path::PathBuf,
-    process::{Command, ExitStatus, Stdio},
-    sync::mpsc,
-    thread,
-    time::Duration,
-};
-
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
+use crate::infrastructure::{model_metadata_json::load_catalog, process::ProcessScope};
+use std::{fs::File, path::PathBuf, time::Duration};
+use tokio::{io::AsyncReadExt, process::ChildStdout, time::timeout};
 
 const HARNESS_DEADLINE: Duration = Duration::from_secs(60);
 const MAXIMUM_HARNESS_OUTPUT_BYTES: usize = 64 * 1024;
 
-struct HarnessOutput {
-    status: ExitStatus,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
+#[derive(Debug, PartialEq, Eq)]
+enum HarnessReadFailure {
+    Deadline,
+    OutputLimit,
+    Closed,
+    Read(String),
 }
 
-fn bounded_output(mut pipe: impl Read) -> Vec<u8> {
-    let mut retained = Vec::new();
-    let mut chunk = [0_u8; 8192];
-    while let Ok(count) = pipe.read(&mut chunk) {
-        if count == 0 {
-            break;
+struct HarnessSupervisor {
+    scope: ProcessScope,
+    root: PathBuf,
+    stdout: ChildStdout,
+}
+
+impl HarnessSupervisor {
+    async fn start(arguments: &[&str]) -> Self {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/infrastructure/acp/contracts/fixtures/opencode_live_boundary.py");
+        let arguments = arguments
+            .iter()
+            .map(|argument| (*argument).to_owned())
+            .collect::<Vec<_>>();
+        let started = ProcessScope::spawn_with_private_directory(move |root| {
+            let mut command = tokio::process::Command::new("python3");
+            command
+                .arg(&fixture)
+                .arg("--supervised-root")
+                .arg(root)
+                .args(&arguments);
+            command
+        });
+        let (mut scope, root) = match started {
+            Ok(started) => started,
+            Err(failure) => {
+                let (cause, recovery) = failure.into_parts();
+                if let Some(mut directory) = recovery {
+                    directory
+                        .release(Duration::from_secs(5))
+                        .await
+                        .expect("failed harness start fixture is released");
+                }
+                panic!("could not start Python Opencode harness: {cause}");
+            }
+        };
+        let stdout = scope.stdout.take().expect("harness stdout is piped");
+        Self {
+            scope,
+            root,
+            stdout,
         }
-        let available = MAXIMUM_HARNESS_OUTPUT_BYTES.saturating_sub(retained.len());
-        retained.extend_from_slice(&chunk[..count.min(available)]);
     }
-    retained
+
+    async fn read_message(
+        &mut self,
+        budget: Duration,
+    ) -> Result<serde_json::Value, HarnessReadFailure> {
+        timeout(budget, async {
+            let mut message = Vec::new();
+            let mut chunk = [0_u8; 8192];
+            loop {
+                let count = self
+                    .stdout
+                    .read(&mut chunk)
+                    .await
+                    .map_err(|error| HarnessReadFailure::Read(error.to_string()))?;
+                if count == 0 {
+                    return Err(HarnessReadFailure::Closed);
+                }
+                let end = chunk[..count]
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .unwrap_or(count);
+                if message.len() + end > MAXIMUM_HARNESS_OUTPUT_BYTES {
+                    return Err(HarnessReadFailure::OutputLimit);
+                }
+                message.extend_from_slice(&chunk[..end]);
+                if end != count {
+                    return serde_json::from_slice(&message)
+                        .map_err(|error| HarnessReadFailure::Read(error.to_string()));
+                }
+            }
+        })
+        .await
+        .map_err(|_| HarnessReadFailure::Deadline)?
+    }
+
+    async fn cleanup(&mut self) {
+        self.scope
+            .cleanup(Duration::ZERO, Duration::from_secs(5))
+            .await
+            .expect("harness process group cleanup is confirmed");
+        assert!(
+            !self.root.exists(),
+            "fixture root remained after confirmed process cleanup"
+        );
+    }
+}
+
+async fn run_python_harness(arguments: &[&str]) {
+    let mut supervisor = HarnessSupervisor::start(arguments).await;
+    let message = supervisor.read_message(HARNESS_DEADLINE).await;
+    supervisor.cleanup().await;
+    let message = message.expect("Python Opencode harness did not return a bounded result");
+    assert!(
+        message["ok"].as_bool() == Some(true),
+        "Python Opencode harness failed: {}",
+        message["error"].as_str().unwrap_or("missing error")
+    );
 }
 
 #[cfg(unix)]
-fn terminate_harness_group(identifier: u32) {
-    // SAFETY: a negative identifier addresses the isolated process group made
-    // for this child. SIGKILL needs no shared memory or signal handler state.
-    unsafe {
-        libc::kill(-(identifier as i32), libc::SIGKILL);
-    }
+fn process_exists(identifier: u32) -> bool {
+    let result = unsafe { libc::kill(identifier as i32, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
-#[cfg(windows)]
-fn terminate_harness_group(identifier: u32) {
-    let _ = Command::new("taskkill")
-        .args(["/PID", &identifier.to_string(), "/T", "/F"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+#[cfg(unix)]
+#[tokio::test]
+async fn outer_deadline_reaps_active_acp_descendants_before_releasing_fixture_root() {
+    let mut supervisor = HarnessSupervisor::start(&["outer-timeout"]).await;
+    let root = supervisor.root.clone();
+    let active = supervisor
+        .read_message(Duration::from_secs(5))
+        .await
+        .expect("synthetic ACP and descendant reached their blocking state");
+    assert_eq!(active["state"], "active");
+    let acp = active["acpPid"].as_u64().unwrap() as u32;
+    let descendant = active["descendantPid"].as_u64().unwrap() as u32;
+    assert!(process_exists(acp));
+    assert!(process_exists(descendant));
+
+    assert_eq!(
+        supervisor.read_message(Duration::from_millis(100)).await,
+        Err(HarnessReadFailure::Deadline)
+    );
+    assert!(root.exists(), "fixture root was released before cleanup");
+    supervisor.cleanup().await;
+    assert!(!process_exists(acp));
+    assert!(!process_exists(descendant));
+    assert!(!root.exists());
 }
 
-fn run_python_harness(arguments: &[&str]) -> HarnessOutput {
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/infrastructure/acp/contracts/fixtures/opencode_live_boundary.py");
-    let mut command = Command::new("python3");
-    command
-        .arg(fixture)
-        .args(arguments)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(unix)]
-    command.process_group(0);
-    let mut child = command.spawn().unwrap();
-    let identifier = child.id();
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
-
-    thread::scope(|scope| {
-        let stdout_reader = scope.spawn(|| bounded_output(stdout));
-        let stderr_reader = scope.spawn(|| bounded_output(stderr));
-        let (status_sender, status_receiver) = mpsc::sync_channel(1);
-        scope.spawn(move || {
-            let _ = status_sender.send(child.wait());
-        });
-        let status = match status_receiver.recv_timeout(HARNESS_DEADLINE) {
-            Ok(status) => status,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                terminate_harness_group(identifier);
-                status_receiver
-                    .recv_timeout(Duration::from_secs(5))
-                    .expect("harness process did not exit after process-group cleanup")
-                    .unwrap();
-                panic!("Python Opencode harness exceeded its deadline");
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                terminate_harness_group(identifier);
-                panic!("harness process waiter disconnected")
-            }
-        };
-        terminate_harness_group(identifier);
-        HarnessOutput {
-            status: status.unwrap(),
-            stdout: stdout_reader.join().unwrap(),
-            stderr: stderr_reader.join().unwrap(),
-        }
-    })
+#[cfg(unix)]
+#[tokio::test]
+async fn silent_provider_reaches_inner_rpc_deadline_and_is_reaped() {
+    run_python_harness(&["silent-provider"]).await;
 }
 
-fn run_live_opencode_harness(mode: &str, arguments: &[PathBuf]) {
+async fn run_live_opencode_harness(mode: &str, arguments: &[PathBuf]) {
     let binary = std::env::var_os("NESSA_PINNED_OPENCODE_BINARY")
         .expect("set NESSA_PINNED_OPENCODE_BINARY to an audited 1.18.31 executable");
     let binary = binary.to_string_lossy();
@@ -124,40 +178,22 @@ fn run_live_opencode_harness(mode: &str, arguments: &[PathBuf]) {
         .collect::<Vec<_>>();
     let mut harness_arguments = vec![mode, binary.as_ref()];
     harness_arguments.extend(arguments.iter().map(|argument| argument.as_ref()));
-    let output = run_python_harness(&harness_arguments);
-    assert!(
-        output.status.success(),
-        "live Opencode {mode} harness failed: stdout={} stderr={}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn silent_provider_reaches_rpc_deadline_and_is_reaped() {
-    let output = run_python_harness(&["silent-provider"]);
-    assert!(
-        output.status.success(),
-        "silent-provider regression failed: stdout={} stderr={}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    run_python_harness(&harness_arguments).await;
 }
 
 /// This is opt-in because obtaining the audited binary belongs to the installer
 /// boundary. The harness itself never downloads or modifies that executable.
-#[test]
+#[tokio::test]
 #[ignore = "requires NESSA_PINNED_OPENCODE_BINARY from the audited installer"]
-fn pinned_binary_cannot_load_caller_config_tools_mcp_or_native_hooks() {
-    run_live_opencode_harness("boundary", &[]);
+async fn pinned_binary_cannot_load_caller_config_tools_mcp_or_native_hooks() {
+    run_live_opencode_harness("boundary", &[]).await;
 }
 
 /// The production launch disables remote model refresh, so this compares the
 /// shipped catalogue with the pinned binary's embedded, credentialed options.
-#[test]
+#[tokio::test]
 #[ignore = "requires NESSA_PINNED_OPENCODE_BINARY from the audited installer"]
-fn shipped_opencode_models_remain_in_the_pinned_catalogue() {
+async fn shipped_opencode_models_remain_in_the_pinned_catalogue() {
     let catalogue = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/models.json");
     for (model, auth_tier) in [
         ("opencode/big-pickle", "public"),
@@ -167,7 +203,8 @@ fn shipped_opencode_models_remain_in_the_pinned_catalogue() {
         run_live_opencode_harness(
             "catalogue",
             &[catalogue.clone(), model.into(), auth_tier.into()],
-        );
+        )
+        .await;
     }
 }
 

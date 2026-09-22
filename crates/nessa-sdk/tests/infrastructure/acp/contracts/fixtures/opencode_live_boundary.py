@@ -4,11 +4,15 @@
 The harness creates only synthetic credentials and hostile marker programs. It
 never reads, copies, or prints a person's Opencode credentials. Its control run
 proves each marker is reachable before the isolated launch is allowed to prove
-that the same source is unreachable.
+that the same source is unreachable. Rust's ProcessScope owns the fixture root
+and the one process group containing this worker, ACP, and ACP descendants;
+this worker supplies bounded protocol operations but does not detach or claim
+group cleanup authority.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import pathlib
@@ -16,7 +20,6 @@ import selectors
 import signal
 import subprocess
 import sys
-import tempfile
 import time
 
 
@@ -77,31 +80,20 @@ class RpcClient:
                     raise AssertionError(f"Opencode exceeded the RPC response limit for {method}")
 
 
-def stop_process_group(process: subprocess.Popen) -> None:
+def stop_child(process: subprocess.Popen) -> None:
+    """Reap the direct child; Rust confirms the whole process group is gone."""
     if process.stdin:
         try:
             process.stdin.close()
         except BrokenPipeError:
             pass
     if process.poll() is None:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        process.terminate()
         try:
             process.wait(timeout=2)
         except subprocess.TimeoutExpired:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            process.kill()
             process.wait(timeout=2)
-    # The group can outlive its leader or contain a descendant that ignored
-    # SIGTERM. Terminate it before the harness acknowledges completion.
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
 
 
 def acp_session(
@@ -114,7 +106,6 @@ def acp_session(
     process = subprocess.Popen(
         [binary, "acp"], cwd=workspace, env=environment,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        start_new_session=True,
     )
     try:
         rpc = RpcClient(process, deadline_seconds)
@@ -132,40 +123,64 @@ def acp_session(
         result = rpc.call(2, method, params)
         return result.get("sessionId", restore)
     finally:
-        stop_process_group(process)
+        stop_child(process)
 
 
-def silent_provider() -> None:
-    with tempfile.TemporaryDirectory(prefix="nessa-opencode-silent-") as temporary:
-        root = pathlib.Path(temporary)
-        provider = root / "silent_provider.py"
-        pid_file = root / "pid"
-        provider.write_text(
-            "#!/usr/bin/env python3\n"
-            "import os,pathlib,signal,sys\n"
-            f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
-            "sys.stdin.buffer.readline()\n"
-            "signal.pause()\n"
+def silent_provider(root: pathlib.Path) -> None:
+    provider = root / "silent_provider.py"
+    pid_file = root / "pid"
+    provider.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os,pathlib,signal,sys\n"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+        "sys.stdin.buffer.readline()\n"
+        "signal.pause()\n"
+    )
+    provider.chmod(0o700)
+    try:
+        acp_session(
+            provider,
+            root,
+            {**os.environ},
+            deadline_seconds=1,
         )
-        provider.chmod(0o700)
-        try:
-            acp_session(
-                provider,
-                root,
-                {**os.environ},
-                deadline_seconds=1,
-            )
-        except TimeoutError as error:
-            assert "initialize" in str(error)
-        else:
-            raise AssertionError("silent provider did not reach the RPC deadline")
-        pid = int(pid_file.read_text())
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            pass
-        else:
-            raise AssertionError("silent provider survived RPC deadline cleanup")
+    except TimeoutError as error:
+        assert "initialize" in str(error)
+    else:
+        raise AssertionError("silent provider did not reach the RPC deadline")
+    pid = int(pid_file.read_text())
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        pass
+    else:
+        raise AssertionError("silent provider survived RPC deadline cleanup")
+
+
+def outer_timeout(root: pathlib.Path) -> None:
+    descendant = root / "descendant.py"
+    descendant.write_text("import signal\nsignal.pause()\n")
+    provider = root / "blocking_acp.py"
+    provider.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json,os,signal,subprocess,sys\n"
+        f"child=subprocess.Popen([sys.executable,{str(descendant)!r}])\n"
+        "print(json.dumps({'acpPid':os.getpid(),'descendantPid':child.pid}),flush=True)\n"
+        "signal.pause()\n"
+    )
+    provider.chmod(0o700)
+    process = subprocess.Popen(
+        [provider, "acp"],
+        cwd=root,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    line = process.stdout.readline()
+    identifiers = json.loads(line)
+    print(json.dumps({"state": "active", **identifiers}), flush=True)
+    signal.pause()
 
 
 def write_hostile_source(directory: pathlib.Path, markers: dict[str, pathlib.Path], mcp: pathlib.Path) -> None:
@@ -189,9 +204,8 @@ def write_hostile_source(directory: pathlib.Path, markers: dict[str, pathlib.Pat
     )
 
 
-def boundary(binary: pathlib.Path) -> None:
-    with tempfile.TemporaryDirectory(prefix="nessa-opencode-live-") as temporary:
-        root = pathlib.Path(temporary)
+def boundary(binary: pathlib.Path, supervisor_root: pathlib.Path) -> None:
+    with contextlib.nullcontext(supervisor_root) as root:
         workspace = root / "workspace"
         workspace.mkdir()
         data = root / "data"
@@ -267,9 +281,14 @@ def boundary(binary: pathlib.Path) -> None:
         assert not any(marker.exists() for marker in markers.values())
 
 
-def catalogue(binary: pathlib.Path, catalogue_path: pathlib.Path, model_id: str, auth_tier: str) -> None:
-    with tempfile.TemporaryDirectory(prefix="nessa-opencode-catalogue-") as temporary:
-        root = pathlib.Path(temporary)
+def catalogue(
+    binary: pathlib.Path,
+    catalogue_path: pathlib.Path,
+    model_id: str,
+    auth_tier: str,
+    supervisor_root: pathlib.Path,
+) -> None:
+    with contextlib.nullcontext(supervisor_root) as root:
         workspace = root / "workspace"
         workspace.mkdir()
         environment = clean_environment(root / "home", root / "data")
@@ -284,7 +303,6 @@ def catalogue(binary: pathlib.Path, catalogue_path: pathlib.Path, model_id: str,
         process = subprocess.Popen(
             [binary, "acp"], cwd=workspace, env=environment,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            start_new_session=True,
         )
         try:
             rpc = RpcClient(process)
@@ -295,7 +313,7 @@ def catalogue(binary: pathlib.Path, catalogue_path: pathlib.Path, model_id: str,
             })
             result = rpc.call(2, "session/new", {"cwd": str(workspace), "mcpServers": []})
         finally:
-            stop_process_group(process)
+            stop_child(process)
         model_option = next(option for option in result["configOptions"] if option["id"] == "model")
         offered = {option["value"] for option in model_option["options"]}
         catalogue_data = json.loads(catalogue_path.read_text())
@@ -306,19 +324,33 @@ def catalogue(binary: pathlib.Path, catalogue_path: pathlib.Path, model_id: str,
             f"{model_id}; offered={sorted(offered)}"
         )
 
-
-if __name__ == "__main__":
-    command, *rest = sys.argv[1:]
+def run(root: pathlib.Path, command: str, rest: list[str]) -> None:
     if command == "silent-provider":
-        silent_provider()
-        sys.exit(0)
+        silent_provider(root)
+        return
+    if command == "outer-timeout":
+        outer_timeout(root)
+        return
     executable, *rest = rest
     binary = pathlib.Path(executable).resolve()
     version = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10)
     assert version.returncode == 0 and version.stdout.strip() == "1.18.31"
     if command == "boundary":
-        boundary(binary)
+        boundary(binary, root)
     elif command == "catalogue":
-        catalogue(binary, pathlib.Path(rest[0]), rest[1], rest[2])
+        catalogue(binary, pathlib.Path(rest[0]), rest[1], rest[2], root)
     else:
         raise AssertionError(f"unknown command: {command}")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 4 or sys.argv[1] != "--supervised-root":
+        raise SystemExit("this fixture requires the Rust process-scope supervisor")
+    supervised_root = pathlib.Path(sys.argv[2]).resolve()
+    assert supervised_root.is_dir(), "supervised fixture root does not exist"
+    try:
+        run(supervised_root, sys.argv[3], sys.argv[4:])
+    except BaseException as error:
+        print(json.dumps({"ok": False, "error": str(error)}), flush=True)
+        raise
+    print(json.dumps({"ok": True}), flush=True)
