@@ -102,7 +102,7 @@ fn provider_diagnostic_is_required_and_bounded_before_owned_decode() {
         let diagnostic = unit.repeat(ProviderDiagnostic::MAX_BYTES + 1);
         let mut oversized = record();
         oversized["invocations"][0]["metadata"]["user_message"] =
-            json!("later".repeat(1024 * 1024));
+            json!("x".repeat(1024 * 1024));
 
         // Construct the wire order explicitly: workspace feature unification can
         // make serde_json preserve insertion order instead of sorting map keys.
