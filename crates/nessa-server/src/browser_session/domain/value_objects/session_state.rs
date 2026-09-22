@@ -12,31 +12,29 @@ pub struct BrowserSessionState {
 }
 
 impl BrowserSessionState {
-    pub fn new<O>(credential_id: CredentialId, origin: O, now: u64) -> Option<Self>
-    where
-        O: TryInto<BrowserSessionOrigin>,
-    {
+    pub fn new(
+        credential_id: CredentialId,
+        origin: BrowserSessionOrigin,
+        now: u64,
+    ) -> Option<Self> {
         Some(Self {
             lifetime: Lifetime::new(now)?,
             credential_id,
-            origin: origin.try_into().ok()?,
+            origin,
         })
     }
 
-    pub fn restore<O>(
+    pub fn restore(
         credential_id: CredentialId,
-        origin: O,
+        origin: BrowserSessionOrigin,
         created_at: u64,
         renewed_at: u64,
         idle_expires_at: u64,
-    ) -> Option<Self>
-    where
-        O: TryInto<BrowserSessionOrigin>,
-    {
+    ) -> Option<Self> {
         Some(Self {
             lifetime: Lifetime::restore(created_at, renewed_at, idle_expires_at)?,
             credential_id,
-            origin: origin.try_into().ok()?,
+            origin,
         })
     }
 

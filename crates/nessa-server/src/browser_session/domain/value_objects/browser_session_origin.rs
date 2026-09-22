@@ -33,7 +33,7 @@ impl BrowserSessionOrigin {
             || authority.ends_with(':')
             || authority
                 .bytes()
-                .any(|byte| matches!(byte, b'/' | b'?' | b'#'))
+                .any(|byte| matches!(byte, b'/' | b'?' | b'#' | b'@' | b'\\'))
         {
             return None;
         }
@@ -43,14 +43,6 @@ impl BrowserSessionOrigin {
     /// Return the preserved origin serialization.
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-}
-
-impl TryFrom<String> for BrowserSessionOrigin {
-    type Error = ();
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::new(value).ok_or(())
     }
 }
 

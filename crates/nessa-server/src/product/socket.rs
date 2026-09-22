@@ -920,7 +920,10 @@ mod tests {
     use crate::{
         agents_test_support::StubAgentProbe,
         app::ports::Clock as UptimeClock,
-        browser_session::{application::SessionStore, domain::value_objects::BrowserSessionState},
+        browser_session::{
+            application::SessionStore,
+            domain::value_objects::{BrowserSessionOrigin, BrowserSessionState},
+        },
         product::ProductDependencies,
     };
     use nessa_auth::{
@@ -1775,7 +1778,7 @@ mod tests {
             present: present.clone(),
             session: BrowserSessionState::new(
                 session.context().credential_id().clone(),
-                "https://127.0.0.1:1443".into(),
+                BrowserSessionOrigin::new("https://127.0.0.1:1443".to_owned()).unwrap(),
                 100,
             )
             .unwrap(),
@@ -1806,7 +1809,7 @@ mod tests {
             present: present.clone(),
             session: BrowserSessionState::new(
                 session.context().credential_id().clone(),
-                "https://127.0.0.1:1443".into(),
+                BrowserSessionOrigin::new("https://127.0.0.1:1443".to_owned()).unwrap(),
                 100,
             )
             .unwrap(),

@@ -5,7 +5,7 @@ use crate::browser_session::{
 };
 use crate::browser_session::{
     application::{BrowserSessionVerifier, SessionStore},
-    domain::value_objects::{BrowserSessionState, RemovalReason},
+    domain::value_objects::{BrowserSessionOrigin, BrowserSessionState, RemovalReason},
 };
 use axum::{
     extract::State,
@@ -21,6 +21,9 @@ fn headers() -> HeaderMap {
     value.insert(header::ORIGIN, "https://127.0.0.1:1443".parse().unwrap());
     value.insert("x-nessa-browser", "1".parse().unwrap());
     value
+}
+fn session_origin(value: &str) -> BrowserSessionOrigin {
+    BrowserSessionOrigin::new(value.to_owned()).unwrap()
 }
 fn with_cookie(value: &str) -> HeaderMap {
     let mut headers = headers();
@@ -49,8 +52,12 @@ async fn browser_session_verifier_rejects_forged_missing_foreign_and_expired_pro
     store
         .insert(
             id.clone(),
-            BrowserSessionState::new(credential_id.clone(), "https://127.0.0.1:1443".into(), 100)
-                .unwrap(),
+            BrowserSessionState::new(
+                credential_id.clone(),
+                session_origin("https://127.0.0.1:1443"),
+                100,
+            )
+            .unwrap(),
             None,
             100,
         )
@@ -106,15 +113,17 @@ async fn browser_session_verifier_rejects_forged_missing_foreign_and_expired_pro
 }
 
 #[tokio::test]
-async fn current_verifier_cannot_reauthorize_restored_untrusted_origin() {
-    let store = MemorySessions::default();
+async fn current_verifier_cannot_reauthorize_replayed_untrusted_origin() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("historical-origin.jsonl");
     let id = "d".repeat(64);
+    let store = PersistentSessions::open(&path, 100).unwrap();
     store
         .insert(
             id.clone(),
             BrowserSessionState::new(
                 CredentialId::new("credential").unwrap(),
-                "https://historical.example".to_owned(),
+                session_origin("https://historical.example"),
                 100,
             )
             .unwrap(),
@@ -123,6 +132,9 @@ async fn current_verifier_cannot_reauthorize_restored_untrusted_origin() {
         )
         .await
         .unwrap();
+    drop(store);
+
+    let store = PersistentSessions::open(&path, 100).unwrap();
     let evidence = SessionEvidence::new(id.as_bytes().to_vec()).unwrap();
     let verifier = BrowserSessionVerifier {
         store: &store,
@@ -297,8 +309,12 @@ async fn minimal_session_survives_restart_and_rejects_malformed_credential_ids()
     store
         .insert(
             id.clone(),
-            BrowserSessionState::new(credential_id.clone(), "https://127.0.0.1:1443".into(), 100)
-                .unwrap(),
+            BrowserSessionState::new(
+                credential_id.clone(),
+                session_origin("https://127.0.0.1:1443"),
+                100,
+            )
+            .unwrap(),
             None,
             100,
         )
@@ -366,8 +382,12 @@ async fn concurrent_renewals_return_the_authoritative_current_session() {
     store
         .insert(
             id.clone(),
-            BrowserSessionState::new(credential_id.clone(), "https://127.0.0.1:1443".into(), 100)
-                .unwrap(),
+            BrowserSessionState::new(
+                credential_id.clone(),
+                session_origin("https://127.0.0.1:1443"),
+                100,
+            )
+            .unwrap(),
             None,
             100,
         )
@@ -729,7 +749,7 @@ async fn timed_out_replacement_login_atomically_restores_the_prior_cookie() {
     let prior_id = "6".repeat(64);
     let prior = BrowserSessionState::new(
         authenticate(&state).await.context().credential_id().clone(),
-        "https://127.0.0.1:1443".into(),
+        session_origin("https://127.0.0.1:1443"),
         100,
     )
     .unwrap();
@@ -824,7 +844,8 @@ async fn timed_out_check_finishes_the_exact_renewal_transition() {
         .inner
         .insert(
             id.clone(),
-            BrowserSessionState::new(credential_id, "https://127.0.0.1:1443".into(), 100).unwrap(),
+            BrowserSessionState::new(credential_id, session_origin("https://127.0.0.1:1443"), 100)
+                .unwrap(),
             None,
             100,
         )
@@ -1152,8 +1173,12 @@ async fn check_uses_one_time_sample_for_expected_and_persisted_renewal() {
     authority.snapshot.lock().unwrap().membership = context;
     let credential_id = authenticate(&state).await.context().credential_id().clone();
     let store = Arc::new(RenewingStore {
-        session: BrowserSessionState::new(credential_id, "https://127.0.0.1:1443".into(), 100)
-            .unwrap(),
+        session: BrowserSessionState::new(
+            credential_id,
+            session_origin("https://127.0.0.1:1443"),
+            100,
+        )
+        .unwrap(),
         renewals: Mutex::new(vec![]),
     });
     state.clock = Arc::new(AdvancingClock(AtomicU64::new(3_700)));
@@ -1240,7 +1265,7 @@ async fn current_identity_failures_keep_distinct_automatic_removal_causes() {
         let store = Arc::new(HostileStore {
             session: BrowserSessionState::new(
                 identity.context().credential_id().clone(),
-                "https://127.0.0.1:1443".into(),
+                session_origin("https://127.0.0.1:1443"),
                 100,
             )
             .unwrap(),
@@ -1300,7 +1325,7 @@ async fn logout_attributes_only_current_verified_authority_as_explicit() {
         let store = Arc::new(HostileStore {
             session: BrowserSessionState::new(
                 identity.context().credential_id().clone(),
-                "https://127.0.0.1:1443".into(),
+                session_origin("https://127.0.0.1:1443"),
                 100,
             )
             .unwrap(),
@@ -1339,7 +1364,7 @@ async fn hostile_store_cannot_restore_an_expired_domain_session() {
     let identity = authenticate(&state).await;
     let expired = BrowserSessionState::restore(
         identity.context().credential_id().clone(),
-        "https://127.0.0.1:1443".into(),
+        session_origin("https://127.0.0.1:1443"),
         100,
         100,
         100 + crate::browser_session::domain::value_objects::IDLE_SECONDS,
