@@ -19,7 +19,7 @@ pub enum AgentCredentialKind {
 /// memory copies, so this value does not claim secure erasure.
 pub struct AgentCredential {
     kind: AgentCredentialKind,
-    secret: String,
+    secret: Box<str>,
 }
 
 impl AgentCredential {
@@ -39,7 +39,10 @@ impl AgentCredential {
         if secret.chars().all(char::is_whitespace) || secret.chars().any(char::is_control) {
             return Err(AgentCredentialError);
         }
-        Ok(Self { kind, secret })
+        Ok(Self {
+            kind,
+            secret: secret.into_boxed_str(),
+        })
     }
 
     /// The environment meaning the provider adapter must preserve.
@@ -49,7 +52,7 @@ impl AgentCredential {
 
     /// Borrow the private text only at the keychain or process-launch boundary.
     pub fn expose(&self) -> &str {
-        self.secret.as_str()
+        &self.secret
     }
 }
 
@@ -95,5 +98,16 @@ mod tests {
 
         assert_eq!(credential.kind(), AgentCredentialKind::OAuthToken);
         assert_eq!(credential.expose(), " token ");
+    }
+
+    #[test]
+    fn a_small_secret_does_not_retain_the_input_allocation_capacity() {
+        let mut secret = Vec::with_capacity(1024 * 1024);
+        secret.extend_from_slice(b"key");
+
+        let credential = AgentCredential::new(AgentCredentialKind::ApiKey, secret).unwrap();
+
+        assert_eq!(credential.expose(), "key");
+        assert_eq!(std::mem::size_of_val::<str>(&credential.secret), 3);
     }
 }

@@ -4,7 +4,7 @@
 //! read runs off the async executor, and an unavailable or malformed store
 //! fails the open before any provider process can be started.
 
-use std::{collections::BTreeMap, ffi::OsString, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, ffi::OsString, mem, sync::Arc, time::Duration};
 
 use nessa_sdk::{
     application::agent_execution::{
@@ -80,9 +80,13 @@ impl AgentProvider for CredentialedClaudeProvider {
         let audit = self.audit.clone();
         let prompt = self.prompt.clone();
         Box::pin(async move {
-            let environment =
-                read_credential_environment(credentials, CREDENTIAL_READ_DEADLINE).await?;
-            config.credential_environment.extend(environment);
+            let inherited_environment = mem::take(&mut config.credential_environment);
+            config.credential_environment = read_credential_environment(
+                inherited_environment,
+                credentials,
+                CREDENTIAL_READ_DEADLINE,
+            )
+            .await?;
             let provider = ClaudeAcpProvider::new(config, &model, limits, audit)
                 .map_err(ProviderOpenError::no_resources)?
                 .with_system_prompt(prompt);
@@ -92,12 +96,15 @@ impl AgentProvider for CredentialedClaudeProvider {
 }
 
 async fn read_credential_environment(
+    environment: BTreeMap<OsString, OsString>,
     credentials: Arc<dyn AgentCredentialSource>,
     deadline: Duration,
 ) -> Result<BTreeMap<OsString, OsString>, ProviderOpenError> {
     tokio::time::timeout(
         deadline,
-        tokio::task::spawn_blocking(move || credential_environment(credentials.as_ref())),
+        tokio::task::spawn_blocking(move || {
+            credential_environment(environment, credentials.as_ref())
+        }),
     )
     .await
     .map_err(|_| credential_open_failure(AgentCredentialFailure::Unavailable))?
@@ -106,9 +113,11 @@ async fn read_credential_environment(
 }
 
 fn credential_environment(
+    mut environment: BTreeMap<OsString, OsString>,
     source: &dyn AgentCredentialSource,
 ) -> Result<BTreeMap<OsString, OsString>, AgentCredentialFailure> {
-    let mut environment = BTreeMap::new();
+    environment.remove(&OsString::from("ANTHROPIC_API_KEY"));
+    environment.remove(&OsString::from("CLAUDE_CODE_OAUTH_TOKEN"));
     if let Some(credential) = source.read(AgentId::Claude)? {
         let variable = match credential.kind() {
             AgentCredentialKind::ApiKey => "ANTHROPIC_API_KEY",
@@ -131,7 +140,8 @@ fn credential_open_failure(failure: AgentCredentialFailure) -> ProviderOpenError
 mod tests {
     use super::*;
     use crate::agents::application::AgentCredential;
-    use std::thread;
+    use std::sync::{mpsc, Mutex};
+    use tokio::sync::oneshot;
 
     struct Credentials(Result<Option<(AgentCredentialKind, Vec<u8>)>, AgentCredentialFailure>);
 
@@ -147,11 +157,17 @@ mod tests {
         }
     }
 
-    struct SlowCredentials;
+    struct BlockingCredentials {
+        entered: Mutex<Option<oneshot::Sender<()>>>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
 
-    impl AgentCredentialSource for SlowCredentials {
+    impl AgentCredentialSource for BlockingCredentials {
         fn read(&self, _: AgentId) -> Result<Option<AgentCredential>, AgentCredentialFailure> {
-            thread::sleep(Duration::from_millis(25));
+            if let Some(entered) = self.entered.lock().unwrap().take() {
+                let _ = entered.send(());
+            }
+            let _ = self.release.lock().unwrap().recv();
             Ok(None)
         }
     }
@@ -162,9 +178,11 @@ mod tests {
             (AgentCredentialKind::ApiKey, "ANTHROPIC_API_KEY"),
             (AgentCredentialKind::OAuthToken, "CLAUDE_CODE_OAUTH_TOKEN"),
         ] {
-            let environment =
-                credential_environment(&Credentials(Ok(Some((kind, b"private".to_vec())))))
-                    .unwrap();
+            let environment = credential_environment(
+                BTreeMap::new(),
+                &Credentials(Ok(Some((kind, b"private".to_vec())))),
+            )
+            .unwrap();
             assert_eq!(environment.len(), 1);
             assert_eq!(
                 environment.get(&OsString::from(variable)).unwrap(),
@@ -175,22 +193,92 @@ mod tests {
 
     #[test]
     fn absent_and_unavailable_credentials_remain_different_answers() {
-        assert!(credential_environment(&Credentials(Ok(None)))
-            .unwrap()
-            .is_empty());
+        assert!(
+            credential_environment(BTreeMap::new(), &Credentials(Ok(None)))
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
-            credential_environment(&Credentials(Err(AgentCredentialFailure::Unavailable))),
+            credential_environment(
+                BTreeMap::new(),
+                &Credentials(Err(AgentCredentialFailure::Unavailable)),
+            ),
             Err(AgentCredentialFailure::Unavailable)
         );
     }
 
-    #[tokio::test]
+    #[test]
+    fn the_source_replaces_every_inherited_claude_auth_combination() {
+        let base = |variable: &str| {
+            BTreeMap::from([
+                (OsString::from(variable), OsString::from("inherited")),
+                (OsString::from("PATH"), OsString::from("/usr/bin")),
+            ])
+        };
+        for (inherited, kind, expected) in [
+            (
+                "CLAUDE_CODE_OAUTH_TOKEN",
+                AgentCredentialKind::ApiKey,
+                "ANTHROPIC_API_KEY",
+            ),
+            (
+                "ANTHROPIC_API_KEY",
+                AgentCredentialKind::OAuthToken,
+                "CLAUDE_CODE_OAUTH_TOKEN",
+            ),
+        ] {
+            let environment = credential_environment(
+                base(inherited),
+                &Credentials(Ok(Some((kind, b"current".to_vec())))),
+            )
+            .unwrap();
+            assert_eq!(
+                environment.get(&OsString::from(expected)).unwrap(),
+                "current"
+            );
+            assert!(!environment.contains_key(&OsString::from(inherited)));
+            assert_eq!(
+                environment.get(&OsString::from("PATH")).unwrap(),
+                "/usr/bin"
+            );
+        }
+
+        let environment = credential_environment(
+            BTreeMap::from([
+                (
+                    OsString::from("ANTHROPIC_API_KEY"),
+                    OsString::from("inherited-key"),
+                ),
+                (
+                    OsString::from("CLAUDE_CODE_OAUTH_TOKEN"),
+                    OsString::from("inherited-token"),
+                ),
+            ]),
+            &Credentials(Ok(None)),
+        )
+        .unwrap();
+        assert!(environment.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn a_blocked_credential_store_cannot_block_provider_opening() {
-        let error =
-            read_credential_environment(Arc::new(SlowCredentials), Duration::from_millis(1))
-                .await
-                .unwrap_err();
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let credentials = Arc::new(BlockingCredentials {
+            entered: Mutex::new(Some(entered_tx)),
+            release: Mutex::new(release_rx),
+        });
+        let read = tokio::spawn(read_credential_environment(
+            BTreeMap::new(),
+            credentials,
+            Duration::from_secs(3),
+        ));
+        entered_rx.await.unwrap();
+        tokio::time::advance(Duration::from_secs(3)).await;
+
+        let error = read.await.unwrap().unwrap_err();
 
         assert!(matches!(error.cause(), AgentError::Configuration(_)));
+        release_tx.send(()).unwrap();
     }
 }

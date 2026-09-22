@@ -19,11 +19,11 @@ export function AgentApiKeyForm({
   agentName: string
   disabled?: boolean
   onSave: (agent: ApiKeyAgent, key: string) => Promise<void>
-  onSaved: () => void
+  onSaved: () => void | Promise<void>
 }) {
   const [key, setKey] = React.useState("")
   const [saving, setSaving] = React.useState(false)
-  const [outcome, setOutcome] = React.useState<"saved" | "failed">()
+  const [outcome, setOutcome] = React.useState<"saved" | "failed" | "refresh-failed">()
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -32,11 +32,17 @@ export function AgentApiKeyForm({
     setOutcome(undefined)
     try {
       await onSave(agent, key)
-      setKey("")
-      setOutcome("saved")
-      onSaved()
     } catch {
       setOutcome("failed")
+      setSaving(false)
+      return
+    }
+    setKey("")
+    setOutcome("saved")
+    try {
+      await onSaved()
+    } catch {
+      setOutcome("refresh-failed")
     } finally {
       setSaving(false)
     }
@@ -79,6 +85,11 @@ export function AgentApiKeyForm({
       {outcome === "failed" ? (
         <p role="alert" className="nessa-text-2 text-destructive">
           Nessa could not save this key. Try again.
+        </p>
+      ) : null}
+      {outcome === "refresh-failed" ? (
+        <p role="alert" className="nessa-text-2 text-destructive">
+          Key saved, but Nessa could not check {agentName} again. Retry the check.
         </p>
       ) : null}
     </form>

@@ -82,4 +82,32 @@ describe("agent API-key entry", () => {
     expect(container.textContent).not.toContain("provider leaked")
     expect(container.textContent).not.toContain("sk-private-value")
   })
+
+  it("reports a refresh failure without relabeling the persisted save", async () => {
+    const save = vi.fn(async () => {})
+    const saved = vi.fn(async () => {
+      throw new Error("refresh leaked sk-private-value")
+    })
+    await React.act(async () => {
+      root.render(
+        <AgentApiKeyForm
+          agent="claude"
+          agentName="Claude"
+          onSave={save}
+          onSaved={saved}
+        />,
+      )
+    })
+
+    const input = await enterAndSubmit("sk-private-value")
+
+    expect(save).toHaveBeenCalledOnce()
+    expect(saved).toHaveBeenCalledOnce()
+    expect(input.value).toBe("")
+    expect(container.textContent).toContain("Key saved")
+    expect(container.textContent).toContain("could not check Claude again")
+    expect(container.textContent).not.toContain("could not save")
+    expect(container.textContent).not.toContain("refresh leaked")
+    expect(container.textContent).not.toContain("sk-private-value")
+  })
 })
