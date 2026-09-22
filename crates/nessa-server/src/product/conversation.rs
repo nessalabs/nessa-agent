@@ -2,11 +2,12 @@
 //! The socket has already checked current access and the conversation action grant.
 use super::{
     generated::{
-        ConversationAnswerParams, ConversationCancelParams, ConversationCloseParams,
-        ConversationCreateParams, ConversationCreateResult, ConversationErrorCode,
-        ConversationMutationResult, ConversationPermissionAnswerErrorDetails,
-        ConversationPermissionSelectionState, ConversationReadParams, ConversationRemoveParams,
-        ConversationReorderParams, ConversationSendParams,
+        ConversationAnswerParams, ConversationAnswerQuestionParams, ConversationCancelParams,
+        ConversationCloseParams, ConversationCreateParams, ConversationCreateResult,
+        ConversationErrorCode, ConversationMutationResult,
+        ConversationPermissionAnswerErrorDetails, ConversationPermissionSelectionState,
+        ConversationReadParams, ConversationRemoveParams, ConversationReorderParams,
+        ConversationSendParams,
     },
     socket::{failure, failure_with_details, success},
     state::ProductRouteState,
@@ -153,6 +154,30 @@ pub(super) async fn dispatch(
                     &ConversationMutationResult {
                         request_id: params.request_id,
                         applied,
+                    },
+                ))
+            }
+            "conversation.answerQuestion" => {
+                let params = params!(ConversationAnswerQuestionParams);
+                service
+                    .answer_question(
+                        conversation_id(&params.conversation_id)?,
+                        caller(params.request_id.clone()),
+                        params.execution_id,
+                        params.question_id,
+                        params.choices.map(|choices| {
+                            choices
+                                .into_iter()
+                                .map(|choice| (choice.key, choice.values, choice.own_words))
+                                .collect()
+                        }),
+                    )
+                    .await?;
+                Ok(success(
+                    &frame.id,
+                    &ConversationMutationResult {
+                        request_id: params.request_id,
+                        applied: true,
                     },
                 ))
             }

@@ -137,6 +137,16 @@ impl ExecutionController {
         event.validate_payload_size()?;
         Ok(event)
     }
+    /// Emit that one ask has stopped waiting, answered or withdrawn.
+    pub fn close_question(
+        &self,
+        execution: &ExecutionId,
+        id: QuestionId,
+    ) -> Result<ExecutionEvent, AgentError> {
+        let event = ExecutionEvent::new(execution.clone(), ExecutionUpdate::QuestionClosed { id });
+        event.validate_payload_size()?;
+        Ok(event)
+    }
     /// Admits review `id` for the observed `tool`, retaining its exact `input` and
     /// offered `options` until resolution. Produces the correlated review event.
     /// Supply the captured `execution` ID; a stale or inactive target returns an error.

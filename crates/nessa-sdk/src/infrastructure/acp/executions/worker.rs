@@ -1960,6 +1960,12 @@ impl<P: AcpProfile> Worker<P> {
             QuestionResponse::Declined => question_wire::declined(&wire_id),
         };
         let delivery = self.send(written).await;
+        // The ask has stopped waiting whatever the wire did with the answer, and
+        // a surface that did not answer it still has to see that.
+        let closed = execution.close_question(&answer.execution_id, answer.id.clone());
+        if let Ok(event) = closed {
+            let _ = self.emit(event);
+        }
         let observed = match &delivery {
             Ok(()) => PermissionAnswerDelivery::Written,
             Err(error) => PermissionAnswerDelivery::Failed(error.clone()),

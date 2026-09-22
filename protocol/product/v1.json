@@ -32,7 +32,12 @@
           "description": "Challenge deadline as Unix seconds, rounded up from millisecond wall time. The server enforces one monotonic timeout including challenge delivery; expiry closes with retryable handshake_timeout."
         }
       },
-      "required": ["minVersion", "maxVersion", "nonce", "expiresAt"],
+      "required": [
+        "minVersion",
+        "maxVersion",
+        "nonce",
+        "expiresAt"
+      ],
       "description": "Server challenge received before authentication. The SDK checks version overlap, then returns the nonce with credential evidence; callers normally use NessaClient.connect instead of building this payload."
     },
     "ProductClientMetadata": {
@@ -46,7 +51,9 @@
           "description": "Identifier of the connecting client application or instance."
         }
       },
-      "required": ["id"],
+      "required": [
+        "id"
+      ],
       "description": "Caller identification sent during the product handshake. This metadata does not grant permissions."
     },
     "SessionAuthenticateParams": {
@@ -82,7 +89,13 @@
           "description": "Descriptive client metadata, separate from authenticated identity."
         }
       },
-      "required": ["minVersion", "maxVersion", "nonce", "credential", "client"],
+      "required": [
+        "minVersion",
+        "maxVersion",
+        "nonce",
+        "credential",
+        "client"
+      ],
       "description": "Wire request for session.authenticate. NessaClient.connect builds this after validating the server challenge; a successful response is ProductSessionReady."
     },
     "ProductSessionReady": {
@@ -131,7 +144,10 @@
           "description": "Gateway audience to which the credential is bound."
         },
         "expiresAt": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 0,
           "maximum": 9007199254740991,
           "description": "Exclusive Unix seconds, or null for no expiry."
@@ -182,7 +198,10 @@
           "description": "Category of actor; this alone does not grant access."
         }
       },
-      "required": ["id", "kind"],
+      "required": [
+        "id",
+        "kind"
+      ],
       "x-rust-type": "nessa_auth::application::dto::PrincipalInputDto",
       "description": "Identity that acts in the product: a human, integration, or agent. A principal needs an active organization membership and an appropriate credential to access the gateway."
     },
@@ -217,7 +236,13 @@
           "description": "Whether the membership is active or disabled."
         }
       },
-      "required": ["id", "principalId", "organizationId", "role", "state"],
+      "required": [
+        "id",
+        "principalId",
+        "organizationId",
+        "role",
+        "state"
+      ],
       "x-rust-type": "nessa_auth::application::dto::MembershipInputDto",
       "description": "Relationship between a principal and an organization. The role participates in authorization and disabled membership prevents access."
     },
@@ -238,7 +263,10 @@
           "description": "Resource identifier, such as the gateway ID for server operations."
         }
       },
-      "required": ["organizationId", "id"],
+      "required": [
+        "organizationId",
+        "id"
+      ],
       "x-rust-type": "nessa_auth::application::dto::ResourceDto",
       "description": "Organization-scoped authorization target used by ProductGrant. The gateway resolves the actual resource for each operation before checking policy."
     },
@@ -257,7 +285,10 @@
           "description": "Exact organization-scoped target on which this action is requested."
         }
       },
-      "required": ["action", "resource"],
+      "required": [
+        "action",
+        "resource"
+      ],
       "x-rust-type": "nessa_auth::application::dto::CredentialGrantDto",
       "description": "One action/resource restriction on a credential. Used in credential issuance, credential metadata, and authenticated session snapshots. A grant is not a standalone permission: current membership and server policy must also allow the operation.\n\nFor example, { action: \"server.read\", resource: { organizationId: \"personal\", id: \"gateway\" } } scopes server-read access to that gateway; use the actual organization and gateway identifiers from your installation."
     },
@@ -296,13 +327,19 @@
           "description": "Creation time in Unix seconds."
         },
         "expiresAt": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 0,
           "maximum": 9007199254740991,
           "description": "Exclusive Unix seconds, or null for no expiry."
         },
         "revokedAt": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 0,
           "description": "Revocation time in Unix seconds, or null if not revoked."
         },
@@ -347,7 +384,10 @@
           "description": "Organization membership associated with that principal."
         },
         "expiresAt": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 0,
           "maximum": 9007199254740991,
           "description": "Exclusive Unix seconds, or null for no expiry."
@@ -362,7 +402,12 @@
           "description": "Requested action/resource restrictions; at least one is required."
         }
       },
-      "required": ["requestId", "principal", "membership", "grants"],
+      "required": [
+        "requestId",
+        "principal",
+        "membership",
+        "grants"
+      ],
       "description": "Wire input for issuing a scoped credential. Prefer client.credentials.issue, whose IssueCredentialParams allows the SDK to generate requestId. Reuse the same ID and inputs when explicitly retrying an uncertain result."
     },
     "CredentialListParams": {
@@ -389,7 +434,10 @@
           "description": "Identifier of the credential to revoke."
         }
       },
-      "required": ["requestId", "credentialId"],
+      "required": [
+        "requestId",
+        "credentialId"
+      ],
       "description": "Wire input for credential.revoke. Prefer client.credentials.revoke to generate and preserve the request ID."
     },
     "IssuedCredentialResult": {
@@ -407,7 +455,10 @@
           "description": "One-time credential evidence accepted by product connect auth. It is not replayed on a duplicate request."
         }
       },
-      "required": ["credential", "secret"],
+      "required": [
+        "credential",
+        "secret"
+      ],
       "description": "First successful issuance response. Contains secret evidence only once; keep it in private storage before discarding the result."
     },
     "ExistingCredentialResult": {
@@ -424,7 +475,10 @@
           "description": "Always true: this response does not contain a usable secret."
         }
       },
-      "required": ["credential", "secretUnavailable"],
+      "required": [
+        "credential",
+        "secretUnavailable"
+      ],
       "description": "Response when the issuance request ID already completed. Metadata is returned, but the original secret cannot be recovered by retrying."
     },
     "CredentialListResult": {
@@ -440,7 +494,9 @@
           "description": "Non-secret credential records returned by the gateway."
         }
       },
-      "required": ["credentials"],
+      "required": [
+        "credentials"
+      ],
       "description": "Credentials visible to the authorized caller, without secret evidence."
     },
     "CredentialRevokeResult": {
@@ -460,7 +516,10 @@
           "description": "Authorization-state revision returned by the mutation."
         }
       },
-      "required": ["credentialId", "revision"],
+      "required": [
+        "credentialId",
+        "revision"
+      ],
       "description": "Acknowledgement of a credential revocation."
     },
     "SessionCloseReason": {
@@ -528,17 +587,27 @@
     },
     "PrincipalKind": {
       "type": "string",
-      "enum": ["human", "integration", "agent"],
+      "enum": [
+        "human",
+        "integration",
+        "agent"
+      ],
       "description": "Supported categories of authenticated actors: human users, integrations, and agents."
     },
     "MembershipRole": {
       "type": "string",
-      "enum": ["admin", "member"],
+      "enum": [
+        "admin",
+        "member"
+      ],
       "description": "Organization roles understood by product authorization policy."
     },
     "MembershipState": {
       "type": "string",
-      "enum": ["active", "disabled"],
+      "enum": [
+        "active",
+        "disabled"
+      ],
       "description": "Membership availability. Disabled membership prevents access even when credential evidence is valid."
     },
     "SessionTermination": {
@@ -560,7 +629,10 @@
           "description": "Optional server delay hint in milliseconds, bounded to 60,000."
         }
       },
-      "required": ["code", "retryable"],
+      "required": [
+        "code",
+        "retryable"
+      ],
       "description": "Structured WebSocket close reason. The SDK derives retry policy from the numeric close code and accepts matching, bounded server delay hints."
     },
     "ConversationMessageStatus": {
@@ -579,12 +651,19 @@
     "ConversationPendingMode": {
       "type": "string",
       "description": "How an admitted input waits for dispatch.",
-      "enum": ["queued", "steering"]
+      "enum": [
+        "queued",
+        "steering"
+      ]
     },
     "ConversationDisposition": {
       "type": "string",
       "description": "How the gateway accepted or recovered this submission.",
-      "enum": ["queued", "injected", "settled"]
+      "enum": [
+        "queued",
+        "injected",
+        "settled"
+      ]
     },
     "ConversationCapabilities": {
       "type": "object",
@@ -612,7 +691,13 @@
           "description": "The connected agent advertised image input. False until an agent has been opened, and whenever it advertised none."
         }
       },
-      "required": ["queue", "steer", "resume", "permissions", "imageInput"]
+      "required": [
+        "queue",
+        "steer",
+        "resume",
+        "permissions",
+        "imageInput"
+      ]
     },
     "ImageAttachment": {
       "type": "object",
@@ -628,7 +713,12 @@
         },
         "mimeType": {
           "type": "string",
-          "enum": ["image/png", "image/jpeg", "image/gif", "image/webp"],
+          "enum": [
+            "image/png",
+            "image/jpeg",
+            "image/gif",
+            "image/webp"
+          ],
           "description": "Image encoding."
         },
         "size": {
@@ -638,7 +728,11 @@
           "description": "Image length in bytes, at most 5 MiB."
         }
       },
-      "required": ["digest", "mimeType", "size"]
+      "required": [
+        "digest",
+        "mimeType",
+        "size"
+      ]
     },
     "LinkedFile": {
       "type": "object",
@@ -651,10 +745,12 @@
           "maxLength": 4096,
           "x-utf8MaxBytes": 4096,
           "pattern": "^(?:/(?!\\.{1,2}(?:/|$))[^/\\u0000-\\u001f\\u007f\\u0080-\\u009f]+)+$",
-          "description": "Absolute path on the machine the gateway runs on, at most 4096 UTF-8 bytes (`x-utf8MaxBytes`; the `maxLength` beside it counts code points and is only a coarse upper bound, since a path within the byte limit always has fewer code points than bytes). Every component below the root is a name: no control character (C0 or C1), none empty, and none `.` or `..`. A component that is empty or a dot does not survive being written as a URI, which would make the link name a different path; a control character makes a path nobody can be shown before they approve the read. Nothing here is a rule about markdown — the gateway hands the path to the agent inside a link and encodes both halves of it down to an allowlist, so a bracket or a backslash in a name is the encoder's business and not the caller's."
+          "description": "Absolute path on the machine the gateway runs on, at most 4096 UTF-8 bytes (`x-utf8MaxBytes`; the `maxLength` beside it counts code points and is only a coarse upper bound, since a path within the byte limit always has fewer code points than bytes). Every component below the root is a name: no control character (C0 or C1), none empty, and none `.` or `..`. A component that is empty or a dot does not survive being written as a URI, which would make the link name a different path; a control character makes a path nobody can be shown before they approve the read. Nothing here is a rule about markdown \u2014 the gateway hands the path to the agent inside a link and encodes both halves of it down to an allowlist, so a bracket or a backslash in a name is the encoder's business and not the caller's."
         }
       },
-      "required": ["path"]
+      "required": [
+        "path"
+      ]
     },
     "AttachmentBeginParams": {
       "type": "object",
@@ -696,7 +792,13 @@
           "description": "Exact length in bytes, at most 64 MiB, which admits a camera RAW file; the upload is refused unless it is exactly this long."
         }
       },
-      "required": ["conversationId", "requestId", "digest", "mimeType", "size"]
+      "required": [
+        "conversationId",
+        "requestId",
+        "digest",
+        "mimeType",
+        "size"
+      ]
     },
     "AttachmentBeginResult": {
       "type": "object",
@@ -712,36 +814,54 @@
         },
         "state": {
           "type": "string",
-          "enum": ["stored", "upload_required"],
+          "enum": [
+            "stored",
+            "upload_required"
+          ],
           "description": "`stored` needs nothing further; `upload_required` carries a ticket."
         },
         "ticket": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 64,
           "maxLength": 64,
           "pattern": "^[0-9a-f]{64}$",
           "description": "Secret single-use upload ticket, sent as the `x-nessa-upload-ticket` header of one `PUT /attachments`. Null when stored. Do not log it."
         },
         "expiresAtMs": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 0,
           "description": "Unix milliseconds after which the ticket is refused. Null when stored."
         },
         "digest": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 71,
           "maxLength": 71,
           "pattern": "^sha256:[0-9a-f]{64}$",
           "description": "When stored: digest of what the conversation holds, which is what a message refers to. The gateway may have converted or compressed the upload, so this can differ from the uploaded digest. Null when an upload is required."
         },
         "mimeType": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 3,
           "maxLength": 127,
           "description": "When stored: media type of what the conversation holds. Null when an upload is required."
         },
         "size": {
-          "type": ["integer", "null"],
+          "type": [
+            "integer",
+            "null"
+          ],
           "minimum": 1,
           "description": "When stored: length in bytes of what the conversation holds. Null when an upload is required."
         }
@@ -825,7 +945,14 @@
           "description": "Target event count when steering was admitted locally; does not imply provider consumption timing."
         }
       },
-      "required": ["executionId", "userText", "attachments", "files", "status", "parts"]
+      "required": [
+        "executionId",
+        "userText",
+        "attachments",
+        "files",
+        "status",
+        "parts"
+      ]
     },
     "ConversationPending": {
       "type": "object",
@@ -868,7 +995,13 @@
           "description": "Queue or steering admission."
         }
       },
-      "required": ["executionId", "text", "attachments", "files", "mode"]
+      "required": [
+        "executionId",
+        "text",
+        "attachments",
+        "files",
+        "mode"
+      ]
     },
     "ConversationPermissionOption": {
       "type": "object",
@@ -890,7 +1023,10 @@
           "description": "Provider label for this option."
         }
       },
-      "required": ["id", "label"]
+      "required": [
+        "id",
+        "label"
+      ]
     },
     "ConversationPermission": {
       "type": "object",
@@ -1003,7 +1139,14 @@
           "description": "Exact tool arguments observed through a permission request, or empty when unavailable."
         }
       },
-      "required": ["executionId", "toolId", "title", "status", "details", "input"]
+      "required": [
+        "executionId",
+        "toolId",
+        "title",
+        "status",
+        "details",
+        "input"
+      ]
     },
     "ConversationView": {
       "type": "object",
@@ -1078,6 +1221,14 @@
         "runtime": {
           "$ref": "#/$defs/ConversationRuntime",
           "description": "Configured provider, model and working directory for this conversation."
+        },
+        "questions": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/ConversationQuestion"
+          },
+          "description": "Questions the agent is waiting on, oldest first."
         }
       },
       "required": [
@@ -1089,7 +1240,8 @@
         "tools",
         "capabilities",
         "truncated",
-        "queueComplete"
+        "queueComplete",
+        "questions"
       ]
     },
     "ConversationCreateParams": {
@@ -1119,7 +1271,10 @@
           "description": "Coding agent this conversation runs on for its whole life. Omitted takes the gateway's configured default. Ignored when the conversation already exists, which is reopened on the agent it was created with."
         }
       },
-      "required": ["conversationId", "requestId"]
+      "required": [
+        "conversationId",
+        "requestId"
+      ]
     },
     "ConversationCreateResult": {
       "type": "object",
@@ -1134,7 +1289,9 @@
           "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
         }
       },
-      "required": ["conversationId"]
+      "required": [
+        "conversationId"
+      ]
     },
     "ConversationReadParams": {
       "type": "object",
@@ -1149,7 +1306,9 @@
           "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
         }
       },
-      "required": ["conversationId"]
+      "required": [
+        "conversationId"
+      ]
     },
     "ConversationSendParams": {
       "type": "object",
@@ -1238,11 +1397,19 @@
           "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
         }
       },
-      "required": ["conversationId", "requestId", "executionId"]
+      "required": [
+        "conversationId",
+        "requestId",
+        "executionId"
+      ]
     },
     "ConversationPermissionSelectionState": {
       "type": "string",
-      "enum": ["pending", "consumed", "unknown"],
+      "enum": [
+        "pending",
+        "consumed",
+        "unknown"
+      ],
       "description": "Whether a failed permission answer left the domain review pending, consumed it, or could not prove either state."
     },
     "ConversationPermissionAnswerErrorDetails": {
@@ -1255,7 +1422,9 @@
           "description": "Authoritative knowledge of whether the reviewed option was selected."
         }
       },
-      "required": ["selectionState"]
+      "required": [
+        "selectionState"
+      ]
     },
     "ConversationAnswerParams": {
       "type": "object",
@@ -1347,7 +1516,13 @@
           "description": "Reason recorded with authenticated caller attribution."
         }
       },
-      "required": ["conversationId", "requestId", "executionId", "permissionId", "reason"]
+      "required": [
+        "conversationId",
+        "requestId",
+        "executionId",
+        "permissionId",
+        "reason"
+      ]
     },
     "ConversationCloseParams": {
       "type": "object",
@@ -1369,7 +1544,10 @@
           "description": "Stable action identifier retained for retries of one logical command."
         }
       },
-      "required": ["conversationId", "requestId"]
+      "required": [
+        "conversationId",
+        "requestId"
+      ]
     },
     "ConversationReceipt": {
       "type": "object",
@@ -1388,7 +1566,10 @@
           "description": "Accepted or recovered submission state."
         }
       },
-      "required": ["executionId", "disposition"]
+      "required": [
+        "executionId",
+        "disposition"
+      ]
     },
     "ConversationMutationResult": {
       "type": "object",
@@ -1407,7 +1588,10 @@
           "description": "Whether the requested change was applied or already acknowledged."
         }
       },
-      "required": ["requestId", "applied"]
+      "required": [
+        "requestId",
+        "applied"
+      ]
     },
     "ConversationReorderParams": {
       "type": "object",
@@ -1442,11 +1626,20 @@
           "description": "Exact desired full waiting order, including steering inputs. Running invocations are excluded."
         }
       },
-      "required": ["conversationId", "requestId", "executionIds"]
+      "required": [
+        "conversationId",
+        "requestId",
+        "executionIds"
+      ]
     },
     "ConversationReorderOutcome": {
       "type": "string",
-      "enum": ["applied", "unchanged", "queue_changed", "priority_conflict"],
+      "enum": [
+        "applied",
+        "unchanged",
+        "queue_changed",
+        "priority_conflict"
+      ],
       "description": "Applied or unchanged order, or a rejected stale queue/steering-priority conflict. Rejections leave the queue unchanged."
     },
     "ConversationReorderResult": {
@@ -1466,7 +1659,10 @@
           "description": "Whether the whole requested order was accepted."
         }
       },
-      "required": ["requestId", "outcome"]
+      "required": [
+        "requestId",
+        "outcome"
+      ]
     },
     "ConversationRuntime": {
       "type": "object",
@@ -1491,7 +1687,11 @@
           "description": "Working directory on the gateway host, not the client filesystem."
         }
       },
-      "required": ["model", "provider", "workspace"],
+      "required": [
+        "model",
+        "provider",
+        "workspace"
+      ],
       "description": "Runtime configuration selected by the gateway composition for this conversation."
     },
     "ConversationPart": {
@@ -1506,7 +1706,11 @@
         },
         "kind": {
           "type": "string",
-          "enum": ["text", "thought", "tool"],
+          "enum": [
+            "text",
+            "thought",
+            "tool"
+          ],
           "description": "Text, exposed thought content, or a tool observation."
         },
         "text": {
@@ -1529,7 +1733,12 @@
           "description": "Opaque provider message identity; only fragments with the same identity may be combined."
         }
       },
-      "required": ["offset", "kind", "text", "toolId"],
+      "required": [
+        "offset",
+        "kind",
+        "text",
+        "toolId"
+      ],
       "description": "One ordered observation fragment in a bounded execution projection; offsets may have gaps."
     },
     "ConversationErrorCode": {
@@ -1560,7 +1769,226 @@
         "attachment_storage_unavailable",
         "attachment_cleanup_unavailable"
       ],
-      "description": "Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold — never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command."
+      "description": "Typed rejection code carried by a conversation command the gateway dispatched and refused. Branch on these instead of message text. These are not every code a conversation request can receive: access and routing failures are answered by the session before a conversation command is dispatched, and carry their own codes. agent_startup_deadline means the agent was still starting when its budget expired, so nothing reached the provider and the same command is safe to repeat; it normally succeeds once the runtime is warm, but a launch whose process could not be confirmed stopped keeps that conversation blocked. invalid_request and agent_not_configured reject the command until their cause is addressed. agent_not_configured, agent_unsupported and conversations_not_configured are three different situations and only one of them is fixed by configuring an agent: the gateway runs no conversations at all, it names no runtime under the agent this conversation asked for, or no build here can open that conversation's agent. The image codes answer `attachment.begin` and a message naming uploads: image_input_unsupported is a model that takes no images, so no ticket and no message with one will ever be taken; attachment_not_found is an image this conversation does not hold \u2014 never uploaded into it, expired, or released when it closed; attachment_unavailable is one it holds but could not read; attachment_capacity is no room for another upload right now; attachment_storage_unavailable is the gateway unable to keep the bytes. attachment_cleanup_unavailable is a close that did happen, whose release of this conversation's uploads did not, and is the one image code that is not a refusal of the command."
+    },
+    "ConversationAnswerOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One answer a question offers: the value recorded, and the label read.",
+      "properties": {
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Exact value recorded when this option is chosen."
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Text shown to whoever answers."
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Secondary text, where the agent supplied any."
+        }
+      },
+      "required": [
+        "value",
+        "label"
+      ]
+    },
+    "ConversationAsked": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One question, and what may be answered to it.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Key the answer is correlated back under."
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "What is being asked."
+        },
+        "header": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Short label for the question, where the agent supplied one."
+        },
+        "multiSelect": {
+          "type": "boolean",
+          "description": "Whether several options may be chosen rather than one."
+        },
+        "freeText": {
+          "type": "boolean",
+          "description": "Whether an answer in the answerer's own words is accepted."
+        },
+        "options": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/ConversationAnswerOption"
+          },
+          "description": "What may be chosen, in the order the agent offered it."
+        }
+      },
+      "required": [
+        "key",
+        "prompt",
+        "multiSelect",
+        "freeText",
+        "options"
+      ]
+    },
+    "ConversationQuestion": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A question the agent is waiting on an answer to. Nothing is authorised by answering; the agent simply cannot continue that path until it hears back.",
+      "properties": {
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
+        },
+        "questionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Identity the answer names."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "The agent's own framing of why it is asking."
+        },
+        "questions": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/ConversationAsked"
+          },
+          "description": "What is being asked, in the order the agent asked it."
+        }
+      },
+      "required": [
+        "executionId",
+        "questionId",
+        "message",
+        "questions"
+      ]
+    },
+    "ConversationQuestionChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What was chosen for one question. Both parts may be absent, which is how a question is skipped.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The question this answers."
+        },
+        "values": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "x-utf8MaxBytes": 1024
+          },
+          "description": "Option values chosen, which the question must have offered."
+        },
+        "ownWords": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024,
+          "x-utf8MaxBytes": 1024,
+          "description": "Words of the answerer's own, only where the question invited them."
+        }
+      },
+      "required": [
+        "key",
+        "values"
+      ]
+    },
+    "ConversationAnswerQuestionParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Answer one question the agent asked, or decline to answer it.",
+      "properties": {
+        "conversationId": {
+          "type": "string",
+          "minLength": 36,
+          "maxLength": 36,
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "description": "Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization."
+        },
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable action identifier retained for retries of one logical command."
+        },
+        "executionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "Stable invocation identifier retained for retries of one logical message, at most 256 UTF-8 bytes."
+        },
+        "questionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "x-utf8MaxBytes": 256,
+          "description": "The ask being answered."
+        },
+        "choices": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/ConversationQuestionChoice"
+          },
+          "description": "What was chosen. Null declines the question, which is an answer the agent is told."
+        }
+      },
+      "required": [
+        "conversationId",
+        "requestId",
+        "executionId",
+        "questionId"
+      ]
     }
   }
 }

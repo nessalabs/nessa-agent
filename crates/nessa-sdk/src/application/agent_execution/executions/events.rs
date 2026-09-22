@@ -79,6 +79,7 @@ impl ExecutionEvent {
             }
             // An ask is bounded by its own construction — every text and both
             // collections — so what is left to check is the identity beside it.
+            ExecutionUpdate::QuestionClosed { id } => validate_observation_id(id.as_str()),
             ExecutionUpdate::QuestionAsked { id, question } => {
                 validate_observation_id(id.as_str())?;
                 ExecutionController::validate_tool_payload(
@@ -140,6 +141,7 @@ impl ExecutionEvent {
             ExecutionUpdate::QuestionAsked { id, question } => {
                 id.as_str().len().saturating_add(question.payload_bytes())
             }
+            ExecutionUpdate::QuestionClosed { id } => id.as_str().len(),
         };
         size_of::<Self>()
             .saturating_add(self.execution_id().as_str().len())
@@ -207,5 +209,14 @@ pub enum ExecutionUpdate {
         id: QuestionId,
         /// What was asked and what will be accepted as an answer.
         question: AgentQuestion,
+    },
+    /// An ask that is no longer waiting, because it was answered or withdrawn.
+    ///
+    /// Carried as an observation rather than left to whoever answered, so a
+    /// surface that was not the one answering — or one reading the session back
+    /// afterwards — sees the question stop being open.
+    QuestionClosed {
+        /// The ask that is no longer waiting.
+        id: QuestionId,
     },
 }

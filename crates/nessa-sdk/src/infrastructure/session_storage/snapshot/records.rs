@@ -138,6 +138,9 @@ pub(super) enum Update {
         message: String,
         questions: Vec<Asked>,
     },
+    QuestionClosed {
+        id: String,
+    },
 }
 /// One saved question: what was asked, and what could be chosen.
 #[derive(Serialize, Deserialize)]
@@ -222,6 +225,9 @@ impl From<ExecutionEvent> for Event {
                     tool: Tool::observation(&tool_id, &observation),
                     input: (&input).into(),
                     options: permissions::choices(&options),
+                },
+                ExecutionUpdate::QuestionClosed { id } => Update::QuestionClosed {
+                    id: id.as_str().into(),
                 },
                 ExecutionUpdate::QuestionAsked { id, question } => Update::QuestionAsked {
                     id: id.as_str().into(),
@@ -342,6 +348,12 @@ impl Event {
                     observation,
                     input: input.into(),
                     options: permissions::decode_choices(options)?,
+                }
+            }
+            Update::QuestionClosed { id } => {
+                validate_observation_id(&id).map_err(corrupt)?;
+                ExecutionUpdate::QuestionClosed {
+                    id: QuestionId::new(id).map_err(corrupt)?,
                 }
             }
             Update::QuestionAsked {

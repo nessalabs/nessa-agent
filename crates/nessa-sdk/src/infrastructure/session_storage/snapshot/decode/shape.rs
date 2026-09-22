@@ -97,7 +97,7 @@ impl Shape {
             (Update, "Text" | "Thought") => Text(MAX_MESSAGE_CHUNK_BYTES),
             (Update, "Tool") | (Review, "tool") => Tool,
             (Update, "PermissionRequested" | "PermissionCancelled") => Review,
-            (Update, "QuestionAsked") => Ask,
+            (Update, "QuestionAsked" | "QuestionClosed") => Ask,
             (Ask, "questions") => Asked,
             (Asked, "options") => AskedOptions,
             (Ask, "id") => Text(256),

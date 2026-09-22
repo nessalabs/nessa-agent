@@ -16,11 +16,12 @@ use crate::application::agent_execution::hooks::{
 use crate::application::agent_execution::permissions::{
     ActionContext, PermissionAnswer, PermissionAnswerFailure, PermissionAnswerFuture,
     PermissionCancellation, PermissionCancellationRequest, PermissionSelectionState,
+    QuestionAnswer,
 };
 use crate::application::agent_execution::providers::{
     AgentProvider, CleanupReport, CloseOutcome, ExecutionEventStream, ExecutionReportSource,
     ObservationFailure, ObservationFailureCause, OperationCapabilities, ProviderExecutionReply,
-    ProviderSession, ProviderSessionState, SessionCloseRequest,
+    ProviderOperationFailure, ProviderSession, ProviderSessionState, SessionCloseRequest,
 };
 use crate::application::agent_execution::sessions::{SessionManager, StorageError};
 use crate::domain::{
@@ -757,6 +758,36 @@ impl Agent {
         self.inner.lifecycle.finalize_stop(&attempt, &cleanup).await
     }
 
+    /// Answer one question the agent asked, or decline it.
+    ///
+    /// Runs as a control like an answered review: admitted once, supervised,
+    /// and continuing even if its caller stops waiting — the agent is holding a
+    /// request open and must be told something. Success is that the answer was
+    /// written, never that the agent acted on it.
+    pub fn answer_question(
+        &self,
+        answer: QuestionAnswer,
+    ) -> impl Future<Output = Result<(), AgentError>> + Send + '_ {
+        let agent = self.clone();
+        async move {
+            let admission = agent.accept_control()?;
+            let supervisor = agent.clone();
+            let control_origin = admission.control_origin();
+            tokio::spawn(async move {
+                agent
+                    .run_control_observed(admission.clone(), async {
+                        agent.inner.session.answer_question(answer).await
+                    })
+                    .await
+                    .map_err(ProviderOperationFailure::into_error)
+            })
+            .await
+            .map_err(|_| {
+                supervisor.inner.lifecycle.block_control(control_origin);
+                AgentError::CleanupUncertain
+            })?
+        }
+    }
     /// Resolve the identified pending review using its offered option and verified
     /// actor. Correlation, policy, audit, and provider delivery failures are returned;
     /// Successful evidence must match the retained review's tool, offered options,

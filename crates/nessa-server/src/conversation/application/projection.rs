@@ -1,7 +1,8 @@
 use super::view::{
-    ConversationAttachment, ConversationCapabilities, ConversationLinkedFile, ConversationMessage,
-    ConversationMessageStatus, ConversationPart, ConversationPending, ConversationPendingMode,
-    ConversationPermission, ConversationPermissionOption, ConversationTool, ConversationView,
+    ConversationAnswerOption, ConversationAsked, ConversationAttachment, ConversationCapabilities,
+    ConversationLinkedFile, ConversationMessage, ConversationMessageStatus, ConversationPart,
+    ConversationPending, ConversationPendingMode, ConversationPermission,
+    ConversationPermissionOption, ConversationQuestion, ConversationTool, ConversationView,
 };
 use nessa_sdk::application::agent_execution::{
     executions::{ExecutionEvent, ExecutionUpdate},
@@ -10,6 +11,7 @@ use nessa_sdk::application::agent_execution::{
 use nessa_sdk::domain::agent_execution::{
     executions::{ExecutionId, ExecutionOutcome, InvocationStage, MessageKind},
     prompts::UserMessage,
+    questions::AnswerShape,
     tools::{ToolContentView, ToolStatus},
 };
 use std::collections::HashSet;
@@ -27,6 +29,8 @@ pub(super) struct Projection {
     revision: u64,
     lagged: bool,
     resolved_permissions: HashSet<(String, String)>,
+    /// Asks that have stopped waiting, so a replayed ask does not reopen one.
+    answered_questions: HashSet<(String, String)>,
     terminal_executions: HashSet<String>,
 }
 pub(super) fn clipped(value: &str, bytes: usize) -> String {
@@ -45,6 +49,9 @@ fn outcome(value: ExecutionOutcome) -> ConversationMessageStatus {
         | ExecutionOutcome::Refused => ConversationMessageStatus::Failed,
     }
 }
+/// The most questions this view carries at once; an agent asking beyond it
+/// is truncated rather than allowed to fill the surface.
+const MAX_OPEN_QUESTIONS: usize = 8;
 impl Projection {
     pub fn new(
         id: String,
@@ -56,6 +63,7 @@ impl Projection {
             revision: 0,
             lagged: false,
             resolved_permissions: HashSet::new(),
+            answered_questions: HashSet::new(),
             terminal_executions: HashSet::new(),
             view: ConversationView {
                 conversation_id: id,
@@ -63,6 +71,7 @@ impl Projection {
                 messages: Vec::new(),
                 pending: Vec::new(),
                 permissions: Vec::new(),
+                questions: Vec::new(),
                 tools: Vec::new(),
                 runtime: None,
                 capabilities,
@@ -233,6 +242,18 @@ impl Projection {
                         self.view
                             .permissions
                             .retain(|permission| permission.execution_id != execution);
+                        self.view
+                            .questions
+                            .retain(|question| question.execution_id != execution);
+                    }
+                    ExecutionUpdate::QuestionAsked { .. } => self.observe_question(event),
+                    ExecutionUpdate::QuestionClosed { id } => {
+                        self.answered_questions
+                            .insert((execution.to_owned(), id.as_str().to_owned()));
+                        self.view.questions.retain(|question| {
+                            question.execution_id != execution
+                                || question.question_id != id.as_str()
+                        });
                     }
                     ExecutionUpdate::Message(_) | ExecutionUpdate::Tool(_) => {}
                 }
@@ -251,6 +272,55 @@ impl Projection {
         }
     }
 
+    /// Put one question into the view, unless it has already been answered or
+    /// the execution that asked it is over.
+    fn observe_question(&mut self, event: &ExecutionEvent) {
+        let ExecutionUpdate::QuestionAsked { id, question } = event.update() else {
+            return;
+        };
+        let execution = event.execution_id().as_str();
+        if self
+            .answered_questions
+            .contains(&(execution.to_owned(), id.as_str().to_owned()))
+            || self.terminal_executions.contains(execution)
+            || self
+                .view
+                .questions
+                .iter()
+                .any(|open| open.question_id == id.as_str() && open.execution_id == execution)
+        {
+            return;
+        }
+        if self.view.questions.len() >= MAX_OPEN_QUESTIONS {
+            self.view.truncated = true;
+            return;
+        }
+        self.view.questions.push(ConversationQuestion {
+            execution_id: execution.to_owned(),
+            question_id: id.as_str().to_owned(),
+            message: question.message().to_owned(),
+            questions: question
+                .questions()
+                .iter()
+                .map(|asked| ConversationAsked {
+                    key: asked.key().to_owned(),
+                    prompt: asked.prompt().to_owned(),
+                    header: asked.header().map(str::to_owned),
+                    multi_select: asked.shape() == AnswerShape::Many,
+                    free_text: asked.free_text(),
+                    options: asked
+                        .options()
+                        .iter()
+                        .map(|option| ConversationAnswerOption {
+                            value: option.value().to_owned(),
+                            label: option.label().to_owned(),
+                            description: option.description().map(str::to_owned),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        });
+    }
     fn observe_permission(&mut self, event: &ExecutionEvent) {
         let ExecutionUpdate::PermissionRequested {
             id: permission,
@@ -431,9 +501,25 @@ impl Projection {
                 self.view
                     .permissions
                     .retain(|permission| permission.execution_id != id);
+                self.view
+                    .questions
+                    .retain(|question| question.execution_id != id);
             }
             ExecutionUpdate::PermissionCancelled(cancellation) => {
                 self.resolved_permission(id, cancellation.request().id().as_str())
+            }
+            ExecutionUpdate::QuestionAsked { .. } => {
+                // An agent waiting on an answer is still running: it has not
+                // stopped, it has asked.
+                self.view.messages[index].status = ConversationMessageStatus::Running;
+                self.observe_question(event);
+            }
+            ExecutionUpdate::QuestionClosed { id } => {
+                self.answered_questions
+                    .insert((id.as_str().to_owned(), id.as_str().to_owned()));
+                self.view
+                    .questions
+                    .retain(|question| question.question_id != id.as_str());
             }
             ExecutionUpdate::PermissionRequested { .. } => {
                 self.view.messages[index].status = ConversationMessageStatus::Running;
