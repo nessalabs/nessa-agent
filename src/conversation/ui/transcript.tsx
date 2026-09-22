@@ -1,11 +1,6 @@
 import { agentTranscript } from "../adapters/agent-stream/transcript"
 import { agentTurnView } from "./agent-transcript-view"
-import {
-  ToolActivity,
-  ToolDetails,
-  ThoughtActivity,
-  ThoughtDetails,
-} from "./tool-activity"
+import { WorkActivity, WorkDetails } from "./tool-activity"
 import {
   MessageScroller,
   MessageScrollerViewport,
@@ -26,7 +21,7 @@ import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
 import { type Conversation, type Receipt, type Turn } from "../model"
 import { EmptyState } from "./empty-state"
 import { Thinking } from "./thinking"
-import { selectedToolActivity } from "./tool-selection"
+import { selectedWork } from "./tool-selection"
 
 export function Transcript({
   conversation,
@@ -47,8 +42,7 @@ export function Transcript({
   gatewayAvailable: boolean
   onOpenPaste: (text: string) => void
 }) {
-  const [thoughtFor, setThoughtFor] = React.useState<string | null>(null)
-  const [toolsFor, setToolsFor] = React.useState<string | null>(null)
+  const [workFor, setWorkFor] = React.useState<string | null>(null)
   const normalized = React.useMemo(
     () =>
       agentTranscript(
@@ -63,12 +57,10 @@ export function Transcript({
     [normalized],
   )
   const segments = rows.flatMap((row) => row.content)
-  const thoughtTurn = segments.find((part) => part.key === thoughtFor)
-  const selectedToolPart = selectedToolActivity(segments, toolsFor)
-  const selectedTools = selectedToolPart?.tools ?? []
+  const openWork = selectedWork(segments, workFor)
   React.useEffect(() => {
-    if (toolsFor !== null && !selectedToolPart) setToolsFor(null)
-  }, [selectedToolPart, toolsFor])
+    if (workFor !== null && !openWork) setWorkFor(null)
+  }, [openWork, workFor])
   const users = new Map(
     conversation.turns
       .filter((turn) => turn.from === "user")
@@ -108,17 +100,8 @@ export function Transcript({
                   )}
                   {row.content.map((part) => (
                     <React.Fragment key={part.key}>
-                      {part.thought && (
-                        <ThoughtActivity
-                          onOpen={() => setThoughtFor(part.key)}
-                          running={row.status === "running"}
-                        />
-                      )}
-                      {part.tools && (
-                        <ToolActivity
-                          tools={part.tools}
-                          onOpen={() => setToolsFor(part.key)}
-                        />
+                      {(part.thought || part.tools) && (
+                        <WorkActivity work={part} onOpen={() => setWorkFor(part.key)} />
                       )}
                       {part.text && (
                         <TurnRow
@@ -152,15 +135,7 @@ export function Transcript({
         </MessageScrollerViewport>
         <MessageScrollerButton />
       </MessageScroller>
-      {thoughtTurn && (
-        <ThoughtDetails
-          thought={thoughtTurn.thought ?? ""}
-          onClose={() => setThoughtFor(null)}
-        />
-      )}
-      {selectedToolPart && (
-        <ToolDetails tools={selectedTools} onClose={() => setToolsFor(null)} />
-      )}
+      {openWork && <WorkDetails work={openWork} onClose={() => setWorkFor(null)} />}
     </>
   )
 }

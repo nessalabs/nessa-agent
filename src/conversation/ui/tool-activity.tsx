@@ -14,82 +14,53 @@ import type { AgentToolView } from "./agent-transcript-view"
 const ToolRows = lazy(() => import("./tool-rows"))
 
 type Tool = AgentToolView
-function summary(tools: Tool[]) {
-  const running = tools.some(
-    (tool) => tool.status === "pending" || tool.status === "running",
-  )
-  const failed = tools.filter((tool) => tool.status === "failed").length
-  return `${running ? "Running" : "Ran"} ${tools.length} tool${tools.length === 1 ? "" : "s"}${failed ? ` · ${failed} failed` : ""}`
-}
-export function ToolActivity({ tools, onOpen }: { tools: Tool[]; onOpen: () => void }) {
-  if (!tools.length) return null
-  const running = tools.some(
-    (tool) => tool.status === "pending" || tool.status === "running",
-  )
-  return (
-    <AgentActivity
-      status={
-        running
-          ? "running"
-          : tools.some((tool) => tool.status === "failed")
-            ? "error"
-            : "complete"
-      }
-    >
-      <AgentActivityTrigger onClick={onOpen}>{summary(tools)}</AgentActivityTrigger>
-    </AgentActivity>
-  )
-}
-export function ToolDetails({ tools, onClose }: { tools: Tool[]; onClose: () => void }) {
-  return (
-    <Sheet className="nessa-detail-sheet" label="Tool activity" onClose={onClose}>
-      <SheetHandle />
-      <SheetHeader>
-        <SheetExpand />
-        <SheetTitle>{summary(tools)}</SheetTitle>
-        <SheetAction>Done</SheetAction>
-      </SheetHeader>
-      <SheetBody>
-        <Suspense fallback={<p>Loading tool details…</p>}>
-          <ToolRows tools={tools} />
-        </Suspense>
-      </SheetBody>
-    </Sheet>
-  )
-}
+export type Work = { thought?: string; tools?: Tool[] }
 
-export function ThoughtActivity({
-  running,
-  onOpen,
-}: {
-  running: boolean
-  onOpen: () => void
-}) {
+function isRunning(tools: Tool[]) {
+  return tools.some((tool) => tool.status === "pending" || tool.status === "running")
+}
+/**
+ * What a turn's working is called when it is one line.
+ *
+ * A tool that failed is not in it. An agent trying something that does not
+ * work and then trying something else is how agents work; counting those in
+ * the transcript tells a reader something is wrong with their request when
+ * nothing is. The failure is in the expansion, for whoever goes looking. A
+ * turn that failed is said by the conversation notice, which is not this.
+ */
+export function workSummary({ thought, tools = [] }: Work) {
+  if (!tools.length) return thought ? "Thought" : ""
+  if (isRunning(tools)) return "Running…"
+  return `Ran ${tools.length} tool${tools.length === 1 ? "" : "s"}`
+}
+export function WorkActivity({ work, onOpen }: { work: Work; onOpen: () => void }) {
+  const label = workSummary(work)
+  if (!label) return null
   return (
-    <AgentActivity status={running ? "running" : "complete"}>
-      <AgentActivityTrigger onClick={onOpen}>
-        {running ? "Thinking" : "Thought"}
-      </AgentActivityTrigger>
+    <AgentActivity status={isRunning(work.tools ?? []) ? "running" : "complete"}>
+      <AgentActivityTrigger onClick={onOpen}>{label}</AgentActivityTrigger>
     </AgentActivity>
   )
 }
-export function ThoughtDetails({
-  thought,
-  onClose,
-}: {
-  thought: string
-  onClose: () => void
-}) {
+export function WorkDetails({ work, onClose }: { work: Work; onClose: () => void }) {
+  const label = workSummary(work)
   return (
-    <Sheet className="nessa-detail-sheet" label="Thought" onClose={onClose}>
+    <Sheet className="nessa-detail-sheet" label={label} onClose={onClose}>
       <SheetHandle />
       <SheetHeader>
         <SheetExpand />
-        <SheetTitle>Thought</SheetTitle>
+        <SheetTitle>{label}</SheetTitle>
         <SheetAction>Done</SheetAction>
       </SheetHeader>
       <SheetBody>
-        <p className="whitespace-pre-wrap select-text text-sm">{thought}</p>
+        {work.thought ? (
+          <p className="whitespace-pre-wrap select-text text-sm">{work.thought}</p>
+        ) : null}
+        {work.tools?.length ? (
+          <Suspense fallback={<p>Loading tool details…</p>}>
+            <ToolRows tools={work.tools} />
+          </Suspense>
+        ) : null}
       </SheetBody>
     </Sheet>
   )
