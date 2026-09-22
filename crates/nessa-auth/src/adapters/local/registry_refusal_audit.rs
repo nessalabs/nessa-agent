@@ -118,31 +118,35 @@ fn path_value(path: &Path) -> Value {
     if let Some(value) = path.to_str() {
         return json!({"encoding": "utf8", "value": value});
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        return json!({
-            "encoding": "unix_bytes_base64url",
-            "value": URL_SAFE_NO_PAD.encode(path.as_os_str().as_bytes()),
-        });
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        let bytes: Vec<u8> = path
-            .as_os_str()
-            .encode_wide()
-            .flat_map(u16::to_le_bytes)
-            .collect();
-        return json!({
-            "encoding": "windows_utf16le_base64url",
-            "value": URL_SAFE_NO_PAD.encode(bytes),
-        });
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        json!({"encoding": "platform_debug", "value": format!("{path:?}")})
-    }
+    non_utf8_path_value(path)
+}
+
+#[cfg(unix)]
+fn non_utf8_path_value(path: &Path) -> Value {
+    use std::os::unix::ffi::OsStrExt;
+    json!({
+        "encoding": "unix_bytes_base64url",
+        "value": URL_SAFE_NO_PAD.encode(path.as_os_str().as_bytes()),
+    })
+}
+
+#[cfg(windows)]
+fn non_utf8_path_value(path: &Path) -> Value {
+    use std::os::windows::ffi::OsStrExt;
+    let bytes: Vec<u8> = path
+        .as_os_str()
+        .encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    json!({
+        "encoding": "windows_utf16le_base64url",
+        "value": URL_SAFE_NO_PAD.encode(bytes),
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn non_utf8_path_value(path: &Path) -> Value {
+    json!({"encoding": "platform_debug", "value": format!("{path:?}")})
 }
 
 #[cfg(test)]
