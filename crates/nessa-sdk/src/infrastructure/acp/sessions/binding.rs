@@ -31,7 +31,7 @@ use crate::domain::agent_execution::executions::ExecutionId;
 use crate::domain::agent_execution::prompts::UserMessage;
 use crate::domain::agent_execution::sessions::ExecutionSessionId;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
-use crate::infrastructure::process::ProcessScope;
+use crate::infrastructure::process::{ProcessScope, ProcessStartFailure};
 use std::{
     sync::{atomic::AtomicU64, Arc, Mutex as ControlMutex},
     time::Duration,
@@ -41,7 +41,8 @@ use tokio::{
     time::Instant,
 };
 
-pub(crate) type ProcessFactory = Arc<dyn Fn() -> Result<ProcessScope, AgentError> + Send + Sync>;
+pub(crate) type ProcessFactory =
+    Arc<dyn Fn() -> Result<ProcessScope, ProcessStartFailure> + Send + Sync>;
 
 pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
     process: ProcessFactory,
@@ -67,11 +68,7 @@ pub(crate) async fn open<P: AcpProfile + Clone + Sync>(
         audit,
         permission_sequence: Arc::new(AtomicU64::new(0)),
     };
-    let (mut generation, initial_events) = factory.start(restore).map_err(|cause| {
-        // This private factory returns only ProcessScope::spawn Transport errors;
-        // it transfers a scope only on success, before the worker is started.
-        ProviderOpenError::no_resources(cause)
-    })?;
+    let (mut generation, initial_events) = factory.start(restore)?;
     // A cancelled open drops this generation and requests its process cleanup.
     let session_id = match generation.ready().await {
         Ok(id) => id,
@@ -121,10 +118,25 @@ impl<P: AcpProfile + Clone> WorkerFactory<P> {
     fn start(
         &self,
         restore: Option<ExecutionSessionId>,
-    ) -> Result<(Generation, EventStream), AgentError> {
+    ) -> Result<(Generation, EventStream), ProviderOpenError> {
         self.operation_capabilities
             .send_replace(OperationCapabilities::default());
-        let scope = (self.process)()?;
+        let scope = match (self.process)() {
+            Ok(scope) => scope,
+            Err(failure) => {
+                let (cause, recovery) = failure.into_parts();
+                return Err(match recovery {
+                    Some(directory) => ProviderOpenError::with_cleanup(
+                        cause,
+                        Arc::new(ProcessCleanup::retaining_directory(
+                            self.config.clone(),
+                            directory,
+                        )),
+                    ),
+                    None => ProviderOpenError::no_resources(cause),
+                });
+            }
+        };
         let (commands, receiver) = mpsc::channel(16);
         let (close_requested, close_receiver) = watch::channel(None);
         let (finished, completion) = watch::channel(None);

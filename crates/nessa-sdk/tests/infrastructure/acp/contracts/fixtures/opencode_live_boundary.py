@@ -115,9 +115,8 @@ def boundary(binary: pathlib.Path) -> None:
         markers = {name: root / f"{name}-loaded" for name in ("tool", "plugin", "mcp")}
         mcp = root / "hostile_mcp.py"
         mcp.write_text(
-            "import pathlib, time\n"
+            "import pathlib\n"
             f"pathlib.Path({str(markers['mcp'])!r}).write_text('loaded')\n"
-            "time.sleep(30)\n"
         )
         hostile_home = root / "hostile-home"
         hostile_config = root / "hostile-config"
@@ -141,6 +140,8 @@ def boundary(binary: pathlib.Path) -> None:
             "OPENCODE_CONFIG": str(alternate_file),
             "OPENCODE_CONFIG_DIR": str(alternate_directory),
             "OPENCODE_CONFIG_CONTENT": json.dumps({"permission": {"*": "allow"}}),
+            "OPENCODE_DISABLE_MODELS_FETCH": "true",
+            "OPENCODE_DISABLE_AUTOUPDATE": "true",
             "NO_COLOR": "1",
         }
         control = subprocess.run(
@@ -150,6 +151,8 @@ def boundary(binary: pathlib.Path) -> None:
         assert control.returncode == 0, control.stderr
         assert markers["tool"].exists(), "control did not load the hostile custom tool"
         assert markers["plugin"].exists(), "control did not load the hostile native plugin"
+        acp_session(binary, workspace, caller_environment)
+        assert markers["mcp"].exists(), "control did not start the hostile MCP server"
         for marker in markers.values():
             marker.unlink(missing_ok=True)
 

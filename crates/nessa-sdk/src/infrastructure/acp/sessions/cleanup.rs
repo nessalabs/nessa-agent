@@ -1,10 +1,10 @@
-//! Retain the actual process scope until a failed teardown can be retried.
+//! Retain the actual process or pre-start directory until cleanup can be retried.
 use super::AcpConfig;
 use crate::application::agent_execution::{
     agents::AgentError,
     providers::{CleanupFuture, CleanupReport, CloseOutcome, ProviderCleanup},
 };
-use crate::infrastructure::process::ProcessScope;
+use crate::infrastructure::process::{ProcessScope, RetainedDirectory};
 use std::time::Duration;
 use tokio::{runtime::Handle, sync::Mutex, time::sleep};
 
@@ -15,8 +15,13 @@ pub(crate) struct ProcessCleanup {
 }
 #[derive(Default)]
 struct CleanupState {
-    scope: Option<ProcessScope>,
+    resource: Option<CleanupResource>,
     confirmed: Option<CloseOutcome>,
+}
+
+enum CleanupResource {
+    Process(ProcessScope),
+    Directory(RetainedDirectory),
 }
 impl ProcessCleanup {
     pub(crate) fn new(config: AcpConfig) -> Self {
@@ -27,7 +32,17 @@ impl ProcessCleanup {
         }
     }
     pub(crate) async fn retain(&self, scope: ProcessScope) {
-        self.state.lock().await.scope = Some(scope);
+        self.state.lock().await.resource = Some(CleanupResource::Process(scope));
+    }
+    pub(crate) fn retaining_directory(config: AcpConfig, directory: RetainedDirectory) -> Self {
+        Self {
+            state: Mutex::new(CleanupState {
+                resource: Some(CleanupResource::Directory(directory)),
+                confirmed: None,
+            }),
+            config,
+            runtime: Handle::current(),
+        }
     }
     pub(crate) async fn confirmed(&self) -> Option<CloseOutcome> {
         self.state.lock().await.confirmed
@@ -40,18 +55,28 @@ impl ProviderCleanup for ProcessCleanup {
             if let Some(outcome) = state.confirmed {
                 return CleanupReport::confirmed(outcome);
             }
-            let Some(scope) = state.scope.as_mut() else {
+            let Some(resource) = state.resource.as_mut() else {
                 return CleanupReport::unconfirmed(AgentError::CleanupUncertain);
             };
-            let outcome = match scope
-                .cleanup(self.config.shutdown_grace, self.config.kill_timeout)
-                .await
-            {
-                Ok(outcome) => outcome,
-                Err(error) => return CleanupReport::unconfirmed(error),
+            let outcome = match resource {
+                CleanupResource::Process(scope) => {
+                    match scope
+                        .cleanup(self.config.shutdown_grace, self.config.kill_timeout)
+                        .await
+                    {
+                        Ok(outcome) => outcome,
+                        Err(error) => return CleanupReport::unconfirmed(error),
+                    }
+                }
+                CleanupResource::Directory(directory) => {
+                    if let Err(error) = directory.release(self.config.kill_timeout).await {
+                        return CleanupReport::unconfirmed(error);
+                    }
+                    CloseOutcome { forced: false }
+                }
             };
             state.confirmed = Some(outcome);
-            state.scope.take();
+            state.resource.take();
             CleanupReport::confirmed(outcome)
         })
     }
@@ -59,7 +84,7 @@ impl ProviderCleanup for ProcessCleanup {
 
 impl Drop for ProcessCleanup {
     fn drop(&mut self) {
-        let Some(mut scope) = self.state.get_mut().scope.take() else {
+        let Some(mut resource) = self.state.get_mut().resource.take() else {
             return;
         };
         let grace = self.config.shutdown_grace;
@@ -70,13 +95,26 @@ impl Drop for ProcessCleanup {
         drop(self.runtime.spawn(async move {
             let mut backoff = Duration::from_millis(100);
             loop {
-                match scope.cleanup(grace, kill_timeout).await {
+                let result = match &mut resource {
+                    CleanupResource::Process(scope) => scope.cleanup(grace, kill_timeout).await,
+                    CleanupResource::Directory(directory) => directory
+                        .release(kill_timeout)
+                        .await
+                        .map(|()| CloseOutcome { forced: false }),
+                };
+                match result {
                     Ok(_) => break,
-                    Err(error) => tracing::warn!(
-                        %error,
-                        retained_directory = ?scope.retained_directory_path(),
-                        "retaining abandoned ACP process until cleanup is confirmed"
-                    ),
+                    Err(error) => {
+                        let retained_directory = match &resource {
+                            CleanupResource::Process(scope) => scope.retained_directory_path(),
+                            CleanupResource::Directory(directory) => Some(directory.path()),
+                        };
+                        tracing::warn!(
+                            %error,
+                            ?retained_directory,
+                            "retaining abandoned ACP resource until cleanup is confirmed"
+                        );
+                    }
                 }
                 sleep(backoff).await;
                 backoff = backoff.saturating_mul(2).min(Duration::from_secs(5));

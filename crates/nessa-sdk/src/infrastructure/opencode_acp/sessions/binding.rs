@@ -310,9 +310,9 @@ impl OpencodeAcpProvider {
             // pinned build stops being offered and every session is refused
             // rather than healing itself on the next refresh. That is
             // fail-closed and the refusal names the cause, and `data/models.json`
-            // would need the same edit regardless — but no test here can go red
-            // when it happens, because the contract fixture states the offered
-            // list rather than asking a live Opencode for it.
+            // would need the same edit regardless. The opt-in pinned-binary
+            // contract asks a live Opencode for selected IDs in each auth tier;
+            // the synthetic handler remains the deterministic protocol fixture.
             .env("OPENCODE_DISABLE_MODELS_FETCH", "1")
             // The pinned release is the tested one, so a copy that moves on
             // its own is a version this profile's `initialize` check would

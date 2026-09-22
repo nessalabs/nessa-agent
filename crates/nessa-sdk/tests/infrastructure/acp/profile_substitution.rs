@@ -12,7 +12,7 @@ use crate::application::agent_execution::executions::{
 use crate::application::agent_execution::permissions::{
     ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,
 };
-use crate::application::agent_execution::providers::SessionCloseRequest;
+use crate::application::agent_execution::providers::{ResourceCleanup, SessionCloseRequest};
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::application::dto::{ModalitiesDto, ModelMetadataDto};
 use crate::domain::agent_execution::executions::{ExecutionId, ExecutionOutcome, MessageKind};
@@ -180,7 +180,7 @@ async fn a_non_claude_profile_uses_shared_sessions_permissions_and_transport() {
             .envs(&process_config.environment)
             .envs(&process_config.credential_environment)
             .current_dir(&process_config.workspace);
-        ProcessScope::spawn(command)
+        ProcessScope::spawn(command).map_err(Into::into)
     });
     let mut opened = binding::open(
         process,
@@ -445,6 +445,44 @@ fn cleanup_fault_process(config: &AcpConfig) -> binding::ProcessFactory {
         scope.fail_next_cleanup();
         Ok(scope)
     })
+}
+
+#[tokio::test]
+async fn failed_spawn_with_a_retained_resource_returns_retryable_cleanup() {
+    let (_root, config, capabilities) = profile_setup();
+    let directory = Mutex::new(None);
+    let failure = match ProcessScope::spawn_with_private_directory(|path| {
+        *directory.lock().unwrap() = Some(path.to_path_buf());
+        tokio::process::Command::new("/definitely/not/a/real/nessa-agent-provider")
+    }) {
+        Ok(_) => panic!("invalid executable unexpectedly spawned"),
+        Err(failure) => failure,
+    };
+    let directory = directory.into_inner().unwrap().unwrap();
+    let failure = Mutex::new(Some(failure));
+    let process = Arc::new(move || Err(failure.lock().unwrap().take().unwrap()));
+
+    let failure = binding::open(
+        process,
+        config,
+        capabilities,
+        TestAcpProfile {
+            reject_startup: false,
+            reject_session: false,
+        },
+        Arc::new(RecordingAudit::default()),
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(failure.cause(), AgentError::Transport(_)));
+    assert!(directory.is_dir());
+    let cleanup = failure.cleanup().expect("retained directory cleanup");
+    assert!(matches!(
+        cleanup.retry_cleanup().await.resources(),
+        ResourceCleanup::Confirmed(_)
+    ));
+    assert!(!directory.exists());
 }
 fn read_process_id(root: &tempfile::TempDir) -> i32 {
     std::fs::read_to_string(root.path().join("pid"))
@@ -806,7 +844,7 @@ async fn a_profile_with_nothing_to_configure_still_has_its_session_held_to_the_f
             .envs(&process_config.environment)
             .envs(&process_config.credential_environment)
             .current_dir(&process_config.workspace);
-        ProcessScope::spawn(command)
+        ProcessScope::spawn(command).map_err(Into::into)
     });
     let modes = Arc::new(Mutex::new(Vec::new()));
     let opened = binding::open(
