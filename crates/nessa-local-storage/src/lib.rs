@@ -3,7 +3,7 @@
 use std::{
     fs::File,
     io,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 #[cfg(unix)]
 mod unix;
@@ -43,6 +43,43 @@ fn unsafe_file() -> io::Error {
         io::ErrorKind::PermissionDenied,
         "local storage must be private and owned by the current OS user",
     )
+}
+
+/// Create a private directory tree beneath a trusted root and durably publish
+/// every directory name before creating its child.
+///
+/// The path must be non-empty, relative, and contain only normal components.
+/// Each prefix is created through the platform's anchored `beneath` operation,
+/// then its established parent is synced before descent continues. The final
+/// directory is synced before success, so callers do not need a later file
+/// publication to establish the directory tree itself.
+pub fn create_durable_directory_beneath(root: &Path, directory: &Path) -> io::Result<()> {
+    create_durable_directory_with(
+        directory,
+        |relative| create_directory_beneath(root, relative),
+        |relative| sync_directory_beneath(root, relative),
+    )
+}
+
+fn create_durable_directory_with(
+    directory: &Path,
+    mut create: impl FnMut(&Path) -> io::Result<()>,
+    mut sync: impl FnMut(&Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut relative = PathBuf::new();
+    for component in directory.components() {
+        let Component::Normal(name) = component else {
+            return Err(unsafe_file());
+        };
+        let parent = relative.clone();
+        relative.push(name);
+        create(&relative)?;
+        sync(&parent)?;
+    }
+    if relative.as_os_str().is_empty() {
+        return Err(unsafe_file());
+    }
+    sync(&relative)
 }
 
 /// A temporary file protected at creation, before any secret bytes are written.
@@ -168,6 +205,55 @@ mod tests {
     use std::io::{Read, Write};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn durable_directory_syncs_each_name_before_descent_and_the_leaf_before_success() {
+        let steps = std::cell::RefCell::new(Vec::new());
+
+        create_durable_directory_with(
+            Path::new("audit/refusals"),
+            |path| {
+                steps
+                    .borrow_mut()
+                    .push(format!("create:{}", path.display()));
+                Ok(())
+            },
+            |path| {
+                steps.borrow_mut().push(format!("sync:{}", path.display()));
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            steps.into_inner(),
+            vec![
+                "create:audit".to_owned(),
+                "sync:".to_owned(),
+                "create:audit/refusals".to_owned(),
+                "sync:audit".to_owned(),
+                "sync:audit/refusals".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn durable_directory_sync_failure_stops_before_creating_a_child() {
+        let mut created = Vec::new();
+
+        let error = create_durable_directory_with(
+            Path::new("audit/refusals"),
+            |path| {
+                created.push(path.to_path_buf());
+                Ok(())
+            },
+            |_| Err(io::Error::other("injected parent sync failure")),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "injected parent sync failure");
+        assert_eq!(created, [PathBuf::from("audit")]);
+    }
 
     /// The step `publish` is built out of, and the whole of what it promises.
     ///
