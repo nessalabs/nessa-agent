@@ -3,11 +3,11 @@ use super::{
     GatewayReconciliationEffect, GatewayReconciliationIds, GatewayReconciliationIntent,
     GatewayReconciliationOutcome, GatewayReconciliationProgress, GatewayReconciliationRequest,
     GatewayStartup, GatewayStartupEvents, GatewayStartupPhase, LoginShellPath, ReconciledGateway,
-    ReconciliationNativeDecision, ReconciliationNativeEffect,
+    ReconciliationHistoryFact,
 };
 use crate::gateway::domain::value_objects::{
     BundledSurface, PendingReconciliation, ReconciliationCause, ReconciliationEvidence,
-    ReconciliationInitiator, SearchPath,
+    ReconciliationInitiator, ReconciliationRejectedReport, SearchPath,
 };
 #[cfg(test)]
 use std::time::Duration;
@@ -20,34 +20,13 @@ use std::{
 struct Lifecycle {
     startup: GatewayStartup,
     retained_gateway: Option<ReconciledGateway>,
-    attempt: Option<Arc<ReconciliationAttempt>>,
-    pending_origin: Option<PendingOrigin>,
+    running: Option<Arc<AttemptReceipt>>,
+    pending: Option<Arc<AttemptReceipt>>,
 }
 
-#[derive(Clone)]
-struct PendingOrigin {
-    request: GatewayReconciliationRequest,
-    authority: PendingReconciliation,
-}
-
-impl PendingOrigin {
-    fn new(request: GatewayReconciliationRequest) -> Self {
-        Self {
-            authority: PendingReconciliation::new(request.record().clone()),
-            request,
-        }
-    }
-
-    fn request(&self) -> &GatewayReconciliationRequest {
-        &self.request
-    }
-    fn is_owned_by(&self, attempt: &GatewayReconciliationAttempt) -> bool {
-        self.authority.is_owned_by(attempt.record())
-    }
-}
-
-struct ReconciliationAttempt {
+struct AttemptReceipt {
     request: GatewayReconciliationAttempt,
+    authority: PendingReconciliation,
     state: Mutex<AttemptState>,
     settled: Condvar,
 }
@@ -63,9 +42,10 @@ struct AttemptSettlement {
     reported: Result<(), GatewayError>,
 }
 
-impl ReconciliationAttempt {
+impl AttemptReceipt {
     fn pending(request: GatewayReconciliationAttempt) -> Self {
         Self {
+            authority: PendingReconciliation::new(request.record().clone()),
             request,
             state: Mutex::new(AttemptState {
                 settlement: None,
@@ -76,13 +56,11 @@ impl ReconciliationAttempt {
     }
 
     fn wait(&self) -> Result<(), GatewayError> {
-        self.wait_settlement()
-            .map(|settlement| settlement.reported)?
+        self.wait_settlement()?.reported
     }
 
     fn wait_physical(&self) -> Result<ReconciledGateway, GatewayError> {
-        self.wait_settlement()
-            .map(|settlement| settlement.physical)?
+        self.wait_settlement()?.physical
     }
 
     fn wait_settlement(&self) -> Result<AttemptSettlement, GatewayError> {
@@ -93,11 +71,11 @@ impl ReconciliationAttempt {
             .settled
             .wait_while(state, |state| state.settlement.is_none())
             .map_err(|_| state_unavailable())?;
-        Ok(settlement
+        settlement
             .settlement
             .as_ref()
             .cloned()
-            .ok_or_else(state_unavailable)?)
+            .ok_or_else(state_unavailable)
     }
 
     fn settle(&self, result: AttemptSettlement) -> Result<(), GatewayError> {
@@ -124,19 +102,18 @@ impl ReconciliationAttempt {
 
 struct StartupProgress {
     lifecycle: Arc<Mutex<Lifecycle>>,
-    attempt: Arc<ReconciliationAttempt>,
+    attempt: Arc<AttemptReceipt>,
     events: Arc<dyn GatewayStartupEvents>,
     audit: Arc<dyn GatewayReconciliationAudit>,
     intent: Arc<Mutex<Option<GatewayReconciliationIntent>>>,
-    decisions: Arc<Mutex<Vec<ReconciliationNativeDecision>>>,
-    effects: Arc<Mutex<Vec<ReconciliationNativeEffect>>>,
+    history: Arc<Mutex<Vec<ReconciliationHistoryFact>>>,
 }
 
 impl GatewayReconciliationProgress for StartupProgress {
     fn readiness_invalidated(&self) {
         let starting = self.lifecycle.lock().ok().and_then(|mut current| {
             let owns_current = current
-                .attempt
+                .running
                 .as_ref()
                 .is_some_and(|attempt| Arc::ptr_eq(attempt, &self.attempt));
             if !owns_current || !matches!(current.startup.phase(), GatewayStartupPhase::Ready) {
@@ -180,15 +157,9 @@ impl GatewayReconciliationProgress for StartupProgress {
         Ok(())
     }
 
-    fn effect_observed(&self, effect: ReconciliationNativeEffect) {
-        if let Ok(mut effects) = self.effects.lock() {
-            effects.push(effect);
-        }
-    }
-
-    fn decision_observed(&self, decision: ReconciliationNativeDecision) {
-        if let Ok(mut decisions) = self.decisions.lock() {
-            decisions.push(decision);
+    fn history_observed(&self, fact: ReconciliationHistoryFact) {
+        if let Ok(mut history) = self.history.lock() {
+            history.push(fact);
         }
     }
 }
@@ -216,6 +187,24 @@ pub struct Gateway {
     runtime: PathBuf,
     stage: String,
     lifecycle: Arc<Mutex<Lifecycle>>,
+    admission: Arc<Mutex<()>>,
+}
+
+#[derive(Clone)]
+struct ReconciliationExecutor {
+    host: Arc<dyn GatewayHost>,
+    login_shell: Arc<dyn LoginShellPath>,
+    startup_events: Arc<dyn GatewayStartupEvents>,
+    reconciliation_audit: Arc<dyn GatewayReconciliationAudit>,
+    agent_path: Arc<OnceLock<Option<SearchPath>>>,
+    runtime: PathBuf,
+    stage: String,
+    lifecycle: Arc<Mutex<Lifecycle>>,
+}
+
+struct AdmittedReceipt {
+    receipt: Arc<AttemptReceipt>,
+    start_owner: bool,
 }
 impl Gateway {
     pub fn bootstrap(
@@ -239,9 +228,10 @@ impl Gateway {
             lifecycle: Arc::new(Mutex::new(Lifecycle {
                 startup: GatewayStartup::starting(),
                 retained_gateway: None,
-                attempt: None,
-                pending_origin: None,
+                running: None,
+                pending: None,
             })),
+            admission: Arc::new(Mutex::new(())),
         }
     }
 
@@ -296,208 +286,44 @@ impl Gateway {
             }
         };
         let request = GatewayReconciliationRequest::new(request_correlation, evidence);
-        let host = self.host.clone();
-        let login_shell = self.login_shell.clone();
-        let startup_events = self.startup_events.clone();
-        let reconciliation_audit = self.reconciliation_audit.clone();
-        let reconciliation_ids = self.reconciliation_ids.clone();
-        let agent_path = self.agent_path.clone();
-        let runtime = self.runtime.clone();
-        let stage = self.stage.clone();
         let lifecycle = self.lifecycle.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            let mut queued_configuration_change = false;
-            let mut current = loop {
-                let mut current = lifecycle.lock().map_err(|_| state_unavailable())?;
-                let Some(attempt) = current.attempt.clone() else {
-                    break current;
-                };
-                let configuration_change =
-                    request.evidence().cause() == ReconciliationCause::ClaudeConfigurationChanged;
-                if configuration_change && !queued_configuration_change {
-                    current.pending_origin = Some(PendingOrigin::new(request.clone()));
-                    queued_configuration_change = true;
-                    drop(current);
-                    let _ = attempt.wait();
-                    continue;
-                }
-                if attempt.request.origin() == &request {
-                    drop(current);
-                    return attempt.wait();
-                }
-                if !configuration_change {
-                    if let Some(pending) = current.pending_origin.as_ref() {
-                        if attempt.request.origin() == pending.request() {
-                            drop(current);
-                            audit_attached(&reconciliation_audit, &attempt.request, &request)?;
-                            return attempt.wait();
-                        }
-                        drop(current);
-                        let _ = attempt.wait();
-                        continue;
-                    }
-                }
-                drop(current);
-                audit_attached(&reconciliation_audit, &attempt.request, &request)?;
-                return attempt.wait();
-            };
-            if request.evidence().cause() == ReconciliationCause::ClaudeConfigurationChanged
-                && !queued_configuration_change
-            {
-                current.pending_origin = Some(PendingOrigin::new(request.clone()));
-            }
-            let origin = current
-                .pending_origin
-                .as_ref()
-                .map(|pending| pending.request().clone())
-                .unwrap_or_else(|| request.clone());
-            let attempt_correlation = match reconciliation_ids.next() {
-                Ok(correlation) => correlation,
-                Err(error) => {
-                    current.startup = current
-                        .startup
-                        .next(GatewayStartupPhase::Failed(error.clone()));
-                    let failed = current.startup.clone();
-                    drop(current);
-                    publish(&startup_events, &failed);
-                    return Err(error);
-                }
-            };
-            let admitted =
-                match GatewayReconciliationAttempt::new(attempt_correlation, origin.clone()) {
-                    Ok(attempt) => attempt,
-                    Err(error) => {
-                        current.startup = current
-                            .startup
-                            .next(GatewayStartupPhase::Failed(error.clone()));
-                        let failed = current.startup.clone();
-                        drop(current);
-                        publish(&startup_events, &failed);
-                        return Err(error);
-                    }
-                };
-            if origin != request {
-                audit_attached(&reconciliation_audit, &admitted, &request)?;
-            }
-            let attempt = Arc::new(ReconciliationAttempt::pending(admitted));
-            current.attempt = Some(attempt.clone());
-            let announce_starting =
-                matches!(current.startup.phase(), GatewayStartupPhase::Failed(_));
-            let starting = announce_starting.then(|| {
-                current.startup = current.startup.next(GatewayStartupPhase::Starting);
-                current.startup.clone()
-            });
-            drop(current);
-            if let Some(starting) = &starting {
-                publish(&startup_events, starting);
-            }
-
-            let progress = StartupProgress {
-                lifecycle: lifecycle.clone(),
-                attempt: attempt.clone(),
-                events: startup_events.clone(),
-                audit: reconciliation_audit.clone(),
-                intent: Arc::new(Mutex::new(None)),
-                decisions: Arc::new(Mutex::new(Vec::new())),
-                effects: Arc::new(Mutex::new(Vec::new())),
-            };
-
-            let outcome = catch_unwind(AssertUnwindSafe(|| {
-                let agent_path =
-                    agent_path.get_or_init(|| resolve_agent_path(login_shell.as_ref()));
-                host.register(
-                    &runtime,
-                    &stage,
-                    agent_path.as_ref(),
-                    &attempt.request,
-                    &progress,
-                )
-            }));
-            let mut physical = outcome.unwrap_or_else(|_| {
-                Err(GatewayError::Registration(
-                    "gateway host panicked during reconciliation".into(),
-                ))
-            });
-            let intent = progress
-                .intent
-                .lock()
-                .ok()
-                .and_then(|intent| intent.clone());
-            let effects = progress
-                .effects
-                .lock()
-                .map(|effects| effects.clone())
-                .unwrap_or_default();
-            let decisions = progress
-                .decisions
-                .lock()
-                .map(|decisions| decisions.clone())
-                .unwrap_or_default();
-            if physical.is_ok() && intent.is_none() {
-                physical = Err(GatewayError::Registration(
-                    "gateway host completed without an admitted audit intent".into(),
-                ));
-            }
-            let mut outcome_error = None;
-            let audit_outcome = intent.and_then(|intent| {
-                let effect = match &physical {
-                    Ok(gateway) => match gateway.audit_identity() {
-                        Ok(identity) => GatewayReconciliationEffect::Confirmed(identity),
-                        Err(error) => {
-                            outcome_error = Some(error);
-                            return None;
-                        }
-                    },
-                    Err(error) if !effects.is_empty() => GatewayReconciliationEffect::Partial {
-                        decisions: decisions.clone(),
-                        effects: effects.clone(),
-                        error: error.clone(),
-                    },
-                    Err(error) => GatewayReconciliationEffect::Refused {
-                        decisions: decisions.clone(),
-                        error: error.clone(),
-                    },
-                };
-                match GatewayReconciliationOutcome::new(intent.clone(), effect) {
-                    Ok(outcome) => Some(outcome),
-                    Err(error) => {
-                        outcome_error = Some(error);
-                        None
-                    }
-                }
-            });
-            let audit_result = audit_outcome.as_ref().map(|audit_outcome| {
-                catch_unwind(AssertUnwindSafe(|| {
-                    reconciliation_audit.outcome(audit_outcome)
-                }))
-            });
-            let reported = match (outcome_error, audit_result) {
-                (Some(error), _) => Err(GatewayError::Audit {
-                    audit: error.to_string(),
-                    physical: physical.clone().err().map(Box::new),
-                }),
-                (None, None) => physical.clone().map(|_| ()),
-                (None, Some(Ok(Ok(())))) => physical.clone().map(|_| ()),
-                (None, Some(Ok(Err(error)))) => Err(GatewayError::Audit {
-                    audit: error.to_string(),
-                    physical: physical.clone().err().map(Box::new),
-                }),
-                (None, Some(Err(_))) => Err(GatewayError::Audit {
-                    audit: "gateway reconciliation audit adapter panicked".into(),
-                    physical: physical.clone().err().map(Box::new),
-                }),
-            };
-            finish(
+        let admission = self.admission.clone();
+        let reconciliation_ids = self.reconciliation_ids.clone();
+        let reconciliation_audit = self.reconciliation_audit.clone();
+        let startup_events = self.startup_events.clone();
+        let executor = ReconciliationExecutor {
+            host: self.host.clone(),
+            login_shell: self.login_shell.clone(),
+            startup_events: self.startup_events.clone(),
+            reconciliation_audit: self.reconciliation_audit.clone(),
+            agent_path: self.agent_path.clone(),
+            runtime: self.runtime.clone(),
+            stage: self.stage.clone(),
+            lifecycle: self.lifecycle.clone(),
+        };
+        let admitted = tauri::async_runtime::spawn_blocking(move || {
+            let admitted = admit_request(
                 &lifecycle,
-                &attempt,
+                &admission,
+                &reconciliation_ids,
+                &reconciliation_audit,
                 &startup_events,
-                physical,
-                reported,
-                &effects,
-            )
+                request,
+            )?;
+            if admitted.start_owner {
+                let owner = admitted.receipt.clone();
+                let _owner =
+                    tauri::async_runtime::spawn_blocking(move || execute_chain(&executor, owner));
+            }
+            Ok::<_, GatewayError>(admitted)
         })
         .await
-        .map_err(|error| GatewayError::Registration(error.to_string()))?
+        .map_err(|error| GatewayError::Registration(error.to_string()))??;
+
+        let receipt = admitted.receipt;
+        tauri::async_runtime::spawn_blocking(move || receipt.wait())
+            .await
+            .map_err(|error| GatewayError::Registration(error.to_string()))?
     }
     pub fn stop_agents(&self) -> Result<(), GatewayError> {
         let gateway = loop {
@@ -505,7 +331,7 @@ impl Gateway {
                 .lifecycle
                 .lock()
                 .map_err(|_| GatewayError::NotReconciled)?;
-            let Some(attempt) = lifecycle.attempt.clone() else {
+            let Some(attempt) = lifecycle.running.clone() else {
                 break lifecycle
                     .retained_gateway
                     .clone()
@@ -516,6 +342,90 @@ impl Gateway {
         };
         self.host.stop_agents(&gateway)
     }
+}
+
+fn admit_request(
+    lifecycle: &Arc<Mutex<Lifecycle>>,
+    admission: &Arc<Mutex<()>>,
+    ids: &Arc<dyn GatewayReconciliationIds>,
+    audit: &Arc<dyn GatewayReconciliationAudit>,
+    events: &Arc<dyn GatewayStartupEvents>,
+    request: GatewayReconciliationRequest,
+) -> Result<AdmittedReceipt, GatewayError> {
+    let guard = admission.lock().map_err(|_| state_unavailable())?;
+    let configuration_change =
+        request.evidence().cause() == ReconciliationCause::ClaudeConfigurationChanged;
+    let existing = {
+        let current = lifecycle.lock().map_err(|_| state_unavailable())?;
+        current.pending.clone().or_else(|| {
+            (!configuration_change)
+                .then(|| current.running.clone())
+                .flatten()
+        })
+    };
+    if let Some(receipt) = existing {
+        drop(guard);
+        audit_attached(audit, &receipt.request, &request)?;
+        return Ok(AdmittedReceipt {
+            receipt,
+            start_owner: false,
+        });
+    }
+
+    let correlation = match ids.next() {
+        Ok(correlation) => correlation,
+        Err(error) => {
+            drop(guard);
+            admission_failed(lifecycle, events, &error);
+            return Err(error);
+        }
+    };
+    let attempt = match GatewayReconciliationAttempt::new(correlation, request) {
+        Ok(attempt) => attempt,
+        Err(error) => {
+            drop(guard);
+            admission_failed(lifecycle, events, &error);
+            return Err(error);
+        }
+    };
+    let receipt = Arc::new(AttemptReceipt::pending(attempt));
+    let (selected, start_owner, starting) = {
+        let mut current = lifecycle.lock().map_err(|_| state_unavailable())?;
+        if let Some(pending) = current.pending.clone() {
+            (pending, false, None)
+        } else if current.running.is_some() {
+            if configuration_change {
+                current.pending = Some(receipt.clone());
+                (receipt.clone(), false, None)
+            } else {
+                (
+                    current.running.clone().ok_or_else(state_unavailable)?,
+                    false,
+                    None,
+                )
+            }
+        } else {
+            current.running = Some(receipt.clone());
+            let starting =
+                matches!(current.startup.phase(), GatewayStartupPhase::Failed(_)).then(|| {
+                    current.startup = current.startup.next(GatewayStartupPhase::Starting);
+                    current.startup.clone()
+                });
+            (receipt.clone(), true, starting)
+        }
+    };
+    let joined = !Arc::ptr_eq(&selected, &receipt);
+    drop(guard);
+    if let Some(starting) = &starting {
+        publish(events, starting);
+    }
+    if joined {
+        audit_attached(audit, &selected.request, receipt.request.origin())?;
+    }
+    Ok(AdmittedReceipt {
+        receipt: selected,
+        start_owner,
+    })
 }
 
 fn publish(events: &Arc<dyn GatewayStartupEvents>, startup: &GatewayStartup) {
@@ -530,7 +440,7 @@ fn admission_failed(
     error: &GatewayError,
 ) {
     let failed = lifecycle.lock().ok().and_then(|mut current| {
-        if current.attempt.is_some() {
+        if current.running.is_some() {
             return None;
         }
         current.startup = current
@@ -573,81 +483,226 @@ fn state_unavailable() -> GatewayError {
     GatewayError::Registration("gateway startup state is unavailable".into())
 }
 
-fn finish(
-    lifecycle: &Arc<Mutex<Lifecycle>>,
-    attempt: &Arc<ReconciliationAttempt>,
-    events: &Arc<dyn GatewayStartupEvents>,
-    result: Result<ReconciledGateway, GatewayError>,
+enum CleanupUpdate {
+    Keep,
+    Replace(ReconciledGateway),
+    Clear,
+}
+
+struct AttemptExecution {
+    physical: Result<ReconciledGateway, GatewayError>,
     reported: Result<(), GatewayError>,
-    effects: &[ReconciliationNativeEffect],
-) -> Result<(), GatewayError> {
-    let mut current = lifecycle.lock().map_err(|_| state_unavailable())?;
-    let owns_current = current
-        .attempt
-        .as_ref()
-        .is_some_and(|current| Arc::ptr_eq(current, attempt));
-    if !owns_current {
-        return Err(state_unavailable());
+    cleanup: CleanupUpdate,
+    ready: bool,
+}
+
+fn execute_chain(executor: &ReconciliationExecutor, mut receipt: Arc<AttemptReceipt>) {
+    loop {
+        let execution = catch_unwind(AssertUnwindSafe(|| execute_attempt(executor, &receipt)))
+            .unwrap_or_else(|_| AttemptExecution {
+                physical: Err(GatewayError::Registration(
+                    "gateway reconciliation owner panicked".into(),
+                )),
+                reported: Err(GatewayError::Registration(
+                    "gateway reconciliation owner panicked".into(),
+                )),
+                cleanup: CleanupUpdate::Keep,
+                ready: false,
+            });
+        match settle_and_promote(executor, &receipt, execution) {
+            Some(next) => receipt = next,
+            None => return,
+        }
     }
-    let physical_settlement = result.clone();
-    let (answer, publish_startup) = match (result, reported) {
-        (Ok(gateway), Ok(())) => {
-            let changed_identity = current
-                .retained_gateway
-                .as_ref()
-                .is_some_and(|previous| previous != &gateway);
-            current.retained_gateway = Some(gateway);
-            if current
-                .pending_origin
-                .as_ref()
-                .is_some_and(|pending| pending.is_owned_by(&attempt.request))
-            {
-                current.pending_origin = None;
-            }
-            if matches!(current.startup.phase(), GatewayStartupPhase::Ready) && !changed_identity {
-                (Ok(()), None)
+}
+
+fn execute_attempt(
+    executor: &ReconciliationExecutor,
+    receipt: &Arc<AttemptReceipt>,
+) -> AttemptExecution {
+    let progress = StartupProgress {
+        lifecycle: executor.lifecycle.clone(),
+        attempt: receipt.clone(),
+        events: executor.startup_events.clone(),
+        audit: executor.reconciliation_audit.clone(),
+        intent: Arc::new(Mutex::new(None)),
+        history: Arc::new(Mutex::new(Vec::new())),
+    };
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        let agent_path = executor
+            .agent_path
+            .get_or_init(|| resolve_agent_path(executor.login_shell.as_ref()));
+        executor.host.register(
+            &executor.runtime,
+            &executor.stage,
+            agent_path.as_ref(),
+            &receipt.request,
+            &progress,
+        )
+    }));
+    let mut physical = outcome.unwrap_or_else(|_| {
+        Err(GatewayError::Registration(
+            "gateway host panicked during reconciliation".into(),
+        ))
+    });
+    let intent = progress
+        .intent
+        .lock()
+        .ok()
+        .and_then(|intent| intent.clone());
+    let facts = progress
+        .history
+        .lock()
+        .map(|history| history.clone())
+        .unwrap_or_default();
+    if physical.is_ok() && intent.is_none() {
+        physical = Err(GatewayError::Registration(
+            "gateway host completed without an admitted audit intent".into(),
+        ));
+    }
+    let Some(intent) = intent else {
+        let error = physical.clone().err().unwrap_or_else(|| {
+            GatewayError::Registration("gateway audit intent is missing".into())
+        });
+        return AttemptExecution {
+            physical,
+            reported: Err(error),
+            cleanup: CleanupUpdate::Keep,
+            ready: false,
+        };
+    };
+    let identity = physical
+        .as_ref()
+        .map_err(Clone::clone)
+        .and_then(ReconciledGateway::audit_identity);
+    let audit_outcome = GatewayReconciliationOutcome::assess(intent, facts, identity);
+    let (base_report, cleanup, ready) = match audit_outcome.effect() {
+        GatewayReconciliationEffect::Confirmed { .. } => (
+            Ok(()),
+            physical
+                .clone()
+                .map(CleanupUpdate::Replace)
+                .unwrap_or(CleanupUpdate::Keep),
+            true,
+        ),
+        GatewayReconciliationEffect::Failed { history, error } => (
+            Err(error.clone()),
+            if history.proves_unloaded() {
+                CleanupUpdate::Clear
             } else {
-                current.startup = current.startup.next(GatewayStartupPhase::Ready);
-                (Ok(()), Some(current.startup.clone()))
-            }
-        }
-        (Ok(gateway), Err(error)) => {
-            current.retained_gateway = Some(gateway);
-            current.startup = current
-                .startup
-                .next(GatewayStartupPhase::Failed(error.clone()));
-            (Err(error), Some(current.startup.clone()))
-        }
-        (Err(physical_error), reported) => {
-            let error = reported.err().unwrap_or(physical_error);
-            if effects.contains(&ReconciliationNativeEffect::OldServiceUnloaded) {
-                current.retained_gateway = None;
-            }
-            current.startup = current
-                .startup
-                .next(GatewayStartupPhase::Failed(error.clone()));
-            (Err(error), Some(current.startup.clone()))
+                CleanupUpdate::Keep
+            },
+            false,
+        ),
+        GatewayReconciliationEffect::RejectedReport {
+            trusted_history,
+            report,
+            error,
+        } => {
+            let cleanup = match report {
+                ReconciliationRejectedReport::ConfirmedTargetMismatch(_)
+                | ReconciliationRejectedReport::HealthyReuseMismatch(_)
+                | ReconciliationRejectedReport::ReusedRuntimeInstance(_) => {
+                    if trusted_history.proves_unloaded() {
+                        CleanupUpdate::Clear
+                    } else {
+                        CleanupUpdate::Keep
+                    }
+                }
+                _ => physical
+                    .clone()
+                    .map(CleanupUpdate::Replace)
+                    .unwrap_or_else(|_| {
+                        if trusted_history.proves_unloaded() {
+                            CleanupUpdate::Clear
+                        } else {
+                            CleanupUpdate::Keep
+                        }
+                    }),
+            };
+            (Err(error.clone()), cleanup, false)
         }
     };
-    let settled = attempt.settle(AttemptSettlement {
-        physical: physical_settlement,
-        reported: answer.clone(),
-    });
-    current.attempt = None;
-    drop(current);
-    if let Some(startup) = &publish_startup {
-        publish(events, startup);
+    let audit_result = catch_unwind(AssertUnwindSafe(|| {
+        executor.reconciliation_audit.outcome(&audit_outcome)
+    }));
+    let reported = match audit_result {
+        Ok(Ok(())) => base_report,
+        Ok(Err(error)) => Err(GatewayError::Audit {
+            audit: error.to_string(),
+            physical: base_report.err().map(Box::new),
+        }),
+        Err(_) => Err(GatewayError::Audit {
+            audit: "gateway reconciliation audit adapter panicked".into(),
+            physical: base_report.err().map(Box::new),
+        }),
+    };
+    let ready = ready && reported.is_ok();
+    AttemptExecution {
+        physical,
+        reported,
+        cleanup,
+        ready,
     }
-    settled?;
-    answer
 }
-/// The search path the agent should be given, if it can be had. Called once per
-/// host process; see [`Gateway::agent_path`].
-///
-/// A login shell that hangs or fails is not a registration failure: the user
-/// still gets their gateway, the agent still gets a working path, and the one
-/// consequence — that the tools they installed are not on it — is said out loud
-/// rather than left to be discovered as `command not found`.
+
+fn settle_and_promote(
+    executor: &ReconciliationExecutor,
+    receipt: &Arc<AttemptReceipt>,
+    execution: AttemptExecution,
+) -> Option<Arc<AttemptReceipt>> {
+    let answer = execution.reported.clone();
+    let settlement = AttemptSettlement {
+        physical: execution.physical,
+        reported: answer.clone(),
+    };
+    let (next, startup) = executor
+        .lifecycle
+        .lock()
+        .ok()
+        .and_then(|mut current| {
+            let owns_running = current
+                .running
+                .as_ref()
+                .is_some_and(|running| Arc::ptr_eq(running, receipt));
+            if !owns_running {
+                return None;
+            }
+            match execution.cleanup {
+                CleanupUpdate::Keep => {}
+                CleanupUpdate::Replace(gateway) => current.retained_gateway = Some(gateway),
+                CleanupUpdate::Clear => current.retained_gateway = None,
+            }
+            let phase = if execution.ready {
+                GatewayStartupPhase::Ready
+            } else {
+                GatewayStartupPhase::Failed(answer.clone().err().unwrap_or_else(|| {
+                    GatewayError::Registration("gateway reconciliation was rejected".into())
+                }))
+            };
+            let unchanged_ready =
+                execution.ready && matches!(current.startup.phase(), GatewayStartupPhase::Ready);
+            let startup = (!unchanged_ready).then(|| {
+                current.startup = current.startup.next(phase);
+                current.startup.clone()
+            });
+            current.running = None;
+            let next = current.pending.take();
+            if let Some(next) = &next {
+                if next.authority.is_owned_by(next.request.record()) {
+                    current.running = Some(next.clone());
+                }
+            }
+            Some((current.running.clone(), startup))
+        })
+        .unwrap_or((None, None));
+    if let Some(startup) = &startup {
+        publish(&executor.startup_events, startup);
+    }
+    let _ = receipt.settle(settlement);
+    next
+}
+
 fn resolve_agent_path(login_shell: &dyn LoginShellPath) -> Option<SearchPath> {
     match login_shell.resolve() {
         Ok(path) => Some(path),

@@ -4,9 +4,10 @@ pub use reconciliation_evidence::{
     BundledSurface, PendingReconciliation, ReconciliationAttemptRecord, ReconciliationCause,
     ReconciliationConsistencyError, ReconciliationCorrelation, ReconciliationCorrelationError,
     ReconciliationCorrelationPairError, ReconciliationEvidence, ReconciliationEvidenceError,
+    ReconciliationHistory, ReconciliationHistoryAssessment, ReconciliationHistoryFact,
     ReconciliationIdentityError, ReconciliationIncarnation, ReconciliationInitiator,
-    ReconciliationIntentRecord, ReconciliationNativeDecision, ReconciliationNativeEffect,
-    ReconciliationOutcomeRecord, ReconciliationPhysicalRecord, ReconciliationRequestRecord,
+    ReconciliationIntentRecord, ReconciliationOutcomeDisposition, ReconciliationOutcomeRecord,
+    ReconciliationPhysicalRecord, ReconciliationRejectedReport, ReconciliationRequestRecord,
     ReconciliationTarget,
 };
 mod search_path;

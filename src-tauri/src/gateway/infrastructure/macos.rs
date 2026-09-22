@@ -1,8 +1,7 @@
 //! launchd registration and loopback readiness. Service lifetime belongs to launchd.
 use crate::gateway::application::{
     GatewayError, GatewayHost, GatewayReconciliationAttempt, GatewayReconciliationIntent,
-    GatewayReconciliationProgress, ReconciledGateway, ReconciliationNativeDecision,
-    ReconciliationNativeEffect,
+    GatewayReconciliationProgress, ReconciledGateway, ReconciliationHistoryFact,
 };
 use crate::gateway::domain::value_objects::{ReconciliationTarget, SearchPath};
 use nessa_local_storage::OpenMode;
@@ -117,6 +116,45 @@ fn matches_reconciled_gateway(
                 && runtime.generation == gateway.service_generation()
     )
 }
+
+fn retire_then_unload(
+    progress: &dyn GatewayReconciliationProgress,
+    retire: impl FnOnce() -> Result<(), String>,
+    unload: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    retire()?;
+    progress.history_observed(ReconciliationHistoryFact::RetirementAcknowledged);
+    unload()?;
+    progress.history_observed(ReconciliationHistoryFact::OldServiceUnloaded);
+    Ok(())
+}
+
+fn publish_definition(
+    progress: &dyn GatewayReconciliationProgress,
+    rename: impl FnOnce() -> Result<(), String>,
+    sync_directory: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    rename()?;
+    progress.history_observed(ReconciliationHistoryFact::ServiceDefinitionPublished);
+    sync_directory()?;
+    progress.history_observed(ReconciliationHistoryFact::ServiceDefinitionDurable);
+    Ok(())
+}
+
+fn run_bootstrap<T, E>(
+    progress: &dyn GatewayReconciliationProgress,
+    run: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    progress.history_observed(ReconciliationHistoryFact::BootstrapCommandRequested);
+    let output = run()?;
+    progress.history_observed(ReconciliationHistoryFact::BootstrapCommandCompleted);
+    Ok(output)
+}
+
+fn bootstrap_succeeded(progress: &dyn GatewayReconciliationProgress) {
+    progress.history_observed(ReconciliationHistoryFact::BootstrapCommandSucceeded);
+}
+
 fn register(
     runtime: &Path,
     stage: &str,
@@ -350,18 +388,21 @@ fn register(
                 .map(PathBuf::from)
                 .filter(|path| path.is_absolute())
                 .ok_or("Loaded definition has no absolute data namespace")?;
-            retire(
-                &old_data,
-                &service,
-                &fingerprint,
-                &running.fingerprint,
-                &running.instance,
-                &running.generation,
-                &generation,
+            retire_then_unload(
+                progress,
+                || {
+                    retire(
+                        &old_data,
+                        &service,
+                        &fingerprint,
+                        &running.fingerprint,
+                        &running.instance,
+                        &running.generation,
+                        &generation,
+                    )
+                },
+                || launchctl(&["bootout", &service]),
             )?;
-            progress.effect_observed(ReconciliationNativeEffect::RetirementAcknowledged);
-            launchctl(&["bootout", &service])?;
-            progress.effect_observed(ReconciliationNativeEffect::OldServiceUnloaded);
             clear_install_attempt(&lock_directory)?;
         }
         ServiceState::LegacyExactService => {
@@ -370,7 +411,7 @@ fn register(
             eprintln!("[nessa] Retiring legacy gateway {service}; active agents will be stopped by server shutdown");
             progress.readiness_invalidated();
             launchctl(&["bootout", &service])?;
-            progress.effect_observed(ReconciliationNativeEffect::OldServiceUnloaded);
+            progress.history_observed(ReconciliationHistoryFact::OldServiceUnloaded);
             clear_install_attempt(&lock_directory)?;
         }
         ServiceState::ForeignPort => {
@@ -411,7 +452,7 @@ fn register(
             }
             progress.readiness_invalidated();
             launchctl(&["bootout", &service])?;
-            progress.effect_observed(ReconciliationNativeEffect::OldServiceUnloaded);
+            progress.history_observed(ReconciliationHistoryFact::OldServiceUnloaded);
             if recorded.is_some() {
                 startup::forget_recorded_failure(&installed_logs);
             }
@@ -450,31 +491,27 @@ fn register(
             .map_err(|e| e.to_string())?
             .sync_all()
             .map_err(|e| e.to_string())?;
-        if let Err(error) = fs::rename(&next, &path) {
-            return Err(error.to_string().into());
-        }
-        progress.effect_observed(ReconciliationNativeEffect::ServiceDefinitionPublished);
-        nessa_local_storage::sync_directory(&agents).map_err(|e| e.to_string())?;
-        progress.effect_observed(ReconciliationNativeEffect::ServiceDefinitionDurable);
+        publish_definition(
+            progress,
+            || fs::rename(&next, &path).map_err(|error| error.to_string()),
+            || nessa_local_storage::sync_directory(&agents).map_err(|error| error.to_string()),
+        )?;
         publish_install_attempt(&lock_directory, &service, &definition)?;
-        progress.decision_observed(ReconciliationNativeDecision::BootstrapCommandRequested);
-        let bootstrap = Command::new("/bin/launchctl")
-            .args(["bootstrap", &domain])
-            .arg(&path)
-            .output();
-        if bootstrap.is_ok() {
-            progress.effect_observed(ReconciliationNativeEffect::BootstrapCommandCompleted);
-        }
-        let bootstrap = bootstrap
-            .map_err(|error| BootstrapFailure::CouldNotRun(error.to_string()))
-            .and_then(bootstrap_result);
+        let bootstrap = run_bootstrap(progress, || {
+            Command::new("/bin/launchctl")
+                .args(["bootstrap", &domain])
+                .arg(&path)
+                .output()
+        })
+        .map_err(|error| BootstrapFailure::CouldNotRun(error.to_string()))
+        .and_then(bootstrap_result);
         finish_bootstrap(
             bootstrap,
             || service_status(&service).map(|status| status.loaded),
             || disabled_services.is_disabled(&domain, &label),
             || clear_install_attempt(&lock_directory),
         )?;
-        progress.effect_observed(ReconciliationNativeEffect::BootstrapCommandSucceeded);
+        bootstrap_succeeded(progress);
         let running = wait_fingerprint(&service, (&fingerprint, &generation), port, &log)?;
         clear_install_attempt(&lock_directory)?;
         Ok(running)
@@ -843,12 +880,16 @@ fn finish_bootstrap(
 #[cfg(test)]
 mod tests {
     use super::{
-        disabled_service, finish_bootstrap, gave_up_retry, incomplete_install_retry,
-        installed_generation, matches_reconciled_gateway, prepare_data_directory,
-        registered_agent_path, runtime_fingerprint, service_matches, startup, unavailable_service,
+        bootstrap_succeeded, disabled_service, finish_bootstrap, gave_up_retry,
+        incomplete_install_retry, installed_generation, matches_reconciled_gateway,
+        prepare_data_directory, publish_definition, registered_agent_path, retire_then_unload,
+        run_bootstrap, runtime_fingerprint, service_matches, startup, unavailable_service,
         unreadable_process_identity, BootstrapFailure, SearchPath,
     };
-    use crate::gateway::application::ReconciledGateway;
+    use crate::gateway::application::{
+        GatewayError, GatewayReconciliationIntent, GatewayReconciliationProgress,
+        ReconciledGateway, ReconciliationHistoryFact,
+    };
     use crate::gateway::infrastructure::macos::control::{Health, ManagedRuntime, ServiceStatus};
     use crate::gateway::infrastructure::macos::startup::LastExit;
     use serde_json::{json, Value};
@@ -856,7 +897,68 @@ mod tests {
         cell::Cell,
         fs,
         path::{Path, PathBuf},
+        sync::Mutex,
     };
+
+    #[derive(Default)]
+    struct RecordingProgress(Mutex<Vec<ReconciliationHistoryFact>>);
+
+    impl GatewayReconciliationProgress for RecordingProgress {
+        fn readiness_invalidated(&self) {}
+
+        fn intent_admitted(&self, _: GatewayReconciliationIntent) -> Result<(), GatewayError> {
+            Ok(())
+        }
+
+        fn history_observed(&self, fact: ReconciliationHistoryFact) {
+            self.0.lock().unwrap().push(fact);
+        }
+    }
+
+    #[test]
+    fn production_transition_helpers_emit_only_completed_ordered_boundaries() {
+        let progress = RecordingProgress::default();
+        assert_eq!(
+            retire_then_unload(&progress, || Ok(()), || Err("bootout failed".into())),
+            Err("bootout failed".into())
+        );
+        assert_eq!(
+            *progress.0.lock().unwrap(),
+            [ReconciliationHistoryFact::RetirementAcknowledged]
+        );
+
+        let progress = RecordingProgress::default();
+        assert_eq!(
+            publish_definition(&progress, || Ok(()), || Err("sync failed".into())),
+            Err("sync failed".into())
+        );
+        assert_eq!(
+            *progress.0.lock().unwrap(),
+            [ReconciliationHistoryFact::ServiceDefinitionPublished]
+        );
+
+        let progress = RecordingProgress::default();
+        assert_eq!(
+            run_bootstrap(&progress, || Err::<(), _>("spawn failed")),
+            Err("spawn failed")
+        );
+        assert_eq!(
+            *progress.0.lock().unwrap(),
+            [ReconciliationHistoryFact::BootstrapCommandRequested]
+        );
+
+        let progress = RecordingProgress::default();
+        run_bootstrap(&progress, || Ok::<_, &str>(())).unwrap();
+        bootstrap_succeeded(&progress);
+        assert_eq!(
+            *progress.0.lock().unwrap(),
+            [
+                ReconciliationHistoryFact::BootstrapCommandRequested,
+                ReconciliationHistoryFact::BootstrapCommandCompleted,
+                ReconciliationHistoryFact::BootstrapCommandSucceeded,
+            ]
+        );
+    }
 
     fn temporary_directory(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("nessa-gateway-{name}-{}", std::process::id()))

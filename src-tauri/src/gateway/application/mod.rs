@@ -1,9 +1,7 @@
 //! Retryable desktop gateway reconciliation; native effects enter through the owned port.
 mod ports;
 mod service;
-pub use crate::gateway::domain::value_objects::{
-    ReconciliationNativeDecision, ReconciliationNativeEffect,
-};
+pub use crate::gateway::domain::value_objects::ReconciliationHistoryFact;
 #[cfg(test)]
 pub(crate) use ports::testing;
 pub use ports::{

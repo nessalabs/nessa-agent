@@ -10,11 +10,11 @@ use crate::gateway::{
     application::{
         GatewayError, GatewayReconciliationAttempt, GatewayReconciliationAudit,
         GatewayReconciliationEffect, GatewayReconciliationIntent, GatewayReconciliationOutcome,
-        GatewayReconciliationRequest, ReconciliationNativeDecision, ReconciliationNativeEffect,
+        GatewayReconciliationRequest, ReconciliationHistoryFact,
     },
     domain::value_objects::{
         BundledSurface, ReconciliationCause, ReconciliationIncarnation, ReconciliationInitiator,
-        ReconciliationTarget,
+        ReconciliationRejectedReport, ReconciliationTarget,
     },
 };
 use serde_json::{json, Value};
@@ -73,25 +73,29 @@ impl GatewayReconciliationAudit for FileReconciliationAudit {
 
     fn outcome(&self, outcome: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
         let effect = match outcome.effect() {
-            GatewayReconciliationEffect::Confirmed(after) => {
-                json!({"kind":"confirmed", "after":identity(after)})
-            }
-            GatewayReconciliationEffect::Refused { decisions, error } => {
+            GatewayReconciliationEffect::Confirmed { after, history } => {
                 json!({
-                    "kind":"refused",
-                    "decisions": decisions.iter().map(|decision| native_decision(*decision)).collect::<Vec<_>>(),
+                    "kind":"confirmed",
+                    "history": history.facts().iter().map(|fact| native_fact(*fact)).collect::<Vec<_>>(),
+                    "after":identity(after)
+                })
+            }
+            GatewayReconciliationEffect::Failed { history, error } => {
+                json!({
+                    "kind":"failed",
+                    "history": history.facts().iter().map(|fact| native_fact(*fact)).collect::<Vec<_>>(),
                     "error":error.to_string()
                 })
             }
-            GatewayReconciliationEffect::Partial {
-                decisions,
-                effects,
+            GatewayReconciliationEffect::RejectedReport {
+                trusted_history,
+                report,
                 error,
             } => {
                 json!({
-                    "kind":"partial",
-                    "decisions":decisions.iter().map(|decision| native_decision(*decision)).collect::<Vec<_>>(),
-                    "effects":effects.iter().map(|effect| native_effect(*effect)).collect::<Vec<_>>(),
+                    "kind":"rejected_report",
+                    "trustedHistory":trusted_history.facts().iter().map(|fact| native_fact(*fact)).collect::<Vec<_>>(),
+                    "rejected":rejected_report(report),
                     "error":error.to_string()
                 })
             }
@@ -149,20 +153,35 @@ fn initiator(initiator: ReconciliationInitiator) -> &'static str {
     }
 }
 
-fn native_effect(effect: ReconciliationNativeEffect) -> &'static str {
-    match effect {
-        ReconciliationNativeEffect::RetirementAcknowledged => "retirement_acknowledged",
-        ReconciliationNativeEffect::OldServiceUnloaded => "old_service_unloaded",
-        ReconciliationNativeEffect::ServiceDefinitionPublished => "service_definition_published",
-        ReconciliationNativeEffect::ServiceDefinitionDurable => "service_definition_durable",
-        ReconciliationNativeEffect::BootstrapCommandCompleted => "bootstrap_command_completed",
-        ReconciliationNativeEffect::BootstrapCommandSucceeded => "bootstrap_command_succeeded",
+fn native_fact(fact: ReconciliationHistoryFact) -> &'static str {
+    match fact {
+        ReconciliationHistoryFact::RetirementAcknowledged => "retirement_acknowledged",
+        ReconciliationHistoryFact::OldServiceUnloaded => "old_service_unloaded",
+        ReconciliationHistoryFact::ServiceDefinitionPublished => "service_definition_published",
+        ReconciliationHistoryFact::ServiceDefinitionDurable => "service_definition_durable",
+        ReconciliationHistoryFact::BootstrapCommandRequested => "bootstrap_command_requested",
+        ReconciliationHistoryFact::BootstrapCommandCompleted => "bootstrap_command_completed",
+        ReconciliationHistoryFact::BootstrapCommandSucceeded => "bootstrap_command_succeeded",
     }
 }
 
-fn native_decision(decision: ReconciliationNativeDecision) -> &'static str {
-    match decision {
-        ReconciliationNativeDecision::BootstrapCommandRequested => "bootstrap_command_requested",
+fn rejected_report(report: &ReconciliationRejectedReport) -> Value {
+    match report {
+        ReconciliationRejectedReport::InvalidHistory(fact) => {
+            json!({"reason":"invalid_history", "rejectedFact":native_fact(*fact)})
+        }
+        ReconciliationRejectedReport::ConfirmationWithoutCompleteHistory => {
+            json!({"reason":"confirmation_without_complete_history"})
+        }
+        ReconciliationRejectedReport::ConfirmedTargetMismatch(after) => {
+            json!({"reason":"confirmed_target_mismatch", "claimedAfter":identity(after)})
+        }
+        ReconciliationRejectedReport::HealthyReuseMismatch(after) => {
+            json!({"reason":"healthy_reuse_mismatch", "claimedAfter":identity(after)})
+        }
+        ReconciliationRejectedReport::ReusedRuntimeInstance(after) => {
+            json!({"reason":"reused_runtime_instance", "claimedAfter":identity(after)})
+        }
     }
 }
 
@@ -246,14 +265,11 @@ mod tests {
         audit.intent(&intent).expect("intent write");
         assert!(audit.intent(&intent).is_err());
 
-        let outcome = GatewayReconciliationOutcome::new(
+        let outcome = GatewayReconciliationOutcome::assess(
             intent,
-            GatewayReconciliationEffect::Refused {
-                decisions: Vec::new(),
-                error: GatewayError::Registration("refused".into()),
-            },
-        )
-        .expect("outcome");
+            Vec::new(),
+            Err(GatewayError::Registration("refused".into())),
+        );
         audit.outcome(&outcome).expect("outcome write");
         let joined = request(3, ReconciliationCause::ExplicitRetry);
         audit.joined(&attempt, &joined).expect("join write");
@@ -266,7 +282,41 @@ mod tests {
         .expect("json");
         assert_eq!(recorded["target"]["runtimeFingerprint"], "a".repeat(64));
         assert_eq!(recorded["origin"]["cause"], "startup");
-        assert_eq!(recorded["effect"]["kind"], "refused");
+        assert_eq!(recorded["effect"]["kind"], "failed");
+
+        let attempt = GatewayReconciliationAttempt::new(
+            correlation(5),
+            request(4, ReconciliationCause::Startup),
+        )
+        .expect("attempt");
+        let target = ReconciliationTarget::new(
+            "gui/501/so.nessa.gateway.prod".into(),
+            "a".repeat(64),
+            "b".repeat(64),
+        )
+        .expect("target");
+        let after = ReconciliationIncarnation::new(
+            target.clone(),
+            "550e8400-e29b-41d4-a716-446655440000".into(),
+            42,
+            7420,
+        )
+        .expect("identity");
+        let intent =
+            GatewayReconciliationIntent::new(attempt, target, Some(after.clone())).expect("intent");
+        let rejected = GatewayReconciliationOutcome::assess(
+            intent,
+            vec![ReconciliationHistoryFact::BootstrapCommandSucceeded],
+            Ok(after),
+        );
+        audit.outcome(&rejected).expect("rejected write");
+        let rejected: Value = serde_json::from_slice(
+            &fs::read(directory.join("00000000-0000-4000-8000-000000000005-outcome.json"))
+                .expect("record"),
+        )
+        .expect("json");
+        assert_eq!(rejected["effect"]["kind"], "rejected_report");
+        assert_eq!(rejected["effect"]["rejected"]["reason"], "invalid_history");
         fs::remove_dir_all(root).expect("cleanup");
     }
 }

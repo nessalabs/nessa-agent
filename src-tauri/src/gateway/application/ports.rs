@@ -1,8 +1,9 @@
 use crate::gateway::domain::value_objects::{
     ReconciliationAttemptRecord, ReconciliationCorrelation, ReconciliationEvidence,
-    ReconciliationIncarnation, ReconciliationIntentRecord, ReconciliationNativeDecision,
-    ReconciliationNativeEffect, ReconciliationOutcomeRecord, ReconciliationPhysicalRecord,
-    ReconciliationRequestRecord, ReconciliationTarget, SearchPath, SearchPathError,
+    ReconciliationHistory, ReconciliationHistoryFact, ReconciliationIncarnation,
+    ReconciliationIntentRecord, ReconciliationOutcomeDisposition, ReconciliationOutcomeRecord,
+    ReconciliationPhysicalRecord, ReconciliationRejectedReport, ReconciliationRequestRecord,
+    ReconciliationTarget, SearchPath, SearchPathError,
 };
 use std::{error::Error, fmt, path::Path};
 
@@ -158,15 +159,14 @@ pub trait GatewayStartupEvents: Send + Sync {
     fn publish(&self, startup: &GatewayStartup);
 }
 
-/// Reports that native reconciliation is about to invalidate current readiness.
+/// Reports readiness invalidation and the ordered native history for one attempt.
 ///
 /// Healthy verification never calls this port. A native adapter calls it before
 /// it fences, retires, unloads, or replaces the ready process.
 pub trait GatewayReconciliationProgress: Send + Sync {
     fn readiness_invalidated(&self);
     fn intent_admitted(&self, intent: GatewayReconciliationIntent) -> Result<(), GatewayError>;
-    fn decision_observed(&self, decision: ReconciliationNativeDecision);
-    fn effect_observed(&self, effect: ReconciliationNativeEffect);
+    fn history_observed(&self, fact: ReconciliationHistoryFact);
 }
 
 /// One caller's immutable request to the serialized reconciliation owner.
@@ -272,14 +272,17 @@ impl GatewayReconciliationIntent {
 /// Physical reconciliation result, kept separate from audit delivery.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GatewayReconciliationEffect {
-    Confirmed(ReconciliationIncarnation),
-    Refused {
-        decisions: Vec<ReconciliationNativeDecision>,
+    Confirmed {
+        after: ReconciliationIncarnation,
+        history: ReconciliationHistory,
+    },
+    Failed {
+        history: ReconciliationHistory,
         error: GatewayError,
     },
-    Partial {
-        decisions: Vec<ReconciliationNativeDecision>,
-        effects: Vec<ReconciliationNativeEffect>,
+    RejectedReport {
+        trusted_history: ReconciliationHistory,
+        report: ReconciliationRejectedReport,
         error: GatewayError,
     },
 }
@@ -287,37 +290,64 @@ pub enum GatewayReconciliationEffect {
 /// Final audit record for one admitted attempt.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GatewayReconciliationOutcome {
-    _record: ReconciliationOutcomeRecord,
+    record: ReconciliationOutcomeRecord,
     intent: GatewayReconciliationIntent,
     effect: GatewayReconciliationEffect,
 }
 
 impl GatewayReconciliationOutcome {
-    pub fn new(
+    pub fn assess(
         intent: GatewayReconciliationIntent,
-        effect: GatewayReconciliationEffect,
-    ) -> Result<Self, GatewayError> {
-        let physical = match &effect {
-            GatewayReconciliationEffect::Confirmed(after) => {
-                ReconciliationPhysicalRecord::Confirmed(after.clone())
-            }
-            GatewayReconciliationEffect::Refused { .. } => ReconciliationPhysicalRecord::Refused,
-            GatewayReconciliationEffect::Partial { effects, .. } => {
-                ReconciliationPhysicalRecord::Partial(effects.clone())
-            }
+        facts: Vec<ReconciliationHistoryFact>,
+        physical: Result<ReconciliationIncarnation, GatewayError>,
+    ) -> Self {
+        let physical_record = match &physical {
+            Ok(after) => ReconciliationPhysicalRecord::Confirmed(after.clone()),
+            Err(_) => ReconciliationPhysicalRecord::Failed,
         };
-        let decisions = match &effect {
-            GatewayReconciliationEffect::Confirmed(_) => Vec::new(),
-            GatewayReconciliationEffect::Refused { decisions, .. }
-            | GatewayReconciliationEffect::Partial { decisions, .. } => decisions.clone(),
+        let record =
+            ReconciliationOutcomeRecord::assess(intent.record().clone(), facts, physical_record);
+        let effect = match (record.disposition(), physical) {
+            (
+                ReconciliationOutcomeDisposition::Accepted(
+                    ReconciliationPhysicalRecord::Confirmed(after),
+                ),
+                Ok(_),
+            ) => GatewayReconciliationEffect::Confirmed {
+                after: after.clone(),
+                history: record.history().clone(),
+            },
+            (
+                ReconciliationOutcomeDisposition::Accepted(ReconciliationPhysicalRecord::Failed),
+                Err(error),
+            ) => GatewayReconciliationEffect::Failed {
+                history: record.history().clone(),
+                error,
+            },
+            (ReconciliationOutcomeDisposition::Rejected(report), physical) => {
+                GatewayReconciliationEffect::RejectedReport {
+                    trusted_history: record.history().clone(),
+                    report: report.clone(),
+                    error: physical.err().unwrap_or_else(|| {
+                        GatewayError::Registration(
+                            "gateway host returned a contradictory success report".into(),
+                        )
+                    }),
+                }
+            }
+            _ => GatewayReconciliationEffect::RejectedReport {
+                trusted_history: record.history().clone(),
+                report: ReconciliationRejectedReport::ConfirmationWithoutCompleteHistory,
+                error: GatewayError::Registration(
+                    "gateway host returned an incomplete terminal report".into(),
+                ),
+            },
         };
-        let record = ReconciliationOutcomeRecord::new(intent.record().clone(), decisions, physical)
-            .map_err(|error| GatewayError::Registration(error.to_string()))?;
-        Ok(Self {
-            _record: record,
+        Self {
+            record,
             intent,
             effect,
-        })
+        }
     }
 
     pub fn attempt(&self) -> &GatewayReconciliationAttempt {
@@ -330,6 +360,10 @@ impl GatewayReconciliationOutcome {
 
     pub fn effect(&self) -> &GatewayReconciliationEffect {
         &self.effect
+    }
+
+    pub fn record(&self) -> &ReconciliationOutcomeRecord {
+        &self.record
     }
 }
 
