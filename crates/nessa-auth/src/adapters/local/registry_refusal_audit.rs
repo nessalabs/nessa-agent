@@ -8,11 +8,13 @@ use crate::application::{
     ports::Clock,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use nessa_local_storage::{create_directory_beneath, sync_directory_beneath, PrivateTempFile};
+use nessa_local_storage::{
+    create_durable_directory_beneath, sync_directory_beneath, PrivateTempFile,
+};
 use serde_json::{json, Value};
 use std::{
-    io::{self, Write},
-    path::{Component, Path, PathBuf},
+    io::Write,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -112,41 +114,6 @@ fn fault_value(fault: &CredentialRegistryFault) -> Value {
     }
 }
 
-fn create_durable_directory_beneath(root: &Path, directory: &Path) -> io::Result<()> {
-    create_durable_directory_with(
-        directory,
-        |relative| create_directory_beneath(root, relative),
-        |parent| sync_directory_beneath(root, parent),
-    )
-}
-
-fn create_durable_directory_with(
-    directory: &Path,
-    mut create: impl FnMut(&Path) -> io::Result<()>,
-    mut sync: impl FnMut(&Path) -> io::Result<()>,
-) -> io::Result<()> {
-    let mut relative = PathBuf::new();
-    for component in directory.components() {
-        let Component::Normal(name) = component else {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "audit directory must be relative to its trusted root",
-            ));
-        };
-        let parent = relative.clone();
-        relative.push(name);
-        create(&relative)?;
-        sync(&parent)?;
-    }
-    if relative.as_os_str().is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "audit directory must not be empty",
-        ));
-    }
-    Ok(())
-}
-
 fn path_value(path: &Path) -> Value {
     if let Some(value) = path.to_str() {
         return json!({"encoding": "utf8", "value": value});
@@ -172,8 +139,10 @@ fn path_value(path: &Path) -> Value {
             "value": URL_SAFE_NO_PAD.encode(bytes),
         });
     }
-    #[allow(unreachable_code)]
-    json!({"encoding": "platform_debug", "value": format!("{path:?}")})
+    #[cfg(not(any(unix, windows)))]
+    {
+        json!({"encoding": "platform_debug", "value": format!("{path:?}")})
+    }
 }
 
 #[cfg(test)]
@@ -262,54 +231,6 @@ mod tests {
 
         assert_eq!(value["encoding"], "windows_utf16le_base64url");
         assert_eq!(decoded, expected);
-    }
-
-    #[test]
-    fn each_directory_name_is_synced_before_its_child_is_created() {
-        let steps = std::cell::RefCell::new(Vec::new());
-
-        create_durable_directory_with(
-            Path::new("audit/credential-registry-refusals"),
-            |path| {
-                steps
-                    .borrow_mut()
-                    .push(format!("create:{}", path.display()));
-                Ok(())
-            },
-            |path| {
-                steps.borrow_mut().push(format!("sync:{}", path.display()));
-                Ok(())
-            },
-        )
-        .unwrap();
-
-        assert_eq!(
-            steps.into_inner(),
-            vec![
-                "create:audit".to_owned(),
-                "sync:".to_owned(),
-                "create:audit/credential-registry-refusals".to_owned(),
-                "sync:audit".to_owned(),
-            ]
-        );
-    }
-
-    #[test]
-    fn parent_sync_failure_stops_before_creating_a_child() {
-        let mut created = Vec::new();
-
-        let error = create_durable_directory_with(
-            Path::new("audit/credential-registry-refusals"),
-            |path| {
-                created.push(path.to_path_buf());
-                Ok(())
-            },
-            |_| Err(io::Error::other("injected parent sync failure")),
-        )
-        .unwrap_err();
-
-        assert_eq!(error.to_string(), "injected parent sync failure");
-        assert_eq!(created, [PathBuf::from("audit")]);
     }
 
     #[cfg(unix)]

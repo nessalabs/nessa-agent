@@ -275,6 +275,9 @@ path the caller trusts, and a `_beneath` one that walks a relative path down
 from an already-verified root, refusing anything that is not a private
 directory of this user's and never following a symbolic link. A caller whose
 tree can be written to by anything else uses the second.
+`create_durable_directory_beneath` establishes a nested private tree one name
+at a time, syncing each parent before descent and the final leaf before success;
+audit sinks use it before publishing records into a previously absent tree.
 
 `crates/nessa-images` fits one image to a consumer's limits: it reads the
 encoding from the bytes, turns the image upright, scales it down, and converts or
