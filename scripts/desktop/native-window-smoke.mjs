@@ -170,21 +170,51 @@ const gatewayPort = await freePort()
 const driverPort = await freePort()
 const nativePort = await freePort()
 const providerPath = join(root, "scripts/desktop/native-smoke-provider.mjs")
+const modelId = "gpt-5.6-luna"
+const sourceCatalog = JSON.parse(
+  readFileSync(join(root, "crates/nessa-sdk/data/models.json"), "utf8"),
+)
+const sourceModel = sourceCatalog.models.find(
+  (model) => model.provider === "openai" && model.modelId === modelId,
+)
+assert.ok(sourceModel, "native smoke model must remain in the bundled catalog")
+const catalogPath = join(directory, "models.json")
+writeFileSync(
+  catalogPath,
+  JSON.stringify({
+    verifiedOn: sourceCatalog.verifiedOn,
+    models: [
+      {
+        ...sourceModel,
+        // The external agent is deterministic and accepts this exact image
+        // profile. Keep that fixture fact out of the production model catalog.
+        imageInput: {
+          mediaTypes: ["image/png"],
+          maxEncodedBytes: 1_000_000,
+          maxEdgePx: 1024,
+          manyImagesMaxEdgePx: 1024,
+          nativeLongEdgePx: 1024,
+        },
+      },
+    ],
+  }),
+  { mode: 0o600 },
+)
 const configPath = join(data, "ci", "instances", instance, "config.json")
 mkdirSync(dirname(configPath), { recursive: true, mode: 0o700 })
 writeFileSync(
   configPath,
   JSON.stringify({
     agents: {
-      catalog: join(root, "crates/nessa-sdk/data/models.json"),
+      catalog: catalogPath,
       workspace,
       selected: "codex",
       runtimes: {
         codex: {
           command: process.execPath,
           args: [providerPath],
-          model: "gpt-5.6-luna",
-          toolsEnabled: false,
+          model: modelId,
+          toolsEnabled: true,
         },
       },
     },

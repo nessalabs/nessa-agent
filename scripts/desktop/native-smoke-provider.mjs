@@ -48,8 +48,7 @@ function promptContent(parts) {
     }
     if (
       part?.type === "image" &&
-      typeof part.mimeType === "string" &&
-      part.mimeType.startsWith("image/") &&
+      part.mimeType === "image/png" &&
       typeof part.data === "string" &&
       part.data.length > 0
     ) {
