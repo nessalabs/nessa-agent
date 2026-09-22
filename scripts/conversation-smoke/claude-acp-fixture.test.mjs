@@ -124,7 +124,7 @@ test("Claude fixture records real prompt, permission, terminal, and resume messa
     const first = launch()
     first.send({ id: 1, method: "initialize", params: {} })
     assert.equal((await first.next()).result.agentInfo.version, "0.76.0")
-    first.send({ id: 2, method: "session/new", params: {} })
+    first.send({ id: 2, method: "session/new", params: { cwd: directory } })
     const opened = await first.next()
     const providerSessionId = opened.result.sessionId
     first.send({
@@ -145,9 +145,23 @@ test("Claude fixture records real prompt, permission, terminal, and resume messa
       },
     })
     assert.equal((await first.next()).method, "session/update")
-    assert.equal((await first.next()).params.update.sessionUpdate, "tool_call")
+    const tool = await first.next()
+    assert.equal(tool.params.update.sessionUpdate, "tool_call")
+    assert.equal(tool.params.update.toolCallId, "tool-execution-answer")
+    assert.equal(tool.params.update.title, "Read fixture-input")
+    // ClaudeProfile::permission_input parses Read through the production
+    // file-tool schema, whose required field is an absolute `file_path`.
+    assert.deepEqual(tool.params.update.rawInput, {
+      file_path: join(directory, "fixture-input"),
+    })
     const permission = await first.next()
     assert.equal(permission.id, "review-execution-answer")
+    assert.equal(permission.params.toolCall.toolCallId, tool.params.update.toolCallId)
+    assert.deepEqual(permission.params.toolCall.rawInput, tool.params.update.rawInput)
+    assert.deepEqual(permission.params.options, [
+      { optionId: "allow-once", kind: "allow_once", name: "Allow once" },
+      { optionId: "deny-once", kind: "reject_once", name: "Deny once" },
+    ])
     first.send({
       id: permission.id,
       result: { outcome: { outcome: "selected", optionId: "allow-once" } },
@@ -197,6 +211,22 @@ test("Claude fixture records real prompt, permission, terminal, and resume messa
           event.expectedExecutionId === "execution-answer",
       ).length,
       1,
+    )
+    assert.equal(
+      events.find(
+        (event) =>
+          event.type === "session-resume" &&
+          event.providerSessionId === providerSessionId,
+      )?.sessionWorkspace,
+      directory,
+    )
+    assert.deepEqual(
+      events.find(
+        (event) =>
+          event.type === "permission-request" &&
+          event.providerSessionId === providerSessionId,
+      )?.rawInput,
+      { file_path: join(directory, "fixture-input") },
     )
     assert.equal(
       events.filter(

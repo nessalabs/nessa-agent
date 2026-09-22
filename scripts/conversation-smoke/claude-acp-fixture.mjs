@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
+import { once } from "node:events"
 import {
   appendFileSync,
   existsSync,
@@ -9,9 +10,9 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs"
-import process from "node:process"
 import { createConnection } from "node:net"
-import { once } from "node:events"
+import { isAbsolute, join } from "node:path"
+import process from "node:process"
 import { createInterface } from "node:readline"
 import { fixtureCorrelation } from "./evidence.mjs"
 
@@ -81,6 +82,7 @@ function configuration() {
 }
 
 let providerSessionId
+let sessionWorkspace
 let pendingPrompt
 let pendingPermission
 
@@ -117,23 +119,39 @@ async function receive(message) {
     return
   }
   if (method === "session/new") {
+    assert.ok(
+      typeof params.cwd === "string" && isAbsolute(params.cwd),
+      "session workspace must be absolute",
+    )
     providerSessionId = `conversation-smoke-${randomUUID()}`
+    sessionWorkspace = params.cwd
     const state = loadState()
     assert.ok(state.sessions.length < 16, "fixture provider session bound")
-    state.sessions.push(providerSessionId)
+    state.sessions.push({ providerSessionId, sessionWorkspace })
     saveState(state)
-    record({ type: "session-new", providerSessionId, processId: process.pid })
+    record({
+      type: "session-new",
+      providerSessionId,
+      processId: process.pid,
+      sessionWorkspace,
+    })
     result(message.id, { sessionId: providerSessionId, ...configuration() })
     return
   }
   if (method === "session/resume") {
     const state = loadState()
-    assert.ok(
-      state.sessions.includes(params.sessionId),
-      "resume must name a session previously created by this fixture",
+    const resumed = state.sessions.find(
+      (session) => session.providerSessionId === params.sessionId,
     )
+    assert.ok(resumed, "resume must name a session previously created by this fixture")
     providerSessionId = params.sessionId
-    record({ type: "session-resume", providerSessionId, processId: process.pid })
+    sessionWorkspace = resumed.sessionWorkspace
+    record({
+      type: "session-resume",
+      providerSessionId,
+      processId: process.pid,
+      sessionWorkspace,
+    })
     result(message.id, configuration())
     return
   }
@@ -158,14 +176,15 @@ async function receive(message) {
     if (expectedExecutionId === "execution-answer") {
       const permissionRequestId = `review-${expectedExecutionId}`
       const toolCallId = `tool-${expectedExecutionId}`
+      const rawInput = { file_path: join(sessionWorkspace, "fixture-input") }
       pendingPermission = { permissionRequestId, toolCallId, expectedExecutionId }
       update(providerSessionId, {
         sessionUpdate: "tool_call",
         toolCallId,
-        title: "Inspect fixture",
+        title: "Read fixture-input",
         kind: "read",
         status: "pending",
-        rawInput: { target: "fixture-input" },
+        rawInput,
         _meta: { claudeCode: { toolName: "Read" } },
       })
       send({
@@ -177,7 +196,7 @@ async function receive(message) {
             toolCallId,
             kind: "read",
             status: "pending",
-            rawInput: { target: "fixture-input" },
+            rawInput,
             _meta: { claudeCode: { toolName: "Read" } },
           },
           options: [
@@ -192,6 +211,7 @@ async function receive(message) {
         expectedExecutionId,
         permissionRequestId,
         toolCallId,
+        rawInput,
       })
       return
     }
