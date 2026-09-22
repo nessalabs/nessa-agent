@@ -162,7 +162,17 @@ export function useOnboarding(
     () =>
       createGatewayStartupMonitor(nativeGatewayStartup, (next) => {
         setGatewayStartupState(next)
-        if (next.state === "ready" || next.state === "unmanaged") {
+        if (next.state === "ready") {
+          // A changed native identity may advance directly from Ready to a
+          // newer Ready when its invalidation event was missed. Its readiness
+          // answer still belongs to the old identity, so replace even an
+          // outstanding ask before probing the newly confirmed gateway.
+          readiness.abandon()
+          setState(clearReadiness)
+          void readiness.check()
+          return
+        }
+        if (next.state === "unmanaged") {
           void readiness.check()
           return
         }

@@ -45,6 +45,11 @@ function Surface({ agents }: { agents: AgentReadinessSource }) {
       null,
       `${onboarding.gatewayStartup.state}:${onboarding.checking}`,
     ),
+    React.createElement(
+      "output",
+      { "data-readiness": true },
+      `${onboarding.state.readiness?.claude ?? "unknown"}:${onboarding.state.readinessFailure ?? "-"}`,
+    ),
     React.createElement("button", { onClick: onboarding.begin }, "Begin"),
     React.createElement("button", { onClick: onboarding.retryGatewayStartup }, "Retry"),
   )
@@ -111,6 +116,53 @@ describe("the setup owner under Strict Mode", () => {
     expect(container.querySelector("output")?.textContent).toBe("ready:false")
     expect(agents.read).toHaveBeenCalledTimes(1)
   })
+
+  it.each([
+    {
+      stale: { ok: false as const, reason: "unreachable" as const },
+      name: "unreachable failure",
+    },
+    {
+      stale: { ok: true as const, agents: { claude: "ready" as const } },
+      name: "ready answer",
+    },
+  ])(
+    "replaces a pending $name when a newer ready identity arrives without starting",
+    async ({ stale }) => {
+      native.gatewayStartup.mockResolvedValue({ revision: 2, state: "ready" })
+      const first = deferred<Awaited<ReturnType<AgentReadinessSource["read"]>>>()
+      const second = deferred<Awaited<ReturnType<AgentReadinessSource["read"]>>>()
+      const agents = {
+        read: vi
+          .fn()
+          .mockReturnValueOnce(first.promise)
+          .mockReturnValueOnce(second.promise),
+      }
+
+      await render(agents)
+      await flush()
+      expect(agents.read).toHaveBeenCalledTimes(1)
+
+      await React.act(async () => {
+        native.handlers.at(-1)!({ revision: 4, state: "ready" })
+      })
+      await flush()
+      expect(agents.read).toHaveBeenCalledTimes(2)
+      expect(container.querySelector("[data-readiness]")?.textContent).toBe("unknown:-")
+
+      await React.act(async () => first.resolve(stale))
+      await flush()
+      expect(container.querySelector("[data-readiness]")?.textContent).toBe("unknown:-")
+
+      await React.act(async () =>
+        second.resolve({ ok: true, agents: { claude: "not-installed" } }),
+      )
+      await flush()
+      expect(container.querySelector("[data-readiness]")?.textContent).toBe(
+        "not-installed:-",
+      )
+    },
+  )
 
   it("preserves the browser asks when the native lifecycle is unmanaged", async () => {
     native.gatewayStartup.mockResolvedValue({ revision: 0, state: "unmanaged" })
