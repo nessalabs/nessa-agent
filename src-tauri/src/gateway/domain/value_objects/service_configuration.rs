@@ -1,3 +1,4 @@
+use nessa_agent_credentials::CredentialNamespace;
 use std::{
     error::Error,
     fmt,
@@ -10,9 +11,8 @@ use std::{
 /// No field is inherited from the shell that happened to launch the desktop.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceConfiguration {
-    stage: String,
+    credential_namespace: CredentialNamespace,
     data_root: PathBuf,
-    instance: Option<String>,
     port: u16,
     claude_config_directory: Option<PathBuf>,
 }
@@ -26,12 +26,10 @@ impl ServiceConfiguration {
         port: u16,
         claude_config_directory: Option<PathBuf>,
     ) -> Result<Self, ServiceConfigurationError> {
-        if !segment(&stage) {
-            return Err(ServiceConfigurationError::Stage);
-        }
-        if instance.as_deref().is_some_and(|value| !segment(value)) {
-            return Err(ServiceConfigurationError::Instance);
-        }
+        CredentialNamespace::new(stage.clone(), None)
+            .map_err(|_| ServiceConfigurationError::Stage)?;
+        let credential_namespace = CredentialNamespace::new(stage, instance)
+            .map_err(|_| ServiceConfigurationError::Instance)?;
         if !absolute_without_parent(&data_root) {
             return Err(ServiceConfigurationError::DataRoot);
         }
@@ -45,9 +43,8 @@ impl ServiceConfiguration {
             return Err(ServiceConfigurationError::ClaudeConfigDirectory);
         }
         Ok(Self {
-            stage,
+            credential_namespace,
             data_root,
-            instance,
             port,
             claude_config_directory,
         })
@@ -55,7 +52,7 @@ impl ServiceConfiguration {
 
     /// Stage compiled into this packaged host.
     pub fn stage(&self) -> &str {
-        &self.stage
+        self.credential_namespace.stage()
     }
 
     /// Trusted base beneath which stage and instance namespaces are created.
@@ -65,7 +62,12 @@ impl ServiceConfiguration {
 
     /// Optional explicit service instance.
     pub fn instance(&self) -> Option<&str> {
-        self.instance.as_deref()
+        self.credential_namespace.instance()
+    }
+
+    /// The exact namespace shared by host keychain writes and gateway reads.
+    pub fn credential_namespace(&self) -> &CredentialNamespace {
+        &self.credential_namespace
     }
 
     /// Loopback port registered and probed for this service.
@@ -84,20 +86,13 @@ impl ServiceConfiguration {
         directory: Option<PathBuf>,
     ) -> Result<Self, ServiceConfigurationError> {
         Self::new(
-            self.stage.clone(),
+            self.stage().to_owned(),
             self.data_root.clone(),
-            self.instance.clone(),
+            self.instance().map(str::to_owned),
             self.port,
             directory,
         )
     }
-}
-
-fn segment(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 fn absolute_without_parent(value: &Path) -> bool {

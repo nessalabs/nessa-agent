@@ -255,6 +255,14 @@ The local backend, embedded Cedar, and `/session` gateway are implemented.
 providers. See [local authentication](adr/done/0010-local-authentication.md). Hosted
 identity providers remain future adapters.
 
+`crates/nessa-agent-credentials` is the smaller pure domain shared by the
+desktop's agent-key writer and the gateway's agent credential source. It owns
+the immutable validated credential text, API-key/OAuth meaning, the explicit
+Claude/OpenCode credential identity, and the durable stage/instance namespace.
+It owns no keychain, environment, provider, serialization, or filesystem code;
+each caller keeps those effects behind its own application port. See the
+[crate map](../crates/nessa-agent-credentials/README.md).
+
 `crates/nessa-local-storage` owns native OS private-file mechanics shared by the
 local auth, SDK session storage, and desktop credential adapters. It has no auth/domain policy
 or Tauri dependency; callers inject the resulting adapters through composition.
@@ -609,6 +617,15 @@ handler receives the shared reader over it alone via `FromRef`. Tests under
 `tests/agents/` split domain rules, application orchestration, the shared
 reader's bounds, the HTTP boundary, the local probe's failure modes, what makes
 a file a sign-in, and each agent's own conventions.
+
+The same context owns `AgentCredentialSource`, which reads standalone Claude
+environment credentials before the Nessa keychain and preserves API-key versus
+OAuth meaning. Its values and stage/instance account namespace come from
+`nessa-agent-credentials`; `protocol/defaults/agent-credentials.json` is the one
+infrastructure mapping for the Security.framework service and the Claude and
+OpenCode item names. The Claude provider reads that injected source on a
+blocking worker for every process open, so a key saved during onboarding is the
+next key launched without entering configuration, plist, arguments, or logs.
 
 ## Attachments
 

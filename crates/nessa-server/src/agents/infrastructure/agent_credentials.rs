@@ -8,6 +8,7 @@
 use std::os::unix::ffi::OsStrExt;
 use std::{collections::HashMap, ffi::OsString, sync::LazyLock};
 
+use nessa_agent_credentials::{CredentialAgent, CredentialNamespace};
 use serde::Deserialize;
 
 use crate::agents::{
@@ -46,56 +47,68 @@ trait KeychainReader: Send + Sync {
 
 /// The credential source selected by server composition.
 pub struct LocalAgentCredentials {
-    environment: HashMap<AgentId, (AgentCredentialKind, OsString)>,
+    environment: HashMap<CredentialAgent, (AgentCredentialKind, OsString)>,
     keychain: Box<dyn KeychainReader>,
-    stage: String,
-    instance: Option<String>,
+    namespace: CredentialNamespace,
 }
 
 impl LocalAgentCredentials {
     /// Capture standalone environment credentials and the durable keychain namespace.
-    pub fn from_environment(stage: String, instance: Option<String>) -> Self {
+    pub fn from_environment(namespace: CredentialNamespace) -> Self {
         let mut environment = HashMap::new();
         if let Some(value) = std::env::var_os("ANTHROPIC_API_KEY") {
-            environment.insert(AgentId::Claude, (AgentCredentialKind::ApiKey, value));
+            environment.insert(
+                CredentialAgent::Claude,
+                (AgentCredentialKind::ApiKey, value),
+            );
         } else if let Some(value) = std::env::var_os("CLAUDE_CODE_OAUTH_TOKEN") {
-            environment.insert(AgentId::Claude, (AgentCredentialKind::OAuthToken, value));
+            environment.insert(
+                CredentialAgent::Claude,
+                (AgentCredentialKind::OAuthToken, value),
+            );
         }
         Self {
             environment,
             keychain: platform_keychain(),
-            stage,
-            instance,
+            namespace,
         }
     }
 
-    fn account(&self, agent: AgentId) -> Option<String> {
+    fn account(&self, agent: CredentialAgent) -> Result<String, AgentCredentialFailure> {
         let item = match agent {
-            AgentId::Claude => &ITEMS.accounts.claude,
-            AgentId::Opencode => &ITEMS.accounts.opencode,
-            AgentId::Codex => return None,
+            CredentialAgent::Claude => &ITEMS.accounts.claude,
+            CredentialAgent::Opencode => &ITEMS.accounts.opencode,
         };
-        Some(match &self.instance {
-            Some(instance) => format!("{}:{instance}:{item}", self.stage),
-            None => format!("{}:{item}", self.stage),
-        })
+        self.namespace
+            .account(item)
+            .map_err(|_| AgentCredentialFailure::Invalid)
     }
 }
 
 impl AgentCredentialSource for LocalAgentCredentials {
     fn read(&self, agent: AgentId) -> Result<Option<AgentCredential>, AgentCredentialFailure> {
+        let agent = match agent {
+            AgentId::Claude => CredentialAgent::Claude,
+            AgentId::Opencode => CredentialAgent::Opencode,
+            AgentId::Codex => return Ok(None),
+        };
         if let Some((kind, value)) = self.environment.get(&agent) {
             let bytes = os_bytes(value)?;
-            return AgentCredential::new(*kind, bytes).map(Some);
+            return credential(*kind, bytes).map(Some);
         }
-        let Some(account) = self.account(agent) else {
-            return Ok(None);
-        };
+        let account = self.account(agent)?;
         self.keychain
             .read(&ITEMS.service, &account)?
-            .map(|secret| AgentCredential::new(AgentCredentialKind::ApiKey, secret))
+            .map(|secret| credential(AgentCredentialKind::ApiKey, secret))
             .transpose()
     }
+}
+
+fn credential(
+    kind: AgentCredentialKind,
+    secret: Vec<u8>,
+) -> Result<AgentCredential, AgentCredentialFailure> {
+    AgentCredential::new(kind, secret).map_err(|_| AgentCredentialFailure::Invalid)
 }
 
 #[cfg(unix)]
@@ -159,8 +172,7 @@ mod tests {
             keychain: Box::new(Keychain {
                 answer: Mutex::new(answer),
             }),
-            stage: "ci".into(),
-            instance: Some("one".into()),
+            namespace: CredentialNamespace::new("ci".into(), Some("one".into())).unwrap(),
         }
     }
 
@@ -171,8 +183,8 @@ mod tests {
         assert_eq!(credential.kind(), AgentCredentialKind::ApiKey);
         assert_eq!(credential.expose(), "secret");
         assert_eq!(
-            source.account(AgentId::Claude).as_deref(),
-            Some("ci:one:claude-api-key")
+            source.account(CredentialAgent::Claude).unwrap(),
+            "ci:one:claude-api-key"
         );
     }
 

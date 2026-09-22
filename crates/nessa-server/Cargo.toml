@@ -18,6 +18,7 @@ nessa-sdk = { path = "../nessa-sdk" }
 nessa-images = { path = "../nessa-images" }
 nessa-local-storage = { path = "../nessa-local-storage" }
 nessa-auth = { path = "../nessa-auth" }
+nessa-agent-credentials = { path = "../nessa-agent-credentials" }
 axum = { version = "0.8", features = ["ws"] }
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }

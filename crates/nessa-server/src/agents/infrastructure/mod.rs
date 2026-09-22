@@ -7,6 +7,7 @@
 //!      │   what an unanswered  (each vendor's      (what a credential
 //!      │   source means)        own conventions)    variable and file are)
 //!      └──────────────reads a named file through────────▶
+//!   credentialed_claude.rs ──reads──▶ agent_credentials.rs ──▶ keychain
 //! ```
 //!
 //! The arrows point one way: an agent's module knows nothing about how its
@@ -15,12 +16,19 @@
 //! reads it through the same shared rule they all answer by, which is the
 //! second edge above. A third agent gets its own sibling module rather than a
 //! branch inside an existing one.
+//! The lower edge is separate from vendor sign-in discovery: the same injected
+//! Nessa-owned credential source feeds readiness and each new Claude process,
+//! while its macOS adapter refuses any read that would require keychain UI.
 mod agent_credentials;
 #[cfg(target_os = "macos")]
 mod agent_credentials_macos;
 mod claude;
 mod codex;
+#[cfg(unix)]
+mod credentialed_claude;
 mod credentials;
 mod local;
 pub use agent_credentials::LocalAgentCredentials;
+#[cfg(unix)]
+pub use credentialed_claude::CredentialedClaudeProvider;
 pub use local::{AgentLaunchFiles, LocalAgentProbe};
