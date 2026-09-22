@@ -67,6 +67,13 @@ fn stderr(run: &Run) -> String {
     String::from_utf8_lossy(&run.output.stderr).into_owned()
 }
 
+/// Display may use an equivalent OS spelling such as a Windows short path.
+/// Exact lossless identity is asserted separately on the structured audit target.
+fn assert_human_target(message: &str, target: &Path) {
+    let name = target.file_name().and_then(|name| name.to_str()).unwrap();
+    assert!(message.contains(name), "{message}");
+}
+
 fn records(auth: &Path) -> Vec<Value> {
     let directory = auth.join("audit/credential-registry-refusals");
     fs::read_dir(directory)
@@ -81,10 +88,7 @@ fn records(auth: &Path) -> Vec<Value> {
 fn assert_refusal(run: &Run, expected_cause: &str) {
     let message = stderr(run);
     assert_eq!(run.output.status.code(), Some(28), "{message}");
-    assert!(
-        message.contains(run.registry.to_str().unwrap()),
-        "{message}"
-    );
+    assert_human_target(&message, &run.registry);
     assert!(
         message.contains("schema 1 is unsupported; expected schema 2"),
         "{message}"
@@ -138,10 +142,7 @@ fn audit_failure_keeps_the_original_refusal_and_registry_bytes_visible() {
     let run = run(&["server"], true);
     let message = stderr(&run);
     assert_eq!(run.output.status.code(), Some(28), "{message}");
-    assert!(
-        message.contains(run.registry.to_str().unwrap()),
-        "{message}"
-    );
+    assert_human_target(&message, &run.registry);
     assert!(
         message.contains("schema 1 is unsupported; expected schema 2"),
         "{message}"
@@ -188,6 +189,7 @@ fn assert_unsafe_refusal(run: &Run, target: &Path, role: &str) {
         message.contains("not private, single-linked storage"),
         "{message}"
     );
+    assert_human_target(&message, target);
     let records = records(&run.auth);
     assert_eq!(records.len(), 1);
     assert_eq!(records[0]["target"]["value"], target.to_str().unwrap());
