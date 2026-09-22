@@ -16,8 +16,9 @@
 //! describe whether resource cleanup was confirmed. Operation failures carry explicit
 //! provider session status; execution reports distinguish rejection from observed settlement.
 //! Diagnostic errors never determine admission or resource ownership.
-//! OperationCapabilities flows from the live backend through ProviderSession to
-//! Agent; immutable model capabilities remain a separate admission contract.
+//! ProviderOperationCapabilities flows from the live backend into ProviderSession,
+//! which resolves the private effective OperationCapabilities read by Agent;
+//! immutable model capabilities remain a separate admission contract.
 //! Admission reads one negotiated fact from it: an image message is refused when
 //! the agent is known not to take images, and admitted while that is not yet known.
 //! A backend's `validate_input` adds what it could never deliver, such as a
@@ -40,7 +41,14 @@ pub use close::SessionCloseRequest;
 pub use identity::ProviderIdentity;
 pub use images::{ImageInputRefusal, UserImageError, UserImageFuture, UserImageSource};
 pub use open::{ProviderCleanup, ProviderOpenError, ProviderOpenFuture};
-pub use operations::OperationCapabilities;
+pub use operations::{
+    CompactionReportingCapability, ElicitationForwardingCapability, IncomingElicitationCapability,
+    ModelSwitchReportingCapability, NativeHookSuppressionCapability, OperationCapabilities,
+    PermissionDeferralCapability, PermissionDenialCapability, PolicyCloseSessionCapability,
+    PolicyEndTurnCapability, PreToolPolicyCapability, ProviderCompactionReportingCapability,
+    ProviderModelSwitchReportingCapability, ProviderOperationCapabilities,
+    ProviderPermissionDeferralCapability,
+};
 pub use ports::{
     AgentProvider, CloseOutcome, ExecutionEventStream, OpenedProviderSession,
     ProviderSessionBackend,

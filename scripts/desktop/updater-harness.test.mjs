@@ -157,6 +157,9 @@ test("the harness looks for artifacts the release build is configured to produce
   assert.deepEqual(defaultArtifacts("win32", "0.1.0"), [
     "target/release/bundle/nsis/Nessa_0.1.0_x64-setup.exe",
   ])
+  assert.deepEqual(defaultArtifacts("darwin", config.version, "/checkout-output"), [
+    "/checkout-output/release/bundle/macos/Nessa.app.tar.gz",
+  ])
   assert.throws(() => defaultArtifacts("aix", "0.1.0"), /platform/)
 })
 
