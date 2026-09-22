@@ -246,6 +246,38 @@ describe("local gateway endpoint discovery", () => {
   )
 
   it.runIf(process.platform !== "win32")(
+    "validates the resolved ancestry selected by an owned symlink",
+    async () => {
+      const safe = await mkdtemp(join(tmpdir(), "nessa-endpoint-safe-"))
+      const target = await mkdtemp(join(tmpdir(), "nessa-endpoint-target-"))
+      try {
+        const writable = join(target, "writable")
+        const root = join(writable, "data")
+        const logs = join(root, "dev", "logs")
+        await mkdir(logs, { recursive: true, mode: 0o700 })
+        await chmod(writable, 0o777)
+        await writeFile(join(logs, "gateway-endpoint.json"), JSON.stringify(record), {
+          mode: 0o600,
+        })
+        await symlink(writable, join(safe, "selected"))
+        const request = vi.fn(async () => health())
+        const endpoint = await nodeGatewayEndpointSource({
+          dataDir: join(safe, "selected", "data"),
+          uid: process.getuid?.(),
+          request,
+        })
+        await expect(endpoint?.load({ stage: "dev" })).rejects.toBeInstanceOf(
+          NessaEndpointDiscoveryError,
+        )
+        expect(request).not.toHaveBeenCalled()
+      } finally {
+        await rm(safe, { recursive: true })
+        await rm(target, { recursive: true })
+      }
+    },
+  )
+
+  it.runIf(process.platform !== "win32")(
     "refuses a namespace with unsafe mode or owner evidence",
     async () => {
       const root = await mkdtemp(join(tmpdir(), "nessa-endpoint-private-"))

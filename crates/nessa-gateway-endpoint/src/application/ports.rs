@@ -1,4 +1,4 @@
-use crate::domain::GatewayEndpointAdvertisement;
+use crate::domain::{GatewayEndpoint, GatewayEndpointAdvertisement};
 use std::io;
 
 /// Durable publication needed by the endpoint use case.

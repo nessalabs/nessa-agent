@@ -18,6 +18,9 @@ fn endpoint_accepts_only_a_bound_loopback_socket() {
     let loopback = GatewayEndpoint::new("ws://127.0.0.1:9123".into(), identity()).unwrap();
     assert_eq!(loopback.web_socket_url(), "ws://127.0.0.1:9123");
     assert!(GatewayEndpoint::new("ws://127.0.0.1:0".into(), identity()).is_err());
+    assert!(GatewayEndpoint::new("ws://127.0.0.1".into(), identity()).is_err());
+    assert!(GatewayEndpoint::new("ws://127.0.0.1:9123/".into(), identity()).is_err());
+    assert!(GatewayEndpoint::new("wss://127.0.0.1:9123".into(), identity()).is_err());
     assert!(GatewayEndpoint::new("ws://192.0.2.1:9123".into(), identity()).is_err());
     assert!(GatewayEndpoint::new("ws://127.0.0.2:9123".into(), identity()).is_err());
     assert!(GatewayEndpoint::new("ws://[::1]:9123".into(), identity()).is_ok());

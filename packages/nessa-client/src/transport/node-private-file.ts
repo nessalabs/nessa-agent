@@ -16,11 +16,12 @@ function unsafe(condition: boolean): void {
   if (condition) throw new NessaPrivateFileUnsafeError()
 }
 
-async function validateAcquisition(
+async function validateAcquisitionChain(
   tools: NodeFileTools,
   root: string,
   uid: number,
-): Promise<string> {
+  allowOwnedSymlinks: boolean,
+): Promise<void> {
   const { fs, path } = tools
   unsafe(!path.isAbsolute(root))
   const original: string[] = []
@@ -32,23 +33,29 @@ async function validateAcquisition(
   for (const [index, current] of original.entries()) {
     const stat = await fs.lstat(current)
     const isRoot = index === original.length - 1
-    unsafe(
-      isRoot
-        ? stat.isSymbolicLink() ||
-            !stat.isDirectory() ||
-            stat.uid !== uid ||
-            (stat.mode & 0o077) !== 0
-        : !stat.isDirectory() && !stat.isSymbolicLink(),
-    )
+    const symlink = stat.isSymbolicLink()
+    unsafe(symlink && (!allowOwnedSymlinks || isRoot))
+    unsafe(!stat.isDirectory() && !symlink)
+    if (isRoot) unsafe(stat.uid !== uid || (stat.mode & 0o077) !== 0)
     if (stat.isDirectory() && !isRoot) {
       unsafe(stat.uid !== 0 && stat.uid !== uid)
       const writableByAnotherUser = (stat.mode & 0o022) !== 0
       const sticky = (stat.mode & 0o1000) !== 0
       unsafe(writableByAnotherUser && !sticky)
     }
-    if (stat.isSymbolicLink()) unsafe(stat.uid !== 0 && stat.uid !== uid)
+    if (symlink) unsafe(stat.uid !== 0 && stat.uid !== uid)
   }
-  return fs.realpath(root)
+}
+
+async function validateAcquisition(
+  tools: NodeFileTools,
+  root: string,
+  uid: number,
+): Promise<string> {
+  await validateAcquisitionChain(tools, root, uid, true)
+  const canonicalRoot = await tools.fs.realpath(root)
+  await validateAcquisitionChain(tools, canonicalRoot, uid, false)
+  return canonicalRoot
 }
 
 /**

@@ -244,6 +244,37 @@ fn absent_record_falls_back_but_mismatched_identity_is_refused() {
     server.join().unwrap();
 }
 
+#[test]
+fn a_domain_invalid_record_cannot_open_a_health_connection() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let temporary = tempfile::tempdir().unwrap();
+    let logs = temporary.path().join("logs");
+    nessa_local_storage::create_directory(&logs).unwrap();
+    let mut file = nessa_local_storage::open(
+        &logs.join(ENDPOINT_FILE),
+        nessa_local_storage::OpenMode::CreateNew,
+    )
+    .unwrap();
+    write!(
+        file,
+        "{{\"webSocketUrl\":\"ws://{address}/\",\"endpointInstance\":\"3f43acfb-3ce4-48fb-8dd1-d31c9404a6bd\",\"processId\":909}}"
+    )
+    .unwrap();
+    drop(file);
+
+    let error = DiscoverGatewayEndpoint::new(&discovery(&logs))
+        .execute()
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+        "domain-invalid endpoint must fail before unauthenticated health I/O"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn an_intermediate_symlink_cannot_redirect_endpoint_read_or_publication() {

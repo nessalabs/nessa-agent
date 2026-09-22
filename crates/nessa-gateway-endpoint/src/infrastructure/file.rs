@@ -1,6 +1,8 @@
 use crate::{
     application::{EndpointDiscovery, EndpointPublication},
-    domain::{GatewayEndpoint, GatewayEndpointAdvertisement},
+    domain::{
+        EndpointIdentity, GatewayEndpoint, GatewayEndpointAdvertisement, ManagedRuntimeIdentity,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -101,20 +103,16 @@ impl EndpointDiscovery for FileEndpointDiscovery {
         if serde_json::to_vec(&record).map_err(|_| invalid_record())? != bytes {
             return Err(invalid_record());
         }
-        let address = record_address(&record)?;
+        let advertisement = record_advertisement(&record)?;
+        let address = advertisement_address(advertisement.endpoint())?;
         let health = read_health(address)?;
-        if !health.matches(&record) {
+        if !health.matches(&advertisement) {
             return Err(io::Error::new(
                 ErrorKind::PermissionDenied,
                 "published gateway endpoint belongs to a different process",
             ));
         }
-        let identity =
-            crate::domain::EndpointIdentity::new(record.endpoint_instance, record.process_id)
-                .map_err(|_| invalid_record())?;
-        GatewayEndpoint::new(record.web_socket_url, identity)
-            .map(Some)
-            .map_err(|_| invalid_record())
+        Ok(Some(advertisement.endpoint().clone()))
     }
 }
 
@@ -125,14 +123,11 @@ fn invalid_record() -> io::Error {
     )
 }
 
-fn record_address(record: &EndpointRecord) -> io::Result<SocketAddr> {
-    if uuid::Uuid::parse_str(&record.endpoint_instance)
-        .ok()
-        .is_none_or(|value| value.to_string() != record.endpoint_instance)
-        || record.process_id == 0
-    {
-        return Err(invalid_record());
-    }
+fn record_advertisement(record: &EndpointRecord) -> io::Result<GatewayEndpointAdvertisement> {
+    let identity = EndpointIdentity::new(record.endpoint_instance.clone(), record.process_id)
+        .map_err(|_| invalid_record())?;
+    let endpoint = GatewayEndpoint::new(record.web_socket_url.clone(), identity)
+        .map_err(|_| invalid_record())?;
     let managed = [
         record.runtime_fingerprint.is_some(),
         record.service_generation.is_some(),
@@ -142,39 +137,30 @@ fn record_address(record: &EndpointRecord) -> io::Result<SocketAddr> {
     if managed.iter().any(|value| *value) && !managed.iter().all(|value| *value) {
         return Err(invalid_record());
     }
-    if let (Some(fingerprint), Some(generation), Some(instance), Some(process_id)) = (
+    let managed = if let (Some(fingerprint), Some(generation), Some(instance), Some(process_id)) = (
         &record.runtime_fingerprint,
         &record.service_generation,
         &record.runtime_instance,
         record.runtime_process_id,
     ) {
-        let digest = |value: &str| {
-            value.len() == 64
-                && value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        };
-        if !digest(fingerprint)
-            || !digest(generation)
-            || uuid::Uuid::parse_str(instance)
-                .ok()
-                .is_none_or(|value| value.to_string() != *instance)
-            || instance != &record.endpoint_instance
-            || process_id != record.process_id
-        {
-            return Err(invalid_record());
-        }
-    }
-    let url = url::Url::parse(&record.web_socket_url).map_err(|_| invalid_record())?;
-    if url.scheme() != "ws"
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.path() != "/"
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(invalid_record());
-    }
+        Some(
+            ManagedRuntimeIdentity::new(
+                fingerprint.clone(),
+                generation.clone(),
+                instance.clone(),
+                process_id,
+            )
+            .map_err(|_| invalid_record())?,
+        )
+    } else {
+        None
+    };
+    GatewayEndpointAdvertisement::new(endpoint, managed).map_err(|_| invalid_record())
+}
+
+fn advertisement_address(endpoint: &GatewayEndpoint) -> io::Result<SocketAddr> {
+    let web_socket_url = endpoint.web_socket_url();
+    let url = url::Url::parse(&web_socket_url).map_err(|_| invalid_record())?;
     let ip = match url.host().ok_or_else(invalid_record)? {
         url::Host::Ipv4(value) => IpAddr::V4(value),
         url::Host::Ipv6(value) => IpAddr::V6(value),
@@ -200,13 +186,16 @@ struct HealthIdentity {
 }
 
 impl HealthIdentity {
-    fn matches(&self, record: &EndpointRecord) -> bool {
-        let runtime_process_id = record.runtime_process_id.map(|value| value.to_string());
-        self.endpoint_instance == record.endpoint_instance
-            && self.endpoint_process_id == record.process_id.to_string()
-            && self.runtime_fingerprint.as_ref() == record.runtime_fingerprint.as_ref()
-            && self.service_generation.as_ref() == record.service_generation.as_ref()
-            && self.runtime_instance.as_ref() == record.runtime_instance.as_ref()
+    fn matches(&self, advertisement: &GatewayEndpointAdvertisement) -> bool {
+        let endpoint = advertisement.endpoint().identity();
+        let managed = advertisement.managed();
+        let runtime_process_id = managed.map(|value| value.endpoint().process_id().to_string());
+        self.endpoint_instance == endpoint.instance()
+            && self.endpoint_process_id == endpoint.process_id().to_string()
+            && self.runtime_fingerprint.as_deref()
+                == managed.map(ManagedRuntimeIdentity::fingerprint)
+            && self.service_generation.as_deref() == managed.map(ManagedRuntimeIdentity::generation)
+            && self.runtime_instance.as_deref() == managed.map(|value| value.endpoint().instance())
             && self.runtime_process_id.as_ref() == runtime_process_id.as_ref()
     }
 }
