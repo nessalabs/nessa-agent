@@ -335,13 +335,6 @@ export type Control =
   | { kind: "reorder"; executionIds: string[] }
   | { kind: "remove"; executionId: string }
   | { kind: "answer"; executionId: string; permissionId: string; optionId: string }
-  | {
-      kind: "answerQuestion"
-      executionId: string
-      questionId: string
-      /** Null declines: the agent is told it was answered with nothing. */
-      choices: { key: string; values: string[]; ownWords?: string }[] | null
-    }
   | { kind: "cancel"; executionId: string; permissionId: string }
   | { kind: "retry"; executionId: string }
 export const controlConversation = createAsyncThunk<
@@ -398,14 +391,6 @@ export const controlConversation = createAsyncThunk<
           control.executionId,
           control.permissionId,
           control.optionId,
-        )
-        break
-      case "answerQuestion":
-        await extra.conversation.answerQuestion(
-          serverId,
-          control.executionId,
-          control.questionId,
-          control.choices,
         )
         break
       case "cancel":

@@ -5,7 +5,7 @@ pub(super) use crate::application::agent_execution::permissions::*;
 pub(super) use crate::application::agent_execution::providers::*;
 pub(super) use crate::application::dto::{ImageInputLimitsDto, ModalitiesDto, ModelMetadataDto};
 pub(super) use crate::domain::agent_execution::{
-    executions::*, permissions::*, prompts::*, questions::*, sessions::ExecutionFinish,
+    executions::*, permissions::*, prompts::*, sessions::ExecutionFinish,
 };
 pub(super) use crate::domain::common::value_objects::TokenLimits;
 pub(super) use crate::domain::model_metadata::entities::ModelMetadata;
@@ -30,7 +30,6 @@ pub(super) struct RecordingAudit {
     pub(super) answers: Mutex<Vec<PermissionAnswerRecord>>,
     pub(super) reorders: Mutex<Vec<QueueOrderRecord>>,
     pub(super) declines: Mutex<Vec<ReviewDeclineRecord>>,
-    pub(super) answered_questions: Mutex<Vec<QuestionAnswerRecord>>,
     pub(super) reject: bool,
     pub(super) stall: bool,
 }
@@ -59,9 +58,6 @@ impl ExecutionAudit for RecordingAudit {
                 }
                 ExecutionAuditRecord::ReviewDeclined(record) => {
                     self.declines.lock().unwrap().push(record)
-                }
-                ExecutionAuditRecord::QuestionAnswered(record) => {
-                    self.answered_questions.lock().unwrap().push(record)
                 }
             }
             Ok(())

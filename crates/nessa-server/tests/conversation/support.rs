@@ -19,7 +19,7 @@ use nessa_sdk::{
             },
             permissions::{
                 PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
-                PermissionResolution, PermissionSelectionState, QuestionAnswer,
+                PermissionResolution, PermissionSelectionState,
             },
             providers::{
                 AgentProvider, CleanupFuture, CleanupReport, CloseOutcome, ExecutionEventStream,
@@ -394,14 +394,6 @@ impl ProviderSessionBackend for Backend {
             ProviderExecutionReply::Finished(ExecutionReport::new(
                 Some(Ok(ExecutionOutcome::Completed)),
                 None,
-                ProviderSessionState::Usable,
-            ))
-        })
-    }
-    fn answer_question(&self, _: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
-        Box::pin(async {
-            Err(ProviderOperationFailure::new(
-                AgentError::Unsupported("this fixture asks nothing".into()),
                 ProviderSessionState::Usable,
             ))
         })

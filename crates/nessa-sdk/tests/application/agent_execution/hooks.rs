@@ -261,14 +261,6 @@ impl ProviderSessionBackend for FailingBackend {
             ))
         })
     }
-    fn answer_question(&self, _: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
-        Box::pin(async {
-            Err(ProviderOperationFailure::new(
-                AgentError::Unsupported("this fixture asks nothing".into()),
-                ProviderSessionState::Usable,
-            ))
-        })
-    }
     fn answer_permission(
         &self,
         _: PermissionAnswer,
@@ -363,14 +355,6 @@ impl ProviderSessionBackend for CloseSettledBackend {
             ProviderExecutionReply::Finished(ExecutionReport::new(
                 Some(result),
                 None,
-                ProviderSessionState::Usable,
-            ))
-        })
-    }
-    fn answer_question(&self, _: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
-        Box::pin(async {
-            Err(ProviderOperationFailure::new(
-                AgentError::Unsupported("this fixture asks nothing".into()),
                 ProviderSessionState::Usable,
             ))
         })

@@ -43,7 +43,6 @@ const PRODUCT_METHODS: &[&str] = &[
     "conversation.remove",
     "conversation.reorder",
     "conversation.answer",
-    "conversation.answerQuestion",
     "conversation.cancel",
     "conversation.close",
     "attachment.begin",
@@ -332,7 +331,7 @@ async fn run_authenticated<S>(
                 // Admission authorizes one operation against committed state.
                 // Its response may finish after revocation; the next request
                 // and idle liveness check observe the new revision.
-                let control = matches!(frame.method.as_str(), "conversation.close" | "conversation.answer" | "conversation.answerQuestion" | "conversation.cancel" | "conversation.remove" | "conversation.reorder");
+                let control = matches!(frame.method.as_str(), "conversation.close" | "conversation.answer" | "conversation.cancel" | "conversation.remove" | "conversation.reorder");
                 if requests.len() >= if control { 20 } else { 16 } {
                     if send_error(state.settings.write_timeout(), &mut socket, &frame.id, "temporarily_unavailable").await.is_err() { break; }
                     continue;
@@ -606,9 +605,6 @@ fn action_for_method(method: &str) -> Option<&'static str> {
         | "conversation.remove"
         | "conversation.reorder"
         | "conversation.answer"
-        // Answering the agent's own question is input to the conversation, so
-        // it is writing to it like any other reply.
-        | "conversation.answerQuestion"
         | "conversation.cancel"
         | "conversation.close"
         // Uploading into a conversation is writing to it.

@@ -24,9 +24,7 @@
     "audienceId": "gateway",
     "expiresAt": 200,
     "grants": [],
-    "methods": [
-      "server.health"
-    ]
+    "methods": ["server.health"]
   },
   "CredentialRevokeParams": {
     "requestId": "revoke-1",
@@ -103,35 +101,7 @@
       }
     },
     "truncated": false,
-    "queueComplete": true,
-    "questions": [
-      {
-        "executionId": "execution-1",
-        "questionId": "1",
-        "message": "Which environment should I deploy to?",
-        "questions": [
-          {
-            "key": "question_0",
-            "prompt": "Which environment should I deploy to?",
-            "header": "Environment",
-            "multiSelect": false,
-            "freeText": true,
-            "options": [
-              {
-                "value": "staging",
-                "label": "Staging",
-                "description": "Safe to break"
-              },
-              {
-                "value": "production",
-                "label": "Production",
-                "description": null
-              }
-            ]
-          }
-        ]
-      }
-    ]
+    "queueComplete": true
   },
   "ConversationReadParams": {
     "conversationId": "00000000-0000-4000-8000-000000000001"
@@ -170,28 +140,10 @@
   "ConversationReorderParams": {
     "conversationId": "00000000-0000-4000-8000-000000000001",
     "requestId": "reorder-1",
-    "executionIds": [
-      "execution-2",
-      "execution-1"
-    ]
+    "executionIds": ["execution-2", "execution-1"]
   },
   "ConversationReorderResult": {
     "requestId": "reorder-1",
     "outcome": "applied"
-  },
-  "ConversationAnswerQuestionParams": {
-    "conversationId": "00000000-0000-4000-8000-000000000001",
-    "requestId": "action",
-    "executionId": "execution",
-    "questionId": "1",
-    "choices": [
-      {
-        "key": "question_0",
-        "values": [
-          "staging"
-        ],
-        "ownWords": null
-      }
-    ]
   }
 }

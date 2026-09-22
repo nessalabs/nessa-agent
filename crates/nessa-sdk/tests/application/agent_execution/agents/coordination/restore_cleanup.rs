@@ -1,6 +1,5 @@
 //! Restoration and cleanup must operate on the same attached resource generation.
 use super::*;
-use crate::application::agent_execution::permissions::QuestionAnswer;
 use crate::application::agent_execution::providers::ResourceCleanup;
 use std::{
     future::{poll_fn, Future},
@@ -18,14 +17,6 @@ impl ProviderSessionBackend for RestoredBackend {
     }
     fn execute(&self, request: ExecutionRequest) -> ProviderExecutionFuture<'_> {
         self.base.execute(request)
-    }
-    fn answer_question(&self, _: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
-        Box::pin(async {
-            Err(ProviderOperationFailure::new(
-                AgentError::Unsupported("this fixture asks nothing".into()),
-                ProviderSessionState::Usable,
-            ))
-        })
     }
     fn answer_permission(
         &self,

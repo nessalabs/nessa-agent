@@ -508,24 +508,6 @@ export function gatewayEffects(
         throw controlFailure(error)
       }
     },
-    async answerQuestion(conversationId, executionId, questionId, choices) {
-      try {
-        await api().answerQuestion(
-          conversationId,
-          executionId,
-          questionId,
-          choices === null
-            ? null
-            : choices.map((choice) => ({
-                key: choice.key,
-                values: choice.values,
-                ownWords: choice.ownWords ?? null,
-              })),
-        )
-      } catch (error) {
-        throw controlFailure(error)
-      }
-    },
     async cancel(conversationId, executionId, permissionId) {
       try {
         await api().cancel(

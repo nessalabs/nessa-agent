@@ -6,7 +6,6 @@ use crate::application::agent_execution::executions::{
 use crate::domain::agent_execution::{
     permissions::PermissionOption,
     prompts::{LinkedFile, UserMessage},
-    questions::MAX_TEXT_BYTES as MAX_QUESTION_TEXT_BYTES,
     tools::{FileLocation, ToolContent},
 };
 use std::mem::size_of;
@@ -45,9 +44,6 @@ pub(super) enum Shape {
     QueueIds,
     Tool,
     Review,
-    Ask,
-    Asked,
-    AskedOptions,
     Content,
     Locations,
     Options,
@@ -97,14 +93,6 @@ impl Shape {
             (Update, "Text" | "Thought") => Text(MAX_MESSAGE_CHUNK_BYTES),
             (Update, "Tool") | (Review, "tool") => Tool,
             (Update, "PermissionRequested" | "PermissionCancelled") => Review,
-            (Update, "QuestionAsked" | "QuestionClosed") => Ask,
-            (Ask, "questions") => Asked,
-            (Asked, "options") => AskedOptions,
-            (Ask, "id") => Text(256),
-            (Ask, "message") | (Asked, "prompt" | "header") => Text(MAX_QUESTION_TEXT_BYTES),
-            (Asked, "key") | (AskedOptions, "value" | "label" | "description") => {
-                Text(MAX_QUESTION_TEXT_BYTES)
-            }
             (Tool, "content") => Content,
             (Tool, "locations") => Locations,
             (Tool, "id") | (Review, "id" | "execution_id" | "tool_id" | "session_id") => Text(256),

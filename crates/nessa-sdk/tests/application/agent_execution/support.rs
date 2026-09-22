@@ -51,14 +51,6 @@ impl ProviderSessionBackend for RecordingSession {
             ))
         })
     }
-    fn answer_question(&self, _: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
-        Box::pin(async {
-            Err(ProviderOperationFailure::new(
-                AgentError::Unsupported("this fixture asks nothing".into()),
-                ProviderSessionState::Usable,
-            ))
-        })
-    }
     fn answer_permission(
         &self,
         _answer: PermissionAnswer,
@@ -98,14 +90,6 @@ impl ProviderSessionBackend for OfflineSession {
             ProviderExecutionReply::Finished(ExecutionReport::new(
                 Some(result),
                 None,
-                ProviderSessionState::Usable,
-            ))
-        })
-    }
-    fn answer_question(&self, _: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
-        Box::pin(async {
-            Err(ProviderOperationFailure::new(
-                AgentError::Unsupported("this fixture asks nothing".into()),
                 ProviderSessionState::Usable,
             ))
         })
@@ -236,14 +220,6 @@ impl ProviderSessionBackend for InMemoryPermissionBackend {
             ProviderExecutionReply::Rejected(result.expect_err("fixture rejects execution"))
         })
     }
-    fn answer_question(&self, _: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
-        Box::pin(async {
-            Err(ProviderOperationFailure::new(
-                AgentError::Unsupported("this fixture asks nothing".into()),
-                ProviderSessionState::Usable,
-            ))
-        })
-    }
     fn answer_permission(
         &self,
         answer: PermissionAnswer,
@@ -305,9 +281,6 @@ impl ProviderSessionBackend for InMemoryPermissionBackend {
                             }
                             ExecutionAuditRecord::ReviewDeclined(_) => {
                                 panic!("close cannot decline a review")
-                            }
-                            ExecutionAuditRecord::QuestionAnswered(_) => {
-                                panic!("close cannot answer a question")
                             }
                         }
                     }

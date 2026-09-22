@@ -14,7 +14,6 @@
     "conversation.steer": "ConversationSendParams",
     "conversation.remove": "ConversationRemoveParams",
     "conversation.answer": "ConversationAnswerParams",
-    "conversation.answerQuestion": "ConversationAnswerQuestionParams",
     "conversation.cancel": "ConversationCancelParams",
     "conversation.close": "ConversationCloseParams",
     "conversation.reorder": "ConversationReorderParams",

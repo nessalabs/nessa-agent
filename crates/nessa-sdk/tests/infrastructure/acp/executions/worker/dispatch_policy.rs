@@ -187,7 +187,6 @@ async fn worker_with_ready_frames_boundary(
             agent_accepts_images: false,
             operation_capabilities,
             permissions: HashMap::new(),
-            questions: HashMap::new(),
             declined: None,
             shutdown_deadline: None,
             configured: true,

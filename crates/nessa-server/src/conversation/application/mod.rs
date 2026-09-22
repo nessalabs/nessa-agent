@@ -22,7 +22,7 @@ pub use ports::{
 };
 pub use service::{
     ConversationAgent, ConversationAgents, ConversationCaller, ConversationDependencies,
-    ConversationLimits, ConversationService, QuestionChoiceInput, RequestedAgent, SubmissionMode,
+    ConversationLimits, ConversationService, RequestedAgent, SubmissionMode,
 };
 pub use view::{
     CompactionReportingSupport, ConversationAgentFeatures, ConversationAttachment,

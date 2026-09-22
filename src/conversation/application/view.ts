@@ -36,20 +36,6 @@ export type ConversationView = {
     title: string
     options: { id: string; label: string }[]
   }[]
-  /** Questions the agent is waiting on. Nothing is authorised by answering. */
-  questions: {
-    executionId: string
-    questionId: string
-    message: string
-    questions: {
-      key: string
-      prompt: string
-      header?: string | null
-      multiSelect: boolean
-      freeText: boolean
-      options: { value: string; label: string; description?: string | null }[]
-    }[]
-  }[]
   tools: {
     executionId: string
     toolId: string

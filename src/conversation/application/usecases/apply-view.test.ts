@@ -46,7 +46,6 @@ const view: ConversationView = {
       ],
     },
   ],
-  questions: [],
   tools: [
     {
       executionId: "run",
@@ -111,7 +110,6 @@ it("keeps error and status separate from actual assistant text, and handles empt
     ],
     pending: [],
     permissions: [],
-    questions: [],
     permissionViewError: "Review exceeds safe view limit",
   })
   expect(projected.phase).toBe("idle")
@@ -131,7 +129,6 @@ it("replaces server-only queue rows when the next complete view removes them", (
     messages: [],
     pending: [],
     permissions: [],
-    questions: [],
     tools: [],
   })
   expect(stopped.turns).toEqual([])
@@ -175,7 +172,6 @@ function stoppedQueue(queueComplete: boolean) {
     ...view,
     messages: [],
     permissions: [],
-    questions: [],
     tools: [],
     queueComplete: true,
     pending: identities.map((executionId) => ({
@@ -196,7 +192,6 @@ function stoppedQueue(queueComplete: boolean) {
     ...view,
     pending: [],
     permissions: [],
-    questions: [],
     tools: [],
     queueComplete,
     messages: [
@@ -241,7 +236,6 @@ it("an accepted row the server stops listing is retired by a complete queue", ()
     ...view,
     pending: [],
     permissions: [],
-    questions: [],
     tools: [],
     messages: [{ ...view.messages[0]!, parts: [], status: "queued" }],
   })
@@ -252,7 +246,6 @@ it("an accepted row the server stops listing is retired by a complete queue", ()
     messages: [],
     pending: [],
     permissions: [],
-    questions: [],
     tools: [],
   })
   expect(userReceipts(stopped.turns)).toEqual([])
@@ -293,7 +286,6 @@ it("a complete queue still keeps unacknowledged local sends and local failures",
     messages: [],
     pending: [],
     permissions: [],
-    questions: [],
     tools: [],
     queueComplete: true,
   })
@@ -334,7 +326,6 @@ it("retires a refusal's reason with its sentence, and keeps both while the faile
     messages: [],
     pending: [],
     permissions: [],
-    questions: [],
     tools: [],
   })
   expect(unrelated.error).toBe(failed.error)
@@ -344,7 +335,6 @@ it("retires a refusal's reason with its sentence, and keeps both while the faile
     ...view,
     pending: [],
     permissions: [],
-    questions: [],
     tools: [],
     messages: [{ ...view.messages[0]!, parts: [], status: "queued" }],
   })
@@ -373,7 +363,6 @@ it("shows a turn it never held the bytes for as text plus image references", () 
     ...view,
     tools: [],
     permissions: [],
-    questions: [],
     messages: [
       {
         executionId: "captioned",
@@ -456,7 +445,6 @@ it("keeps a sent turn's local previews when the gateway echoes it by reference",
     ...view,
     tools: [],
     permissions: [],
-    questions: [],
     pending: [],
     messages: [
       {

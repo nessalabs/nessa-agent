@@ -47,13 +47,6 @@ impl AcpProfile for ClaudeProfile {
             == Some(true)
     }
 
-    fn supports_questions(&self) -> bool {
-        // Verified against the pinned harness: with `elicitation.form`
-        // advertised it offers `AskUserQuestion` and bridges it to a form
-        // elicitation. Without it the tool is withheld from the model entirely.
-        true
-    }
-
     fn validate_initialize(&self, result: &Value) -> Result<(), AgentError> {
         if result.pointer("/agentInfo/version").and_then(Value::as_str) != Some("0.76.0") {
             return Err(protocol("requires Claude ACP 0.76.0"));

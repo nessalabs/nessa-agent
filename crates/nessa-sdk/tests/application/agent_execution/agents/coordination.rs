@@ -1,7 +1,6 @@
 //! Deterministic checks at the control-result handoff before caller-side processing.
 use super::*;
 use crate::application::agent_execution::agents::AgentFuture;
-use crate::application::agent_execution::permissions::QuestionAnswer;
 use crate::application::{
     agent_execution::{
         executions::{ExecutionAudit, ExecutionAuditRecord, ExecutionRequest, SubmissionMode},
@@ -125,14 +124,6 @@ impl ProviderSessionBackend for Backend {
             ProviderExecutionReply::Finished(ExecutionReport::new(
                 Some(result),
                 None,
-                ProviderSessionState::Usable,
-            ))
-        })
-    }
-    fn answer_question(&self, _: QuestionAnswer) -> ProviderOperationFuture<'_, ()> {
-        Box::pin(async {
-            Err(ProviderOperationFailure::new(
-                AgentError::Unsupported("this fixture asks nothing".into()),
                 ProviderSessionState::Usable,
             ))
         })

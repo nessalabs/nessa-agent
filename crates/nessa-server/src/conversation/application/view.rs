@@ -21,8 +21,6 @@ pub struct ConversationView {
     pub messages: Vec<ConversationMessage>,
     pub pending: Vec<ConversationPending>,
     pub permissions: Vec<ConversationPermission>,
-    /// Questions the agent is waiting on, oldest first.
-    pub questions: Vec<ConversationQuestion>,
     pub tools: Vec<ConversationTool>,
     pub capabilities: ConversationCapabilities,
     pub truncated: bool,
@@ -104,37 +102,6 @@ pub struct ConversationPermission {
 pub struct ConversationPermissionOption {
     pub id: String,
     pub label: String,
-}
-/// One question an agent is waiting on an answer to.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConversationQuestion {
-    pub execution_id: String,
-    pub question_id: String,
-    /// The agent's own framing of why it is asking.
-    pub message: String,
-    pub questions: Vec<ConversationAsked>,
-}
-/// One thing asked, and what may be answered.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConversationAsked {
-    pub key: String,
-    pub prompt: String,
-    pub header: Option<String>,
-    /// Whether several options may be chosen rather than one.
-    pub multi_select: bool,
-    /// Whether an answer in the answerer's own words is accepted.
-    pub free_text: bool,
-    pub options: Vec<ConversationAnswerOption>,
-}
-/// One offered answer: what is recorded, and what is read.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConversationAnswerOption {
-    pub value: String,
-    pub label: String,
-    pub description: Option<String>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

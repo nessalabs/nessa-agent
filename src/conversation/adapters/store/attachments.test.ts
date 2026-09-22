@@ -196,7 +196,6 @@ function viewSaying(imageInput: boolean): ConversationEffects["read"] {
     messages: [],
     pending: [],
     permissions: [],
-    questions: [],
     tools: [],
     capabilities: {
       queue: true,

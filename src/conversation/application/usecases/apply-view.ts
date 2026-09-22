@@ -144,7 +144,6 @@ export function applyView(current: Conversation, view: ConversationView): Conver
       queueComplete: view.queueComplete,
       permissionViewError: view.permissionViewError,
       permissions: view.permissions,
-      questions: view.questions,
       tools: view.tools,
       pending: view.pending,
       capabilities: view.capabilities,

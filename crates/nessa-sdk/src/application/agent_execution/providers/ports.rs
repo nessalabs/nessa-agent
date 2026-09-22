@@ -11,7 +11,7 @@ use crate::application::agent_execution::{
     executions::ExecutionRequest,
     permissions::{
         PermissionAnswer, PermissionCancellation, PermissionCancellationRequest,
-        PermissionResolution, QuestionAnswer,
+        PermissionResolution,
     },
 };
 use crate::domain::agent_execution::executions::ExecutionId;
@@ -90,12 +90,6 @@ pub trait ProviderSessionBackend: Send + Sync {
     /// It retains accepted observations but stops polling further chunks after
     /// unconfirmed cleanup, so ready output cannot delay settlement or close.
     fn execute(&self, input: ExecutionRequest) -> ProviderExecutionFuture<'_>;
-    /// Answer one question the agent asked, or decline it.
-    ///
-    /// Success is that the answer was written, never that the agent acted on
-    /// it. An answer for a question this session is not holding is refused:
-    /// there is nothing waiting for it.
-    fn answer_question(&self, answer: QuestionAnswer) -> ProviderOperationFuture<'_, ()>;
     /// Validate the exact execution/review/option and verified attribution in
     /// `answer`, retain audit evidence, and report wire-delivery failure separately.
     /// Once admitted, the backend owns completion independently of the caller's

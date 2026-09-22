@@ -16,7 +16,6 @@ const view: ConversationView = {
   messages: [],
   pending: [],
   permissions: [],
-  questions: [],
   tools: [],
   capabilities: {
     queue: true,
