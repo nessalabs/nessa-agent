@@ -103,6 +103,9 @@ the exact file and a structural fault, leaves its bytes unchanged, and writes a
 separate refusal record under
 `<namespace>/auth/audit/credential-registry-refusals`. Restore a verified backup
 to the named registry path before retrying. Keep the rejected file as evidence.
+For a private-storage refusal, a verified registry may instead have its
+current-user ownership, single regular-file link, and private permissions
+restored in place (`0600` for the file and `0700` for its directories on Unix).
 If no trustworthy backup exists, the last resort is to move that file to secure
 evidence storage and run `nessa auth init --local` with a new absolute token
 path. That operation is a new identity boundary: it creates new gateway,

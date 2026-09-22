@@ -115,9 +115,18 @@ impl fmt::Display for LocalStoreError {
                     .to_str()
                     .map(str::to_owned)
                     .unwrap_or_else(|| format!("{path:?}"));
-                write!(
-                    formatter,
-                    "credential registry at {path} was refused: {fault}. The file was left unchanged. Restore a verified backup to the same path to preserve credential identities and revocations. As a last resort, move the invalid file to secure evidence storage, then run `nessa auth init --local --owner-token-file <new-absolute-path>`; reinitializing creates new identities, invalidates old tokens, and can orphan access tied to the old organization"
+                write!(formatter, "credential registry at {path} was refused: {fault}. The file was left unchanged. ")?;
+                if matches!(fault, CredentialRegistryFault::UnsafeStorage) {
+                    formatter.write_str(
+                        "Preserve the current file and path as evidence. If the registry is verified, restore private current-user ownership, a single regular-file link, and private permissions (0600 for the file and 0700 for its directories on Unix), then retry. Otherwise restore a verified private backup to the same path. ",
+                    )?;
+                } else {
+                    formatter.write_str(
+                        "Restore a verified backup to the same path to preserve credential identities and revocations. ",
+                    )?;
+                }
+                formatter.write_str(
+                    "As a last resort, move the invalid file to secure evidence storage, then run `nessa auth init --local --owner-token-file <new-absolute-path>`; reinitializing creates new identities, invalidates old tokens, and can orphan access tied to the old organization",
                 )
             }
             Self::Capacity => formatter.write_str("credential registry capacity reached"),
@@ -281,7 +290,7 @@ impl LocalCredentialStore {
                 LocalStoreError::Io(error)
             }
         })?;
-        let registry = match private_open(&root, &path, false) {
+        let registry = match private_open_registry(&root, &path) {
             Ok(file) => {
                 let metadata = file.metadata()?;
                 if metadata.len() > config.max_registry_bytes {
@@ -1622,17 +1631,32 @@ fn private_open(root: &Path, path: &Path, create: bool) -> Result<File, LocalSto
         },
     )
     .map_err(|error| {
-        if error.kind() == io::ErrorKind::PermissionDenied
-            || matches!(
-                error.raw_os_error(),
-                Some(libc::ELOOP) | Some(libc::ENOTDIR)
-            )
-        {
+        if unsafe_storage_error(&error) {
             LocalStoreError::Corrupt
         } else {
             LocalStoreError::Io(error)
         }
     })
+}
+
+fn private_open_registry(root: &Path, path: &Path) -> Result<File, LocalStoreError> {
+    nessa_local_storage::open_beneath(root, path, nessa_local_storage::OpenMode::ReadWrite).map_err(
+        |error| {
+            if unsafe_storage_error(&error) {
+                invalid_registry(root, path, CredentialRegistryFault::UnsafeStorage)
+            } else {
+                LocalStoreError::Io(error)
+            }
+        },
+    )
+}
+
+fn unsafe_storage_error(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::PermissionDenied
+        || matches!(
+            error.raw_os_error(),
+            Some(libc::ELOOP) | Some(libc::ENOTDIR)
+        )
 }
 fn set_private_directory(path: &Path) -> Result<(), LocalStoreError> {
     Ok(nessa_local_storage::verify_directory(path)?)
@@ -2465,14 +2489,26 @@ mod tests {
         store.bootstrap(bootstrap()).unwrap();
         drop(store);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(open_store(&path).is_err());
+        assert!(matches!(
+            open_store(&path),
+            Err(LocalStoreError::InvalidRegistry {
+                fault: CredentialRegistryFault::UnsafeStorage,
+                ..
+            })
+        ));
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o644
         );
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
         fs::hard_link(&path, root.path().join("shared.json")).unwrap();
-        assert!(open_store(&path).is_err());
+        assert!(matches!(
+            open_store(&path),
+            Err(LocalStoreError::InvalidRegistry {
+                fault: CredentialRegistryFault::UnsafeStorage,
+                ..
+            })
+        ));
     }
 
     #[cfg(unix)]
@@ -2488,7 +2524,10 @@ mod tests {
         symlink(target, &registry).unwrap();
         assert!(matches!(
             open_store(registry),
-            Err(LocalStoreError::Corrupt)
+            Err(LocalStoreError::InvalidRegistry {
+                fault: CredentialRegistryFault::UnsafeStorage,
+                ..
+            })
         ));
     }
 

@@ -84,6 +84,9 @@ the exact path and a bounded structural fault without including rejected values;
 the application records target, unchanged-before/after meaning, cause, and the
 known initiator in a private sibling audit directory. Audit failure remains
 visible beside the original refusal. Neither path edits or deletes the registry.
+The local refusal sink addresses every directory and record beneath the verified
+auth root, refuses symbolic-link ancestry, and syncs each parent after creating
+its child before it publishes and syncs the record.
 
 ## Authentication is not ongoing authorization
 

@@ -43,6 +43,9 @@ pub enum CredentialRegistryFault {
         /// Configured maximum registry size.
         maximum_bytes: u64,
     },
+    /// The registry name, ancestry, ownership, permissions, file type, or link
+    /// count failed the private-storage boundary.
+    UnsafeStorage,
 }
 
 /// Safe categories from `serde_json`; no rejected value is retained.
@@ -126,6 +129,9 @@ impl fmt::Display for CredentialRegistryFault {
             } => write!(
                 formatter,
                 "file size {observed_bytes} bytes exceeds the {maximum_bytes}-byte limit"
+            ),
+            Self::UnsafeStorage => formatter.write_str(
+                "file or path is not private, single-linked storage owned by the current OS user",
             ),
         }
     }

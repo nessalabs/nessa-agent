@@ -8,25 +8,31 @@ use crate::application::{
     ports::Clock,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use nessa_local_storage::{create_directory, sync_directory, PrivateTempFile};
+use nessa_local_storage::{create_directory_beneath, sync_directory_beneath, PrivateTempFile};
 use serde_json::{json, Value};
 use std::{
-    io::Write,
-    path::{Path, PathBuf},
+    io::{self, Write},
+    path::{Component, Path, PathBuf},
     sync::Arc,
 };
 
 /// One immutable, synced file per refused registry read.
 pub struct DurableCredentialRegistryRefusalAudit {
+    root: PathBuf,
     directory: PathBuf,
     clock: Arc<dyn Clock>,
 }
 
 impl DurableCredentialRegistryRefusalAudit {
-    /// Configure the audit directory. It is created only if a refusal is
-    /// actually recorded, so a healthy open performs no audit filesystem work.
-    pub fn new(directory: PathBuf, clock: Arc<dyn Clock>) -> Self {
-        Self { directory, clock }
+    /// Configure the trusted root and relative audit directory. The directory
+    /// is created only if a refusal is actually recorded, so a healthy open
+    /// performs no audit filesystem work.
+    pub fn new(root: PathBuf, directory: PathBuf, clock: Arc<dyn Clock>) -> Self {
+        Self {
+            root,
+            directory,
+            clock,
+        }
     }
 }
 
@@ -35,7 +41,7 @@ impl CredentialRegistryRefusalAudit for DurableCredentialRegistryRefusalAudit {
         &self,
         refusal: &CredentialRegistryRefusal,
     ) -> Result<(), CredentialRegistryAuditError> {
-        create_directory(&self.directory).map_err(unavailable)?;
+        create_durable_directory_beneath(&self.root, &self.directory).map_err(unavailable)?;
         let id = record_id()?;
         let value = json!({
             "recordId": id,
@@ -50,13 +56,14 @@ impl CredentialRegistryRefusalAudit for DurableCredentialRegistryRefusalAudit {
             "fault": fault_value(refusal.fault()),
             "observedAtMs": self.clock.unix_milliseconds(),
         });
-        let mut file = PrivateTempFile::new_in(&self.directory).map_err(unavailable)?;
+        let mut file =
+            PrivateTempFile::new_beneath(&self.root, &self.directory).map_err(unavailable)?;
         serde_json::to_writer(file.as_file_mut(), &value).map_err(unavailable)?;
         file.as_file_mut().write_all(b"\n").map_err(unavailable)?;
         file.as_file().sync_all().map_err(unavailable)?;
-        file.persist(&self.directory.join(format!("{id}.json")))
+        file.persist_beneath(&self.directory.join(format!("{id}.json")))
             .map_err(unavailable)?;
-        sync_directory(&self.directory).map_err(unavailable)
+        sync_directory_beneath(&self.root, &self.directory).map_err(unavailable)
     }
 }
 
@@ -99,7 +106,45 @@ fn fault_value(fault: &CredentialRegistryFault) -> Value {
             "observedBytes": observed_bytes,
             "maximumBytes": maximum_bytes,
         }),
+        CredentialRegistryFault::UnsafeStorage => json!({
+            "kind": "unsafe_storage",
+        }),
     }
+}
+
+fn create_durable_directory_beneath(root: &Path, directory: &Path) -> io::Result<()> {
+    create_durable_directory_with(
+        directory,
+        |relative| create_directory_beneath(root, relative),
+        |parent| sync_directory_beneath(root, parent),
+    )
+}
+
+fn create_durable_directory_with(
+    directory: &Path,
+    mut create: impl FnMut(&Path) -> io::Result<()>,
+    mut sync: impl FnMut(&Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut relative = PathBuf::new();
+    for component in directory.components() {
+        let Component::Normal(name) = component else {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "audit directory must be relative to its trusted root",
+            ));
+        };
+        let parent = relative.clone();
+        relative.push(name);
+        create(&relative)?;
+        sync(&parent)?;
+    }
+    if relative.as_os_str().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "audit directory must not be empty",
+        ));
+    }
+    Ok(())
 }
 
 fn path_value(path: &Path) -> Value {
@@ -150,7 +195,8 @@ mod tests {
     fn refusal_record_keeps_target_transition_cause_and_initiator() {
         let root = tempfile::tempdir().unwrap();
         let audit = DurableCredentialRegistryRefusalAudit::new(
-            root.path().join("audit"),
+            root.path().to_path_buf(),
+            "audit".into(),
             Arc::new(FixedClock),
         );
         let target = root.path().join("credentials.v1.json");
@@ -216,5 +262,77 @@ mod tests {
 
         assert_eq!(value["encoding"], "windows_utf16le_base64url");
         assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn each_directory_name_is_synced_before_its_child_is_created() {
+        let steps = std::cell::RefCell::new(Vec::new());
+
+        create_durable_directory_with(
+            Path::new("audit/credential-registry-refusals"),
+            |path| {
+                steps
+                    .borrow_mut()
+                    .push(format!("create:{}", path.display()));
+                Ok(())
+            },
+            |path| {
+                steps.borrow_mut().push(format!("sync:{}", path.display()));
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            steps.into_inner(),
+            vec![
+                "create:audit".to_owned(),
+                "sync:".to_owned(),
+                "create:audit/credential-registry-refusals".to_owned(),
+                "sync:audit".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parent_sync_failure_stops_before_creating_a_child() {
+        let mut created = Vec::new();
+
+        let error = create_durable_directory_with(
+            Path::new("audit/credential-registry-refusals"),
+            |path| {
+                created.push(path.to_path_buf());
+                Ok(())
+            },
+            |_| Err(io::Error::other("injected parent sync failure")),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "injected parent sync failure");
+        assert_eq!(created, [PathBuf::from("audit")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn audit_ancestry_symlink_cannot_redirect_writes_outside_the_root() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), root.path().join("audit")).unwrap();
+        let audit = DurableCredentialRegistryRefusalAudit::new(
+            root.path().to_path_buf(),
+            "audit/credential-registry-refusals".into(),
+            Arc::new(FixedClock),
+        );
+        let refusal = CredentialRegistryRefusal::new(
+            root.path().join("credentials.v1.json"),
+            CredentialRegistryFault::UnsafeStorage,
+            CredentialRegistryRefusalCause::GatewayStartup,
+            CredentialRegistryRefusalInitiator::Automatic,
+        );
+
+        assert!(audit.record(&refusal).is_err());
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 0);
     }
 }

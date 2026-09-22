@@ -129,6 +129,9 @@ mod tests {
     use crate::core::launch::Managed;
     use crate::env::{EnvironmentError, HOST};
     use nessa_auth::adapters::local::LocalStoreError;
+    use nessa_auth::application::credential_registry::{
+        CredentialRegistryAuditError, CredentialRegistryFault,
+    };
     use std::io::{Error, ErrorKind};
     use std::path::{Path, PathBuf};
 
@@ -255,6 +258,47 @@ mod tests {
         assert!(!ending.recorded);
         assert_eq!(ending.status, exit_code(&corrupt()));
         assert_ne!(ending.status, 0);
+    }
+
+    #[test]
+    fn refusal_audit_delivery_never_substitutes_for_managed_recovery_evidence() {
+        let home = tempfile::tempdir().expect("temporary directory");
+        let launch = managed(home.path());
+        let invalid = || LocalStoreError::InvalidRegistry {
+            path: home.path().join("auth/credentials.v1.json"),
+            fault: CredentialRegistryFault::UnsafeStorage,
+        };
+
+        for refusal_audit in [
+            None,
+            Some(CredentialRegistryAuditError::unavailable(
+                "injected refusal audit failure",
+            )),
+        ] {
+            let ending = failed(&RunError::registry(invalid(), refusal_audit), &launch);
+            assert_eq!(
+                ending,
+                Ending {
+                    status: 0,
+                    recorded: true,
+                }
+            );
+        }
+        assert!(home.path().join("logs").join(RECORD).is_file());
+
+        let obstructed = obstructed();
+        let ending = failed(
+            &RunError::registry(
+                LocalStoreError::InvalidRegistry {
+                    path: obstructed.path().join("auth/credentials.v1.json"),
+                    fault: CredentialRegistryFault::UnsafeStorage,
+                },
+                None,
+            ),
+            &managed(obstructed.path()),
+        );
+        assert!(!ending.recorded);
+        assert_eq!(ending.status, 28);
     }
 
     /// The thing someone does while diagnosing a gateway that will not start

@@ -50,7 +50,8 @@ pub(super) fn open(
                     initiator,
                 );
                 DurableCredentialRegistryRefusalAudit::new(
-                    directory.join("audit/credential-registry-refusals"),
+                    directory.to_path_buf(),
+                    "audit/credential-registry-refusals".into(),
                     Arc::new(SystemClock),
                 )
                 .record(&refusal)
