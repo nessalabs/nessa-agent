@@ -316,6 +316,17 @@ the worst case is one ~45 s rebuild rather than a cold one. Use
 Worktrees are created as **siblings** of this checkout
 (`../nessa-app-<name>`) so they can share this repo's workspace `target/`.
 
+Claude Code makes worktrees of its own, for background agents and for subagents
+declaring `isolation: worktree`, and its default is a plain `git worktree add`
+under `.claude/worktrees/` with no shared `target/` — a cold build of ~600
+crates each time. `.claude/settings.json` configures a
+[`WorktreeCreate` hook](https://code.claude.com/docs/en/worktrees) pointing at
+`./scripts/worktree.sh claude-hook`, which is the only supported way to replace
+that behaviour; there is no setting for the worktree location. Those worktrees
+then land beside this one and share `target/` like any other. The hook reuses a
+branch or worktree that already exists rather than refusing, because unlike a
+person, Claude Code names the branch and comes back to ones it made earlier.
+
 ## Build
 
 Nothing ships that the app does not reach, and the two build modes exist so
@@ -343,6 +354,21 @@ from clean went 104s → **43s** at an 85% hit rate on the machine that measured
 it. `brew install sccache` or `apt install sccache`; it cannot cache
 incrementally-compiled crates, so it skips this app's own crate in dev builds —
 the win is the ~500 dependency crates, which is where the time goes.
+
+Measured again on `nessa-images`, the crate whose dependencies carry the
+`opt-level = 2` override, building into a target directory wiped between the
+two runs: **18.5 s → 4.3 s**, 39 of 39 compilations served from the cache. That
+gap is what a worktree with its own `target/`, or a stray `cargo clean`, costs
+when sccache is absent. Set it once in your shell profile:
+
+```sh
+command -v sccache >/dev/null 2>&1 && export RUSTC_WRAPPER=sccache
+```
+
+The guard is the point: the variable is only set where sccache exists, so the
+same profile is safe on a machine without it. It is deliberately not in
+`.cargo/config.toml` — a wrapper named there fails the build outright on any
+machine that has not installed it, including CI.
 
 Dev builds use `debug = "line-tables-only"`: full debug info is the single
 biggest cost in a Tauri rebuild, and line tables still give a readable backtrace.
