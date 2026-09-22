@@ -29,7 +29,7 @@ static ITEMS: LazyLock<CredentialItems> = LazyLock::new(|| {
         .expect("bundled agent-credentials.json must describe keychain items")
 });
 
-/// The macOS login-keychain writer selected by desktop composition.
+/// A macOS login-keychain writer available for desktop composition to select.
 pub struct LocalAgentCredentialStore {
     namespace: CredentialNamespace,
 }

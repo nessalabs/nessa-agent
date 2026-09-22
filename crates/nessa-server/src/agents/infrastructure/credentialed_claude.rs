@@ -1,8 +1,8 @@
 //! Claude provider construction with a credential read at each process launch.
 //!
-//! The source is the same injected port readiness asks. Its blocking keychain
-//! read runs off the async executor, and an unavailable or malformed store
-//! fails the open before any provider process can be started.
+//! Its injected source runs blocking keychain reads off the async executor. An
+//! unavailable or malformed store fails the open before a provider process can
+//! be started. Composition selection remains outside this adapter.
 
 use std::{collections::BTreeMap, ffi::OsString, mem, sync::Arc, time::Duration};
 

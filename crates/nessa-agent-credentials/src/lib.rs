@@ -1,8 +1,7 @@
 //! Shared domain language for credentials Nessa gives local coding agents.
 //!
-//! The desktop host writes one validated value and the gateway reads that same
-//! value for readiness and launch. Keychain names and operating-system effects
-//! stay in each caller's infrastructure.
+//! Desktop and gateway adapters share these validated values without moving
+//! keychain names or operating-system effects into the domain.
 //!
 //! ```text
 //! desktop writer ──▶ AgentCredential ◀── gateway source

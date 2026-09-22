@@ -16,9 +16,9 @@
 //! reads it through the same shared rule they all answer by, which is the
 //! second edge above. A third agent gets its own sibling module rather than a
 //! branch inside an existing one.
-//! The lower edge is separate from vendor sign-in discovery: the same injected
-//! Nessa-owned credential source feeds readiness and each new Claude process,
-//! while its macOS adapter refuses any read that would require keychain UI.
+//! The lower edge is separate from vendor sign-in discovery: it defines a
+//! Nessa-owned source and Claude provider adapter that composition can inject.
+//! Its macOS reader refuses any read that would require keychain UI.
 mod agent_credentials;
 #[cfg(target_os = "macos")]
 mod agent_credentials_macos;

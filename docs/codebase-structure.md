@@ -644,9 +644,9 @@ standalone Claude environment credentials before the Nessa keychain while
 preserving API-key versus OAuth meaning. Its values and stage/instance account namespace come from
 `nessa-agent-credentials`; `protocol/defaults/agent-credentials.json` is the one
 infrastructure mapping for the Security.framework service and the Claude and
-OpenCode item names. The Claude provider reads that injected source on a
-blocking worker whenever it opens a process. The source never enters configuration,
-plist, arguments, or logs.
+OpenCode item names. `CredentialedClaudeProvider` is the provider adapter that
+can read an injected source on a blocking worker for each process open. Neither
+adapter puts the source value in configuration, plist, arguments, or logs.
 
 ## Attachments
 

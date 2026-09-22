@@ -1,8 +1,8 @@
 //! Nessa-owned credentials supplied to local agent launches.
 //!
 //! Environment credentials remain an explicit standalone-server input. A
-//! packaged service has none, so the same source then reads the stage-scoped
-//! Nessa keychain item. Readiness and provider launch receive the same source.
+//! packaged service can instead read a stage-scoped Nessa keychain item once
+//! composition injects this source into its consumers.
 
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
@@ -45,7 +45,7 @@ trait KeychainReader: Send + Sync {
         -> Result<Option<Vec<u8>>, AgentCredentialFailure>;
 }
 
-/// The credential source selected by server composition.
+/// A credential source available for server composition to select.
 pub struct LocalAgentCredentials {
     environment: HashMap<CredentialAgent, (AgentCredentialKind, OsString)>,
     keychain: Box<dyn KeychainReader>,
