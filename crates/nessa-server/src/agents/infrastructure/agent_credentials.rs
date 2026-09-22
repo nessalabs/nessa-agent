@@ -4,7 +4,9 @@
 //! packaged service has none, so the same source then reads the stage-scoped
 //! Nessa keychain item. Readiness and provider launch receive the same source.
 
-use std::{collections::HashMap, ffi::OsString};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+use std::{collections::HashMap, ffi::OsString, sync::LazyLock};
 
 use serde::Deserialize;
 
@@ -32,7 +34,7 @@ struct CredentialAccounts {
     opencode: String,
 }
 
-static ITEMS: std::sync::LazyLock<CredentialItems> = std::sync::LazyLock::new(|| {
+static ITEMS: LazyLock<CredentialItems> = LazyLock::new(|| {
     serde_json::from_str(CREDENTIALS_JSON)
         .expect("bundled agent-credentials.json must describe keychain items")
 });
@@ -98,7 +100,6 @@ impl AgentCredentialSource for LocalAgentCredentials {
 
 #[cfg(unix)]
 fn os_bytes(value: &OsString) -> Result<Vec<u8>, AgentCredentialFailure> {
-    use std::os::unix::ffi::OsStrExt;
     Ok(value.as_os_str().as_bytes().to_vec())
 }
 

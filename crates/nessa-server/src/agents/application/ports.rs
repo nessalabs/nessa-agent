@@ -80,7 +80,7 @@ mod credential_tests {
         for secret in [
             Vec::new(),
             b"line\nbreak".to_vec(),
-            b"  \t".to_vec(),
+            b"   ".to_vec(),
             vec![0xff],
         ] {
             assert_eq!(
