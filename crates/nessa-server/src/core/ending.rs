@@ -191,7 +191,7 @@ mod tests {
         let home = tempfile::tempdir().expect("temporary directory");
         let launch = managed(home.path());
         assert_eq!(
-            failed(&RunError::Registry(LocalStoreError::Corrupt), &launch),
+            failed(&RunError::registry(LocalStoreError::Corrupt, None), &launch),
             Ending {
                 status: 0,
                 recorded: true
@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn a_failure_that_could_not_be_recorded_stays_retryable() {
         let home = obstructed();
-        let corrupt = || RunError::Registry(LocalStoreError::Corrupt);
+        let corrupt = || RunError::registry(LocalStoreError::Corrupt, None);
         let ending = failed(&corrupt(), &managed(home.path()));
         assert!(!ending.recorded);
         assert_eq!(ending.status, exit_code(&corrupt()));
@@ -270,7 +270,7 @@ mod tests {
         let home = tempfile::tempdir().expect("temporary directory");
         let registered = managed(home.path());
         record(
-            &RunError::Registry(LocalStoreError::Corrupt),
+            &RunError::registry(LocalStoreError::Corrupt, None),
             registered.managed().expect("managed"),
         )
         .expect("record published");

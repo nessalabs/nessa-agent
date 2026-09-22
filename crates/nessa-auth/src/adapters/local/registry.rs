@@ -17,6 +17,7 @@ use crate::{
             IssueCredentialOutcome, IssueCredentialRequest, ListCredentialsRequest,
             ListTransitionsRequest, RevokeCredentialOutcome, RevokeCredentialRequest,
         },
+        credential_registry::{CredentialRegistryFault, JsonFaultCategory, RegistryInvariant},
         dto::{
             CredentialGrantDto, CredentialMetadataDto, CredentialTransitionDto, InitiatorDto,
             MembershipInputDto, MembershipRoleDto, MembershipStateDto, OrganizationInputDto,
@@ -89,6 +90,13 @@ pub enum LocalStoreError {
     NotInitialized,
     AlreadyInitialized,
     Corrupt,
+    /// Existing registry bytes were refused at open and left unchanged.
+    InvalidRegistry {
+        /// Absolute registry path that was read.
+        path: PathBuf,
+        /// Safe structural reason the bytes were refused.
+        fault: CredentialRegistryFault,
+    },
     Capacity,
     Conflict,
     NotFound,
@@ -102,6 +110,16 @@ impl fmt::Display for LocalStoreError {
             Self::NotInitialized => formatter.write_str("credential registry is not initialized"),
             Self::AlreadyInitialized => formatter.write_str("credential registry is initialized"),
             Self::Corrupt => formatter.write_str("credential registry is invalid"),
+            Self::InvalidRegistry { path, fault } => {
+                let path = path
+                    .to_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("{path:?}"));
+                write!(
+                    formatter,
+                    "credential registry at {path} was refused: {fault}. The file was left unchanged. Restore a verified backup to the same path to preserve credential identities and revocations. As a last resort, move the invalid file to secure evidence storage, then run `nessa auth init --local --owner-token-file <new-absolute-path>`; reinitializing creates new identities, invalidates old tokens, and can orphan access tied to the old organization"
+                )
+            }
             Self::Capacity => formatter.write_str("credential registry capacity reached"),
             Self::Conflict => formatter.write_str("credential command conflicts with stored state"),
             Self::NotFound => formatter.write_str("credential was not found"),
@@ -111,6 +129,16 @@ impl fmt::Display for LocalStoreError {
 }
 
 impl std::error::Error for LocalStoreError {}
+
+impl LocalStoreError {
+    /// Return the refused target and safe fault for application audit.
+    pub fn invalid_registry(&self) -> Option<(&Path, &CredentialRegistryFault)> {
+        match self {
+            Self::InvalidRegistry { path, fault } => Some((path, fault)),
+            _ => None,
+        }
+    }
+}
 
 impl From<io::Error> for LocalStoreError {
     fn from(value: io::Error) -> Self {
@@ -257,17 +285,45 @@ impl LocalCredentialStore {
             Ok(file) => {
                 let metadata = file.metadata()?;
                 if metadata.len() > config.max_registry_bytes {
-                    return Err(LocalStoreError::Capacity);
+                    return Err(invalid_registry(
+                        &root,
+                        &path,
+                        CredentialRegistryFault::TooLarge {
+                            observed_bytes: metadata.len(),
+                            maximum_bytes: config.max_registry_bytes,
+                        },
+                    ));
                 }
                 let mut bytes = Vec::new();
                 file.take(config.max_registry_bytes + 1)
                     .read_to_end(&mut bytes)?;
                 if bytes.len() as u64 > config.max_registry_bytes {
-                    return Err(LocalStoreError::Capacity);
+                    return Err(invalid_registry(
+                        &root,
+                        &path,
+                        CredentialRegistryFault::TooLarge {
+                            observed_bytes: bytes.len() as u64,
+                            maximum_bytes: config.max_registry_bytes,
+                        },
+                    ));
                 }
-                let registry: Registry =
-                    serde_json::from_slice(&bytes).map_err(|_| LocalStoreError::Corrupt)?;
-                validate_registry(&registry, &config)?;
+                let registry: Registry = serde_json::from_slice(&bytes).map_err(|error| {
+                    let fault = unsupported_schema(&bytes).unwrap_or_else(|| {
+                        CredentialRegistryFault::MalformedJson {
+                            line: error.line(),
+                            column: error.column(),
+                            category: match error.classify() {
+                                serde_json::error::Category::Io => JsonFaultCategory::Io,
+                                serde_json::error::Category::Syntax => JsonFaultCategory::Syntax,
+                                serde_json::error::Category::Data => JsonFaultCategory::Data,
+                                serde_json::error::Category::Eof => JsonFaultCategory::Eof,
+                            },
+                        }
+                    });
+                    invalid_registry(&root, &path, fault)
+                })?;
+                validate_registry(&registry, &config)
+                    .map_err(|fault| invalid_registry(&root, &path, fault))?;
                 Some(registry)
             }
             Err(LocalStoreError::Io(error)) if error.kind() == io::ErrorKind::NotFound => None,
@@ -833,7 +889,7 @@ impl LocalCredentialStore {
     }
 
     fn persist(&self, registry: &Registry) -> Result<(), LocalStoreError> {
-        validate_registry(registry, &self.config)?;
+        validate_registry(registry, &self.config).map_err(|_| LocalStoreError::Corrupt)?;
         let parent = self.path.parent().ok_or(LocalStoreError::Corrupt)?;
         let mut temporary = nessa_local_storage::PrivateTempFile::new_beneath(&self.root, parent)?;
         let bytes = serde_json::to_vec(registry).map_err(|_| LocalStoreError::Corrupt)?;
@@ -886,7 +942,7 @@ impl LocalCredentialStore {
         }
         let registry: Registry =
             serde_json::from_slice(&actual).map_err(|_| LocalStoreError::Corrupt)?;
-        validate_registry(&registry, &self.config)?;
+        validate_registry(&registry, &self.config).map_err(|_| LocalStoreError::Corrupt)?;
         file.sync_all()?;
         self.sync_registry_directory(parent)
     }
@@ -1072,6 +1128,7 @@ impl From<LocalStoreError> for CredentialAdminError {
             | LocalStoreError::NotInitialized
             | LocalStoreError::AlreadyInitialized
             | LocalStoreError::Corrupt
+            | LocalStoreError::InvalidRegistry { .. }
             | LocalStoreError::Io(_) => Self::Unavailable,
         }
     }
@@ -1227,6 +1284,29 @@ fn transitions_of_command(
         .collect()
 }
 
+#[derive(Deserialize)]
+struct SchemaProbe {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u64,
+}
+
+fn unsupported_schema(bytes: &[u8]) -> Option<CredentialRegistryFault> {
+    let probe: SchemaProbe = serde_json::from_slice(bytes).ok()?;
+    (probe.schema_version != u64::from(SCHEMA_VERSION)).then_some(
+        CredentialRegistryFault::UnsupportedSchema {
+            found: probe.schema_version,
+            expected: SCHEMA_VERSION,
+        },
+    )
+}
+
+fn invalid_registry(root: &Path, path: &Path, fault: CredentialRegistryFault) -> LocalStoreError {
+    LocalStoreError::InvalidRegistry {
+        path: root.join(path),
+        fault,
+    }
+}
+
 /// The one rule for recorded evidence, applied before every write and on every
 /// reopen: each transition satisfies the domain, chains from the previous state
 /// of its credential, and ends at the state the registry actually stores.
@@ -1234,9 +1314,10 @@ fn validate_transitions(
     registry: &Registry,
     config: &LocalStoreConfig,
     principals: &HashSet<&String>,
-) -> Result<(), LocalStoreError> {
+) -> Result<(), CredentialRegistryFault> {
+    let invalid = || CredentialRegistryFault::InvalidState(RegistryInvariant::TransitionHistory);
     if registry.transitions.len() > 2 * config.max_credentials {
-        return Err(LocalStoreError::Corrupt);
+        return Err(invalid());
     }
     let mut chains: HashMap<&str, Vec<&CredentialTransitionDto>> = HashMap::new();
     let mut previous_revision = 0;
@@ -1249,13 +1330,13 @@ fn validate_transitions(
                 .as_ref()
                 .is_some_and(|value| value.trim().is_empty() || value.len() > 200)
         {
-            return Err(LocalStoreError::Corrupt);
+            return Err(invalid());
         }
         previous_revision = transition.revision;
-        CredentialTransition::try_from(transition.clone()).map_err(|_| LocalStoreError::Corrupt)?;
+        CredentialTransition::try_from(transition.clone()).map_err(|_| invalid())?;
         if let InitiatorDto::Principal { id } = &transition.initiator {
             if !principals.contains(id) {
-                return Err(LocalStoreError::Corrupt);
+                return Err(invalid());
             }
         }
         chains
@@ -1273,23 +1354,23 @@ fn validate_transitions(
     for stored in &registry.credentials {
         let chain = chains
             .get(stored.metadata.id.as_str())
-            .ok_or(LocalStoreError::Corrupt)?;
+            .ok_or_else(invalid)?;
         seen += chain.len();
-        let (first, rest) = chain.split_first().ok_or(LocalStoreError::Corrupt)?;
+        let (first, rest) = chain.split_first().ok_or_else(invalid)?;
         if !matches!(first.cause, TransitionCauseDto::Issued { .. }) || rest.len() > 1 {
-            return Err(LocalStoreError::Corrupt);
+            return Err(invalid());
         }
         let mut previous = first;
         for transition in rest {
             let TransitionCauseDto::Revoked { cause } = &transition.cause else {
-                return Err(LocalStoreError::Corrupt);
+                return Err(invalid());
             };
             if transition.before != Some(previous.after) {
-                return Err(LocalStoreError::Corrupt);
+                return Err(invalid());
             }
             if let crate::application::dto::RevocationCauseDto::Superseded { by, .. } = cause {
                 if issued_revision(by) != Some(transition.revision) {
-                    return Err(LocalStoreError::Corrupt);
+                    return Err(invalid());
                 }
             }
             previous = transition;
@@ -1298,12 +1379,12 @@ fn validate_transitions(
             || previous.after.expires_at != stored.metadata.expires_at
             || previous.after.revoked_at != stored.metadata.revoked_at
         {
-            return Err(LocalStoreError::Corrupt);
+            return Err(invalid());
         }
     }
     // A transition naming a credential the registry does not hold.
     if seen != registry.transitions.len() {
-        return Err(LocalStoreError::Corrupt);
+        return Err(invalid());
     }
     Ok(())
 }
@@ -1311,19 +1392,34 @@ fn validate_transitions(
 fn validate_registry(
     registry: &Registry,
     config: &LocalStoreConfig,
-) -> Result<(), LocalStoreError> {
-    if registry.schema_version != SCHEMA_VERSION
-        || registry.credentials.len() > config.max_credentials
+) -> Result<(), CredentialRegistryFault> {
+    if registry.schema_version != SCHEMA_VERSION {
+        return Err(CredentialRegistryFault::UnsupportedSchema {
+            found: u64::from(registry.schema_version),
+            expected: SCHEMA_VERSION,
+        });
+    }
+    if registry.credentials.len() > config.max_credentials
         || registry.issue_receipts.len() > config.max_receipts
         || registry.revoke_receipts.len() > config.max_receipts
-        || registry.gateway_id.is_empty()
-        || !registry.memberships.iter().any(|membership| {
-            membership.id == registry.owner_membership_id
-                && membership.role == MembershipRoleDto::Admin
-                && membership.state == MembershipStateDto::Active
-        })
     {
-        return Err(LocalStoreError::Corrupt);
+        return Err(CredentialRegistryFault::InvalidState(
+            RegistryInvariant::Capacity,
+        ));
+    }
+    if registry.gateway_id.is_empty() {
+        return Err(CredentialRegistryFault::InvalidState(
+            RegistryInvariant::GatewayIdentity,
+        ));
+    }
+    if !registry.memberships.iter().any(|membership| {
+        membership.id == registry.owner_membership_id
+            && membership.role == MembershipRoleDto::Admin
+            && membership.state == MembershipStateDto::Active
+    }) {
+        return Err(CredentialRegistryFault::InvalidState(
+            RegistryInvariant::OwnerMembership,
+        ));
     }
     let organizations: HashSet<_> = registry
         .organizations
@@ -1349,20 +1445,27 @@ fn validate_registry(
         || membership_bindings.len() != registry.memberships.len()
         || credentials.len() != registry.credentials.len()
     {
-        return Err(LocalStoreError::Corrupt);
+        return Err(CredentialRegistryFault::InvalidState(
+            RegistryInvariant::DuplicateIdentity,
+        ));
     }
     for membership in &registry.memberships {
         if !principals.contains(&membership.principal_id)
             || !organizations.contains(&membership.organization_id)
             || Membership::try_from(membership.clone()).is_err()
         {
-            return Err(LocalStoreError::Corrupt);
+            return Err(CredentialRegistryFault::InvalidState(
+                RegistryInvariant::MembershipBinding,
+            ));
         }
     }
     for credential in &registry.credentials {
-        validate_metadata(&credential.metadata).map_err(|_| LocalStoreError::Corrupt)?;
-        validate_grants(&credential.metadata, &registry.gateway_id, true)
-            .map_err(|_| LocalStoreError::Corrupt)?;
+        validate_metadata(&credential.metadata).map_err(|_| {
+            CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialMetadata)
+        })?;
+        validate_grants(&credential.metadata, &registry.gateway_id, true).map_err(|_| {
+            CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialMetadata)
+        })?;
         if credential.metadata.audience_id != registry.gateway_id
             || !principals.contains(&credential.metadata.principal_id)
             || !organizations.contains(&credential.metadata.organization_id)
@@ -1371,13 +1474,17 @@ fn validate_registry(
                     && membership.organization_id == credential.metadata.organization_id
             })
         {
-            return Err(LocalStoreError::Corrupt);
+            return Err(CredentialRegistryFault::InvalidState(
+                RegistryInvariant::CredentialBinding,
+            ));
         }
-        let verifier = URL_SAFE_NO_PAD
-            .decode(&credential.verifier)
-            .map_err(|_| LocalStoreError::Corrupt)?;
+        let verifier = URL_SAFE_NO_PAD.decode(&credential.verifier).map_err(|_| {
+            CredentialRegistryFault::InvalidState(RegistryInvariant::CredentialVerifier)
+        })?;
         if verifier.len() != 32 {
-            return Err(LocalStoreError::Corrupt);
+            return Err(CredentialRegistryFault::InvalidState(
+                RegistryInvariant::CredentialVerifier,
+            ));
         }
     }
     let issue_commands: HashSet<_> = registry
@@ -1401,7 +1508,9 @@ fn validate_registry(
                 || !credentials.contains(&receipt.credential_id)
         })
     {
-        return Err(LocalStoreError::Corrupt);
+        return Err(CredentialRegistryFault::InvalidState(
+            RegistryInvariant::CommandReceipt,
+        ));
     }
     Ok(())
 }
@@ -2300,7 +2409,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             open_store(auth.join("credentials.v1.json")),
-            Err(LocalStoreError::Corrupt)
+            Err(LocalStoreError::InvalidRegistry { .. })
         ));
     }
 
@@ -2820,9 +2929,67 @@ mod tests {
             fs::write(&path, &good).unwrap();
             rewrite(&path, edit);
             assert!(
-                matches!(open_store(&path), Err(LocalStoreError::Corrupt)),
+                matches!(
+                    open_store(&path),
+                    Err(LocalStoreError::InvalidRegistry { .. })
+                ),
                 "accepted: {name}"
             );
         }
+    }
+
+    #[test]
+    fn unsupported_schema_names_only_safe_structure_and_preserves_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("auth/credentials.v1.json");
+        nessa_local_storage::create_directory(path.parent().unwrap()).unwrap();
+        let bytes = br#"{"schemaVersion":1,"credentialSecret":"never-report-this"}"#;
+        nessa_local_storage::open(&path, nessa_local_storage::OpenMode::CreateNew)
+            .unwrap()
+            .write_all(bytes)
+            .unwrap();
+
+        let error = match open_store(&path) {
+            Err(error) => error,
+            Ok(_) => panic!("unsupported registry opened"),
+        };
+
+        assert!(matches!(
+            error.invalid_registry(),
+            Some((target, CredentialRegistryFault::UnsupportedSchema { found: 1, expected: 2 }))
+                if target == path
+        ));
+        let message = error.to_string();
+        assert!(message.contains("schema 1 is unsupported"), "{message}");
+        assert!(message.contains(path.to_str().unwrap()), "{message}");
+        assert!(!message.contains("never-report-this"), "{message}");
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn malformed_registry_diagnostic_never_echoes_rejected_values() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("auth/credentials.v1.json");
+        nessa_local_storage::create_directory(path.parent().unwrap()).unwrap();
+        let bytes = br#"{"schemaVersion":2,"credentials":"never-report-this"}"#;
+        nessa_local_storage::open(&path, nessa_local_storage::OpenMode::CreateNew)
+            .unwrap()
+            .write_all(bytes)
+            .unwrap();
+
+        let error = match open_store(&path) {
+            Err(error) => error,
+            Ok(_) => panic!("malformed registry opened"),
+        };
+
+        assert!(matches!(
+            error.invalid_registry(),
+            Some((target, CredentialRegistryFault::MalformedJson {
+                category: JsonFaultCategory::Data,
+                ..
+            })) if target == path
+        ));
+        assert!(!error.to_string().contains("never-report-this"));
+        assert_eq!(fs::read(path).unwrap(), bytes);
     }
 }
