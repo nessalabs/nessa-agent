@@ -85,10 +85,17 @@ activates hooks. Commands use fixed executable/argument vectors, explicit workin
 directory and an allowlisted environment; model input travels as bounded data,
 never shell interpolation. Execution has bounded input/output, elapsed time,
 concurrency, and owned process cleanup through injected application ports. A
-subprocess boundary alone is not a sandbox. Native hooks stay disabled; inability
-to establish suppression refuses the affected binding's startup or restoration
-before work, including when no Nessa hook is configured. This is a required future
-contract, not a claim that every current adapter already enforces suppression.
+subprocess boundary alone is not a sandbox. User-configured native executable
+hooks stay disabled, including hooks supplied through project, managed, or plugin
+configuration and legacy notification commands. Provider-owned builtin resource
+cleanup is a separate lifecycle responsibility and must not be disabled to claim
+suppression. Inability to establish suppression refuses the affected binding's
+startup or restoration before work, including when no Nessa hook is configured.
+A requested override and an absence of hook events do not establish the effective
+setting. This is a required future contract, not a claim that every current
+adapter already enforces suppression. The pinned Codex binding cannot attest the
+effective setting against higher-precedence legacy managed configuration; that
+scenario remains unsupported until an enforceable boundary exists.
 
 Every consequential verdict retains session/invocation/tool or permission target,
 before/after meaning, bounded reason, and the exact rule ID, immutable revision,

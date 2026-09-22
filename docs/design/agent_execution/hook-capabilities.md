@@ -122,11 +122,53 @@ fail-closed enforcement policy unchanged.
 The ACP adapter [discards `hook/started` and `hook/completed`](https://github.com/agentclientprotocol/codex-acp/blob/a7afd2ae077d625710194d9701b83595494449de/src/CodexEventHandler.ts#L604-L605)
 and [drops hook history entries](https://github.com/agentclientprotocol/codex-acp/blob/a7afd2ae077d625710194d9701b83595494449de/src/ResponseItemHistoryFallback.ts#L182).
 Native hooks are therefore not an observable Nessa hook stream.
-Native suppression is not established by this survey. A policy must not activate
-on the assumption that Codex's native configuration has been isolated.
 The adapter separately handles `thread/compacted` and `model/rerouted` in the
 [same event handler](https://github.com/agentclientprotocol/codex-acp/blob/a7afd2ae077d625710194d9701b83595494449de/src/CodexEventHandler.ts#L572-L583);
 these observations do not expose pre-compaction or general model-switch vetoes.
+
+#### Native suppression request and verification gap
+
+The reviewed Nessa baseline's
+[binding](../../../crates/nessa-sdk/src/infrastructure/codex_acp/sessions/binding.rs)
+sets model and optional instructions in `CODEX_CONFIG`; it does not request hook
+suppression. At the pinned upstream versions, adding `features.hooks: false` and
+`notify: []` is a source-supported suppression request, not an implemented Nessa
+feature or proof of effective suppression. These are separate settings:
+
+- Codex's [engine](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/hooks/src/engine/mod.rs#L228-L267)
+  removes ordinary configured handlers when the feature is false, retaining
+  provider builtin cleanup. Its [regression test](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/hooks/src/engine/mod_tests.rs#L1967-L2000)
+  distinguishes builtin cleanup from ordinary trusted plugin commands. This is
+  upstream source/test evidence; the test was not run here. Disabling all plugins
+  to remove cleanup would change broader capabilities and is not this contract.
+- Legacy [`notify` dispatch](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/hooks/src/registry.rs#L118-L180)
+  is constructed independently of the hook feature. Turning off only the feature
+  leaves this command path available.
+
+The [configuration loader](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/config/src/loader/mod.rs#L440-L497)
+applies session overrides after ordinary user/project layers, then applies legacy
+managed file and MDM layers above those overrides. Those later layers can restore
+hooks or notification commands. By contrast, conflicting modern feature
+requirements [reject configuration](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/core/src/config/managed_features.rs#L280-L319).
+Modern rejection does not prove safety against the different legacy path.
+
+ACP [merges the environment configuration into session options](https://github.com/agentclientprotocol/codex-acp/blob/a7afd2ae077d625710194d9701b83595494449de/src/CodexAcpClient.ts#L721-L769)
+for new and restored sessions. Codex's [resume path](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/app-server/src/request_processors/thread_processor.rs#L3652-L3689)
+returns an already-running thread before applying new configuration. Nessa's
+baseline opens a fresh process per binding, so its normal restoration is cold;
+future process reuse must not assume configuration is reapplied.
+
+ACP exposes no effective hooks/notify attestation, and its discarded hook events
+cannot prove their absence. Nessa's profile verification checks model and mode,
+not suppression. An isolated `CODEX_HOME` would relocate authentication and
+persisted sessions without removing system/MDM configuration precedence; it is
+not a demonstrated fix. Under ADR 0014, the minimal enforceable contract requires
+suppression established before startup/restoration effects, including with zero
+Nessa hooks. The current binding cannot satisfy that contract in the legacy
+managed-policy scenario. Its suppression capability remains unknown, and required
+startup must be refused until effective suppression can be established; adding
+the request alone cannot close [#147](https://github.com/nessalabs/nessa-agent/issues/147).
+No startup refusal or attestation mechanism is claimed implemented here.
 
 ### Opencode
 
@@ -215,6 +257,7 @@ closed as not planned and deferred; it is not part of this implementation plan.
 
 | Capability | Baseline answer | Activation requirement |
 | --- | --- | --- |
+| Native executable-hook suppression | Claude requests suppression; Codex baseline omits it and has an unresolved managed-policy precedence gap; Opencode uses PURE with separate containment gaps | Establish effective suppression before startup/restoration, even with zero Nessa hooks; preserve provider builtin cleanup. |
 | Pre-tool denial | Conditional ACP review path, not universal coverage | Prove the requested tool set cannot execute before Nessa's decision. |
 | Policy end-turn | Not implemented | Same target across direct/queued/steered work; late provider result and reusable session verified. |
 | Policy session close | Existing attributed close primitive, configured policy integration absent | Rule cause retained through all cleanup/audit paths. |
