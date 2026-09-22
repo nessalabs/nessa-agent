@@ -16,6 +16,9 @@ import { BrowserApplication } from "./composition/browser"
 import { hasNativeHost, windowSurface } from "./host"
 
 import { environmentFromVite } from "./env/vite"
+import { installDevConsoleForwarding } from "./diagnostics/dev-console"
+
+if (import.meta.env.DEV) installDevConsoleForwarding()
 
 const environment = environmentFromVite()
 const dependencies = createDependencies({ environment })
