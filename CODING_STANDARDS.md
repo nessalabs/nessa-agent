@@ -153,49 +153,58 @@ that their combination describes a possible execution.
 - Every review report must state which relationships and boundaries were checked,
   the enforcing code and regression evidence, and explicit exclusions. A review
   fails this gate if it only lists individually validated types or isolated tests.
-- For lifecycle changes, name one owner of each transition and test the same
-  guarantees across every delivery mode that uses it. This is
-  [gate 13](#gates) applied to transitions: one owner, and no second
-  implementation of the same decision anywhere in the stack. A second flag, error walker,
-  or cleanup path is not an independent implementation of the same authority.
-  A stop must be correlated with the affected work's admission; historical cleanup
-  cannot become the cancellation cause of a later input. Preserve the first cause
-  for each affected owner when later close requests arrive, and distinguish waiting
-  work that survives provider cleanup from active work that must stop.
-  For interrupted native steering, compare the saved transition with the owning
-  work permit, including automatic stops that do not notify explicit-close listeners.
-  Test retry and restoration, plus a genuine delivery failure with no earlier stop.
-  Test the ordering matrix, not only one failing example: stop before first poll,
-  stop while pending, acknowledgement before stop, and both ready in one poll.
-  Separate provider acknowledgement from local validation and persistence waits;
-  later cancellation cannot erase a received result. Cross diagnostic variants
-  with the same provider state, and the same diagnostic with different states.
-  Waiting receipts must settle or remain eligible to run according to their own
-  work permits, never according to an error-name allowlist.
-  Include a new explicit close joining an existing automatic stop: preserve old
-  owners' causes while attributing newly stopped waiters to the explicit caller.
-  Cross physical release with audit success/failure for both reported and locally
-  performed cleanup. Before a closed runner exits, every stopped receipt must
-  settle without depending on another explicit close or a particular control path.
-  Restoration and cleanup must serialize attachment ownership, not only admission.
-  Pause between retiring a cached cleanup report and arming the next attachment;
-  a concurrent close must own that attachment before reporting release. Assert
-  provider cleanup calls and retained ownership, not just a successful close result.
-  Follow operation-reported cleanup through the resource owner, outstanding close
-  waiters, final returned result, and last-handle drop. Retired work can still
-  report release of the same attachment; a restored attachment has a different
-  owner. Test both cases, including competing uncertain cleanup and audit failures.
-  Reconciliation and publication must be atomic with respect to incoming evidence;
-  repeated reconciliation must not duplicate failures or grow the report.
-  At gateway boundaries, extend ownership tests through caller disconnect and
-  reconnect: detached commands must retain bounded admission ownership, and
-  permission/close controls must remain available under normal-request pressure.
-  Compare live projections with saved terminal evidence in both arrival orders;
-  a replacement view must not revive removed server state or duplicate output.
-  Keep diagnostic errors out of admission and resource-ownership decisions:
-  transport rejection, provider settlement, local cancellation, physical cleanup,
-  and audit acknowledgement require explicit facts. Exercise identical diagnostics
-  with different physical states, and different diagnostics with the same state.
+- **Lifecycle transitions have one owner.** Name the owner of each transition and
+  test the same guarantees across every delivery mode that uses it. This is
+  [gate 13](#gates) applied to transitions: a second flag, error walker, or
+  cleanup path is not an independent implementation of the same authority. Test
+  each of the following against the ordering matrix rather than one failing
+  example — stop before first poll, stop while pending, acknowledgement before
+  stop, and both ready in one poll.
+
+  - _A cause outlives the event that set it._ Correlate a stop with the admission
+    of the work it affects; historical cleanup cannot become the cancellation
+    cause of a later input. When further close requests arrive, preserve the first
+    cause for each owner already stopped and attribute only newly stopped waiters
+    to the new caller — an explicit close joining an automatic stop does both at
+    once. Distinguish waiting work that survives provider cleanup from active work
+    that must stop.
+  - _Acknowledgement, local decision, and confirmed effect are separate facts._
+    Keep provider acknowledgement apart from local validation and persistence
+    waits; a later cancellation cannot erase a result already received. For
+    interrupted native steering, compare the saved transition against the owning
+    work permit, including automatic stops that never notify explicit-close
+    listeners, and test retry, restoration, and a genuine delivery failure with no
+    earlier stop.
+  - _A diagnostic is not a decision._ Transport rejection, provider settlement,
+    local cancellation, physical cleanup, and audit acknowledgement each require
+    an explicit fact; an error's shape decides neither admission nor resource
+    ownership. Waiting receipts settle, or stay eligible to run, by their own work
+    permits and never by an error-name allowlist. Cross identical diagnostics with
+    different provider and physical states, and different diagnostics with the
+    same state.
+  - _Release has an owner, and a report of release is not release._ Assert the
+    provider cleanup calls and what ownership is retained, not merely a successful
+    close result, and follow operation-reported cleanup through the resource
+    owner, outstanding close waiters, the final returned result, and the
+    last-handle drop. Restoration and cleanup serialize attachment ownership, not
+    only admission: a concurrent close must own an attachment before reporting its
+    release, so pause between retiring a cached cleanup report and arming the next
+    one. Retired work can still report release of the same attachment, and a
+    restored attachment has a different owner; test both, with competing uncertain
+    cleanup and with audit failure. Cross physical release with audit success and
+    failure, for reported and locally performed cleanup alike — released resources
+    must not turn a retained failure into an acknowledgement — covering cached
+    reports and reports arriving through provider operations as well as a direct
+    close. Before a closed runner exits, every stopped receipt settles without
+    depending on another explicit close or on one particular control path.
+  - _Reconciliation and publication are atomic with respect to incoming evidence._
+    Repeating them must not duplicate failures or grow the report.
+  - _Ownership outlives the caller._ At gateway boundaries, extend these tests
+    through caller disconnect and reconnect: a detached command keeps bounded
+    admission ownership, and permission and close controls stay available under
+    normal-request pressure. Compare live projections against saved terminal
+    evidence in both arrival orders; a replacement view must not revive removed
+    server state or duplicate output.
 - Identity among siblings. A key names an element among the children it sits
   with, not the data it is about. Two children of one parent under one key are
   one child to the renderer. React warns and does not refuse; what follows
@@ -252,9 +261,6 @@ that their combination describes a possible execution.
   inherited budget exhaustion as well as long ready streams. Once cleanup is
   unconfirmed, ready output must not starve settlement or cleanup retry; retain an
   already-ready result without continuing an unbounded observation drain.
-- Repeat cleanup after physical success with audit failure. Released resources
-  must not turn a retained failure into acknowledgement; test cached reports and
-  reports received through provider operations as well as direct close.
 
 ### Review dimensions
 
