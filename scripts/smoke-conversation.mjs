@@ -24,11 +24,13 @@ import {
 } from "@nessa/client"
 import { evidenceFor, readEvidence, waitFor } from "./conversation-smoke/evidence.mjs"
 import {
+  collectCleanupFailures,
   createLossyProxy,
   processIsGone,
   reservePort,
   startGateway,
   stopGateway,
+  stopOwnedFixtureProcesses,
 } from "./conversation-smoke/runtime.mjs"
 
 globalThis.WebSocket = WebSocket
@@ -68,6 +70,7 @@ const cancelExecutionId = "execution-cancel"
 const clients = []
 let proxy
 let gateway
+let primaryFailure
 
 const connect = async (url) => {
   const client = await NessaClient.connect({
@@ -93,8 +96,15 @@ const connect = async (url) => {
   return client
 }
 
-const viewWith = (client, accept, description) =>
-  waitFor(() => client.conversation.read(conversationId), accept, description, 15_000)
+const viewWith = (client, accept, description) => {
+  const operation = waitFor(
+    () => client.conversation.read(conversationId),
+    accept,
+    description,
+    15_000,
+  )
+  return proxy ? proxy.guard(operation) : operation
+}
 
 try {
   mkdirSync(workspace)
@@ -185,15 +195,18 @@ try {
   })
   let lostResponse
   try {
-    await client.conversation.send(
-      conversationId,
-      `answer this fixture\nfixtureCorrelation:${answerExecutionId}`,
-      [imageReference],
-      [],
-      { requestId: sendRequestId, executionId: answerExecutionId },
+    await proxy.guard(
+      client.conversation.send(
+        conversationId,
+        `answer this fixture\nfixtureCorrelation:${answerExecutionId}`,
+        [imageReference],
+        [],
+        { requestId: sendRequestId, executionId: answerExecutionId },
+      ),
     )
     assert.fail("the proxy must drop the committed send response")
   } catch (error) {
+    proxy.assertHealthy()
     assert.ok(error instanceof NessaConversationMutationError)
     assert.equal(error.requestId, sendRequestId)
     assert.equal(error.executionId, answerExecutionId)
@@ -201,27 +214,31 @@ try {
     lostResponse = error
   }
   assert.equal(proxy.evidence.droppedResponses, 1)
-  await waitFor(
-    () => ({ current: client.connectionState, observed: [...connectionStates] }),
-    ({ current, observed }) =>
-      current.status === "connected" && observed.includes("reconnecting"),
-    "automatic client reconnection",
+  await proxy.guard(
+    waitFor(
+      () => ({ current: client.connectionState, observed: [...connectionStates] }),
+      ({ current, observed }) =>
+        current.status === "connected" && observed.includes("reconnecting"),
+      "automatic client reconnection",
+    ),
   )
   stopObservingConnection()
-  const promptEvidence = await waitFor(
-    () =>
-      readEvidence(evidencePath).filter(
-        (event) =>
-          event.type === "prompt" && event.expectedExecutionId === answerExecutionId,
-      ),
-    (events) => events.length === 1,
-    "one provider prompt after the lost response",
+  const promptEvidence = await proxy.guard(
+    waitFor(
+      () =>
+        readEvidence(evidencePath).filter(
+          (event) =>
+            event.type === "prompt" && event.expectedExecutionId === answerExecutionId,
+        ),
+      (events) => events.length === 1,
+      "one provider prompt after the lost response",
+    ),
   )
   const [{ providerSessionId }] = promptEvidence
   assert.ok(promptEvidence[0].promptTypes.includes("image"))
   assert.equal(proxy.evidence.matchingSendFrames, 1, "reconnection must not replay send")
 
-  const recovered = await lostResponse.retry()
+  const recovered = await proxy.guard(lostResponse.retry())
   assert.equal(recovered.requestId, sendRequestId)
   assert.equal(recovered.executionId, answerExecutionId)
   assert.equal(
@@ -256,12 +273,14 @@ try {
     ["allow-once", "deny-once"],
   )
 
-  const steered = await client.conversation.steer(
-    conversationId,
-    `refine it\nfixtureCorrelation:${steerExecutionId}`,
-    [],
-    [],
-    { requestId: "request-steer", executionId: steerExecutionId },
+  const steered = await proxy.guard(
+    client.conversation.steer(
+      conversationId,
+      `refine it\nfixtureCorrelation:${steerExecutionId}`,
+      [],
+      [],
+      { requestId: "request-steer", executionId: steerExecutionId },
+    ),
   )
   assert.equal(steered.executionId, steerExecutionId)
   assert.equal(steered.disposition, "injected")
@@ -290,12 +309,14 @@ try {
     answerExecutionId,
   )
 
-  const answered = await client.conversation.answer(
-    conversationId,
-    answerExecutionId,
-    permission.permissionId,
-    "allow-once",
-    { requestId: "request-answer" },
+  const answered = await proxy.guard(
+    client.conversation.answer(
+      conversationId,
+      answerExecutionId,
+      permission.permissionId,
+      "allow-once",
+      { requestId: "request-answer" },
+    ),
   )
   assert.equal(answered.applied, true)
   await viewWith(
@@ -318,6 +339,7 @@ try {
   )
 
   client.close()
+  proxy.assertHealthy()
   await proxy.close()
   proxy = undefined
   await stopGateway(gateway)
@@ -434,21 +456,49 @@ try {
     Boolean,
     "provider process cleanup after close",
   )
-  console.log("conversation smoke passed")
 } catch (error) {
   const logs = gateway?.logs() ?? ""
   const secret = existsSync(ownerPath) ? readFileSync(ownerPath, "utf8").trim() : ""
   const redactedLogs = secret ? logs.replaceAll(secret, "[credential redacted]") : logs
-  throw new Error(`${error?.stack ?? error}\nGateway log tail:\n${redactedLogs}`)
-} finally {
-  for (const client of clients) client.close()
-  if (proxy) await proxy.close()
-  if (gateway) {
-    try {
-      await stopGateway(gateway)
-    } catch {
-      gateway.child.kill("SIGKILL")
-    }
-  }
-  rmSync(temporary, { recursive: true, force: true })
+  primaryFailure = new Error(
+    `${error?.stack ?? error}\nGateway log tail:\n${redactedLogs}`,
+    { cause: error },
+  )
 }
+
+const cleanupFailures = await collectCleanupFailures([
+  ...clients.map((client, index) => ({
+    name: `client ${index + 1}`,
+    run: () => client.close(),
+  })),
+  ...(proxy ? [{ name: "lossy proxy", run: () => proxy.close() }] : []),
+  ...(gateway ? [{ name: "gateway", run: () => stopGateway(gateway) }] : []),
+  {
+    name: "fixture processes",
+    run: () => stopOwnedFixtureProcesses(evidencePath),
+  },
+])
+if (
+  !cleanupFailures.some((failure) =>
+    ["gateway", "fixture processes"].includes(failure.cleanupName),
+  )
+) {
+  cleanupFailures.push(
+    ...(await collectCleanupFailures([
+      {
+        name: "temporary data",
+        run: () => rmSync(temporary, { recursive: true, force: true }),
+      },
+    ])),
+  )
+}
+
+if (primaryFailure && cleanupFailures.length === 0) throw primaryFailure
+if (primaryFailure || cleanupFailures.length > 0)
+  throw new AggregateError(
+    [...(primaryFailure ? [primaryFailure] : []), ...cleanupFailures],
+    primaryFailure
+      ? "conversation smoke and cleanup failed"
+      : "conversation smoke cleanup failed",
+  )
+console.log("conversation smoke passed")
