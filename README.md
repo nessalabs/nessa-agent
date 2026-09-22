@@ -180,12 +180,48 @@ and `just release` there.
 | `just release` | Shipping bundle — fat LTO, stripped (`.dmg` / `.deb` / NSIS) |
 | `pnpm app` | `tauri dev`, no host defaults |
 | `pnpm app:build` | Build and verify the currently supported macOS shipping bundle |
+| `pnpm desktop:smoke` | On Linux, build and drive a real embedded WebKitGTK window against an isolated gateway/provider |
 | `pnpm frontend:check` | Run the complete frontend/client formatting, lint, protocol, docs, type, test, and build contract |
 | `pnpm sdk:check` | Run SDK formatting, Clippy, tests, and warnings-denied Rustdoc |
 | `pnpm check` | Run the same frontend, Rust crate, SDK, MCP, and desktop checks composed in CI |
 | `pnpm typecheck` | `tsc --noEmit` |
 | `pnpm ui:check` | Confirm the vendored UI matches `nessa-ui-revision` (offline, runs before `typecheck`, `dev`, `build`, `test`) |
 | `pnpm ui:types` | Reconcile the vendored UI with `nessa-ui-revision` |
+
+### Desktop verification
+
+A direct Cargo build embeds `dist/`; it never silently falls back to the Vite
+development server. Build the matching frontend first, then build and launch the
+ordinary debug executable:
+
+```bash
+VITE_NESSA_STAGE=ci pnpm build
+NESSA_STAGE=ci cargo build -p nessa-app
+NESSA_STAGE=ci target/debug/nessa-app
+```
+
+`pnpm app` remains the hot-reload path and points the webview at Vite. For a
+focused Rust host test, disable the embedded production feature so a test does
+not require `dist/` and pass test-harness flags after `--`:
+
+```bash
+cargo test -p nessa-app --no-default-features launch::tests -- --test-threads=1
+```
+
+The native window smoke requires Linux, `tauri-driver` 2.0.6,
+`WebKitWebDriver`, and Xvfb on a headless machine:
+
+```bash
+xvfb-run --auto-servernum pnpm desktop:smoke
+```
+
+It launches the real WebKitGTK window, isolated gateway, and deterministic ACP
+provider; verifies a connected render, message reply, and attachment tile; and
+checks that every process exits. Its synthetic browser `File` drop exercises
+the real page attachment and upload path, but not a physical OS drag event,
+which the native host consumes. The local-auth workflow is configured to run
+this proof on Linux. WKWebView has no corresponding WebDriver coverage on
+macOS.
 
 ### Settings
 

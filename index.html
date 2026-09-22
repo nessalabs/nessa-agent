@@ -4,9 +4,40 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Nessa</title>
+    <style>
+      @keyframes reveal-load-help {
+        to {
+          opacity: 1;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <main
+        data-nessa-load-fallback
+        style="
+          box-sizing: border-box;
+          min-height: 100vh;
+          display: grid;
+          place-content: center;
+          gap: 0.5rem;
+          padding: 2rem;
+          color: #e8e8e8;
+          background: #171717;
+          font:
+            14px/1.5 system-ui,
+            sans-serif;
+          text-align: center;
+        "
+      >
+        <strong>Loading Nessa…</strong>
+        <span style="opacity: 0; animation: reveal-load-help 0s 4s forwards">
+          If this stays on screen, quit and reopen the app. If it keeps happening,
+          reinstall Nessa.
+        </span>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

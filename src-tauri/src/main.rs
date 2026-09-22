@@ -5,6 +5,7 @@ mod attachments;
 mod composition;
 mod gateway;
 mod host;
+mod launch;
 mod links;
 mod local_data;
 mod panel;
@@ -31,6 +32,11 @@ use std::sync::Mutex;
 use tauri::{Manager, WindowEvent};
 
 fn main() {
+    if let Err(error) = launch::accept(std::env::args_os().skip(1)) {
+        eprintln!("[nessa] {error}");
+        std::process::exit(2);
+    }
+
     // Before Tauri (and GTK) start. Linux uses this to disable WebKit's
     // DMA-BUF renderer when there is no DRM device.
     platform::current().prepare();
@@ -127,11 +133,24 @@ fn main() {
             // is read once per launch, not once per question.
             //
             // Setup is a takeover: it covers the screen, menu bar included, and
-            // is the active window when it does. It is placed while still
-            // hidden and shown by its own page, once that page has a frame to
-            // show — see `panel::reveal_setup_window`.
+            // is the active window when it does. A release page reveals it once
+            // it has a frame to show; a debug host reveals its static loading
+            // fallback too, so broken JavaScript cannot leave first run hidden.
+            // See `panel::open_setup_window` and `panel::reveal_setup_window`.
             if !settings.onboarding.completed {
                 panel::open_setup_window(app.handle());
+            } else {
+                // A debug executable is also a supported way to exercise the
+                // real embedded desktop without `tauri dev`. Reveal it after
+                // setup has sized and bound the configured panel. The static
+                // document remains visible if the application bundle cannot
+                // replace its loading fallback.
+                #[cfg(debug_assertions)]
+                if let Some(window) = app.get_webview_window(panel::MAIN_WINDOW) {
+                    if let Err(error) = panel::show(&window, &settings) {
+                        eprintln!("[nessa] could not reveal the debug panel: {error}");
+                    }
+                }
             }
 
             // Last, and on purpose. It must not delay anything above it, so it

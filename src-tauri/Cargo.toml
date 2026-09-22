@@ -96,6 +96,9 @@ minisign-verify = "0.2"
 base64 = "0.22"
 
 [features]
+# A directly built desktop binary owns its page. `tauri dev` disables default
+# features while it points the webview at Vite, preserving hot reload there.
+default = ["custom-protocol"]
 # Used for production builds or when a dev server is not specified. Do not remove.
 custom-protocol = ["tauri/custom-protocol"]
 
