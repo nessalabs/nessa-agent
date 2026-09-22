@@ -641,9 +641,15 @@ context and the published protocol schema must agree on (`agreement.rs`).
 ## Installing an agent runtime
 
 `crates/nessa-server/src/agent_install/` puts an agent's own runtime on the
-machine at the version Nessa has tested. Claude and Codex are expected to be
-installed already; Opencode is the one Nessa fetches, because it is the agent a
-first-time user can reach with nothing signed in.
+machine at the version Nessa has tested. Opencode is the only one it fetches
+today; Claude and Codex ride inside the application instead. That split was once
+explained by Opencode being the agent a first-time user could reach with nothing
+signed in, and that turned out to be false — its free models are refused outside
+OpenCode's own application, so all three want the person's own account. What is
+left of the reason applies to every agent equally: telling somebody to go and
+install something before they can use Nessa is the thing this context exists to
+avoid. [ADR 0013](adr/todo/0013-fetch-agent-runtimes.md) is the decision to
+fetch all three and ship none.
 
 `domain/value_objects/` owns what is true before any file exists: `AgentName`,
 which is the identity in this context and is constrained to what can also be a
@@ -673,7 +679,8 @@ network) and `RuntimeStore` (this machine's disk), whose `StagedArchive` carries
 an open file rather than a path, so the bytes that are measured are the bytes
 that are unpacked.
 
-`infrastructure/` holds the three outside things: `pinned_releases.rs` reads
+`infrastructure/` holds the three outside things — the pins, the network and
+the disk, one module each. `pinned_releases.rs` reads
 `data/agent-releases.json`, compiled in so the tested version cannot depend on
 what is beside the binary, and is also the one boundary that reads *the
 machine* — `host_platform()` builds a `HostPlatform` from the compiler's own

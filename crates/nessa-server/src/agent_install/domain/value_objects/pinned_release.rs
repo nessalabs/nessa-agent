@@ -172,49 +172,6 @@ impl ReleaseVersion {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
-    /// Whether this version is at or above `floor`.
-    ///
-    /// The question a floor exists to answer: a runtime already on the machine
-    /// is usable if it is not older than the oldest release whose behaviour
-    /// this build still handles.
-    ///
-    /// Compared component by component as numbers, which is the whole point.
-    /// These are strings, and as strings `0.9.0` sorts above `0.76.0` — so a
-    /// build whose floor was `0.76.0` would accept a runtime nearly seventy
-    /// releases too old and only find out when the protocol did not match.
-    ///
-    /// A component that is not a number — the `rc1` of `1.2.0-rc1`, a build
-    /// suffix — compares as below a numbered one at the same position, so a
-    /// pre-release is never mistaken for the release it precedes. Anything
-    /// further is deliberately not modelled: this is a floor, not a semantic
-    /// version implementation, and the pins it is asked about are plain
-    /// three-part versions.
-    pub fn at_least(&self, floor: &ReleaseVersion) -> bool {
-        fn parts(value: &str) -> Vec<Option<u64>> {
-            value
-                .split(['.', '-', '+', '_'])
-                .map(|part| part.parse::<u64>().ok())
-                .collect()
-        }
-        let mine = parts(&self.0);
-        let theirs = parts(&floor.0);
-        for index in 0..mine.len().max(theirs.len()) {
-            // A version that has run out of components is the shorter one, and
-            // `1.2` is below `1.2.1` rather than equal to it.
-            let (a, b) = (
-                mine.get(index).copied().unwrap_or(Some(0)),
-                theirs.get(index).copied().unwrap_or(Some(0)),
-            );
-            match (a, b) {
-                (Some(a), Some(b)) if a != b => return a > b,
-                (Some(_), None) => return true,
-                (None, Some(_)) => return false,
-                _ => {}
-            }
-        }
-        true
-    }
 }
 
 impl fmt::Display for ReleaseVersion {
