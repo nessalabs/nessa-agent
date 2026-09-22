@@ -9,6 +9,7 @@ import {
   NessaRpcError,
   type AttachmentBeginRefusal,
   type ConversationErrorCode,
+  type ConversationView as GatewayConversationView,
   type NessaClient,
   type StoredAttachment,
 } from "@nessa/client"
@@ -23,6 +24,32 @@ import {
   type ConversationEffects,
 } from "../../application/ports"
 import type { CommandFailure, ReadFailure } from "../../model"
+
+function conversationView(value: GatewayConversationView): ConversationView {
+  const features = value.capabilities.agentFeatures
+  return {
+    ...value,
+    capabilities: {
+      queue: value.capabilities.queue,
+      steer: value.capabilities.steer,
+      resume: value.capabilities.resume,
+      permissions: value.capabilities.permissions,
+      imageInput: value.capabilities.imageInput,
+      agentFeatures: {
+        permissionDenial: features.permissionDenial,
+        nativeHookSuppression: features.nativeHookSuppression,
+        compactionReporting: features.compactionReporting,
+        modelSwitchReporting: features.modelSwitchReporting,
+        permissionDeferral: features.permissionDeferral,
+        elicitationForwarding: features.elicitationForwarding,
+        preToolPolicy: features.preToolPolicy,
+        policyEndTurn: features.policyEndTurn,
+        policyCloseSession: features.policyCloseSession,
+        incomingElicitation: features.incomingElicitation,
+      },
+    },
+  }
+}
 
 /** Why the gateway declined to issue a ticket, as what the panel can do about it. */
 function beginFailure(refusal: AttachmentBeginRefusal | undefined) {
@@ -376,6 +403,7 @@ export function gatewayEffects(
       const request = (previous ?? Promise.resolve())
         .catch(() => undefined)
         .then(() => api().read(conversationId))
+        .then(conversationView)
         // The gateway's answer to a read is the last thing it says in its own
         // vocabulary: from here the panel has a word of its own for it.
         .catch((error: unknown) => {

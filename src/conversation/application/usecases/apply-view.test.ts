@@ -62,6 +62,18 @@ const view: ConversationView = {
     resume: true,
     permissions: true,
     imageInput: false,
+    agentFeatures: {
+      permissionDenial: "unknown",
+      nativeHookSuppression: "unknown",
+      compactionReporting: "unsupported_not_implemented",
+      modelSwitchReporting: "unsupported_not_implemented",
+      permissionDeferral: "unsupported_not_implemented",
+      elicitationForwarding: "unknown",
+      preToolPolicy: "unsupported_not_implemented",
+      policyEndTurn: "unsupported_not_implemented",
+      policyCloseSession: "unsupported_not_implemented",
+      incomingElicitation: "unsupported_not_implemented",
+    },
   },
 }
 it("projects exact review and tool targets while preserving the next unsent draft", () => {
