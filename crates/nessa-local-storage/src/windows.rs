@@ -297,6 +297,13 @@ pub fn verify_file(file: &File) -> io::Result<()> {
     verify_acl(file)
 }
 pub fn open(path: &Path, mode: OpenMode) -> io::Result<File> {
+    open_with_additional_access(path, mode, 0)
+}
+fn open_with_additional_access(
+    path: &Path,
+    mode: OpenMode,
+    additional_access: u32,
+) -> io::Result<File> {
     check_parents(path)?;
     let user = User::current()?;
     let descriptor = user.descriptor(false)?;
@@ -306,6 +313,7 @@ pub fn open(path: &Path, mode: OpenMode) -> io::Result<File> {
         bInheritHandle: 0,
     };
     let access = GENERIC_READ
+        | additional_access
         | if matches!(mode, OpenMode::Read | OpenMode::ReadNonblocking) {
             0
         } else {
@@ -319,6 +327,9 @@ pub fn open(path: &Path, mode: OpenMode) -> io::Result<File> {
     let file = raw_open(path, access, disposition, &attributes)?;
     verify_file(&file)?;
     Ok(file)
+}
+pub fn open_temporary(path: &Path) -> io::Result<File> {
+    open_with_additional_access(path, OpenMode::CreateNew, DELETE)
 }
 pub fn verify_directory(path: &Path) -> io::Result<()> {
     check_parents(path)?;
@@ -375,6 +386,17 @@ pub fn open_beneath(root: &Path, relative: &Path, mode: OpenMode) -> io::Result<
     }
     verify_directory(root)?;
     open(&root.join(relative), mode)
+}
+pub fn open_temporary_beneath(root: &Path, relative: &Path) -> io::Result<File> {
+    if relative.components().next().is_none()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(unsafe_file());
+    }
+    verify_directory(root)?;
+    open_temporary(&root.join(relative))
 }
 /// Windows does not expose Unix directory fsync semantics. Files are flushed
 /// before publication; replacement requests the platform's write-through move.
@@ -489,6 +511,7 @@ pub fn replace_beneath(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{create_private_directory_tree_beneath, PrivateTempFile};
     use std::{
         io::{Read, Write},
         os::windows::fs::symlink_file,
@@ -545,6 +568,40 @@ mod tests {
             open(&from, OpenMode::Read).unwrap_err().kind(),
             io::ErrorKind::NotFound
         );
+    }
+
+    #[test]
+    fn private_temporary_drop_has_the_capability_to_remove_its_reservation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        create_directory(&root).unwrap();
+        create_private_directory_tree_beneath(&root, Path::new("audit")).unwrap();
+
+        let reserved = PrivateTempFile::new_beneath(&root, Path::new("audit")).unwrap();
+        assert_eq!(fs::read_dir(root.join("audit")).unwrap().count(), 1);
+        drop(reserved);
+
+        assert_eq!(fs::read_dir(root.join("audit")).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn failed_private_publication_cleans_its_reservation_without_replacing_the_winner() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("root");
+        create_directory(&root).unwrap();
+        create_private_directory_tree_beneath(&root, Path::new("audit")).unwrap();
+        let destination = Path::new("audit/record.json");
+        let mut winner = PrivateTempFile::new_beneath(&root, Path::new("audit")).unwrap();
+        winner.as_file_mut().write_all(b"winner").unwrap();
+        winner.publish_new_beneath(destination).unwrap();
+        let mut loser = PrivateTempFile::new_beneath(&root, Path::new("audit")).unwrap();
+        loser.as_file_mut().write_all(b"loser").unwrap();
+
+        let error = loser.publish_new_beneath(destination).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(root.join(destination)).unwrap(), b"winner");
+        assert_eq!(fs::read_dir(root.join("audit")).unwrap().count(), 1);
     }
 
     fn replace_acl(file: &File, sddl: &str) {

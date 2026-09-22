@@ -18,7 +18,7 @@ use std::{
     sync::Arc,
 };
 
-/// One immutable, synced file per refused registry read.
+/// One immutable, synced file per refused registry-authority read.
 pub struct DurableCredentialRegistryRefusalAudit {
     root: PathBuf,
     directory: PathBuf,
@@ -45,13 +45,14 @@ impl CredentialRegistryRefusalAudit for DurableCredentialRegistryRefusalAudit {
     ) -> Result<(), CredentialRegistryAuditError> {
         create_private_directory_tree_beneath(&self.root, &self.directory).map_err(unavailable)?;
         let id = record_id()?;
+        let transition = refusal.transition();
         let value = json!({
             "recordId": id,
             "kind": "credential_registry_refused",
             "target": path_value(refusal.target()),
             "transition": {
-                "before": "registry_present_untrusted",
-                "after": "registry_open_refused_file_preserved",
+                "before": transition.before(),
+                "after": transition.after(),
             },
             "cause": refusal.cause().as_str(),
             "initiator": {"kind": refusal.initiator().as_str()},

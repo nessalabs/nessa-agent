@@ -44,19 +44,23 @@ fn run_with(args: impl FnOnce(&Path) -> Vec<String>, setup: impl FnOnce(&Path, &
     drop(file);
     setup(&auth, &registry);
     let args = args(root.path());
-    let output = Command::new(env!("CARGO_BIN_EXE_nessa"))
-        .args(&args)
-        .env_clear()
-        .env("NESSA_DATA_DIR", root.path())
-        .env("NESSA_STAGE", "ci")
-        .output()
-        .unwrap();
+    let output = execute(root.path(), &args);
     Run {
         _root: root,
         registry,
         auth,
         output,
     }
+}
+
+fn execute(root: &Path, args: &[String]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_nessa"))
+        .args(args)
+        .env_clear()
+        .env("NESSA_DATA_DIR", root)
+        .env("NESSA_STAGE", "ci")
+        .output()
+        .unwrap()
 }
 
 fn stderr(run: &Run) -> String {
@@ -184,12 +188,24 @@ fn assert_unsafe_refusal(run: &Run, target: &Path, role: &str) {
         message.contains("not private, single-linked storage"),
         "{message}"
     );
-    assert_eq!(fs::read(&run.registry).unwrap(), INVALID);
     let records = records(&run.auth);
     assert_eq!(records.len(), 1);
     assert_eq!(records[0]["target"]["value"], target.to_str().unwrap());
     assert_eq!(records[0]["fault"]["kind"], "unsafe_storage");
     assert_eq!(records[0]["fault"]["role"], role);
+    let expected_transition = if role == "lock" {
+        (
+            "registry_lock_present_untrusted",
+            "registry_lock_open_refused_file_preserved",
+        )
+    } else {
+        (
+            "registry_present_untrusted",
+            "registry_open_refused_file_preserved",
+        )
+    };
+    assert_eq!(records[0]["transition"]["before"], expected_transition.0);
+    assert_eq!(records[0]["transition"]["after"], expected_transition.1);
 }
 
 #[cfg(unix)]
@@ -312,6 +328,69 @@ fn lock_symlink_is_refused_and_audited_without_changing_its_target() {
     assert_unsafe_refusal(&run, &lock, "lock");
     assert!(run.auth.join("lock-evidence").is_file());
     assert_eq!(fs::read(&run.registry).unwrap(), INVALID);
+}
+
+#[cfg(unix)]
+#[test]
+fn unsafe_lock_preserves_an_initialized_registry_byte_for_byte() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let auth = root.path().join("ci/auth");
+    let registry = auth.join("credentials.v1.json");
+    let token = root.path().join("owner.token");
+    let initialized = execute(
+        root.path(),
+        &[
+            "auth".into(),
+            "init".into(),
+            "--local".into(),
+            "--owner-token-file".into(),
+            token.to_str().unwrap().into(),
+        ],
+    );
+    assert!(
+        initialized.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initialized.stderr)
+    );
+    let before = fs::read(&registry).unwrap();
+    let lock = lock_path(&auth);
+    fs::set_permissions(&lock, fs::Permissions::from_mode(0o644)).unwrap();
+    let output = execute(root.path(), &["server".into()]);
+    let run = Run {
+        _root: root,
+        registry,
+        auth,
+        output,
+    };
+
+    assert_unsafe_refusal(&run, &lock, "lock");
+    assert_eq!(fs::read(&run.registry).unwrap(), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn unsafe_lock_does_not_create_an_absent_registry() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().unwrap();
+    let auth = root.path().join("ci/auth");
+    nessa_local_storage::create_directory(&auth).unwrap();
+    let registry = auth.join("credentials.v1.json");
+    let lock = lock_path(&auth);
+    nessa_local_storage::open(&lock, nessa_local_storage::OpenMode::CreateNew).unwrap();
+    fs::set_permissions(&lock, fs::Permissions::from_mode(0o644)).unwrap();
+    let output = execute(root.path(), &["server".into()]);
+    let run = Run {
+        _root: root,
+        registry,
+        auth,
+        output,
+    };
+
+    assert_unsafe_refusal(&run, &lock, "lock");
+    assert!(!run.registry.exists());
 }
 
 #[cfg(unix)]

@@ -29,6 +29,9 @@ pub fn open(path: &Path, mode: OpenMode) -> io::Result<File> {
     verify_file(&file)?;
     Ok(file)
 }
+pub fn open_temporary(path: &Path) -> io::Result<File> {
+    open(path, OpenMode::CreateNew)
+}
 pub fn open_beneath(root: &Path, relative: &Path, mode: OpenMode) -> io::Result<File> {
     let (parent, leaf) = open_parent_beneath(root, relative)?;
     let mut flags = libc::O_CLOEXEC | libc::O_NOFOLLOW;
@@ -46,6 +49,9 @@ pub fn open_beneath(root: &Path, relative: &Path, mode: OpenMode) -> io::Result<
     let file = unsafe { File::from_raw_fd(descriptor) };
     verify_file(&file)?;
     Ok(file)
+}
+pub fn open_temporary_beneath(root: &Path, relative: &Path) -> io::Result<File> {
+    open_beneath(root, relative, OpenMode::CreateNew)
 }
 pub fn verify_file(file: &File) -> io::Result<()> {
     let metadata = file.metadata()?;

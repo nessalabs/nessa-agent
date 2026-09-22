@@ -1681,11 +1681,7 @@ fn authoritative_open(
 }
 
 fn unsafe_storage_error(error: &io::Error) -> bool {
-    error.kind() == io::ErrorKind::PermissionDenied
-        || matches!(
-            error.raw_os_error(),
-            Some(libc::ELOOP) | Some(libc::ENOTDIR)
-        )
+    error.kind() == io::ErrorKind::PermissionDenied || nessa_local_storage::is_unsafe_file(error)
 }
 fn set_private_directory(path: &Path) -> Result<(), LocalStoreError> {
     Ok(nessa_local_storage::verify_directory(path)?)

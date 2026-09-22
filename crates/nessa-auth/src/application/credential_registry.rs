@@ -66,6 +66,33 @@ impl CredentialRegistryStorageRole {
     }
 }
 
+/// The state transition a refusal audit can truthfully claim.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CredentialRegistryRefusalTransition {
+    /// The registry was observed but refused and preserved.
+    RegistryFilePreserved,
+    /// The registry lock was observed but refused and preserved before registry state was read.
+    RegistryLockPreserved,
+}
+
+impl CredentialRegistryRefusalTransition {
+    /// Return the stable audit representation of the state before refusal.
+    pub fn before(self) -> &'static str {
+        match self {
+            Self::RegistryFilePreserved => "registry_present_untrusted",
+            Self::RegistryLockPreserved => "registry_lock_present_untrusted",
+        }
+    }
+
+    /// Return the stable audit representation of the state after refusal.
+    pub fn after(self) -> &'static str {
+        match self {
+            Self::RegistryFilePreserved => "registry_open_refused_file_preserved",
+            Self::RegistryLockPreserved => "registry_lock_open_refused_file_preserved",
+        }
+    }
+}
+
 /// Safe categories from `serde_json`; no rejected value is retained.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JsonFaultCategory {
@@ -196,7 +223,7 @@ impl CredentialRegistryRefusalInitiator {
     }
 }
 
-/// Immutable evidence that a registry was refused and left untouched.
+/// Immutable evidence that a registry authority file was refused and left untouched.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CredentialRegistryRefusal {
     target: PathBuf,
@@ -222,7 +249,7 @@ impl CredentialRegistryRefusal {
         }
     }
 
-    /// Return the registry path that was refused and preserved.
+    /// Return the registry or lock path that was refused and preserved.
     pub fn target(&self) -> &Path {
         &self.target
     }
@@ -230,6 +257,22 @@ impl CredentialRegistryRefusal {
     /// Return the safe structural fault reported by the storage adapter.
     pub fn fault(&self) -> &CredentialRegistryFault {
         &self.fault
+    }
+
+    /// Return the preserved state transition supported by this fault.
+    pub fn transition(&self) -> CredentialRegistryRefusalTransition {
+        match self.fault {
+            CredentialRegistryFault::MalformedJson { .. }
+            | CredentialRegistryFault::UnsupportedSchema { .. }
+            | CredentialRegistryFault::InvalidState(_)
+            | CredentialRegistryFault::TooLarge { .. }
+            | CredentialRegistryFault::UnsafeStorage(CredentialRegistryStorageRole::Registry) => {
+                CredentialRegistryRefusalTransition::RegistryFilePreserved
+            }
+            CredentialRegistryFault::UnsafeStorage(CredentialRegistryStorageRole::Lock) => {
+                CredentialRegistryRefusalTransition::RegistryLockPreserved
+            }
+        }
     }
 
     /// Return why this process attempted to open the registry.

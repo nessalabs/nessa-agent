@@ -38,11 +38,41 @@ pub enum OpenMode {
     OpenOrCreate,
     CreateNew,
 }
+#[derive(Debug)]
+struct UnsafeFile;
+
+impl std::fmt::Display for UnsafeFile {
+    fn fmt(&self, output: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        output.write_str("local storage must be private and owned by the current OS user")
+    }
+}
+
+impl std::error::Error for UnsafeFile {}
+
 fn unsafe_file() -> io::Error {
-    io::Error::new(
-        io::ErrorKind::PermissionDenied,
-        "local storage must be private and owned by the current OS user",
-    )
+    io::Error::new(io::ErrorKind::PermissionDenied, UnsafeFile)
+}
+
+/// Reports whether an I/O error proves that a local-storage object is unsafe.
+///
+/// Ordinary absence and operating-system availability failures are deliberately
+/// distinct so callers may fall back only when no untrusted object was found.
+pub fn is_unsafe_file(error: &io::Error) -> bool {
+    if error
+        .get_ref()
+        .and_then(|cause| cause.downcast_ref::<UnsafeFile>())
+        .is_some()
+    {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        matches!(error.raw_os_error(), Some(code) if code == libc::ELOOP || code == libc::ENOTDIR)
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
 }
 
 /// Create a private directory tree one anchored component at a time beneath a
@@ -99,7 +129,7 @@ impl PrivateTempFile {
             getrandom::fill(&mut random).map_err(|e| io::Error::other(e.to_string()))?;
             let name: String = random.iter().map(|b| format!("{b:02x}")).collect();
             let path = parent.join(format!("{TEMPORARY_PREFIX}{name}{TEMPORARY_SUFFIX}"));
-            match open(&path, OpenMode::CreateNew) {
+            match platform::open_temporary(&path) {
                 Ok(file) => {
                     return Ok(Self {
                         file: Some(file),
@@ -124,7 +154,7 @@ impl PrivateTempFile {
             getrandom::fill(&mut random).map_err(|e| io::Error::other(e.to_string()))?;
             let name: String = random.iter().map(|b| format!("{b:02x}")).collect();
             let relative = directory.join(format!("{TEMPORARY_PREFIX}{name}{TEMPORARY_SUFFIX}"));
-            match open_beneath(root, &relative, OpenMode::CreateNew) {
+            match platform::open_temporary_beneath(root, &relative) {
                 Ok(file) => {
                     return Ok(Self {
                         file: Some(file),
@@ -343,10 +373,37 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn anchored_drop_cannot_follow_replaced_ancestry_to_delete_outside() {
+    fn redirect_reservation_ancestry(
+        temporary: &tempfile::TempDir,
+        root: &Path,
+        temp: &PrivateTempFile,
+    ) -> (PathBuf, PathBuf) {
         use std::os::unix::fs::symlink;
 
+        let relative = &temp.beneath.as_ref().unwrap().1;
+        let held = root.join("held-audit");
+        std::fs::rename(root.join("audit"), &held).unwrap();
+        let outside = temporary.path().join("outside");
+        create_directory(&outside).unwrap();
+        create_directory(&outside.join("refusals")).unwrap();
+        let marker = outside.join(relative.strip_prefix("audit").unwrap());
+        std::fs::write(&marker, b"outside").unwrap();
+        symlink(&outside, root.join("audit")).unwrap();
+
+        assert_eq!(std::fs::read(&temp.path).unwrap(), b"outside");
+        let control = outside.join("refusals/old-cleanup-control.tmp");
+        std::fs::write(&control, b"control").unwrap();
+        std::fs::remove_file(root.join("audit/refusals/old-cleanup-control.tmp")).unwrap();
+        assert!(
+            !control.exists(),
+            "the negative control did not follow the swapped ancestry"
+        );
+        (held, marker)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn anchored_drop_cannot_follow_replaced_ancestry_to_delete_outside() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("root");
         create_directory(&root).unwrap();
@@ -354,17 +411,13 @@ mod tests {
         let mut temp = PrivateTempFile::new_beneath(&root, Path::new("audit/refusals")).unwrap();
         temp.as_file_mut().write_all(b"reserved").unwrap();
         let name = temp.path.file_name().unwrap().to_owned();
-        std::fs::rename(root.join("audit"), root.join("held-audit")).unwrap();
-        let outside = temporary.path().join("outside");
-        create_directory(&outside).unwrap();
-        std::fs::write(outside.join(&name), b"outside").unwrap();
-        symlink(&outside, root.join("audit")).unwrap();
+        let (held, marker) = redirect_reservation_ancestry(&temporary, &root, &temp);
 
         drop(temp);
 
-        assert_eq!(std::fs::read(outside.join(&name)).unwrap(), b"outside");
+        assert_eq!(std::fs::read(marker).unwrap(), b"outside");
         assert_eq!(
-            std::fs::read(root.join("held-audit/refusals").join(name)).unwrap(),
+            std::fs::read(held.join("refusals").join(name)).unwrap(),
             b"reserved"
         );
     }
@@ -372,8 +425,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn failed_anchored_publication_reports_retained_cleanup_without_outside_delete() {
-        use std::os::unix::fs::symlink;
-
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("root");
         create_directory(&root).unwrap();
@@ -381,11 +432,7 @@ mod tests {
         let mut temp = PrivateTempFile::new_beneath(&root, Path::new("audit/refusals")).unwrap();
         temp.as_file_mut().write_all(b"reserved").unwrap();
         let name = temp.path.file_name().unwrap().to_owned();
-        std::fs::rename(root.join("audit"), root.join("held-audit")).unwrap();
-        let outside = temporary.path().join("outside");
-        create_directory(&outside).unwrap();
-        std::fs::write(outside.join(&name), b"outside").unwrap();
-        symlink(&outside, root.join("audit")).unwrap();
+        let (held, marker) = redirect_reservation_ancestry(&temporary, &root, &temp);
 
         let error = temp
             .persist_beneath(Path::new("audit/refusals/record.json"))
@@ -397,9 +444,9 @@ mod tests {
                 .contains("anchored temporary cleanup also failed"),
             "{error}"
         );
-        assert_eq!(std::fs::read(outside.join(&name)).unwrap(), b"outside");
+        assert_eq!(std::fs::read(marker).unwrap(), b"outside");
         assert_eq!(
-            std::fs::read(root.join("held-audit/refusals").join(name)).unwrap(),
+            std::fs::read(held.join("refusals").join(name)).unwrap(),
             b"reserved"
         );
     }

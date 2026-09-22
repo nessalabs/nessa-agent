@@ -256,11 +256,13 @@ providers. See [local authentication](adr/done/0010-local-authentication.md). Ho
 identity providers remain future adapters.
 
 `application/credential_registry.rs` owns the secret-free refusal facts and
-audit port for an existing registry that cannot be trusted. The local registry
-adapter keeps one content-validation path and translates private-storage
-refusals at the same open boundary: it reports the exact path plus a bounded
-syntax, schema, invariant, size, or storage fault and never rewrites the
-rejected file. `adapters/local/registry_refusal_audit.rs` records the target,
+audit port for a registry authority file that cannot be trusted. The local
+registry adapter keeps one content-validation path and translates
+private-storage refusals at the same open boundary: it reports the exact path,
+the registry-or-lock role, and a bounded syntax, schema, invariant, size, or
+storage fault and never rewrites the rejected file. The application derives the
+role-specific preserved transition, so a lock refusal does not claim registry
+state was read. `adapters/local/registry_refusal_audit.rs` records the target,
 before/after meaning, cause, and known initiator outside the untrusted registry.
 It creates and publishes only beneath the verified auth root, syncs each parent
 after creating its child on Unix, applies the Windows guarantees described
