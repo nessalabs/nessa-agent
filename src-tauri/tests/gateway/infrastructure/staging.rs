@@ -2,7 +2,7 @@ use super::super::generation::random_generation;
 use super::{
     clone_file, copy_directory, entry_name, finalize_file, finish_staging_profile, launch_settings,
     publish, stage_runtime, stage_runtime_using, start_staging_profile, tree_fingerprint, utf8,
-    validate_runtime, StagingProfile,
+    validate_runtime, CloneFile, StagingProfile,
 };
 use crate::gateway::infrastructure::macos::runtime_fingerprint;
 use serde_json::json;
@@ -110,21 +110,55 @@ struct RuntimeSize {
     bytes: u64,
 }
 
+const MOST_MEASUREMENT_ENTRIES: u64 = 50_000;
+const MOST_MEASUREMENT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+fn enforce_runtime_size_limits(size: &RuntimeSize) -> Result<(), String> {
+    let entries = size
+        .files
+        .checked_add(size.directories)
+        .and_then(|entries| entries.checked_add(size.links))
+        .ok_or("Runtime entry count overflowed")?;
+    if entries > MOST_MEASUREMENT_ENTRIES {
+        return Err(format!(
+            "Runtime measurement exceeded {MOST_MEASUREMENT_ENTRIES} entries"
+        ));
+    }
+    if size.bytes > MOST_MEASUREMENT_BYTES {
+        return Err(format!(
+            "Runtime measurement exceeded {MOST_MEASUREMENT_BYTES} bytes"
+        ));
+    }
+    Ok(())
+}
+
 fn runtime_size(path: &Path, size: &mut RuntimeSize) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
     if metadata.file_type().is_symlink() {
-        size.links += 1;
+        size.links = size
+            .links
+            .checked_add(1)
+            .ok_or("Runtime link count overflowed")?;
+        enforce_runtime_size_limits(size)?;
     } else if metadata.is_dir() {
-        size.directories += 1;
+        size.directories = size
+            .directories
+            .checked_add(1)
+            .ok_or("Runtime directory count overflowed")?;
+        enforce_runtime_size_limits(size)?;
         for entry in fs::read_dir(path).map_err(|error| error.to_string())? {
             runtime_size(&entry.map_err(|error| error.to_string())?.path(), size)?;
         }
     } else if metadata.is_file() {
-        size.files += 1;
+        size.files = size
+            .files
+            .checked_add(1)
+            .ok_or("Runtime file count overflowed")?;
         size.bytes = size
             .bytes
             .checked_add(metadata.len())
             .ok_or("Runtime byte count overflowed")?;
+        enforce_runtime_size_limits(size)?;
     } else {
         return Err("Runtime measurement found an unsupported entry".into());
     }
@@ -134,7 +168,7 @@ fn runtime_size(path: &Path, size: &mut RuntimeSize) -> Result<(), String> {
 fn measured_copy(
     destination: &Path,
     source: &Path,
-    clone: super::CloneFile,
+    clone: CloneFile,
     profile: bool,
 ) -> (Duration, Option<StagingProfile>) {
     nessa_local_storage::create_directory(destination).unwrap();
@@ -146,6 +180,57 @@ fn measured_copy(
     let elapsed = started.elapsed();
     let profile = profile.then(finish_staging_profile);
     (elapsed, profile)
+}
+
+fn measurement_provenance() {
+    let build_head = option_env!("NESSA_STAGING_BUILD_HEAD").expect(
+        "build this ignored harness with NESSA_STAGING_BUILD_HEAD set to the checkout commit",
+    );
+    assert!(
+        matches!(build_head.len(), 40 | 64)
+            && build_head.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "NESSA_STAGING_BUILD_HEAD must be a full Git object ID"
+    );
+    let build_invocation = option_env!("NESSA_STAGING_BUILD_INVOCATION").expect(
+        "build this ignored harness with NESSA_STAGING_BUILD_INVOCATION set to the exact Cargo command",
+    );
+    assert!(
+        !build_invocation.trim().is_empty(),
+        "NESSA_STAGING_BUILD_INVOCATION must not be empty"
+    );
+    let binary = std::env::current_exe()
+        .and_then(|path| path.canonicalize())
+        .expect("the running test binary path must be available");
+    eprintln!(
+        "compiled_checkout={:?} compiled_head={} test_binary={} cargo_package_version={} profile={} debug_assertions={} build_invocation={:?}",
+        env!("CARGO_MANIFEST_DIR"),
+        build_head,
+        binary.display(),
+        env!("CARGO_PKG_VERSION"),
+        if cfg!(debug_assertions) { "debug" } else { "release" },
+        cfg!(debug_assertions),
+        build_invocation,
+    );
+}
+
+fn comparison_schedule(repetition: usize) -> ([(&'static str, CloneFile); 2], [bool; 2]) {
+    let modes = if repetition % 2 == 0 {
+        [
+            ("clone", clone_file as CloneFile),
+            ("byte-copy", force_byte_copy as CloneFile),
+        ]
+    } else {
+        [
+            ("byte-copy", force_byte_copy as CloneFile),
+            ("clone", clone_file as CloneFile),
+        ]
+    };
+    let collector_order = if repetition % 2 == 0 {
+        [true, false]
+    } else {
+        [false, true]
+    };
+    (modes, collector_order)
 }
 
 fn assert_success_profile(profile: &StagingProfile) {
@@ -162,17 +247,73 @@ fn assert_success_profile(profile: &StagingProfile) {
     }
 }
 
+#[test]
+fn comparison_schedule_gives_each_mode_both_collector_orders() {
+    let mut clone_first = Vec::new();
+    let mut byte_copy_first = Vec::new();
+
+    for repetition in 0..4 {
+        let (modes, collector_order) = comparison_schedule(repetition);
+        let names = modes.map(|(name, _)| name);
+        assert_eq!(
+            names,
+            if repetition % 2 == 0 {
+                ["clone", "byte-copy"]
+            } else {
+                ["byte-copy", "clone"]
+            }
+        );
+        for (mode, _) in modes {
+            match mode {
+                "clone" => clone_first.push(collector_order[0]),
+                "byte-copy" => byte_copy_first.push(collector_order[0]),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    assert_eq!(clone_first, [true, false, true, false]);
+    assert_eq!(byte_copy_first, [true, false, true, false]);
+}
+
+#[test]
+fn runtime_inventory_limits_are_enforced_at_the_increment_boundary() {
+    let at_entry_limit = RuntimeSize {
+        directories: MOST_MEASUREMENT_ENTRIES,
+        ..RuntimeSize::default()
+    };
+    enforce_runtime_size_limits(&at_entry_limit).unwrap();
+
+    let beyond_entry_limit = RuntimeSize {
+        directories: MOST_MEASUREMENT_ENTRIES + 1,
+        ..RuntimeSize::default()
+    };
+    assert_eq!(
+        enforce_runtime_size_limits(&beyond_entry_limit).unwrap_err(),
+        format!("Runtime measurement exceeded {MOST_MEASUREMENT_ENTRIES} entries")
+    );
+
+    let beyond_byte_limit = RuntimeSize {
+        bytes: MOST_MEASUREMENT_BYTES + 1,
+        ..RuntimeSize::default()
+    };
+    assert_eq!(
+        enforce_runtime_size_limits(&beyond_byte_limit).unwrap_err(),
+        format!("Runtime measurement exceeded {MOST_MEASUREMENT_BYTES} bytes")
+    );
+}
+
 /// Measures the real packaged tree without making the routine test suite copy it.
 ///
 /// Run explicitly with `NESSA_STAGING_MEASUREMENT_RUNTIME` naming the runtime
 /// resource directory. The source is opened read-only by the staging code; every
 /// destination lives below one random temporary directory owned by `Fixture`.
+/// Compile it with `NESSA_STAGING_BUILD_HEAD` and
+/// `NESSA_STAGING_BUILD_INVOCATION`; both are embedded in the test binary.
 #[test]
 #[ignore = "copies and validates a packaged runtime supplied by the caller"]
 fn measure_packaged_runtime_staging_phases() {
-    const MOST_ENTRIES: u64 = 50_000;
-    const MOST_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-
+    measurement_provenance();
     let source = std::env::var_os("NESSA_STAGING_MEASUREMENT_RUNTIME")
         .map(PathBuf::from)
         .expect("NESSA_STAGING_MEASUREMENT_RUNTIME must name a packaged runtime");
@@ -180,9 +321,6 @@ fn measure_packaged_runtime_staging_phases() {
     let expected = runtime_fingerprint(&source).expect("runtime manifest must be readable");
     let mut size = RuntimeSize::default();
     runtime_size(&source, &mut size).expect("runtime tree must be measurable");
-    let entries = size.files + size.directories + size.links;
-    assert!(entries <= MOST_ENTRIES, "runtime has {entries} entries");
-    assert!(size.bytes <= MOST_BYTES, "runtime has {} bytes", size.bytes);
 
     let fixture = Fixture::new();
     let phases = fixture.0.join("phases");
@@ -250,14 +388,15 @@ fn measure_packaged_runtime_staging_phases() {
 /// Run explicitly with `NESSA_STAGING_MEASUREMENT_RUNTIME` naming the runtime.
 /// `NESSA_STAGING_MEASUREMENT_REPETITIONS` may select one through ten repetitions.
 /// Each sample gets a fresh destination, and both mode and collector order alternate.
+/// Compile it with `NESSA_STAGING_BUILD_HEAD` and
+/// `NESSA_STAGING_BUILD_INVOCATION`; both are embedded in the test binary.
 #[test]
 #[ignore = "copies a packaged runtime repeatedly for comparative profiling"]
 fn compare_packaged_runtime_clone_and_byte_copy_profiles() {
     const DEFAULT_REPETITIONS: usize = 4;
     const MOST_REPETITIONS: usize = 10;
-    const MOST_ENTRIES: u64 = 50_000;
-    const MOST_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
+    measurement_provenance();
     let source = std::env::var_os("NESSA_STAGING_MEASUREMENT_RUNTIME")
         .map(PathBuf::from)
         .expect("NESSA_STAGING_MEASUREMENT_RUNTIME must name a packaged runtime")
@@ -266,9 +405,6 @@ fn compare_packaged_runtime_clone_and_byte_copy_profiles() {
     let fingerprint = runtime_fingerprint(&source).expect("runtime manifest must be readable");
     let mut size = RuntimeSize::default();
     runtime_size(&source, &mut size).expect("runtime tree must be measurable");
-    let entries = size.files + size.directories + size.links;
-    assert!(entries <= MOST_ENTRIES, "runtime has {entries} entries");
-    assert!(size.bytes <= MOST_BYTES, "runtime has {} bytes", size.bytes);
     let repetitions = std::env::var("NESSA_STAGING_MEASUREMENT_REPETITIONS")
         .ok()
         .map(|value| {
@@ -301,18 +437,8 @@ fn compare_packaged_runtime_clone_and_byte_copy_profiles() {
     );
 
     for repetition in 0..repetitions {
-        let modes: [(&str, super::CloneFile); 2] = if repetition % 2 == 0 {
-            [("clone", clone_file), ("byte-copy", force_byte_copy)]
-        } else {
-            [("byte-copy", force_byte_copy), ("clone", clone_file)]
-        };
+        let (modes, collector_order) = comparison_schedule(repetition);
         for (mode_index, (mode, clone)) in modes.into_iter().enumerate() {
-            let profile_first = (repetition + mode_index) % 2 == 0;
-            let collector_order = if profile_first {
-                [true, false]
-            } else {
-                [false, true]
-            };
             let mut profiled_elapsed = None;
             let mut ordinary_elapsed = None;
             for (sample_index, profile_enabled) in collector_order.into_iter().enumerate() {
