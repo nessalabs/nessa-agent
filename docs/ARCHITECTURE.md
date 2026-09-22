@@ -364,9 +364,9 @@ and injected session authentication contracts. Embedded Cedar evaluates product 
 See [local authentication](adr/done/0010-local-authentication.md) for setup and current limits. See the [crate guide](../crates/nessa-auth/README.md).
 
 **Local agent credential values** (`crates/nessa-agent-credentials`) — pure
-shared domain, no binary or effects. The desktop writer and gateway source use
-the same validated private credential and durable stage/instance namespace,
-while retaining caller-owned storage/read ports. The canonical keychain names
+shared domain, no binary or effects. Desktop and gateway adapters consume the
+same validated private credential and stage/instance namespace while retaining
+caller-owned storage/read ports. The canonical keychain names
 are infrastructure data in `protocol/defaults/agent-credentials.json`; provider
 environment mapping stays in the gateway adapter. See the
 [crate guide](../crates/nessa-agent-credentials/README.md).

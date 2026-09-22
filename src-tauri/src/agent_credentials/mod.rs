@@ -1,7 +1,7 @@
 //! Saving credentials that Nessa supplies to explicitly supported local agents.
 //!
 //! ```text
-//! trusted host command ──▶ AgentCredentialStore ──▶ macOS login keychain
+//! future host command ──▶ AgentCredentialStore ──▶ macOS login keychain
 //!                              ▲
 //!                    validated shared credential
 //! ```

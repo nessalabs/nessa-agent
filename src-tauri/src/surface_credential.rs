@@ -101,10 +101,7 @@ impl SurfaceCredential {
         }
     }
 
-    /// The credential in the durable namespace registered for a service.
-    ///
-    /// Packaged composition uses this constructor so a shell environment cannot
-    /// point the panel and gateway at different roots or instances.
+    /// Build a credential location from one validated service configuration.
     pub fn for_service(service: &ServiceConfiguration) -> Self {
         let stage = service.stage().to_owned();
         let (root, relative) = credential_location(

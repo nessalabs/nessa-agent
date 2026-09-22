@@ -19,8 +19,8 @@ owns its own application port. The crate owns only:
 
 - `CredentialAgent`, the closed set of agents with Nessa-managed credentials;
 - `AgentCredential`, private validated text and its API-key/OAuth meaning;
-- `CredentialNamespace`, the stage and instance account scope used by both
-  host writes and gateway reads.
+- `CredentialNamespace`, the stage and instance account scope accepted by the
+  host writer and gateway reader adapters.
 
 The canonical Security.framework service and per-agent item names remain an
 infrastructure contract in `protocol/defaults/agent-credentials.json`. Provider

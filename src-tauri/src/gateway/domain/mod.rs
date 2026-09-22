@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! infrastructure::LoginShell ──raw shell output──▶ SearchPath::parse
-//! persisted host settings ──▶ ServiceConfiguration ──▶ application::Gateway
+//! validated inputs ──▶ ServiceConfiguration ──▶ future reconciliation wiring
 //! application::Gateway ─────────validated values─────▶ infrastructure::Launchd
 //! ```
 //! Arrows mean values handed inward and then back out. Nothing here reads

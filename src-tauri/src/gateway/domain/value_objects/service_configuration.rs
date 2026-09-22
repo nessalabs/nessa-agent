@@ -7,8 +7,8 @@ use std::{
 
 /// Durable inputs that identify one packaged gateway service.
 ///
-/// The value is assembled from the packaged stage and persisted host settings.
-/// No field is inherited from the shell that happened to launch the desktop.
+/// The value accepts packaged stage and durable host inputs without consulting
+/// the shell that happened to launch the desktop.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceConfiguration {
     credential_namespace: CredentialNamespace,
