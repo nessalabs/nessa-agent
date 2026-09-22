@@ -8,6 +8,10 @@ import {
   RetryableConnectError,
   resolveConnectRetry,
 } from "../application/connect-retry.js"
+import { nodeGatewayEndpointSource } from "../transport/local-gateway-endpoint.js"
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 type Scenario =
   | "ready"
@@ -199,6 +203,40 @@ describe("product connection recovery", () => {
     expect(credential).not.toHaveBeenCalled()
     expect(sockets).toHaveLength(0)
   })
+
+  it.runIf(process.platform !== "win32")(
+    "sends no credential or auth frame for a symlinked endpoint namespace",
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "nessa-connect-endpoint-"))
+      const outside = await mkdtemp(join(tmpdir(), "nessa-connect-outside-"))
+      try {
+        await mkdir(join(outside, "logs"), { mode: 0o700 })
+        await writeFile(join(outside, "logs/gateway-endpoint.json"), "{}", {
+          mode: 0o600,
+        })
+        await symlink(outside, join(root, "dev"))
+        const endpointSource = await nodeGatewayEndpointSource({
+          dataDir: root,
+          uid: process.getuid?.(),
+          request: vi.fn(),
+        })
+        const credential = vi.fn()
+        await expect(
+          NessaClient.connect({
+            ...options,
+            auth: undefined,
+            endpointSource,
+            credentialSource: { load: credential },
+          }),
+        ).rejects.toBeInstanceOf(NessaEndpointDiscoveryError)
+        expect(credential).not.toHaveBeenCalled()
+        expect(sockets).toHaveLength(0)
+      } finally {
+        await rm(root, { recursive: true })
+        await rm(outside, { recursive: true })
+      }
+    },
+  )
 
   it("rediscovers and reloads credentials before each managed reconnect", async () => {
     const endpoints = ["ws://127.0.0.1:9137", "ws://127.0.0.1:9138"]

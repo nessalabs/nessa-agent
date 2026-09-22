@@ -1,6 +1,8 @@
 use nessa_gateway_endpoint::{
-    application::{DiscoverGatewayEndpoint, ManagedRuntimeAdvertisement, PublishGatewayEndpoint},
-    domain::{EndpointIdentity, GatewayEndpoint},
+    application::{DiscoverGatewayEndpoint, PublishGatewayEndpoint},
+    domain::{
+        EndpointIdentity, GatewayEndpoint, GatewayEndpointAdvertisement, ManagedRuntimeIdentity,
+    },
     infrastructure::{FileEndpointDiscovery, FileEndpointPublication, ENDPOINT_FILE},
 };
 use std::{
@@ -24,6 +26,13 @@ fn discovery(directory: &std::path::Path) -> FileEndpointDiscovery {
     )
 }
 
+fn advertisement(
+    endpoint: &GatewayEndpoint,
+    managed: Option<ManagedRuntimeIdentity>,
+) -> GatewayEndpointAdvertisement {
+    GatewayEndpointAdvertisement::new(endpoint.clone(), managed).unwrap()
+}
+
 fn endpoint(port: u16) -> GatewayEndpoint {
     GatewayEndpoint::new(
         format!("ws://127.0.0.1:{port}"),
@@ -43,16 +52,15 @@ fn canonical_publication_agrees_with_the_cross_runtime_fixture() {
         EndpointIdentity::new("5485b918-1eeb-4a4a-ad1d-9fdc70dfa231".into(), 4711).unwrap(),
     )
     .unwrap();
-    let managed = ManagedRuntimeAdvertisement::new(
+    let managed = ManagedRuntimeIdentity::new(
         "a".repeat(64),
         "b".repeat(64),
         endpoint.identity().instance().into(),
         endpoint.identity().process_id(),
-        endpoint.identity(),
     )
     .unwrap();
     PublishGatewayEndpoint::new(&publication)
-        .execute(&endpoint, Some(&managed))
+        .execute(&advertisement(&endpoint, Some(managed)))
         .unwrap();
     assert_eq!(
         std::fs::read(logs.join(ENDPOINT_FILE)).unwrap(),
@@ -111,16 +119,10 @@ fn managed_discovery_correlates_every_identity_field_over_a_real_health_socket()
         EndpointIdentity::new(instance.into(), 909).unwrap(),
     )
     .unwrap();
-    let managed = ManagedRuntimeAdvertisement::new(
-        fingerprint,
-        generation,
-        instance.into(),
-        909,
-        endpoint.identity(),
-    )
-    .unwrap();
+    let managed =
+        ManagedRuntimeIdentity::new(fingerprint, generation, instance.into(), 909).unwrap();
     PublishGatewayEndpoint::new(&publication(&logs))
-        .execute(&endpoint, Some(&managed))
+        .execute(&advertisement(&endpoint, Some(managed)))
         .unwrap();
     assert_eq!(
         DiscoverGatewayEndpoint::new(&discovery(&logs))
@@ -139,19 +141,18 @@ fn publication_atomically_replaces_the_previous_bound_port_and_managed_identity(
     let logs = temporary.path().join("logs");
     let adapter = publication(&logs);
     PublishGatewayEndpoint::new(&adapter)
-        .execute(&endpoint(7421), None)
+        .execute(&advertisement(&endpoint(7421), None))
         .unwrap();
     let replaced = endpoint(8137);
-    let managed = ManagedRuntimeAdvertisement::new(
+    let managed = ManagedRuntimeIdentity::new(
         "a".repeat(64),
         "b".repeat(64),
         replaced.identity().instance().into(),
         replaced.identity().process_id(),
-        replaced.identity(),
     )
     .unwrap();
     PublishGatewayEndpoint::new(&adapter)
-        .execute(&replaced, Some(&managed))
+        .execute(&advertisement(&replaced, Some(managed)))
         .unwrap();
 
     let record: serde_json::Value =
@@ -172,24 +173,27 @@ fn publication_atomically_replaces_the_previous_bound_port_and_managed_identity(
 }
 
 #[test]
-fn managed_identity_must_be_the_same_process_as_the_endpoint() {
+fn contradictory_managed_identity_cannot_be_published_or_write_a_file() {
+    let temporary = tempfile::tempdir().unwrap();
+    let logs = temporary.path().join("logs");
     let endpoint = endpoint(8137);
-    assert!(ManagedRuntimeAdvertisement::new(
+    let another_instance = ManagedRuntimeIdentity::new(
         "a".repeat(64),
         "b".repeat(64),
         "78f4377b-e600-4f4c-94eb-99ad6f35a62e".into(),
         endpoint.identity().process_id(),
-        endpoint.identity(),
     )
-    .is_err());
-    assert!(ManagedRuntimeAdvertisement::new(
+    .unwrap();
+    assert!(GatewayEndpointAdvertisement::new(endpoint.clone(), Some(another_instance)).is_err());
+    let another_process = ManagedRuntimeIdentity::new(
         "a".repeat(64),
         "b".repeat(64),
         endpoint.identity().instance().into(),
         910,
-        endpoint.identity(),
     )
-    .is_err());
+    .unwrap();
+    assert!(GatewayEndpointAdvertisement::new(endpoint, Some(another_process)).is_err());
+    assert!(!logs.join(ENDPOINT_FILE).exists());
 }
 
 #[test]
@@ -198,15 +202,13 @@ fn discovery_reads_a_real_private_file_and_correlates_a_real_health_socket() {
     let logs = temporary.path().join("logs");
     let (address, server) = health_server("3f43acfb-3ce4-48fb-8dd1-d31c9404a6bd", 909);
     let publication = publication(&logs);
+    let endpoint = GatewayEndpoint::new(
+        format!("ws://{address}"),
+        endpoint(address.port()).identity().clone(),
+    )
+    .unwrap();
     PublishGatewayEndpoint::new(&publication)
-        .execute(
-            &GatewayEndpoint::new(
-                format!("ws://{address}"),
-                endpoint(address.port()).identity().clone(),
-            )
-            .unwrap(),
-            None,
-        )
+        .execute(&advertisement(&endpoint, None))
         .unwrap();
     let discovered = DiscoverGatewayEndpoint::new(&discovery(&logs))
         .execute()
@@ -227,15 +229,13 @@ fn absent_record_falls_back_but_mismatched_identity_is_refused() {
 
     let (address, server) = health_server("3f43acfb-3ce4-48fb-8dd1-d31c9404a6bd", 910);
     let publication = publication(&logs);
+    let endpoint = GatewayEndpoint::new(
+        format!("ws://{address}"),
+        endpoint(address.port()).identity().clone(),
+    )
+    .unwrap();
     PublishGatewayEndpoint::new(&publication)
-        .execute(
-            &GatewayEndpoint::new(
-                format!("ws://{address}"),
-                endpoint(address.port()).identity().clone(),
-            )
-            .unwrap(),
-            None,
-        )
+        .execute(&advertisement(&endpoint, None))
         .unwrap();
     let error = DiscoverGatewayEndpoint::new(&discovery(&logs))
         .execute()
@@ -265,7 +265,7 @@ fn an_intermediate_symlink_cannot_redirect_endpoint_read_or_publication() {
         trusted.path().to_path_buf(),
         "logs".into(),
     ))
-    .execute(&endpoint(9137), None)
+    .execute(&advertisement(&endpoint(9137), None))
     .unwrap_err();
     assert!(nessa_local_storage::is_unsafe_file(&write));
     assert!(!outside.path().join(ENDPOINT_FILE).exists());
@@ -288,15 +288,13 @@ fn health_correlation_has_one_total_deadline_across_slow_reads() {
     });
     let temporary = tempfile::tempdir().unwrap();
     let logs = temporary.path().join("logs");
+    let endpoint = GatewayEndpoint::new(
+        format!("ws://{address}"),
+        endpoint(address.port()).identity().clone(),
+    )
+    .unwrap();
     PublishGatewayEndpoint::new(&publication(&logs))
-        .execute(
-            &GatewayEndpoint::new(
-                format!("ws://{address}"),
-                endpoint(address.port()).identity().clone(),
-            )
-            .unwrap(),
-            None,
-        )
+        .execute(&advertisement(&endpoint, None))
         .unwrap();
 
     let started = Instant::now();
@@ -329,7 +327,7 @@ fn bracketed_ipv6_loopback_is_discovered_over_a_real_health_socket() {
     )
     .unwrap();
     PublishGatewayEndpoint::new(&publication(&logs))
-        .execute(&endpoint, None)
+        .execute(&advertisement(&endpoint, None))
         .unwrap();
     assert_eq!(
         DiscoverGatewayEndpoint::new(&discovery(&logs))

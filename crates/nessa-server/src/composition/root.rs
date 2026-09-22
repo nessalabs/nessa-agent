@@ -14,8 +14,10 @@ use crate::{
 };
 use axum::Extension;
 use nessa_gateway_endpoint::{
-    application::{ManagedRuntimeAdvertisement, PublishGatewayEndpoint},
-    domain::{EndpointIdentity, GatewayEndpoint},
+    application::PublishGatewayEndpoint,
+    domain::{
+        EndpointIdentity, GatewayEndpoint, GatewayEndpointAdvertisement, ManagedRuntimeIdentity,
+    },
     infrastructure::FileEndpointPublication,
 };
 use std::future::Future;
@@ -158,12 +160,11 @@ impl CompositionRoot {
         let managed = desktop_identity
             .as_ref()
             .map(|identity| {
-                ManagedRuntimeAdvertisement::new(
+                ManagedRuntimeIdentity::new(
                     identity.fingerprint().as_str().to_owned(),
                     identity.generation().as_str().to_owned(),
                     identity.instance().as_str().to_owned(),
                     identity.process_id(),
-                    endpoint.identity(),
                 )
             })
             .transpose()
@@ -172,11 +173,10 @@ impl CompositionRoot {
             .gateway_endpoint_storage()
             .ok_or_else(|| RunError::Runtime("missing endpoint publication namespace".into()))?;
         let publication = FileEndpointPublication::new(endpoint_root, endpoint_directory);
-        let published_endpoint = endpoint.clone();
-        let published_managed = managed.clone();
+        let advertisement = GatewayEndpointAdvertisement::new(endpoint.clone(), managed)
+            .map_err(|error| RunError::Runtime(error.into()))?;
         tokio::task::spawn_blocking(move || {
-            PublishGatewayEndpoint::new(&publication)
-                .execute(&published_endpoint, published_managed.as_ref())
+            PublishGatewayEndpoint::new(&publication).execute(&advertisement)
         })
         .await
         .map_err(|error| RunError::Serve(std::io::Error::other(error.to_string())))?

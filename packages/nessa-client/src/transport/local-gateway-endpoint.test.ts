@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { tmpdir } from "node:os"
@@ -121,7 +121,7 @@ describe("local gateway endpoint discovery", () => {
       const root = await mkdtemp(join(tmpdir(), "nessa-endpoint-"))
       try {
         const logs = join(root, "ci", "instances", "worker-7", "logs")
-        await mkdir(logs, { recursive: true })
+        await mkdir(logs, { recursive: true, mode: 0o700 })
         await writeFile(join(logs, "gateway-endpoint.json"), JSON.stringify(record), {
           mode: 0o600,
         })
@@ -144,7 +144,7 @@ describe("local gateway endpoint discovery", () => {
       const root = await mkdtemp(join(tmpdir(), "nessa-endpoint-link-"))
       try {
         const logs = join(root, "dev", "logs")
-        await mkdir(logs, { recursive: true })
+        await mkdir(logs, { recursive: true, mode: 0o700 })
         const outside = join(root, "outside.json")
         await writeFile(outside, JSON.stringify(record), { mode: 0o600 })
         await promisify(execFile)("ln", [
@@ -172,7 +172,7 @@ describe("local gateway endpoint discovery", () => {
       const root = await mkdtemp(join(tmpdir(), "nessa-endpoint-fifo-"))
       try {
         const logs = join(root, "dev", "logs")
-        await mkdir(logs, { recursive: true })
+        await mkdir(logs, { recursive: true, mode: 0o700 })
         await promisify(execFile)("mkfifo", [join(logs, "gateway-endpoint.json")])
         const endpoint = await nodeGatewayEndpointSource({
           dataDir: root,
@@ -188,9 +188,104 @@ describe("local gateway endpoint discovery", () => {
     },
   )
 
+  it.runIf(process.platform !== "win32")(
+    "refuses a matching record reached through a symlinked namespace",
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "nessa-endpoint-ancestor-"))
+      const outside = await mkdtemp(join(tmpdir(), "nessa-endpoint-outside-"))
+      try {
+        await chmod(outside, 0o700)
+        const logs = join(outside, "logs")
+        await mkdir(logs, { mode: 0o700 })
+        await writeFile(join(logs, "gateway-endpoint.json"), JSON.stringify(record), {
+          mode: 0o600,
+        })
+        await symlink(outside, join(root, "dev"))
+        const request = vi.fn(async () => health())
+        const endpoint = await nodeGatewayEndpointSource({
+          dataDir: root,
+          uid: process.getuid?.(),
+          request,
+        })
+        await expect(endpoint?.load({ stage: "dev" })).rejects.toBeInstanceOf(
+          NessaEndpointDiscoveryError,
+        )
+        expect(request).not.toHaveBeenCalled()
+      } finally {
+        await rm(root, { recursive: true })
+        await rm(outside, { recursive: true })
+      }
+    },
+  )
+
+  it.runIf(process.platform !== "win32")(
+    "refuses a private root acquired through an attacker-writable parent",
+    async () => {
+      const fixture = await mkdtemp(join(tmpdir(), "nessa-endpoint-parent-"))
+      try {
+        const parent = join(fixture, "writable")
+        const root = join(parent, "data")
+        const logs = join(root, "dev", "logs")
+        await mkdir(logs, { recursive: true, mode: 0o700 })
+        await chmod(parent, 0o777)
+        await writeFile(join(logs, "gateway-endpoint.json"), JSON.stringify(record), {
+          mode: 0o600,
+        })
+        const endpoint = await nodeGatewayEndpointSource({
+          dataDir: root,
+          uid: process.getuid?.(),
+          request: async () => health(),
+        })
+        await expect(endpoint?.load({ stage: "dev" })).rejects.toBeInstanceOf(
+          NessaEndpointDiscoveryError,
+        )
+      } finally {
+        await rm(fixture, { recursive: true })
+      }
+    },
+  )
+
+  it.runIf(process.platform !== "win32")(
+    "refuses a namespace with unsafe mode or owner evidence",
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "nessa-endpoint-private-"))
+      try {
+        const logs = join(root, "dev", "logs")
+        await mkdir(logs, { recursive: true, mode: 0o700 })
+        await writeFile(join(logs, "gateway-endpoint.json"), JSON.stringify(record), {
+          mode: 0o600,
+        })
+        const options = {
+          dataDir: root,
+          request: async () => health(),
+        }
+        await chmod(logs, 0o755)
+        const publicDirectory = await nodeGatewayEndpointSource({
+          ...options,
+          uid: process.getuid?.(),
+        })
+        await expect(publicDirectory?.load({ stage: "dev" })).rejects.toBeInstanceOf(
+          NessaEndpointDiscoveryError,
+        )
+        await chmod(logs, 0o700)
+        const wrongOwner = await nodeGatewayEndpointSource({
+          ...options,
+          uid: (process.getuid?.() ?? 0) + 1,
+        })
+        await expect(wrongOwner?.load({ stage: "dev" })).rejects.toBeInstanceOf(
+          NessaEndpointDiscoveryError,
+        )
+      } finally {
+        await rm(root, { recursive: true })
+      }
+    },
+  )
+
   it.each([
     "not json",
     JSON.stringify({ ...record, webSocketUrl: "ws://example.com:9137" }),
+    JSON.stringify({ ...record, webSocketUrl: "wss://127.0.0.1:9137" }),
+    JSON.stringify({ ...record, webSocketUrl: "ws://127.0.0.1:0" }),
     JSON.stringify({ ...record, runtimeInstance: undefined }),
     JSON.stringify({
       ...record,

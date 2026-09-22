@@ -3,6 +3,7 @@ import {
   type GatewayEndpointSource,
 } from "../application/gateway-endpoint.js"
 import { isLoopbackWebSocketUrl } from "../application/resolve-options.js"
+import { NessaPrivateFileUnsafeError, readUnixPrivateFile } from "./node-private-file.js"
 
 const FILE = "gateway-endpoint.json"
 const MAX_RECORD_BYTES = 16 * 1024
@@ -53,13 +54,22 @@ function recordOf(value: unknown): EndpointRecord {
     Number(object.processId) > 0xffff_ffff
   )
     throw new Error()
-  if (!isLoopbackWebSocketUrl(object.webSocketUrl)) throw new Error()
   const parsed = new URL(object.webSocketUrl)
   const authority = object.webSocketUrl.slice("ws://".length)
-  const explicitPort = authority.startsWith("[")
-    ? /^\[[^\]]+\]:\d+$/.test(authority)
-    : /^[^:]+:\d+$/.test(authority)
-  if (!explicitPort || parsed.pathname !== "/" || parsed.search || parsed.hash)
+  const portText = authority.startsWith("[")
+    ? authority.match(/^\[[^\]]+\]:(\d+)$/)?.[1]
+    : authority.match(/^[^:]+:(\d+)$/)?.[1]
+  const port = portText === undefined ? 0 : Number(portText)
+  if (
+    parsed.protocol !== "ws:" ||
+    !isLoopbackWebSocketUrl(object.webSocketUrl) ||
+    !Number.isInteger(port) ||
+    port < 1 ||
+    port > 65_535 ||
+    parsed.pathname !== "/" ||
+    parsed.search ||
+    parsed.hash
+  )
     throw new Error()
   const managedKeys = [
     "runtimeFingerprint",
@@ -193,45 +203,33 @@ export async function nodeGatewayEndpointSource(options: {
           const { windowsPrivateFile } = await import("./windows-private-file.js")
           return await windowsPrivateFile("read", filePath)
         } catch (error) {
-          const { NessaPrivateFileUnsafeError } =
+          const { NessaPrivateFileUnsafeError: NessaWindowsPrivateFileUnsafeError } =
             await import("./windows-private-file.js")
-          if (error instanceof NessaPrivateFileUnsafeError)
+          if (error instanceof NessaWindowsPrivateFileUnsafeError)
             throw new NessaEndpointDiscoveryError(
               "The published gateway endpoint file is not private",
             )
           return undefined
         }
       }
-      let handle: import("node:fs/promises").FileHandle
       try {
-        handle = await fs.open(
-          filePath,
-          constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+        if (!base || options.uid === undefined) throw new NessaPrivateFileUnsafeError()
+        return await readUnixPrivateFile(
+          { fs, path, constants },
+          base,
+          path.relative(base, filePath),
+          options.uid,
+          MAX_RECORD_BYTES,
         )
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ELOOP")
+        if (
+          error instanceof NessaPrivateFileUnsafeError ||
+          (error as NodeJS.ErrnoException).code === "ELOOP"
+        )
           throw new NessaEndpointDiscoveryError(
             "The published gateway endpoint file is not private",
           )
         return undefined
-      }
-      try {
-        const stat = await handle.stat()
-        if (
-          !stat.isFile() ||
-          stat.nlink !== 1 ||
-          options.uid === undefined ||
-          stat.uid !== options.uid ||
-          (stat.mode & 0o077) !== 0 ||
-          stat.size < 1 ||
-          stat.size > MAX_RECORD_BYTES
-        )
-          throw new NessaEndpointDiscoveryError(
-            "The published gateway endpoint file is not private",
-          )
-        return await handle.readFile("utf8")
-      } finally {
-        await handle.close()
       }
     },
   }

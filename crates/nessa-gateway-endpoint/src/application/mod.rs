@@ -4,4 +4,4 @@ mod ports;
 mod publish;
 
 pub use ports::{EndpointDiscovery, EndpointPublication};
-pub use publish::{DiscoverGatewayEndpoint, ManagedRuntimeAdvertisement, PublishGatewayEndpoint};
+pub use publish::{DiscoverGatewayEndpoint, PublishGatewayEndpoint};

@@ -56,6 +56,23 @@ it("rejects public files, symlinks, and namespace traversal", async () => {
   )
 })
 
+it("rejects a credential reached through a symlinked namespace", async () => {
+  const root = await mkdtemp(join(tmpdir(), "nessa-source-link-"))
+  const outside = await mkdtemp(join(tmpdir(), "nessa-source-outside-"))
+  roots.push(root, outside)
+  await chmod(root, 0o700)
+  await chmod(outside, 0o700)
+  const folder = join(outside, "auth/surfaces")
+  await mkdir(folder, { recursive: true, mode: 0o700 })
+  await writeFile(join(folder, "chat.token"), "redirected-secret\n", { mode: 0o600 })
+  await symlink(outside, join(root, "ci"))
+  const source = new LocalFileCredentialSource({
+    dataDir: root,
+    uid: process.getuid?.(),
+  })
+  await expect(source.load(context)).rejects.toThrow()
+})
+
 it("never resolves localhost for automatic credential loading", async () => {
   const { source } = await fixture()
   for (const url of ["ws://localhost:7420/session", "wss://localhost:7420/session"]) {

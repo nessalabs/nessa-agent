@@ -1,14 +1,9 @@
-use super::ManagedRuntimeAdvertisement;
-use crate::domain::GatewayEndpoint;
+use crate::domain::GatewayEndpointAdvertisement;
 use std::io;
 
 /// Durable publication needed by the endpoint use case.
 pub trait EndpointPublication: Send + Sync {
-    fn publish(
-        &self,
-        endpoint: &GatewayEndpoint,
-        managed: Option<&ManagedRuntimeAdvertisement>,
-    ) -> io::Result<()>;
+    fn publish(&self, advertisement: &GatewayEndpointAdvertisement) -> io::Result<()>;
 }
 
 /// Read and correlate the current endpoint. `None` means no publication could

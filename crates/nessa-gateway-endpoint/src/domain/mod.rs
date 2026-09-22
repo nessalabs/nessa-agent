@@ -2,4 +2,6 @@
 
 mod endpoint;
 
-pub use endpoint::{EndpointIdentity, GatewayEndpoint};
+pub use endpoint::{
+    EndpointIdentity, GatewayEndpoint, GatewayEndpointAdvertisement, ManagedRuntimeIdentity,
+};

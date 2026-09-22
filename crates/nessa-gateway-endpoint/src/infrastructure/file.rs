@@ -1,6 +1,6 @@
 use crate::{
-    application::{EndpointDiscovery, EndpointPublication, ManagedRuntimeAdvertisement},
-    domain::GatewayEndpoint,
+    application::{EndpointDiscovery, EndpointPublication},
+    domain::{GatewayEndpoint, GatewayEndpointAdvertisement},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -41,11 +41,9 @@ struct EndpointRecord {
 }
 
 impl EndpointPublication for FileEndpointPublication {
-    fn publish(
-        &self,
-        endpoint: &GatewayEndpoint,
-        managed: Option<&ManagedRuntimeAdvertisement>,
-    ) -> io::Result<()> {
+    fn publish(&self, advertisement: &GatewayEndpointAdvertisement) -> io::Result<()> {
+        let endpoint = advertisement.endpoint();
+        let managed = advertisement.managed();
         nessa_local_storage::create_directory_beneath(&self.root, &self.directory)?;
         let mut file =
             nessa_local_storage::PrivateTempFile::new_beneath(&self.root, &self.directory)?;
@@ -53,10 +51,10 @@ impl EndpointPublication for FileEndpointPublication {
             web_socket_url: endpoint.web_socket_url(),
             endpoint_instance: endpoint.identity().instance().to_owned(),
             process_id: endpoint.identity().process_id(),
-            runtime_fingerprint: managed.map(|value| value.fingerprint.clone()),
-            service_generation: managed.map(|value| value.generation.clone()),
-            runtime_instance: managed.map(|value| value.instance.clone()),
-            runtime_process_id: managed.map(|value| value.process_id),
+            runtime_fingerprint: managed.map(|value| value.fingerprint().to_owned()),
+            service_generation: managed.map(|value| value.generation().to_owned()),
+            runtime_instance: managed.map(|value| value.endpoint().instance().to_owned()),
+            runtime_process_id: managed.map(|value| value.endpoint().process_id()),
         };
         serde_json::to_writer(file.as_file_mut(), &record)?;
         file.as_file().sync_all()?;
