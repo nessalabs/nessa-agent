@@ -316,6 +316,43 @@ the worst case is one ~45 s rebuild rather than a cold one. Use
 Worktrees are created as **siblings** of this checkout
 (`../nessa-app-<name>`) so they can share this repo's workspace `target/`.
 
+Claude Code makes worktrees of its own, for background agents and for subagents
+declaring `isolation: worktree`, and its default is a plain `git worktree add`
+with no shared `target/` — a cold build of ~600 crates each time.
+`.claude/settings.json` configures
+[`WorktreeCreate` and `WorktreeRemove` hooks](https://code.claude.com/docs/en/worktrees)
+pointing at `./scripts/worktree.sh claude-hook` and `claude-hook-remove`, which
+is the only supported way to replace that behaviour; there is no setting for it.
+
+Replacing Claude Code's creation means owing it the behaviour it would have had.
+The `WorktreeCreate` payload carries exactly one field, `name`, and it is a
+worktree **slug** — not a branch and not a path — so everything else is the
+hook's job to match:
+
+| | What the hook does, and why |
+| --- | --- |
+| Location | `.claude/worktrees/<name>`, where Claude Code puts its own, already gitignored. Deliberately **not** the sibling directory `create` uses. Those are people's worktrees, and the two naming schemes are not the same function — a slug may contain dots, a `create` name may not — so keeping the namespaces apart is what stops an agent being handed somebody's checkout to commit to |
+| Branch | `worktree-<name>`, which is what Claude Code's own default names it |
+| Base | The repository's default branch, which is what `worktree.baseRef: "fresh"` means. `git worktree add -b` with no start-point instead branches from whatever the clone is sitting on, so a clone parked on a feature branch would have given every agent that branch's commits. `--no-track`, so the agent's `git push` and `git pull` don't act on main |
+
+Note that the documented input schema for `WorktreeCreate` lists `path` and
+`worktree_path` as well. Claude Code 2.1.278 sends neither; only `WorktreeRemove`
+carries `worktree_path`. The hook reads what is actually sent.
+
+The remove hook is not optional. Claude Code's periodic sweep only removes
+worktrees carrying a marker it writes itself, and one a hook created has none,
+so without it every worktree made this way would stay on disk for ever — the
+accumulation this exists to stop. It unlinks `target/` before removing the
+directory, for the reason the script's own warning gives, and deletes the branch
+only when the base already contains every commit on it. That last test is
+`merge-base --is-ancestor` rather than `git branch -d`, because `-d` means
+"merged into whatever this clone has checked out" and would refuse to tidy up an
+empty worktree branch whenever the clone sits on an unrelated branch.
+
+One thing the hook gives up: `.worktreeinclude` is not processed when a
+`WorktreeCreate` hook replaces creation. This repo has no such file, so nothing
+is lost today; add the copying to the hook if one is ever introduced.
+
 ## Build
 
 Nothing ships that the app does not reach, and the two build modes exist so
@@ -343,6 +380,21 @@ from clean went 104s → **43s** at an 85% hit rate on the machine that measured
 it. `brew install sccache` or `apt install sccache`; it cannot cache
 incrementally-compiled crates, so it skips this app's own crate in dev builds —
 the win is the ~500 dependency crates, which is where the time goes.
+
+Measured again on `nessa-images`, the crate whose dependencies carry the
+`opt-level = 2` override, building into a target directory wiped between the
+two runs: **18.5 s → 4.3 s**, 39 of 39 compilations served from the cache. That
+gap is what a worktree with its own `target/`, or a stray `cargo clean`, costs
+when sccache is absent. Set it once in your shell profile:
+
+```sh
+command -v sccache >/dev/null 2>&1 && export RUSTC_WRAPPER=sccache
+```
+
+The guard is the point: the variable is only set where sccache exists, so the
+same profile is safe on a machine without it. It is deliberately not in
+`.cargo/config.toml` — a wrapper named there fails the build outright on any
+machine that has not installed it, including CI.
 
 Dev builds use `debug = "line-tables-only"`: full debug info is the single
 biggest cost in a Tauri rebuild, and line tables still give a readable backtrace.
