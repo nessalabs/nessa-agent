@@ -2,7 +2,8 @@
 //!
 //! `prod` uses the bare app config directory. Every other stage string gets a
 //! subdirectory. Optional `NESSA_INSTANCE` further isolates worktrees/sandboxes.
-//! Path isolation accepts any non-empty stage — it is not an allow-list.
+//! The stage is embedded by the build; a runtime override can only confirm it,
+//! never silently move a bundle into another namespace.
 
 use std::path::PathBuf;
 
@@ -10,29 +11,44 @@ use tauri::{AppHandle, Manager};
 
 const ENV_STAGE: &str = "NESSA_STAGE";
 const ENV_INSTANCE: &str = "NESSA_INSTANCE";
+const BUNDLE_STAGE: &str = env!("NESSA_BUNDLE_STAGE");
+
+/// A runtime override that disagrees with the stage recorded in this bundle.
+#[derive(Debug, PartialEq, Eq)]
+pub struct StageMismatch {
+    bundle: String,
+    runtime: String,
+}
+
+impl std::fmt::Display for StageMismatch {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            out,
+            "desktop startup refused: bundle stage {:?}, runtime NESSA_STAGE {:?}",
+            self.bundle, self.runtime
+        )
+    }
+}
+
+impl std::error::Error for StageMismatch {}
 
 /// Directory under which `settings.json`, `shortcuts.json`, and later stores live.
-pub fn config_root(app: &AppHandle) -> Option<PathBuf> {
+pub fn config_root(app: &AppHandle, stage: &str) -> Option<PathBuf> {
     let base = app.path().app_config_dir().ok()?;
-    match namespace_segment(&process_stage(), process_instance().as_deref()) {
+    match namespace_segment(stage, process_instance().as_deref()) {
         None => Some(base),
         Some(segment) => Some(base.join(segment)),
     }
 }
 
-/// `NESSA_STAGE`, or `dev` in debug builds / `prod` in release when unset/empty.
-pub fn process_stage() -> String {
-    match std::env::var(ENV_STAGE) {
-        Ok(value) => {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                default_stage()
-            } else {
-                trimmed.to_string()
-            }
-        }
-        Err(_) => default_stage(),
-    }
+/// The stage embedded in this bundle, unless an equal runtime override confirms it.
+pub fn process_stage() -> Result<String, StageMismatch> {
+    let runtime = std::env::var_os(ENV_STAGE).map(|value| {
+        value
+            .into_string()
+            .unwrap_or_else(|value| value.to_string_lossy().into_owned())
+    });
+    resolve_stage(BUNDLE_STAGE, runtime.as_deref())
 }
 
 fn process_instance() -> Option<String> {
@@ -46,12 +62,16 @@ fn process_instance() -> Option<String> {
     })
 }
 
-fn default_stage() -> String {
-    if cfg!(debug_assertions) {
-        String::from("dev")
-    } else {
-        String::from("prod")
+fn resolve_stage(bundle: &str, runtime: Option<&str>) -> Result<String, StageMismatch> {
+    if let Some(runtime) = runtime {
+        if runtime.is_empty() || runtime.trim() != runtime || runtime != bundle {
+            return Err(StageMismatch {
+                bundle: bundle.to_owned(),
+                runtime: runtime.to_owned(),
+            });
+        }
     }
+    Ok(bundle.to_owned())
 }
 
 /// `None` means use the bare config dir (`prod` only).
@@ -136,5 +156,23 @@ mod tests {
     #[test]
     fn prod_is_case_insensitive_for_bare_path() {
         assert_eq!(namespace_segment("Prod", None), None);
+    }
+
+    #[test]
+    fn absent_or_equal_runtime_stage_uses_the_bundle_stage() {
+        assert_eq!(resolve_stage("dev", None), Ok("dev".into()));
+        assert_eq!(resolve_stage("prod", Some("prod")), Ok("prod".into()));
+    }
+
+    #[test]
+    fn blank_or_different_runtime_stage_names_both_values() {
+        for runtime in ["", " dev ", "prod"] {
+            let error = resolve_stage("dev", Some(runtime)).unwrap_err();
+            assert_eq!(error.bundle, "dev");
+            assert_eq!(error.runtime, runtime);
+            let message = error.to_string();
+            assert!(message.contains("bundle stage \"dev\""));
+            assert!(message.contains(&format!("runtime NESSA_STAGE {runtime:?}")));
+        }
     }
 }

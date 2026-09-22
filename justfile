@@ -6,8 +6,9 @@
 #   just dev      desktop app in dev mode (falls back to the browser UI)
 #   just server   local nessa server only
 #   just web      UI in a browser only; window controls no-op
-#   just release fast  testing-shaped release (macOS .app / Linux .deb / Windows nsis)
-#   just release  shipping bundle (macOS .dmg / Linux .deb / Windows nsis)
+#   just release prod fast  testing-shaped prod release (macOS .app / Linux .deb / Windows nsis)
+#   just release  shipping prod bundle (macOS .dmg / Linux .deb / Windows nsis)
+#   just release dev  shipping bundle whose UI and host both use dev
 
 #   just worktree create <name>  feature checkout sharing the build cache
 #   just worktree list           list checkouts
@@ -162,15 +163,17 @@ dev:
     pnpm app
 
 # Shipping bundle by default; macOS builds seal and verify the completed bundle.
-# `just release fast` builds with faster settings.
+# `just release prod fast` builds with faster settings.
 [unix]
-release mode="shipping":
-    {{if mode == "fast" { "CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_PROFILE_RELEASE_OPT_LEVEL=1 CARGO_PROFILE_RELEASE_STRIP=false " } else if mode == "shipping" { "" } else { error("Use just release or just release fast") }}}node scripts/desktop/build.mjs --bundles {{if mode == "fast" { fast-bundle } else { release-bundle }}}
+[positional-arguments]
+release stage="prod" mode="shipping":
+    {{if mode == "fast" { "CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 CARGO_PROFILE_RELEASE_OPT_LEVEL=1 CARGO_PROFILE_RELEASE_STRIP=false " } else if mode == "shipping" { "" } else { error("Use just release [stage] or just release [stage] fast") }}}node scripts/desktop/build.mjs --stage "$1" --bundles {{if mode == "fast" { fast-bundle } else { release-bundle }}}
 
-# Shipping bundle by default; `just release fast` builds with faster settings.
+# Shipping bundle by default; `just release prod fast` builds with faster settings.
 [windows]
-release mode="shipping":
-    {{if mode == "fast" { "set CARGO_PROFILE_RELEASE_LTO=false&& set CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16&& set CARGO_PROFILE_RELEASE_OPT_LEVEL=1&& set CARGO_PROFILE_RELEASE_STRIP=false&& " } else if mode == "shipping" { "" } else { error("Use just release or just release fast") }}}node scripts/desktop/build.mjs --bundles {{if mode == "fast" { fast-bundle } else { release-bundle }}}
+[positional-arguments]
+release stage="prod" mode="shipping":
+    {{if mode == "fast" { "set CARGO_PROFILE_RELEASE_LTO=false&& set CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16&& set CARGO_PROFILE_RELEASE_OPT_LEVEL=1&& set CARGO_PROFILE_RELEASE_STRIP=false&& " } else if mode == "shipping" { "" } else { error("Use just release [stage] or just release [stage] fast") }}}node scripts/desktop/build.mjs --stage "%1" --bundles {{if mode == "fast" { fast-bundle } else { release-bundle }}}
 
 # Manage feature worktrees: create <name>, list, remove <name>, or clean (requires Bash).
 [unix]
