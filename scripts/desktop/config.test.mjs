@@ -78,6 +78,7 @@ test("disk image verification follows explicit bundles or the authoritative defa
 
 test("the public desktop build command verifies the final bundle", () => {
   assert.equal(packageConfig.scripts["app:build"], "node scripts/desktop/build.mjs")
+  assert.equal(packageConfig.scripts.app, "node scripts/desktop/dev.mjs")
   const buildScript = readFileSync("scripts/desktop/build.mjs", "utf8")
   assert.match(buildScript, /runDesktopBuild/)
   assert.match(buildScript, /if \(status !== 0\) process\.exit/)
@@ -105,14 +106,20 @@ test("generated runtime resources exist only in the public build configuration",
 
 test("build argument forms select the exact artifact and disk image to verify", () => {
   assert.deepEqual(
-    parseBuildArguments(["--target=aarch64-apple-darwin", "--bundles=dmg,app"]),
-    { target: "aarch64-apple-darwin", bundles: "dmg,app" },
+    parseBuildArguments([
+      "--stage=dev",
+      "--target=aarch64-apple-darwin",
+      "--bundles=dmg,app",
+    ]),
+    { stage: "dev", target: "aarch64-apple-darwin", bundles: "dmg,app" },
   )
   assert.deepEqual(parseBuildArguments(["-t", "x86_64-apple-darwin", "-b", "app,dmg"]), {
+    stage: undefined,
     target: "x86_64-apple-darwin",
     bundles: "app,dmg",
   })
   assert.deepEqual(parseBuildArguments(["-tuniversal-apple-darwin", "-b=dmg"]), {
+    stage: undefined,
     target: "universal-apple-darwin",
     bundles: "dmg",
   })
@@ -124,6 +131,9 @@ test("build argument forms select the exact artifact and disk image to verify", 
     ["--bundles"],
     ["--bundles="],
     ["-b", "app", "--bundles=dmg"],
+    ["--stage"],
+    ["--stage="],
+    ["--stage", "dev", "--stage=prod"],
   ]) {
     assert.throws(() => parseBuildArguments(args))
   }
@@ -132,7 +142,7 @@ test("build argument forms select the exact artifact and disk image to verify", 
 test("equal-form build arguments reach final verification unchanged", () => {
   const calls = []
   const status = runDesktopBuild({
-    args: ["--target=aarch64-apple-darwin", "--bundles=app,dmg"],
+    args: ["--stage=dev", "--target=aarch64-apple-darwin", "--bundles=app,dmg"],
     environment: {
       APPLE_SIGNING_IDENTITY: "-",
       NESSA_BUILD_TARGET: "stale-target",
@@ -146,6 +156,9 @@ test("equal-form build arguments reach final verification unchanged", () => {
     },
   })
   assert.equal(status, 0)
+  assert.ok(!calls[0].args.includes("--stage=dev"), "private stage option reached Tauri")
+  assert.equal(calls[0].options.env.NESSA_STAGE, "dev")
+  assert.equal(calls[0].options.env.VITE_NESSA_STAGE, "dev")
   // Build, then staple the disk image, then verify. The staple is between the
   // two because the bundler notarizes the app and builds the image around it,
   // leaving the image itself without a ticket for the verification to find.

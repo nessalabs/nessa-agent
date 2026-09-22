@@ -136,6 +136,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      # The launch contract executes the public just recipes rather than
+      # reimplementing them in a test. Keep that executable boundary available
+      # in this bare-Node job.
+      - uses: taiki-e/install-action@just
       - run: cargo fmt --all -- --check
       # Test before lint, here and in the matrix below, and it is worth saying
       # why because the intuitive order is the other one. Reporting a
@@ -153,8 +157,8 @@ jobs:
       # The repository's own scripts had tests that nothing ran: a developer
       # setup script and a one-time data migration, both of which change a
       # user's files. Here rather than in the matrix job because they are
-      # plain Node with no dependency to install, and their Unix-only cases
-      # guard themselves rather than being skipped on a whole runner.
+      # plain Node plus the recipe runner installed above, and their Unix-only
+      # cases guard themselves rather than being skipped on a whole runner.
       - run: node --test scripts/*.test.mjs
       # The official client and protocol checks do not require the desktop UI's
       # separate repository. Install only their tooling in an isolated harness.
