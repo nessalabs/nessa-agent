@@ -20,7 +20,6 @@ async function validateAcquisitionChain(
   tools: NodeFileTools,
   root: string,
   uid: number,
-  allowOwnedSymlinks: boolean,
 ): Promise<void> {
   const { fs, path } = tools
   unsafe(!path.isAbsolute(root))
@@ -33,9 +32,7 @@ async function validateAcquisitionChain(
   for (const [index, current] of original.entries()) {
     const stat = await fs.lstat(current)
     const isRoot = index === original.length - 1
-    const symlink = stat.isSymbolicLink()
-    unsafe(symlink && (!allowOwnedSymlinks || isRoot))
-    unsafe(!stat.isDirectory() && !symlink)
+    unsafe(stat.isSymbolicLink() || !stat.isDirectory())
     if (isRoot) unsafe(stat.uid !== uid || (stat.mode & 0o077) !== 0)
     if (stat.isDirectory() && !isRoot) {
       unsafe(stat.uid !== 0 && stat.uid !== uid)
@@ -43,7 +40,6 @@ async function validateAcquisitionChain(
       const sticky = (stat.mode & 0o1000) !== 0
       unsafe(writableByAnotherUser && !sticky)
     }
-    if (symlink) unsafe(stat.uid !== 0 && stat.uid !== uid)
   }
 }
 
@@ -52,20 +48,21 @@ async function validateAcquisition(
   root: string,
   uid: number,
 ): Promise<string> {
-  await validateAcquisitionChain(tools, root, uid, true)
+  await validateAcquisitionChain(tools, root, uid)
   const canonicalRoot = await tools.fs.realpath(root)
-  await validateAcquisitionChain(tools, canonicalRoot, uid, false)
+  unsafe(canonicalRoot !== tools.path.resolve(root))
+  await validateAcquisitionChain(tools, canonicalRoot, uid)
   return canonicalRoot
 }
 
 /**
  * Read one Unix private file through a namespace protected from other OS users.
  *
- * The acquisition path may contain a system or current-user symlink only when
- * its parent prevents another user from replacing it. The selected root and
- * every namespace directory below it must be real, current-user, mode-0700
- * directories. The leaf is opened nonblocking with `O_NOFOLLOW`, then its
- * ownership, mode, type, link count, and size are checked on that same handle.
+ * Every acquisition-path and namespace component must be a real directory;
+ * symbolic-link roots and ancestors are unsupported. The selected root and
+ * every namespace directory below it must be current-user, mode-0700 directories.
+ * The leaf is opened nonblocking with `O_NOFOLLOW`, then its ownership, mode,
+ * type, link count, and size are checked on that same handle.
  *
  * This boundary does not resist a privileged process or a concurrent process
  * running under the same uid. Such a process can already read a mode-0600

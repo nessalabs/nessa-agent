@@ -7,7 +7,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{
     io::{self, ErrorKind, Read, Write},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream},
+    net::{IpAddr, SocketAddr, TcpStream},
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -177,13 +177,7 @@ fn advertisement_address(endpoint: &GatewayEndpoint) -> io::Result<SocketAddr> {
         Host::Ipv6(value) => IpAddr::V6(value),
         Host::Domain(_) => return Err(invalid_record()),
     };
-    let port = url.port_or_known_default().ok_or_else(invalid_record)?;
-    if !matches!(ip, IpAddr::V4(value) if value == Ipv4Addr::LOCALHOST)
-        && !matches!(ip, IpAddr::V6(value) if value == Ipv6Addr::LOCALHOST)
-        || port == 0
-    {
-        return Err(invalid_record());
-    }
+    let port = url.port().ok_or_else(invalid_record)?;
     Ok(SocketAddr::new(ip, port))
 }
 

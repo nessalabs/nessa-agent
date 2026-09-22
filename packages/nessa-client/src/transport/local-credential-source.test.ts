@@ -1,17 +1,20 @@
 import { afterEach, expect, it } from "vitest"
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { LocalFileCredentialSource } from "./local-credential-source.js"
 
 const roots: string[] = []
+async function canonicalTemp(prefix: string): Promise<string> {
+  return realpath(await mkdtemp(prefix))
+}
 afterEach(async () => {
   await Promise.all(
     roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   )
 })
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "nessa-source-"))
+  const root = await canonicalTemp(join(tmpdir(), "nessa-source-"))
   roots.push(root)
   const folder = join(root, "ci/instances/one/auth/surfaces")
   await mkdir(folder, { recursive: true, mode: 0o700 })
@@ -57,8 +60,8 @@ it("rejects public files, symlinks, and namespace traversal", async () => {
 })
 
 it("rejects a credential reached through a symlinked namespace", async () => {
-  const root = await mkdtemp(join(tmpdir(), "nessa-source-link-"))
-  const outside = await mkdtemp(join(tmpdir(), "nessa-source-outside-"))
+  const root = await canonicalTemp(join(tmpdir(), "nessa-source-link-"))
+  const outside = await canonicalTemp(join(tmpdir(), "nessa-source-outside-"))
   roots.push(root, outside)
   await chmod(root, 0o700)
   await chmod(outside, 0o700)
@@ -68,6 +71,28 @@ it("rejects a credential reached through a symlinked namespace", async () => {
   await symlink(outside, join(root, "ci"))
   const source = new LocalFileCredentialSource({
     dataDir: root,
+    uid: process.getuid?.(),
+  })
+  await expect(source.load(context)).rejects.toThrow()
+})
+
+it("refuses a multi-hop root whose hidden hop is attacker-writable", async () => {
+  const safe = await canonicalTemp(join(tmpdir(), "nessa-source-multihop-safe-"))
+  const target = await canonicalTemp(join(tmpdir(), "nessa-source-multihop-target-"))
+  roots.push(safe, target)
+  const writable = join(target, "writable")
+  const trusted = join(target, "trusted-target")
+  const folder = join(trusted, "private/ci/instances/one/auth/surfaces")
+  await mkdir(writable, { mode: 0o700 })
+  await mkdir(folder, { recursive: true, mode: 0o700 })
+  await writeFile(join(folder, "chat.token"), "redirected-secret\n", { mode: 0o600 })
+  await symlink(trusted, join(writable, "hop"))
+  await symlink(join(writable, "hop"), join(safe, "selected"))
+  await chmod(writable, 0o777)
+
+  const source = new LocalFileCredentialSource({
+    dataDir: join(safe, "selected", "private"),
+    instance: "one",
     uid: process.getuid?.(),
   })
   await expect(source.load(context)).rejects.toThrow()

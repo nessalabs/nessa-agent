@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { tmpdir } from "node:os"
@@ -19,6 +19,10 @@ const record = {
   serviceGeneration: "b".repeat(64),
   runtimeInstance: "5485b918-1eeb-4a4a-ad1d-9fdc70dfa231",
   runtimeProcessId: 4711,
+}
+
+async function canonicalTemp(prefix: string): Promise<string> {
+  return realpath(await mkdtemp(prefix))
 }
 
 function health(overrides: Record<string, string> = {}) {
@@ -118,7 +122,7 @@ describe("local gateway endpoint discovery", () => {
   it.runIf(process.platform !== "win32")(
     "reads the real stage and instance namespace with private file checks",
     async () => {
-      const root = await mkdtemp(join(tmpdir(), "nessa-endpoint-"))
+      const root = await canonicalTemp(join(tmpdir(), "nessa-endpoint-"))
       try {
         const logs = join(root, "ci", "instances", "worker-7", "logs")
         await mkdir(logs, { recursive: true, mode: 0o700 })
@@ -141,7 +145,7 @@ describe("local gateway endpoint discovery", () => {
   it.runIf(process.platform !== "win32")(
     "refuses a symlinked publication as unsafe",
     async () => {
-      const root = await mkdtemp(join(tmpdir(), "nessa-endpoint-link-"))
+      const root = await canonicalTemp(join(tmpdir(), "nessa-endpoint-link-"))
       try {
         const logs = join(root, "dev", "logs")
         await mkdir(logs, { recursive: true, mode: 0o700 })
@@ -169,7 +173,7 @@ describe("local gateway endpoint discovery", () => {
   it.runIf(process.platform !== "win32")(
     "refuses a fifo publication without waiting for a writer",
     async () => {
-      const root = await mkdtemp(join(tmpdir(), "nessa-endpoint-fifo-"))
+      const root = await canonicalTemp(join(tmpdir(), "nessa-endpoint-fifo-"))
       try {
         const logs = join(root, "dev", "logs")
         await mkdir(logs, { recursive: true, mode: 0o700 })
@@ -191,8 +195,8 @@ describe("local gateway endpoint discovery", () => {
   it.runIf(process.platform !== "win32")(
     "refuses a matching record reached through a symlinked namespace",
     async () => {
-      const root = await mkdtemp(join(tmpdir(), "nessa-endpoint-ancestor-"))
-      const outside = await mkdtemp(join(tmpdir(), "nessa-endpoint-outside-"))
+      const root = await canonicalTemp(join(tmpdir(), "nessa-endpoint-ancestor-"))
+      const outside = await canonicalTemp(join(tmpdir(), "nessa-endpoint-outside-"))
       try {
         await chmod(outside, 0o700)
         const logs = join(outside, "logs")
@@ -221,7 +225,7 @@ describe("local gateway endpoint discovery", () => {
   it.runIf(process.platform !== "win32")(
     "refuses a private root acquired through an attacker-writable parent",
     async () => {
-      const fixture = await mkdtemp(join(tmpdir(), "nessa-endpoint-parent-"))
+      const fixture = await canonicalTemp(join(tmpdir(), "nessa-endpoint-parent-"))
       try {
         const parent = join(fixture, "writable")
         const root = join(parent, "data")
@@ -246,10 +250,10 @@ describe("local gateway endpoint discovery", () => {
   )
 
   it.runIf(process.platform !== "win32")(
-    "validates the resolved ancestry selected by an owned symlink",
+    "refuses an acquisition symlink before following it",
     async () => {
-      const safe = await mkdtemp(join(tmpdir(), "nessa-endpoint-safe-"))
-      const target = await mkdtemp(join(tmpdir(), "nessa-endpoint-target-"))
+      const safe = await canonicalTemp(join(tmpdir(), "nessa-endpoint-safe-"))
+      const target = await canonicalTemp(join(tmpdir(), "nessa-endpoint-target-"))
       try {
         const writable = join(target, "writable")
         const root = join(writable, "data")
@@ -278,9 +282,46 @@ describe("local gateway endpoint discovery", () => {
   )
 
   it.runIf(process.platform !== "win32")(
+    "refuses a multi-hop root before health when a hidden hop is attacker-writable",
+    async () => {
+      const safe = await canonicalTemp(join(tmpdir(), "nessa-endpoint-multihop-safe-"))
+      const target = await canonicalTemp(
+        join(tmpdir(), "nessa-endpoint-multihop-target-"),
+      )
+      try {
+        const writable = join(target, "writable")
+        const trusted = join(target, "trusted-target")
+        const logs = join(trusted, "private", "dev", "logs")
+        await mkdir(writable, { mode: 0o700 })
+        await mkdir(logs, { recursive: true, mode: 0o700 })
+        await writeFile(join(logs, "gateway-endpoint.json"), JSON.stringify(record), {
+          mode: 0o600,
+        })
+        await symlink(trusted, join(writable, "hop"))
+        await symlink(join(writable, "hop"), join(safe, "selected"))
+        await chmod(writable, 0o777)
+
+        const request = vi.fn(async () => health())
+        const endpoint = await nodeGatewayEndpointSource({
+          dataDir: join(safe, "selected", "private"),
+          uid: process.getuid?.(),
+          request,
+        })
+        await expect(endpoint?.load({ stage: "dev" })).rejects.toBeInstanceOf(
+          NessaEndpointDiscoveryError,
+        )
+        expect(request).not.toHaveBeenCalled()
+      } finally {
+        await rm(safe, { recursive: true })
+        await rm(target, { recursive: true })
+      }
+    },
+  )
+
+  it.runIf(process.platform !== "win32")(
     "refuses a namespace with unsafe mode or owner evidence",
     async () => {
-      const root = await mkdtemp(join(tmpdir(), "nessa-endpoint-private-"))
+      const root = await canonicalTemp(join(tmpdir(), "nessa-endpoint-private-"))
       try {
         const logs = join(root, "dev", "logs")
         await mkdir(logs, { recursive: true, mode: 0o700 })

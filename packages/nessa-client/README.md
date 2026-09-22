@@ -53,12 +53,14 @@ session's endpoint. Other hosts can inject their own sources or pass `url` and
 
 On Unix, the built-in Node sources protect against another OS user redirecting
 these files: the selected data root and namespace directories must be owned by
-the current user and private, their acquisition path cannot be replaceable by
-another user, and the leaf is read from the same nonblocking, no-follow handle
-that is validated. This boundary does not protect against a privileged process
-or a concurrent process running under the same uid; either can already read the
-mode-0600 credential. Hosts that require stronger namespace confinement inject a
-trusted source. The native host uses the Rust handle-relative storage adapter.
+the current user and private, every acquisition-path component must be a real
+directory rather than a symbolic link, and the leaf is read from the same
+nonblocking, no-follow handle that is validated. Callers using a symbolic-link
+data root must inject a trusted source instead. This boundary does not protect
+against a privileged process or a concurrent process running under the same uid;
+either can already read the mode-0600 credential. Hosts that require stronger
+namespace confinement inject a trusted source. The native host uses the Rust
+handle-relative storage adapter.
 
 ```ts
 import {

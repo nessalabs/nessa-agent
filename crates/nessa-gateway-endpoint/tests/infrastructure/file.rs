@@ -6,9 +6,8 @@ use nessa_gateway_endpoint::{
     infrastructure::{FileEndpointDiscovery, FileEndpointPublication, ENDPOINT_FILE},
 };
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::{fs, os::unix::fs::PermissionsExt};
 use std::{
-    fs,
     io::{ErrorKind, Read, Write},
     net::{SocketAddr, TcpListener},
     path::{Path, PathBuf},
