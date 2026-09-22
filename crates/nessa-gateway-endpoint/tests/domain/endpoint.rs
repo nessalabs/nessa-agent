@@ -1,5 +1,4 @@
 use nessa_gateway_endpoint::domain::{EndpointIdentity, GatewayEndpoint};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 fn identity() -> EndpointIdentity {
     EndpointIdentity::new("7a653268-43fc-4e76-a4d3-df749cc629b1".into(), 123).unwrap()
@@ -14,12 +13,8 @@ fn identity_requires_a_canonical_process_incarnation() {
 
 #[test]
 fn endpoint_accepts_only_a_bound_loopback_socket() {
-    let loopback = GatewayEndpoint::new(
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9123),
-        identity(),
-    )
-    .unwrap();
+    let loopback = GatewayEndpoint::new("ws://127.0.0.1:9123".into(), identity()).unwrap();
     assert_eq!(loopback.web_socket_url(), "ws://127.0.0.1:9123");
-    assert!(GatewayEndpoint::new("127.0.0.1:0".parse().unwrap(), identity()).is_err());
-    assert!(GatewayEndpoint::new("192.0.2.1:9123".parse().unwrap(), identity()).is_err());
+    assert!(GatewayEndpoint::new("ws://127.0.0.1:0".into(), identity()).is_err());
+    assert!(GatewayEndpoint::new("ws://192.0.2.1:9123".into(), identity()).is_err());
 }

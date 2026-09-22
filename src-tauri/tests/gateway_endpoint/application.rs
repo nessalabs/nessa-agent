@@ -18,7 +18,7 @@ impl EndpointDiscovery for Fixed {
 
 fn endpoint() -> GatewayEndpoint {
     GatewayEndpoint::new(
-        "127.0.0.1:9137".parse().unwrap(),
+        "ws://127.0.0.1:9137".into(),
         EndpointIdentity::new("5485b918-1eeb-4a4a-ad1d-9fdc70dfa231".into(), 4711).unwrap(),
     )
     .unwrap()

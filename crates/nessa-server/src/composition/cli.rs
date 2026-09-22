@@ -34,7 +34,14 @@ pub(super) fn online(
         Some(logs) => DiscoverGatewayEndpoint::new(&FileEndpointDiscovery::new(logs))
             .execute()
             .map_err(|error| failure(error.to_string()))?
-            .map(|endpoint| endpoint.address())
+            .map(|endpoint| {
+                endpoint
+                    .web_socket_url()
+                    .trim_start_matches("ws://")
+                    .parse()
+                    .map_err(|_| failure("invalid published gateway address"))
+            })
+            .transpose()?
             .unwrap_or(address),
         None => address,
     };

@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use uuid::Uuid;
 
 /// Identity of one server process publishing and answering for an endpoint.
@@ -35,24 +34,38 @@ impl EndpointIdentity {
 /// One numeric-loopback WebSocket endpoint and the process that owns it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GatewayEndpoint {
-    address: SocketAddr,
+    web_socket_url: String,
     identity: EndpointIdentity,
 }
 
 impl GatewayEndpoint {
-    pub fn new(address: SocketAddr, identity: EndpointIdentity) -> Result<Self, &'static str> {
-        if !address.ip().is_loopback() || address.port() == 0 {
+    pub fn new(web_socket_url: String, identity: EndpointIdentity) -> Result<Self, &'static str> {
+        let parsed = url::Url::parse(&web_socket_url).map_err(|_| "invalid gateway endpoint")?;
+        let loopback = match parsed.host() {
+            Some(url::Host::Ipv4(address)) => address.is_loopback(),
+            Some(url::Host::Ipv6(address)) => address.is_loopback(),
+            _ => false,
+        };
+        if parsed.scheme() != "ws"
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.port().is_none_or(|port| port == 0)
+            || parsed.path() != "/"
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+            || web_socket_url.ends_with('/')
+            || !loopback
+        {
             return Err("gateway endpoint must be a bound loopback socket");
         }
-        Ok(Self { address, identity })
+        Ok(Self {
+            web_socket_url,
+            identity,
+        })
     }
 
     pub fn web_socket_url(&self) -> String {
-        format!("ws://{}", self.address)
-    }
-
-    pub fn address(&self) -> SocketAddr {
-        self.address
+        self.web_socket_url.clone()
     }
 
     pub fn identity(&self) -> &EndpointIdentity {

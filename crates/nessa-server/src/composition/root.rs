@@ -152,8 +152,9 @@ impl CompositionRoot {
             std::process::id(),
         )
         .map_err(|error| RunError::Runtime(error.into()))?;
-        let endpoint = GatewayEndpoint::new(bound_address, endpoint_identity.clone())
-            .map_err(|error| RunError::Runtime(error.into()))?;
+        let endpoint =
+            GatewayEndpoint::new(format!("ws://{bound_address}"), endpoint_identity.clone())
+                .map_err(|error| RunError::Runtime(error.into()))?;
         let managed = desktop_identity
             .as_ref()
             .map(|identity| {

@@ -109,7 +109,7 @@ impl EndpointDiscovery for FileEndpointDiscovery {
         let identity =
             crate::domain::EndpointIdentity::new(record.endpoint_instance, record.process_id)
                 .map_err(|_| invalid_record())?;
-        GatewayEndpoint::new(address, identity)
+        GatewayEndpoint::new(record.web_socket_url, identity)
             .map(Some)
             .map_err(|_| invalid_record())
     }

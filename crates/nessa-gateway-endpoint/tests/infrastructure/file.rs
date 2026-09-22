@@ -11,7 +11,7 @@ use std::{
 
 fn endpoint(port: u16) -> GatewayEndpoint {
     GatewayEndpoint::new(
-        format!("127.0.0.1:{port}").parse().unwrap(),
+        format!("ws://127.0.0.1:{port}"),
         EndpointIdentity::new("3f43acfb-3ce4-48fb-8dd1-d31c9404a6bd".into(), 909).unwrap(),
     )
     .unwrap()
@@ -24,7 +24,7 @@ fn canonical_publication_agrees_with_the_cross_runtime_fixture() {
     let logs = temporary.path().join("logs");
     let publication = FileEndpointPublication::new(logs.clone());
     let endpoint = GatewayEndpoint::new(
-        "127.0.0.1:9137".parse().unwrap(),
+        "ws://127.0.0.1:9137".into(),
         EndpointIdentity::new("5485b918-1eeb-4a4a-ad1d-9fdc70dfa231".into(), 4711).unwrap(),
     )
     .unwrap();
@@ -92,7 +92,7 @@ fn managed_discovery_correlates_every_identity_field_over_a_real_health_socket()
     let (address, server) =
         health_server_with_managed(instance, 909, Some((&fingerprint, &generation)));
     let endpoint = GatewayEndpoint::new(
-        address,
+        format!("ws://{address}"),
         EndpointIdentity::new(instance.into(), 909).unwrap(),
     )
     .unwrap();
@@ -112,8 +112,8 @@ fn managed_discovery_correlates_every_identity_field_over_a_real_health_socket()
             .execute()
             .unwrap()
             .unwrap()
-            .address(),
-        address
+            .web_socket_url(),
+        format!("ws://{address}")
     );
     server.join().unwrap();
 }
@@ -185,7 +185,11 @@ fn discovery_reads_a_real_private_file_and_correlates_a_real_health_socket() {
     let publication = FileEndpointPublication::new(logs.clone());
     PublishGatewayEndpoint::new(&publication)
         .execute(
-            &GatewayEndpoint::new(address, endpoint(address.port()).identity().clone()).unwrap(),
+            &GatewayEndpoint::new(
+                format!("ws://{address}"),
+                endpoint(address.port()).identity().clone(),
+            )
+            .unwrap(),
             None,
         )
         .unwrap();
@@ -212,7 +216,11 @@ fn absent_record_falls_back_but_mismatched_identity_is_refused() {
     let publication = FileEndpointPublication::new(logs.clone());
     PublishGatewayEndpoint::new(&publication)
         .execute(
-            &GatewayEndpoint::new(address, endpoint(address.port()).identity().clone()).unwrap(),
+            &GatewayEndpoint::new(
+                format!("ws://{address}"),
+                endpoint(address.port()).identity().clone(),
+            )
+            .unwrap(),
             None,
         )
         .unwrap();

@@ -446,7 +446,7 @@ mod tests {
     fn a_mismatched_verified_destination_is_refused_before_the_token_is_read() {
         let credential = FakeCredentials::holding("fixture-only");
         let endpoint = GatewayEndpoint::new(
-            "127.0.0.1:9137".parse().unwrap(),
+            "ws://127.0.0.1:9137".into(),
             EndpointIdentity::new("5485b918-1eeb-4a4a-ad1d-9fdc70dfa231".into(), 4711).unwrap(),
         )
         .unwrap();
