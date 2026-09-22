@@ -1,8 +1,9 @@
 use super::super::generation::random_generation;
 use super::{
-    clone_file, entry_name, finalize_file, launch_settings, publish, stage_runtime,
+    clone_file, copy_directory, entry_name, finalize_file, launch_settings, publish, stage_runtime,
     stage_runtime_using, tree_fingerprint, utf8, validate_runtime,
 };
+use crate::gateway::infrastructure::macos::runtime_fingerprint;
 use serde_json::json;
 use std::{
     ffi::{CString, OsString},
@@ -13,6 +14,7 @@ use std::{
     },
     path::{Path, PathBuf},
     process::Command,
+    time::Instant,
 };
 
 const TEST_ATTRIBUTE: &[u8] = b"com.nessa.runtime-staging-test\0";
@@ -97,6 +99,105 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+#[derive(Default)]
+struct RuntimeSize {
+    files: u64,
+    directories: u64,
+    links: u64,
+    bytes: u64,
+}
+
+fn runtime_size(path: &Path, size: &mut RuntimeSize) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink() {
+        size.links += 1;
+    } else if metadata.is_dir() {
+        size.directories += 1;
+        for entry in fs::read_dir(path).map_err(|error| error.to_string())? {
+            runtime_size(&entry.map_err(|error| error.to_string())?.path(), size)?;
+        }
+    } else if metadata.is_file() {
+        size.files += 1;
+        size.bytes = size
+            .bytes
+            .checked_add(metadata.len())
+            .ok_or("Runtime byte count overflowed")?;
+    } else {
+        return Err("Runtime measurement found an unsupported entry".into());
+    }
+    Ok(())
+}
+
+/// Measures the real packaged tree without making the routine test suite copy it.
+///
+/// Run explicitly with `NESSA_STAGING_MEASUREMENT_RUNTIME` naming the runtime
+/// resource directory. The source is opened read-only by the staging code; every
+/// destination lives below one random temporary directory owned by `Fixture`.
+#[test]
+#[ignore = "copies and validates a packaged runtime supplied by the caller"]
+fn measure_packaged_runtime_staging_phases() {
+    const MOST_ENTRIES: u64 = 50_000;
+    const MOST_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+    let source = std::env::var_os("NESSA_STAGING_MEASUREMENT_RUNTIME")
+        .map(PathBuf::from)
+        .expect("NESSA_STAGING_MEASUREMENT_RUNTIME must name a packaged runtime");
+    let source = source.canonicalize().expect("runtime source must exist");
+    let expected = runtime_fingerprint(&source).expect("runtime manifest must be readable");
+    let mut size = RuntimeSize::default();
+    runtime_size(&source, &mut size).expect("runtime tree must be measurable");
+    let entries = size.files + size.directories + size.links;
+    assert!(entries <= MOST_ENTRIES, "runtime has {entries} entries");
+    assert!(size.bytes <= MOST_BYTES, "runtime has {} bytes", size.bytes);
+
+    let fixture = Fixture::new();
+    let phases = fixture.0.join("phases");
+    nessa_local_storage::create_directory(&phases).unwrap();
+    let temporary = phases.join(".staging-measurement");
+    nessa_local_storage::create_directory(&temporary).unwrap();
+
+    let copy_started = Instant::now();
+    copy_directory(&source, &source, &temporary, clone_file).unwrap();
+    let copied_in = copy_started.elapsed();
+
+    let validation_started = Instant::now();
+    validate_runtime(&temporary, &expected).unwrap();
+    let validated_in = validation_started.elapsed();
+
+    let published = phases.join(&expected);
+    let publication_started = Instant::now();
+    publish(&temporary, &published).unwrap();
+    nessa_local_storage::sync_directory(&phases).unwrap();
+    let published_in = publication_started.elapsed();
+
+    let installations = fixture.0.join("stage-runtime");
+    let staging_started = Instant::now();
+    let staged = stage_runtime(&source, &installations, &expected).unwrap();
+    let staged_in = staging_started.elapsed();
+
+    let reuse_started = Instant::now();
+    assert_eq!(
+        stage_runtime(&source, &installations, &expected).unwrap(),
+        staged
+    );
+    let reused_in = reuse_started.elapsed();
+
+    eprintln!(
+        "runtime={} fingerprint={} files={} directories={} links={} bytes={} copy_sync_attrs_ms={} validation_ms={} publication_ms={} stage_runtime_ms={} reuse_ms={}",
+        source.display(),
+        expected,
+        size.files,
+        size.directories,
+        size.links,
+        size.bytes,
+        copied_in.as_millis(),
+        validated_in.as_millis(),
+        published_in.as_millis(),
+        staged_in.as_millis(),
+        reused_in.as_millis(),
+    );
 }
 #[test]
 fn rust_fingerprint_matches_javascript_with_unicode_and_escape_framing() {
