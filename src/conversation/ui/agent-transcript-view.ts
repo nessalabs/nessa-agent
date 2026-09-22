@@ -13,6 +13,13 @@ export type AgentToolView = {
   input: string
   details: string
 }
+/** One thing a turn did, in the order it did it. */
+export type WorkStep = {
+  key: string
+  text?: string
+  thought?: string
+  tool?: AgentToolView
+}
 function rawText(raw: JsonValue, key: string): string {
   if (raw === null || Array.isArray(raw) || typeof raw !== "object") return ""
   return typeof raw[key] === "string" ? raw[key] : ""
@@ -67,21 +74,12 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
   /**
    * A turn is two things in the transcript: what it worked through, and what
    * it came back with. The working — every thought, every tool call, every
-   * line the agent said to itself on the way — is one collapsed segment. Only
-   * the answer is left outside, because the answer is what was asked for.
+   * line the agent said to itself on the way — is one collapsed segment, kept
+   * in the order it happened so a rationale still sits beside the call it
+   * explains. Only the answer is left outside, because the answer is what was
+   * asked for.
    */
-  const content: {
-    key: string
-    text?: string
-    thought?: string
-    tools?: AgentToolView[]
-  }[] = []
-  const work: { key: string; thought?: string; tools?: AgentToolView[] } = {
-    key: `${turn.key}:work`,
-  }
-  const note = (text: string) => {
-    work.thought = work.thought ? `${work.thought}\n\n${text}` : text
-  }
+  const steps: WorkStep[] = []
   for (const event of events) {
     const payload = event.payload
     // The final answer is the only text that stays in the conversation.
@@ -90,32 +88,29 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
       event.id !== finalEvent?.id &&
       payload.text.trim()
     )
-      note(payload.text)
+      steps.push({ key: event.id, text: payload.text })
     // A thought of nothing but whitespace is a disclosure over nothing.
-    if (payload.type === "reasoning" && payload.text.trim()) note(payload.text)
+    if (payload.type === "reasoning" && payload.text.trim())
+      steps.push({ key: event.id, thought: payload.text })
     if (payload.type === "tool_call_started") {
       const tool = tools.find((tool) => tool.callId === payload.callId)
-      if (tool) work.tools = [...(work.tools ?? []), tool]
+      if (tool) steps.push({ key: event.id, tool })
     }
   }
-  if (work.thought || work.tools) content.push(work)
-  if (finalEvent && finalEvent.payload.type === "assistant_text")
-    content.push({ key: finalEvent.id, text: finalEvent.payload.text })
-  if (turn.finalText !== null && !finalEvent)
+  const content: { key: string; text?: string; work?: WorkStep[] }[] = []
+  if (steps.length) content.push({ key: `${turn.key}:work`, work: steps })
+  // Keyed on the turn, not the event: which text is the answer changes while a
+  // turn runs, and a key that moved with it would remount the bubble.
+  if (turn.finalText !== null)
     content.push({ key: `${turn.key}:answer`, text: turn.finalText })
   const completed = turn.completed?.payload
   return {
     content,
     key: turn.key,
     promptId: turn.prompt?.id,
-    text: turn.finalText ?? "",
-    thought: events
-      .flatMap(({ payload }) => (payload.type === "reasoning" ? [payload.text] : []))
-      .join("\n"),
     status:
       completed?.type === "turn_completed"
         ? (completed.terminalReason ?? completed.status)
         : "running",
-    tools,
   }
 }

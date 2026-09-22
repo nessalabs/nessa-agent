@@ -1,6 +1,6 @@
 import { agentTranscript } from "../adapters/agent-stream/transcript"
 import { agentTurnView } from "./agent-transcript-view"
-import { WorkActivity, WorkDetails } from "./tool-activity"
+import { WorkActivity, WorkDetails } from "./work-activity"
 import {
   MessageScroller,
   MessageScrollerViewport,
@@ -21,7 +21,7 @@ import { MessageMarkdown } from "@nessa-ui/react/message-markdown"
 import { type Conversation, type Receipt, type Turn } from "../model"
 import { EmptyState } from "./empty-state"
 import { Thinking } from "./thinking"
-import { selectedWork } from "./tool-selection"
+import { selectedWork } from "./work-selection"
 
 export function Transcript({
   conversation,
@@ -43,6 +43,7 @@ export function Transcript({
   onOpenPaste: (text: string) => void
 }) {
   const [workFor, setWorkFor] = React.useState<string | null>(null)
+  const sheetId = React.useId()
   const normalized = React.useMemo(
     () =>
       agentTranscript(
@@ -56,7 +57,9 @@ export function Transcript({
     () => normalized.turns.map((turn) => agentTurnView(turn, normalized)),
     [normalized],
   )
-  const segments = rows.flatMap((row) => row.content)
+  const segments = rows.flatMap((row) =>
+    row.content.map((part) => ({ ...part, running: row.status === "running" })),
+  )
   const openWork = selectedWork(segments, workFor)
   React.useEffect(() => {
     if (workFor !== null && !openWork) setWorkFor(null)
@@ -100,8 +103,14 @@ export function Transcript({
                   )}
                   {row.content.map((part) => (
                     <React.Fragment key={part.key}>
-                      {(part.thought || part.tools) && (
-                        <WorkActivity work={part} onOpen={() => setWorkFor(part.key)} />
+                      {part.work && (
+                        <WorkActivity
+                          work={part.work}
+                          running={row.status === "running"}
+                          expanded={workFor === part.key}
+                          sheetId={sheetId}
+                          onOpen={() => setWorkFor(part.key)}
+                        />
                       )}
                       {part.text && (
                         <TurnRow
@@ -135,7 +144,14 @@ export function Transcript({
         </MessageScrollerViewport>
         <MessageScrollerButton />
       </MessageScroller>
-      {openWork && <WorkDetails work={openWork} onClose={() => setWorkFor(null)} />}
+      {openWork?.work && (
+        <WorkDetails
+          work={openWork.work}
+          running={openWork.running}
+          sheetId={sheetId}
+          onClose={() => setWorkFor(null)}
+        />
+      )}
     </>
   )
 }
