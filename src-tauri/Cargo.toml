@@ -12,7 +12,6 @@ rust-version = "1.85"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-nessa-agent-credentials = { path = "../crates/nessa-agent-credentials" }
 nessa-local-storage = { path = "../crates/nessa-local-storage" }
 # `macos-private-api` is what makes the transparent, undecorated window legal
 # on macOS; `tray-icon` and `image-png` back the menu bar item.

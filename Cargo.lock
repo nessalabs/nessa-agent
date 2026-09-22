@@ -2620,7 +2620,6 @@ dependencies = [
  "gtk",
  "libc",
  "minisign-verify",
- "nessa-agent-credentials",
  "nessa-local-storage",
  "objc2",
  "objc2-app-kit",
