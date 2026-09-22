@@ -550,6 +550,15 @@ fixtures run in CI. It is a source-level import check, not a Rust module resolve
 macros, fully qualified expressions, transitive re-exports, lifecycle ownership,
 and semantic DTO relationships still require compilation and review.
 
+`scripts/check-runtime-dependencies.mjs` separately follows Cargo's resolved
+package IDs from the server, SDK, auth, local-storage, images, and MCP packages.
+It rejects reachable Tauri desktop-framework packages under the default and
+all-feature workspace configurations, including renamed and transitive edges,
+while allowing the unrelated desktop application graph. Cargo metadata includes
+dependencies for every target; features are conservatively unified within each
+queried workspace configuration. The check and its Cargo fixture run once in the
+platform-independent `gateway-contract` job with bare Node and Cargo.
+
 ### New-context layout from day one
 
 Use `context/domain`, `context/application`, and `context/infrastructure` for new
