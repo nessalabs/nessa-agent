@@ -11,6 +11,8 @@ unrelated future systems.
 | [SDK runtime shape](sdk-shape.md) | Nessa server ownership and proposed conversation delivery contract |
 | [Session and stream contracts](../session-and-stream-contracts.md) | Proposed gateway/history delivery contract, broader than the implemented execution binding |
 | [Dependency injection](../dependency-injection.md) | Current composition rules shared across repository contexts |
+| [Nessa-owned policy hooks](../../adr/todo/0014-nessa-owned-policy-hooks.md) | Proposed decision for hook boundaries, disclosure, failure and attribution; implementation remains tracked by #130 |
+| [Hook capability survey](hook-capabilities.md) | Pinned Claude/Codex/Opencode source evidence, unpinned Kiro observations, and explicit limits on Nessa enforcement |
 
 ```text
 current Agent --> local session snapshots + scheduling --> provider harness
