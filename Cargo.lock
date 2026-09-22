@@ -2627,7 +2627,6 @@ dependencies = [
  "sha2",
  "tauri",
  "tauri-build",
- "tauri-utils",
  "tauri-plugin-dialog",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-updater",
