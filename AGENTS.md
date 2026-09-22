@@ -135,6 +135,14 @@ Inspect the resulting layout and verify module maps, moved links, and checks.
   context; see [seams at the process boundary](CODING_STANDARDS.md#seams-at-the-process-boundary).
 - Proposed ADRs and plans are not implemented features. Do not implement unrelated
   future systems merely because their ports are discussed in design documents.
+- Anything significant enough to need an ADR, a design document, or a branch of
+  its own gets a GitHub issue first, and takes that issue's number. A new ADR is
+  `docs/adr/todo/<issue>-<slug>.md`. Numbering from "the next free one in the
+  directory" collided twice, because a directory cannot see what is in flight on
+  another branch and git merges two differently-named files without a word;
+  GitHub allocates issue numbers centrally, so two branches cannot be handed the
+  same one. `0001`–`0014` predate this and keep their numbers. See
+  [the ADR index](docs/adr/README.md#numbering-open-the-issue-first).
 
 - Hard rule: do not add backward-compatibility shims, legacy fallbacks, aliases, or
   unnecessary protocol/schema/package version bumps. Update current callers, tests,

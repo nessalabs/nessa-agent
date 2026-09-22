@@ -8,13 +8,37 @@ import { adrNumber, duplicateAdrNumbers } from "./adr-numbers.mjs"
 
 const adr = join(dirname(fileURLToPath(import.meta.url)), "../../docs/adr")
 
-test("a four-digit prefix is the number and anything else is not an ADR", () => {
+test("the leading digits are the number, however many there are", () => {
+  // The old era, padded to four.
   assert.equal(adrNumber("0014-fetch-agent-runtimes.md"), "0014")
+  // The new one: the number of the issue that proposed it, as issues spell it.
+  assert.equal(adrNumber("142-some-decision.md"), "142")
   assert.equal(adrNumber("README.md"), null)
-  // The template is not a decision and must not reserve a number.
   assert.equal(adrNumber("template.md"), null)
-  // Numbers are padded, so a stray three-digit file is not silently a fifth.
-  assert.equal(adrNumber("014-fetch-agent-runtimes.md"), null)
+})
+
+test("padding is spelling, not identity", () => {
+  // `0014` and `14` are one number written two ways, and a record that took the
+  // second while another holds the first is the clash this exists to catch —
+  // not two records that merely look different in a directory listing.
+  const clashes = duplicateAdrNumbers([
+    ["done", ["0014-fetch-agent-runtimes.md"]],
+    ["todo", ["14-something-else.md"]],
+  ])
+
+  assert.equal(clashes.length, 1)
+  assert.equal(clashes[0].number, "14")
+})
+
+test("an issue-numbered record does not collide with the old block", () => {
+  // The whole reason the scheme works: issues are past 140 and the records
+  // written before the rule stop at 0014, so the ranges cannot meet.
+  const clashes = duplicateAdrNumbers([
+    ["done", ["0013-files-by-path-not-by-payload.md"]],
+    ["todo", ["0014-fetch-agent-runtimes.md", "142-a-later-decision.md"]],
+  ])
+
+  assert.deepEqual(clashes, [])
 })
 
 test("one number used twice is reported with both files", () => {
@@ -25,7 +49,8 @@ test("one number used twice is reported with both files", () => {
 
   assert.deepEqual(clashes, [
     {
-      number: "0013",
+      // The identity, not the spelling — the paths below carry that.
+      number: "13",
       paths: [
         "done/0013-files-by-path-not-by-payload.md",
         "todo/0013-fetch-agent-runtimes.md",
@@ -43,7 +68,7 @@ test("todo and done share one sequence, so a number survives being implemented",
   ])
 
   assert.equal(clashes.length, 1)
-  assert.equal(clashes[0].number, "0005")
+  assert.equal(clashes[0].number, "5")
 })
 
 test("every clash is reported, not the first", () => {
@@ -54,7 +79,7 @@ test("every clash is reported, not the first", () => {
 
   assert.deepEqual(
     clashes.map(({ number }) => number),
-    ["0002", "0003"],
+    ["2", "3"],
   )
 })
 
