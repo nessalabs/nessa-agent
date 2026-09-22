@@ -4,11 +4,12 @@
 
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{mpsc::Sender, Mutex};
 
 use crate::agent_install::application::{
-    ArchiveSource, AuditFailure, InstallAudit, Publication, PublicationChange, PublishFailure,
-    RollbackChange, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
+    ArchiveSource, AuditFailure, InstallAudit, Publication, PublicationChange,
+    PublicationCleanupFailure, PublicationRecovery, PublishFailure, RollbackChange, RuntimeStore,
+    SourceFailure, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, ArchivePath, ArchiveUrl, HostPlatform, InstallRequest,
@@ -236,7 +237,8 @@ pub(crate) struct FakeStore {
     stage: Option<StoreFailure>,
     digest: Result<ArchiveDigest, StoreFailure>,
     publish: Result<PublicationChange, StoreFailure>,
-    rollback: Option<RollbackChange>,
+    recovery: PublicationRecovery,
+    lease_drop: Option<Sender<()>>,
     /// How many archives this store has staged, so each gets its own name.
     staged: std::sync::atomic::AtomicUsize,
     calls: Mutex<StoreCalls>,
@@ -251,7 +253,8 @@ impl FakeStore {
             stage: None,
             digest: Ok(ArchiveDigest::parse(PINNED_DIGEST).expect("test digest is usable")),
             publish: Ok(PublicationChange::Installed),
-            rollback: None,
+            recovery: PublicationRecovery::NotRequired,
+            lease_drop: None,
             staged: std::sync::atomic::AtomicUsize::new(0),
             calls: Mutex::new(StoreCalls::default()),
         }
@@ -286,7 +289,18 @@ impl FakeStore {
         rollback: RollbackChange,
     ) -> Self {
         self.publish = Err(failure);
-        self.rollback = Some(rollback);
+        self.recovery = PublicationRecovery::RolledBack(rollback);
+        self
+    }
+
+    pub(crate) fn failing_after_incomplete_cleanup(
+        mut self,
+        failure: StoreFailure,
+        rollback: Option<RollbackChange>,
+        cleanup: PublicationCleanupFailure,
+    ) -> Self {
+        self.publish = Err(failure);
+        self.recovery = PublicationRecovery::Incomplete { rollback, cleanup };
         self
     }
 
@@ -295,6 +309,11 @@ impl FakeStore {
         previous: crate::agent_install::domain::RuntimeArtifact,
     ) -> Self {
         self.publish = Ok(PublicationChange::Replaced(previous));
+        self
+    }
+
+    pub(crate) fn signalling_lease_drop(mut self, sender: Sender<()>) -> Self {
+        self.lease_drop = Some(sender);
         self
     }
 
@@ -402,13 +421,32 @@ impl RuntimeStore for FakeStore {
         drop(calls);
         self.publish
             .clone()
-            .map(|change| Publication::new(self.root.join("opencode"), change, Box::new(())))
-            .map_err(|failure| PublishFailure {
-                failure,
-                rollback: self.rollback.clone(),
-                lease: self.rollback.as_ref().map(|_| {
-                    Box::new(()) as Box<dyn crate::agent_install::application::PublicationLease>
-                }),
+            .map(|change| {
+                Publication::new(
+                    self.root.join("opencode"),
+                    change,
+                    self.lease_drop.clone().map_or_else(
+                        || {
+                            Box::new(())
+                                as Box<dyn crate::agent_install::application::PublicationLease>
+                        },
+                        |sender| Box::new(DropSignal(sender)),
+                    ),
+                )
+            })
+            .map_err(|failure| match self.recovery.clone() {
+                PublicationRecovery::NotRequired => PublishFailure::unchanged(failure),
+                PublicationRecovery::RolledBack(rollback) => {
+                    PublishFailure::rolled_back(failure, rollback, lease(self.lease_drop.clone()))
+                }
+                PublicationRecovery::Incomplete { rollback, cleanup } => {
+                    PublishFailure::incomplete(
+                        failure,
+                        rollback,
+                        cleanup,
+                        lease(self.lease_drop.clone()),
+                    )
+                }
             })
     }
 
@@ -418,5 +456,22 @@ impl RuntimeStore for FakeStore {
             .expect("fake store lock")
             .discarded
             .push(staged.path().to_owned());
+    }
+}
+
+struct DropSignal(Sender<()>);
+
+fn lease(
+    sender: Option<Sender<()>>,
+) -> Box<dyn crate::agent_install::application::PublicationLease> {
+    sender.map_or_else(
+        || Box::new(()) as Box<dyn crate::agent_install::application::PublicationLease>,
+        |sender| Box::new(DropSignal(sender)),
+    )
+}
+
+impl Drop for DropSignal {
+    fn drop(&mut self) {
+        let _ = self.0.send(());
     }
 }

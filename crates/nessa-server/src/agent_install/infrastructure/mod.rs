@@ -5,7 +5,7 @@
 //! pinned_releases  -> what Nessa has tested, compiled in from data/agent-releases.json
 //! https_archives   -> ArchiveSource, fetching an archive over HTTPS
 //! managed_runtimes -> RuntimeStore, holding installed runtimes under one directory
-//! audit            -> InstallAudit, committing one private record per transition
+//! audit            -> InstallAudit, committing a locked, sequenced durable journal
 //! ```
 //! Arrows mean "implements" or "provides". Nothing here decides whether an
 //! archive is trustworthy; that is the release's own rule, applied by the

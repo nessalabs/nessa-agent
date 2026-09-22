@@ -818,6 +818,11 @@ replaced, or rolled-back evidence is acknowledged, so concurrent installers
 cannot report effects in an order that contradicts their before/after chain.
 Audit failure stays visible; when publication already happened, the error says
 the runtime is installed rather than claiming cleanup reversed it.
+If publication durability fails, the store removes only the target it computed
+from the accepted pin, restores only a prior record whose validated artifact
+still had a private nonempty executable, and re-reads installed state under the
+same lease. The original failure, every cleanup failure, and only a confirmed
+rollback state travel as separate typed facts to the use case.
 
 `infrastructure/` holds the four outside things: `pinned_releases.rs` reads
 `data/agent-releases.json`, compiled in so the tested version cannot depend on
@@ -835,10 +840,13 @@ crate's `*_beneath` primitives, which walk down one verified component at a
 time; the root itself, which composition owns, is the single path resolved the
 ordinary way. So no symbolic link between the root and a runtime can send a
 read, a write or a removal outside the store, and the installed executable is
-private to its owner like everything else there. `audit.rs` writes one private
-JSON file per transition, syncs the record and directory before acknowledging
-it, and supplies the observation time and record identity. Those adapter facts
-do not decide transition order; the domain before/after chain does.
+private to its owner like everything else there. `audit.rs` creates its nested
+directory durably beneath the data root, then uses a filesystem lock shared by
+CLI processes to write monotonically sequenced private JSON records. It syncs
+each record and the journal directory before acknowledging it, and refuses a
+corrupt or discontinuous journal rather than silently appending past it.
+Observation time is descriptive; the durable sequence and domain before/after
+chain establish order.
 
 `composition/install_command.rs` wires those for `nessa install-agent NAME`,
 picks the build for this machine — the most demanding of the pinned releases

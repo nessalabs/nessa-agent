@@ -59,13 +59,15 @@ fn install(
     let release = pinned(agent, &host)?;
     let source = HttpsArchives::new().map_err(|error| RunError::Agent(error.to_string()))?;
     let store = ManagedRuntimes::new(root);
-    let audit_root = root
+    let data_root = root
         .parent()
-        .ok_or_else(|| RunError::Agent("invalid agent runtime directory".into()))?
-        .join("audit")
-        .join("agent-install");
-    let audit = DurableInstallAudit::new(audit_root, Arc::new(super::local_auth::SystemClock))
-        .map_err(|error| RunError::Agent(error.to_string()))?;
+        .ok_or_else(|| RunError::Agent("invalid agent runtime directory".into()))?;
+    let audit = DurableInstallAudit::new(
+        data_root,
+        Path::new("audit/agent-install"),
+        Arc::new(super::local_auth::SystemClock),
+    )
+    .map_err(|error| RunError::Agent(error.to_string()))?;
     let installed = InstallAgentRuntime {
         source: &source,
         store: &store,
@@ -193,6 +195,7 @@ fn explain(failure: &InstallFailure) -> String {
         ),
         InstallFailure::Download(_) => format!("{failure}; nothing was installed, try again"),
         InstallFailure::Store(failure) => format!("{failure}; nothing was installed"),
+        InstallFailure::Recovery { .. } => failure.to_string(),
         InstallFailure::Evidence(_) => format!("{failure}; the install result was not reported"),
         InstallFailure::Audit {
             runtime_installed: true,

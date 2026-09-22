@@ -2,8 +2,8 @@ use std::fmt;
 use std::path::PathBuf;
 
 use super::ports::{
-    ArchiveSource, AuditFailure, InstallAudit, PublicationChange, RollbackChange, RuntimeStore,
-    SourceFailure, StagedArchive, StoreFailure,
+    ArchiveSource, AuditFailure, InstallAudit, PublicationChange, PublicationCleanupFailure,
+    PublicationRecovery, RollbackChange, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
     AgentName, ArchiveRejected, HostPlatform, InstallAttempt, InstallAttemptError, InstallRequest,
@@ -60,6 +60,12 @@ pub enum InstallFailure {
         runtime_installed: bool,
         failure: AuditFailure,
     },
+    /// Publication failed and its cleanup also failed. The original operation
+    /// and cleanup failures remain separate facts.
+    Recovery {
+        operation: StoreFailure,
+        cleanup: PublicationCleanupFailure,
+    },
 }
 
 impl fmt::Display for InstallFailure {
@@ -87,6 +93,9 @@ impl fmt::Display for InstallFailure {
                 } else {
                     write!(f, "install audit was not committed: {failure}")
                 }
+            }
+            Self::Recovery { operation, cleanup } => {
+                write!(f, "{operation}; publication cleanup also failed: {cleanup}")
             }
         }
     }
@@ -229,9 +238,20 @@ impl InstallAgentRuntime<'_> {
                 Ok(publication.executable().to_owned())
             }
             Err(publish) => {
-                let operation = InstallFailure::Store(publish.failure.clone());
-                let Some(rollback) = publish.rollback.as_ref() else {
-                    return Err(operation);
+                let operation = InstallFailure::Store(publish.failure().clone());
+                let (rollback, outcome) = match publish.recovery() {
+                    PublicationRecovery::NotRequired => return Err(operation),
+                    PublicationRecovery::RolledBack(rollback) => (Some(rollback), operation),
+                    PublicationRecovery::Incomplete { rollback, cleanup } => (
+                        rollback.as_ref(),
+                        InstallFailure::Recovery {
+                            operation: publish.failure().clone(),
+                            cleanup: cleanup.clone(),
+                        },
+                    ),
+                };
+                let Some(rollback) = rollback else {
+                    return Err(outcome);
                 };
                 let restored = match rollback {
                     RollbackChange::Restored(artifact) => RollbackState::Restored(artifact.clone()),
@@ -241,8 +261,8 @@ impl InstallAgentRuntime<'_> {
                     .rolled_back(restored)
                     .map_err(InstallFailure::Evidence)?;
                 match self.audit.record(transition) {
-                    Ok(()) => Err(operation),
-                    Err(failure) => Err(with_audit_failure(operation, failure)),
+                    Ok(()) => Err(outcome),
+                    Err(failure) => Err(with_audit_failure(outcome, failure)),
                 }
             }
         }

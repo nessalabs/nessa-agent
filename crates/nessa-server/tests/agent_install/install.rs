@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent_install::application::RollbackChange;
+use crate::agent_install::application::{PublicationCleanupFailure, RollbackChange};
 use crate::agent_install::domain::{
     InstallTransitionKind, Libc, ReleasePlatform, ReleaseRequirements, RuntimeArtifact,
 };
@@ -7,6 +7,28 @@ use crate::agent_install_test_support::{
     agent, audit, host, host_of, platform, release, release_needing, request, FakeSource,
     FakeStore, RecordingAudit, OTHER_DIGEST, PINNED_DIGEST,
 };
+use std::sync::{mpsc, Mutex};
+use std::time::Duration;
+
+struct BlockingAudit {
+    target: InstallTransitionKind,
+    entered: mpsc::SyncSender<()>,
+    release: Mutex<mpsc::Receiver<()>>,
+    fail: bool,
+}
+
+impl InstallAudit for BlockingAudit {
+    fn record(&self, transition: InstallTransition) -> Result<(), AuditFailure> {
+        if transition.kind() == self.target {
+            self.entered.send(()).unwrap();
+            self.release.lock().unwrap().recv().unwrap();
+            if self.fail {
+                return Err(AuditFailure("sink refused".into()));
+            }
+        }
+        Ok(())
+    }
+}
 
 #[test]
 fn a_matching_archive_is_published() {
@@ -601,6 +623,138 @@ fn audit_failure_after_verification_is_visible_and_prevents_publication() {
 }
 
 #[test]
+fn audit_failure_at_started_prevents_install_effects() {
+    let root = tempfile::tempdir().unwrap();
+    let source = FakeSource::serving(b"archive bytes");
+    let store = FakeStore::empty(root.path());
+    let audit = RecordingAudit::failing_on(InstallTransitionKind::Started, "sink refused");
+
+    let failure = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: &audit,
+    }
+    .execute(
+        &agent(),
+        &release("1.18.31", PINNED_DIGEST, &platform()),
+        &host(),
+        &request(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        failure,
+        InstallFailure::Audit {
+            runtime_installed: false,
+            ..
+        }
+    ));
+    assert!(source.requested().is_empty());
+    assert!(store.published().is_empty());
+}
+
+#[test]
+fn audit_failure_at_replaced_reports_the_new_runtime_and_prior_evidence() {
+    let root = tempfile::tempdir().unwrap();
+    let source = FakeSource::serving(b"archive bytes");
+    let previous = RuntimeArtifact::for_release(&release("1.17.0", OTHER_DIGEST, &platform()));
+    let store = FakeStore::empty(root.path()).replacing(previous.clone());
+    let audit = RecordingAudit::failing_on(InstallTransitionKind::Replaced, "sink refused");
+
+    let failure = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: &audit,
+    }
+    .execute(
+        &agent(),
+        &release("1.18.31", PINNED_DIGEST, &platform()),
+        &host(),
+        &request(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        failure,
+        InstallFailure::Audit {
+            runtime_installed: true,
+            ..
+        }
+    ));
+    assert_eq!(audit.records().last().unwrap().previous(), Some(&previous));
+}
+
+#[test]
+fn audit_failure_at_rollback_preserves_the_publication_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let source = FakeSource::serving(b"archive bytes");
+    let operation = StoreFailure::Unwritable("publish failed".into());
+    let store = FakeStore::empty(root.path())
+        .failing_after_rollback(operation.clone(), RollbackChange::NoInstalledRuntime);
+    let audit = RecordingAudit::failing_on(InstallTransitionKind::RolledBack, "sink refused");
+
+    let failure = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: &audit,
+    }
+    .execute(
+        &agent(),
+        &release("1.18.31", PINNED_DIGEST, &platform()),
+        &host(),
+        &request(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        failure,
+        InstallFailure::Audit { operation: Some(inner), runtime_installed: false, .. }
+            if *inner == InstallFailure::Store(operation)
+    ));
+}
+
+#[test]
+fn cleanup_failure_is_visible_without_replacing_the_publication_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let source = FakeSource::serving(b"archive bytes");
+    let operation = StoreFailure::Unwritable("record sync failed".into());
+    let cleanup = StoreFailure::Unwritable("withdrawal failed".into());
+    let cleanup_evidence =
+        PublicationCleanupFailure::new(Some(cleanup), None, None).expect("one cleanup failure");
+    let store = FakeStore::empty(root.path()).failing_after_incomplete_cleanup(
+        operation.clone(),
+        Some(RollbackChange::NoInstalledRuntime),
+        cleanup_evidence.clone(),
+    );
+    let audit = RecordingAudit::default();
+
+    let failure = InstallAgentRuntime {
+        source: &source,
+        store: &store,
+        audit: &audit,
+    }
+    .execute(
+        &agent(),
+        &release("1.18.31", PINNED_DIGEST, &platform()),
+        &host(),
+        &request(),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        failure,
+        InstallFailure::Recovery {
+            operation,
+            cleanup: cleanup_evidence,
+        }
+    );
+    assert_eq!(
+        audit.records().last().unwrap().kind(),
+        InstallTransitionKind::RolledBack
+    );
+}
+
+#[test]
 fn audit_failure_after_publication_reports_the_runtime_as_installed() {
     let root = tempfile::tempdir().unwrap();
     let source = FakeSource::serving(b"archive bytes");
@@ -659,4 +813,92 @@ fn audit_failure_preserves_digest_rejection_and_cleanup() {
     ));
     assert!(store.published().is_empty());
     assert_eq!(store.discarded().len(), 1);
+}
+
+#[test]
+fn successful_publication_lease_spans_a_failing_audit_and_then_releases() {
+    let root = tempfile::tempdir().unwrap();
+    let source = FakeSource::serving(b"archive bytes");
+    let (lease_dropped, dropped) = mpsc::channel();
+    let store = FakeStore::empty(root.path()).signalling_lease_drop(lease_dropped);
+    let (entered_send, entered) = mpsc::sync_channel(0);
+    let (release, release_recv) = mpsc::sync_channel(0);
+    let audit = BlockingAudit {
+        target: InstallTransitionKind::Installed,
+        entered: entered_send,
+        release: Mutex::new(release_recv),
+        fail: true,
+    };
+
+    std::thread::scope(|threads| {
+        let install = threads.spawn(|| {
+            InstallAgentRuntime {
+                source: &source,
+                store: &store,
+                audit: &audit,
+            }
+            .execute(
+                &agent(),
+                &crate::agent_install_test_support::release("1.18.31", PINNED_DIGEST, &platform()),
+                &host(),
+                &request(),
+            )
+        });
+        entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(dropped.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        release.send(()).unwrap();
+        assert!(matches!(
+            install.join().unwrap(),
+            Err(InstallFailure::Audit {
+                runtime_installed: true,
+                ..
+            })
+        ));
+        dropped.recv_timeout(Duration::from_secs(5)).unwrap();
+    });
+}
+
+#[test]
+fn rollback_lease_spans_successful_audit_and_then_releases() {
+    let root = tempfile::tempdir().unwrap();
+    let source = FakeSource::serving(b"archive bytes");
+    let (lease_dropped, dropped) = mpsc::channel();
+    let store = FakeStore::empty(root.path())
+        .failing_after_rollback(
+            StoreFailure::Unwritable("publish failed".into()),
+            RollbackChange::NoInstalledRuntime,
+        )
+        .signalling_lease_drop(lease_dropped);
+    let (entered_send, entered) = mpsc::sync_channel(0);
+    let (release, release_recv) = mpsc::sync_channel(0);
+    let audit = BlockingAudit {
+        target: InstallTransitionKind::RolledBack,
+        entered: entered_send,
+        release: Mutex::new(release_recv),
+        fail: false,
+    };
+
+    std::thread::scope(|threads| {
+        let install = threads.spawn(|| {
+            InstallAgentRuntime {
+                source: &source,
+                store: &store,
+                audit: &audit,
+            }
+            .execute(
+                &agent(),
+                &crate::agent_install_test_support::release("1.18.31", PINNED_DIGEST, &platform()),
+                &host(),
+                &request(),
+            )
+        });
+        entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(dropped.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        release.send(()).unwrap();
+        assert!(matches!(
+            install.join().unwrap(),
+            Err(InstallFailure::Store(_))
+        ));
+        dropped.recv_timeout(Duration::from_secs(5)).unwrap();
+    });
 }

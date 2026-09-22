@@ -158,12 +158,127 @@ pub enum RollbackChange {
     NoInstalledRuntime,
 }
 
+/// Every cleanup failure observed after publication failed. The original
+/// publication failure remains separate on [`PublishFailure`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicationCleanupFailure {
+    withdrawal: Option<StoreFailure>,
+    restoration: Option<StoreFailure>,
+    confirmation: Option<StoreFailure>,
+}
+
+impl PublicationCleanupFailure {
+    pub fn new(
+        withdrawal: Option<StoreFailure>,
+        restoration: Option<StoreFailure>,
+        confirmation: Option<StoreFailure>,
+    ) -> Option<Self> {
+        (withdrawal.is_some() || restoration.is_some() || confirmation.is_some()).then_some(Self {
+            withdrawal,
+            restoration,
+            confirmation,
+        })
+    }
+
+    pub fn withdrawal(&self) -> Option<&StoreFailure> {
+        self.withdrawal.as_ref()
+    }
+
+    pub fn restoration(&self) -> Option<&StoreFailure> {
+        self.restoration.as_ref()
+    }
+
+    pub fn confirmation(&self) -> Option<&StoreFailure> {
+        self.confirmation.as_ref()
+    }
+}
+
+impl fmt::Display for PublicationCleanupFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let failures = [
+            self.withdrawal
+                .as_ref()
+                .map(|failure| ("withdrawal", failure)),
+            self.restoration
+                .as_ref()
+                .map(|failure| ("restoration", failure)),
+            self.confirmation
+                .as_ref()
+                .map(|failure| ("confirmation", failure)),
+        ];
+        let mut separator = "";
+        for failure in failures.into_iter().flatten() {
+            write!(formatter, "{separator}{}: {}", failure.0, failure.1)?;
+            separator = "; ";
+        }
+        Ok(())
+    }
+}
+
+/// What cleanup after a failed publication established while retaining the
+/// publication lease.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublicationRecovery {
+    /// Publication failed before it changed installed state.
+    NotRequired,
+    /// The prior installed state was durably restored.
+    RolledBack(RollbackChange),
+    /// Cleanup failed. `rollback` is present only when the installed state was
+    /// nevertheless re-read and confirmed after that failure.
+    Incomplete {
+        rollback: Option<RollbackChange>,
+        cleanup: PublicationCleanupFailure,
+    },
+}
+
 /// A publication failure, including a rollback the store actually performed.
 pub struct PublishFailure {
-    pub failure: StoreFailure,
-    pub rollback: Option<RollbackChange>,
-    /// Held only when a rollback happened, until its audit record is handled.
-    pub lease: Option<Box<dyn PublicationLease>>,
+    failure: StoreFailure,
+    recovery: PublicationRecovery,
+    _lease: Box<dyn PublicationLease>,
+}
+
+impl PublishFailure {
+    pub fn unchanged(failure: StoreFailure) -> Self {
+        Self {
+            failure,
+            recovery: PublicationRecovery::NotRequired,
+            _lease: Box::new(()),
+        }
+    }
+
+    pub fn rolled_back(
+        failure: StoreFailure,
+        rollback: RollbackChange,
+        lease: Box<dyn PublicationLease>,
+    ) -> Self {
+        Self {
+            failure,
+            recovery: PublicationRecovery::RolledBack(rollback),
+            _lease: lease,
+        }
+    }
+
+    pub fn incomplete(
+        failure: StoreFailure,
+        rollback: Option<RollbackChange>,
+        cleanup: PublicationCleanupFailure,
+        lease: Box<dyn PublicationLease>,
+    ) -> Self {
+        Self {
+            failure,
+            recovery: PublicationRecovery::Incomplete { rollback, cleanup },
+            _lease: lease,
+        }
+    }
+
+    pub fn failure(&self) -> &StoreFailure {
+        &self.failure
+    }
+
+    pub fn recovery(&self) -> &PublicationRecovery {
+        &self.recovery
+    }
 }
 
 impl fmt::Debug for PublishFailure {
@@ -171,7 +286,7 @@ impl fmt::Debug for PublishFailure {
         formatter
             .debug_struct("PublishFailure")
             .field("failure", &self.failure)
-            .field("rollback", &self.rollback)
+            .field("recovery", &self.recovery)
             .finish_non_exhaustive()
     }
 }

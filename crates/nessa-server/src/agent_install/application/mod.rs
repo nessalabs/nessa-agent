@@ -11,6 +11,7 @@ mod install;
 mod ports;
 pub use install::{InstallAgentRuntime, InstallFailure, InstalledRuntime};
 pub use ports::{
-    ArchiveSource, AuditFailure, InstallAudit, Publication, PublicationChange, PublicationLease,
-    PublishFailure, RollbackChange, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
+    ArchiveSource, AuditFailure, InstallAudit, Publication, PublicationChange,
+    PublicationCleanupFailure, PublicationLease, PublicationRecovery, PublishFailure,
+    RollbackChange, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
 };

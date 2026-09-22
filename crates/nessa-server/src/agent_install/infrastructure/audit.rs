@@ -1,10 +1,17 @@
-//! Durable install evidence: one private file per transition, synced before
-//! acknowledgement. `observedAtMs` is when this adapter received the record;
-//! effect ordering comes from each transition's before/after chain, not clocks.
-use std::{io::Write, path::PathBuf, sync::Arc};
+//! Durable install evidence: one private, monotonically sequenced file per
+//! transition. A filesystem lock serializes writers across CLI processes;
+//! clocks describe observation time and never decide effect order.
+use std::{
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use nessa_auth::application::ports::Clock;
-use nessa_local_storage::{create_directory, sync_directory, PrivateTempFile};
+use nessa_local_storage::{
+    create_durable_directory_beneath, open, open_beneath, sync_directory_beneath, OpenMode,
+    PrivateTempFile,
+};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -15,32 +22,89 @@ use crate::agent_install::{
 
 /// Private host audit storage for agent-runtime installation transitions.
 pub struct DurableInstallAudit {
+    root: PathBuf,
     directory: PathBuf,
+    lock_path: PathBuf,
     clock: Arc<dyn Clock>,
 }
 
 impl DurableInstallAudit {
-    pub fn new(directory: PathBuf, clock: Arc<dyn Clock>) -> Result<Self, AuditFailure> {
-        create_directory(&directory).map_err(audit_failure)?;
-        Ok(Self { directory, clock })
+    pub fn new(root: &Path, directory: &Path, clock: Arc<dyn Clock>) -> Result<Self, AuditFailure> {
+        create_durable_directory_beneath(root, directory).map_err(audit_failure)?;
+        let lock_path = directory.join("audit.lock");
+        open_beneath(root, &lock_path, OpenMode::OpenOrCreate).map_err(audit_failure)?;
+        sync_directory_beneath(root, directory).map_err(audit_failure)?;
+        Ok(Self {
+            root: root.to_owned(),
+            directory: directory.to_owned(),
+            lock_path,
+            clock,
+        })
     }
 }
 
 impl InstallAudit for DurableInstallAudit {
     fn record(&self, transition: InstallTransition) -> Result<(), AuditFailure> {
+        let lock = open_beneath(&self.root, &self.lock_path, OpenMode::OpenOrCreate)
+            .map_err(audit_failure)?;
+        lock.lock().map_err(audit_failure)?;
+        let sequence = next_sequence(&self.root.join(&self.directory))?;
         let id = Uuid::new_v4().to_string();
         let mut value = record_value(&transition);
         value["recordId"] = json!(id);
+        value["sequence"] = json!(sequence);
         value["observedAtMs"] = json!(self.clock.unix_milliseconds());
-        let mut file = PrivateTempFile::new_in(&self.directory).map_err(audit_failure)?;
+        let mut file =
+            PrivateTempFile::new_beneath(&self.root, &self.directory).map_err(audit_failure)?;
         serde_json::to_writer(file.as_file_mut(), &value)
             .map_err(|error| AuditFailure(error.to_string()))?;
         file.as_file_mut().write_all(b"\n").map_err(audit_failure)?;
         file.as_file().sync_all().map_err(audit_failure)?;
-        file.persist(&self.directory.join(format!("{id}.json")))
+        file.persist_beneath(&self.directory.join(format!("{sequence:020}.json")))
             .map_err(audit_failure)?;
-        sync_directory(&self.directory).map_err(audit_failure)
+        sync_directory_beneath(&self.root, &self.directory).map_err(audit_failure)
     }
+}
+
+fn next_sequence(directory: &Path) -> Result<u64, AuditFailure> {
+    let mut sequences = Vec::new();
+    for entry in std::fs::read_dir(directory).map_err(audit_failure)? {
+        let entry = entry.map_err(audit_failure)?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(number) = name.strip_suffix(".json") else {
+            continue;
+        };
+        let sequence = number
+            .parse::<u64>()
+            .map_err(|_| AuditFailure(format!("invalid audit record name {name}")))?;
+        let mut record = open(&entry.path(), OpenMode::ReadNonblocking).map_err(audit_failure)?;
+        let mut encoded = Vec::new();
+        record.read_to_end(&mut encoded).map_err(audit_failure)?;
+        let value: Value = serde_json::from_slice(&encoded)
+            .map_err(|error| AuditFailure(format!("invalid audit record {name}: {error}")))?;
+        if value["sequence"].as_u64() != Some(sequence) {
+            return Err(AuditFailure(format!(
+                "audit record {name} disagrees with its sequence"
+            )));
+        }
+        sequences.push(sequence);
+    }
+    sequences.sort_unstable();
+    for (index, sequence) in sequences.iter().enumerate() {
+        let expected = u64::try_from(index).unwrap_or(u64::MAX) + 1;
+        if *sequence != expected {
+            return Err(AuditFailure(format!(
+                "audit sequence is not contiguous at {expected}"
+            )));
+        }
+    }
+    u64::try_from(sequences.len())
+        .ok()
+        .and_then(|last| last.checked_add(1))
+        .ok_or_else(|| AuditFailure("audit sequence exhausted".into()))
 }
 
 fn artifact(value: &RuntimeArtifact) -> Value {

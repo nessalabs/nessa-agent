@@ -4,6 +4,7 @@ use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
@@ -105,7 +106,7 @@ fn publish(
     store
         .publish(&agent(), release, &mut staged)
         .map(|publication| publication.executable().to_owned())
-        .map_err(|failure| failure.failure)
+        .map_err(|failure| failure.failure().clone())
 }
 
 /// Where `publish` puts the version directory for the release these tests use.
@@ -205,7 +206,7 @@ fn a_published_runtime_is_reported_as_installed() {
 
     assert!(published.is_file());
     assert_eq!(
-        std::fs::read(published.executable()).expect("reading the published runtime"),
+        std::fs::read(&published).expect("reading the published runtime"),
         b"binary"
     );
     assert_eq!(
@@ -1231,7 +1232,7 @@ fn an_install_that_cannot_be_settled_takes_back_only_what_it_wrote() {
         .expect_err("an install that cannot be made durable fails");
 
     assert!(
-        matches!(failure.failure, StoreFailure::Unwritable(_)),
+        matches!(failure.failure(), StoreFailure::Unwritable(_)),
         "a directory that will not sync is this machine's doing: {failure:?}"
     );
     assert!(
@@ -1239,8 +1240,11 @@ fn an_install_that_cannot_be_settled_takes_back_only_what_it_wrote() {
         "a failed install left a runtime nothing records"
     );
     assert!(
-        !artifact_path(root.path()).exists(),
-        "a failed install left its own artifact directory behind"
+        std::fs::read_dir(artifact_path(root.path()))
+            .expect("the empty artifact directory remains")
+            .next()
+            .is_none(),
+        "a failed install left bytes in its artifact directory"
     );
     assert_eq!(
         std::fs::read(&survivor).expect("the other runtime still reads"),
@@ -1252,6 +1256,213 @@ fn an_install_that_cannot_be_settled_takes_back_only_what_it_wrote() {
         Ok(Some(survivor)),
         "a failed install left another artifact unusable"
     );
+}
+
+#[test]
+fn failure_before_record_replacement_confirms_the_previous_runtime() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = release("1.18.31", "package/bin/opencode");
+    let previous_path = publish(
+        &store,
+        &previous,
+        &archive("package/bin/opencode", b"previous"),
+    )
+    .unwrap();
+    let target = artifact(
+        "1.19.0",
+        "package/bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    let mut staged = staged(&store, &archive("package/bin/opencode", b"target"));
+    let calls = AtomicUsize::new(0);
+
+    let failure = store
+        .publish_durably(&agent(), &target, &mut staged, |_| {
+            (calls.fetch_add(1, Ordering::SeqCst) != 0)
+                .then_some(())
+                .ok_or_else(|| std::io::Error::other("first durability step failed"))
+        })
+        .unwrap_err();
+
+    assert!(matches!(
+        failure.recovery(),
+        PublicationRecovery::RolledBack(RollbackChange::Restored(artifact))
+            if artifact == &RuntimeArtifact::for_release(&previous)
+    ));
+    assert_eq!(
+        store.installed(&agent(), &previous),
+        Ok(Some(previous_path))
+    );
+}
+
+#[test]
+fn failure_after_record_replacement_durably_restores_the_previous_record() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = release("1.18.31", "package/bin/opencode");
+    let previous_path = publish(
+        &store,
+        &previous,
+        &archive("package/bin/opencode", b"previous"),
+    )
+    .unwrap();
+    let target = artifact(
+        "1.19.0",
+        "package/bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    let mut staged = staged(&store, &archive("package/bin/opencode", b"target"));
+    let calls = AtomicUsize::new(0);
+
+    let failure = store
+        .publish_durably(&agent(), &target, &mut staged, |_| {
+            let call = calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if call == 6 {
+                Err(std::io::Error::other("record directory sync failed"))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+    assert!(matches!(
+        failure.recovery(),
+        PublicationRecovery::RolledBack(RollbackChange::Restored(artifact))
+            if artifact == &RuntimeArtifact::for_release(&previous)
+    ));
+    assert_eq!(
+        store.installed(&agent(), &previous),
+        Ok(Some(previous_path))
+    );
+    assert_eq!(store.installed(&agent(), &target), Ok(None));
+}
+
+#[test]
+fn failure_after_first_record_replacement_confirms_no_runtime() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let target = release("1.18.31", "package/bin/opencode");
+    let mut staged = staged(&store, &archive("package/bin/opencode", b"target"));
+    let calls = AtomicUsize::new(0);
+
+    let failure = store
+        .publish_durably(&agent(), &target, &mut staged, |_| {
+            let call = calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if call == 6 {
+                Err(std::io::Error::other("record directory sync failed"))
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+    assert!(matches!(
+        failure.recovery(),
+        PublicationRecovery::RolledBack(RollbackChange::NoInstalledRuntime)
+    ));
+    assert_eq!(store.installed(&agent(), &target), Ok(None));
+}
+
+#[test]
+fn withdrawal_failure_is_visible_while_the_restored_runtime_is_confirmed() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = release("1.18.31", "package/bin/opencode");
+    publish(
+        &store,
+        &previous,
+        &archive("package/bin/opencode", b"previous"),
+    )
+    .unwrap();
+    let target = artifact(
+        "1.19.0",
+        "package/bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    let mut staged = staged(&store, &archive("package/bin/opencode", b"target"));
+    let calls = AtomicUsize::new(0);
+
+    let failure = store
+        .publish_with_recovery(
+            &agent(),
+            &target,
+            &mut staged,
+            |_| {
+                let call = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                if call == 6 {
+                    Err(std::io::Error::other("record directory sync failed"))
+                } else {
+                    Ok(())
+                }
+            },
+            |_| Err(StoreFailure::Unwritable("withdrawal failed".into())),
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        failure.recovery(),
+        PublicationRecovery::Incomplete {
+            rollback: Some(RollbackChange::Restored(artifact)),
+            cleanup,
+        } if artifact == &RuntimeArtifact::for_release(&previous)
+            && cleanup.withdrawal().is_some_and(|failure| failure.to_string().contains("withdrawal failed"))
+    ));
+    assert_eq!(
+        store.installed(&agent(), &previous).unwrap().is_some(),
+        true
+    );
+}
+
+#[test]
+fn every_cleanup_failure_is_preserved_when_rollback_cannot_be_confirmed() {
+    let root = temporary_root();
+    let store = ManagedRuntimes::new(root.path());
+    let previous = release("1.18.31", "package/bin/opencode");
+    publish(
+        &store,
+        &previous,
+        &archive("package/bin/opencode", b"previous"),
+    )
+    .unwrap();
+    let target = artifact(
+        "1.19.0",
+        "package/bin/opencode",
+        &"b".repeat(64),
+        "macos",
+        "aarch64",
+    );
+    let mut staged = staged(&store, &archive("package/bin/opencode", b"target"));
+    let calls = AtomicUsize::new(0);
+
+    let failure = store
+        .publish_with_recovery(
+            &agent(),
+            &target,
+            &mut staged,
+            |_| {
+                let call = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                (call < 6)
+                    .then_some(())
+                    .ok_or_else(|| std::io::Error::other("durability failed"))
+            },
+            |_| Err(StoreFailure::Unwritable("withdrawal failed".into())),
+        )
+        .unwrap_err();
+
+    let PublicationRecovery::Incomplete { rollback, cleanup } = failure.recovery() else {
+        panic!("cleanup failure was not retained: {failure:?}");
+    };
+    assert!(rollback.is_none());
+    assert!(cleanup.withdrawal().is_some());
+    assert!(cleanup.restoration().is_some());
+    assert!(cleanup.confirmation().is_none());
 }
 
 #[test]
@@ -1626,7 +1837,7 @@ fn a_failure_after_the_rename_says_nothing_was_installed_and_means_it() {
         .expect_err("an install that cannot be settled");
 
     assert!(
-        matches!(failure.failure, StoreFailure::Unwritable(_)),
+        matches!(failure.failure(), StoreFailure::Unwritable(_)),
         "a record that would not write is this machine's doing: {failure:?}"
     );
     assert!(
