@@ -12,9 +12,9 @@ pub enum AgentCredentialFailure {
 
 /// Credentials Nessa may give an explicitly supported local agent.
 ///
-/// Read for each launch so a credential saved during onboarding is immediately
-/// usable. Readiness receives the same instance; it never infers sign-in from a
-/// different store.
+/// A consumer reads whenever it needs the current value. Composition that
+/// requires launch and readiness to agree must inject this same source into
+/// both consumers; the port itself does not select either consumer.
 pub trait AgentCredentialSource: Send + Sync {
     /// Read the current credential for `agent`, or `None` when Nessa stores none.
     fn read(&self, agent: AgentId) -> Result<Option<AgentCredential>, AgentCredentialFailure>;
