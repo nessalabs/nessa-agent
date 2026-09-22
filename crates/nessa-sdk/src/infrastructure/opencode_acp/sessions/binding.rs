@@ -16,11 +16,7 @@ use crate::domain::model_metadata::entities::ModelMetadata;
 use crate::domain::model_metadata::value_objects::{Modalities, ModelFeatures, ModelProvider};
 use crate::infrastructure::acp::sessions::{binding as acp_binding, identity, AcpConfig};
 use crate::infrastructure::process::ProcessScope;
-use std::{
-    ffi::OsStr,
-    path::Path,
-    sync::Arc,
-};
+use std::{ffi::OsStr, path::Path, sync::Arc};
 use tokio::process::Command;
 
 /// What an Opencode session launched by this binding is allowed to do, as the
