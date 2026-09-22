@@ -139,8 +139,6 @@ jobs:
       - name: Check portable Rust dependency graphs
         run: node scripts/check-runtime-dependencies.mjs --verify-fixture
       - run: cargo fmt --all -- --check
-      - run: cargo clippy -p nessa-gateway-endpoint --all-targets -- -D warnings
-      - run: cargo test -p nessa-gateway-endpoint
       # Test before lint, here and in the matrix below, and it is worth saying
       # why because the intuitive order is the other one. Reporting a
       # `-D warnings` failure first would be better if it were free, and it is
@@ -283,6 +281,11 @@ jobs:
       - run: node --test scripts/architecture/*.test.mjs
       - run: node --test scripts/agents/*.test.mjs
       - run: node scripts/check-architecture.mjs
+      # Endpoint file publication crosses the platform-specific local-storage
+      # adapters, so each OS gives a different answer. Lint this new crate before
+      # its tests; the existing package group below retains its measured order.
+      - run: cargo clippy -p nessa-gateway-endpoint --all-targets -- -D warnings
+      - run: cargo test -p nessa-gateway-endpoint
       - run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk
       - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings
       - run: node scripts/check-sdk-docs.mjs
