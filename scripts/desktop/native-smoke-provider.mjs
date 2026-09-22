@@ -37,11 +37,28 @@ function options() {
   }
 }
 
-function promptText(parts) {
-  return parts
-    .filter((part) => part?.type === "text" && typeof part.text === "string")
-    .map((part) => part.text)
-    .join("")
+function promptContent(parts) {
+  if (!Array.isArray(parts)) throw new Error("ACP prompt was not an array")
+  const text = []
+  let images = 0
+  for (const part of parts) {
+    if (part?.type === "text" && typeof part.text === "string") {
+      text.push(part.text)
+      continue
+    }
+    if (
+      part?.type === "image" &&
+      typeof part.mimeType === "string" &&
+      part.mimeType.startsWith("image/") &&
+      typeof part.data === "string" &&
+      part.data.length > 0
+    ) {
+      images += 1
+      continue
+    }
+    throw new Error(`unexpected ACP prompt part: ${JSON.stringify(part)}`)
+  }
+  return { text: text.join(""), images }
 }
 
 for await (const line of createInterface({ input: process.stdin })) {
@@ -57,7 +74,10 @@ for await (const line of createInterface({ input: process.stdin })) {
           title: "Codex",
           version: "1.12.0",
         },
-        agentCapabilities: { sessionCapabilities: { resume: {} } },
+        agentCapabilities: {
+          promptCapabilities: { image: true },
+          sessionCapabilities: { resume: {} },
+        },
         _meta: { steering: { supported: true } },
       },
     })
@@ -79,14 +99,15 @@ for await (const line of createInterface({ input: process.stdin })) {
     continue
   }
   if (method === "session/prompt") {
-    const text = promptText(message.params.prompt)
+    const prompt = promptContent(message.params.prompt)
+    const images = prompt.images === 0 ? "" : ` [${prompt.images} image]`
     send({
       method: "session/update",
       params: {
         sessionId,
         update: {
           sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: `Smoke reply: ${text}` },
+          content: { type: "text", text: `Smoke reply: ${prompt.text}${images}` },
         },
       },
     })
