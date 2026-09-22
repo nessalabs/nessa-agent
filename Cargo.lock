@@ -2607,6 +2607,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "nessa-agent-credentials"
+version = "0.1.0"
+
+[[package]]
 name = "nessa-app"
 version = "0.1.0"
 dependencies = [
@@ -2616,11 +2620,13 @@ dependencies = [
  "gtk",
  "libc",
  "minisign-verify",
+ "nessa-agent-credentials",
  "nessa-local-storage",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
  "objc2-uniform-type-identifiers",
+ "security-framework",
  "serde",
  "serde_json",
  "sha2",
@@ -2725,6 +2731,7 @@ dependencies = [
  "getrandom 0.3.4",
  "image",
  "libc",
+ "nessa-agent-credentials",
  "nessa-auth",
  "nessa-images",
  "nessa-local-storage",
