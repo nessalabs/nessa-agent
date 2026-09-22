@@ -362,6 +362,11 @@ independently of whether that turn contains text.
 
 ### Packaged gateway lifecycle
 
+- `scripts/desktop/native-window-smoke.mjs` owns the Linux WebKitGTK end-to-end
+  boundary. Its adjacent `native-smoke-*` modules isolate executable discovery,
+  process cleanup, WebDriver request lifecycles, failure evidence, and the
+  deterministic ACP provider so each boundary can be tested without launching
+  the native window.
 - `scripts/desktop/prepare.mjs` enables managed runtime preparation only on macOS.
   `runtime-layout.mjs` owns the executable names used by assembly, signing, and
   bundle verification. `prepare-runtime.mjs` owns the shared native-target check,

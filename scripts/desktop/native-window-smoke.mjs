@@ -32,6 +32,8 @@ import {
   watchInterruptions,
 } from "./native-smoke-processes.mjs"
 import { builtExecutables } from "./native-smoke-build.mjs"
+import { retainNativeSmokeFailure } from "./native-smoke-evidence.mjs"
+import { webdriverRequest } from "./native-smoke-webdriver.mjs"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..")
 const elementKey = "element-6066-11e4-a52e-4f735466cecf"
@@ -124,37 +126,59 @@ function embeddedCsp(port) {
   return clauses.filter(Boolean).join("; ")
 }
 
-async function webdriver(port, method, path, body, signal = interruption.signal) {
-  const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+async function webdriver(
+  port,
+  method,
+  path,
+  body,
+  { phase, lifecycle = "command", signal = interruption.signal } = {},
+) {
+  return webdriverRequest({
+    port,
     method,
-    headers: body === undefined ? undefined : { "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.any([AbortSignal.timeout(10_000), signal]),
+    path,
+    body,
+    phase: phase ?? `${method} ${path}`,
+    lifecycle,
+    signal,
   })
-  const text = await response.text()
-  const result = text ? JSON.parse(text) : {}
-  if (!response.ok || result.value?.error)
-    throw new Error(`${method} ${path}: ${response.status} ${text}`)
-  return result.value
 }
 
 async function element(port, session, selector) {
-  const value = await webdriver(port, "POST", `/session/${session}/element`, {
-    using: "css selector",
-    value: selector,
-  })
+  const value = await webdriver(
+    port,
+    "POST",
+    `/session/${session}/element`,
+    { using: "css selector", value: selector },
+    { phase: `find ${selector}` },
+  )
   return value[elementKey] ?? value.ELEMENT
 }
 
 async function type(port, session, target, text) {
-  await webdriver(port, "POST", `/session/${session}/element/${target}/value`, {
-    text,
-    value: Array.from(text),
-  })
+  await webdriver(
+    port,
+    "POST",
+    `/session/${session}/element/${target}/value`,
+    { text, value: Array.from(text) },
+    { phase: "type the native smoke prompt" },
+  )
 }
 
-async function execute(port, session, script, args = []) {
-  return webdriver(port, "POST", `/session/${session}/execute/sync`, { script, args })
+async function execute(
+  port,
+  session,
+  script,
+  args = [],
+  phase = "execute a native window assertion",
+) {
+  return webdriver(
+    port,
+    "POST",
+    `/session/${session}/execute/sync`,
+    { script, args },
+    { phase },
+  )
 }
 
 const directory = mkdtempSync(join(tmpdir(), "nessa-native-window-"))
@@ -250,6 +274,7 @@ const runtimeEnv = {
 }
 
 const logs = []
+const failureArtifactRoot = process.env.NESSA_NATIVE_SMOKE_ARTIFACTS
 const interruption = watchInterruptions()
 const appPidPath = join(directory, "app.pid")
 const providerPidPath = join(workspace, "native-smoke-provider.pid")
@@ -262,6 +287,15 @@ let failure
 let passed
 let application
 let gateway
+let lifecyclePhase = "fixture prepared"
+
+function markPhase(phase, details) {
+  lifecyclePhase = phase
+  const suffix = details ? `: ${details}` : ""
+  const entry = `[harness ${new Date().toISOString()}] ${phase}${suffix}\n`
+  logs.push(entry)
+  console.log(entry.trimEnd())
+}
 
 try {
   requireCommand("tauri-driver")
@@ -333,6 +367,7 @@ try {
     interruption.signal,
   )
   assert.ok(alive(server.pid), "gateway process must exist before the UI starts")
+  markPhase("gateway ready", `pid=${server.pid}`)
 
   const wrapper = join(directory, "launch-app.sh")
   writeFileSync(
@@ -347,7 +382,10 @@ try {
     ["--port", String(driverPort), "--native-port", String(nativePort)],
     {
       cwd: root,
-      env: runtimeEnv,
+      env: {
+        ...runtimeEnv,
+        WEBKIT_DEBUG: "SessionHost,WebDriverClassic",
+      },
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -365,17 +403,58 @@ try {
     30_000,
     interruption.signal,
   )
+  markPhase("Tauri WebDriver ready", `pid=${driver.pid}`)
 
-  const created = await webdriver(driverPort, "POST", "/session", {
-    capabilities: { alwaysMatch: { "tauri:options": { application: wrapper } } },
-  })
+  markPhase("WebDriver session requested")
+  const sessionOutcome = webdriver(
+    driverPort,
+    "POST",
+    "/session",
+    {
+      capabilities: {
+        alwaysMatch: { "tauri:options": { application: wrapper } },
+      },
+    },
+    { phase: "create WebDriver session", lifecycle: "session" },
+  ).then(
+    (value) => ({ ok: true, value }),
+    (error) => ({ ok: false, error }),
+  )
+  const appOutcome = eventually(
+    "application launch during WebDriver session creation",
+    () => {
+      if (!existsSync(appPidPath)) return false
+      const pid = Number(readFileSync(appPidPath, "utf8").trim())
+      return alive(pid) && pid
+    },
+    30_000,
+  ).then(
+    (value) => ({ ok: true, value }),
+    (error) => ({ ok: false, error }),
+  )
+  const first = await Promise.race([
+    sessionOutcome.then((result) => ({ source: "session", result })),
+    appOutcome.then((result) => ({ source: "application", result })),
+  ])
+  if (!first.result.ok) throw first.result.error
+
+  let created
+  if (first.source === "application") {
+    appPid = first.result.value
+    markPhase("application launched", `pid=${appPid}; session pending`)
+    const result = await sessionOutcome
+    if (!result.ok) throw result.error
+    created = result.value
+  } else {
+    created = first.result.value
+    const result = await appOutcome
+    if (!result.ok) throw result.error
+    appPid = result.value
+    markPhase("application launched", `pid=${appPid}`)
+  }
   session = created.sessionId
   assert.ok(session, "WebDriver did not return a session id")
-  appPid = await eventually("application PID", () => {
-    if (!existsSync(appPidPath)) return false
-    const pid = Number(readFileSync(appPidPath, "utf8").trim())
-    return alive(pid) && pid
-  })
+  markPhase("WebDriver session ready", `session=${session}`)
 
   const frame = await eventually(
     "real panel render and gateway connection",
@@ -389,6 +468,8 @@ try {
          const rect = root.getBoundingClientRect(); const style = getComputedStyle(root);
          return { width: innerWidth, height: innerHeight, rootWidth: rect.width,
            rootHeight: rect.height, display: style.display, visibility: style.visibility };`,
+        [],
+        "inspect connected panel",
       ),
     60_000,
   )
@@ -396,6 +477,7 @@ try {
   assert.ok(frame.rootWidth > 0 && frame.rootHeight > 0, JSON.stringify(frame))
   assert.notEqual(frame.display, "none")
   assert.notEqual(frame.visibility, "hidden")
+  markPhase("connected panel rendered")
 
   const composer = await element(driverPort, session, '[aria-label="Message"]')
   await type(driverPort, session, composer, `native smoke${String.fromCodePoint(0xe007)}`)
@@ -404,8 +486,11 @@ try {
       driverPort,
       session,
       "return document.body.innerText.includes('Smoke reply: native smoke')",
+      [],
+      "inspect deterministic agent reply",
     ),
   )
+  markPhase("deterministic reply rendered")
 
   await execute(
     driverPort,
@@ -418,6 +503,7 @@ try {
        target.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }));
      return true;`,
     [png],
+    "dispatch synthetic image drop",
   )
   const attachment = await eventually("stored image attachment", () =>
     execute(
@@ -429,6 +515,8 @@ try {
        if (!stored || !tile || !image || !image.complete || image.naturalWidth < 1) return null;
        return { upload: stored.dataset.upload, title: tile.title,
          width: image.naturalWidth, height: image.naturalHeight };`,
+      [],
+      "inspect stored image attachment",
     ),
   )
   assert.deepEqual(attachment, {
@@ -444,18 +532,16 @@ try {
     return alive(pid) && pid
   })
   assert.ok(alive(appPid) && alive(providerPid) && alive(server.pid) && alive(driver.pid))
+  markPhase("native smoke assertions complete")
   passed = `gateway=${server.pid}, driver=${driver.pid}, app=${appPid}, provider=${providerPid}`
 } catch (error) {
   failure = error
 } finally {
   if (session)
-    await webdriver(
-      driverPort,
-      "DELETE",
-      `/session/${session}`,
-      undefined,
-      AbortSignal.timeout(10_000),
-    ).catch((error) => logs.push(`[cleanup] ${error}`))
+    await webdriver(driverPort, "DELETE", `/session/${session}`, undefined, {
+      phase: "delete WebDriver session",
+      signal: null,
+    }).catch((error) => logs.push(`[cleanup] ${error}`))
   appPid ??= recordedPid(appPidPath)
   providerPid ??= recordedPid(providerPidPath)
   const driverGroupGone = await stopOwnedGroup(driver?.pid)
@@ -490,7 +576,36 @@ try {
       failure = failure ? new AggregateError([failure, cleanup]) : cleanup
     }
   }
-  if (failure) console.error(logs.join("").slice(-12_000))
+  if (failure) {
+    const failureText = failure?.stack ?? String(failure)
+    logs.push(`[failure] ${failureText}\n`)
+    console.error(logs.join("").slice(-12_000))
+    if (failureArtifactRoot) {
+      try {
+        const retained = retainNativeSmokeFailure(failureArtifactRoot, instance, {
+          logs: logs.join(""),
+          metadata: {
+            lifecyclePhase,
+            error: failureText,
+            instance,
+            ports: { gateway: gatewayPort, driver: driverPort, native: nativePort },
+            pids: {
+              gateway: server?.pid,
+              driver: driver?.pid,
+              application: appPid,
+              provider: providerPid,
+            },
+            sessionCreated: Boolean(session),
+            executableArtifacts: { application, gateway },
+          },
+        })
+        console.error(`native smoke failure artifacts: ${retained}`)
+      } catch (artifactError) {
+        console.error(`could not retain native smoke failure artifacts: ${artifactError}`)
+        failure = new AggregateError([failure, artifactError])
+      }
+    }
+  }
   rmSync(directory, { recursive: true, force: true })
   interruption.dispose()
 }

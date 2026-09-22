@@ -338,7 +338,17 @@ jobs:
           pnpm install --frozen-lockfile
       - name: Exercise the native desktop window
         if: runner.os == 'Linux'
+        env:
+          NESSA_NATIVE_SMOKE_ARTIFACTS: ${{ runner.temp }}/nessa-native-smoke-artifacts
         run: xvfb-run --auto-servernum pnpm desktop:smoke
+      - name: Upload native desktop smoke failure evidence
+        if: failure() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-window-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nessa-native-smoke-artifacts
+          if-no-files-found: ignore
+          retention-days: 7
       # Auth/SDK checks do not need the desktop UI's separate repository. Use an
       # isolated minimal npm harness so this job has no UI checkout credentials.
       - name: Prepare SDK integration harness
