@@ -25,6 +25,7 @@ const sourceScript =
 function fixture() {
   const temporary = mkdtempSync(join(tmpdir(), "nessa-worktree-target-"))
   const repo = join(temporary, "repo")
+  const remote = join(temporary, "origin.git")
   const bin = join(temporary, "bin")
   mkdirSync(join(repo, "scripts"), { recursive: true })
   mkdirSync(join(repo, "src"))
@@ -48,6 +49,12 @@ function fixture() {
   git("config", "user.name", "Worktree Test")
   git("add", ".")
   git("commit", "-m", "fixture")
+  execFileSync("git", ["init", "--bare", "--initial-branch=main", remote], {
+    env,
+    stdio: "pipe",
+  })
+  git("remote", "add", "origin", remote)
+  git("push", "-u", "origin", "main")
 
   const run = (args, cwd = repo) =>
     execFileSync("bash", [join(cwd, "scripts/worktree.sh"), ...args], {
@@ -74,18 +81,58 @@ function fixture() {
 }
 
 test(
-  "worktrees own artifacts across A/B/A builds and legacy links migrate safely",
+  "manual worktrees use the remote default, own artifacts, and migrate legacy links safely",
   { skip: process.platform === "win32" },
   () => {
     const context = fixture()
     const { temporary, repo, env, run, spawn, spawnWithEnvironment, pathFor } = context
     try {
+      execFileSync("git", ["checkout", "-b", "parked-feature"], {
+        cwd: repo,
+        env,
+        stdio: "pipe",
+      })
+      writeFileSync(join(repo, "parked-feature-only"), "must not enter new worktrees")
+      execFileSync("git", ["add", "parked-feature-only"], {
+        cwd: repo,
+        env,
+        stdio: "pipe",
+      })
+      execFileSync("git", ["commit", "-m", "park saved checkout"], {
+        cwd: repo,
+        env,
+        stdio: "pipe",
+      })
+
       run(["create", "feature/a"])
       run(["create", "feature/b"])
       const a = pathFor("feature/a")
       const b = pathFor("feature/b")
       const aTarget = join(a, "target")
       const bTarget = join(b, "target")
+
+      const remoteMain = execFileSync("git", ["rev-parse", "origin/main"], {
+        cwd: repo,
+        env,
+        encoding: "utf8",
+      }).trim()
+      for (const worktree of [a, b]) {
+        assert.equal(
+          execFileSync("git", ["rev-parse", "HEAD"], {
+            cwd: worktree,
+            env,
+            encoding: "utf8",
+          }).trim(),
+          remoteMain,
+          "manual worktree inherited the saved checkout instead of the remote default",
+        )
+        const upstream = spawnSync(
+          "git",
+          ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+          { cwd: worktree, env, encoding: "utf8" },
+        )
+        assert.notEqual(upstream.status, 0, "feature worktree must not track main")
+      }
 
       writeFileSync(join(a, "src/main.rs"), 'fn main() { println!("A"); }\n')
       execFileSync("cargo", ["build", "--quiet"], { cwd: a, env })
