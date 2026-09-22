@@ -8,9 +8,9 @@
 use super::control::atomic_write;
 use crate::gateway::{
     application::{
-        GatewayError, GatewayNativeEffect, GatewayReconciliationAttempt,
-        GatewayReconciliationAudit, GatewayReconciliationEffect, GatewayReconciliationIntent,
-        GatewayReconciliationOutcome, GatewayReconciliationRequest,
+        GatewayError, GatewayReconciliationAttempt, GatewayReconciliationAudit,
+        GatewayReconciliationEffect, GatewayReconciliationIntent, GatewayReconciliationOutcome,
+        GatewayReconciliationRequest, ReconciliationNativeDecision, ReconciliationNativeEffect,
     },
     domain::value_objects::{
         BundledSurface, ReconciliationCause, ReconciliationIncarnation, ReconciliationInitiator,
@@ -76,12 +76,21 @@ impl GatewayReconciliationAudit for FileReconciliationAudit {
             GatewayReconciliationEffect::Confirmed(after) => {
                 json!({"kind":"confirmed", "after":identity(after)})
             }
-            GatewayReconciliationEffect::Refused(error) => {
-                json!({"kind":"refused", "error":error.to_string()})
+            GatewayReconciliationEffect::Refused { decisions, error } => {
+                json!({
+                    "kind":"refused",
+                    "decisions": decisions.iter().map(|decision| native_decision(*decision)).collect::<Vec<_>>(),
+                    "error":error.to_string()
+                })
             }
-            GatewayReconciliationEffect::Partial { effects, error } => {
+            GatewayReconciliationEffect::Partial {
+                decisions,
+                effects,
+                error,
+            } => {
                 json!({
                     "kind":"partial",
+                    "decisions":decisions.iter().map(|decision| native_decision(*decision)).collect::<Vec<_>>(),
                     "effects":effects.iter().map(|effect| native_effect(*effect)).collect::<Vec<_>>(),
                     "error":error.to_string()
                 })
@@ -140,11 +149,20 @@ fn initiator(initiator: ReconciliationInitiator) -> &'static str {
     }
 }
 
-fn native_effect(effect: GatewayNativeEffect) -> &'static str {
+fn native_effect(effect: ReconciliationNativeEffect) -> &'static str {
     match effect {
-        GatewayNativeEffect::OldServiceUnloaded => "old_service_unloaded",
-        GatewayNativeEffect::ServiceDefinitionPublished => "service_definition_published",
-        GatewayNativeEffect::BootstrapRequested => "bootstrap_requested",
+        ReconciliationNativeEffect::RetirementAcknowledged => "retirement_acknowledged",
+        ReconciliationNativeEffect::OldServiceUnloaded => "old_service_unloaded",
+        ReconciliationNativeEffect::ServiceDefinitionPublished => "service_definition_published",
+        ReconciliationNativeEffect::ServiceDefinitionDurable => "service_definition_durable",
+        ReconciliationNativeEffect::BootstrapCommandCompleted => "bootstrap_command_completed",
+        ReconciliationNativeEffect::BootstrapCommandSucceeded => "bootstrap_command_succeeded",
+    }
+}
+
+fn native_decision(decision: ReconciliationNativeDecision) -> &'static str {
+    match decision {
+        ReconciliationNativeDecision::BootstrapCommandRequested => "bootstrap_command_requested",
     }
 }
 
@@ -230,7 +248,10 @@ mod tests {
 
         let outcome = GatewayReconciliationOutcome::new(
             intent,
-            GatewayReconciliationEffect::Refused(GatewayError::Registration("refused".into())),
+            GatewayReconciliationEffect::Refused {
+                decisions: Vec::new(),
+                error: GatewayError::Registration("refused".into()),
+            },
         )
         .expect("outcome");
         audit.outcome(&outcome).expect("outcome write");

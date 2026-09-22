@@ -9,7 +9,15 @@ use crate::gateway::{
         ReconciliationIncarnation, ReconciliationInitiator, ReconciliationTarget, SearchPathError,
     },
 };
-use std::{path::Path, sync::mpsc, sync::Mutex, thread, time::Duration};
+use std::{
+    path::Path,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc, Mutex,
+    },
+    thread,
+    time::Duration,
+};
 
 fn login_shell(path: &str) -> Arc<FixedLoginShell> {
     Arc::new(FixedLoginShell(Ok(SearchPath::parse(path).unwrap())))
@@ -460,7 +468,10 @@ impl GatewayHost for AuditedHost {
                 Err(GatewayError::Registration("registration refused".into()))
             }
             AuditedPhysicalResult::Partial => {
-                progress.effect_observed(GatewayNativeEffect::BootstrapRequested);
+                progress.effect_observed(ReconciliationNativeEffect::ServiceDefinitionPublished);
+                progress.effect_observed(ReconciliationNativeEffect::ServiceDefinitionDurable);
+                progress.decision_observed(ReconciliationNativeDecision::BootstrapCommandRequested);
+                progress.effect_observed(ReconciliationNativeEffect::BootstrapCommandCompleted);
                 Err(GatewayError::Registration(
                     "bootstrap result unavailable".into(),
                 ))
@@ -559,11 +570,29 @@ fn confirmed_refused_and_partial_effects_are_audited_with_delivery_failures_sepa
                     AuditedPhysicalResult::Confirmed,
                     GatewayReconciliationEffect::Confirmed(after),
                 ) => assert_eq!(after.target(), intents[0].target()),
-                (AuditedPhysicalResult::Refused, GatewayReconciliationEffect::Refused(_)) => {}
+                (
+                    AuditedPhysicalResult::Refused,
+                    GatewayReconciliationEffect::Refused { decisions, .. },
+                ) => assert!(decisions.is_empty()),
                 (
                     AuditedPhysicalResult::Partial,
-                    GatewayReconciliationEffect::Partial { effects, .. },
-                ) => assert_eq!(effects, &[GatewayNativeEffect::BootstrapRequested]),
+                    GatewayReconciliationEffect::Partial {
+                        decisions, effects, ..
+                    },
+                ) => {
+                    assert_eq!(
+                        decisions,
+                        &[ReconciliationNativeDecision::BootstrapCommandRequested]
+                    );
+                    assert_eq!(
+                        effects,
+                        &[
+                            ReconciliationNativeEffect::ServiceDefinitionPublished,
+                            ReconciliationNativeEffect::ServiceDefinitionDurable,
+                            ReconciliationNativeEffect::BootstrapCommandCompleted,
+                        ]
+                    );
+                }
                 _ => panic!("audit effect disagreed with {physical:?}"),
             }
             drop(outcomes);
@@ -1253,6 +1282,78 @@ fn configuration_change_during_an_attempt_owns_exactly_one_successor() {
     );
 }
 
+#[test]
+fn predecessor_completion_cannot_let_a_credential_steal_pending_configuration_cause() {
+    struct CapturingHost(Mutex<Vec<GatewayReconciliationAttempt>>);
+    impl GatewayHost for CapturingHost {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            self.0.lock().unwrap().push(attempt.clone());
+            let gateway = reconciled("configuration-successor");
+            admit(attempt, progress, gateway.service());
+            Ok(gateway)
+        }
+        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
+            Ok(())
+        }
+    }
+
+    let startup_request = GatewayReconciliationRequest::new(
+        correlation(100),
+        ReconciliationEvidence::new(
+            ReconciliationCause::Startup,
+            ReconciliationInitiator::DesktopHost,
+        )
+        .unwrap(),
+    );
+    let predecessor = Arc::new(ReconciliationAttempt::pending(
+        GatewayReconciliationAttempt::new(correlation(101), startup_request).unwrap(),
+    ));
+    let configuration_request = GatewayReconciliationRequest::new(
+        correlation(102),
+        ReconciliationEvidence::new(
+            ReconciliationCause::ClaudeConfigurationChanged,
+            ReconciliationInitiator::BundledSurface(BundledSurface::Main),
+        )
+        .unwrap(),
+    );
+    let host = Arc::new(CapturingHost(Mutex::new(Vec::new())));
+    let gateway = Gateway::bootstrap(
+        host.clone(),
+        login_shell("/usr/bin"),
+        testing::discard_startup_events(),
+        testing::sequential_reconciliation_ids(),
+        testing::discard_reconciliation_audit(),
+        "/runtime".into(),
+        "ci".into(),
+    );
+    {
+        let mut lifecycle = gateway.lifecycle.lock().unwrap();
+        lifecycle.attempt = Some(predecessor.clone());
+        lifecycle.pending_origin = Some(PendingOrigin::new(configuration_request.clone()));
+    }
+    finish(
+        &gateway.lifecycle,
+        &predecessor,
+        &gateway.startup_events,
+        Ok(reconciled("predecessor")),
+        Ok(()),
+        &[],
+    )
+    .unwrap();
+
+    tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Setup)).unwrap();
+    let attempts = host.0.lock().unwrap();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].origin(), &configuration_request);
+}
+
 #[derive(Default)]
 struct RecordingEvents(Mutex<Vec<GatewayStartup>>);
 
@@ -1629,4 +1730,255 @@ fn cancelled_caller_does_not_cancel_or_duplicate_shared_reconciliation() {
         gateway.startup().unwrap().phase(),
         &GatewayStartupPhase::Ready
     );
+}
+
+struct FailSecondAudit {
+    intent_calls: AtomicUsize,
+    outcome_calls: AtomicUsize,
+    fail_intent: bool,
+}
+
+impl GatewayReconciliationAudit for FailSecondAudit {
+    fn intent(&self, _: &GatewayReconciliationIntent) -> Result<(), GatewayError> {
+        let call = self.intent_calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if self.fail_intent && call == 2 {
+            Err(GatewayError::Registration(
+                "second intent audit failed".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn outcome(&self, _: &GatewayReconciliationOutcome) -> Result<(), GatewayError> {
+        let call = self.outcome_calls.fetch_add(1, Ordering::SeqCst) + 1;
+        if !self.fail_intent && call == 2 {
+            Err(GatewayError::Registration(
+                "second outcome audit failed".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn joined(
+        &self,
+        _: &GatewayReconciliationAttempt,
+        _: &GatewayReconciliationRequest,
+    ) -> Result<(), GatewayError> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+enum SecondReconciliation {
+    IntentOnlyFailure,
+    OldServiceUnloaded,
+    ConfirmedReplacement,
+}
+
+struct RetainedIdentityHost {
+    calls: Mutex<usize>,
+    second: SecondReconciliation,
+    stopped: Mutex<Vec<String>>,
+}
+
+impl GatewayHost for RetainedIdentityHost {
+    fn register(
+        &self,
+        _: &Path,
+        _: &str,
+        _: Option<&SearchPath>,
+        attempt: &GatewayReconciliationAttempt,
+        progress: &dyn GatewayReconciliationProgress,
+    ) -> Result<ReconciledGateway, GatewayError> {
+        let call = {
+            let mut calls = self.calls.lock().unwrap();
+            *calls += 1;
+            *calls
+        };
+        if call == 1 {
+            let gateway = reconciled("old");
+            admit(attempt, progress, gateway.service());
+            return Ok(gateway);
+        }
+        match self.second {
+            SecondReconciliation::IntentOnlyFailure => {
+                let target =
+                    ReconciliationTarget::new("old".into(), "a".repeat(64), "b".repeat(64))
+                        .unwrap();
+                progress.intent_admitted(
+                    GatewayReconciliationIntent::new(attempt.clone(), target, None).unwrap(),
+                )?;
+                Err(GatewayError::Registration(
+                    "unreachable after intent failure".into(),
+                ))
+            }
+            SecondReconciliation::OldServiceUnloaded => {
+                admit(attempt, progress, "replacement");
+                progress.effect_observed(ReconciliationNativeEffect::RetirementAcknowledged);
+                progress.effect_observed(ReconciliationNativeEffect::OldServiceUnloaded);
+                Err(GatewayError::Registration(
+                    "bootstrap failed after unload".into(),
+                ))
+            }
+            SecondReconciliation::ConfirmedReplacement => {
+                let gateway = reconciled("replacement");
+                admit(attempt, progress, gateway.service());
+                Ok(gateway)
+            }
+        }
+    }
+
+    fn stop_agents(&self, gateway: &ReconciledGateway) -> Result<(), GatewayError> {
+        self.stopped.lock().unwrap().push(gateway.service().into());
+        Ok(())
+    }
+}
+
+fn retained_identity_gateway(
+    second: SecondReconciliation,
+    audit: Arc<dyn GatewayReconciliationAudit>,
+) -> (Gateway, Arc<RetainedIdentityHost>) {
+    let host = Arc::new(RetainedIdentityHost {
+        calls: Mutex::new(0),
+        second,
+        stopped: Mutex::new(Vec::new()),
+    });
+    (
+        Gateway::bootstrap(
+            host.clone(),
+            login_shell("/usr/bin"),
+            testing::discard_startup_events(),
+            testing::sequential_reconciliation_ids(),
+            audit,
+            "/runtime".into(),
+            "ci".into(),
+        ),
+        host,
+    )
+}
+
+#[test]
+fn retained_cleanup_identity_tracks_native_and_audit_facts_separately() {
+    let audit = Arc::new(FailSecondAudit {
+        intent_calls: AtomicUsize::new(0),
+        outcome_calls: AtomicUsize::new(0),
+        fail_intent: true,
+    });
+    let (gateway, host) = retained_identity_gateway(SecondReconciliation::IntentOnlyFailure, audit);
+    tauri::async_runtime::block_on(gateway.start()).unwrap();
+    assert!(tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)).is_err());
+    gateway.stop_agents().unwrap();
+    assert_eq!(*host.stopped.lock().unwrap(), ["old"]);
+
+    let (gateway, _) = retained_identity_gateway(
+        SecondReconciliation::OldServiceUnloaded,
+        Arc::new(RecordingAudit::default()),
+    );
+    tauri::async_runtime::block_on(gateway.start()).unwrap();
+    assert!(tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)).is_err());
+    assert_eq!(gateway.stop_agents(), Err(GatewayError::NotReconciled));
+
+    let audit = Arc::new(FailSecondAudit {
+        intent_calls: AtomicUsize::new(0),
+        outcome_calls: AtomicUsize::new(0),
+        fail_intent: false,
+    });
+    let (gateway, host) =
+        retained_identity_gateway(SecondReconciliation::ConfirmedReplacement, audit);
+    tauri::async_runtime::block_on(gateway.start()).unwrap();
+    assert!(matches!(
+        tauri::async_runtime::block_on(gateway.wait_ready(BundledSurface::Main)),
+        Err(GatewayError::Audit { physical: None, .. })
+    ));
+    gateway.stop_agents().unwrap();
+    assert_eq!(*host.stopped.lock().unwrap(), ["replacement"]);
+}
+
+#[test]
+fn partial_outcomes_preserve_each_confirmed_native_boundary() {
+    struct BoundaryHost {
+        decisions: Vec<ReconciliationNativeDecision>,
+        effects: Vec<ReconciliationNativeEffect>,
+    }
+    impl GatewayHost for BoundaryHost {
+        fn register(
+            &self,
+            _: &Path,
+            _: &str,
+            _: Option<&SearchPath>,
+            attempt: &GatewayReconciliationAttempt,
+            progress: &dyn GatewayReconciliationProgress,
+        ) -> Result<ReconciledGateway, GatewayError> {
+            admit(attempt, progress, "target");
+            for decision in &self.decisions {
+                progress.decision_observed(*decision);
+            }
+            for effect in &self.effects {
+                progress.effect_observed(*effect);
+            }
+            Err(GatewayError::Registration("boundary failure".into()))
+        }
+        fn stop_agents(&self, _: &ReconciledGateway) -> Result<(), GatewayError> {
+            Ok(())
+        }
+    }
+
+    let cases = [
+        (
+            vec![],
+            vec![ReconciliationNativeEffect::RetirementAcknowledged],
+        ),
+        (
+            vec![],
+            vec![ReconciliationNativeEffect::ServiceDefinitionPublished],
+        ),
+        (
+            vec![ReconciliationNativeDecision::BootstrapCommandRequested],
+            vec![
+                ReconciliationNativeEffect::ServiceDefinitionPublished,
+                ReconciliationNativeEffect::ServiceDefinitionDurable,
+            ],
+        ),
+        (
+            vec![ReconciliationNativeDecision::BootstrapCommandRequested],
+            vec![
+                ReconciliationNativeEffect::ServiceDefinitionPublished,
+                ReconciliationNativeEffect::ServiceDefinitionDurable,
+                ReconciliationNativeEffect::BootstrapCommandCompleted,
+            ],
+        ),
+        (
+            vec![ReconciliationNativeDecision::BootstrapCommandRequested],
+            vec![
+                ReconciliationNativeEffect::ServiceDefinitionPublished,
+                ReconciliationNativeEffect::ServiceDefinitionDurable,
+                ReconciliationNativeEffect::BootstrapCommandCompleted,
+                ReconciliationNativeEffect::BootstrapCommandSucceeded,
+            ],
+        ),
+    ];
+    for (expected_decisions, expected_effects) in cases {
+        let audit = Arc::new(RecordingAudit::default());
+        let gateway = Gateway::bootstrap(
+            Arc::new(BoundaryHost {
+                decisions: expected_decisions.clone(),
+                effects: expected_effects.clone(),
+            }),
+            login_shell("/usr/bin"),
+            testing::discard_startup_events(),
+            testing::sequential_reconciliation_ids(),
+            audit.clone(),
+            "/runtime".into(),
+            "ci".into(),
+        );
+        assert!(tauri::async_runtime::block_on(gateway.start()).is_err());
+        let outcomes = audit.outcomes.lock().unwrap();
+        assert!(matches!(
+            outcomes[0].effect(),
+            GatewayReconciliationEffect::Partial { decisions, effects, .. }
+                if decisions == &expected_decisions && effects == &expected_effects
+        ));
+    }
 }

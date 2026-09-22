@@ -1,13 +1,13 @@
 use super::{
-    GatewayError, GatewayHost, GatewayNativeEffect, GatewayReconciliationAttempt,
-    GatewayReconciliationAudit, GatewayReconciliationEffect, GatewayReconciliationIds,
-    GatewayReconciliationIntent, GatewayReconciliationOutcome, GatewayReconciliationProgress,
-    GatewayReconciliationRequest, GatewayStartup, GatewayStartupEvents, GatewayStartupPhase,
-    LoginShellPath, ReconciledGateway,
+    GatewayError, GatewayHost, GatewayReconciliationAttempt, GatewayReconciliationAudit,
+    GatewayReconciliationEffect, GatewayReconciliationIds, GatewayReconciliationIntent,
+    GatewayReconciliationOutcome, GatewayReconciliationProgress, GatewayReconciliationRequest,
+    GatewayStartup, GatewayStartupEvents, GatewayStartupPhase, LoginShellPath, ReconciledGateway,
+    ReconciliationNativeDecision, ReconciliationNativeEffect,
 };
 use crate::gateway::domain::value_objects::{
-    BundledSurface, ReconciliationCause, ReconciliationEvidence, ReconciliationInitiator,
-    SearchPath,
+    BundledSurface, PendingReconciliation, ReconciliationCause, ReconciliationEvidence,
+    ReconciliationInitiator, SearchPath,
 };
 #[cfg(test)]
 use std::time::Duration;
@@ -19,9 +19,31 @@ use std::{
 
 struct Lifecycle {
     startup: GatewayStartup,
-    reconciled: Option<ReconciledGateway>,
+    retained_gateway: Option<ReconciledGateway>,
     attempt: Option<Arc<ReconciliationAttempt>>,
-    pending_origin: Option<GatewayReconciliationRequest>,
+    pending_origin: Option<PendingOrigin>,
+}
+
+#[derive(Clone)]
+struct PendingOrigin {
+    request: GatewayReconciliationRequest,
+    authority: PendingReconciliation,
+}
+
+impl PendingOrigin {
+    fn new(request: GatewayReconciliationRequest) -> Self {
+        Self {
+            authority: PendingReconciliation::new(request.record().clone()),
+            request,
+        }
+    }
+
+    fn request(&self) -> &GatewayReconciliationRequest {
+        &self.request
+    }
+    fn is_owned_by(&self, attempt: &GatewayReconciliationAttempt) -> bool {
+        self.authority.is_owned_by(attempt.record())
+    }
 }
 
 struct ReconciliationAttempt {
@@ -71,16 +93,15 @@ impl ReconciliationAttempt {
             .settled
             .wait_while(state, |state| state.settlement.is_none())
             .map_err(|_| state_unavailable())?;
-        settlement
+        Ok(settlement
             .settlement
             .as_ref()
             .cloned()
-            .ok_or_else(state_unavailable)?
+            .ok_or_else(state_unavailable)?)
     }
 
     fn settle(&self, result: AttemptSettlement) -> Result<(), GatewayError> {
-        *self
-            .state
+        self.state
             .lock()
             .map_err(|_| state_unavailable())?
             .settlement = Some(result);
@@ -107,7 +128,8 @@ struct StartupProgress {
     events: Arc<dyn GatewayStartupEvents>,
     audit: Arc<dyn GatewayReconciliationAudit>,
     intent: Arc<Mutex<Option<GatewayReconciliationIntent>>>,
-    effects: Arc<Mutex<Vec<GatewayNativeEffect>>>,
+    decisions: Arc<Mutex<Vec<ReconciliationNativeDecision>>>,
+    effects: Arc<Mutex<Vec<ReconciliationNativeEffect>>>,
 }
 
 impl GatewayReconciliationProgress for StartupProgress {
@@ -158,9 +180,15 @@ impl GatewayReconciliationProgress for StartupProgress {
         Ok(())
     }
 
-    fn effect_observed(&self, effect: GatewayNativeEffect) {
+    fn effect_observed(&self, effect: ReconciliationNativeEffect) {
         if let Ok(mut effects) = self.effects.lock() {
             effects.push(effect);
+        }
+    }
+
+    fn decision_observed(&self, decision: ReconciliationNativeDecision) {
+        if let Ok(mut decisions) = self.decisions.lock() {
+            decisions.push(decision);
         }
     }
 }
@@ -210,7 +238,7 @@ impl Gateway {
             stage,
             lifecycle: Arc::new(Mutex::new(Lifecycle {
                 startup: GatewayStartup::starting(),
-                reconciled: None,
+                retained_gateway: None,
                 attempt: None,
                 pending_origin: None,
             })),
@@ -287,7 +315,7 @@ impl Gateway {
                 let configuration_change =
                     request.evidence().cause() == ReconciliationCause::ClaudeConfigurationChanged;
                 if configuration_change && !queued_configuration_change {
-                    current.pending_origin = Some(request.clone());
+                    current.pending_origin = Some(PendingOrigin::new(request.clone()));
                     queued_configuration_change = true;
                     drop(current);
                     let _ = attempt.wait();
@@ -299,7 +327,7 @@ impl Gateway {
                 }
                 if !configuration_change {
                     if let Some(pending) = current.pending_origin.as_ref() {
-                        if attempt.request.origin() == pending {
+                        if attempt.request.origin() == pending.request() {
                             drop(current);
                             audit_attached(&reconciliation_audit, &attempt.request, &request)?;
                             return attempt.wait();
@@ -316,11 +344,12 @@ impl Gateway {
             if request.evidence().cause() == ReconciliationCause::ClaudeConfigurationChanged
                 && !queued_configuration_change
             {
-                current.pending_origin = Some(request.clone());
+                current.pending_origin = Some(PendingOrigin::new(request.clone()));
             }
             let origin = current
                 .pending_origin
-                .clone()
+                .as_ref()
+                .map(|pending| pending.request().clone())
                 .unwrap_or_else(|| request.clone());
             let attempt_correlation = match reconciliation_ids.next() {
                 Ok(correlation) => correlation,
@@ -369,6 +398,7 @@ impl Gateway {
                 events: startup_events.clone(),
                 audit: reconciliation_audit.clone(),
                 intent: Arc::new(Mutex::new(None)),
+                decisions: Arc::new(Mutex::new(Vec::new())),
                 effects: Arc::new(Mutex::new(Vec::new())),
             };
 
@@ -398,6 +428,11 @@ impl Gateway {
                 .lock()
                 .map(|effects| effects.clone())
                 .unwrap_or_default();
+            let decisions = progress
+                .decisions
+                .lock()
+                .map(|decisions| decisions.clone())
+                .unwrap_or_default();
             if physical.is_ok() && intent.is_none() {
                 physical = Err(GatewayError::Registration(
                     "gateway host completed without an admitted audit intent".into(),
@@ -414,10 +449,14 @@ impl Gateway {
                         }
                     },
                     Err(error) if !effects.is_empty() => GatewayReconciliationEffect::Partial {
-                        effects,
+                        decisions: decisions.clone(),
+                        effects: effects.clone(),
                         error: error.clone(),
                     },
-                    Err(error) => GatewayReconciliationEffect::Refused(error.clone()),
+                    Err(error) => GatewayReconciliationEffect::Refused {
+                        decisions: decisions.clone(),
+                        error: error.clone(),
+                    },
                 };
                 match GatewayReconciliationOutcome::new(intent.clone(), effect) {
                     Ok(outcome) => Some(outcome),
@@ -448,7 +487,14 @@ impl Gateway {
                     physical: physical.clone().err().map(Box::new),
                 }),
             };
-            finish(&lifecycle, &attempt, &startup_events, physical, reported)
+            finish(
+                &lifecycle,
+                &attempt,
+                &startup_events,
+                physical,
+                reported,
+                &effects,
+            )
         })
         .await
         .map_err(|error| GatewayError::Registration(error.to_string()))?
@@ -461,14 +507,12 @@ impl Gateway {
                 .map_err(|_| GatewayError::NotReconciled)?;
             let Some(attempt) = lifecycle.attempt.clone() else {
                 break lifecycle
-                    .reconciled
+                    .retained_gateway
                     .clone()
                     .ok_or(GatewayError::NotReconciled)?;
             };
             drop(lifecycle);
-            attempt
-                .wait_physical()
-                .map_err(|_| GatewayError::NotReconciled)?;
+            let _ = attempt.wait_physical();
         };
         self.host.stop_agents(&gateway)
     }
@@ -535,6 +579,7 @@ fn finish(
     events: &Arc<dyn GatewayStartupEvents>,
     result: Result<ReconciledGateway, GatewayError>,
     reported: Result<(), GatewayError>,
+    effects: &[ReconciliationNativeEffect],
 ) -> Result<(), GatewayError> {
     let mut current = lifecycle.lock().map_err(|_| state_unavailable())?;
     let owns_current = current
@@ -548,11 +593,17 @@ fn finish(
     let (answer, publish_startup) = match (result, reported) {
         (Ok(gateway), Ok(())) => {
             let changed_identity = current
-                .reconciled
+                .retained_gateway
                 .as_ref()
                 .is_some_and(|previous| previous != &gateway);
-            current.reconciled = Some(gateway);
-            current.pending_origin = None;
+            current.retained_gateway = Some(gateway);
+            if current
+                .pending_origin
+                .as_ref()
+                .is_some_and(|pending| pending.is_owned_by(&attempt.request))
+            {
+                current.pending_origin = None;
+            }
             if matches!(current.startup.phase(), GatewayStartupPhase::Ready) && !changed_identity {
                 (Ok(()), None)
             } else {
@@ -561,7 +612,7 @@ fn finish(
             }
         }
         (Ok(gateway), Err(error)) => {
-            current.reconciled = Some(gateway);
+            current.retained_gateway = Some(gateway);
             current.startup = current
                 .startup
                 .next(GatewayStartupPhase::Failed(error.clone()));
@@ -569,22 +620,25 @@ fn finish(
         }
         (Err(physical_error), reported) => {
             let error = reported.err().unwrap_or(physical_error);
-            current.reconciled = None;
+            if effects.contains(&ReconciliationNativeEffect::OldServiceUnloaded) {
+                current.retained_gateway = None;
+            }
             current.startup = current
                 .startup
                 .next(GatewayStartupPhase::Failed(error.clone()));
             (Err(error), Some(current.startup.clone()))
         }
     };
-    attempt.settle(AttemptSettlement {
+    let settled = attempt.settle(AttemptSettlement {
         physical: physical_settlement,
         reported: answer.clone(),
-    })?;
+    });
     current.attempt = None;
     drop(current);
     if let Some(startup) = &publish_startup {
         publish(events, startup);
     }
+    settled?;
     answer
 }
 /// The search path the agent should be given, if it can be had. Called once per

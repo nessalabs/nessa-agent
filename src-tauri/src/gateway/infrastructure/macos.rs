@@ -1,7 +1,8 @@
 //! launchd registration and loopback readiness. Service lifetime belongs to launchd.
 use crate::gateway::application::{
-    GatewayError, GatewayHost, GatewayNativeEffect, GatewayReconciliationAttempt,
-    GatewayReconciliationIntent, GatewayReconciliationProgress, ReconciledGateway,
+    GatewayError, GatewayHost, GatewayReconciliationAttempt, GatewayReconciliationIntent,
+    GatewayReconciliationProgress, ReconciledGateway, ReconciliationNativeDecision,
+    ReconciliationNativeEffect,
 };
 use crate::gateway::domain::value_objects::{ReconciliationTarget, SearchPath};
 use nessa_local_storage::OpenMode;
@@ -358,8 +359,9 @@ fn register(
                 &running.generation,
                 &generation,
             )?;
+            progress.effect_observed(ReconciliationNativeEffect::RetirementAcknowledged);
             launchctl(&["bootout", &service])?;
-            progress.effect_observed(GatewayNativeEffect::OldServiceUnloaded);
+            progress.effect_observed(ReconciliationNativeEffect::OldServiceUnloaded);
             clear_install_attempt(&lock_directory)?;
         }
         ServiceState::LegacyExactService => {
@@ -368,7 +370,7 @@ fn register(
             eprintln!("[nessa] Retiring legacy gateway {service}; active agents will be stopped by server shutdown");
             progress.readiness_invalidated();
             launchctl(&["bootout", &service])?;
-            progress.effect_observed(GatewayNativeEffect::OldServiceUnloaded);
+            progress.effect_observed(ReconciliationNativeEffect::OldServiceUnloaded);
             clear_install_attempt(&lock_directory)?;
         }
         ServiceState::ForeignPort => {
@@ -409,7 +411,7 @@ fn register(
             }
             progress.readiness_invalidated();
             launchctl(&["bootout", &service])?;
-            progress.effect_observed(GatewayNativeEffect::OldServiceUnloaded);
+            progress.effect_observed(ReconciliationNativeEffect::OldServiceUnloaded);
             if recorded.is_some() {
                 startup::forget_recorded_failure(&installed_logs);
             }
@@ -451,14 +453,19 @@ fn register(
         if let Err(error) = fs::rename(&next, &path) {
             return Err(error.to_string().into());
         }
+        progress.effect_observed(ReconciliationNativeEffect::ServiceDefinitionPublished);
         nessa_local_storage::sync_directory(&agents).map_err(|e| e.to_string())?;
-        progress.effect_observed(GatewayNativeEffect::ServiceDefinitionPublished);
+        progress.effect_observed(ReconciliationNativeEffect::ServiceDefinitionDurable);
         publish_install_attempt(&lock_directory, &service, &definition)?;
-        progress.effect_observed(GatewayNativeEffect::BootstrapRequested);
+        progress.decision_observed(ReconciliationNativeDecision::BootstrapCommandRequested);
         let bootstrap = Command::new("/bin/launchctl")
             .args(["bootstrap", &domain])
             .arg(&path)
-            .output()
+            .output();
+        if bootstrap.is_ok() {
+            progress.effect_observed(ReconciliationNativeEffect::BootstrapCommandCompleted);
+        }
+        let bootstrap = bootstrap
             .map_err(|error| BootstrapFailure::CouldNotRun(error.to_string()))
             .and_then(bootstrap_result);
         finish_bootstrap(
@@ -467,6 +474,7 @@ fn register(
             || disabled_services.is_disabled(&domain, &label),
             || clear_install_attempt(&lock_directory),
         )?;
+        progress.effect_observed(ReconciliationNativeEffect::BootstrapCommandSucceeded);
         let running = wait_fingerprint(&service, (&fingerprint, &generation), port, &log)?;
         clear_install_attempt(&lock_directory)?;
         Ok(running)
