@@ -56,9 +56,10 @@ function executionMetadata(events: readonly AgentEvent[]): ExecutionMetadata | u
       activityRunning,
     }
   })
-  const first = facts[0]!
+  const [first, ...rest] = facts
+  if (!first) return undefined
   if (
-    facts.some(
+    rest.some(
       (fact) =>
         fact.sourceTurnId !== first.sourceTurnId ||
         fact.executionId !== first.executionId ||
