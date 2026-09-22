@@ -1,5 +1,7 @@
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::providers::CloseOutcome;
+#[cfg(all(test, unix))]
+use std::{collections::VecDeque, sync::Mutex};
 use std::{fmt, io, path::Path, path::PathBuf, process::Stdio, sync::Arc, time::Duration};
 use tokio::{
     io::AsyncReadExt,
@@ -52,6 +54,46 @@ trait DirectoryReleaser: Send + Sync {
     fn start(&self, path: PathBuf) -> JoinHandle<io::Result<()>>;
 }
 
+#[cfg(all(test, unix))]
+pub(crate) struct DirectoryCleanupStep {
+    started: oneshot::Sender<PathBuf>,
+    release: oneshot::Receiver<io::Result<()>>,
+}
+
+#[cfg(all(test, unix))]
+impl DirectoryCleanupStep {
+    pub(crate) fn new(
+        started: oneshot::Sender<PathBuf>,
+        release: oneshot::Receiver<io::Result<()>>,
+    ) -> Self {
+        Self { started, release }
+    }
+}
+
+#[cfg(all(test, unix))]
+struct ScriptedDirectoryReleaser(Mutex<VecDeque<DirectoryCleanupStep>>);
+
+#[cfg(all(test, unix))]
+impl DirectoryReleaser for ScriptedDirectoryReleaser {
+    fn start(&self, path: PathBuf) -> JoinHandle<io::Result<()>> {
+        let step = self
+            .0
+            .lock()
+            .expect("scripted directory cleanup lock")
+            .pop_front()
+            .expect("one scripted step per cleanup attempt");
+        tokio::spawn(async move {
+            let _ = step.started.send(path.clone());
+            step.release.await.map_err(|_| {
+                io::Error::new(io::ErrorKind::Interrupted, "cleanup release was dropped")
+            })??;
+            tokio::task::spawn_blocking(move || std::fs::remove_dir_all(path))
+                .await
+                .map_err(io::Error::other)?
+        })
+    }
+}
+
 struct FilesystemDirectoryReleaser;
 
 impl DirectoryReleaser for FilesystemDirectoryReleaser {
@@ -77,6 +119,15 @@ impl ProcessStartFailure {
         if let Some(directory) = self.recovery.as_mut() {
             directory.observe_confirmed_cleanup(confirmation);
         }
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn script_directory_cleanup(&mut self, steps: Vec<DirectoryCleanupStep>) {
+        let directory = self
+            .recovery
+            .as_mut()
+            .expect("scripted cleanup requires a retained directory");
+        directory.releaser = Arc::new(ScriptedDirectoryReleaser(Mutex::new(steps.into())));
     }
 }
 

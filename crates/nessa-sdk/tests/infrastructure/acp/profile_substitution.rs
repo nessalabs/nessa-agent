@@ -30,15 +30,18 @@ use crate::domain::effective_capabilities::value_objects::{
 use crate::domain::model_metadata::entities::ModelMetadata;
 use crate::domain::model_metadata::value_objects::{Modalities, ModelFeatures};
 use crate::infrastructure::json_rpc::protocol;
-use crate::infrastructure::process::ProcessScope;
+use crate::infrastructure::process::{DirectoryCleanupStep, ProcessScope};
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
+    future::{poll_fn, Future},
+    io,
     path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
         mpsc, Arc, Mutex,
     },
+    task::Poll,
     time::Duration,
 };
 
@@ -455,6 +458,7 @@ fn cleanup_fault_process(config: &AcpConfig) -> binding::ProcessFactory {
 fn one_failed_restoration(
     config: &AcpConfig,
     cleanup_confirmation: Option<oneshot::Sender<()>>,
+    cleanup_steps: Option<Vec<DirectoryCleanupStep>>,
 ) -> (
     binding::ProcessFactory,
     Arc<Mutex<Option<PathBuf>>>,
@@ -466,6 +470,7 @@ fn one_failed_restoration(
     let calls = Arc::new(AtomicUsize::new(0));
     let observed_calls = calls.clone();
     let cleanup_confirmation = Mutex::new(cleanup_confirmation);
+    let cleanup_steps = Mutex::new(cleanup_steps);
     let process = Arc::new(move || {
         if observed_calls.fetch_add(1, Ordering::SeqCst) == 1 {
             let mut failure = match ProcessScope::spawn_with_private_directory(|path| {
@@ -478,6 +483,9 @@ fn one_failed_restoration(
             if let Some(confirmation) = cleanup_confirmation.lock().unwrap().take() {
                 failure.observe_confirmed_cleanup(confirmation);
             }
+            if let Some(steps) = cleanup_steps.lock().unwrap().take() {
+                failure.script_directory_cleanup(steps);
+            }
             return Err(failure);
         }
         let mut command = tokio::process::Command::new(&config.executable);
@@ -488,6 +496,31 @@ fn one_failed_restoration(
         ProcessScope::spawn(command).map_err(Into::into)
     });
     (process, failed_directory, calls)
+}
+
+struct CleanupGate {
+    started: oneshot::Receiver<PathBuf>,
+    release: oneshot::Sender<io::Result<()>>,
+}
+
+fn cleanup_gate() -> (DirectoryCleanupStep, CleanupGate) {
+    let (started, observed) = oneshot::channel();
+    let (release, continuation) = oneshot::channel();
+    (
+        DirectoryCleanupStep::new(started, continuation),
+        CleanupGate {
+            started: observed,
+            release,
+        },
+    )
+}
+
+async fn assert_pending_once<F: Future>(mut future: std::pin::Pin<&mut F>) {
+    poll_fn(|context| match future.as_mut().poll(context) {
+        Poll::Pending => Poll::Ready(()),
+        Poll::Ready(_) => panic!("interleaved operation completed before its release"),
+    })
+    .await;
 }
 
 async fn stop_initial_generation(
@@ -504,7 +537,7 @@ async fn stop_initial_generation(
 #[tokio::test]
 async fn failed_restoration_cleanup_is_confirmed_before_a_later_generation_starts() {
     let (root, config, capabilities) = profile_setup();
-    let (process, failed_directory, calls) = one_failed_restoration(&config, None);
+    let (process, failed_directory, calls) = one_failed_restoration(&config, None, None);
     let mut opened = binding::open(
         process,
         config,
@@ -545,7 +578,7 @@ async fn failed_restoration_cleanup_is_confirmed_before_a_later_generation_start
 #[tokio::test]
 async fn close_retries_the_failed_restoration_instead_of_the_old_generation() {
     let (root, config, capabilities) = profile_setup();
-    let (process, failed_directory, calls) = one_failed_restoration(&config, None);
+    let (process, failed_directory, calls) = one_failed_restoration(&config, None, None);
     let mut opened = binding::open(
         process,
         config,
@@ -578,10 +611,102 @@ async fn close_retries_the_failed_restoration_instead_of_the_old_generation() {
 }
 
 #[tokio::test]
+async fn close_during_restoration_cleanup_keeps_the_current_owner_and_cause() {
+    let (root, config, capabilities) = profile_setup();
+    let (first_step, first_gate) = cleanup_gate();
+    let (second_step, second_gate) = cleanup_gate();
+    let (process, failed_directory, calls) =
+        one_failed_restoration(&config, None, Some(vec![first_step, second_step]));
+    let mut opened = binding::open(
+        process,
+        config,
+        capabilities,
+        TestAcpProfile {
+            reject_startup: false,
+            reject_session: false,
+        },
+        Arc::new(RecordingAudit::default()),
+        None,
+    )
+    .await
+    .unwrap();
+    stop_initial_generation(&mut opened, &root).await;
+
+    let initial = opened.session.prepare_invocation().await.unwrap_err();
+    let original = initial.error().clone();
+    let directory = failed_directory.lock().unwrap().clone().unwrap();
+    assert!(directory.is_dir());
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    let retry_session = opened.session.clone();
+    let retry = tokio::spawn(async move { retry_session.prepare_invocation().await });
+    let first_path = first_gate.started.await.unwrap();
+    assert_eq!(first_path, directory);
+
+    let waiting_session = opened.session.clone();
+    let mut waiting = Box::pin(async move { waiting_session.prepare_invocation().await });
+    assert_pending_once(waiting.as_mut()).await;
+
+    let closing_session = opened.session.clone();
+    let mut closing = Box::pin(async move {
+        closing_session
+            .shutdown(SessionCloseRequest::Explicit(
+                ActionContext::new("host", "tests", "close-during-restoration").unwrap(),
+            ))
+            .await
+    });
+    assert_pending_once(closing.as_mut()).await;
+
+    first_gate
+        .release
+        .send(Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "directed first cleanup failure",
+        )))
+        .unwrap();
+    let second_path = second_gate.started.await.unwrap();
+    assert_eq!(second_path, directory);
+
+    let retried = retry.await.unwrap().unwrap_err();
+    assert_eq!(retried.error(), &original);
+    assert!(matches!(
+        retried.session_state(),
+        ProviderSessionState::CleanupReported(report)
+            if matches!(report.resources(), ResourceCleanup::Unconfirmed(AgentError::CleanupUncertain))
+    ));
+    let refused = waiting.await.unwrap_err();
+    assert_eq!(refused.error(), &original);
+    assert!(matches!(
+        refused.session_state(),
+        ProviderSessionState::CleanupRequired
+    ));
+    assert!(directory.is_dir());
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    second_gate.release.send(Ok(())).unwrap();
+    let closed = closing.await;
+    assert!(matches!(closed.resources(), ResourceCleanup::Confirmed(_)));
+    assert_eq!(closed.operation_failure(), Some(&original));
+    assert!(!directory.exists());
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    opened.session.prepare_invocation().await.unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(
+            ActionContext::new("host", "tests", "close-later-restoration").unwrap(),
+        ))
+        .await
+        .into_result()
+        .unwrap();
+}
+
+#[tokio::test]
 async fn dropping_a_failed_restoration_keeps_its_directory_until_confirmed_cleanup() {
     let (root, config, capabilities) = profile_setup();
     let (confirmed, confirmation) = oneshot::channel();
-    let (process, failed_directory, calls) = one_failed_restoration(&config, Some(confirmed));
+    let (process, failed_directory, calls) = one_failed_restoration(&config, Some(confirmed), None);
     let mut opened = binding::open(
         process,
         config,

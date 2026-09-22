@@ -280,6 +280,17 @@ impl RestorationRecovery {
             .await
             .with_operation_failure(Some(self.cause.clone()))
     }
+
+    fn failure(&self, state: ProviderSessionState) -> LiveGenerationFailure {
+        LiveGenerationFailure {
+            cause: self.cause.clone(),
+            state: Some(state),
+        }
+    }
+
+    fn operation_failure(&self, state: ProviderSessionState) -> ProviderOperationFailure {
+        ProviderOperationFailure::new(self.cause.clone(), state)
+    }
 }
 impl From<AgentError> for LiveGenerationFailure {
     fn from(cause: AgentError) -> Self {
@@ -377,10 +388,7 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
             if let Some(recovery) = generation.restoration.clone() {
                 let report = recovery.retry().await;
                 if !report.is_confirmed() {
-                    return Err(LiveGenerationFailure {
-                        cause: recovery.cause.clone(),
-                        state: Some(ProviderSessionState::CleanupReported(report)),
-                    });
+                    return Err(recovery.failure(ProviderSessionState::CleanupReported(report)));
                 }
                 generation.restoration = None;
             }
@@ -407,12 +415,10 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
                                 cause: cause.clone(),
                                 cleanup,
                             });
+                            let failure = recovery.failure(ProviderSessionState::CleanupRequired);
                             generation.restoration = Some(recovery.clone());
                             *control = Control::Restoration(recovery);
-                            return Err(LiveGenerationFailure {
-                                cause,
-                                state: Some(ProviderSessionState::CleanupRequired),
-                            });
+                            return Err(failure);
                         }
                         return Err(cause.into());
                     }
@@ -754,6 +760,9 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
         }
         let error = failure.cause;
         let generation = self.generation.lock().await;
+        if let Some(recovery) = generation.restoration.as_ref() {
+            return recovery.operation_failure(ProviderSessionState::CleanupRequired);
+        }
         let completed = generation.completion.borrow().clone();
         let disposition = match completed {
             Some(completed) => {
