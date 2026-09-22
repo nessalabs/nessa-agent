@@ -169,6 +169,49 @@ function terminalConversation(
   }
 }
 
+function queuedConversation(): Conversation {
+  return {
+    id: "queued",
+    title: "Queued",
+    phase: "starting",
+    pending: "submission",
+    draft: [],
+    turns: [
+      {
+        id: "queued-user",
+        from: "user",
+        executionId: "queued-run",
+        receipt: "queued",
+        content: textContent("Queued prompt"),
+      },
+    ],
+    remote: {
+      running: false,
+      permissions: [],
+      tools: [],
+      pending: [
+        {
+          executionId: "queued-run",
+          text: "Queued prompt",
+          attachments: [],
+          mode: "queued",
+        },
+      ],
+      capabilities: {
+        queue: true,
+        steer: true,
+        resume: true,
+        permissions: true,
+        imageInput: true,
+        agentFeatures,
+      },
+      lifecycle: { phase: "starting" },
+      queueComplete: true,
+      truncated: false,
+    },
+  }
+}
+
 let container: HTMLDivElement
 let root: Root
 
@@ -229,6 +272,99 @@ beforeEach(() => {
 afterEach(async () => {
   await React.act(async () => root.unmount())
   container.remove()
+})
+
+it("shows queued input before an assistant row without inventing activity or duplicating it later", async () => {
+  const queued = queuedConversation()
+  for (let snapshot = 0; snapshot < 2; snapshot++)
+    await render({ ...queued, revision: String(snapshot) })
+
+  let sent = container.querySelectorAll('[data-slot="chat-message"][data-tone="sent"]')
+  expect(sent).toHaveLength(1)
+  expect(sent.item(0).textContent).toContain("Queued prompt")
+  expect(sent.item(0).textContent).toContain("Queued")
+  expect(container.querySelector('[aria-label="Nessa is typing"]')).toBeNull()
+  expect(container.querySelector('[data-slot="agent-activity"]')).toBeNull()
+
+  const completed: Conversation = {
+    id: queued.id,
+    title: queued.title,
+    phase: "idle",
+    draft: [],
+    turns: [
+      {
+        id: "queued-user",
+        from: "user",
+        executionId: "queued-run",
+        receipt: "delivered",
+        content: textContent("Queued prompt"),
+      },
+      {
+        id: "assistant",
+        from: "assistant",
+        executionId: "queued-run",
+        text: "Done",
+        status: "completed",
+        parts: [{ offset: 0, kind: "text", text: "Done", toolId: "" }],
+      },
+    ],
+    remote: queued.remote
+      ? {
+          ...queued.remote,
+          running: false,
+          pending: [],
+          lifecycle: { phase: "attached" },
+        }
+      : undefined,
+  }
+  await render(completed)
+
+  sent = container.querySelectorAll('[data-slot="chat-message"][data-tone="sent"]')
+  expect(sent).toHaveLength(1)
+  expect(sent.item(0).textContent).toContain("Queued prompt")
+  expect(container.textContent).toContain("Done")
+
+  await render({
+    ...completed,
+    phase: "thinking",
+    pending: "submission",
+    turns: [
+      ...completed.turns,
+      {
+        id: "follow-up",
+        from: "user",
+        executionId: "follow-up-run",
+        receipt: "queued",
+        content: textContent("Queued follow-up"),
+      },
+    ],
+    remote: completed.remote
+      ? {
+          ...completed.remote,
+          pending: [
+            {
+              executionId: "follow-up-run",
+              text: "Queued follow-up",
+              attachments: [],
+              mode: "queued",
+            },
+          ],
+        }
+      : undefined,
+  })
+
+  const messages = [
+    ...container.querySelectorAll<HTMLElement>('[data-slot="chat-message"]'),
+  ]
+  expect(messages.map((message) => message.dataset.tone)).toEqual([
+    "sent",
+    "received",
+    "sent",
+  ])
+  expect(messages.at(-1)?.textContent).toContain("Queued follow-up")
+  expect(messages.at(-1)?.textContent).toContain("Queued")
+  expect(container.querySelector('[aria-label="Nessa is typing"]')).toBeNull()
+  expect(container.querySelector('[data-slot="agent-activity"]')).toBeNull()
 })
 
 it("renders one turn activity, keeps details and permission controls reachable, and clears stale selection", async () => {
