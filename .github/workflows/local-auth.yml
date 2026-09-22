@@ -136,6 +136,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Check portable Rust dependency graphs
+        run: node scripts/check-runtime-dependencies.mjs --verify-fixture
       # The launch contract executes the public just recipes rather than
       # reimplementing them in a test. Keep that executable boundary available
       # in this bare-Node job.
