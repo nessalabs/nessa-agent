@@ -3,7 +3,8 @@ import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { bundleArchitecture, includesDiskImage } from "./bundle-architecture.mjs"
 import { verifyRuntimeFingerprint } from "./runtime-fingerprint.mjs"
-import { RUNTIME_EXECUTABLES, signingProblems } from "./runtime-signing.mjs"
+import { runtimeExecutables } from "./runtime-layout.mjs"
+import { signingProblems } from "./runtime-signing.mjs"
 
 const root = resolve(import.meta.dirname, "../..")
 const metadata = JSON.parse(
@@ -60,7 +61,7 @@ if (signedForReal)
  * build is supposed to look like this.
  */
 if (signedForReal) {
-  const problems = RUNTIME_EXECUTABLES.flatMap((name) => {
+  const problems = Object.values(runtimeExecutables("darwin")).flatMap((name) => {
     // codesign writes the display to stderr and nothing to stdout, so this
     // cannot be an execFileSync like every other call here.
     const shown = spawnSync(
