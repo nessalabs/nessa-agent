@@ -165,7 +165,20 @@ fn format_socket_addr(host: &str, port: u16) -> String {
 fn load_stage(source: &impl EnvSource) -> Result<Stage, EnvironmentError> {
     match read_optional(source, key::STAGE)? {
         Some(value) => Stage::parse(&value).map_err(EnvironmentError::InvalidStage),
-        None => Ok(Stage::Dev),
+        None => Ok(default_stage()),
+    }
+}
+
+/// The stage used when no caller names one explicitly.
+///
+/// Desktop release builds register the product gateway in `prod`, so offline
+/// commands from the same release build must resolve the same data root. Debug
+/// builds keep the development default used by the repository workflow.
+fn default_stage() -> Stage {
+    if cfg!(debug_assertions) {
+        Stage::Dev
+    } else {
+        Stage::Prod
     }
 }
 
@@ -225,10 +238,23 @@ mod tests {
     #[test]
     fn dev_stage_defaults_when_env_unset() {
         let config = Environment::load(&MockEnv::new()).expect("defaults");
-        assert_eq!(config.stage, Stage::Dev);
+        let expected = if cfg!(debug_assertions) {
+            Stage::Dev
+        } else {
+            Stage::Prod
+        };
+        assert_eq!(config.stage, expected);
         assert_eq!(config.bind_host, "127.0.0.1");
-        assert_eq!(config.port, 7421);
+        assert_eq!(config.port, stage_port(expected));
         assert_eq!(config.version, VERSION);
+    }
+
+    #[test]
+    fn explicit_stage_overrides_the_build_profile_default() {
+        for (value, expected) in [("dev", Stage::Dev), ("prod", Stage::Prod)] {
+            let config = Environment::load(&MockEnv::new().set(STAGE, value)).expect("stage");
+            assert_eq!(config.stage, expected);
+        }
     }
 
     #[test]
