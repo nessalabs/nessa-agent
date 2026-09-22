@@ -588,34 +588,42 @@
     },
     "PermissionDenialSupport": {
       "type": "string",
+      "description": "Whether Nessa can deliver a deny choice offered by a provider permission review.",
       "enum": ["unknown", "unsupported", "supported_for_offered_permission_reviews"]
     },
     "NativeHookSuppressionSupport": {
       "type": "string",
+      "description": "Whether suppression of user-configured provider hooks has been verified.",
       "enum": ["unknown", "unsupported", "supported_for_user_configured_hooks"]
     },
     "CompactionReportingSupport": {
       "type": "string",
+      "description": "Whether Nessa reports provider compaction with invocation correlation.",
       "enum": ["unsupported_not_implemented", "supported_with_invocation_correlation"]
     },
     "ModelSwitchReportingSupport": {
       "type": "string",
+      "description": "Whether Nessa reports a provider model switch after validation.",
       "enum": ["unsupported_not_implemented", "supported_after_validated_switch"]
     },
     "PermissionDeferralSupport": {
       "type": "string",
+      "description": "Whether Nessa supports an explicit nonterminal defer outcome for a permission review.",
       "enum": ["unsupported_not_implemented", "supported_with_nonterminal_outcome"]
     },
     "ElicitationForwardingSupport": {
       "type": "string",
+      "description": "Whether the provider binding forwards one correlated elicitation round trip.",
       "enum": ["unknown", "unsupported", "supported_with_correlated_round_trip"]
     },
     "PreToolPolicySupport": {
       "type": "string",
+      "description": "Whether a configured Nessa policy can deny a tool held at a permission gate.",
       "enum": ["unknown", "unsupported_not_implemented", "supported_at_permission_gate"]
     },
     "PolicyEndTurnSupport": {
       "type": "string",
+      "description": "Whether a Nessa policy can end its correlated current invocation.",
       "enum": [
         "unknown",
         "unsupported_not_implemented",
@@ -624,10 +632,12 @@
     },
     "PolicyCloseSessionSupport": {
       "type": "string",
+      "description": "Whether a Nessa policy can close its correlated provider session.",
       "enum": ["unknown", "unsupported_not_implemented", "supported_for_session"]
     },
     "IncomingElicitationSupport": {
       "type": "string",
+      "description": "Whether Nessa can receive and resolve an incoming elicitation.",
       "enum": [
         "unknown",
         "unsupported_not_implemented",
@@ -639,16 +649,46 @@
       "additionalProperties": false,
       "description": "Scoped provider transport facts and effective Nessa policy integration support.",
       "properties": {
-        "permissionDenial": { "$ref": "#/$defs/PermissionDenialSupport" },
-        "nativeHookSuppression": { "$ref": "#/$defs/NativeHookSuppressionSupport" },
-        "compactionReporting": { "$ref": "#/$defs/CompactionReportingSupport" },
-        "modelSwitchReporting": { "$ref": "#/$defs/ModelSwitchReportingSupport" },
-        "permissionDeferral": { "$ref": "#/$defs/PermissionDeferralSupport" },
-        "elicitationForwarding": { "$ref": "#/$defs/ElicitationForwardingSupport" },
-        "preToolPolicy": { "$ref": "#/$defs/PreToolPolicySupport" },
-        "policyEndTurn": { "$ref": "#/$defs/PolicyEndTurnSupport" },
-        "policyCloseSession": { "$ref": "#/$defs/PolicyCloseSessionSupport" },
-        "incomingElicitation": { "$ref": "#/$defs/IncomingElicitationSupport" }
+        "permissionDenial": {
+          "$ref": "#/$defs/PermissionDenialSupport",
+          "description": "Scoped delivery support for a rejecting option offered by a provider review."
+        },
+        "nativeHookSuppression": {
+          "$ref": "#/$defs/NativeHookSuppressionSupport",
+          "description": "Verified suppression state for user-configured provider hooks."
+        },
+        "compactionReporting": {
+          "$ref": "#/$defs/CompactionReportingSupport",
+          "description": "Effective Nessa support for correlated compaction reporting."
+        },
+        "modelSwitchReporting": {
+          "$ref": "#/$defs/ModelSwitchReportingSupport",
+          "description": "Effective Nessa support for validated model-switch reporting."
+        },
+        "permissionDeferral": {
+          "$ref": "#/$defs/PermissionDeferralSupport",
+          "description": "Effective Nessa support for an explicit nonterminal permission defer outcome."
+        },
+        "elicitationForwarding": {
+          "$ref": "#/$defs/ElicitationForwardingSupport",
+          "description": "Provider forwarding support for a correlated elicitation round trip."
+        },
+        "preToolPolicy": {
+          "$ref": "#/$defs/PreToolPolicySupport",
+          "description": "Effective Nessa support for enforcing configured policy before a held tool runs."
+        },
+        "policyEndTurn": {
+          "$ref": "#/$defs/PolicyEndTurnSupport",
+          "description": "Effective Nessa support for ending a current invocation from policy."
+        },
+        "policyCloseSession": {
+          "$ref": "#/$defs/PolicyCloseSessionSupport",
+          "description": "Effective Nessa support for closing a provider session from policy."
+        },
+        "incomingElicitation": {
+          "$ref": "#/$defs/IncomingElicitationSupport",
+          "description": "Effective Nessa support for receiving and resolving incoming elicitation."
+        }
       },
       "required": [
         "permissionDenial",
@@ -689,7 +729,8 @@
           "description": "The connected agent advertised image input. False until an agent has been opened, and whenever it advertised none."
         },
         "agentFeatures": {
-          "$ref": "#/$defs/ConversationAgentFeatures"
+          "$ref": "#/$defs/ConversationAgentFeatures",
+          "description": "Scoped transport and effective application support for agent features."
         }
       },
       "required": [

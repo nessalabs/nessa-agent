@@ -146,17 +146,17 @@ fn image(media_type: ImageMediaType, size: u64) -> ImageReference {
 /// refuses every input with `refuses` when that is set.
 struct ImageProvider {
     executions: Arc<AtomicUsize>,
-    agent: OperationCapabilities,
+    agent: ProviderOperationCapabilities,
     refuses: Option<AgentError>,
 }
 struct ImageBackend {
     executions: Arc<AtomicUsize>,
-    agent: OperationCapabilities,
+    agent: ProviderOperationCapabilities,
     refuses: Option<AgentError>,
     sender: mpsc::UnboundedSender<ExecutionEvent>,
 }
 impl ImageProvider {
-    fn new(agent: OperationCapabilities, refuses: Option<AgentError>) -> Arc<Self> {
+    fn new(agent: ProviderOperationCapabilities, refuses: Option<AgentError>) -> Arc<Self> {
         Arc::new(Self {
             executions: Arc::default(),
             agent,

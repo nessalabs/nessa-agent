@@ -627,7 +627,7 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
                 return Err(AgentError::ImageInputRefused(ImageInputRefusal::NotOffered));
             }
             let agent = self.operation_capabilities();
-            if agent.negotiated() && !agent.image_input() {
+            if agent.negotiated && !agent.image_input {
                 return Err(AgentError::ImageInputRefused(
                     ImageInputRefusal::AgentDoesNotAccept,
                 ));

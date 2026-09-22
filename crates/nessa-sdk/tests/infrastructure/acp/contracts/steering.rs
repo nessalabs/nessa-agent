@@ -377,6 +377,81 @@ async fn operation_capabilities_follow_successful_negotiation_and_restoration() 
 }
 
 #[tokio::test]
+async fn restoration_publishes_provider_facts_only_after_verified_readiness() {
+    let _slot = process_test_slot().await;
+    let (root, opened) = steering_session("resume-gated").await;
+    let ready = opened.session.operation_capabilities();
+    assert!(ready.negotiated());
+    assert!(!ready.image_input());
+    assert_eq!(
+        ready.permission_denial(),
+        PermissionDenialCapability::SupportedForOfferedPermissionReviews
+    );
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+
+    let restoring = opened.session.clone();
+    let preparation = tokio::spawn(async move { restoring.prepare_invocation().await });
+    wait_for_file(&root, "resume-observed").await;
+
+    let pending = opened.session.operation_capabilities();
+    assert!(!pending.negotiated());
+    assert!(!pending.image_input());
+    assert_eq!(
+        pending.permission_denial(),
+        PermissionDenialCapability::Unknown
+    );
+    assert_eq!(
+        pending.native_hook_suppression(),
+        NativeHookSuppressionCapability::Unknown
+    );
+    assert_eq!(
+        pending.elicitation_forwarding(),
+        ElicitationForwardingCapability::Unknown
+    );
+    assert_eq!(
+        pending.compaction_reporting(),
+        CompactionReportingCapability::UnsupportedNotImplemented
+    );
+    assert_eq!(
+        pending.model_switch_reporting(),
+        ModelSwitchReportingCapability::UnsupportedNotImplemented
+    );
+    assert_eq!(
+        pending.permission_deferral(),
+        PermissionDeferralCapability::UnsupportedNotImplemented
+    );
+    assert_eq!(
+        pending.incoming_elicitation(),
+        IncomingElicitationCapability::UnsupportedNotImplemented
+    );
+
+    std::fs::write(root.path().join("resume-healthy"), "ready").unwrap();
+    preparation.await.unwrap().unwrap();
+    let restored = opened.session.operation_capabilities();
+    assert!(restored.negotiated());
+    assert!(!restored.image_input());
+    assert_eq!(
+        restored.permission_denial(),
+        PermissionDenialCapability::SupportedForOfferedPermissionReviews
+    );
+    assert_eq!(
+        restored.compaction_reporting(),
+        CompactionReportingCapability::UnsupportedNotImplemented
+    );
+    opened
+        .session
+        .shutdown(SessionCloseRequest::Explicit(close_action()))
+        .await
+        .into_result()
+        .unwrap();
+}
+
+#[tokio::test]
 async fn failed_restoration_clears_previously_negotiated_operation_support() {
     let _slot = process_test_slot().await;
     let (_root, opened) = steering_session("steering-resume-removed").await;

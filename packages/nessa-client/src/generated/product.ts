@@ -230,6 +230,7 @@ export const ConversationDisposition = {
 } as const
 export type ConversationDisposition =
   (typeof ConversationDisposition)[keyof typeof ConversationDisposition]
+/** Whether Nessa can deliver a deny choice offered by a provider permission review. */
 export const PermissionDenialSupport = {
   Unknown: "unknown",
   Unsupported: "unsupported",
@@ -237,6 +238,7 @@ export const PermissionDenialSupport = {
 } as const
 export type PermissionDenialSupport =
   (typeof PermissionDenialSupport)[keyof typeof PermissionDenialSupport]
+/** Whether suppression of user-configured provider hooks has been verified. */
 export const NativeHookSuppressionSupport = {
   Unknown: "unknown",
   Unsupported: "unsupported",
@@ -244,24 +246,28 @@ export const NativeHookSuppressionSupport = {
 } as const
 export type NativeHookSuppressionSupport =
   (typeof NativeHookSuppressionSupport)[keyof typeof NativeHookSuppressionSupport]
+/** Whether Nessa reports provider compaction with invocation correlation. */
 export const CompactionReportingSupport = {
   UnsupportedNotImplemented: "unsupported_not_implemented",
   SupportedWithInvocationCorrelation: "supported_with_invocation_correlation",
 } as const
 export type CompactionReportingSupport =
   (typeof CompactionReportingSupport)[keyof typeof CompactionReportingSupport]
+/** Whether Nessa reports a provider model switch after validation. */
 export const ModelSwitchReportingSupport = {
   UnsupportedNotImplemented: "unsupported_not_implemented",
   SupportedAfterValidatedSwitch: "supported_after_validated_switch",
 } as const
 export type ModelSwitchReportingSupport =
   (typeof ModelSwitchReportingSupport)[keyof typeof ModelSwitchReportingSupport]
+/** Whether Nessa supports an explicit nonterminal defer outcome for a permission review. */
 export const PermissionDeferralSupport = {
   UnsupportedNotImplemented: "unsupported_not_implemented",
   SupportedWithNonterminalOutcome: "supported_with_nonterminal_outcome",
 } as const
 export type PermissionDeferralSupport =
   (typeof PermissionDeferralSupport)[keyof typeof PermissionDeferralSupport]
+/** Whether the provider binding forwards one correlated elicitation round trip. */
 export const ElicitationForwardingSupport = {
   Unknown: "unknown",
   Unsupported: "unsupported",
@@ -269,6 +275,7 @@ export const ElicitationForwardingSupport = {
 } as const
 export type ElicitationForwardingSupport =
   (typeof ElicitationForwardingSupport)[keyof typeof ElicitationForwardingSupport]
+/** Whether a configured Nessa policy can deny a tool held at a permission gate. */
 export const PreToolPolicySupport = {
   Unknown: "unknown",
   UnsupportedNotImplemented: "unsupported_not_implemented",
@@ -276,6 +283,7 @@ export const PreToolPolicySupport = {
 } as const
 export type PreToolPolicySupport =
   (typeof PreToolPolicySupport)[keyof typeof PreToolPolicySupport]
+/** Whether a Nessa policy can end its correlated current invocation. */
 export const PolicyEndTurnSupport = {
   Unknown: "unknown",
   UnsupportedNotImplemented: "unsupported_not_implemented",
@@ -283,6 +291,7 @@ export const PolicyEndTurnSupport = {
 } as const
 export type PolicyEndTurnSupport =
   (typeof PolicyEndTurnSupport)[keyof typeof PolicyEndTurnSupport]
+/** Whether a Nessa policy can close its correlated provider session. */
 export const PolicyCloseSessionSupport = {
   Unknown: "unknown",
   UnsupportedNotImplemented: "unsupported_not_implemented",
@@ -290,6 +299,7 @@ export const PolicyCloseSessionSupport = {
 } as const
 export type PolicyCloseSessionSupport =
   (typeof PolicyCloseSessionSupport)[keyof typeof PolicyCloseSessionSupport]
+/** Whether Nessa can receive and resolve an incoming elicitation. */
 export const IncomingElicitationSupport = {
   Unknown: "unknown",
   UnsupportedNotImplemented: "unsupported_not_implemented",
@@ -299,15 +309,25 @@ export type IncomingElicitationSupport =
   (typeof IncomingElicitationSupport)[keyof typeof IncomingElicitationSupport]
 /** Scoped provider transport facts and effective Nessa policy integration support. */
 export interface ConversationAgentFeatures {
+  /** Scoped delivery support for a rejecting option offered by a provider review. */
   permissionDenial: PermissionDenialSupport
+  /** Verified suppression state for user-configured provider hooks. */
   nativeHookSuppression: NativeHookSuppressionSupport
+  /** Effective Nessa support for correlated compaction reporting. */
   compactionReporting: CompactionReportingSupport
+  /** Effective Nessa support for validated model-switch reporting. */
   modelSwitchReporting: ModelSwitchReportingSupport
+  /** Effective Nessa support for an explicit nonterminal permission defer outcome. */
   permissionDeferral: PermissionDeferralSupport
+  /** Provider forwarding support for a correlated elicitation round trip. */
   elicitationForwarding: ElicitationForwardingSupport
+  /** Effective Nessa support for enforcing configured policy before a held tool runs. */
   preToolPolicy: PreToolPolicySupport
+  /** Effective Nessa support for ending a current invocation from policy. */
   policyEndTurn: PolicyEndTurnSupport
+  /** Effective Nessa support for closing a provider session from policy. */
   policyCloseSession: PolicyCloseSessionSupport
+  /** Effective Nessa support for receiving and resolving incoming elicitation. */
   incomingElicitation: IncomingElicitationSupport
 }
 /** Operations supported by this configured agent. */
@@ -322,6 +342,7 @@ export interface ConversationCapabilities {
   permissions: boolean
   /** The connected agent advertised image input. False until an agent has been opened, and whenever it advertised none. */
   imageInput: boolean
+  /** Scoped transport and effective application support for agent features. */
   agentFeatures: ConversationAgentFeatures
 }
 /** One uploaded image a message refers to. The bytes travel on the upload path, never in a socket message. */
