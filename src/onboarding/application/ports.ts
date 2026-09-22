@@ -8,7 +8,11 @@
  * answer comes from.
  */
 
-import type { AgentReadinessFailure, AgentReadinessReport } from "../model/onboarding"
+import type {
+  AgentId,
+  AgentReadinessFailure,
+  AgentReadinessReport,
+} from "../model/onboarding"
 
 /**
  * What came back when the runtimes were asked.
@@ -26,4 +30,13 @@ export type AgentReadinessAnswer =
 export interface AgentReadinessSource {
   /** Ask once. Never rejects: every way of not getting an answer is a value. */
   read(): Promise<AgentReadinessAnswer>
+}
+
+/** Agents whose API keys the native host explicitly knows how to store. */
+export type ApiKeyAgent = Extract<AgentId, "claude" | "opencode">
+
+/** The native host boundary that saves one Nessa-owned API key. */
+export interface AgentApiKeySink {
+  /** Save the exact key. Rejects with no secret-bearing diagnostic on failure. */
+  save(agent: ApiKeyAgent, key: string): Promise<void>
 }
