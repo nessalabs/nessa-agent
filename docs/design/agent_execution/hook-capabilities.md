@@ -212,6 +212,104 @@ installed 2.22 runtime's timeout, rewrite or ACP forwarding contract. Native
 pre-tool/prompt blocking and context injection are documented; Nessa reachability
 remains unknown. Compiled `elicitation/create` symbols are not forwarding proof.
 
+## Context and lifecycle evidence at the requested points
+
+The following tables describe native inputs, not a Nessa hook payload or proof
+of ACP delivery. Claude fields come from the pinned
+[SDK types](https://unpkg.com/@anthropic-ai/claude-agent-sdk@0.3.257/sdk.d.ts);
+Codex fields come from its pinned
+[generated command-input schemas](https://github.com/openai/codex/tree/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/hooks/schema/generated);
+Opencode signatures come from its pinned
+[plugin interface](https://github.com/anomalyco/opencode/blob/014614d35b397775e5d397a490fc72368c894ec2/packages/plugin/src/index.ts#L222-L334).
+The links contain the full shapes; the table highlights the context needed to
+compare these boundaries. None of these tables reports an exercised model or tool.
+
+Claude's common input requires session ID, transcript path and working directory.
+Prompt correlation, permission mode and agent identity/type are optional; effort
+is conditional on a supported model and tool-use context, not session lifecycle.
+A path is not inline transcript content. Codex schemas require a transcript-path
+field whose value may be null. Its tool/prompt/stop inputs carry a turn ID; its
+session-start/end inputs do not. Optional subagent fields on tool/prompt inputs do
+not establish a subagent identity on every event.
+
+| Requested point | Claude native context | Codex native context | Opencode native context |
+| --- | --- | --- | --- |
+| Before tool | Common fields plus tool name, input and tool-use ID. | Session/turn, cwd, model/mode, transcript path, tool name/input/use ID; optional agent identity/type. | Tool/session/call IDs; mutable arguments are the separate output object. |
+| After tool | Before-tool fields plus response and optional execution duration. | Before-tool fields plus tool response. | Tool/session/call IDs and arguments; mutable title, output and metadata. |
+| Prompt submitted | Common fields plus prompt; optional source and session title. | Session/turn, cwd, model/mode, transcript path and prompt; optional agent identity/type. | `chat.message` receives session plus optional agent/model/message/variant; output carries message and parts. |
+| Stop | Common fields plus stop-hook-active; optional last assistant message and background-work context. | Session/turn, cwd, model/mode, transcript path, stop-hook-active and nullable last assistant message. | No dedicated equivalent callback; generic session/step events are observations. |
+| Session start/resume | Common fields plus source (`startup`, `resume`, `clear`, `compact`, `fork`); optional model/title and resume/cache estimates. | Session, cwd, transcript path, model/mode and source (`startup`, `resume`, `clear`, `compact`). | Generic session events; ACP restoration is a separate handler path, not a dedicated plugin resume callback. |
+| Session end | Common fields plus exit reason. | Session, cwd, transcript path and reason; no turn/model/mode fields in the command schema. | Generic session events and plugin disposal have different owners; disposal is not a per-session end guarantee. |
+| Notification/permission | Notification message/type and optional title; permission requests instead carry tool name/input and optional suggestions. | Permission request carries session/turn, cwd, model/mode, transcript path and tool name/input, with optional agent fields; no general Notification event. | Generic event payload; the declared permission input/output callback is inactive at this pin. |
+
+Kiro has no repository pin or adapter, so context, resume, output and failure
+behavior at every requested point remain unknown. Its local strings/help are not
+an equivalent input schema or a runtime test.
+
+`UserPromptSubmit` is an input boundary, not proof that a model turn began; `Stop`
+is a native lifecycle hook, not automatically the same fact as Nessa settlement.
+Likewise Opencode's `chat.message` and ACP idle status must not be relabelled as
+a universal turn-start/end hook. Nessa maps its own submission and settlement
+boundaries explicitly, retaining delivery mode and provider evidence separately.
+
+### Restoration is not one native event
+
+Claude declares a `SessionStart` resume source and optional elapsed-time,
+context-token and cache-estimate fields. Their presence in the SDK type does not
+prove delivery through Nessa's ACP session restoration.
+
+Codex's [cold-resume initialization](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/core/src/session/session.rs#L1616-L1640)
+queues `SessionStart(resume)`; [pending startup hooks](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/core/src/hook_runtime.rs#L123-L151)
+run at the next turn. An [already-running thread](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/core/src/thread_manager.rs#L1937-L1962)
+returns without that spawn path. A successful resume response is therefore not
+proof that the native startup hook has run, nor that both resume modes emit it.
+
+Opencode's [load and resume handlers](https://github.com/anomalyco/opencode/blob/014614d35b397775e5d397a490fc72368c894ec2/packages/opencode/src/acp/service.ts#L211-L337)
+both restore session state and register supplied MCP servers. Load fetches and
+replays messages; resume fetches up to 20 messages to restore state and does not
+replay them. Neither handler exposes a dedicated plugin resume callback. These
+are pinned source observations, not exercised restoration tests.
+
+### Controlled Claude SDK callback bridge probe
+
+On 2026-09-22, an isolated fixture exercised the actual SDK `0.3.257` JavaScript
+bridge with an owned fake CLI selected explicitly by
+`pathToClaudeCodeExecutable`. The registry tarball SHA-256 was
+`ccc63d1abbf816d30a242f8c76e006b082180910c2220916c47d44e53c8426c0`.
+The runner cleared the inherited environment, supplied fresh scratch home/config
+and temporary directories, disabled setting sources and session persistence, and
+made no model or authenticated provider call. The coordinating reviewer inspected
+the fixture and independently reran its assertions successfully. This is a
+record of a local controlled probe, not a repository regression suite.
+
+| Controlled callback | Exercised bridge result |
+| --- | --- |
+| PreToolUse | Input and separate tool-use ID reached the callback; returned deny, rewrite/context fields and generic message fields were serialized unchanged with the original request ID. |
+| SessionStart | Supplied resume source and timing/token/cache fields reached the callback; returned context/title fields retained request correlation. |
+| Stop | Returned `continue: false`, stop reason and system message were serialized unchanged. |
+| PostToolUse callback throws | SDK serialized a correlated error containing the controlled failure reason. |
+
+The fake peer used callback IDs registered by the SDK during initialization and
+supplied the event frames itself. Transporting output fields together does not
+prove the native runtime accepts that combination. This probe establishes neither
+actual tool veto/rewrite nor model-visible context, native event timing, matcher
+or timeout behavior, command-hook behavior, ACP forwarding or real session-resume
+lifecycle delivery. Those consuming boundaries remain separate acceptance work.
+
+### Behavior evidence still needed
+
+| Boundary | Established by this survey | Remaining behavior evidence |
+| --- | --- | --- |
+| Claude callback/native command outputs | SDK declarations, packaged native branches, and the isolated four-callback bridge probe above. | Native callback timing/timeout, real resume delivery, command precedence, actual model context and execution veto. |
+| Codex event engine | Exact source, schemas, output validation and upstream test cases; those Rust tests were not run here. | Controlled runner tests for rewrite/deny/context, malformed/timeout/exit behavior and cold versus running resume. |
+| Opencode plugin/ACP handlers | Active transform call sites, sequential awaits, generic event dispatch and load/resume source. | Stubbed dispatch/restoration tests plus actual tool/model-boundary effects. |
+| Kiro | Signed local artifact identity, help and static strings only. | A pinned integration basis and event/context/output/failure/ACP behavior tests. |
+
+A callback result or parser acceptance alone cannot prove that a tool did not run
+or that the model received injected text. Record those claims only after checking
+the consuming execution boundary. This is why #134 remains open after the source
+inventory and design decision merged.
+
 ## Output support and explicit degradation
 
 | Requested power | Native evidence | Nessa contract/degradation |

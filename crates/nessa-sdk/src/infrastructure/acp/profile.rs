@@ -1,6 +1,9 @@
 use super::sessions::AcpConfig;
 use crate::application::agent_execution::agents::AgentError;
 use crate::application::agent_execution::executions::ExecutionRequest;
+use crate::application::agent_execution::providers::{
+    PermissionDenialCapability, ProviderOperationCapabilities, ProviderPermissionDeferralCapability,
+};
 use crate::application::agent_execution::tools::ToolReviewInput;
 use crate::domain::agent_execution::tools::ToolCallUpdate;
 use crate::domain::effective_capabilities::value_objects::EffectiveCapabilities;
@@ -9,6 +12,14 @@ use serde_json::Value;
 /// Infrastructure strategy for differences between ACP implementations.
 /// Standard ACP transport and domain execution rules stay in the shared runtime.
 pub(crate) trait AcpProfile: Send + Sync + 'static {
+    /// Provider facts that follow from this ACP profile's verified transport behavior.
+    fn operation_capabilities(&self, _initialize: &Value) -> ProviderOperationCapabilities {
+        ProviderOperationCapabilities {
+            permission_denial: PermissionDenialCapability::SupportedForOfferedPermissionReviews,
+            permission_deferral: ProviderPermissionDeferralCapability::Unsupported,
+            ..ProviderOperationCapabilities::default()
+        }
+    }
     /// Profiles opt into their explicitly verified steering extension.
     fn supports_steering(&self, _initialize: &Value) -> bool {
         false
