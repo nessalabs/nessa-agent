@@ -12,13 +12,9 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import test from "node:test"
 
-import {
-  assembleDesktopRuntime,
-  runtimeExecutableNames,
-  rustHostTarget,
-} from "./prepare-runtime.mjs"
-import { verifyRuntimeFingerprint } from "./runtime-fingerprint.mjs"
-import { RUNTIME_EXECUTABLES } from "./runtime-signing.mjs"
+import { assembleDesktopRuntime, rustHostTarget } from "./prepare-runtime.mjs"
+import { runtimeFingerprint, verifyRuntimeFingerprint } from "./runtime-fingerprint.mjs"
+import { runtimeExecutables } from "./runtime-layout.mjs"
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "nessa-prepare-runtime-"))
@@ -66,22 +62,6 @@ function fakeCommands(target, calls) {
   }
 }
 
-test("desktop platform layouts name their bundled executables", () => {
-  assert.deepEqual(runtimeExecutableNames("darwin"), {
-    node: "node",
-    gateway: "nessa",
-    mcp: "nessa-mcp",
-  })
-  assert.deepEqual(runtimeExecutableNames("linux"), runtimeExecutableNames("darwin"))
-  assert.deepEqual(runtimeExecutableNames("win32"), {
-    node: "node.exe",
-    gateway: "nessa.exe",
-    mcp: "nessa-mcp.exe",
-  })
-  assert.deepEqual(Object.values(runtimeExecutableNames("darwin")), RUNTIME_EXECUTABLES)
-  assert.throws(() => runtimeExecutableNames("freebsd"), /does not support freebsd/)
-})
-
 test("the Rust host target must be present and exact", () => {
   assert.equal(
     rustHostTarget("rustc 1.90.0\nbinary: rustc\nhost: x86_64-unknown-linux-gnu\n"),
@@ -103,7 +83,7 @@ test("assembly publishes one complete relocatable runtime manifest", (t) => {
   const manifest = assembleDesktopRuntime({
     root,
     out,
-    platform: "darwin",
+    executables: runtimeExecutables("darwin"),
     requestedTarget: "aarch64-apple-darwin",
     run: fakeCommands(target, calls),
     prepareNode({ executable, out: runtime }) {
@@ -114,6 +94,7 @@ test("assembly publishes one complete relocatable runtime manifest", (t) => {
     finalizeExecutables({ executables, out: runtime }) {
       for (const name of Object.values(executables))
         assert.equal(typeof readFileSync(join(runtime, name), "utf8"), "string")
+      writeFileSync(join(runtime, executables.gateway), "signed gateway")
       assert.equal(readFileSync(join(runtime, "models.json"), "utf8"), '{"models":[]}')
     },
   })
@@ -123,9 +104,12 @@ test("assembly publishes one complete relocatable runtime manifest", (t) => {
     claudeAcp: "0.76.0",
     codexAcp: "1.12.0",
     target: "aarch64-apple-darwin",
-    fingerprint: verifyRuntimeFingerprint(out),
+    fingerprint: runtimeFingerprint(out),
   })
   assert.deepEqual(JSON.parse(readFileSync(join(out, "manifest.json"), "utf8")), manifest)
+  assert.equal(readFileSync(join(out, "nessa"), "utf8"), "signed gateway")
+  assert.equal(manifest.fingerprint, runtimeFingerprint(out))
+  assert.equal(verifyRuntimeFingerprint(out), manifest.fingerprint)
   assert.throws(() => readFileSync(join(out, "removed-resource")), /ENOENT/)
   assert.equal(
     readFileSync(join(out, "claude-acp/node_modules/.bin/agent"), "utf8"),
@@ -158,7 +142,7 @@ test("a mismatched target leaves the last complete runtime untouched", (t) => {
       assembleDesktopRuntime({
         root,
         out,
-        platform: "darwin",
+        executables: runtimeExecutables("darwin"),
         requestedTarget: "x86_64-apple-darwin",
         run: fakeCommands(target, calls),
         prepareNode() {
@@ -191,7 +175,7 @@ test("invalid cargo metadata leaves the last complete runtime untouched", (t) =>
       assembleDesktopRuntime({
         root,
         out,
-        platform: "darwin",
+        executables: runtimeExecutables("darwin"),
         run(command, args, options) {
           if (command === "cargo" && args[0] === "metadata") return "{}"
           return run(command, args, options)
@@ -219,7 +203,7 @@ test("failed platform finalization cannot publish a runtime manifest", (t) => {
       assembleDesktopRuntime({
         root,
         out,
-        platform: "darwin",
+        executables: runtimeExecutables("darwin"),
         run: fakeCommands(target, []),
         prepareNode({ executable, out: runtime }) {
           writeFileSync(join(runtime, executable), "node")

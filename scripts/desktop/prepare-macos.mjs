@@ -4,6 +4,7 @@ import { mkdirSync, cpSync, readFileSync, existsSync } from "node:fs"
 import { resolve, join } from "node:path"
 import { createHash } from "node:crypto"
 import { assembleDesktopRuntime } from "./prepare-runtime.mjs"
+import { runtimeExecutables } from "./runtime-layout.mjs"
 import {
   runtimeEntitlements,
   signingArguments,
@@ -21,11 +22,12 @@ const cache = join(root, "target/desktop-downloads")
 const identity =
   signingIdentity(process.env.NESSA_RUNTIME_SIGNING_IDENTITY) ??
   signingIdentity(process.env.APPLE_SIGNING_IDENTITY)
+const executables = runtimeExecutables(process.platform)
 
 assembleDesktopRuntime({
   root,
   out,
-  platform: process.platform,
+  executables,
   requestedTarget: target,
   prepareNode({ executable, out: runtime }) {
     mkdirSync(cache, { recursive: true })

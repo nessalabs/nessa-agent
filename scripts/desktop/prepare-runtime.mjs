@@ -20,15 +20,6 @@ const HARNESSES = {
   "codex-acp": "@agentclientprotocol/codex-acp",
 }
 
-/** Name the executables produced and bundled on one desktop platform. */
-export function runtimeExecutableNames(platform) {
-  if (platform === "darwin" || platform === "linux")
-    return { node: "node", gateway: "nessa", mcp: "nessa-mcp" }
-  if (platform === "win32")
-    return { node: "node.exe", gateway: "nessa.exe", mcp: "nessa-mcp.exe" }
-  throw new Error(`Bundled gateway packaging does not support ${platform}`)
-}
-
 /** Read the native Rust target without guessing it from Node's platform names. */
 export function rustHostTarget(versionOutput) {
   const host = versionOutput.match(/^host: (.+)$/m)?.[1]
@@ -43,13 +34,12 @@ export function rustHostTarget(versionOutput) {
 export function assembleDesktopRuntime({
   root,
   out,
-  platform,
+  executables,
   requestedTarget,
   prepareNode,
   finalizeExecutables,
   run = execFileSync,
 }) {
-  const executables = runtimeExecutableNames(platform)
   const host = rustHostTarget(run("rustc", ["-vV"], { encoding: "utf8" }))
   if (requestedTarget && requestedTarget !== host)
     throw new Error("Build the desktop runtime on the target architecture")
