@@ -34,7 +34,9 @@ src/                      composition root (`main.tsx`, `store.ts`)
   session/                wire session to nessa-server (@nessa/client)
   panel/                  floating-window chrome (model / application / adapters / UI)
   host/                   injected OS features + the window seam
+  diagnostics/            development page-console forwarding
 src-tauri/src/
+  diagnostics.rs          debug-only page-to-terminal diagnostic bridge
   <context>/
     domain/               rules, entities, value objects, events
     application/          use cases + ports (traits) the use case needs
