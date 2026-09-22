@@ -108,8 +108,11 @@ rule/tool identities and safe reasons, not raw inputs or thinking.
   unsupported concepts need explicit semantics and evidence first.
 - Treat denial as permission deferral: ACP's resolved refusal cannot become a
   later approval through steering. Remembered approvals and bounded decisions are
-  [#141](https://github.com/nessalabs/nessa-agent/issues/141); human questions are
-  [#146](https://github.com/nessalabs/nessa-agent/issues/146).
+  [#141](https://github.com/nessalabs/nessa-agent/issues/141). Incoming question
+  acceptance and prerequisite repairs belong to
+  [#151](https://github.com/nessalabs/nessa-agent/issues/151) under #130.
+  [#146](https://github.com/nessalabs/nessa-agent/issues/146)'s outbound MCP ask
+  proposal is deferred (closed as not planned), not an implementation dependency.
 - Fail open for enforcement or merely tell the model to stop: neither preserves
   the policy boundary when the hook or model fails.
 

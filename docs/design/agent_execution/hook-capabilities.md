@@ -150,7 +150,9 @@ Native argument/result transforms are unavailable over that ACP boundary.
 Global configuration, custom tools that bypass permission evaluation, and MCP
 startup are separate containment concerns documented in the binding. Work in
 [#123](https://github.com/nessalabs/nessa-agent/issues/123) is not incorporated
-into this baseline. No claim of complete tool interception, plugin/config
+into this baseline. [#147](https://github.com/nessalabs/nessa-agent/issues/147)
+tracks the native-hook suppression gap; its Opencode work shares #123's owner.
+No claim of complete tool interception, plugin/config
 isolation, filesystem secrecy or startup containment follows from `PURE` alone.
 
 ### Kiro
@@ -196,7 +198,12 @@ accepted content. These probes
 do not cover MCP/app-server/model end-to-end delivery. Opencode's pinned
 [MCP initialization](https://github.com/anomalyco/opencode/blob/014614d35b397775e5d397a490fc72368c894ec2/packages/opencode/src/mcp/index.ts#L38-L82)
 does not enable elicitation. No current whole-path support claim follows from
-the isolated probes; #146 owns retained regression fixtures and integration.
+the isolated probes. Incoming schema/free-text acceptance and prerequisite repair
+are tracked under [#151](https://github.com/nessalabs/nessa-agent/issues/151) within
+#130. The external `agent-questions` owner supplies implementation evidence;
+WS6 owns this matrix and defers question-dependent integration. The outbound
+MCP ask proposal [#146](https://github.com/nessalabs/nessa-agent/issues/146) is
+closed as not planned and deferred; it is not part of this implementation plan.
 
 | Capability | Baseline answer | Activation requirement |
 | --- | --- | --- |
@@ -205,7 +212,7 @@ the isolated probes; #146 owns retained regression fixtures and integration.
 | Policy session close | Existing attributed close primitive, configured policy integration absent | Rule cause retained through all cleanup/audit paths. |
 | Compaction reporting | Native source evidence; Nessa mapping unverified | Actual correlated event from the selected binding; otherwise unsupported. |
 | Model-switch reporting | Config facts are not necessarily switch lifecycle | Validate actual event/phase and current model together. |
-| MCP elicitation forwarding | Unknown pending #146 evidence | Server-initiated request must reach question path and return correlated accept/decline/cancel; declarations alone insufficient. |
+| MCP elicitation forwarding | Unknown pending incoming-question evidence | A configured server's request must reach the question path and return correlated accept/decline/cancel; declarations alone insufficient. No Nessa-originated ask tool is implied. |
 | Permission deferral | Unsupported on these third-party bindings | No steering workaround; future own-loop harness outside scope. |
 
 Test obligations for implementation include unsupported/unknown rejection before
@@ -213,4 +220,6 @@ effects; renegotiation/restoration; causal-context lag and truncation; mixed hoo
 verdict precedence; native suppression with zero configured hooks; once-only
 remembered decisions with revocation; late provider outcomes; caller loss; and
 audit-sink failure while cleanup still runs. These are required tests, not tests
-claimed to have run. #141/#146 owners supply human-question and approval evidence.
+claimed to have run. #151's external owner supplies incoming-question evidence;
+#141 approval work and question-dependent integration require a coordinated
+handoff. The deferred outbound proposal supplies no implementation or support claim.
