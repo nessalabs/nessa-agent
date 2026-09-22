@@ -190,12 +190,20 @@ Extend `OperationCapabilities` through the existing gateway/client projection.
 Every feature needs its own tri-state value, scope and explanation; the existing
 global `negotiated` bit cannot turn a native API declaration into support.
 
-WS7 exercised real Claude/Codex handler code against a controlled connection:
-Claude forwards form fields and accepts correlated content. Both pinned ACP
-schema readers require `elicitation.form: {}`; the current boolean `true`
-advertisement is discarded. With the proper object Codex forwards and returns
-accepted content. These probes
-do not cover MCP/app-server/model end-to-end delivery. Opencode's pinned
+### Question evidence belongs to different revisions
+
+| Evidence owner | Exact scope | What it establishes |
+| --- | --- | --- |
+| Reviewed Nessa baseline | `1b244f9be4cdc64c1298633422596a1a1e00fc6c`, SDK source | No question/elicitation advertisement or incoming question implementation. Provider handler capabilities do not make this baseline accept questions. |
+| External unmerged `agent-questions` branch | [`73b826cf`, worker initialization](https://github.com/nessalabs/nessa-agent/blob/73b826cf0461d3aab8081869235b7f480fae52a1/crates/nessa-sdk/src/infrastructure/acp/executions/worker.rs#L679-L680) | Sends `elicitation.form: true`; this is external branch behavior, not baseline behavior or merged support. |
+| Historical WS7 isolated probes | Claude ACP 0.76.0 / Codex ACP 1.12.0 handlers and installed ACP 1.4.0 schema, controlled connection | Tests malformed boolean and valid object inputs, field forwarding and correlated handler return only. No model/MCP/app-server/panel end-to-end proof. |
+
+The probe report says both pinned schema readers discard boolean `form: true`;
+`form: {}` is the valid advertisement. Claude forwards form fields and accepts
+correlated content in its direct handler probe; Codex forwards and returns
+accepted content with the object capability. This is a historical probe report,
+not a test of the reviewed Nessa baseline or evidence that the external branch's
+other defects are repaired. Opencode's pinned
 [MCP initialization](https://github.com/anomalyco/opencode/blob/014614d35b397775e5d397a490fc72368c894ec2/packages/opencode/src/mcp/index.ts#L38-L82)
 does not enable elicitation. No current whole-path support claim follows from
 the isolated probes. Incoming schema/free-text acceptance and prerequisite repair
@@ -212,7 +220,7 @@ closed as not planned and deferred; it is not part of this implementation plan.
 | Policy session close | Existing attributed close primitive, configured policy integration absent | Rule cause retained through all cleanup/audit paths. |
 | Compaction reporting | Native source evidence; Nessa mapping unverified | Actual correlated event from the selected binding; otherwise unsupported. |
 | Model-switch reporting | Config facts are not necessarily switch lifecycle | Validate actual event/phase and current model together. |
-| MCP elicitation forwarding | Unknown pending incoming-question evidence | A configured server's request must reach the question path and return correlated accept/decline/cancel; declarations alone insufficient. No Nessa-originated ask tool is implied. |
+| MCP elicitation forwarding | Nessa incoming path absent in baseline; full provider path unverified | A configured server's request must reach the question path and return correlated accept/decline/cancel; declarations alone insufficient. No Nessa-originated ask tool is implied. |
 | Permission deferral | Unsupported on these third-party bindings | No steering workaround; future own-loop harness outside scope. |
 
 Test obligations for implementation include unsupported/unknown rejection before
