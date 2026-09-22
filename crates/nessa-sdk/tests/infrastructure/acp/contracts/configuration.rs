@@ -583,7 +583,10 @@ async fn close_during_restored_configuration_retains_the_explicit_actor() {
         .snapshot()
         .await
         .unwrap()
-        .provider_context;
+        .provider_context
+        .recorded()
+        .expect("attached provider context")
+        .clone();
     agent.close(close_action()).await.unwrap();
     let invoking = tokio::spawn({
         let agent = agent.clone();

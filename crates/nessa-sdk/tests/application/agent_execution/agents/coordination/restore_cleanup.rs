@@ -5,38 +5,6 @@ use std::{
     future::{poll_fn, Future},
     task::Poll,
 };
-use tokio::sync::Mutex as AsyncMutex;
-
-struct RestoredBackend {
-    base: Backend,
-    report: CleanupReport,
-}
-impl ProviderSessionBackend for RestoredBackend {
-    fn prepare_invocation(&self) -> ProviderOperationFuture<'_, ()> {
-        self.base.prepare_invocation()
-    }
-    fn execute(&self, request: ExecutionRequest) -> ProviderExecutionFuture<'_> {
-        self.base.execute(request)
-    }
-    fn answer_permission(
-        &self,
-        answer: PermissionAnswer,
-    ) -> ProviderOperationFuture<'_, PermissionResolution> {
-        self.base.answer_permission(answer)
-    }
-    fn cancel_permission(
-        &self,
-        request: PermissionCancellationRequest,
-    ) -> ProviderOperationFuture<'_, PermissionCancellation> {
-        self.base.cancel_permission(request)
-    }
-    fn close(&self, request: SessionCloseRequest) -> CleanupFuture<'_> {
-        Box::pin(async move {
-            self.base.close(request).await;
-            self.report.clone()
-        })
-    }
-}
 
 #[tokio::test]
 async fn close_during_restore_cleans_the_rearmed_attachment() {
@@ -48,31 +16,20 @@ async fn close_during_restore_cleans_the_rearmed_attachment() {
             Err(AgentError::AuditFailure),
         ),
     ] {
-        let (agent, old_backend) = agent_with_backend().await;
+        let (agent, backend) = agent_with_backend().await;
         agent.close(actor()).await.unwrap();
         assert!(!agent.inner.lifecycle.attachment_needs_cleanup());
-        let restored = Arc::new(RestoredBackend {
-            base: Backend::default(),
-            report: report.clone(),
-        });
-        let session = ProviderSession::new(
-            agent.inner.session.id().clone(),
-            restored.clone(),
-            agent.inner.session.capabilities().clone(),
-            Arc::new(AcceptingAudit),
-        );
-        let events: Arc<AsyncMutex<Box<dyn ExecutionEventStream>>> =
-            Arc::new(AsyncMutex::new(Box::new(ExhaustedEvents)));
+        *backend.cleanup_report.lock().unwrap() = Some(report.clone());
+        let authorization = agent
+            .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+            .unwrap();
         let (entered, reached) = oneshot::channel();
         let (release, waiting) = oneshot::channel();
         agent
             .inner
             .lifecycle
             .pause_next_preparation(entered, waiting);
-        let preparing = tokio::spawn({
-            let lifecycle = agent.inner.lifecycle.clone();
-            async move { lifecycle.prepare(session, events).await }
-        });
+        let attaching = agent.start_attachment(authorization).unwrap();
         reached.await.unwrap();
         let closer = ActionContext::new("owner", "phone", "close-restoring-context").unwrap();
         let (cleanup_entered, cleanup_started) = oneshot::channel();
@@ -82,7 +39,6 @@ async fn close_during_restore_cleans_the_rearmed_attachment() {
             .notify_next_cleanup_start(cleanup_entered);
         let attempt = agent.start_shutdown(SessionCloseRequest::Explicit(closer.clone()));
         assert!(agent.inner.lifecycle.is_closed());
-        // Let the independently owned cleanup task reach the held transition.
         cleanup_started.await.unwrap();
         let stopped = attempt.clone().wait();
         tokio::pin!(stopped);
@@ -94,19 +50,20 @@ async fn close_during_restore_cleans_the_rearmed_attachment() {
         );
         release.send(()).unwrap();
         assert_eq!(
-            timeout(Duration::from_secs(2), preparing)
+            timeout(Duration::from_secs(2), attaching.wait())
                 .await
-                .unwrap()
-                .unwrap(),
+                .expect("fenced attachment settles"),
             Err(AgentError::Closed)
         );
         let actual = timeout(Duration::from_secs(2), stopped).await.unwrap();
         assert_eq!(actual, report);
         assert_eq!(
-            *restored.base.closes.lock().unwrap(),
-            vec![SessionCloseRequest::Explicit(closer)]
+            *backend.closes.lock().unwrap(),
+            vec![
+                SessionCloseRequest::Explicit(actor()),
+                SessionCloseRequest::Explicit(closer),
+            ]
         );
-        assert_eq!(old_backend.closes.lock().unwrap().len(), 1);
         assert_eq!(
             agent.inner.lifecycle.attachment_needs_cleanup(),
             !report.is_confirmed()
@@ -123,17 +80,14 @@ async fn close_during_restore_cleans_the_rearmed_attachment() {
 async fn close_before_restore_prevents_rearming() {
     let (agent, backend) = agent_with_backend().await;
     agent.close(actor()).await.unwrap();
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::CallerRequested(actor()))
+        .unwrap();
     let attempt = agent.start_shutdown(SessionCloseRequest::Explicit(actor()));
-    let events: Arc<AsyncMutex<Box<dyn ExecutionEventStream>>> =
-        Arc::new(AsyncMutex::new(Box::new(ExhaustedEvents)));
-    assert_eq!(
-        agent
-            .inner
-            .lifecycle
-            .prepare(agent.inner.session.clone(), events)
-            .await,
-        Err(AgentError::Closed)
-    );
+    assert!(matches!(
+        agent.start_attachment(authorization),
+        Err(AgentError::AttachmentAuthorizationStale)
+    ));
     let report = attempt.clone().wait().await;
     assert!(report.is_confirmed());
     agent.inner.lifecycle.finalize_stop(&attempt, &report).await;

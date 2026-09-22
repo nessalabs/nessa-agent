@@ -10,7 +10,6 @@ use crate::{
     },
     domain::agent_execution::sessions::SessionId,
     infrastructure::session_storage::{InMemoryStorage, LocalFileStorage},
-    Agent,
 };
 use std::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},

@@ -4,7 +4,6 @@ use crate::application::agent_execution::sessions::{SessionManager, StorageError
 use crate::domain::agent_execution::sessions::SessionId;
 use crate::infrastructure::acp::sessions::StdioMcpServer;
 use crate::infrastructure::session_storage::LocalFileStorage;
-use crate::Agent;
 
 fn provider(config: AcpConfig, model: &ModelMetadata) -> ClaudeAcpProvider {
     ClaudeAcpProvider::new(

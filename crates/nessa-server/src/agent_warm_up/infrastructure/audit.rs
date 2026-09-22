@@ -3,7 +3,10 @@ use crate::agent_warm_up::application::{
     ProviderFailure, WarmUpAudit, WarmUpAuditRecord, WarmUpError, WarmUpFuture,
 };
 use nessa_local_storage::{create_directory, sync_directory, PrivateTempFile};
-use nessa_sdk::application::agent_execution::{agents::AgentError, permissions::ActionContext};
+use nessa_sdk::application::agent_execution::{
+    agents::{AgentError, AttachmentFailureCode, AttachmentPhase},
+    permissions::ActionContext,
+};
 use serde_json::json;
 use serde_json::Value;
 use std::{fmt::Display, io::Write, path::PathBuf};
@@ -39,6 +42,29 @@ fn actor(actor: &ActionContext) -> Value {
 /// field rather than prose.
 fn failure(failure: &ProviderFailure) -> Value {
     let error = match &failure.error {
+        AgentError::AttachmentUnavailable(AttachmentPhase::Failed(code)) => json!({
+            "kind":"attachment_unavailable",
+            "phase":"failed",
+            "failureCode":match code {
+                AttachmentFailureCode::Audit => "audit",
+                AttachmentFailureCode::Provider => "provider",
+                AttachmentFailureCode::Storage => "storage",
+                AttachmentFailureCode::Cleanup => "cleanup",
+            },
+        }),
+        AgentError::AttachmentUnavailable(phase) => json!({
+            "kind":"attachment_unavailable",
+            "phase":match phase {
+                AttachmentPhase::Absent => "absent",
+                AttachmentPhase::Waiting => "waiting",
+                AttachmentPhase::Starting => "starting",
+                AttachmentPhase::Attached => "attached",
+                AttachmentPhase::Failed(_) => unreachable!("failed phase handled above"),
+            },
+        }),
+        AgentError::AttachmentAuthorizationStale => {
+            json!({"kind":"attachment_authorization_stale"})
+        }
         AgentError::StartupDeadline(step) => json!({
             "kind": "startup_deadline",
             "step": step.as_str(),

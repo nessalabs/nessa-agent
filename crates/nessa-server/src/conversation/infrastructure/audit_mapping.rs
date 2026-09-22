@@ -1,23 +1,61 @@
 //! Explicit mapping retains target, transition, cause, actor, and delivery separately.
 use nessa_sdk::application::agent_execution::{
-    executions::{ExecutionAuditRecord, QueueOrderCause},
+    executions::{
+        AdmissionAuditCause, AdmissionAuditStage, AttachmentAuditCause, AttachmentAuditStage,
+        ExecutionAuditRecord, QueueOrderCause, SteeringAuditCause, SteeringAuditStage,
+    },
     permissions::{
         ActionContext, ApprovalBasis, CancellationOrigin, PermissionAnswerDelivery,
         ReviewDeclineRecord,
     },
 };
 use nessa_sdk::domain::agent_execution::{
-    executions::{ExecutionOutcome, InvocationKind},
+    executions::{ExecutionOutcome, InvocationKind, SubmissionMode},
     permissions::{
         PermissionCancellationReason, PermissionCancellationReasonView, PermissionDecision,
         PermissionEffect, PermissionRequest, PermissionScopeView, PermissionStateView,
         ReviewDeclineReason,
     },
+    sessions::AttachmentCause,
 };
 use serde_json::{json, Value};
 
 pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
     match record {
+        ExecutionAuditRecord::Attachment(record) => {
+            json!({
+                "kind":"attachment_transition",
+                "sessionId":record.session_id().as_str(),
+                "before":attachment_stage(record.before()),
+                "after":attachment_stage(record.after()),
+                "cause":attachment_cause(record.cause()),
+                "actor":record.actor().map(actor),
+            })
+        }
+        ExecutionAuditRecord::QueueAdmitted(record) => {
+            json!({
+                "kind":"queue_admitted",
+                "sessionId":record.session_id().as_str(),
+                "executionId":record.execution_id().as_str(),
+                "mode":submission_mode(record.mode()),
+                "before":admission_stage(record.before()),
+                "after":admission_stage(record.after()),
+                "cause":match record.cause() { AdmissionAuditCause::Submitted => "submitted" },
+                "actor":actor(record.actor()),
+            })
+        }
+        ExecutionAuditRecord::SteeringAcknowledged(record) => {
+            json!({
+                "kind":"steering_acknowledged",
+                "sessionId":record.session_id().as_str(),
+                "executionId":record.execution_id().as_str(),
+                "target":record.target().as_str(),
+                "before":steering_stage(record.before()),
+                "after":steering_stage(record.after()),
+                "cause":match record.cause() { SteeringAuditCause::ProviderAcknowledged => "provider_acknowledged" },
+                "actor":actor(record.actor()),
+            })
+        }
         ExecutionAuditRecord::QueueReordered(record) => {
             let change = record.change();
             json!({
@@ -57,6 +95,53 @@ pub(super) fn record_value(record: &ExecutionAuditRecord) -> Value {
             json!({"kind":"permission_answered","sessionId":record.session_id().as_str(),"request":permission(resolution.request()),"input":{"name":resolution.input().name,"argumentsJson":resolution.input().arguments_json},"actor":actor(resolution.attribution().actor()),"basis":basis,"delivery":delivery})
         }
         ExecutionAuditRecord::ReviewDeclined(record) => declined(record),
+    }
+}
+fn attachment_stage(stage: AttachmentAuditStage) -> &'static str {
+    match stage {
+        AttachmentAuditStage::Absent => "absent",
+        AttachmentAuditStage::Waiting => "waiting",
+        AttachmentAuditStage::Starting => "starting",
+        AttachmentAuditStage::ContextPublished => "context_published",
+        AttachmentAuditStage::Attached => "attached",
+        AttachmentAuditStage::Failed => "failed",
+    }
+}
+fn attachment_cause(cause: AttachmentAuditCause) -> Value {
+    match cause {
+        AttachmentAuditCause::Started(cause) => json!({
+            "kind":"started",
+            "attachmentCause":match cause {
+                AttachmentCause::Initial => "initial",
+                AttachmentCause::Reopen => "reopen",
+                AttachmentCause::AutomaticRecovery => "automatic_recovery",
+            },
+        }),
+        AttachmentAuditCause::AuthorizationAbandoned => {
+            json!({"kind":"authorization_abandoned"})
+        }
+        AttachmentAuditCause::Published => json!({"kind":"published"}),
+        AttachmentAuditCause::Failed => json!({"kind":"failed"}),
+    }
+}
+fn admission_stage(stage: AdmissionAuditStage) -> &'static str {
+    match stage {
+        AdmissionAuditStage::Unowned => "unowned",
+        AdmissionAuditStage::Owned => "owned",
+    }
+}
+fn steering_stage(stage: SteeringAuditStage) -> &'static str {
+    match stage {
+        SteeringAuditStage::Pending => "pending",
+        SteeringAuditStage::Injected => "injected",
+    }
+}
+fn submission_mode(mode: SubmissionMode) -> &'static str {
+    match mode {
+        SubmissionMode::Immediate => "immediate",
+        SubmissionMode::Queued => "queued",
+        SubmissionMode::BoundarySteering => "boundary_steering",
+        SubmissionMode::Steering => "steering",
     }
 }
 /// A review the binding refused before anyone was offered it.

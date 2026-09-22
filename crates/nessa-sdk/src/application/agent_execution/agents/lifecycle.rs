@@ -28,7 +28,7 @@ use crate::domain::agent_execution::{
 use std::sync::mpsc::Receiver;
 use std::{
     collections::HashMap,
-    future::Future,
+    future::{poll_fn, Future},
     panic::{catch_unwind, AssertUnwindSafe},
     pin::Pin,
     sync::{Arc, Mutex},
@@ -416,7 +416,7 @@ impl SessionLifecycle {
         let start = AttachmentStart {
             generation: state.attachment_generation,
             cause: authorization.cause,
-            actor: authorization.actor,
+            actor: authorization.actor.clone(),
             result: result.clone(),
         };
         state.attachment = AttachmentState::Starting {

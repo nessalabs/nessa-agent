@@ -1,6 +1,10 @@
 use super::*;
 use nessa_sdk::application::agent_execution::{
-    executions::{ExecutionController, QueueOrderRecord, SessionClosureRecord},
+    executions::{
+        AttachmentAuditCause, AttachmentAuditRecord, AttachmentAuditStage, ExecutionController,
+        QueueAdmissionRecord, QueueOrderRecord, SessionClosureRecord,
+        SteeringAcknowledgementRecord,
+    },
     permissions::{
         ActionContext, ApprovalAttribution, ApprovalBasis, CancellationOrigin, PermissionAnswer,
         PermissionAnswerDelivery, PermissionAnswerRecord, ReviewDeclineRecord,
@@ -8,8 +12,8 @@ use nessa_sdk::application::agent_execution::{
     tools::ToolReviewInput,
 };
 use nessa_sdk::domain::agent_execution::{
-    executions::{ExecutionId, ExecutionOutcome, InvocationKind, QueueOrderChange},
-    sessions::{ExecutionSession, ExecutionSessionId, SessionId},
+    executions::{ExecutionId, ExecutionOutcome, InvocationKind, QueueOrderChange, SubmissionMode},
+    sessions::{AttachmentCause, ExecutionSession, ExecutionSessionId, SessionId},
 };
 use nessa_sdk::domain::agent_execution::{
     permissions::{
@@ -31,6 +35,51 @@ fn finished(outcome: ExecutionOutcome) -> ExecutionAuditRecord {
     let id = ExecutionId::new("execution").unwrap();
     session.begin_execution(id.clone()).unwrap();
     ExecutionAuditRecord::Finished(session.finish_execution(&id, Ok(outcome)).unwrap().0)
+}
+#[test]
+fn audit_maps_attachment_and_admission_evidence_without_losing_correlation() {
+    let session = SessionId::new("session").unwrap();
+    let execution = ExecutionId::new("steering").unwrap();
+    let target = ExecutionId::new("active").unwrap();
+    let attachment = record_value(&ExecutionAuditRecord::Attachment(
+        AttachmentAuditRecord::new(
+            session.clone(),
+            AttachmentAuditStage::Waiting,
+            AttachmentAuditStage::Starting,
+            AttachmentAuditCause::Started(AttachmentCause::Reopen),
+            Some(actor()),
+        ),
+    ));
+    assert_eq!(attachment["kind"], "attachment_transition");
+    assert_eq!(attachment["before"], "waiting");
+    assert_eq!(attachment["after"], "starting");
+    assert_eq!(attachment["cause"]["kind"], "started");
+    assert_eq!(attachment["cause"]["attachmentCause"], "reopen");
+    assert_eq!(attachment["actor"]["requestId"], "action");
+
+    let admission = record_value(&ExecutionAuditRecord::QueueAdmitted(
+        QueueAdmissionRecord::submitted(
+            session.clone(),
+            execution.clone(),
+            SubmissionMode::Steering,
+            actor(),
+        ),
+    ));
+    assert_eq!(admission["executionId"], "steering");
+    assert_eq!(admission["mode"], "steering");
+    assert_eq!(admission["before"], "unowned");
+    assert_eq!(admission["after"], "owned");
+    assert_eq!(admission["cause"], "submitted");
+
+    let steering = record_value(&ExecutionAuditRecord::SteeringAcknowledged(
+        SteeringAcknowledgementRecord::provider_acknowledged(session, execution, target, actor()),
+    ));
+    assert_eq!(steering["executionId"], "steering");
+    assert_eq!(steering["target"], "active");
+    assert_eq!(steering["before"], "pending");
+    assert_eq!(steering["after"], "injected");
+    assert_eq!(steering["cause"], "provider_acknowledged");
+    assert_eq!(steering["actor"]["requestId"], "action");
 }
 #[test]
 fn audit_maps_complete_queue_transition_with_priority_and_actor() {

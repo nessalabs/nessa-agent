@@ -1263,7 +1263,7 @@ impl Agent {
                         index,
                         event(
                             InvocationKind::Steering,
-                            target.clone(),
+                            Some(target.clone()),
                             Some(InvocationStage::Queued),
                             InvocationStage::Injected,
                             SchedulingCause::SteeringInjected,

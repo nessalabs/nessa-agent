@@ -75,6 +75,11 @@ fn answers(audit: &AnswerAudit) -> Vec<PermissionAnswerRecord> {
                 panic!("resolved answer must not be relabelled on cleanup")
             }
             ExecutionAuditRecord::QueueReordered(_) => None,
+            ExecutionAuditRecord::Attachment(_)
+            | ExecutionAuditRecord::QueueAdmitted(_)
+            | ExecutionAuditRecord::SteeringAcknowledged(_) => {
+                panic!("provider answer audit emitted SDK admission evidence")
+            }
             ExecutionAuditRecord::ReviewDeclined(record) => {
                 panic!("an offered review must not be refused unoffered: {record:?}")
             }

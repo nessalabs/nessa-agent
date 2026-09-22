@@ -1,7 +1,7 @@
 //! Deterministically cancel callers while real file operations are queued.
 use super::*;
 use crate::application::agent_execution::providers::ProviderIdentity;
-use crate::domain::agent_execution::sessions::ExecutionSessionId;
+use crate::domain::agent_execution::sessions::{ExecutionSessionId, ProviderContext};
 use std::{
     future::{poll_fn, Future},
     sync::mpsc,

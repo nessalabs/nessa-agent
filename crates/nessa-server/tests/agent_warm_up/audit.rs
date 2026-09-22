@@ -4,7 +4,10 @@
 use super::{DurableWarmUpAudit, ProviderFailure, WarmUpAudit, WarmUpAuditRecord};
 use crate::agent_warm_up::domain::{RuntimeFingerprint, WarmUpCause, WarmUpState};
 use nessa_sdk::application::agent_execution::{
-    agents::{AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep},
+    agents::{
+        AgentError, AgentStartupContext, AgentStartupPhase, AgentStartupStep,
+        AttachmentFailureCode, AttachmentPhase,
+    },
     permissions::ActionContext,
 };
 use std::path::Path;
@@ -103,6 +106,14 @@ async fn a_failed_warm_up_records_the_startup_step_as_data() {
 async fn every_failure_a_warm_up_can_reach_is_discriminated() {
     let root = tempfile::tempdir().unwrap();
     for (index, (error, kind)) in [
+        (
+            AgentError::AttachmentUnavailable(AttachmentPhase::Starting),
+            "attachment_unavailable",
+        ),
+        (
+            AgentError::AttachmentAuthorizationStale,
+            "attachment_authorization_stale",
+        ),
         (AgentError::Deadline, "deadline"),
         (AgentError::Closed, "closed"),
         (AgentError::CleanupUncertain, "cleanup_uncertain"),
@@ -137,6 +148,26 @@ async fn every_failure_a_warm_up_can_reach_is_discriminated() {
         assert_eq!(value["failure"]["error"]["kind"], kind);
         assert_eq!(value["failure"]["cleanupUnconfirmed"], false);
     }
+}
+
+#[tokio::test]
+async fn attachment_unavailable_retains_phase_and_failure_category() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("warm-up-attachment");
+    let audit = DurableWarmUpAudit::new(directory.clone()).unwrap();
+    audit
+        .record(record(Some(ProviderFailure {
+            error: AgentError::AttachmentUnavailable(AttachmentPhase::Failed(
+                AttachmentFailureCode::Storage,
+            )),
+            cleanup_unconfirmed: false,
+        })))
+        .await
+        .unwrap();
+    let value = written(&directory);
+    assert_eq!(value["failure"]["error"]["kind"], "attachment_unavailable");
+    assert_eq!(value["failure"]["error"]["phase"], "failed");
+    assert_eq!(value["failure"]["error"]["failureCode"], "storage");
 }
 
 /// A sink that cannot accept evidence has to say so: the service refuses to

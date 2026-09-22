@@ -12,7 +12,6 @@ use std::{
     future::{poll_fn, Future},
     task::Poll,
 };
-use tokio::sync::Mutex;
 
 async fn restore_attachment(agent: &Agent, prior: &WorkPermit) {
     agent.inner.lifecycle.record_provider_state(
@@ -21,13 +20,13 @@ async fn restore_attachment(agent: &Agent, prior: &WorkPermit) {
             forced: false,
         })),
     );
+    let authorization = agent
+        .authorize_attachment(AttachmentRequest::AutomaticRecovery)
+        .unwrap();
     agent
-        .inner
-        .lifecycle
-        .prepare(
-            agent.inner.session.clone(),
-            Arc::new(Mutex::new(Box::new(ExhaustedEvents))),
-        )
+        .start_attachment(authorization)
+        .unwrap()
+        .wait()
         .await
         .unwrap();
     let preparation = agent.accept_preparation().unwrap();

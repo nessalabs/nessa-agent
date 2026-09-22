@@ -1,6 +1,6 @@
 //! Deterministic checks at the control-result handoff before caller-side processing.
 use super::*;
-use crate::application::agent_execution::agents::AgentFuture;
+use crate::application::agent_execution::agents::{AgentFuture, AttachmentRequest};
 use crate::application::{
     agent_execution::{
         executions::{ExecutionAudit, ExecutionAuditRecord, ExecutionRequest, SubmissionMode},
@@ -25,6 +25,49 @@ impl ExecutionAudit for AcceptingAudit {
     fn record(&self, _record: ExecutionAuditRecord) -> AgentFuture<'_, ()> {
         Box::pin(async { Ok(()) })
     }
+}
+fn capabilities_ref() -> &'static EffectiveCapabilities {
+    static CAPABILITIES: std::sync::OnceLock<EffectiveCapabilities> = std::sync::OnceLock::new();
+    CAPABILITIES.get_or_init(|| {
+        let text = ModalitiesDto {
+            text: true,
+            image: false,
+            audio: false,
+        };
+        let model = ModelMetadata::try_from(ModelMetadataDto {
+            provider: "anthropic".into(),
+            model_id: "fixture".into(),
+            display_name: "Fixture".into(),
+            input: text,
+            image_input: None,
+            output: text,
+            tool_use: true,
+            reasoning: false,
+            max_context_window_tokens: 1000,
+            max_output_tokens: 100,
+            knowledge_cutoff: "2026-01".into(),
+            documentation_url: "https://example.com".into(),
+        })
+        .unwrap();
+        let text = Modalities::new(true, false, false).unwrap();
+        EffectiveCapabilities::new(
+            &model,
+            BindingRestrictions::new(ModelFeatures::new(text, text, true, false), model.limits()),
+            model.limits(),
+        )
+        .unwrap()
+    })
+}
+async fn attached_agent(
+    provider: Arc<dyn AgentProvider>,
+    manager: SessionManager,
+) -> Result<Agent, AgentError> {
+    let agent = Agent::prepare(provider, manager, Arc::new(AcceptingAudit))
+        .await
+        .map_err(|error| error.cause().clone())?;
+    let authorization = agent.authorize_attachment(AttachmentRequest::CallerRequested(actor()))?;
+    agent.start_attachment(authorization)?.wait().await?;
+    Ok(agent)
 }
 use crate::domain::{
     agent_execution::{

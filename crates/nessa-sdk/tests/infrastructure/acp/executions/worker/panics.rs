@@ -234,6 +234,11 @@ async fn audit_panics_attempt_all_cleanup_records_and_retain_process_for_retry()
                         ExecutionAuditRecord::QueueReordered(_) => {
                             panic!("explicit close did not reorder pending work")
                         }
+                        ExecutionAuditRecord::Attachment(_)
+                        | ExecutionAuditRecord::QueueAdmitted(_)
+                        | ExecutionAuditRecord::SteeringAcknowledged(_) => {
+                            panic!("provider cleanup emitted SDK admission evidence")
+                        }
                         ExecutionAuditRecord::ReviewDeclined(_) => {
                             panic!("explicit close did not refuse a review")
                         }

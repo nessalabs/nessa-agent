@@ -89,7 +89,7 @@ async fn manager(previous_turns: usize) -> (SessionManager, Arc<FaultLease>, Exe
             ..Evidence::default()
         })),
         dispatched: RwLock::new(HashMap::new()),
-        attachment: None,
+        attachment: Arc::new(AttachmentLease::empty()),
     };
     manager.begin_dispatch(&active_id);
     (manager, lease, active_id)
