@@ -25,6 +25,19 @@ const HOST_EVENTS = {
   attachmentBatch: "nessa://attachment-batch",
 } as const
 
+export interface WebviewConsoleEntry {
+  level: "warn" | "error"
+  message: string
+  source: string
+}
+
+/** Mirrors a development webview warning or error to the host terminal. */
+export async function forwardWebviewConsole(entry: WebviewConsoleEntry): Promise<void> {
+  if (!inTauri) return
+  const { invoke } = await import("@tauri-apps/api/core")
+  await invoke("plugin:dev-console|forward_webview_console", { entry })
+}
+
 /**
  * The frosted surface is a native window effect, so the clear surface has to
  * turn it off in the host as well as in CSS.
