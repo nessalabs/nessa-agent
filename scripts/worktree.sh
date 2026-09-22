@@ -31,7 +31,11 @@
 
 set -euo pipefail
 
-script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# `pwd -P` throughout: git records a worktree by its physical path, and these
+# paths are compared against that registry as strings. Reached through a
+# symlinked parent, a logical path would match nothing — the hook would refuse
+# to reopen its own worktree, and would skip deleting its branch on removal.
+script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 # Worktrees, and the build cache they share, belong to the original clone —
 # never to whichever checkout this copy of the script happens to sit in.
@@ -49,7 +53,7 @@ script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 git_common="$(git -C "$script_root" rev-parse --git-common-dir 2>/dev/null || true)"
 [[ -n "$git_common" ]] || { printf '%s\n' "not a git checkout: $script_root" >&2; exit 1; }
 [[ "$git_common" = /* ]] || git_common="$script_root/$git_common"
-repo_root="$(cd "$git_common/.." && pwd)"
+repo_root="$(cd "$git_common/.." && pwd -P)"
 repo_name="$(basename "$repo_root")"
 parent="$(dirname "$repo_root")"
 
@@ -98,10 +102,18 @@ check_name() {
 # dot segments to climb out of it, no leading dash to be read as an option.
 check_hook_name() {
   local name="$1" segment
+  local -a segments=()
   [[ -n "$name" ]] || die "WorktreeCreate: empty name"
   [[ "$name" != -* ]] || die "WorktreeCreate: name may not start with a dash: $name"
-  local IFS=/
-  for segment in $name; do
+  # A trailing slash leaves no empty field to catch below, so it is caught here.
+  [[ "$name" != */ ]] || die "WorktreeCreate: name may not end with a slash: $name"
+  # `read -ra`, not `for segment in $name`: an unquoted expansion is also a glob,
+  # so a name of `*` would have been replaced by the contents of whatever
+  # directory the hook happened to run in and then matched the alphabet below
+  # one innocent-looking filename at a time. Splitting without expanding means
+  # the rule reads the name it was given.
+  IFS=/ read -ra segments <<< "$name"
+  for segment in "${segments[@]}"; do
     [[ -n "$segment" ]] || die "WorktreeCreate: empty path segment in name: $name"
     [[ "$segment" != . && "$segment" != .. ]] \
       || die "WorktreeCreate: name may not contain a '.' or '..' segment: $name"
@@ -188,6 +200,16 @@ worktree_for_branch() {
   git -C "$repo_root" worktree list --porcelain | awk -v want="refs/heads/$1" '
     /^worktree /  { path = substr($0, 10) }
     /^branch /    { if (substr($0, 8) == want) { print path; exit } }
+  '
+}
+
+# Whether git knows a path as one of its worktrees, branch or not. A worktree
+# left on a detached HEAD has no `branch` line, and reading only that made it
+# indistinguishable from a stray directory.
+is_registered_worktree() {
+  git -C "$repo_root" worktree list --porcelain | awk -v want="$1" '
+    /^worktree /  { if (substr($0, 10) == want) { found = 1; exit } }
+    END           { exit(found ? 0 : 1) }
   '
 }
 
@@ -321,11 +343,11 @@ cmd_claude_hook() {
   # would be handed back as a checkout that is not one, and Claude Code refuses
   # those with a message about git metadata rather than about this.
   if [[ -e "$dir" ]]; then
-    occupant="$(branch_at_worktree "$dir")"
-    [[ -n "$occupant" ]] \
+    is_registered_worktree "$dir" \
       || die "$dir exists but git does not know it as a worktree.
 Remove it and let this recreate it, or pick another name."
-    echo "→ reusing $dir (on $occupant)" >&2
+    occupant="$(branch_at_worktree "$dir")"
+    echo "→ reusing $dir (on ${occupant:-a detached HEAD})" >&2
     ensure_shared_target "$dir" || echo "→ build cache not shared; continuing" >&2
     printf '%s\n' "$dir"
     return 0
@@ -394,9 +416,22 @@ cmd_claude_hook_remove() {
   payload="$(cat)"
   dir="$(printf '%s' "$payload" | hook_field worktree_path)"
   [[ -n "$dir" ]] || die "WorktreeRemove: no .worktree_path in: $payload"
+  # git records no trailing slash, and the branch lookup below is a string
+  # compare against that record.
+  while [[ "$dir" == */ && "$dir" != / ]]; do dir="${dir%/}"; done
   [[ -e "$dir" ]] || return 0
 
   branch="$(branch_at_worktree "$dir")"
+  # A worktree left on a detached HEAD — an agent that ran `git bisect`, or
+  # checked out a sha — has no branch line for git to answer with, and reading
+  # only that would leave its branch behind for ever. Under
+  # `.claude/worktrees/` the branch is known from the path: this hook chose
+  # both. Nothing is deleted on the strength of that alone; it still has to
+  # exist and still has to hold nothing the base does not.
+  if [[ -z "$branch" && "$dir" == "$repo_root/.claude/worktrees/"* ]]; then
+    branch="worktree-${dir#"$repo_root/.claude/worktrees/"}"
+    git -C "$repo_root" show-ref --quiet --verify "refs/heads/$branch" || branch=""
+  fi
   if [[ -L "$dir/target" ]]; then
     rm -f "$dir/target"
   fi
@@ -486,6 +521,7 @@ case "${1:-}" in
   remove)      shift; cmd_remove "$@" ;;
   list)        git -C "$repo_root" worktree list ;;
   path)        shift; cmd_path "$@" ;;
+  check-hook-name) shift; check_hook_name "${1:-}" ;;
   claude-hook) cmd_claude_hook ;;
   claude-hook-remove) cmd_claude_hook_remove ;;
   *)           usage ;;

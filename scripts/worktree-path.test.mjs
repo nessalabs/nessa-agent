@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawnSync } from "node:child_process"
 import { readFileSync } from "node:fs"
 import test from "node:test"
 
@@ -89,4 +89,47 @@ test("the name alphabet still excludes the character that stands for a slash", (
 test("a name the alphabet rejects is refused rather than placed somewhere odd", () => {
   assert.throws(() => pathFor("has space"), /invalid name/)
   assert.throws(() => pathFor("has.dot"), /invalid name/)
+})
+
+/**
+ * The slug rule is a different rule from `check_name`, for a different
+ * alphabet: Claude Code accepts `[a-zA-Z0-9._-]` per slash-separated segment,
+ * dots included, so names it makes without complaint — `v1.2`, `release/1.0` —
+ * must not be refused. What the value is used as, though, is a path under
+ * `.claude/worktrees/`, so the rule has to hold on the path side too.
+ *
+ * The glob cases are the reason this test exists. The check split the name with
+ * an unquoted expansion, which is also a pathname expansion, so `*` was
+ * replaced by the contents of whatever directory the hook ran in and then
+ * matched the alphabet one innocent filename at a time.
+ */
+const accepts = (name) => {
+  const result = spawnSync("bash", [script, "check-hook-name", name], { cwd: root })
+  return result.status === 0
+}
+
+test("the slug rule accepts the names Claude Code actually makes", () => {
+  for (const name of [
+    "v1.2",
+    "release/1.0",
+    "bright-running-fox",
+    "issue-74-agent-startup",
+    "a_b",
+    "a/b/c",
+  ])
+    assert.equal(accepts(name), true, `${name} should be a usable worktree name`)
+})
+
+test("a name is not expanded as a glob while it is being checked", () => {
+  for (const name of ["*", "?", "scripts/*", "[R]EADME.md"])
+    assert.equal(
+      accepts(name),
+      false,
+      `${name} was accepted — the rule is matching directory contents, not the name`,
+    )
+})
+
+test("nothing accepted can climb out of the worktree directory", () => {
+  for (const name of ["../escape", "a/../b", "/a", "a//b", "a/", "-rf", ""])
+    assert.equal(accepts(name), false, `${name} should not be a usable worktree name`)
 })
