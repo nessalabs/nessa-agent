@@ -24,11 +24,39 @@ use serde::{Deserialize, Serialize};
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub panel: Panel,
+    /// Durable identity and provider settings for the packaged gateway service.
+    pub service: Service,
     /// Keep background agents running after quitting the desktop by default.
     pub stop_agents_on_quit: bool,
     /// How far first-run setup got. A file written before this key existed
     /// loads as "not done", which is the same answer a first launch gives.
     pub onboarding: Onboarding,
+}
+
+/// Inputs that may intentionally select a packaged service identity.
+///
+/// `None` means composition resolves the packaged default from the account and
+/// compiled stage. Values are validated by `ServiceConfiguration` before any
+/// registration effect; settings remain a transport shape, not authority.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Service {
+    /// Explicit Nessa data root. Defaults to the current account's Nessa root.
+    pub data_root: Option<PathBuf>,
+    /// Explicit service instance. Defaults to the stage's primary instance.
+    pub instance: Option<String>,
+    /// Explicit loopback port. Defaults to the compiled stage table.
+    pub port: Option<u16>,
+    /// Provider settings that affect the registered service definition.
+    pub claude: ClaudeService,
+}
+
+/// Durable Claude settings used by both readiness and provider launch.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ClaudeService {
+    /// Explicit Claude configuration directory, or the provider's account default.
+    pub configuration_directory: Option<PathBuf>,
 }
 
 /// What first-run setup has settled.
@@ -288,6 +316,10 @@ mod tests {
         // Nor does it name an agent, which is why the gateway's own default is
         // what a conversation starts on rather than a guess made here.
         assert_eq!(settings.onboarding.agent, None);
+        assert!(settings.service.data_root.is_none());
+        assert!(settings.service.instance.is_none());
+        assert!(settings.service.port.is_none());
+        assert!(settings.service.claude.configuration_directory.is_none());
     }
 
     #[test]
@@ -342,10 +374,28 @@ mod tests {
 
     #[test]
     fn camel_case_keys_round_trip() {
-        let settings = parse(r#"{ "panel": { "width": 480, "minWidth": 400 } }"#).unwrap();
+        let settings = parse(
+            r#"{
+                "panel": { "width": 480, "minWidth": 400 },
+                "service": {
+                    "dataRoot": "/private/nessa",
+                    "instance": "work",
+                    "port": 17420,
+                    "claude": { "configurationDirectory": "/private/claude" }
+                }
+            }"#,
+        )
+        .unwrap();
         assert_eq!(settings.panel.width, 480.0);
         assert_eq!(settings.panel.min_width, 400.0);
         assert!(settings.panel.height.is_none());
+        assert_eq!(settings.service.data_root, Some("/private/nessa".into()));
+        assert_eq!(settings.service.instance.as_deref(), Some("work"));
+        assert_eq!(settings.service.port, Some(17420));
+        assert_eq!(
+            settings.service.claude.configuration_directory,
+            Some("/private/claude".into())
+        );
     }
 
     #[test]
@@ -464,6 +514,7 @@ mod tests {
                 },
                 stop_agents_on_quit: true,
                 onboarding: Onboarding::default(),
+                service: Service::default(),
             },
             &store,
         )
