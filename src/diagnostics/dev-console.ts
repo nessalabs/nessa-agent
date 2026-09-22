@@ -2,6 +2,26 @@ import { forwardWebviewConsole, type WebviewConsoleEntry } from "../host/window"
 
 type ConsoleWriter = Pick<Console, "warn" | "error">
 type Forward = (entry: WebviewConsoleEntry) => Promise<void> | void
+type Source = () => string
+
+/**
+ * Repairs malformed UTF-16 and keeps at most `mostScalars` Unicode values.
+ *
+ * JavaScript permits lone surrogates, while the host's JSON `String` does not.
+ * Iterating a string combines a valid surrogate pair into one scalar and leaves
+ * a lone surrogate as one code unit, which is replaced before IPC serialization.
+ */
+function boundedScalarText(value: string, mostScalars: number): string {
+  const bounded: string[] = []
+  for (const scalar of value) {
+    if (bounded.length === mostScalars) break
+    const unit = scalar.charCodeAt(0)
+    bounded.push(
+      scalar.length === 1 && unit >= 0xd800 && unit <= 0xdfff ? "\ufffd" : scalar,
+    )
+  }
+  return bounded.join("")
+}
 
 function describe(value: unknown): string {
   try {
@@ -22,6 +42,7 @@ function describe(value: unknown): string {
 export function installDevConsoleForwarding(
   target: ConsoleWriter = console,
   forward: Forward = forwardWebviewConsole,
+  source: Source = () => new Error().stack ?? "source unavailable",
 ): () => void {
   const originals = { warn: target.warn, error: target.error }
 
@@ -33,11 +54,8 @@ export function installDevConsoleForwarding(
           level,
           // Four UTF-8 bytes per JavaScript character is the worst case, so
           // these limits fit the host's byte bounds before the IPC allocates.
-          message: values
-            .map(describe)
-            .join(" ")
-            .slice(0, 4 * 1024),
-          source: (new Error().stack ?? "source unavailable").slice(0, 2 * 1024),
+          message: boundedScalarText(values.map(describe).join(" "), 4 * 1024),
+          source: boundedScalarText(source(), 2 * 1024),
         }
         void Promise.resolve(forward(entry)).catch(() => undefined)
       } catch {

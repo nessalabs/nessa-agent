@@ -53,4 +53,38 @@ describe("development page console forwarding", () => {
 
     restore()
   })
+
+  it("keeps a complete final message scalar at the forwarding boundary", () => {
+    const target = { warn: vi.fn(), error: vi.fn() }
+    const forward = vi.fn()
+    const restore = installDevConsoleForwarding(target, forward, () => "source")
+
+    target.warn(`${"x".repeat(4095)}🐇ignored`)
+
+    expect(forward).toHaveBeenCalledWith({
+      level: "warn",
+      message: `${"x".repeat(4095)}🐇`,
+      source: "source",
+    })
+    restore()
+  })
+
+  it("repairs lone surrogates in both terminal fields", () => {
+    const target = { warn: vi.fn(), error: vi.fn() }
+    const forward = vi.fn()
+    const restore = installDevConsoleForwarding(
+      target,
+      forward,
+      () => `${"s".repeat(2047)}\udc00ignored`,
+    )
+
+    target.error("before\ud83dafter")
+
+    expect(forward).toHaveBeenCalledWith({
+      level: "error",
+      message: "before�after",
+      source: `${"s".repeat(2047)}�`,
+    })
+    restore()
+  })
 })
