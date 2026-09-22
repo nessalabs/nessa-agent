@@ -272,6 +272,10 @@ Its immutable domain values live under `domain/value_objects/`: `endpoint.rs`
 validates the listener and process identity, while `advertisement.rs` enforces
 agreement between that endpoint and optional desktop-managed identity. Tests
 mirror those responsibilities under `tests/domain/value_objects/`.
+File adapters require an already-created, current-user-private data root and
+resolve the stage and instance namespace beneath that root without following
+links. Server credential provisioning establishes that root on a new install;
+an existing permissive or redirected root is refused.
 Server composition publishes the actual listener address atomically beside
 `gateway.log`; local Rust clients accept it only when every identity field agrees
 with a bounded unauthenticated `/health` response. This correlation rejects stale

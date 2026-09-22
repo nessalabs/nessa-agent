@@ -5,21 +5,32 @@ use nessa_gateway_endpoint::{
     },
     infrastructure::{FileEndpointDiscovery, FileEndpointPublication, ENDPOINT_FILE},
 };
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
-    io::{Read, Write},
-    net::TcpListener,
+    fs,
+    io::{ErrorKind, Read, Write},
+    net::{SocketAddr, TcpListener},
+    path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
 };
+use tempfile::TempDir;
 
-fn publication(directory: &std::path::Path) -> FileEndpointPublication {
+fn private_logs(temporary: &TempDir) -> PathBuf {
+    let root = temporary.path().join("private-data");
+    nessa_local_storage::create_directory(&root).unwrap();
+    root.join("logs")
+}
+
+fn publication(directory: &Path) -> FileEndpointPublication {
     FileEndpointPublication::new(
         directory.parent().unwrap().to_path_buf(),
         directory.file_name().unwrap().into(),
     )
 }
 
-fn discovery(directory: &std::path::Path) -> FileEndpointDiscovery {
+fn discovery(directory: &Path) -> FileEndpointDiscovery {
     FileEndpointDiscovery::new(
         directory.parent().unwrap().to_path_buf(),
         directory.file_name().unwrap().into(),
@@ -45,7 +56,7 @@ fn endpoint(port: u16) -> GatewayEndpoint {
 fn canonical_publication_agrees_with_the_cross_runtime_fixture() {
     let fixture = include_str!("../../../../protocol/fixtures/gateway-endpoint.json");
     let temporary = tempfile::tempdir().unwrap();
-    let logs = temporary.path().join("logs");
+    let logs = private_logs(&temporary);
     let publication = publication(&logs);
     let endpoint = GatewayEndpoint::new(
         "ws://127.0.0.1:9137".into(),
@@ -68,10 +79,7 @@ fn canonical_publication_agrees_with_the_cross_runtime_fixture() {
     );
 }
 
-fn health_server(
-    instance: &str,
-    process_id: u32,
-) -> (std::net::SocketAddr, thread::JoinHandle<()>) {
+fn health_server(instance: &str, process_id: u32) -> (SocketAddr, thread::JoinHandle<()>) {
     health_server_with_managed(instance, process_id, None)
 }
 
@@ -79,7 +87,7 @@ fn health_server_with_managed(
     instance: &str,
     process_id: u32,
     managed: Option<(&str, &str)>,
-) -> (std::net::SocketAddr, thread::JoinHandle<()>) {
+) -> (SocketAddr, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let instance = instance.to_owned();
@@ -108,7 +116,7 @@ fn health_server_with_managed(
 #[test]
 fn managed_discovery_correlates_every_identity_field_over_a_real_health_socket() {
     let temporary = tempfile::tempdir().unwrap();
-    let logs = temporary.path().join("logs");
+    let logs = private_logs(&temporary);
     let instance = "3f43acfb-3ce4-48fb-8dd1-d31c9404a6bd";
     let fingerprint = "a".repeat(64);
     let generation = "b".repeat(64);
@@ -138,7 +146,7 @@ fn managed_discovery_correlates_every_identity_field_over_a_real_health_socket()
 #[test]
 fn publication_atomically_replaces_the_previous_bound_port_and_managed_identity() {
     let temporary = tempfile::tempdir().unwrap();
-    let logs = temporary.path().join("logs");
+    let logs = private_logs(&temporary);
     let adapter = publication(&logs);
     PublishGatewayEndpoint::new(&adapter)
         .execute(&advertisement(&endpoint(7421), None))
@@ -175,7 +183,7 @@ fn publication_atomically_replaces_the_previous_bound_port_and_managed_identity(
 #[test]
 fn contradictory_managed_identity_cannot_be_published_or_write_a_file() {
     let temporary = tempfile::tempdir().unwrap();
-    let logs = temporary.path().join("logs");
+    let logs = private_logs(&temporary);
     let endpoint = endpoint(8137);
     let another_instance = ManagedRuntimeIdentity::new(
         "a".repeat(64),
@@ -199,7 +207,7 @@ fn contradictory_managed_identity_cannot_be_published_or_write_a_file() {
 #[test]
 fn discovery_reads_a_real_private_file_and_correlates_a_real_health_socket() {
     let temporary = tempfile::tempdir().unwrap();
-    let logs = temporary.path().join("logs");
+    let logs = private_logs(&temporary);
     let (address, server) = health_server("3f43acfb-3ce4-48fb-8dd1-d31c9404a6bd", 909);
     let publication = publication(&logs);
     let endpoint = GatewayEndpoint::new(
@@ -221,7 +229,7 @@ fn discovery_reads_a_real_private_file_and_correlates_a_real_health_socket() {
 #[test]
 fn absent_record_falls_back_but_mismatched_identity_is_refused() {
     let temporary = tempfile::tempdir().unwrap();
-    let logs = temporary.path().join("logs");
+    let logs = private_logs(&temporary);
     assert!(DiscoverGatewayEndpoint::new(&discovery(&logs))
         .execute()
         .unwrap()
@@ -240,7 +248,7 @@ fn absent_record_falls_back_but_mismatched_identity_is_refused() {
     let error = DiscoverGatewayEndpoint::new(&discovery(&logs))
         .execute()
         .unwrap_err();
-    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    assert_eq!(error.kind(), ErrorKind::PermissionDenied);
     server.join().unwrap();
 }
 
@@ -250,7 +258,7 @@ fn a_domain_invalid_record_cannot_open_a_health_connection() {
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
     let temporary = tempfile::tempdir().unwrap();
-    let logs = temporary.path().join("logs");
+    let logs = private_logs(&temporary);
     nessa_local_storage::create_directory(&logs).unwrap();
     let mut file = nessa_local_storage::open(
         &logs.join(ENDPOINT_FILE),
@@ -267,10 +275,10 @@ fn a_domain_invalid_record_cannot_open_a_health_connection() {
     let error = DiscoverGatewayEndpoint::new(&discovery(&logs))
         .execute()
         .unwrap_err();
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(error.kind(), ErrorKind::InvalidData);
     assert_eq!(
         listener.accept().unwrap_err().kind(),
-        std::io::ErrorKind::WouldBlock,
+        ErrorKind::WouldBlock,
         "domain-invalid endpoint must fail before unauthenticated health I/O"
     );
 }
@@ -302,6 +310,28 @@ fn an_intermediate_symlink_cannot_redirect_endpoint_read_or_publication() {
     assert!(!outside.path().join(ENDPOINT_FILE).exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn a_permissive_root_is_refused_before_read_or_publication() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("permissive-data");
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let read =
+        DiscoverGatewayEndpoint::new(&FileEndpointDiscovery::new(root.clone(), "logs".into()))
+            .execute()
+            .unwrap_err();
+    assert!(nessa_local_storage::is_unsafe_file(&read));
+
+    let write =
+        PublishGatewayEndpoint::new(&FileEndpointPublication::new(root.clone(), "logs".into()))
+            .execute(&advertisement(&endpoint(9137), None))
+            .unwrap_err();
+    assert!(nessa_local_storage::is_unsafe_file(&write));
+    assert!(!root.join("logs").exists());
+}
+
 #[test]
 fn health_correlation_has_one_total_deadline_across_slow_reads() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -318,7 +348,7 @@ fn health_correlation_has_one_total_deadline_across_slow_reads() {
         }
     });
     let temporary = tempfile::tempdir().unwrap();
-    let logs = temporary.path().join("logs");
+    let logs = private_logs(&temporary);
     let endpoint = GatewayEndpoint::new(
         format!("ws://{address}"),
         endpoint(address.port()).identity().clone(),
@@ -351,7 +381,7 @@ fn bracketed_ipv6_loopback_is_discovered_over_a_real_health_socket() {
         write!(stream, "HTTP/1.1 200 OK\r\nx-nessa-endpoint-instance: {instance}\r\nx-nessa-endpoint-process-id: 909\r\ncontent-length: 0\r\n\r\n").unwrap();
     });
     let temporary = tempfile::tempdir().unwrap();
-    let logs = temporary.path().join("logs");
+    let logs = private_logs(&temporary);
     let endpoint = GatewayEndpoint::new(
         format!("ws://{address}"),
         EndpointIdentity::new(instance.into(), 909).unwrap(),

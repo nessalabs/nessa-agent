@@ -16,6 +16,9 @@ use url::{Host, Url};
 pub const ENDPOINT_FILE: &str = "gateway-endpoint.json";
 
 /// Atomically replaces the endpoint record in this stage and instance's log directory.
+///
+/// `root` must already be a private directory owned by the current OS user;
+/// `directory` is a relative namespace resolved by the caller.
 pub struct FileEndpointPublication {
     root: PathBuf,
     directory: PathBuf,
@@ -67,6 +70,9 @@ impl EndpointPublication for FileEndpointPublication {
 }
 
 /// Private endpoint record plus bounded unauthenticated health correlation.
+///
+/// `root` must already be a private directory owned by the current OS user;
+/// `directory` is a relative namespace resolved by the caller.
 pub struct FileEndpointDiscovery {
     root: PathBuf,
     directory: PathBuf,

@@ -3,6 +3,7 @@ use super::error::EnvironmentError;
 use super::source::EnvSource;
 use super::stage::Stage;
 use super::stage_port::stage_port;
+use std::path::PathBuf;
 
 /// Fully parsed runtime configuration for this process.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,8 +16,8 @@ pub struct Environment {
     pub uptime_backend: super::UptimeBackend,
     /// Private product auth directory, resolved from typed startup configuration.
     /// None is valid for isolated config tests; serving requires a data root.
-    pub auth_directory: Option<std::path::PathBuf>,
-    endpoint_storage: Option<(std::path::PathBuf, std::path::PathBuf)>,
+    pub auth_directory: Option<PathBuf>,
+    endpoint_storage: Option<(PathBuf, PathBuf)>,
 }
 
 impl Environment {
@@ -64,7 +65,7 @@ impl Environment {
     }
 
     /// Resolve offline administration paths for the selected stage and instance.
-    pub fn auth_directory_from_system() -> Result<std::path::PathBuf, EnvironmentError> {
+    pub fn auth_directory_from_system() -> Result<PathBuf, EnvironmentError> {
         let source = super::source::SystemEnv;
         load_auth_directory(&source, load_stage(&source)?)?.ok_or(EnvironmentError::Backend(
             "set NESSA_DATA_DIR or the OS home directory (USERPROFILE on Windows, HOME on Unix) for local credentials",
@@ -78,7 +79,7 @@ impl Environment {
     /// wrote down about giving up — has to be dealt with even when the reason
     /// this run is ending is that its configuration would not parse. `None` is
     /// a process with no data root at all, which has no such directory.
-    pub fn log_directory_from_system() -> Result<Option<std::path::PathBuf>, EnvironmentError> {
+    pub fn log_directory_from_system() -> Result<Option<PathBuf>, EnvironmentError> {
         let source = super::source::SystemEnv;
         let stage = load_stage(&source)?;
         super::paths::log_directory(
@@ -115,9 +116,7 @@ impl Environment {
     /// its parent is the one namespace authority. Endpoint publication uses the
     /// sibling log directory without re-reading or re-interpreting environment
     /// variables.
-    pub(crate) fn gateway_endpoint_storage(
-        &self,
-    ) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    pub(crate) fn gateway_endpoint_storage(&self) -> Option<(PathBuf, PathBuf)> {
         self.endpoint_storage.clone()
     }
 }
@@ -125,7 +124,7 @@ impl Environment {
 fn load_endpoint_storage(
     source: &impl EnvSource,
     stage: Stage,
-) -> Result<Option<(std::path::PathBuf, std::path::PathBuf)>, EnvironmentError> {
+) -> Result<Option<(PathBuf, PathBuf)>, EnvironmentError> {
     super::paths::endpoint_storage(
         read_optional(source, key::DATA_DIR)?.as_deref(),
         read_optional(source, home_variable())?.as_deref(),
@@ -137,7 +136,7 @@ fn load_endpoint_storage(
 fn load_auth_directory(
     source: &impl EnvSource,
     stage: Stage,
-) -> Result<Option<std::path::PathBuf>, EnvironmentError> {
+) -> Result<Option<PathBuf>, EnvironmentError> {
     super::paths::auth_directory(
         read_optional(source, key::DATA_DIR)?.as_deref(),
         read_optional(source, home_variable())?.as_deref(),
@@ -311,8 +310,8 @@ mod tests {
         assert_eq!(
             config.gateway_endpoint_storage().unwrap(),
             (
-                std::path::PathBuf::from("/private/nessa"),
-                std::path::PathBuf::from("ci/instances/worker-7/logs")
+                PathBuf::from("/private/nessa"),
+                PathBuf::from("ci/instances/worker-7/logs")
             )
         );
     }

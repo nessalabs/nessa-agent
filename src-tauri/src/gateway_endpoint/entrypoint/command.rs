@@ -1,11 +1,14 @@
-use crate::{composition::HostDependencies, gateway::application::Gateway, panel};
+use crate::{
+    composition::HostDependencies, gateway::application::Gateway,
+    gateway_endpoint::application::GatewayEndpointAccess, panel,
+};
 use std::sync::Arc;
-use tauri::State;
+use tauri::{State, WebviewWindow};
 
 async fn load_for(
     label: &str,
     gateway: Option<&Gateway>,
-    endpoint: Arc<crate::gateway_endpoint::application::GatewayEndpointAccess>,
+    endpoint: Arc<GatewayEndpointAccess>,
     stage: &str,
 ) -> Result<Option<String>, String> {
     if label != panel::MAIN_WINDOW {
@@ -25,7 +28,7 @@ async fn load_for(
 
 #[tauri::command]
 pub async fn load_gateway_endpoint(
-    window: tauri::WebviewWindow,
+    window: WebviewWindow,
     deps: State<'_, HostDependencies>,
     stage: String,
 ) -> Result<Option<String>, String> {
