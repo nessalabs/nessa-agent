@@ -129,6 +129,7 @@ import {
 } from "node:fs"
 import { createServer } from "node:http"
 import { basename, resolve } from "node:path"
+import { cargoTargetDirectory } from "../cargo-target.mjs"
 import { option } from "./cli.mjs"
 import { requestedPath } from "./request-target.mjs"
 import {
@@ -213,7 +214,9 @@ function withoutAnArtifact() {
 /** The full path: find what a release build produced, sign it, serve it. */
 function withTheBuiltArtifact() {
   const candidates = (
-    named ? [named] : defaultArtifacts(process.platform, config.version)
+    named
+      ? [named]
+      : defaultArtifacts(process.platform, config.version, cargoTargetDirectory(root))
   ).map((candidate) => resolve(root, candidate))
   const artifact = candidates.find((candidate) => existsSync(candidate))
   if (!artifact) {
