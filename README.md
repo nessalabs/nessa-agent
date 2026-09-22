@@ -295,6 +295,12 @@ just worktree remove add-something   # the branch is kept
 These commands use `scripts/worktree.sh` on macOS and Linux. After entering the
 new checkout, run `just release fast` to build a fast release.
 
+`just worktree create` starts the new branch from the locally known remote
+default branch and does not configure that remote branch as its upstream. The
+saved checkout may remain on any feature branch without leaking those commits
+into new work. Creation does not fetch, so it remains usable offline; run
+`git fetch origin main` first when the newest remote commit is required.
+
 Each worktree owns its workspace `target/`. Cargo, Tauri, and scripts that run
 `target/debug/*` therefore read artifacts produced from the same checkout as
 their source. `scripts/worktree-target.test.mjs` enforces that boundary with two
