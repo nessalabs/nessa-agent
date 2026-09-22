@@ -2631,6 +2631,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-updater",
+ "tauri-utils",
  "tokio",
  "webkit2gtk",
  "window-vibrancy",

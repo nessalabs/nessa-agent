@@ -2,6 +2,7 @@ mod build_stage;
 
 use std::{collections::BTreeSet, env, fs, path::PathBuf};
 
+use serde_json::Value;
 use tauri_utils::{config::parse::read_from, platform::Target};
 
 fn main() {
@@ -12,7 +13,7 @@ fn main() {
 
     let ports = fs::read_to_string("../protocol/defaults/gateway-ports.json")
         .expect("gateway port table must be readable");
-    let document: serde_json::Value =
+    let document: Value =
         serde_json::from_str(&ports).expect("gateway port table must be valid JSON");
     let known = document["stages"]
         .as_object()
@@ -34,19 +35,38 @@ fn main() {
     }
     println!("cargo:rustc-env=NESSA_BUNDLE_STAGE={stage}");
 
-    tauri_build::build()
+    let attributes = tauri_build::Attributes::new().plugin(
+        "dev-console",
+        tauri_build::InlinedPlugin::new().commands(&["forward_webview_console"]),
+    );
+    tauri_build::try_build(attributes).expect("failed to build Tauri application metadata")
 }
 
 fn verify_frontend_stage(known: &BTreeSet<String>, bundle: &str) {
     let record = frontend_stage_record();
+    let index = build_stage::frontend_index(&record)
+        .expect("frontend stage record must have a containing asset directory");
     println!("cargo:rerun-if-changed={}", record.display());
+    println!("cargo:rerun-if-changed={}", index.display());
+    let index_metadata = fs::metadata(&index).unwrap_or_else(|error| {
+        panic!(
+            "frontend entry point is absent at {}: {error}. Build the frontend into the effective Tauri build.frontendDist before Cargo",
+            index.display()
+        )
+    });
+    if !index_metadata.is_file() {
+        panic!(
+            "frontend entry point at {} must be a file. Build the frontend into the effective Tauri build.frontendDist before Cargo",
+            index.display()
+        );
+    }
     let source = fs::read_to_string(&record).unwrap_or_else(|error| {
         panic!(
             "frontend build stage record is absent at {}: {error}. Run the desktop build command so the UI is built before Cargo",
             record.display()
         )
     });
-    let document: serde_json::Value = serde_json::from_str(&source).unwrap_or_else(|error| {
+    let document: Value = serde_json::from_str(&source).unwrap_or_else(|error| {
         panic!(
             "frontend build stage record at {} is invalid: {error}",
             record.display()

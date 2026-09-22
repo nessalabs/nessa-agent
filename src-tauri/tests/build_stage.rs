@@ -1,12 +1,12 @@
 #[path = "../build_stage.rs"]
 mod build_stage;
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, path::PathBuf};
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 fn known_stages() -> BTreeSet<String> {
-    let document: serde_json::Value =
+    let document: Value =
         serde_json::from_str(include_str!("../../protocol/defaults/gateway-ports.json"))
             .expect("the real gateway port table must parse");
     document["stages"]
@@ -82,16 +82,21 @@ fn prebuilt_frontend_must_record_the_same_stage_as_the_host_bundle() {
 #[test]
 fn frontend_stage_record_follows_the_effective_tauri_dist() {
     let config = json!({ "build": { "frontendDist": "../dist" } });
+    let record = build_stage::frontend_stage_record(config.clone(), None).unwrap();
+    assert_eq!(record, PathBuf::from("../dist/nessa-stage.json"));
     assert_eq!(
-        build_stage::frontend_stage_record(config.clone(), None),
-        Ok("../dist/nessa-stage.json".into())
+        build_stage::frontend_index(&record),
+        Some("../dist/index.html".into())
     );
+    let alternate = build_stage::frontend_stage_record(
+        config,
+        Some(r#"{"build":{"frontendDist":"../alpha-dist"}}"#),
+    )
+    .unwrap();
+    assert_eq!(alternate, PathBuf::from("../alpha-dist/nessa-stage.json"));
     assert_eq!(
-        build_stage::frontend_stage_record(
-            config,
-            Some(r#"{"build":{"frontendDist":"../alpha-dist"}}"#),
-        ),
-        Ok("../alpha-dist/nessa-stage.json".into())
+        build_stage::frontend_index(&alternate),
+        Some("../alpha-dist/index.html".into())
     );
 }
 

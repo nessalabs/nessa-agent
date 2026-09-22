@@ -4,7 +4,11 @@
 //! they describe one fact. This module owns their agreement at the last build
 //! boundary before either half is compiled.
 
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{
+    collections::BTreeSet,
+    fmt::{Display, Formatter, Result as FormatResult},
+    path::{Path, PathBuf},
+};
 
 use serde_json::Value;
 use tauri_utils::config::{BuildConfig, FrontendDist};
@@ -20,8 +24,8 @@ pub enum BuildStageError {
     FrontendMismatch { bundle: String, frontend: String },
 }
 
-impl std::fmt::Display for BuildStageError {
-    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for BuildStageError {
+    fn fmt(&self, out: &mut Formatter<'_>) -> FormatResult {
         match self {
             Self::Invalid { name, value } => {
                 write!(
@@ -74,6 +78,12 @@ pub fn frontend_stage_record(
         }
         _ => Err(BuildStageError::MissingFrontendDist),
     }
+}
+
+pub fn frontend_index(record: &Path) -> Option<PathBuf> {
+    record
+        .parent()
+        .map(|directory| directory.join("index.html"))
 }
 
 pub fn verify_frontend(
