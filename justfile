@@ -10,7 +10,8 @@
 #   just release  shipping prod bundle (macOS .dmg / Linux .deb / Windows nsis)
 #   just release dev  shipping bundle whose UI and host both use dev
 
-#   just worktree create <name>  feature checkout sharing the build cache
+#   just worktree create <name>  feature checkout with isolated build output
+#   just worktree isolate        migrate this checkout from the old shared target
 #   just worktree list           list checkouts
 
 # cmd so Windows does not need Git's sh. Unix still uses sh.
@@ -175,7 +176,7 @@ release stage="prod" mode="shipping":
 release stage="prod" mode="shipping":
     {{if mode == "fast" { "set CARGO_PROFILE_RELEASE_LTO=false&& set CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16&& set CARGO_PROFILE_RELEASE_OPT_LEVEL=1&& set CARGO_PROFILE_RELEASE_STRIP=false&& " } else if mode == "shipping" { "" } else { error("Use just release [stage] or just release [stage] fast") }}}node scripts/desktop/build.mjs --stage "%1" --bundles {{if mode == "fast" { fast-bundle } else { release-bundle }}}
 
-# Manage feature worktrees: create <name>, list, remove <name>, or clean (requires Bash).
+# Manage feature worktrees: create <name>, isolate, list, remove <name>, or clean (requires Bash).
 [unix]
 [positional-arguments]
 worktree +args:

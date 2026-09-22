@@ -17,6 +17,7 @@ import { createServer } from "node:net"
 import { setTimeout as sleep } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { WebSocket, WebSocketServer } from "ws"
+import { cargoTargetDirectory } from "./cargo-target.mjs"
 import {
   NessaClient,
   NessaConnectionClosedError,
@@ -29,8 +30,9 @@ globalThis.WebSocket = WebSocket
 const root = fileURLToPath(new URL("../", import.meta.url))
 const directory = mkdtempSync(join(tmpdir(), "nessa-auth-e2e-"))
 const binary = join(
-  root,
-  process.platform === "win32" ? "target/debug/nessa.exe" : "target/debug/nessa",
+  cargoTargetDirectory(root),
+  "debug",
+  process.platform === "win32" ? "nessa.exe" : "nessa",
 )
 const listener = createServer().listen(0, "127.0.0.1")
 await once(listener, "listening")
