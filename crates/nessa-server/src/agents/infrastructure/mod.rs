@@ -15,8 +15,10 @@
 //! reads it through the same shared rule they all answer by, which is the
 //! second edge above. A third agent gets its own sibling module rather than a
 //! branch inside an existing one.
+mod agent_credentials;
 mod claude;
 mod codex;
 mod credentials;
 mod local;
+pub use agent_credentials::LocalAgentCredentials;
 pub use local::{AgentLaunchFiles, LocalAgentProbe};

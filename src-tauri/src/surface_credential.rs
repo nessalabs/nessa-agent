@@ -1,6 +1,7 @@
 //! Native storage for the bundled chat surface. Renderer input never selects a file.
 use crate::composition::HostDependencies;
 use crate::gateway::application::Gateway;
+use crate::gateway::domain::value_objects::ServiceConfiguration;
 use crate::panel;
 use std::{io::Read, path::PathBuf};
 use tauri::State;
@@ -93,6 +94,24 @@ impl SurfaceCredential {
                     .map(|home| PathBuf::from(home).join(".nessa"))
             });
         let (root, relative) = credential_location(base, &stage, instance.as_deref());
+        Self {
+            root,
+            relative,
+            stage,
+        }
+    }
+
+    /// The credential in the durable namespace registered for a service.
+    ///
+    /// Packaged composition uses this constructor so a shell environment cannot
+    /// point the panel and gateway at different roots or instances.
+    pub fn for_service(service: &ServiceConfiguration) -> Self {
+        let stage = service.stage().to_owned();
+        let (root, relative) = credential_location(
+            Some(service.data_root().to_owned()),
+            &stage,
+            service.instance(),
+        );
         Self {
             root,
             relative,
@@ -497,6 +516,29 @@ mod tests {
             relative,
             PathBuf::from("dev/instances/wt/auth/surfaces/nessa-panel.token")
         );
+    }
+
+    #[test]
+    fn a_packaged_credential_uses_the_registered_service_namespace() {
+        let service = ServiceConfiguration::new(
+            "ci".into(),
+            absolute("private-nessa"),
+            Some("acceptance".into()),
+            17420,
+            None,
+        )
+        .unwrap();
+        let credential = SurfaceCredential::for_service(&service);
+
+        assert_eq!(
+            credential.root.as_deref(),
+            Some(absolute("private-nessa").as_path())
+        );
+        assert_eq!(
+            credential.relative,
+            PathBuf::from("ci/instances/acceptance/auth/surfaces/nessa-panel.token")
+        );
+        assert_eq!(credential.stage, "ci");
     }
 
     /// A namespace that cannot be trusted yields no root, and a credential with
