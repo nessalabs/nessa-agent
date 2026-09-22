@@ -343,7 +343,9 @@ TypeScript, backend and frontend, tests, scripts, configuration, and docs.
   runtimes, infrastructure, and model calls.
 - Put documentation with its feature and maintain a clear index. Extend the
   canonical document instead of introducing a second competing guide or standard.
-  Mark proposed work separately from implemented contracts.
+  Mark proposed work separately from implemented contracts. A proposed ADR or plan is not an
+  implemented feature: do not build an unrelated future system because a design
+  document discusses its ports.
 - Keep `mod.rs` maps current: explain ownership, dependencies, and lifecycle
   boundaries, with fenced ASCII diagrams and explicit arrow meanings where useful.
   Update affected imports, callers, test paths, documentation links, and local
@@ -351,6 +353,69 @@ TypeScript, backend and frontend, tests, scripts, configuration, and docs.
 - Treat organization as a completion gate, including delegated work: review the
   resulting file tree and module maps, check moved links and stale references,
   and run checks appropriate to the change before reporting completion.
+
+## Domain-driven design boundaries
+
+Follow pure domain-driven design. New backend contexts are organized into
+`domain`, `application`, and `infrastructure` layers. Existing `adapters`
+directories are infrastructure boundaries; their names do not change the
+dependency rules.
+
+- Model domain concepts explicitly: value objects for identities and constrained
+  values, entities for identity-bearing concepts, and aggregate roots where a
+  consistency boundary must protect related state. Use the domain language in
+  type and file names. Do not invent aggregates, repositories, or events for
+  concepts that have no such responsibility.
+- The domain owns invariants and decisions, and is their single owner under
+  [gate 13](#gates). Keep invariant-bearing fields private; expose validated
+  constructors and behavior that preserve those invariants. Application DTOs must
+  never serve as domain entities or authoritative state.
+- Domain code depends only on the domain and pure language/library facilities. No
+  application DTOs, serialization derives, transport/provider types, filesystem,
+  network, framework, clock reads, or infrastructure imports in the domain.
+- Application use cases coordinate domain behavior and effects through narrow
+  application-owned ports. They own boundary DTOs and explicit DTO/domain mapping;
+  they must not duplicate or become the sole owner of domain rules.
+- Infrastructure implements adapters and ports: JSON, persistence, provider APIs,
+  transport, and OS effects. Parse external representations there and route valid
+  input through application mapping and domain constructors. Composition wires
+  concrete dependencies; dependency direction always points inward.
+- Test domain invariants directly without JSON, databases, providers, or an
+  application runtime. Test application orchestration/projections separately, and
+  test infrastructure parsing and substitution at its boundary.
+
+Value objects have their own gate in [value objects](#value-objects), and
+lifecycle evidence its own in
+[audit evidence](#audit-evidence-is-part-of-the-behavior).
+
+### Where domain code lives
+
+- Group domain code by feature/context first (for example,
+  `domain/model_metadata/`), then by DDD role: `value_objects/`, `entities/`, and
+  `aggregates/` where those roles exist. The folder should make each type's role
+  clear.
+- Within a large context, group by responsibility before DDD role (for example,
+  `agent_execution/tools/entities/`). Use the same feature vocabulary in
+  application, infrastructure, tests, and documentation where that responsibility
+  exists; do not invent empty counterparts or split one consistency boundary into
+  independent aggregates.
+- Reserve `mod.rs` for module documentation, declarations, and re-exports. Put
+  structs, enums, functions, implementations, and tests in named files. Describe
+  each module in plain English: what it owns, why it exists, and how it connects
+  to the surrounding system. Include a small ASCII diagram where it clarifies
+  dependencies, ownership, or data flow, and explain what its arrows mean.
+- Look for reusable domain primitives before introducing feature-specific value
+  objects. Put values with shared meaning and invariants in
+  `domain/common/value_objects/` (for example, calendar dates). Keep common code
+  independent of feature types and errors; features add their own restrictions.
+  Prefer established pure libraries for date/time and URL parsing instead of
+  handwritten calendar or URL validation. Wrap them in domain value objects;
+  parsing libraries are allowed in the domain, infrastructure effects are not.
+  Preserve meaning and precision: a date is not automatically a timestamp. Avoid
+  speculative generic wrappers or a catch-all utilities module.
+- Combine closely related types in cohesive files; do not require one file per
+  type. Avoid a flat domain directory that mixes unrelated features. Moving a DTO
+  into a `domain` directory or adding empty layer folders is not a DDD refactor.
 
 ## Rust imports and type names
 
@@ -395,6 +460,14 @@ desktop host `src-tauri` is not a context and is bound by it anyway: a fetch
 written straight into a function there is unverifiable for exactly the reason it
 would be in an application layer, and a host has more outside things in it than
 anywhere else in the tree.
+
+Dependencies are supplied by typed constructor or factory injection. There is no
+global service locator and no mutable process-wide client or backend handle: a
+consumer takes the narrow thing it needs as a parameter, and composition decides
+which implementation that is. Backend and provider choices are made there too, so
+that local use stays independent of hosted signup and provider selection cannot
+route around policy. When a change adds a seam, test that a substitute really
+substitutes and that the application layer runs without the real one.
 
 The seam is for the boundary, not for every function. One port per kind of
 outside thing — the release channel, the keychain, the clock — not a wrapper per
@@ -544,11 +617,28 @@ reviewer still has to ask where the key came from.
 
 ## Value objects
 
+A value object is immutable and validated at construction; an aggregate root owns
+its consistency boundary, and an entity owns its identity and mutable state.
+
 Reject in-place mutation APIs (including private mutators, mutable references,
 and interior mutability) on domain value objects. Changes produce replacement
 values; entities and aggregates own mutable state and identity checks. Keep
 sparse update inputs distinct from accumulated snapshots so omitted fields
 cannot be mistaken for unknown state.
+
+## Rich content
+
+- Exercise representation boundaries, not only round trips: punctuation and
+  escapes next to structured parts, code/link/HTML contexts, adjacent parts, and
+  empty or whitespace-prefixed payloads. Rendered controls must remain reachable.
+- Keep one stored representation and derive the rest from it, per
+  [gate 13](#gates). Transport text and display titles are derived independently;
+  preserving payload whitespace must not make a label blank.
+- Review new imports through their transitive startup cost. Reuse the existing
+  lazy renderers for optional math, diagrams, and highlighting; dynamic chunks
+  still contribute to installed bundle size.
+- Check changed tests against module boundaries too. A green architecture check
+  covers only its implemented rules, not every requirement in this document.
 
 ## SDK API documentation
 
@@ -603,9 +693,42 @@ costs separately from bytes written to disk.
 
 ## Machine-readable command output
 
+Use `tracing` for SDK diagnostics and examples, and have executable composition
+initialize the subscriber. Other binaries adopt this only once tracing is wired
+into their composition; until that migration lands, the desktop host keeps its
+existing stderr diagnostics so startup failures stay visible.
+
 Primary command output, such as a JSON catalog intended for a pipe, is data rather
 than a diagnostic. Write it to standard output through the appropriate serializer
 or I/O writer without tracing metadata. Keep diagnostics on standard error through
 tracing and preserve a nonzero exit status on failure. Test documented commands
 with stdout and stderr captured separately; a logging-only test cannot verify the
 machine-readable output contract. This does not permit print macros for diagnostics.
+
+## Adding a check to CI
+
+`.github/workflows/local-auth.yml` is the gate every pull request waits on, and
+almost all of its time is `rustc`. A check added carelessly is not free: it is
+paid on every push, and on three runners if it lands in the matrix.
+
+- Put a new check in a job that already exists. A new job pays the whole setup
+  again — runner, checkout, toolchain, a cold dependency graph — to do work that
+  is often seconds long. `gateway-contract` is where a Linux-only or
+  platform-independent check belongs; the `local-auth` matrix is for checks whose
+  answer genuinely differs by platform.
+- Do not run the same check in more than one place; this is [gate 13](#gates) for
+  CI. `cargo fmt --all` in `gateway-contract` covers every crate on every
+  platform, because rustfmt does not read the platform. Before adding a per-crate
+  variant, ask what a second runner would learn.
+- Lint before test. Both compile the crate, and only one of them takes minutes to
+  report a `-D warnings` failure it could have reported first.
+- Build caches are written only from `main`. A pull request reads the tip's
+  artifacts and never evicts them, so a run on a branch is as warm as `main` was
+  and no warmer. Nothing needs doing for this; it is why a first run after a
+  dependency bump is slow.
+- Prose is not checked, and `scripts/documentation-only.mjs` is what lets a
+  documentation-only pull request skip the compile-heavy jobs. If you make
+  anything read a Markdown file — a crate embedding its README with
+  `include_str!`, a check that parses a document — that rule stops being true and
+  has to change with it. `documentation-only.test.mjs` fails with instructions
+  when the Rust half of it breaks; the rest is on you to notice.
