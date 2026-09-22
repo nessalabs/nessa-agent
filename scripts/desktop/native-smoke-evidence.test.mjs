@@ -1,14 +1,20 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
 
 import {
+  decodeWebdriverScreenshot,
   nativeSmokeEvidenceLimits,
   renderNativeSmokeError,
   retainNativeSmokeFailure,
 } from "./native-smoke-evidence.mjs"
+
+const onePixelPng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+)
 
 test("failure retention writes only the selected bounded evidence", () => {
   const root = mkdtempSync(join(tmpdir(), "nessa-native-evidence-"))
@@ -92,6 +98,79 @@ test("oversized logs and error metadata stay within UTF-8 byte budgets", () => {
     assert.ok(metadata.byteLength <= nativeSmokeEvidenceLimits.metadataBytes)
     assert.match(logs.toString("utf8"), /retained-tail$/)
     assert.doesNotThrow(() => JSON.parse(metadata.toString("utf8")))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("page, window, and PNG evidence survive within their explicit bounds", () => {
+  const root = mkdtempSync(join(tmpdir(), "nessa-native-evidence-page-"))
+  try {
+    const screenshot = decodeWebdriverScreenshot(onePixelPng.toString("base64"))
+    const retained = retainNativeSmokeFailure(root, "page-instance", {
+      logs: "timeout\n",
+      screenshot,
+      metadata: {
+        lastPanelObservation: {
+          url: `tauri://localhost/${"🐇".repeat(2_000)}`,
+          title: "Nessa",
+          readyState: "complete",
+          surface: null,
+          root: { present: true, width: 400, height: 320, display: "block" },
+          fallback: { present: false },
+          connectionText: "Connecting to the local server…",
+          bodyText: "wrong page evidence ".repeat(500),
+          viewport: { width: 1440, height: 900 },
+        },
+        windows: {
+          current: "main",
+          handles: Array.from({ length: 30 }, (_, index) => `window-${index}`),
+        },
+      },
+    })
+    const metadata = readFileSync(join(retained, "metadata.json"))
+    const selected = JSON.parse(metadata.toString("utf8"))
+
+    assert.ok(metadata.byteLength <= nativeSmokeEvidenceLimits.metadataBytes)
+    assert.equal(
+      selected.lastPanelObservation.connectionText,
+      "Connecting to the local server…",
+    )
+    assert.match(selected.lastPanelObservation.bodyText, /^wrong page evidence/)
+    assert.deepEqual(selected.windows.handles.slice(0, 2), ["window-0", "window-1"])
+    assert.equal(selected.windows.handles.length, 16)
+    assert.deepEqual(readFileSync(join(retained, "webview.png")), onePixelPng)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("invalid and oversized screenshots leave no partial evidence directory", () => {
+  const root = mkdtempSync(join(tmpdir(), "nessa-native-evidence-png-"))
+  try {
+    assert.throws(() => decodeWebdriverScreenshot("not-base64"), /base64/)
+    assert.throws(
+      () =>
+        retainNativeSmokeFailure(root, "invalid", {
+          logs: "failure",
+          metadata: {},
+          screenshot: Buffer.from("not a PNG"),
+        }),
+      /bounded PNG/,
+    )
+    const oversized = Buffer.alloc(nativeSmokeEvidenceLimits.screenshotBytes + 1)
+    onePixelPng.copy(oversized, 0, 0, 8)
+    assert.throws(
+      () =>
+        retainNativeSmokeFailure(root, "oversized", {
+          logs: "failure",
+          metadata: {},
+          screenshot: oversized,
+        }),
+      /bounded PNG/,
+    )
+    assert.equal(existsSync(join(root, "invalid")), false)
+    assert.equal(existsSync(join(root, "oversized")), false)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

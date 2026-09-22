@@ -33,10 +33,13 @@ import {
 } from "./native-smoke-processes.mjs"
 import { builtExecutables } from "./native-smoke-build.mjs"
 import {
+  decodeWebdriverScreenshot,
   renderNativeSmokeError,
   retainNativeSmokeFailure,
 } from "./native-smoke-evidence.mjs"
 import {
+  nativePanelObservationScript,
+  nativePanelReady,
   observeWebdriverStartup,
   webdriverBudgets,
   webdriverRequest,
@@ -295,6 +298,9 @@ let passed
 let application
 let gateway
 let lifecyclePhase = "fixture prepared"
+let lastPanelObservation
+let windows
+let failureScreenshot
 
 function markPhase(phase, details) {
   lifecyclePhase = phase
@@ -389,10 +395,7 @@ try {
     ["--port", String(driverPort), "--native-port", String(nativePort)],
     {
       cwd: root,
-      env: {
-        ...runtimeEnv,
-        WEBKIT_DEBUG: "SessionHost,WebDriverClassic",
-      },
+      env: runtimeEnv,
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     },
@@ -451,27 +454,39 @@ try {
   assert.ok(session, "WebDriver did not return a session id")
   markPhase("WebDriver session ready", `session=${session}`)
 
+  windows = { errors: [] }
+  for (const [field, path] of [
+    ["current", `/session/${session}/window`],
+    ["handles", `/session/${session}/window/handles`],
+  ]) {
+    try {
+      windows[field] = await webdriver(driverPort, "GET", path, undefined, {
+        phase: `inspect WebDriver ${field} window state`,
+      })
+    } catch (error) {
+      windows.errors.push(renderNativeSmokeError(error))
+    }
+  }
+
+  markPhase("waiting for connected panel")
   const frame = await eventually(
     "real panel render and gateway connection",
-    () =>
-      execute(
+    async () => {
+      lastPanelObservation = await execute(
         driverPort,
         session,
-        `const root = document.querySelector('[data-nessa-root]');
-         const fallback = document.querySelector('[data-nessa-load-fallback]');
-         if (!root || fallback || !document.body.innerText.includes('Connected')) return null;
-         const rect = root.getBoundingClientRect(); const style = getComputedStyle(root);
-         return { width: innerWidth, height: innerHeight, rootWidth: rect.width,
-           rootHeight: rect.height, display: style.display, visibility: style.visibility };`,
+        nativePanelObservationScript,
         [],
         "inspect connected panel",
-      ),
+      )
+      return nativePanelReady(lastPanelObservation) && lastPanelObservation
+    },
     60_000,
   )
-  assert.ok(frame.width >= 400 && frame.height >= 300, JSON.stringify(frame))
-  assert.ok(frame.rootWidth > 0 && frame.rootHeight > 0, JSON.stringify(frame))
-  assert.notEqual(frame.display, "none")
-  assert.notEqual(frame.visibility, "hidden")
+  assert.ok(
+    frame.viewport.width >= 400 && frame.viewport.height >= 300,
+    JSON.stringify(frame),
+  )
   markPhase("connected panel rendered")
 
   const composer = await element(driverPort, session, '[aria-label="Message"]')
@@ -532,6 +547,18 @@ try {
 } catch (error) {
   failure = error
 } finally {
+  if (failure && session) {
+    try {
+      failureScreenshot = decodeWebdriverScreenshot(
+        await webdriver(driverPort, "GET", `/session/${session}/screenshot`, undefined, {
+          phase: "capture failed native panel",
+          signal: null,
+        }),
+      )
+    } catch (screenshotError) {
+      failure = new AggregateError([failure, screenshotError])
+    }
+  }
   if (session)
     await webdriver(driverPort, "DELETE", `/session/${session}`, undefined, {
       phase: "delete WebDriver session",
@@ -593,7 +620,10 @@ try {
             },
             sessionCreated: Boolean(session),
             executableArtifacts: { application, gateway },
+            lastPanelObservation,
+            windows,
           },
+          screenshot: failureScreenshot,
         })
         console.error(`native smoke failure artifacts: ${retained}`)
       } catch (artifactError) {

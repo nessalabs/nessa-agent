@@ -1,7 +1,10 @@
 import assert from "node:assert/strict"
+import { JSDOM } from "jsdom"
 import test from "node:test"
 
 import {
+  nativePanelObservationScript,
+  nativePanelReady,
   observeWebdriverStartup,
   webdriverBudgets,
   webdriverRequest,
@@ -137,4 +140,55 @@ test("successful startup returns both independently observed facts", async () =>
     }),
     { session: { sessionId: "session" }, application: 4321 },
   )
+})
+
+test("panel readiness requires the rendered connection contract", () => {
+  const connected = {
+    readyState: "complete",
+    root: {
+      present: true,
+      width: 400,
+      height: 320,
+      display: "block",
+      visibility: "visible",
+    },
+    fallback: { present: false },
+    connectionText: "Connected",
+  }
+
+  assert.equal(nativePanelReady(connected), true)
+  for (const observation of [
+    { ...connected, readyState: "interactive" },
+    { ...connected, root: { present: false } },
+    { ...connected, root: { ...connected.root, width: 0 } },
+    { ...connected, root: { ...connected.root, visibility: "hidden" } },
+    { ...connected, fallback: { present: true } },
+    { ...connected, connectionText: "Connecting to the local server…" },
+    { ...connected, connectionText: "Not connected" },
+  ])
+    assert.equal(nativePanelReady(observation), false, JSON.stringify(observation))
+})
+
+test("the page observation reads the connection from the empty transcript", () => {
+  const dom = new JSDOM(
+    `<title>Nessa</title><body><main data-nessa-root>
+      <div aria-label="New conversation transcript, 0 sent">
+        <p class="nessa-text-3">Connected</p>
+      </div>
+    </main></body>`,
+    { url: "tauri://localhost/index.html?surface=main", runScripts: "outside-only" },
+  )
+  const root = dom.window.document.querySelector("[data-nessa-root]")
+  root.getBoundingClientRect = () => ({ width: 400, height: 320 })
+  dom.window.document.body.innerText = "Nessa Connected"
+
+  const observation = new dom.window.Function(nativePanelObservationScript)()
+
+  assert.equal(observation.url, "tauri://localhost/index.html?surface=main")
+  assert.equal(observation.surface, "main")
+  assert.equal(observation.connectionText, "Connected")
+  assert.equal(observation.root.width, 400)
+  assert.equal(observation.root.height, 320)
+  assert.equal(observation.fallback.present, false)
+  assert.equal(observation.bodyText, "Nessa Connected")
 })

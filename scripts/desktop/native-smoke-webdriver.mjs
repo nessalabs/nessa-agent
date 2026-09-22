@@ -3,6 +3,46 @@ export const webdriverBudgets = Object.freeze({
   session: 60_000,
 })
 
+export const nativePanelObservationScript = `
+  const scalarPrefix = (value, maximum) => Array.from(String(value ?? '')).slice(0, maximum).join('');
+  const element = (selector) => {
+    const node = document.querySelector(selector);
+    if (!node) return { present: false };
+    const rect = node.getBoundingClientRect();
+    const style = getComputedStyle(node);
+    return { present: true, width: rect.width, height: rect.height,
+      display: style.display, visibility: style.visibility };
+  };
+  const transcript = document.querySelector('[aria-label$=" transcript, 0 sent"]');
+  const status = transcript?.querySelector('p.nessa-text-3');
+  return {
+    url: scalarPrefix(location.href, 1024),
+    title: scalarPrefix(document.title, 256),
+    readyState: document.readyState,
+    surface: new URL(location.href).searchParams.get('surface'),
+    root: element('[data-nessa-root]'),
+    fallback: { ...element('[data-nessa-load-fallback]'),
+      text: scalarPrefix(document.querySelector('[data-nessa-load-fallback]')?.textContent?.trim(), 512) },
+    connectionText: status ? scalarPrefix(status.textContent?.trim(), 128) : null,
+    bodyText: scalarPrefix(document.body?.innerText, 2048),
+    viewport: { width: innerWidth, height: innerHeight },
+  };`
+
+/** Decide readiness from the observed page contract, independently of WebDriver. */
+export function nativePanelReady(observation) {
+  const root = observation?.root
+  return Boolean(
+    observation?.readyState === "complete" &&
+    root?.present &&
+    root.width > 0 &&
+    root.height > 0 &&
+    root.display !== "none" &&
+    root.visibility !== "hidden" &&
+    !observation?.fallback?.present &&
+    observation?.connectionText === "Connected",
+  )
+}
+
 const settle = async (start) => {
   try {
     return { ok: true, value: await start() }
