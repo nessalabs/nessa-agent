@@ -137,13 +137,18 @@ jobs:
         with:
           node-version: 24
       - run: cargo fmt --all -- --check
-      # Lint before test, here and in the matrix below: both compile the crate,
-      # and only one of them takes minutes to tell you about a `-D warnings`
-      # failure it could have reported first.
-      - run: cargo clippy -p nessa-mcp --all-targets -- -D warnings
+      # Test before lint, here and in the matrix below, and it is worth saying
+      # why because the intuitive order is the other one. Reporting a
+      # `-D warnings` failure first would be better if it were free, and it is
+      # not: `cargo test` builds rlibs that a following `cargo clippy` reuses,
+      # so lint lands in about five seconds. Reversed, clippy builds metadata
+      # that `cargo test` cannot link against, and both compilations are paid
+      # in full. Measured on run 35678361232: +39s here, and minutes on each
+      # matrix leg. Green runs are the common case, so they set the order.
       - run: cargo test -p nessa-mcp
-      - run: cargo clippy -p nessa-images --all-targets -- -D warnings
+      - run: cargo clippy -p nessa-mcp --all-targets -- -D warnings
       - run: cargo test -p nessa-images
+      - run: cargo clippy -p nessa-images --all-targets -- -D warnings
       - run: node scripts/check-architecture.mjs
       # The repository's own scripts had tests that nothing ran: a developer
       # setup script and a one-time data migration, both of which change a
@@ -263,17 +268,19 @@ jobs:
         with:
           node-version: 24
       - run: node --test scripts/product-protocol/rust-types.test.mjs
-      # `cargo fmt` is not run here. `gateway-contract` runs it as `--all`,
-      # which covers these four crates and every other one, and rustfmt does
-      # not read the platform: three runners agreeing about whitespace is three
-      # runners, one answer. What is still run per platform is the formatting
-      # `check-desktop.mjs` and `check-mcp.mjs` do, because those crates are
-      # only reached from here.
+      # Duplicated by `cargo fmt --all` in `gateway-contract`, and staying
+      # anyway. `scripts/desktop/ci-harness.test.mjs` requires this exact line,
+      # because what it is really holding together is that `pnpm check` and
+      # this workflow aggregate the same named checks — `check` runs
+      # `server:fmt:check`, `auth:fmt:check` and `sdk:fmt:check` per crate, so
+      # CI does too. Dropping it saved 28 seconds on Windows and cost that
+      # guarantee, which is not a trade worth making.
+      - run: cargo fmt -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk -- --check
       - run: node --test scripts/architecture/*.test.mjs
       - run: node --test scripts/agents/*.test.mjs
       - run: node scripts/check-architecture.mjs
-      - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings
       - run: cargo test -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk
+      - run: cargo clippy -p nessa-local-storage -p nessa-auth -p nessa-server -p nessa-sdk --all-targets -- -D warnings
       - run: node scripts/check-sdk-docs.mjs
       # Not on Linux: `gateway-contract` is an ubuntu-latest job and already
       # runs exactly what this script runs — fmt, clippy and test for
