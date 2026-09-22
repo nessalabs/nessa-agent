@@ -73,6 +73,7 @@ async fn scheduling_retry_rejects_changed_content_attribution_or_delivery_mode()
         vec![
             ImageReference::new(Sha256Digest::from_bytes([1; 32]), ImageMediaType::Png, 1).unwrap(),
         ],
+        Vec::new(),
     )
     .unwrap();
     assert!(matches!(

@@ -191,14 +191,74 @@ pub fn replace(from: &Path, to: &Path) -> io::Result<()> {
 }
 /// Publish `from` under the unused name `to`, never replacing an existing one.
 ///
-/// `link` fails with `AlreadyExists` when `to` is taken, so an interrupted or
+/// A rename that refuses to replace: one call, and afterwards `to` is the file
+/// and `from` is gone. `AlreadyExists` when `to` is taken, so an interrupted or
 /// repeated publish cannot overwrite a record another owner already published.
-/// The published name shares the temporary file's inode until that temporary
-/// name is removed; until then the file has two links and fails private-file
-/// verification, so callers must remove their temporary before reporting
-/// success and clear temporaries a crash left behind.
+///
+/// It is a rename rather than a link because a record has to be readable the
+/// instant it exists. Linking the destination and unlinking the temporary
+/// afterwards left a moment — two calls wide, and as long as the scheduler
+/// cared to make it — when the name existed with two links, and
+/// [`verify_file`] refuses a file with two links as unsafe. Every reader of
+/// that name in that moment was told the record could not be read, including
+/// the one reader who most needs it: a writer that lost the race for the name
+/// and reads the winner's record back to check they agree. There is nothing for
+/// such a reader to wait for and no way for it to tell a busy machine from a
+/// tampered file, so the moment is removed instead of tolerated.
+///
+/// `RENAME_EXCL` and `RENAME_NOREPLACE` are the same guarantee under the two
+/// kernels' names for it. Not every filesystem implements either: SMB and AFP
+/// mounts answer `ENOTSUP`, and NFS, eCryptfs and many FUSE mounts answer
+/// `EINVAL` or `EOPNOTSUPP`. That is the one failure here a person could
+/// actually act on — move the data to a local volume — and the errno alone
+/// does not say so, so it is named. There is deliberately no fallback to the
+/// link-and-unlink this replaced: it would silently reopen the gap above on
+/// exactly the volumes where a network round trip makes it widest.
+///
+/// # Errors
+///
+/// `AlreadyExists` when `to` is taken, [`io::ErrorKind::Unsupported`] with a
+/// sentence naming the volume when the filesystem has no exclusive rename, and
+/// any other platform failure unchanged.
 pub fn publish_new(from: &Path, to: &Path) -> io::Result<()> {
-    fs::hard_link(from, to)
+    let source = CString::new(from.as_os_str().as_bytes()).map_err(|_| unsafe_file())?;
+    let destination = CString::new(to.as_os_str().as_bytes()).map_err(|_| unsafe_file())?;
+    #[cfg(target_vendor = "apple")]
+    let renamed =
+        unsafe { libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) };
+    #[cfg(target_os = "linux")]
+    let renamed = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if renamed != 0 {
+        let error = io::Error::last_os_error();
+        // Compared rather than matched: Linux defines `ENOTSUP` and
+        // `EOPNOTSUPP` as the same number and macOS does not, so as patterns
+        // they are an unreachable arm on one platform and two necessary arms on
+        // the other. This says what it means on both.
+        let unsupported = error.raw_os_error().is_some_and(|code| {
+            code == libc::ENOTSUP || code == libc::EOPNOTSUPP || code == libc::EINVAL
+        });
+        return Err(if unsupported {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "the filesystem holding {} cannot publish a file without replacing one; \
+                     local data has to live on a volume that can, not a network or FUSE mount",
+                    to.display()
+                ),
+            )
+        } else {
+            error
+        });
+    }
+    Ok(())
 }
 pub fn replace_beneath(root: &Path, from: &Path, to: &Path) -> io::Result<()> {
     let (from_parent, from_leaf) = open_parent_beneath(root, from)?;

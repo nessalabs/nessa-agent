@@ -4,14 +4,14 @@ use super::{
     ConversationCreationAudit, ConversationCreationAuditRecord, ConversationDependencies,
     ConversationDisposition, ConversationError, ConversationFuture, ConversationLimits,
     ConversationMessageStatus, ConversationOwnershipState, ConversationRepository,
-    ConversationService, RequestedAgent, RuntimeReadiness, SubmissionMode,
+    ConversationService, RequestedAgent, RuntimeReadiness, SubmissionMode, SubmittedMessage,
 };
 use crate::{
     agents::domain::AgentId,
     conversation::domain::{Conversation, ConversationId},
     conversation_test_support::{
         fixture, only, AcceptingCreationAudit, MemoryRepository, Provider, ProviderFactory,
-        TestClock,
+        RecordingFileLinkAudit, TestClock,
     },
 };
 use nessa_auth::domain::{OrganizationId, PrincipalId};
@@ -148,6 +148,7 @@ async fn creation_audit_is_complete_and_failure_prevents_success_and_provider_op
             storage,
             metadata: repository.clone(),
             creation_audit: audit.clone(),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -201,6 +202,7 @@ async fn failed_creation_audit_is_recovered_once_from_stored_creator_evidence() 
             storage,
             metadata: repository.clone(),
             creation_audit: audit.clone(),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -297,6 +299,7 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
             storage,
             metadata: repository.clone(),
             creation_audit: audit.clone(),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -325,8 +328,11 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
                 id.clone(),
                 caller("panel", "send-1"),
                 "send-1".into(),
-                "Hello".into(),
-                Vec::new(),
+                SubmittedMessage {
+                    text: "Hello".into(),
+                    images: Vec::new(),
+                    files: Vec::new(),
+                },
                 SubmissionMode::Queue,
             )
             .await,
@@ -359,8 +365,11 @@ async fn read_and_send_cannot_open_a_provider_before_the_creation_audit_is_recon
             id.clone(),
             caller("phone", "send-2"),
             "send-2".into(),
-            "Hello".into(),
-            Vec::new(),
+            SubmittedMessage {
+                text: "Hello".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
             SubmissionMode::Queue,
         )
         .await
@@ -398,6 +407,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
             storage,
             metadata: repository.clone(),
             creation_audit: audit.clone(),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -420,6 +430,7 @@ async fn a_failed_reopen_audit_refuses_before_the_conversation_becomes_usable() 
             storage: Arc::new(InMemoryStorage::new()),
             metadata: repository,
             creation_audit: audit.clone(),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -483,6 +494,7 @@ async fn caller_loss_does_not_cancel_creation_audit_or_owned_provider_open() {
             storage,
             metadata: repository,
             creation_audit: audit.clone(),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -587,8 +599,11 @@ async fn consumed_permission_failure_is_not_reoffered_on_the_immediate_read() {
             id.clone(),
             caller("panel", "send"),
             "review".into(),
-            "change file".into(),
-            Vec::new(),
+            SubmittedMessage {
+                text: "change file".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
             SubmissionMode::Queue,
         )
         .await
@@ -743,6 +758,7 @@ async fn restart_rejects_non_owner_before_provider_open_or_capacity_reservation(
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -783,8 +799,11 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
             id.clone(),
             caller("panel", "first"),
             "first".into(),
-            "Hello".into(),
-            Vec::new(),
+            SubmittedMessage {
+                text: "Hello".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
             SubmissionMode::Queue,
         )
         .await
@@ -795,8 +814,11 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
             id.clone(),
             caller("phone", "second"),
             "second".into(),
-            "Again".into(),
-            Vec::new(),
+            SubmittedMessage {
+                text: "Again".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
             SubmissionMode::Queue,
         )
         .await
@@ -813,8 +835,11 @@ async fn queued_turns_finish_in_order_and_retries_do_not_dispatch_twice() {
             id.clone(),
             caller("panel", "first"),
             "first".into(),
-            "Hello".into(),
-            Vec::new(),
+            SubmittedMessage {
+                text: "Hello".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
             SubmissionMode::Queue,
         )
         .await
@@ -920,6 +945,7 @@ async fn transient_storage_open_failure_retires_slot_and_retry_opens_once() {
             storage: storage.clone(),
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -980,6 +1006,7 @@ async fn blocked_metadata_create_does_not_hold_unrelated_live_owner_lock() {
             storage,
             metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -1044,6 +1071,7 @@ async fn resource_free_provider_failure_retires_slot_for_retry() {
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -1143,6 +1171,7 @@ async fn a_conversation_waits_for_runtime_preparation_before_opening_a_provider(
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -1194,6 +1223,7 @@ async fn stopping_agents_supersedes_a_conversation_waiting_for_runtime_preparati
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -1261,6 +1291,7 @@ async fn retirement_supersedes_a_conversation_waiting_for_runtime_preparation() 
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -1336,6 +1367,7 @@ async fn a_startup_deadline_releases_its_slot_so_the_same_command_can_retry() {
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -1391,6 +1423,7 @@ async fn a_startup_deadline_with_unconfirmed_cleanup_retains_its_slot() {
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -1423,6 +1456,7 @@ async fn uncertain_provider_cleanup_keeps_one_slot_and_blocks_reopening() {
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -1474,8 +1508,11 @@ async fn restart_restores_saved_messages_without_replaying_input() {
             id.clone(),
             caller("panel", "first"),
             "first".into(),
-            "Hello".into(),
-            Vec::new(),
+            SubmittedMessage {
+                text: "Hello".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
             SubmissionMode::Queue,
         )
         .await
@@ -1491,6 +1528,7 @@ async fn restart_restores_saved_messages_without_replaying_input() {
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -1527,6 +1565,7 @@ async fn initialization_panic_is_published_and_does_not_strand_shutdown() {
             storage: Arc::new(PanickingStorage),
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -1563,8 +1602,11 @@ async fn boundary_steering_can_be_removed_without_dispatch() {
             id.clone(),
             caller("panel", "running"),
             "running".into(),
-            "Hello".into(),
-            Vec::new(),
+            SubmittedMessage {
+                text: "Hello".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
             SubmissionMode::Queue,
         )
         .await
@@ -1575,8 +1617,11 @@ async fn boundary_steering_can_be_removed_without_dispatch() {
             id.clone(),
             caller("phone", "steer"),
             "steer".into(),
-            "Followup".into(),
-            Vec::new(),
+            SubmittedMessage {
+                text: "Followup".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
             SubmissionMode::Steer,
         )
         .await
@@ -1617,8 +1662,11 @@ async fn close_then_replay_does_not_reopen_or_dispatch_and_new_input_still_works
             id.clone(),
             caller("panel", "original"),
             "original".into(),
-            "Hello".into(),
-            Vec::new(),
+            SubmittedMessage {
+                text: "Hello".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
             SubmissionMode::Queue,
         )
         .await
@@ -1633,8 +1681,11 @@ async fn close_then_replay_does_not_reopen_or_dispatch_and_new_input_still_works
             id.clone(),
             caller("panel", "original"),
             "original".into(),
-            "Hello".into(),
-            Vec::new(),
+            SubmittedMessage {
+                text: "Hello".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
             SubmissionMode::Queue,
         )
         .await
@@ -1656,8 +1707,11 @@ async fn close_then_replay_does_not_reopen_or_dispatch_and_new_input_still_works
             id.clone(),
             caller("phone", "new"),
             "new".into(),
-            "Again".into(),
-            Vec::new(),
+            SubmittedMessage {
+                text: "Again".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
             SubmissionMode::Queue,
         )
         .await
@@ -1687,6 +1741,7 @@ async fn hostile_panic_payload_does_not_strand_initialization_waiters() {
             storage: Arc::new(HostileStorage),
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -1777,8 +1832,11 @@ async fn desktop_quit_keeps_gateway_admission_open() {
             next.clone(),
             caller("panel", "submit-next"),
             "next".into(),
-            "Hello".into(),
-            Vec::new(),
+            SubmittedMessage {
+                text: "Hello".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
             SubmissionMode::Queue,
         )
         .await
@@ -1826,6 +1884,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
             storage: storage.clone(),
             metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -1860,6 +1919,7 @@ async fn a_conversation_runs_on_the_agent_it_was_created_on_and_not_on_the_defau
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -1909,6 +1969,7 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
             storage: storage.clone(),
             metadata: repository.clone(),
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -1940,6 +2001,7 @@ async fn a_conversation_whose_own_agent_is_gone_is_refused_without_taking_its_st
             storage: storage.clone(),
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -2004,6 +2066,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
                 storage: storage.clone(),
                 metadata: repository.clone(),
                 creation_audit: Arc::new(AcceptingCreationAudit),
+                file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
                 attachments: None,
                 clock: Arc::new(TestClock),
             },
@@ -2033,6 +2096,7 @@ async fn a_conversation_refused_for_its_missing_agent_does_not_keep_the_slot_it_
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -2100,6 +2164,7 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
                 storage: storage.clone(),
                 metadata: repository.clone(),
                 creation_audit: Arc::new(AcceptingCreationAudit),
+                file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
                 attachments: None,
                 clock: Arc::new(TestClock),
             },
@@ -2135,6 +2200,7 @@ async fn a_conversation_this_build_cannot_open_is_refused_before_its_storage_is_
             storage: storage.clone(),
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -2263,6 +2329,7 @@ async fn a_caller_context_too_damaged_to_record_is_refused_on_a_reopen_too() {
             storage,
             metadata: repository,
             creation_audit: audit.clone(),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },
@@ -2335,8 +2402,11 @@ async fn a_caller_context_too_damaged_to_record_is_refused_by_every_command() {
                 id.clone(),
                 caller("panel", wiped),
                 "execution".into(),
-                "Hello".into(),
-                Vec::new(),
+                SubmittedMessage {
+                    text: "Hello".into(),
+                    images: Vec::new(),
+                    files: Vec::new(),
+                },
                 SubmissionMode::Queue,
             )
             .await,
@@ -2353,8 +2423,11 @@ async fn a_caller_context_too_damaged_to_record_is_refused_by_every_command() {
             id.clone(),
             caller("panel", "send"),
             "execution".into(),
-            "Hello".into(),
-            Vec::new(),
+            SubmittedMessage {
+                text: "Hello".into(),
+                images: Vec::new(),
+                files: Vec::new(),
+            },
             SubmissionMode::Queue,
         )
         .await
@@ -2449,6 +2522,7 @@ async fn a_conversation_waits_for_its_own_agent_and_not_for_another() {
             storage,
             metadata: repository,
             creation_audit: Arc::new(AcceptingCreationAudit),
+            file_link_audit: Arc::new(RecordingFileLinkAudit::default()),
             attachments: None,
             clock: Arc::new(TestClock),
         },

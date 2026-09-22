@@ -20,6 +20,7 @@ does not make an implementation done.
 | [0006 — Session ping](done/0006-server-ping-round-trip.md) | Historical dev-only spike ping; the serving gateway now uses 0010 |
 | [0007 — Authentication API readiness](done/0007-authentication-delivery.md) | Existing APIs verified, durable lost-response retry tested, registry/gateway bounds measured, retention recorded |
 | [0010 — Local authentication](done/0010-local-authentication.md) | Owner bootstrap/recovery, scoped tokens, SDK/CLI, and mandatory gateway authorization |
+| [0013 — Files by path](done/0013-files-by-path-not-by-payload.md) | Host file picker, a path attachment on the wire, a `resource_link` in the prompt, and its audit record |
 
 ## Todo — implementation priority
 

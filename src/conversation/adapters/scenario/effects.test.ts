@@ -45,6 +45,7 @@ it("still refuses a message the client would not put on the wire", async () => {
       actionId: "action",
       text: "look",
       attachments: [{ digest: "sha256:NOPE", mimeType: "image/png", size: 1 }],
+      files: [],
     })
     .catch((error: unknown) => error)
   expect(error).toBeInstanceOf(SubmissionRefusedError)

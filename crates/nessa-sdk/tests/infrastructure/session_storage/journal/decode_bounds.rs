@@ -2,7 +2,9 @@
 use super::{read, Loaded};
 use crate::application::agent_execution::sessions::StorageError;
 use crate::domain::agent_execution::{
-    prompts::UserMessage, sessions::SessionId, tools::ToolContent,
+    prompts::{LinkedFile, UserMessage},
+    sessions::SessionId,
+    tools::ToolContent,
 };
 use serde_json::{json, Value};
 use std::{
@@ -36,7 +38,7 @@ impl Seek for CountDecode {
 }
 fn metadata() -> Value {
     json!({
-        "submission":"Immediate", "execution_id":"active", "user_message":"input", "user_images":[],
+        "submission":"Immediate", "execution_id":"active", "user_message":"input", "user_images":[], "user_files":[],
         "estimated_input_tokens":1, "reserved_output_tokens":1,
         "actor":{"principal_id":"user","surface_id":"test","request_id":"invoke"},
         "provider_report":null,"local_outcome":null,"cancellation":null,"result":null
@@ -253,21 +255,30 @@ fn saved_image(digest: &str, media_type: &str) -> Value {
 fn digest() -> String {
     format!("sha256:{}", "ab".repeat(32))
 }
-/// The record with `user_images` first in its metadata and two mebibytes of
-/// valid user message after it, so that a bound applied only after the whole
-/// metadata was decoded shows up in the decoded-byte count.
-fn images_first(images: &Value) -> Vec<u8> {
+/// The record with `key` first in its metadata and two mebibytes of valid user
+/// message after it, so that a bound applied only after the whole metadata was
+/// decoded shows up in the decoded-byte count.
+fn metadata_first(key: &str, first: &Value) -> Vec<u8> {
     let mut value = record();
     value["invocations"][0]["metadata"]["user_message"] = json!("p".repeat(2 * 1024 * 1024));
     let metadata = value["invocations"][0]["metadata"].as_object_mut().unwrap();
-    metadata.remove("user_images");
+    assert!(
+        metadata.remove(key).is_some(),
+        "the fixture must carry {key}, which this moves to the front"
+    );
     let remaining = serde_json::to_string(metadata).unwrap();
-    let ordered = format!("{{\"user_images\":{images},{}", &remaining[1..]);
+    let ordered = format!("{{\"{key}\":{first},{}", &remaining[1..]);
     value["invocations"][0]["metadata"] = json!("ordered-metadata");
     String::from_utf8(encoded(&value))
         .unwrap()
         .replace("\"ordered-metadata\"", &ordered)
         .into_bytes()
+}
+fn images_first(images: &Value) -> Vec<u8> {
+    metadata_first("user_images", images)
+}
+fn files_first(files: &Value) -> Vec<u8> {
+    metadata_first("user_files", files)
 }
 
 #[test]
@@ -334,4 +345,126 @@ fn saved_image_fields_are_bounded_before_their_text_is_built() {
             "saved image {field} was decoded before its bound: {decoded}/{length}"
         );
     }
+}
+
+/// The same three bounds as images, for the paths a message points at: how many
+/// there may be, how long each one may be, and what an entry may hold at all.
+///
+/// Each is applied while the collection is being read rather than after, which
+/// is the whole point of stating them: a journal is a file on this disk that
+/// something else may have written, and a decoder that allocates first and
+/// checks afterwards has already done the expensive thing. `user_files` is put
+/// first in the metadata so that a bound applied late would show as two
+/// mebibytes of still-valid message read after it.
+#[test]
+fn a_saved_message_holds_at_most_the_live_number_of_paths_each_within_its_bound() {
+    let one = json!({"path": "/Users/dev/notes.md"});
+    let most = Value::Array(vec![one.clone(); UserMessage::MAX_FILES]);
+    let loaded = load(files_first(&most)).0.expect("the exact bound loads");
+    assert_eq!(
+        loaded.snapshot.unwrap().invocations[0]
+            .request
+            .user_message
+            .files()
+            .len(),
+        UserMessage::MAX_FILES
+    );
+
+    // One more, and two hundred thousand more, stop at the eleventh element.
+    for count in [UserMessage::MAX_FILES + 1, 200_000] {
+        let bytes = files_first(&Value::Array(vec![one.clone(); count]));
+        let length = bytes.len();
+        let (result, decoded) = load(bytes);
+        assert!(matches!(result, Err(StorageError::Corrupt(_))), "{count}");
+        assert!(
+            decoded <= 64 * 1024,
+            "{count} saved paths were decoded before their bound: {decoded}/{length}"
+        );
+    }
+
+    // A path longer than any the domain would have accepted, and long enough
+    // that reading it before refusing it would be the expensive mistake.
+    let long = format!("/{}", "p".repeat(2 * 1024 * 1024));
+    let bytes = files_first(&json!([{ "path": long }]));
+    let length = bytes.len();
+    let (result, decoded) = load(bytes);
+    assert!(matches!(result, Err(StorageError::Corrupt(_))));
+    assert!(
+        decoded <= 64 * 1024,
+        "an oversized path was read before its bound: {decoded}/{length}"
+    );
+    // And the bound is the domain's own, not something smaller: the longest
+    // path a message could have named loads back.
+    let longest = format!("/{}", "p".repeat(LinkedFile::MAX_PATH_BYTES - 1));
+    assert!(
+        load(files_first(&json!([{ "path": longest }]))).0.is_ok(),
+        "the longest path the domain accepts must load"
+    );
+
+    // A file entry is a path and nothing else. An unknown key is refused
+    // before its value is read, so a mebibyte hung off one costs nothing.
+    let bytes = files_first(&json!([{ "reach": "p".repeat(2 * 1024 * 1024), "path": "/a" }]));
+    let length = bytes.len();
+    let (result, decoded) = load(bytes);
+    assert!(matches!(result, Err(StorageError::Corrupt(_))));
+    assert!(
+        decoded <= 64 * 1024,
+        "an unknown file-entry key was read before it was refused: {decoded}/{length}"
+    );
+}
+
+/// A journal written before a message could point at files has no `user_files`
+/// key, and it loads: the message named none, which is what empty says.
+///
+/// That is the true historical meaning rather than a compatibility fiction —
+/// no message could name a file — so this is one contract reading its own
+/// earlier records, not a second reader kept alive beside a first. Six
+/// `Option` fields in the same struct already take that reading of their own
+/// absence.
+///
+/// The line a default must not cross is inventing a value a record could have
+/// meant something else by, and the test below walks right up to it: a `path`
+/// has no default, so a file entry without one is corrupt and stays corrupt.
+#[test]
+fn a_journal_written_before_files_reads_as_a_message_that_named_none() {
+    let mut value = record();
+    let metadata = value["invocations"][0]["metadata"].as_object_mut().unwrap();
+    assert!(
+        metadata.remove("user_files").is_some(),
+        "the fixture must carry the field this test removes"
+    );
+    let loaded = load(encoded(&value)).0.expect("an older journal loads");
+    let restored = loaded.snapshot.expect("the snapshot is there");
+    let message = &restored.invocations[0].request.user_message;
+    assert!(message.files().is_empty());
+    // And nothing else about the record moved.
+    assert_eq!(message.text_str(), "input");
+    assert!(message.images().is_empty());
+
+    // The default stops at the field it is on. A file entry is still a path
+    // and nothing else, so one without a path names nothing and is refused
+    // rather than quietly becoming an empty string.
+    let mut missing = record();
+    missing["invocations"][0]["metadata"]["user_files"] = json!([{}]);
+    assert!(matches!(
+        load(encoded(&missing)).0,
+        Err(StorageError::Corrupt(_))
+    ));
+    let mut nulled = record();
+    nulled["invocations"][0]["metadata"]["user_files"] = json!([{ "path": null }]);
+    assert!(matches!(
+        load(encoded(&nulled)).0,
+        Err(StorageError::Corrupt(_))
+    ));
+    // As does a record whose own required fields are gone: defaulting one
+    // field is not defaulting the struct.
+    let mut gutted = record();
+    let metadata = gutted["invocations"][0]["metadata"]
+        .as_object_mut()
+        .unwrap();
+    metadata.remove("user_images");
+    assert!(matches!(
+        load(encoded(&gutted)).0,
+        Err(StorageError::Corrupt(_))
+    ));
 }

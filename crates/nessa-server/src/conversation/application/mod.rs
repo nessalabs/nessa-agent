@@ -3,6 +3,9 @@
 //! A bounded read projection consumes SDK observations independently of sockets.
 //! Service -> ConversationAttachments: a message may refer only to images this
 //! conversation uploaded, and closing the conversation lets them go.
+//! Service -> ConversationFileLinkAudit: a message may also point at files on
+//! this machine by path. Nothing is uploaded and nothing is held for those, so
+//! what is recorded is who pointed the agent at them.
 mod error;
 mod ports;
 mod projection;
@@ -12,18 +15,20 @@ pub use error::ConversationError;
 pub use ports::{
     AttachmentRelease, AttachmentReleaseCause, ConversationAttachments, ConversationCreation,
     ConversationCreationAudit, ConversationCreationAuditRecord, ConversationCreationCause,
-    ConversationCreationDisposition, ConversationFuture, ConversationOwnershipState,
-    ConversationRepository, RuntimeReadiness, SubmittedImage,
+    ConversationCreationDisposition, ConversationFileLinkAudit, ConversationFileLinkAuditRecord,
+    ConversationFileLinkCause, ConversationFileLinkState, ConversationFuture,
+    ConversationOwnershipState, ConversationRepository, RuntimeReadiness, SubmittedFile,
+    SubmittedImage, SubmittedMessage,
 };
 pub use service::{
     ConversationAgent, ConversationAgents, ConversationCaller, ConversationDependencies,
     ConversationLimits, ConversationService, RequestedAgent, SubmissionMode,
 };
 pub use view::{
-    ConversationAttachment, ConversationCapabilities, ConversationDisposition, ConversationMessage,
-    ConversationMessageStatus, ConversationPending, ConversationPendingMode,
-    ConversationPermission, ConversationPermissionOption, ConversationReorderOutcome,
-    ConversationTool, ConversationView, SubmissionReceipt,
+    ConversationAttachment, ConversationCapabilities, ConversationDisposition,
+    ConversationLinkedFile, ConversationMessage, ConversationMessageStatus, ConversationPending,
+    ConversationPendingMode, ConversationPermission, ConversationPermissionOption,
+    ConversationReorderOutcome, ConversationTool, ConversationView, SubmissionReceipt,
 };
 
 #[cfg(test)]
@@ -41,3 +46,7 @@ mod reorder_tests;
 #[cfg(test)]
 #[path = "../../../tests/conversation/attachments.rs"]
 mod attachment_tests;
+
+#[cfg(test)]
+#[path = "../../../tests/conversation/linked_files.rs"]
+mod linked_file_tests;

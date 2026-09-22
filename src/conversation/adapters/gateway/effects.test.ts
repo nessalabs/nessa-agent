@@ -1,6 +1,9 @@
 import {
   IMAGE_ATTACHMENT_TYPES,
+  linkedFileProblem,
+  MAX_FILE_PATH_BYTES as MAX_FILE_PATH_BYTES_WIRE,
   MAX_IMAGE_ATTACHMENT_BYTES,
+  MAX_MESSAGE_FILES,
   MAX_MESSAGE_IMAGE_BYTES,
   MAX_MESSAGE_IMAGES,
   MAX_UPLOAD_BYTES,
@@ -20,7 +23,10 @@ import {
   SubmissionRefusedError,
 } from "../../application/ports"
 import {
+  linkablePath,
   MAX_ATTACHMENT_BYTES,
+  MAX_FILE_PATH_BYTES,
+  MAX_SEND_FILES,
   MAX_SEND_IMAGES,
   MAX_SEND_TOTAL_IMAGE_BYTES,
   STORED_IMAGE_TYPES,
@@ -64,8 +70,9 @@ it("joins concurrent creation and forwards exact stable submission IDs", async (
     actionId: "action",
     text: "exact",
     attachments: [],
+    files: [],
   })
-  expect(send).toHaveBeenCalledWith("server", "exact", [], {
+  expect(send).toHaveBeenCalledWith("server", "exact", [], [], {
     executionId: "execution",
     requestId: "action",
   })
@@ -142,6 +149,9 @@ it.each([
   // The gateway lost the configuration this conversation was created against:
   // the one read failure this panel has a separate word for.
   ["conversation_configuration_changed", "configuration-changed"],
+  // And the gateway not being able to read what it saved, which it caches and
+  // answers every later read from — so there is nothing left to keep trying.
+  ["conversation_state_unreadable", "state-unreadable"],
   // Known codes with nothing extra to tell somebody watching a stale transcript.
   ["conversation_not_found", "unavailable"],
   ["agent_not_configured", "unavailable"],
@@ -267,27 +277,74 @@ it("holds every message bound the model keeps to the one the protocol generated"
   expect(MAX_SEND_TOTAL_IMAGE_BYTES).toBe(MAX_MESSAGE_IMAGE_BYTES)
   // What one file may weigh to be attached at all is the upload path's bound.
   expect(MAX_ATTACHMENT_BYTES).toBe(MAX_UPLOAD_BYTES)
+  expect(MAX_SEND_FILES).toBe(MAX_MESSAGE_FILES)
+  expect(MAX_FILE_PATH_BYTES).toBe(MAX_FILE_PATH_BYTES_WIRE)
 })
 
-it("forwards a message's images with its text, for send and steer alike", async () => {
+it("refuses locally exactly the paths the published rule refuses", () => {
+  // The model states the path rule in its own terms, because it does not
+  // import a client SDK, and the client compiles the one the schema publishes.
+  // Two statements of one rule is how the client came to accept a C1 control
+  // the gateway refused — and a message refused as `invalid_request` shows no
+  // sentence of its own, so that gap said nothing at all. This is where they
+  // are held to each other.
+  for (const path of [
+    "/a",
+    "/Users/ada/report.pdf",
+    "/Users/ada/report (final) 100%.pdf",
+    "/Users/ada/2026-09-20 10:30.txt",
+    "/Users/ada/отчёт.pdf",
+    "/Users/ada/.zshrc",
+    "/Users/ada/...",
+    "",
+    "report.pdf",
+    "./report.pdf",
+    "/Users/ada/a]b.pdf",
+    "/Users/ada/[x/report.pdf",
+    "/Users/ada/a\nb.pdf",
+    "/Users/ada/a\u0000b.pdf",
+    "/Users/ada/a\u0085b.pdf",
+    "/Users/ada/a\u009fb.pdf",
+    "/Users/ada/a\u007fb.pdf",
+    "/",
+    "/Users/ada/",
+    "//Users/ada/report.pdf",
+    "/Users//ada/report.pdf",
+    "/Users/ada/..",
+    "/Users/../etc/passwd",
+    "/Users/./ada/report.pdf",
+    `/${"a".repeat(4096)}`,
+    `/${"a".repeat(4095)}`,
+  ])
+    expect([path, linkablePath(path)]).toEqual([
+      path,
+      linkedFileProblem({ path }) === undefined,
+    ])
+})
+
+it("forwards a message's images and files with its text, for send and steer alike", async () => {
   const receipt = { executionId: "execution", requestId: "action", disposition: "queued" }
   const send = vi.fn(async () => receipt)
   const steer = vi.fn(async () => receipt)
   const effects = effectsOf(
     () => ({ conversation: { send, steer } }) as unknown as NessaClient,
   )
+  const linked = { path: "/Users/ada/report.pdf" }
   const submission = {
     conversationId: "server",
     executionId: "execution",
     actionId: "action",
     text: "",
     attachments: [stored],
+    files: [linked],
   }
   await effects.send(submission)
   await effects.steer(submission)
   const ids = { executionId: "execution", requestId: "action" }
-  expect(send).toHaveBeenCalledExactlyOnceWith("server", "", [stored], ids)
-  expect(steer).toHaveBeenCalledExactlyOnceWith("server", "", [stored], ids)
+  // The two lists stay apart all the way to the client: an image's bytes were
+  // carried here and a file's path was not.
+  expect(send).toHaveBeenCalledExactlyOnceWith("server", "", [stored], [linked], ids)
+  expect(steer).toHaveBeenCalledExactlyOnceWith("server", "", [stored], [linked], ids)
 })
 
 it.each([
@@ -322,6 +379,7 @@ it.each([
       actionId: "action",
       text: "look",
       attachments: [stored],
+      files: [],
     }
     for (const submit of [effects.send, effects.steer]) {
       const error = await submit(submission).catch((error: unknown) => error)
@@ -350,6 +408,7 @@ it("reports the client refusing a message's images as a certain refusal, for sen
       actionId: "action",
       text: "look",
       attachments: [{ ...stored, size: MAX_IMAGE_ATTACHMENT_BYTES + 1 }],
+      files: [],
     }).catch((error: unknown) => error)
     expect(error).toBeInstanceOf(SubmissionRefusedError)
     expect(error).toMatchObject({ reason: "invalid-request" })
@@ -377,6 +436,7 @@ it("passes an uncertain send failure on untouched: a lost answer is not a refusa
       actionId: "action",
       text: "look",
       attachments: [],
+      files: [],
     })
     .catch((error: unknown) => error)
   expect(error).toBe(lost)
@@ -564,6 +624,7 @@ it("gives every code the client decides before admission a word of its own", asy
         actionId: "action",
         text: "look",
         attachments: [],
+        files: [],
       })
       .catch((error: unknown) => error)
     expect(

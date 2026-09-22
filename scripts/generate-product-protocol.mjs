@@ -80,36 +80,43 @@ for (const [name, def] of Object.entries(schema.$defs)) {
   if (!externalRust) rs += "}\n"
 }
 /**
- * The one value every `attachments` array in the schema agrees on, so a bound
- * that drifted between two commands is a generation failure rather than a
+ * The one value every array of `field` referring to `kind` agrees on, so a
+ * bound that drifted between two commands is a generation failure rather than a
  * constant the client quietly copies from whichever array was read first.
+ *
+ * A message names two kinds of attachment and they are separate arrays, because
+ * they are carried in opposite ways: an image's bytes travel with the message
+ * and a linked file's never do. Each array therefore has its own bounds, and
+ * each is checked across every command that spells one.
  */
-function attachmentArrayBound(keyword) {
+function arrayBound(field, kind, keyword) {
   const arrays = Object.entries(schema.$defs).flatMap(([name, def]) =>
     Object.entries(def.properties ?? {})
       .filter(
-        ([field, node]) =>
-          field === "attachments" && node.items?.$ref?.endsWith("/ImageAttachment"),
+        ([property, node]) =>
+          property === field && node.items?.$ref?.endsWith(`/${kind}`),
       )
       .map(([, node]) => [name, node[keyword]]),
   )
-  if (arrays.length === 0) throw new Error(`No attachments array carries ${keyword}`)
+  if (arrays.length === 0) throw new Error(`No ${field} array carries ${keyword}`)
   const [[, bound]] = arrays
   const disagreeing = arrays.filter(([, value]) => value !== bound)
   if (bound === undefined || disagreeing.length > 0)
-    throw new Error(
-      `attachments arrays disagree on ${keyword}: ${JSON.stringify(arrays)}`,
-    )
+    throw new Error(`${field} arrays disagree on ${keyword}: ${JSON.stringify(arrays)}`)
   return bound
 }
 const image = schema.$defs.ImageAttachment.properties
+const linked = schema.$defs.LinkedFile.properties
 // Named for what a reader of the client says, not for the schema's field paths.
 const bounds = {
   maxImageBytes: image.size.maximum,
   imageMimeTypes: image.mimeType.enum,
-  maxMessageImages: attachmentArrayBound("maxItems"),
-  maxMessageImageBytes: attachmentArrayBound("x-maxTotalBytes"),
+  maxMessageImages: arrayBound("attachments", "ImageAttachment", "maxItems"),
+  maxMessageImageBytes: arrayBound("attachments", "ImageAttachment", "x-maxTotalBytes"),
   maxUploadBytes: schema.$defs.AttachmentBeginParams.properties.size.maximum,
+  maxMessageFiles: arrayBound("files", "LinkedFile", "maxItems"),
+  maxFilePathBytes: linked.path["x-utf8MaxBytes"],
+  filePathPattern: linked.path.pattern,
 }
 ts += `${doc(
   "Bounds the product schema puts on attachments, generated from it so no copy of a number can drift.",

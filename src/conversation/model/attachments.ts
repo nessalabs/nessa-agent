@@ -44,10 +44,12 @@ export type ImageReference = { digest: string; mimeType: StoredImageType; size: 
 /**
  * Where a file's bytes are, from this window's point of view.
  *
- * A file that is not an image stays `not-started`: nothing uploads it, and
- * sending refuses it with a reason. Only `stored` carries a reference, and it
- * carries the whole one, so there is no way to write down an upload that
- * finished without saying what it finished as.
+ * A file that is not an image stays `not-started`, and always will: nothing
+ * uploads it, because nothing needs to. Its bytes are already on the machine
+ * the agent runs on, so the message names where it is instead — see
+ * {@link FileAttachment.path} and {@link messageFiles}. Only `stored` carries a
+ * reference, and it carries the whole one, so there is no way to write down an
+ * upload that finished without saying what it finished as.
  */
 export type UploadState =
   | { status: "not-started" }
@@ -67,15 +69,41 @@ export type FileAttachment = {
   name: string
   mimeType: string
   size: number
+  /** Empty when this window holds no bytes to paint, which a path-only file does not. */
   previewUrl: string
   upload: UploadState
+  /**
+   * Where the file is on this machine, when the host said so, and `null` when
+   * nobody could: a browser `File` deliberately does not carry one, so a file
+   * dropped or chosen outside the desktop app has no path at all.
+   *
+   * This is what makes a file that is not an image sendable. The panel never
+   * opens it; the path travels to the gateway, which checks that it can be
+   * said and puts it in the prompt as a link the agent may open. See
+   * {@link messageFiles}.
+   */
+  path: string | null
 }
+
+/**
+ * One file a message points the agent at, by path rather than by content.
+ * The same shape the wire carries, and the whole of it: a name beside the path
+ * would be a second thing that could disagree with it.
+ */
+export type LinkedFile = { path: string }
 
 /**
  * An image known only by reference: a turn read back from the gateway, which
  * this window never held the bytes for. It has nothing to preview.
  */
 export type ImageReferencePart = { type: "image-reference" } & ImageReference
+
+/**
+ * A file a turn pointed the agent at, read back from the gateway: after a
+ * reload, or a turn sent from another surface. There is nothing to preview and
+ * never was — the path is the whole of what the message carried.
+ */
+export type LinkedFileReferencePart = { type: "file-reference"; path: string }
 
 /**
  * Preview budgets: what one window will hold. They bound drafts, not messages.
@@ -98,31 +126,64 @@ export const MAX_SENT_PREVIEW_BYTES = 64 * 1024 * 1024
 export const MAX_SEND_IMAGES = 10
 // Ten, not twenty: the agent is handed base64, a third larger, in one 16 MiB frame.
 export const MAX_SEND_TOTAL_IMAGE_BYTES = 10 * 1024 * 1024
+/**
+ * How many files one message may point at. No byte budget stands beside it:
+ * nothing about them travels except the paths.
+ */
+export const MAX_SEND_FILES = 10
+/**
+ * Longest path a message may name, in UTF-8 bytes — `PATH_MAX`, which is a
+ * byte limit on every filesystem this runs on. Counted in bytes everywhere it
+ * is counted: here, in the client, and in the gateway's own domain. The
+ * published schema's `maxLength` is in code points and so is only a coarse
+ * upper bound, which can never refuse a path this accepts.
+ */
+export const MAX_FILE_PATH_BYTES = 4096
 
 const digestPattern = /^sha256:[0-9a-f]{64}$/
 
-/** Enforce per-file and aggregate draft budgets before changing stored content. */
+/**
+ * Enforce per-file and aggregate draft budgets before changing stored content.
+ *
+ * The byte budgets are counted over the files this window is holding the bytes
+ * of, and over those alone. A file known by path is not one of them: nothing
+ * was read and nothing is retained, so a video far past every figure here is an
+ * ordinary attachment. What still applies to all of them is how many one draft
+ * may hold, which is about the draft rather than about memory, and that every
+ * file's size is a number that could be one.
+ */
 export function validDraftAttachments(content: MessageContent): boolean {
   const files = content.filter((part) => part.type === "file")
+  const held = files.filter((file) => !linkedFile(file))
   return (
     files.length <= MAX_DRAFT_ATTACHMENTS &&
     new Set(files.map((file) => file.id)).size === files.length &&
-    files.every(
-      (file) =>
-        Number.isSafeInteger(file.size) &&
-        file.size >= 0 &&
-        file.size <= MAX_ATTACHMENT_BYTES,
-    ) &&
-    files.reduce((bytes, file) => bytes + file.size, 0) <= MAX_DRAFT_ATTACHMENT_BYTES
+    files.every((file) => Number.isSafeInteger(file.size) && file.size >= 0) &&
+    held.every((file) => file.size <= MAX_ATTACHMENT_BYTES) &&
+    held.reduce((bytes, file) => bytes + file.size, 0) <= MAX_DRAFT_ATTACHMENT_BYTES
   )
 }
 
 /**
- * Image formats a browser often reports with no type at all — most camera RAW
- * extensions, and sometimes HEIC — by file extension. The gateway only needs to
- * be told "this is an image"; it reads the real encoding from the bytes.
+ * Images by file extension, for every route that has a name and no bytes.
+ *
+ * There are two of those. A browser reports most camera RAW files, and
+ * sometimes HEIC, with no type at all. And a file chosen through the host's
+ * picker was never opened by anything, so its name is the only evidence there
+ * is — which is why the ordinary web encodings are listed here too, though a
+ * browser always types those itself. The gateway only needs to be told "this is
+ * an image"; it reads the real encoding from the bytes.
  */
+/** What a file is called when nothing knows any better. */
+const FALLBACK_MEDIA_TYPE = "application/octet-stream"
+
 const IMAGE_TYPE_BY_EXTENSION: Readonly<Record<string, string>> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
   heic: "image/heic",
   heif: "image/heif",
   avif: "image/avif",
@@ -148,12 +209,21 @@ const IMAGE_TYPE_BY_EXTENSION: Readonly<Record<string, string>> = {
  * wins whenever it gave one. When it gave none — empty, or the
  * `application/octet-stream` that means the same — a known image extension
  * decides, so a RAW file is an image here and not a file that cannot be sent.
+ *
+ * This is what decides a file's route, and the route belongs to the file and
+ * never to the gesture: an image is uploaded, anything else is pointed at by
+ * path, and that holds whether it arrived through the picker, a drop, or a
+ * paste.
  */
 export function declaredMediaType(name: string, browserType: string): string {
   const reported = browserType.trim().toLowerCase()
   if (reported && reported !== "application/octet-stream") return reported
   const extension = /\.([a-z0-9]+)$/i.exec(name.trim())?.[1]?.toLowerCase()
-  return (extension && IMAGE_TYPE_BY_EXTENSION[extension]) || "application/octet-stream"
+  // `Object.hasOwn`, not a bare index: every object inherits `constructor`,
+  // `toString` and the rest, so `photo.constructor` used to look up a function
+  // here and hand it on as a media type, which threw on the first `startsWith`.
+  const known = extension && Object.hasOwn(IMAGE_TYPE_BY_EXTENSION, extension)
+  return (known ? IMAGE_TYPE_BY_EXTENSION[extension] : undefined) ?? FALLBACK_MEDIA_TYPE
 }
 
 /**
@@ -206,6 +276,7 @@ export type ImageRefusal =
   | { kind: "upload-in-flight" }
   | { kind: "too-many-images" }
   | { kind: "images-too-large" }
+  | { kind: "too-many-files" }
 
 /**
  * The images this content would send, or the one reason it cannot.
@@ -235,10 +306,86 @@ export function storedImages(content: MessageContent): ImageReference[] {
   })
 }
 
+/**
+ * Whether this file travels as a path rather than as bytes: anything that is
+ * not an image and that the host gave a path for. An image is never one of
+ * these, even when its path is known — an image is carried, so that the model
+ * sees it without having to decide to look.
+ */
+export function linkedFile(file: FileAttachment): boolean {
+  return !isImageFile(file.mimeType) && file.path !== null
+}
+
+/**
+ * Whether a path can be carried to the agent, which is the gateway's rule
+ * stated here so that a file it would refuse is turned away while it can still
+ * be swapped, rather than after somebody has pressed send.
+ *
+ * Every component below the root has to be a name: absolute, no control
+ * character in it, and none empty, `.` or `..`, none of which survive the path
+ * being written as a URI. The gateway keeps the same rule in its domain and
+ * the protocol publishes it; `adapters/gateway/effects.ts` is where the three
+ * are held to each other, because this model does not import a client SDK.
+ *
+ * Square brackets used to be refused here too, because the agent is handed the
+ * path inside a markdown link and a bracket could close it. That rule covered
+ * one of the three characters that can, and is gone rather than extended: the
+ * gateway's ACP adapter now encodes both halves of the link down to an
+ * allowlist, so `[draft] notes.pdf` is an ordinary name and nothing downstream
+ * depends on its absence.
+ */
+export function linkablePath(path: string): boolean {
+  // Bytes, because that is what the gateway counts and what the constant says.
+  // Counting UTF-16 code units — `path.length` — let a path of 4,095 CJK
+  // characters through here at 12,286 bytes, to be refused after it was sent
+  // as `invalid_request`, which the panel deliberately shows no sentence for.
+  if (!path.startsWith("/")) return false
+  if (new TextEncoder().encode(path).length > MAX_FILE_PATH_BYTES) return false
+  return path
+    .slice(1)
+    .split("/")
+    .every(
+      (part) =>
+        part.length > 0 &&
+        part !== "." &&
+        part !== ".." &&
+        ![...part].some(controlCharacter),
+    )
+}
+
+/**
+ * C0, DEL and C1 — the same set the gateway's own check covers. Written by
+ * code point rather than as a pattern: a regular expression holding literal
+ * control characters is unreadable and one written with escapes is easy to get
+ * a range wrong in, which is how C1 came to be missing from the published rule
+ * while the gateway refused it.
+ */
+function controlCharacter(character: string): boolean {
+  const code = character.codePointAt(0) ?? 0
+  return code <= 0x1f || (code >= 0x7f && code <= 0x9f)
+}
+
+/**
+ * The files this content points the agent at, in attachment order. Nothing
+ * here is uploaded and nothing here is read; whether there are too many of
+ * them is {@link messageImages}'s question, which answers for the whole
+ * message at once.
+ */
+export function messageFiles(content: MessageContent): LinkedFile[] {
+  return content.flatMap((part) => {
+    if (part.type === "file-reference") return [{ path: part.path }]
+    return part.type === "file" && part.path !== null && linkedFile(part)
+      ? [{ path: part.path }]
+      : []
+  })
+}
+
 export function messageImages(
   content: MessageContent,
 ): { ok: true; images: ImageReference[] } | { ok: false; refusal: ImageRefusal } {
-  const files = content.filter((part) => part.type === "file")
+  const parts = content.filter((part) => part.type === "file")
+  // What travels as a path is not waited for, not uploaded, and not an image.
+  const files = parts.filter((file) => !linkedFile(file))
   const unsupported = files.find((file) => !isImageFile(file.mimeType))
   if (unsupported)
     return { ok: false, refusal: { kind: "unsupported-file", name: unsupported.name } }
@@ -255,6 +402,11 @@ export function messageImages(
     return { ok: false, refusal: { kind: "too-many-images" } }
   if (images.reduce((bytes, image) => bytes + image.size, 0) > MAX_SEND_TOTAL_IMAGE_BYTES)
     return { ok: false, refusal: { kind: "images-too-large" } }
+  // Counted the same way the message counts them, so a turn read back from the
+  // gateway — whose files are references rather than draft parts — is held to
+  // the same bound as one attached here.
+  if (messageFiles(content).length > MAX_SEND_FILES)
+    return { ok: false, refusal: { kind: "too-many-files" } }
   return { ok: true, images }
 }
 

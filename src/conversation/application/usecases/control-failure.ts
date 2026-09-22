@@ -89,6 +89,8 @@ function nothingWasDone(
       return "This gateway is not set up to run conversations, so nothing was done. Configure an agent and restart it."
     case "conversation-not-found":
       return "The gateway no longer has this conversation, so nothing was done."
+    case "conversation-state-unreadable":
+      return "Nessa cannot read this conversation's saved state, so nothing was done. Start a new conversation to carry on."
     case "conversation-capacity":
       return "The gateway has too many conversations open, so nothing was done. Close one and try again shortly."
     // Nothing these add is worth a sentence to somebody who pressed a control:

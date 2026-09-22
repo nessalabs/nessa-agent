@@ -2,9 +2,11 @@
 //!
 //! Everything the host reads from outside the process — the settings file, the
 //! shortcut cache, the surface credential, the background service, the release
-//! endpoint — is constructed here, once, while `main`'s `setup` is assembling
-//! the app. Nothing below this point constructs any of them, and nothing below
-//! this point goes looking for them either.
+//! endpoint, the file picker and the filesystem behind the files it answers
+//! with — is
+//! constructed here, once, while `main`'s `setup` is assembling the app.
+//! Nothing below this point constructs any of them, and nothing below this
+//! point goes looking for them either.
 //!
 //! ```text
 //!   main::setup ──assemble──▶ HostDependencies ──manage──▶ Tauri
@@ -36,6 +38,9 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Manager};
 
+use crate::attachments::{
+    self, AttachmentTickets, ChosenFiles, ContentTypes, DragBoard, FilePicker, Readiness,
+};
 use crate::gateway::{self, application::Gateway};
 use crate::local_data;
 use crate::settings::{SettingsFile, SettingsStore};
@@ -60,6 +65,39 @@ pub struct HostDependencies {
     pub shortcuts: Arc<dyn ShortcutStore>,
     /// The bundled surface's native credential.
     pub credential: Arc<dyn SurfaceCredentials>,
+    /// Where the person chooses files to attach: the operating system's own
+    /// file dialog, which the webview has no way of putting on screen itself.
+    pub picker: Arc<dyn FilePicker>,
+    /// What the filesystem says about a file the picker answered with: how long
+    /// it is, and what is in it. Its own dependency rather than part of the
+    /// picker, because the filesystem is a different outside thing from the
+    /// window the choice was made in and refuses for its own reasons — and one
+    /// dependency rather than two, because a length and the contents behind it
+    /// are that same filesystem asked twice.
+    pub files: Arc<dyn ChosenFiles>,
+    /// What this machine says a chosen file *is*. Its own dependency rather
+    /// than another question on the filesystem, because it is a different
+    /// outside thing — Launch Services on macOS, a subprocess on Linux, nothing
+    /// at all elsewhere — and because it does not fail: a platform with no
+    /// answer shrugs, and the panel's extension fallback carries the file.
+    pub types: Arc<dyn ContentTypes>,
+    /// The host's memory of the paths a person chose, and the one-shot tickets
+    /// that stand in for them.
+    ///
+    /// One desk for the process, built here, because a ticket minted by one
+    /// desk and presented to another is a ticket nobody has heard of. It is
+    /// what stops the webview naming a path of its own to read.
+    pub tickets: Arc<dyn AttachmentTickets>,
+    /// Who can make a chosen file readable when it is not yet. Its own
+    /// dependency because it is a service that starts work and reports on it
+    /// later, rather than the filesystem answering about a path.
+    pub readiness: Arc<Readiness>,
+    /// What the drag currently over the panel is carrying besides files.
+    ///
+    /// Held here because it is state the host keeps between two window events
+    /// — the snapshot taken when a drag enters, read when it drops. See
+    /// `attachments::dragged` for why it cannot be read at the drop instead.
+    pub dragging: Arc<DragBoard>,
     /// The registered background service, in the builds that have one.
     ///
     /// `None` in a development build: the gateway is a packaged runtime that a
@@ -105,6 +143,12 @@ impl HostDependencies {
             settings: Arc::new(SettingsFile::at(config_root.clone())),
             shortcuts: Arc::new(ShortcutsFile::at(config_root)),
             credential: Arc::new(SurfaceCredential::from_environment(stage)),
+            picker: attachments::file_picker(app),
+            files: attachments::chosen_files(),
+            types: attachments::content_types(),
+            tickets: attachments::attachment_tickets(),
+            readiness: attachments::readiness(),
+            dragging: attachments::drag_board(),
             gateway,
             #[cfg(desktop)]
             releases: updater::release_source(app),

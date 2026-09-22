@@ -1,7 +1,8 @@
-import { Image as ImageIcon } from "lucide-react"
+import { File as FileIcon, Image as ImageIcon } from "lucide-react"
 import {
   imageReferenceLabel,
   isImageFile,
+  linkedFile,
   previewableImage,
   type MessageContent,
 } from "../model"
@@ -19,21 +20,44 @@ const tile = "flex h-16 items-center justify-center overflow-hidden rounded-xl b
  * labelled placeholder saying what it was and how big. Reading the bytes back from the gateway to
  * paint that tile is deliberately not done here; nothing fetches by digest yet.
  *
- * Renders nothing for a turn with no images, so a text turn's markup is
- * unchanged. An image-only turn renders only this, which is why every tile has
- * a name a screen reader and a pointer can both reach, not only a picture.
+ * A file the turn pointed the agent at gets a tile too, labelled with its name.
+ * Nobody ever held its bytes — the message carried where it is, not what is in
+ * it — so there is nothing to paint and nothing to fetch, and its full path is
+ * the tile's title rather than its label, which would not fit and is not what
+ * the person picked it by.
+ *
+ * Renders nothing for a turn with no attachments, so a text turn's markup is
+ * unchanged. An attachment-only turn renders only this, which is why every tile
+ * has a name a screen reader and a pointer can both reach, not only a picture.
  */
 export function MessageImages({ content }: { content: MessageContent }) {
-  type Tile = { key: string; label: string; src: string | undefined }
+  type Tile = {
+    key: string
+    label: string
+    title: string
+    src: string | undefined
+    file?: true
+  }
   const tiles = content.flatMap((part, index): Tile[] => {
     if (part.type === "file" && isImageFile(part.mimeType))
       return [
         {
           key: part.id,
           label: part.name,
+          title: part.name,
           // An original the webview cannot paint (HEIC, RAW) gets the labelled
           // tile too, by its file name, rather than a broken picture.
           src: previewableImage(part.mimeType) ? part.previewUrl : undefined,
+        },
+      ]
+    if (part.type === "file" && linkedFile(part))
+      return [
+        {
+          key: part.id,
+          label: part.name,
+          title: part.path ?? part.name,
+          src: undefined,
+          file: true,
         },
       ]
     if (part.type === "image-reference")
@@ -42,7 +66,19 @@ export function MessageImages({ content }: { content: MessageContent }) {
           // The same image may be sent twice in one message; position disambiguates.
           key: `${part.digest}:${index}`,
           label: imageReferenceLabel(part.mimeType, part.size),
+          title: imageReferenceLabel(part.mimeType, part.size),
           src: undefined,
+        },
+      ]
+    // Read back from the gateway: the path is all there ever was.
+    if (part.type === "file-reference")
+      return [
+        {
+          key: `${part.path}:${index}`,
+          label: part.path.slice(part.path.lastIndexOf("/") + 1),
+          title: part.path,
+          src: undefined,
+          file: true,
         },
       ]
     return []
@@ -50,11 +86,11 @@ export function MessageImages({ content }: { content: MessageContent }) {
   if (tiles.length === 0) return null
   return (
     <ul
-      aria-label={tiles.length === 1 ? "1 image" : `${tiles.length} images`}
+      aria-label={tiles.length === 1 ? "1 attachment" : `${tiles.length} attachments`}
       className="nessa-message-images m-0 flex list-none flex-wrap gap-1.5 p-0 [&:not(:first-child)]:mt-2"
     >
       {tiles.map((item) => (
-        <li key={item.key} title={item.label} className="inline-flex">
+        <li key={item.key} title={item.title} className="inline-flex">
           {item.src ? (
             <span className={`${tile} w-16`}>
               <img src={item.src} alt={item.label} className="size-full object-cover" />
@@ -64,7 +100,11 @@ export function MessageImages({ content }: { content: MessageContent }) {
               className={`${tile} w-32 flex-col gap-1 px-1.5 text-accent-foreground`}
               data-image-reference
             >
-              <ImageIcon aria-hidden="true" className="size-5 text-muted-foreground" />
+              {item.file ? (
+                <FileIcon aria-hidden="true" className="size-5 text-muted-foreground" />
+              ) : (
+                <ImageIcon aria-hidden="true" className="size-5 text-muted-foreground" />
+              )}
               <span className="w-full truncate text-center font-sans nessa-text-1">
                 {item.label}
               </span>

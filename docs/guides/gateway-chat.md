@@ -229,10 +229,24 @@ send   -> conversation.send { text, attachments: [the returned references] }
   no type at all, so at attach time a known image extension (`.heic`, `.dng`,
   `.cr3`, `.nef`, `.arw`, `.tiff`, … — `declaredMediaType` in
   `src/conversation/model/attachments.ts`) declares the file an image. The
-  gateway reads the real encoding from the bytes. Files that are not images are
-  still preview-only: they are not uploaded, and sending refuses them with a
-  reason. An image the webview cannot paint gets a labelled tile, in the composer
-  and in the transcript, rather than a broken picture.
+  gateway reads the real encoding from the bytes. An image the webview cannot
+  paint gets a labelled tile, in the composer and in the transcript, rather than
+  a broken picture.
+- **A file that is not an image is not uploaded at all: the message names where
+  it is.** The gateway, the agent and the panel are on one machine, so the path
+  travels and the bytes do not, and the agent opens the file itself if it decides
+  to — under a policy that asks the reader first, every time. Which route a file
+  takes is decided by its type and never by how it was attached: an image is
+  uploaded and normalized whatever the gesture, so the images among the picker's
+  answers are read back through `read_attachment_bytes` before they are staged.
+  Only the desktop host can learn a path, so `+` asks its picker through
+  `choose_attachment_files`; a file dropped or pasted has none, and if it is not
+  an image it is refused with a sentence naming the route that works. None of
+  the composer's byte budgets apply to a file known by path, because they all
+  exist to bound what this window is holding — so a 700 MB video is an ordinary
+  attachment, and the notice for one dropped says so. Nothing guarantees the
+  model opens it: the link is text.
+  See [ADR 0013](../adr/done/0013-files-by-path-not-by-payload.md).
 - **At most three uploads run at once per window.** The gateway takes four and
   holds each slot until the image is normalized, so a window that started every
   upload when a dozen images were dropped would have most refused. The rest wait
@@ -274,12 +288,13 @@ send   -> conversation.send { text, attachments: [the returned references] }
   kind and a visible reason, and the draft is kept.** `not-connected` (no session
   yet: "Not connected to the gateway yet. Your draft has been kept."),
   `empty-draft` (the one silent kind: there is nothing to say about nothing),
-  `message-too-large`, and for files `unsupported-file` (not an image),
-  `upload-failed`, `upload-in-flight`, `too-many-images` (more than 10),
-  `images-too-large` (more than 10 MiB together — both counted over the returned
-  references, not the attached files), `image-input-unsupported`,
-  `image-input-unknown`, and `unknown-attachment`. A message of images alone
-  sends; its tab is titled by the first image's name. The composer's submit has
+  `message-too-large`, and for files `unsupported-file` (not an image and no
+  path to name it by), `upload-failed`, `upload-in-flight`, `too-many-images`
+  (more than 10), `images-too-large` (more than 10 MiB together — both counted
+  over the returned references, not the attached files), `too-many-files` (more
+  than 10 paths), `image-input-unsupported`, `image-input-unknown`, and
+  `unknown-attachment`. A message of images or files alone sends; its tab is
+  titled by the first attachment's name. The composer's submit has
   no early return of its own except an attachment still being read, which says
   so in the panel.
 - **Whether the agent takes images is never guessed.** `capabilities.imageInput`
@@ -687,7 +702,12 @@ launch arguments, system prompt, and tool/MCP configuration. A mismatch returns
 history. The gateway logs the underlying opening failure and retains any required
 cleanup owner. Retrying the same configuration does not resolve a mismatch.
 Start a new conversation using the current configuration. No stored-format migration
-or older-version compatibility path is provided.
+or older-version compatibility path is provided — and that is load-bearing rather
+than an omission: a saved record is `deny_unknown_fields` with no defaults, so a
+journal written before a field existed is refused whole. A conversation saved
+before messages could point at files does not reopen. See
+[ADR 0013](../adr/done/0013-files-by-path-not-by-payload.md) for why a migration
+script was written for exactly this and then deleted.
 
 ### Conversation activity surfaces
 

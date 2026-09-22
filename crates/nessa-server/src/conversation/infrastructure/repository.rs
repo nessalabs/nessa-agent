@@ -222,7 +222,17 @@ impl ConversationRepository for LocalConversationRepository {
                             })
                             .ok_or(ConversationError::Metadata)
                     }
-                    Err(_) => Err(ConversationError::Metadata),
+                    // Said once, here, because the caller cannot: every
+                    // failure in this function answers `Metadata`, which is
+                    // right for a caller and useless to anybody looking
+                    // afterwards. The one worth reading is a volume with no
+                    // exclusive rename — every conversation creation fails
+                    // there, for a reason the person can act on and no other
+                    // sign of.
+                    Err(error) => {
+                        tracing::error!(%error, "could not publish a conversation record");
+                        Err(ConversationError::Metadata)
+                    }
                 }
             })
             .await

@@ -15,7 +15,8 @@ use crate::{
     agents::domain::AgentId,
     conversation::{
         application::{
-            ConversationCaller, ConversationError, RequestedAgent, SubmissionMode, SubmittedImage,
+            ConversationCaller, ConversationError, RequestedAgent, SubmissionMode, SubmittedFile,
+            SubmittedImage, SubmittedMessage,
         },
         domain::ConversationId,
     },
@@ -102,16 +103,23 @@ pub(super) async fn dispatch(
                         conversation_id(&params.conversation_id)?,
                         caller(params.request_id),
                         params.execution_id,
-                        params.text,
-                        params
-                            .attachments
-                            .into_iter()
-                            .map(|image| SubmittedImage {
-                                digest: image.digest,
-                                media_type: image.mime_type,
-                                size: image.size,
-                            })
-                            .collect(),
+                        SubmittedMessage {
+                            text: params.text,
+                            images: params
+                                .attachments
+                                .into_iter()
+                                .map(|image| SubmittedImage {
+                                    digest: image.digest,
+                                    media_type: image.mime_type,
+                                    size: image.size,
+                                })
+                                .collect(),
+                            files: params
+                                .files
+                                .into_iter()
+                                .map(|file| SubmittedFile { path: file.path })
+                                .collect(),
+                        },
                         mode,
                     )
                     .await?;
@@ -296,6 +304,17 @@ fn error_code(error: &ConversationError) -> ConversationErrorCode {
             // Startup never reaches the provider with input, and the runtime is
             // warm afterwards: the same command is safe to send again.
             AgentError::StartupDeadline(_) => ConversationErrorCode::AgentStartupDeadline,
+            // Saved state this gateway cannot read, which it will not be able
+            // to read later either: the failure is cached and every later
+            // command is answered from it without touching the provider again.
+            // Its own code, because `agent_operation_failed` says nothing about
+            // whether trying again could differ, and a panel that assumes it
+            // could offers a retry that can only ever return this.
+            // `IdentityMismatch` is answered above as a changed configuration,
+            // which is what it means and already says "start a new one".
+            AgentError::Storage(StorageError::Corrupt(_)) => {
+                ConversationErrorCode::ConversationStateUnreadable
+            }
             _ => ConversationErrorCode::AgentOperationFailed,
         },
         ConversationError::PermissionAnswer { error, .. } => {

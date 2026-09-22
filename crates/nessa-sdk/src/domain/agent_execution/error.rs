@@ -23,6 +23,24 @@ pub enum ExecutionError {
     },
     /// A path description is empty or contains a NUL byte.
     InvalidPath,
+    /// A linked file's path does not start at the root. Only an absolute path
+    /// names a file, because the agent's working directory is not the caller's.
+    RelativeFilePath,
+    /// A linked file's path holds a control character. No path needs one, and
+    /// a path with one cannot be shown to whoever approves the read, written
+    /// into an audit record, or read back out of a log as the same path.
+    ControlCharacterInFilePath,
+    /// A linked file's path ends in a separator, so it names a directory and
+    /// there is no file name to show for it.
+    FilePathWithoutName,
+    /// A linked file's path has a `.` or `..` component. Written as a URI that
+    /// component is resolved away, which would make the link name a different
+    /// path from the one given.
+    UnresolvedFilePathComponent,
+    /// A linked file's path has a doubled separator, so one of its components
+    /// names nothing. Written as a URI that component disappears, which would
+    /// make the link name a different path from the one given.
+    RepeatedSeparatorInFilePath,
     /// The local storage key is not a portable session identity.
     InvalidSessionId,
     /// This live attachment ended; restoration requires a fresh aggregate.

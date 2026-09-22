@@ -112,3 +112,54 @@ it("keeps counting a file whose message may yet come back to the draft", () => {
 it("holds a window's worth of camera RAW files: 256 MiB", () => {
   expect(MAX_SESSION_ATTACHMENT_BYTES).toBe(256 * 1024 * 1024)
 })
+
+it("takes a chosen file by its path, holding none of it and spending no budget", () => {
+  const create = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:unused")
+  const resources = createAttachmentResources()
+  // Far past every byte bound this store has, and it does not matter: the
+  // window is holding a path, not a video.
+  const huge = 700 * 1024 * 1024
+  const [attachment] = resources.addChosen([
+    {
+      path: "/Users/ada/holiday.mp4",
+      name: "holiday.mp4",
+      size: huge,
+      mimeType: "video/mp4",
+      ticket: "t1",
+    },
+  ])
+  expect(attachment).toMatchObject({
+    name: "holiday.mp4",
+    size: huge,
+    path: "/Users/ada/holiday.mp4",
+    previewUrl: "",
+    upload: { status: "not-started" },
+  })
+  // Nothing was read, so nothing was allocated and nothing can be read back.
+  expect(create).not.toHaveBeenCalled()
+  expect(resources.bytes(attachment!.id)).toBeUndefined()
+  expect(resources.canAdd(MAX_SESSION_ATTACHMENT_BYTES)).toBe(true)
+})
+
+it("gives a file with no bytes read no claim to an encoding", () => {
+  const resources = createAttachmentResources()
+  // The platform's own answer is carried through, in the same slot a dropped
+  // file's `type` occupies, so one naming rule sees the same inputs whichever
+  // route a file arrived by.
+  const [typed] = resources.addChosen([
+    {
+      path: "/Users/ada/report.pdf",
+      name: "report.pdf",
+      size: 10,
+      mimeType: "application/pdf",
+      ticket: "t2",
+    },
+  ])
+  expect(typed!.mimeType).toBe("application/pdf")
+  // And a platform with no answer looks exactly like a browser with none, so
+  // the extension fallback gets its turn at attach time rather than here.
+  const [untyped] = resources.addChosen([
+    { path: "/Users/ada/odd.bin", name: "odd.bin", size: 10, mimeType: "", ticket: "t3" },
+  ])
+  expect(untyped!.mimeType).toBe("application/octet-stream")
+})

@@ -179,3 +179,53 @@ fn an_image_message_refused_before_acceptance_says_which_kind_of_refusal_it_was(
         ConversationErrorCode::ImageInputUnsupported
     );
 }
+
+/// Saved state this gateway cannot read, all the way from the decode that
+/// refused it to the code the panel is handed — the chain nobody had written
+/// down, and the one where two layers used to disagree.
+///
+/// The gateway decides once that trying again cannot differ, caches that, and
+/// answers every later command from it without going near the provider. That
+/// fact has to survive into the code it sends, or the panel offers a refresh
+/// that can only ever return this, forever, which is what
+/// `agent_operation_failed` produced: the panel reads it as `unavailable`,
+/// whose sentence promises it keeps trying.
+#[test]
+fn state_this_gateway_cannot_read_is_permanent_and_says_so_on_the_wire() {
+    {
+        let failure = AgentError::Storage(StorageError::Corrupt(
+            "a saved message names a path no domain would accept".into(),
+        ));
+        // The wire says which kind of permanence it is, rather than the
+        // catch-all that says nothing about whether a retry could differ.
+        // That the gateway decides once and caches it is `retryable_agent_open`
+        // in the service, which these two are named in.
+        assert_eq!(
+            error_code(&ConversationError::Agent(failure)),
+            ConversationErrorCode::ConversationStateUnreadable
+        );
+    }
+
+    // An identity mismatch is not this: it means the configuration changed,
+    // which is answered as that and already tells somebody to start a new
+    // conversation. Two permanent things, told apart by which one happened.
+    assert_eq!(
+        error_code(&ConversationError::Agent(AgentError::Storage(
+            StorageError::IdentityMismatch
+        ))),
+        ConversationErrorCode::ConversationConfigurationChanged
+    );
+
+    // Storage failures that are *not* about unreadable state keep the general
+    // code, because trying them again genuinely can differ: a lease somebody
+    // else holds is given up, and an I/O failure can clear.
+    for transient in [
+        StorageError::Busy,
+        StorageError::Io("the disk is full".into()),
+    ] {
+        assert_eq!(
+            error_code(&ConversationError::Agent(AgentError::Storage(transient))),
+            ConversationErrorCode::AgentOperationFailed
+        );
+    }
+}

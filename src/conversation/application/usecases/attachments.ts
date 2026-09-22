@@ -16,9 +16,12 @@ import { findConversation, replaceConversation, withDraft } from "../internal"
  * it: only `changeUpload` moves that state, so a part cannot be attached already
  * claiming bytes the gateway never received.
  *
- * Its media type is settled here too. A browser reports most camera RAW files,
- * and some HEIC, with no type at all; left that way they would be files that
- * can be previewed and never sent. A known image extension makes them images.
+ * Its media type is settled here too, for every file however it arrived,
+ * because the type is what decides the file's route and the gesture never is.
+ * A browser reports most camera RAW files, and some HEIC, with no type at all,
+ * and a file chosen through the host's picker was never opened by anything, so
+ * in both cases the extension decides. Getting that wrong is how the same file
+ * comes to behave differently depending on how it was attached.
  */
 export function attachFiles(
   tabs: LocalTabs,
@@ -31,6 +34,10 @@ export function attachFiles(
     ...current.draft,
     ...files.map((file) => ({
       ...file,
+      // For every file, however it arrived. The type decides the route and the
+      // gesture never does, so a `.heic` chosen through the picker is the same
+      // image here as the one dropped on the panel — whoever attached it is
+      // responsible for having the bytes an image needs.
       mimeType: declaredMediaType(file.name, file.mimeType),
       upload: { status: "not-started" as const },
     })),

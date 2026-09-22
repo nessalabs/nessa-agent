@@ -22,8 +22,11 @@ export function applyView(current: Conversation, view: ConversationView): Conver
       id: local?.id ?? `${message.executionId}:user`,
       from: "user",
       // Local content keeps its previews. Without it — another surface's turn,
-      // or this one after a reload — the images are known only by reference.
-      content: local?.content ?? referencedContent(message.userText, message.attachments),
+      // or this one after a reload — the images are known only by reference and
+      // the files only by the path the turn named.
+      content:
+        local?.content ??
+        referencedContent(message.userText, message.attachments, message.files),
       receipt: waiting.has(message.executionId)
         ? "queued"
         : message.status === "queued"
@@ -73,7 +76,9 @@ export function applyView(current: Conversation, view: ConversationView): Conver
     projected.push({
       id: local?.id ?? `${pending.executionId}:user`,
       from: "user",
-      content: local?.content ?? referencedContent(pending.text, pending.attachments),
+      content:
+        local?.content ??
+        referencedContent(pending.text, pending.attachments, pending.files),
       receipt: "queued",
       executionId: pending.executionId,
       actionId: local?.actionId,

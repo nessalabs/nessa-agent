@@ -35,7 +35,7 @@ it("owns immutable message and action identities through an uncertain retry", as
   const api = createConversationApi({ request }, () => "unused")
   const options = { executionId: "execution", requestId: "action" }
   const error = await api
-    .send(conversationId, "hello", [], options)
+    .send(conversationId, "hello", [], [], options)
     .catch((error) => error)
   options.executionId = "edited-id"
   options.requestId = "edited-action"
@@ -58,6 +58,7 @@ it("owns immutable message and action identities through an uncertain retry", as
     requestId: "action",
     text: "hello",
     attachments: [],
+    files: [],
   })
 })
 it("generates distinct identities per intentional message, retaining each on retry", async () => {
@@ -95,6 +96,7 @@ it("rejects terminal executions that remain pending or actionable", async () => 
     executionId: "finished",
     userText: "done",
     attachments: [],
+    files: [],
     parts: [],
     status: "completed",
   } as const
@@ -114,7 +116,13 @@ it("rejects terminal executions that remain pending or actionable", async () => 
       ...view,
       messages: [terminal],
       pending: [
-        { executionId: "finished", text: "done", attachments: [], mode: "queued" },
+        {
+          executionId: "finished",
+          text: "done",
+          attachments: [],
+          files: [],
+          mode: "queued",
+        },
       ],
     },
     { ...view, messages: [terminal], permissions: [permission] },
@@ -161,6 +169,7 @@ it("accepts bounded full replacement views and rejects mismatched identities or 
           executionId: "e",
           userText: "hi",
           attachments: [],
+          files: [],
           parts: [
             { offset: 0, kind: "thought", text: "", toolId: "" },
             { offset: 1, kind: "text", text: "", toolId: "" },
@@ -196,6 +205,7 @@ it("rejects duplicate identities and impossible steering order at the response b
     executionId: "first",
     userText: "hello",
     attachments: [],
+    files: [],
     parts: [],
     status: "completed",
   } as const
@@ -223,8 +233,20 @@ it("rejects duplicate identities and impossible steering order at the response b
     {
       ...view,
       pending: [
-        { executionId: "waiting", text: "one", attachments: [], mode: "queued" },
-        { executionId: "waiting", text: "two", attachments: [], mode: "steering" },
+        {
+          executionId: "waiting",
+          text: "one",
+          attachments: [],
+          files: [],
+          mode: "queued",
+        },
+        {
+          executionId: "waiting",
+          text: "two",
+          attachments: [],
+          files: [],
+          mode: "steering",
+        },
       ],
     },
     { ...view, permissions: [permission, permission] },
@@ -236,6 +258,7 @@ it("rejects duplicate identities and impossible steering order at the response b
           executionId: "steer",
           userText: "correction",
           attachments: [],
+          files: [],
           parts: [],
           status: "injected",
           steeringTarget: "later",
@@ -251,6 +274,7 @@ it("rejects duplicate identities and impossible steering order at the response b
           executionId: "self",
           userText: "correction",
           attachments: [],
+          files: [],
           parts: [],
           status: "injected",
           steeringTarget: "self",
@@ -265,6 +289,7 @@ it("rejects duplicate identities and impossible steering order at the response b
           executionId: "steer",
           userText: "correction",
           attachments: [],
+          files: [],
           parts: [],
           status: "injected",
         },
@@ -297,6 +322,7 @@ it("accepts bounded omissions and the intentional pending-message overlap", asyn
         executionId: "steer",
         userText: "correction",
         attachments: [],
+        files: [],
         parts: [],
         status: "injected",
         steeringTarget: "omitted-target",
@@ -306,11 +332,20 @@ it("accepts bounded omissions and the intentional pending-message overlap", asyn
         executionId: "waiting",
         userText: "next",
         attachments: [],
+        files: [],
         parts: [],
         status: "queued",
       },
     ],
-    pending: [{ executionId: "waiting", text: "next", attachments: [], mode: "queued" }],
+    pending: [
+      {
+        executionId: "waiting",
+        text: "next",
+        attachments: [],
+        files: [],
+        mode: "queued",
+      },
+    ],
     permissions: [
       {
         executionId: "omitted-execution",
@@ -345,7 +380,7 @@ it("rejects a response acknowledging a different execution or action", async () 
     .mockResolvedValue({ executionId: "other", disposition: "queued" })
   const api = createConversationApi({ request }, () => "id")
   await expect(
-    api.steer(conversationId, "correction", [], { executionId: "expected" }),
+    api.steer(conversationId, "correction", [], [], { executionId: "expected" }),
   ).rejects.toBeInstanceOf(NessaConversationMutationError)
   request.mockResolvedValue({ requestId: "other", applied: true })
   await expect(
@@ -584,13 +619,13 @@ it("enforces canonical conversation and UTF-8 byte limits before admission", asy
   expect(() => api.send("conversation", "hello", [])).toThrow(TypeError)
   expect(() => api.send(conversationId, "😀".repeat(2049), [])).toThrow(TypeError)
   expect(() =>
-    api.send(conversationId, "hello", [], { executionId: "😀".repeat(65) }),
+    api.send(conversationId, "hello", [], [], { executionId: "😀".repeat(65) }),
   ).toThrow(TypeError)
   expect(() =>
-    api.send(conversationId, "hello", [], { requestId: "😀".repeat(65) }),
+    api.send(conversationId, "hello", [], [], { requestId: "😀".repeat(65) }),
   ).toThrow(TypeError)
   await expect(
-    api.send(conversationId, "😀".repeat(2048), [], {
+    api.send(conversationId, "😀".repeat(2048), [], [], {
       executionId: "😀".repeat(64),
       requestId: "😀".repeat(64),
     }),
@@ -606,6 +641,7 @@ it("enforces UTF-8 byte limits on server response identities", async () => {
         executionId: "😀".repeat(65),
         userText: "hello",
         attachments: [],
+        files: [],
         parts: [],
         status: "completed",
       },
@@ -741,12 +777,73 @@ it("sends an image-only message, and steers with images the same way", async () 
   const api = createConversationApi({ request }, () => "id")
   await api.send(conversationId, "", [image])
   await api.steer(conversationId, "  ", [image])
-  const command = { conversationId, executionId: "id", requestId: "id" }
+  const command = { conversationId, executionId: "id", requestId: "id", files: [] }
   const deadline = { atLeastMs: agentOperationTimeoutMs }
   expect(request.mock.calls).toEqual([
     ["conversation.send", { ...command, text: "", attachments: [image] }, deadline],
     ["conversation.steer", { ...command, text: "  ", attachments: [image] }, deadline],
   ])
+})
+it("sends a message that only points at files, and refuses a path it could not carry", () => {
+  const request = queued()
+  const api = createConversationApi({ request }, () => "id")
+  const file = { path: "/Users/ada/report (final).pdf" }
+  const command = { conversationId, executionId: "id", requestId: "id", attachments: [] }
+  const deadline = { atLeastMs: agentOperationTimeoutMs }
+
+  // A file alone is a whole message; the path travels and nothing else does.
+  void api.send(conversationId, "", [], [file])
+  expect(request.mock.calls).toEqual([
+    ["conversation.send", { ...command, text: "", files: [file] }, deadline],
+  ])
+
+  // Refused here, before anything is sent, for every path the gateway's own
+  // rule would refuse on arrival.
+  for (const path of [
+    "report.pdf",
+    "~/report.pdf",
+    "/Users/ada/a\nb.pdf",
+    "/Users/ada/a\u0000b.pdf",
+    `/${"a".repeat(4096)}`,
+    // Parts that would not survive being written as a URI: dropped, or
+    // resolved away, either way naming a path nobody wrote.
+    "//Users/ada/report.pdf",
+    "/Users//ada/report.pdf",
+    "/Users/ada/",
+    "/Users/ada/..",
+    "/Users/../etc/passwd",
+    "/Users/./ada/report.pdf",
+    // C1 controls, and the delete character. The gateway refuses these with
+    // `char::is_control`; the client used to accept them and leave it to answer
+    // `invalid_request`, whose panel sentence is deliberately empty on the
+    // grounds that the client already spoke — so nothing was said at all.
+    "/Users/ada/rep\u0085rt.pdf",
+    "/Users/ada/rep\u0090rt.pdf",
+    "/Users/ada/rep\u009frt.pdf",
+    "/Users/ada/rep\u007frt.pdf",
+  ])
+    expect(() => api.send(conversationId, "look", [], [{ path }])).toThrow(TypeError)
+  // And the ordinary names next to them still go: a leading dot, a name of
+  // three dots, a colon, and a percent sign.
+  for (const path of [
+    "/Users/ada/.zshrc",
+    "/Users/ada/...",
+    "/Users/ada/2026-09-20 10:30.txt",
+    "/Users/ada/100% done.pdf",
+  ])
+    expect(() => api.send(conversationId, "look", [], [{ path }])).not.toThrow()
+  expect(() =>
+    api.send(conversationId, "look", [], [{ path: "/a.pdf", name: "a.pdf" } as never]),
+  ).toThrow(TypeError)
+  expect(() =>
+    api.send(
+      conversationId,
+      "look",
+      [],
+      Array.from({ length: 11 }, (_, index) => ({ path: `/${index}.pdf` })),
+    ),
+  ).toThrow(TypeError)
+  expect(request.mock.calls).toHaveLength(5)
 })
 it("retries with the images it was given, whatever the caller did to its list since", async () => {
   const request = vi
@@ -758,7 +855,7 @@ it("retries with the images it was given, whatever the caller did to its list si
     { ...image },
   ]
   const error = await api
-    .send(conversationId, "look", attachments, { executionId: "execution" })
+    .send(conversationId, "look", attachments, [], { executionId: "execution" })
     .catch((error) => error)
   attachments[0]!.size = 4
   attachments.push({ ...image })
@@ -814,6 +911,12 @@ it.each([
   "attachment_unavailable",
   "conversation_not_found",
   "conversation_capacity",
+  // The gateway cannot read this conversation's saved state and caches that,
+  // so it answers without opening an agent at all. It had been left out of the
+  // list this used to be, which reported it as uncertain and made two
+  // sentences the panel had written for it unreachable; the list is a total
+  // `switch` now, so the next code has to be answered rather than forgotten.
+  "conversation_state_unreadable",
 ] as const)(
   "knows %s was decided before admission, for send and steer alike",
   async (code) => {

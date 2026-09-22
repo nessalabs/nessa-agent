@@ -19,9 +19,8 @@ pub use platform::{
     remove_file_beneath, replace, replace_beneath, sync_directory, sync_directory_beneath,
     verify_directory, verify_file,
 };
-// Publication post-conditions differ by platform: the Unix link leaves the
-// writer's own name behind until it is released. Only `PrivateTempFile::publish`
-// knows how to complete that, so it stays the single entry point.
+// One owner: a temporary file is published by the type that reserved it, so
+// that nothing can publish a name it did not create privately first.
 pub(crate) use platform::publish_new;
 
 const TEMPORARY_PREFIX: &str = ".nessa-";
@@ -112,31 +111,30 @@ impl PrivateTempFile {
     }
     /// Publish this file under `destination` only if that name is still unused.
     ///
+    /// One move. When it returns, `destination` is this file — complete,
+    /// single-linked, and readable by any other owner at once — and this
+    /// temporary name no longer exists. There is no moment in between, which
+    /// matters because the reader most likely to arrive during one is a
+    /// concurrent writer that lost the race for this very name and is about to
+    /// read the winner's record back to check that they agree.
+    ///
     /// Returns `AlreadyExists` when another owner already published there,
-    /// leaving that record untouched. Success means this temporary name has
-    /// also been released, so the published file has a single link and passes
-    /// private-file verification; a failure to release it is reported rather
-    /// than discarded, and [`Self::clear_stale`] repairs it.
+    /// leaving that record untouched. This file is then released by `Drop`,
+    /// exactly as an unpublished temporary is.
     ///
     /// # Errors
-    /// Any platform publication failure, including a taken destination, and any
-    /// failure to release this temporary name afterwards.
+    /// Any platform publication failure, including a taken destination.
     pub fn publish(self, destination: &Path) -> io::Result<()> {
-        publish_new(&self.path, destination)?;
-        match std::fs::remove_file(&self.path) {
-            Ok(()) => Ok(()),
-            // A move already consumed this name; a link did not.
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-        }
+        publish_new(&self.path, destination)
     }
-    /// Remove temporary files an interrupted publish left in `directory`.
+    /// Remove temporary files a killed process left in `directory`.
     ///
-    /// A publish interrupted between linking its destination and releasing its
-    /// own name leaves a second link to an already complete record, which then
-    /// fails private-file verification. One owner calls this when it takes the
-    /// directory, before its first publish; a concurrent writer would see its
-    /// own publish fail rather than lose data.
+    /// A process that is killed between reserving a temporary and publishing it
+    /// does not run [`Drop`], so its reservation stays on disk under a name
+    /// nothing will ever claim. It is not a record and never was; one owner
+    /// sweeps them up when it takes the directory. A concurrent writer's own
+    /// temporary may be swept with them, and it sees its publish fail rather
+    /// than lose data.
     ///
     /// # Errors
     /// The directory cannot be read, or a temporary file cannot be removed.
@@ -170,6 +168,42 @@ mod tests {
     use std::io::{Read, Write};
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    /// The step `publish` is built out of, and the whole of what it promises.
+    ///
+    /// `publish_new` has to finish the publication, not begin it: the moment it
+    /// returns, `destination` must be a complete record with one link and no
+    /// second name anywhere — because another process is already reading that
+    /// name, and there is nothing to wait for it to finish.
+    ///
+    /// It used to link the destination and leave the publisher to unlink its own
+    /// name afterwards. Between those two calls the record had two links and
+    /// `open` refused it as unsafe, so a reader that arrived in the gap was told
+    /// the record could not be read. In `file_link_audit` that reader is the
+    /// writer that just lost the race for the name; being refused made it
+    /// refuse a legitimate submission, on a machine that happened to be busy.
+    #[test]
+    fn a_publication_is_complete_and_single_linked_the_moment_it_returns() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("private");
+        create_directory(&directory).unwrap();
+        let destination = directory.join("record");
+
+        let mut temp = PrivateTempFile::new_in(&directory).unwrap();
+        temp.as_file_mut().write_all(b"owner").unwrap();
+        temp.as_file().sync_all().unwrap();
+        let reserved = temp.path.clone();
+        publish_new(&reserved, &destination).unwrap();
+
+        // Read the way every other owner reads it, with no cleanup in between.
+        let mut text = String::new();
+        open(&destination, OpenMode::Read)
+            .expect("a published record is readable at once")
+            .read_to_string(&mut text)
+            .unwrap();
+        assert_eq!(text, "owner");
+        assert!(!reserved.exists(), "the publisher's own name is gone");
+    }
     #[test]
     fn private_creation_reopen_replace_and_hardlink_rejection() {
         let root = tempfile::tempdir().unwrap();
@@ -194,6 +228,55 @@ mod tests {
         assert_eq!(text, "replacement");
         std::fs::hard_link(&path, directory.join("alias")).unwrap();
         assert!(open(&path, OpenMode::Read).is_err());
+    }
+
+    /// The one failure here somebody can act on, said so they can.
+    ///
+    /// An exclusive rename is not universal: SMB and AFP answer `ENOTSUP`, and
+    /// NFS, eCryptfs and many FUSE mounts answer `EINVAL` or `EOPNOTSUPP`. The
+    /// link-and-unlink this replaced worked on all of them, so the blast radius
+    /// is new, and the errno alone would reach a person as "conversation could
+    /// not be created" with nothing to do about it.
+    ///
+    /// There is no fallback on purpose: falling back to the link would reopen
+    /// the two-linked gap on exactly the volumes where a network round trip
+    /// makes it widest. What a caller gets instead is a kind it can tell apart
+    /// from a taken name, and a sentence naming the volume.
+    ///
+    /// Asserted through the kinds rather than by mounting one of those
+    /// filesystems, which no test here can do: what is pinned is that the three
+    /// outcomes stay distinguishable, since one is ordinary and one is fatal to
+    /// every write this crate makes.
+    #[cfg(unix)]
+    #[test]
+    fn a_volume_that_cannot_publish_is_told_apart_from_a_name_already_taken() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("private");
+        create_directory(&directory).unwrap();
+        let path = directory.join("record");
+
+        let mut first = PrivateTempFile::new_in(&directory).unwrap();
+        first.as_file_mut().write_all(b"owner").unwrap();
+        first.publish(&path).unwrap();
+
+        let mut second = PrivateTempFile::new_in(&directory).unwrap();
+        second.as_file_mut().write_all(b"impostor").unwrap();
+        let taken = second.publish(&path).unwrap_err();
+        assert_eq!(
+            taken.kind(),
+            io::ErrorKind::AlreadyExists,
+            "a taken name is the ordinary case and must not read as a broken volume"
+        );
+
+        // And a destination whose directory does not exist is neither: an
+        // unexpected failure keeps the platform's own error rather than being
+        // dressed up as one of the two a caller branches on.
+        let mut third = PrivateTempFile::new_in(&directory).unwrap();
+        third.as_file_mut().write_all(b"nowhere").unwrap();
+        let elsewhere = third
+            .publish(&directory.join("no-such/record"))
+            .unwrap_err();
+        assert_eq!(elsewhere.kind(), io::ErrorKind::NotFound);
     }
 
     #[test]
@@ -231,13 +314,20 @@ mod tests {
             .unwrap();
         assert_eq!(text, "owner");
 
-        // A publish interrupted before it released its own name leaves the
-        // record unreadable until the next owner clears that temporary.
-        let leftover = directory.join(".nessa-interrupted.tmp");
-        std::fs::hard_link(&path, &leftover).unwrap();
-        assert!(open(&path, OpenMode::Read).is_err());
+        // A crash between reserving a temporary and publishing it leaves that
+        // temporary behind — `Drop` does not run for a process that was killed.
+        // It is nobody's record and the next owner releases it.
+        let mut abandoned = PrivateTempFile::new_in(&directory).unwrap();
+        abandoned
+            .as_file_mut()
+            .write_all(b"half a thought")
+            .unwrap();
+        let leftover = abandoned.path.clone();
+        std::mem::forget(abandoned);
+        assert!(leftover.exists());
         PrivateTempFile::clear_stale(&directory).unwrap();
         assert!(!leftover.exists());
+        // The record beside it was never involved.
         text.clear();
         open(&path, OpenMode::Read)
             .unwrap()

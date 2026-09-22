@@ -254,6 +254,31 @@ linked PDF was read this way and summarized correctly, so a document reaches the
 model through the agent's file tool and a user approval, never through a prompt
 payload.
 
+This is what `LinkedFile` and its `resource_link` block are built on: see
+[prompts](agent_execution/prompts.md) for the value object and
+[ADR 0013](../../../docs/adr/done/0013-files-by-path-not-by-payload.md) for why a
+file that is not an image is named rather than carried. Two details of that
+binding follow from the table above and are worth stating here. The adapter
+writes `[@name](uri)` as plain text, so the `uri` and the `name` are both text
+the model reads and both are interpolated into markdown by code this repository
+does not own. Neither is allowed to be syntax, and that is enforced by deciding
+what may appear in each rather than by listing what may not: the URI is
+percent-encoded down to the unreserved set plus `/` and `%`, and the label
+backslash-escapes every ASCII punctuation character, which is exactly the set
+CommonMark defines an escape for. A file named `report (final).pdf` therefore
+arrives as `[@report \(final\)\.pdf](file:///Users/ada/report%20%28final%29.pdf)`
+— noisier to read than it was, and immune to a grammar nobody here has to have
+understood correctly. Three successive attempts to name the dangerous characters
+instead — brackets, then `)`, then `\` — were each wrong, which is the argument
+for the allowlist and is recorded in `prompt_link_attacks.rs`. And
+`embeddedContext` remains read nowhere: the `resource`-with-text route is
+deliberately not taken, because it would mean transporting the file.
+
+**Unverified against a live model, and worth re-checking when the pin moves:**
+whether a model reliably percent-decodes a URI such as
+`file:///Users/ada/my%20report.pdf` before passing a path to `Read`. The PDF case
+above did not exercise a path needing encoding.
+
 These facts rest on two different strengths of evidence and the difference is the
 useful part. The capability literal and the conversions and discards in the table
 above were read from the adapter's source, which establishes that a discard is silent

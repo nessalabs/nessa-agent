@@ -17,7 +17,7 @@ use crate::domain::{
     agent_execution::{
         executions::{ExecutionId, MessageChunk, MessageId, MessageKind},
         permissions::PermissionId,
-        prompts::{ImageReference, PromptText, UserMessage},
+        prompts::{ImageReference, LinkedFile, PromptText, UserMessage},
         sessions::ExecutionSessionId,
     },
     common::value_objects::{ImageMediaType, Sha256Digest},
@@ -58,15 +58,50 @@ impl Image {
         .map_err(corrupt)
     }
 }
+/// One file a saved user message points at. The path is all there is to save:
+/// nothing was opened when the message was written and nothing is opened when
+/// it is read back, so there is no content to have gone stale.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FileLink {
+    pub(super) path: String,
+}
+impl From<&LinkedFile> for FileLink {
+    fn from(value: &LinkedFile) -> Self {
+        Self {
+            path: value.path().into(),
+        }
+    }
+}
+impl FileLink {
+    /// Rebuild the value object, so a path edited on disk into one the domain
+    /// would never have accepted is a corrupt record rather than a link the
+    /// agent is handed.
+    fn decode(self) -> Result<LinkedFile, StorageError> {
+        LinkedFile::new(self.path).map_err(corrupt)
+    }
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Metadata {
     pub(super) target_event_offset: Option<usize>,
     pub(super) submission: Submission,
     pub(super) execution_id: String,
-    /// Empty for a message of images alone.
+    /// Empty for a message of images or files alone.
     pub(super) user_message: String,
     pub(super) user_images: Vec<Image>,
+    /// Absent in a journal written before a message could point at files, and
+    /// empty is what such a message meant: no message could name one.
+    ///
+    /// This is not a compatibility reader kept alongside a current one. There
+    /// is one contract, and under it an older record says truthfully that its
+    /// message named no files — the same reading the six `Option` fields
+    /// beside this one already take of their own absence. What the default
+    /// must never do is invent a value a record could have meant something
+    /// else by, which is why the path itself has none: a missing `path` is a
+    /// corrupt record, not an empty one.
+    #[serde(default)]
+    pub(super) user_files: Vec<FileLink>,
     pub(super) estimated_input_tokens: u64,
     pub(super) reserved_output_tokens: u32,
     pub(super) actor: Actor,
@@ -109,6 +144,13 @@ impl From<&InvocationRecord> for Metadata {
                 .request
                 .user_message
                 .images()
+                .iter()
+                .map(Into::into)
+                .collect(),
+            user_files: value
+                .request
+                .user_message
+                .files()
                 .iter()
                 .map(Into::into)
                 .collect(),
@@ -172,8 +214,9 @@ impl Metadata {
             submission: self.submission.into(),
             request: ExecutionRequest {
                 execution_id: ExecutionId::new(self.execution_id).map_err(corrupt)?,
-                // Saved text is empty exactly when the message was images alone;
-                // the message's own constructor refuses one with neither.
+                // Saved text is empty exactly when the message was images or
+                // files alone; the message's own constructor refuses one with
+                // none of the three.
                 user_message: UserMessage::new(
                     (!self.user_message.is_empty())
                         .then(|| PromptText::new(self.user_message))
@@ -182,6 +225,10 @@ impl Metadata {
                     self.user_images
                         .into_iter()
                         .map(Image::decode)
+                        .collect::<Result<_, _>>()?,
+                    self.user_files
+                        .into_iter()
+                        .map(FileLink::decode)
                         .collect::<Result<_, _>>()?,
                 )
                 .map_err(corrupt)?,

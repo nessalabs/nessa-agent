@@ -18,6 +18,11 @@ import {
  * for every rule, ending "Try selecting them with +", which is advice the +
  * picker cannot honour: it applies this same `maxSize`.
  *
+ * **This is the browser's drop path only.** In the app the host owns the drag
+ * — it is the only thing that can learn a dropped file's path — and the page
+ * receives no drop events at all, so nothing here fires; see `use-host-drop`.
+ * It stays because a browser still has its own drops and they still work.
+ *
  * `asChild`, so the zone adds no DOM: the child it merges onto is the panel.
  */
 export function AttachmentDropZone({

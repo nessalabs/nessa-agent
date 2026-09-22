@@ -13,6 +13,7 @@ function preview(name: string, size: number) {
     size,
     previewUrl: "blob:local-preview",
     upload: { status: "not-started" },
+    path: null,
   }
   return renderToStaticMarkup(createElement(AttachmentPreview, { file }))
 }

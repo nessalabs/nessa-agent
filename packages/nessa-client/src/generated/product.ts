@@ -252,6 +252,11 @@ export interface ImageAttachment {
   /** Image length in bytes, at most 5 MiB. */
   size: number
 }
+/** One file a message points the agent at. The gateway, the agent and the panel run on one machine, so the path travels and the bytes never do; the agent opens the file itself, with the reader's approval, or does not open it at all. */
+export interface LinkedFile {
+  /** Absolute path on the machine the gateway runs on, at most 4096 UTF-8 bytes (`x-utf8MaxBytes`; the `maxLength` beside it counts code points and is only a coarse upper bound, since a path within the byte limit always has fewer code points than bytes). Every component below the root is a name: no control character (C0 or C1), none empty, and none `.` or `..`. A component that is empty or a dot does not survive being written as a URI, which would make the link name a different path; a control character makes a path nobody can be shown before they approve the read. Nothing here is a rule about markdown — the gateway hands the path to the agent inside a link and encodes both halves of it down to an allowlist, so a bracket or a backslash in a name is the encoder's business and not the caller's. */
+  path: string
+}
 /** Ask to upload one file into a conversation. Repeating it for bytes the conversation already holds needs no upload. */
 export interface AttachmentBeginParams {
   /** Canonical lowercase hyphenated UUID identifying the conversation within the authenticated organization. */
@@ -290,6 +295,8 @@ export interface ConversationMessage {
   userText: string
   /** Images the user sent with this turn, in attachment order. */
   attachments: ImageAttachment[]
+  /** Files the user pointed this turn at, in attachment order. No bytes were ever carried for them. */
+  files: LinkedFile[]
   /** Current invocation state. */
   status: ConversationMessageStatus
   /** Bounded diagnostic for this invocation. */
@@ -309,6 +316,8 @@ export interface ConversationPending {
   text: string
   /** Images waiting with this input, in attachment order. */
   attachments: ImageAttachment[]
+  /** Files the waiting input points at, in attachment order. */
+  files: LinkedFile[]
   /** Queue or steering admission. */
   mode: ConversationPendingMode
 }
@@ -407,6 +416,8 @@ export interface ConversationSendParams {
   text: string
   /** Images already uploaded into this conversation, in attachment order; at most 10 MiB in total. Empty for a message of text alone. */
   attachments: ImageAttachment[]
+  /** Files on this machine the message points the agent at, in attachment order. Nothing is uploaded for them and nothing is read here. Empty for a message that points at none. */
+  files: LinkedFile[]
 }
 /** Remove an input that has not dispatched. */
 export interface ConversationRemoveParams {
@@ -535,6 +546,7 @@ export const ConversationErrorCode = {
   ConversationCapacity: "conversation_capacity",
   ConversationClosed: "conversation_closed",
   ConversationConfigurationChanged: "conversation_configuration_changed",
+  ConversationStateUnreadable: "conversation_state_unreadable",
   ConversationStorageUnavailable: "conversation_storage_unavailable",
   TemporarilyUnavailable: "temporarily_unavailable",
   AuditUnavailable: "audit_unavailable",
@@ -559,6 +571,10 @@ export const bounds = {
   maxMessageImages: 10,
   maxMessageImageBytes: 10485760,
   maxUploadBytes: 67108864,
+  maxMessageFiles: 10,
+  maxFilePathBytes: 4096,
+  filePathPattern:
+    "^(?:/(?!\\.{1,2}(?:/|$))[^/\\u0000-\\u001f\\u007f\\u0080-\\u009f]+)+$",
 } as const
 export const ProductMethod = {
   SessionAuthenticate: "session.authenticate",

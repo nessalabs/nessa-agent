@@ -25,6 +25,7 @@ function view(ids: string[]): ConversationView {
       executionId,
       text: executionId,
       attachments: [],
+      files: [],
       mode: "queued",
     })),
     capabilities: {
