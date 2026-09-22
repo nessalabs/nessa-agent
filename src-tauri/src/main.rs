@@ -1,7 +1,6 @@
 // The release build is a menu bar app with no console window on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod agent_credentials;
 mod attachments;
 mod composition;
 mod diagnostics;

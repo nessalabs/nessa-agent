@@ -258,11 +258,11 @@ providers. See [local authentication](adr/done/0010-local-authentication.md). Ho
 identity providers remain future adapters.
 
 `crates/nessa-agent-credentials` is the smaller pure domain consumed by the
-desktop agent-key writer and gateway credential-source adapters. It owns
+gateway credential-source adapter and available to later credential consumers. It owns
 the immutable validated credential text, API-key/OAuth meaning, the explicit
 Claude/OpenCode credential identity, and the durable stage/instance namespace.
 It owns no keychain, environment, provider, serialization, or filesystem code;
-each caller keeps those effects behind its own application port. See the
+the gateway keeps those effects behind its own application port. See the
 [crate map](../crates/nessa-agent-credentials/README.md).
 
 `crates/nessa-local-storage` owns native OS private-file mechanics shared by the

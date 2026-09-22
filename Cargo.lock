@@ -2626,7 +2626,6 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "objc2-uniform-type-identifiers",
- "security-framework",
  "serde",
  "serde_json",
  "sha2",
