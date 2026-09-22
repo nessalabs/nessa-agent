@@ -107,6 +107,9 @@ check_hook_name() {
   [[ "$name" != -* ]] || die "WorktreeCreate: name may not start with a dash: $name"
   # A trailing slash leaves no empty field to catch below, so it is caught here.
   [[ "$name" != */ ]] || die "WorktreeCreate: name may not end with a slash: $name"
+  # `read` below stops at the first newline, so everything after one would go
+  # unexamined. Refused outright rather than half-checked.
+  [[ "$name" != *$'\n'* ]] || die "WorktreeCreate: name may not contain a newline"
   # `read -ra`, not `for segment in $name`: an unquoted expansion is also a glob,
   # so a name of `*` would have been replaced by the contents of whatever
   # directory the hook happened to run in and then matched the alphabet below
@@ -195,11 +198,22 @@ default_base() {
   printf 'HEAD\n'
 }
 
+# Each of the three readers below consumes git's whole output rather than
+# stopping at the answer. `exit` in awk looks like the obvious economy and is a
+# trap here: once the registry outgrows the pipe buffer, awk leaving early kills
+# `git worktree list` with SIGPIPE, `pipefail` turns that into the pipeline's
+# status, and `set -e` ends the script inside a `$(...)`. The failure arrives as
+# a worktree that "git does not know" and a removal that stops before it
+# removes, which is self-reinforcing: past that size the cleanup that keeps the
+# registry small is the thing that breaks. Reading to the end costs nothing at
+# any plausible number of worktrees.
+
 # Where git has a branch checked out, if anywhere. Empty when it is not.
 worktree_for_branch() {
   git -C "$repo_root" worktree list --porcelain | awk -v want="refs/heads/$1" '
     /^worktree /  { path = substr($0, 10) }
-    /^branch /    { if (substr($0, 8) == want) { print path; exit } }
+    /^branch /    { if (!found && substr($0, 8) == want) { answer = path; found = 1 } }
+    END           { if (found) print answer }
   '
 }
 
@@ -208,7 +222,7 @@ worktree_for_branch() {
 # indistinguishable from a stray directory.
 is_registered_worktree() {
   git -C "$repo_root" worktree list --porcelain | awk -v want="$1" '
-    /^worktree /  { if (substr($0, 10) == want) { found = 1; exit } }
+    /^worktree /  { if (substr($0, 10) == want) found = 1 }
     END           { exit(found ? 0 : 1) }
   '
 }
@@ -217,7 +231,8 @@ is_registered_worktree() {
 branch_at_worktree() {
   git -C "$repo_root" worktree list --porcelain | awk -v want="$1" '
     /^worktree /  { path = substr($0, 10) }
-    /^branch /    { if (path == want) { sub("^refs/heads/", "", $2); print $2; exit } }
+    /^branch /    { if (!found && path == want) { sub("^refs/heads/", "", $2); answer = $2; found = 1 } }
+    END           { if (found) print answer }
   '
 }
 
@@ -420,6 +435,11 @@ cmd_claude_hook_remove() {
   # compare against that record.
   while [[ "$dir" == */ && "$dir" != / ]]; do dir="${dir%/}"; done
   [[ -e "$dir" ]] || return 0
+  # And resolved, for the same reason `repo_root` is: the lookups below compare
+  # against git's registry, which records realpaths. A logical path reaching
+  # here — a worktree made before this hook, under a symlinked parent — would
+  # be removed and its branch quietly kept.
+  dir="$(cd "$dir" && pwd -P)"
 
   branch="$(branch_at_worktree "$dir")"
   # A worktree left on a detached HEAD — an agent that ran `git bisect`, or
@@ -436,6 +456,10 @@ cmd_claude_hook_remove() {
     rm -f "$dir/target"
   fi
   git -C "$repo_root" worktree remove --force "$dir" >&2
+  # A nested name (`a/b`) leaves `a/` behind. `rmdir` removes only empty
+  # directories, so this can never take anything with it, and `-p` stops at the
+  # first that is not empty.
+  rmdir -p "$(dirname "$dir")" 2>/dev/null || true
 
   # Only branches this hook names, and only when the base already contains
   # everything on them. `-D` is safe here because that test, not git's default
@@ -444,7 +468,10 @@ cmd_claude_hook_remove() {
     local base
     base="$(default_base)"
     if git -C "$repo_root" merge-base --is-ancestor "refs/heads/$branch" "$base" 2>/dev/null; then
-      git -C "$repo_root" branch -D "$branch" >&2
+      # Non-fatal: the worktree is already gone, and a branch git declines to
+      # delete — one checked out in another worktree — is not a failed removal.
+      git -C "$repo_root" branch -D "$branch" >&2 \
+        || echo "→ could not delete branch $branch" >&2
     else
       echo "→ keeping branch $branch; it has commits $base does not" >&2
     fi
