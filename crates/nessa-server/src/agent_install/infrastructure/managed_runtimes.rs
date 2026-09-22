@@ -779,18 +779,19 @@ impl ManagedRuntimes {
         durable: impl Fn(&Path) -> io::Result<()>,
     ) -> Result<PathBuf, StoreFailure> {
         // Held from here to the end of this method, the rollback included.
-        // Everything below assumes that whatever is at `destination` when it
-        // looks is either nothing or this call's own work, and that assumption
-        // is true only while nobody else is publishing this agent.
+        // Everything below assumes that whatever is at each of this release's
+        // paths when it looks is either nothing or this call's own work, and
+        // that assumption is true only while nobody else is publishing this
+        // agent.
         let _lock = self.hold(agent)?;
         // Asked again now that this call is the only one publishing. The
         // caller asked before downloading, and between that answer and this
         // line another install may have finished the very same artifact — in
         // which case it is already there, verified against the same digest,
-        // and unpacking over it would mean replacing a file something may be
-        // running with an identical one. Handing back what is installed also
-        // keeps the rollback below honest: after this point, a file at
-        // `destination` can only have been put there by this call.
+        // and unpacking over it would mean replacing files something may be
+        // running with identical ones. Handing back what is installed also
+        // keeps the rollback below honest: after this point, a file at any of
+        // this release's paths can only have been put there by this call.
         if let Some(installed) = self.installed(agent, release)? {
             return Ok(installed);
         }
