@@ -8,7 +8,7 @@ const MAX_BROWSER_SESSION_ORIGIN_BYTES: usize = 1024;
 /// original serialization. Whether a deployment currently trusts that origin
 /// is a separate admission decision.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BrowserSessionOrigin(String);
+pub struct BrowserSessionOrigin(Box<str>);
 
 impl BrowserSessionOrigin {
     /// Validate and retain one browser-session origin.
@@ -37,7 +37,7 @@ impl BrowserSessionOrigin {
         {
             return None;
         }
-        Some(Self(value))
+        Some(Self(value.into_boxed_str()))
     }
 
     /// Return the preserved origin serialization.
