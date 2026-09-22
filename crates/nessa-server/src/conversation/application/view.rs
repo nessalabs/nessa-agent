@@ -11,7 +11,7 @@ use nessa_sdk::{
 use serde::Serialize;
 
 /// A bounded replacement view. Its revision is transient and is not a durable event cursor.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationView {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -113,7 +113,7 @@ pub struct ConversationTool {
     pub title: String,
     pub status: String,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationCapabilities {
     pub queue: bool,
