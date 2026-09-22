@@ -63,6 +63,7 @@ usage: ./scripts/worktree.sh <command> [name]
   remove <name>   Delete that worktree (the branch is kept)
   clean           Rebuild this repo's crates only, keeping dependencies
   list            Show every worktree
+  path <name>     Where that branch's worktree is, or would be
   claude-hook     Not for people. Claude Code's WorktreeCreate hook, wired up
                   in .claude/settings.json, so the worktrees it makes for
                   itself share this build cache too.
@@ -73,27 +74,33 @@ USAGE
 }
 
 # Keeps the name usable as both a branch and a directory.
+#
+# The alphabet is also load-bearing for `worktree_path` below: a dot is not in
+# it, which is what lets a dot stand for a slash without ambiguity. Adding `.`
+# here would make two branches able to want one directory again.
 check_name() {
   [[ -n "${1:-}" ]] || usage
   [[ "$1" =~ ^[A-Za-z0-9_/-]+$ ]] || die "invalid name '$1': use letters, digits, - _ /"
 }
 
-# A slash is fine in a branch but not in a directory name.
-worktree_path() { printf '%s/%s-%s' "$parent" "$repo_name" "${1//\//-}"; }
+# The directory a branch belongs in. One branch, one directory, both ways.
+#
+# A slash is fine in a branch and not in a directory name, so it has to become
+# something. It used to become a dash, and that was the bug: a dash is also an
+# ordinary character in a name, so `a/b` and `a-b` both arrived at `...-a-b`.
+# Nothing downstream could tell them apart, and the hook handed an agent a
+# checkout sitting on the other one's branch to commit to.
+#
+# A dot instead, because `check_name` does not admit one: every dot in a
+# directory name got there from a slash, every dash was a dash, and the mapping
+# is reversible. Collisions stop being something to detect and become something
+# that cannot be expressed.
+#
+# Worktrees made before this are found by `worktree_for_branch`, which asks git
+# where a branch is checked out rather than recomputing a path, so they keep
+# working wherever they sit. This only decides where new ones go.
+worktree_path() { printf '%s/%s-%s' "$parent" "$repo_name" "${1//\//.}"; }
 
-# Point a worktree's target/ at the one the main checkout builds into.
-#
-# Share the compiled dependencies rather than rebuilding them. A symlink rather
-# than CARGO_TARGET_DIR so it applies however cargo is invoked — directly,
-# through pnpm, or by the Tauri CLI. The workspace root relocates cargo's build
-# dir to <repo>/target (not src-tauri/target), so that is the path linked.
-#
-# LOAD-BEARING: this is a symlink, not a copy. `cmd_remove` must delete it
-# before removing the worktree — see the warning there.
-#
-# A real directory is never replaced. A worktree that already has one has
-# already built into it, and swapping it for a link would strand gigabytes
-# where nothing will look for them again.
 # Read `.name` from the hook payload on stdin.
 #
 # Node rather than jq: node is already required to run anything here — the
@@ -132,6 +139,19 @@ branch_at_worktree() {
   '
 }
 
+# Point a worktree's target/ at the one the main checkout builds into.
+#
+# Share the compiled dependencies rather than rebuilding them. A symlink rather
+# than CARGO_TARGET_DIR so it applies however cargo is invoked — directly,
+# through pnpm, or by the Tauri CLI. The workspace root relocates cargo's build
+# dir to <repo>/target (not src-tauri/target), so that is the path linked.
+#
+# LOAD-BEARING: this is a symlink, not a copy. `cmd_remove` must delete it
+# before removing the worktree — see the warning there.
+#
+# A real directory is never replaced. A worktree that already has one has
+# already built into it, and swapping it for a link would strand gigabytes
+# where nothing will look for them again.
 ensure_shared_target() {
   local path="$1" shared="$repo_root/target"
   mkdir -p "$shared"
@@ -213,14 +233,13 @@ cmd_claude_hook() {
   check_name "$name"
 
   # Reuse is decided by which branch git has checked out where, never by a
-  # directory existing. Two different names can land on one path — `check_name`
-  # allows both `foo/bar` and `foo-bar`, and `worktree_path` turns the slash
-  # into a dash, so they collide — and answering "that directory is there" would
-  # hand back a checkout sitting on someone else's branch for an agent to commit
-  # to. Asking git instead also finds a branch checked out somewhere this
-  # function would never have looked, such as the `.claude/worktrees/` copies
-  # made before this hook existed; git refuses to check a branch out twice, so
-  # finding it first is also what keeps `worktree add` from failing.
+  # directory existing. `worktree_path` is injective now, so two branches can no
+  # longer want one directory, but that is a reason not to need this check —
+  # not a reason to trust a path as an identity. A worktree can sit anywhere:
+  # the `.claude/worktrees/` copies made before this hook existed, one moved by
+  # hand, one from the old dash mapping. Git knows where they all are, and it
+  # refuses to check a branch out twice, so finding it first is also what keeps
+  # `worktree add` from being asked to do the impossible.
   checked_out="$(worktree_for_branch "$name")"
   if [[ -n "$checked_out" ]]; then
     echo "→ reusing $checked_out (branch $name already checked out there)" >&2
@@ -258,11 +277,30 @@ Remove it, or ask for a name that does not collide."
   printf '%s\n' "$path"
 }
 
+# Where a branch's worktree is, or would be. Prints one path, nothing else.
+#
+# The mapping in `worktree_path` is the thing collisions used to come from, so
+# it is worth being able to look at directly rather than only through the
+# directories it happens to create. `worktree-path.test.mjs` asserts over this
+# that no two names it accepts can reach one path.
+cmd_path() {
+  check_name "${1:-}"
+  local path
+  path="$(worktree_for_branch "$1")"
+  [[ -n "$path" ]] || path="$(worktree_path "$1")"
+  printf '%s\n' "$path"
+}
+
 cmd_remove() {
   check_name "${1:-}"
   local path
-  path="$(worktree_path "$1")"
-  [[ -d "$path" ]] || die "no worktree at $path"
+  # Asked of git, not recomputed. A worktree made under the old dash mapping,
+  # or moved, is still that branch's worktree and still has the symlink below
+  # that has to come out before anything deletes the directory. Recomputing the
+  # path would simply not find it and would leave both behind.
+  path="$(worktree_for_branch "$1")"
+  [[ -n "$path" ]] || path="$(worktree_path "$1")"
+  [[ -d "$path" ]] || die "no worktree for '$1' (looked at $path)"
 
   # ┌──────────────────────────────────────────────────────────────────────┐
   # │ DO NOT CHANGE THE ORDER OF THE NEXT TWO LINES.                       │
@@ -295,6 +333,7 @@ case "${1:-}" in
   clean)       cmd_clean ;;
   remove)      shift; cmd_remove "$@" ;;
   list)        git -C "$repo_root" worktree list ;;
+  path)        shift; cmd_path "$@" ;;
   claude-hook) cmd_claude_hook ;;
   *)           usage ;;
 esac
