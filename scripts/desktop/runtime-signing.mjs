@@ -18,14 +18,11 @@
  * is why it is a pure function with tests rather than a call to `security`.
  *
  * The bundled `claude` binary under `claude-acp/node_modules` is deliberately
- * not in this list. It arrives from npm already signed by Anthropic with a
- * hardened runtime, the notary log confirms it passes, and re-signing somebody
- * else's binary with our identity would replace a signature we can vouch for
- * with one we cannot.
+ * outside the executable layout. It arrives from npm already signed by
+ * Anthropic with a hardened runtime, the notary log confirms it passes, and
+ * re-signing somebody else's binary with our identity would replace a signature
+ * we can vouch for with one we cannot.
  */
-
-/** The executables in the runtime tree that this repository produces or ships. */
-export const RUNTIME_EXECUTABLES = ["node", "nessa", "nessa-mcp"]
 
 /**
  * Whether a binary needs entitlements, and which.
