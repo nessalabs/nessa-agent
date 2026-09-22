@@ -242,11 +242,17 @@ it("renders one turn activity, keeps details and permission controls reachable, 
     document.body.querySelector('[aria-label="Approve Approve shell"]'),
   ).not.toBeNull()
 
-  await render(withoutActivity(conversation))
-  await React.act(async () => {})
+  // Both conversations deliberately reuse the turn, tool, and activity ids.
+  // A selected segment belongs to the conversation that opened it, so an
+  // immediate tab switch must not retarget the open sheet to the collision.
+  await render(workingConversation("second"))
   expect(document.body.querySelector('[aria-label="Turn activity"]')).toBeNull()
 
-  await render(workingConversation("second"))
+  await render(conversation)
+  await click(requiredElement(container, '[data-slot="agent-activity"] button'))
+  await waitForText("First thought")
+  await render(withoutActivity(conversation))
+  await React.act(async () => {})
   expect(document.body.querySelector('[aria-label="Turn activity"]')).toBeNull()
 })
 

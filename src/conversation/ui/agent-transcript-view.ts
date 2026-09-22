@@ -24,6 +24,51 @@ function rawText(raw: JsonValue, key: string): string {
   if (!Object.hasOwn(raw, key)) return ""
   return typeof raw[key] === "string" ? raw[key] : ""
 }
+type ExecutionMetadata = {
+  sourceTurnId: string
+  executionId: string | null
+  executionStatus: string | null
+  activityRunning: boolean
+}
+function nullableRawText(raw: Record<string, JsonValue>, key: string): string | null {
+  const value = raw[key]
+  if (value === null || typeof value === "string") return value
+  throw new Error("Transcript event has invalid source execution metadata")
+}
+function executionMetadata(events: readonly AgentEvent[]): ExecutionMetadata | undefined {
+  const productEvents = events.filter(({ payload }) =>
+    ["assistant_text", "reasoning", "tool_call_started", "turn_completed"].includes(
+      payload.type,
+    ),
+  )
+  if (productEvents.length === 0) return undefined
+  const facts = productEvents.map(({ raw }) => {
+    if (raw === null || Array.isArray(raw) || typeof raw !== "object")
+      throw new Error("Transcript event is missing source execution metadata")
+    const sourceTurnId = rawText(raw, "sourceTurnId")
+    const activityRunning = raw.activityRunning
+    if (!sourceTurnId || typeof activityRunning !== "boolean")
+      throw new Error("Transcript event is missing source execution metadata")
+    return {
+      sourceTurnId,
+      executionId: nullableRawText(raw, "executionId"),
+      executionStatus: nullableRawText(raw, "executionStatus"),
+      activityRunning,
+    }
+  })
+  const first = facts[0]!
+  if (
+    facts.some(
+      (fact) =>
+        fact.sourceTurnId !== first.sourceTurnId ||
+        fact.executionId !== first.executionId ||
+        fact.executionStatus !== first.executionStatus ||
+        fact.activityRunning !== first.activityRunning,
+    )
+  )
+    throw new Error("Transcript row combines different execution metadata")
+  return first
+}
 export function agentTurnView(turn: Turn, transcript: Transcript) {
   const events: AgentEvent[] = turn.work.flatMap((item) =>
     isToolGroup(item) ? [...item.calls] : [item],
@@ -82,10 +127,18 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
   > | null = null
   let pendingThought: { key: string; text: string } | null = null
   const completed = turn.completed?.payload
-  const running = completed?.type !== "turn_completed"
+  const execution = executionMetadata([
+    ...events,
+    ...(turn.completed ? [turn.completed] : []),
+  ])
   const activityFor = (key: string) => {
     if (!activity) {
-      activity = { key, activity: [], running }
+      if (!execution) throw new Error("Turn activity has no execution metadata")
+      activity = {
+        key,
+        activity: [],
+        running: execution.activityRunning,
+      }
       content.push(activity)
     }
     return activity

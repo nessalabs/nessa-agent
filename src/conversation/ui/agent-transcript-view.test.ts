@@ -96,6 +96,138 @@ it.each(["pending", "running", "completed", "failed"])(
   },
 )
 
+it.each([
+  ["running", true, false],
+  ["completed", false, true],
+  ["cancelled", false, true],
+  ["failed", false, true],
+] as const)(
+  "keeps a pre-steering activity tied to its %s execution",
+  (status, running, terminal) => {
+    const transcript = agentTranscript(
+      "chat",
+      [
+        {
+          id: "user",
+          from: "user",
+          executionId: "run",
+          receipt: "delivered",
+          content: textContent("Inspect"),
+        },
+        {
+          id: "assistant",
+          from: "assistant",
+          executionId: "run",
+          text: "Done",
+          status,
+          parts: [
+            { offset: 0, kind: "tool", text: "", toolId: "tool" },
+            { offset: 2, kind: "text", text: "Done", toolId: "" },
+          ],
+        },
+        {
+          id: "steer",
+          from: "user",
+          executionId: "steer-run",
+          receipt: "delivered",
+          content: textContent("Also inspect this"),
+          steeringTarget: "run",
+          steeringOffset: 1,
+        },
+      ],
+      [
+        {
+          executionId: "run",
+          toolId: "tool",
+          title: "Shell",
+          input: "{}",
+          details: "done",
+          status: "completed",
+        },
+      ],
+    )
+
+    expect(transcript.turns).toHaveLength(2)
+    expect(transcript.turns[0]?.completed).toBeNull()
+    expect(Boolean(transcript.turns[1]?.completed)).toBe(terminal)
+    const first = agentTurnView(transcript.turns[0]!, transcript)
+    const activity = first.content.find((part) => "activity" in part)
+    expect(activity && "activity" in activity ? activity.running : undefined).toBe(
+      running,
+    )
+  },
+)
+
+it("settles a thought-only activity from its source execution across steering", () => {
+  const transcript = agentTranscript(
+    "chat",
+    [
+      {
+        id: "user",
+        from: "user",
+        executionId: "run",
+        receipt: "delivered",
+        content: textContent("Think"),
+      },
+      {
+        id: "assistant",
+        from: "assistant",
+        executionId: "run",
+        text: "Done",
+        status: "completed",
+        parts: [
+          { offset: 0, kind: "thought", text: "Considering", toolId: "" },
+          { offset: 2, kind: "text", text: "Done", toolId: "" },
+        ],
+      },
+      {
+        id: "steer",
+        from: "user",
+        executionId: "steer-run",
+        receipt: "delivered",
+        content: textContent("One more thing"),
+        steeringTarget: "run",
+        steeringOffset: 1,
+      },
+    ],
+    [],
+  )
+
+  const first = agentTurnView(transcript.turns[0]!, transcript)
+  const activity = first.content.find((part) => "activity" in part)
+  expect(activity).toMatchObject({
+    activity: [{ kind: "thought", text: "Considering" }],
+    running: false,
+  })
+  expect(transcript.turns[0]?.completed).toBeNull()
+  expect(transcript.turns[1]?.completed?.payload.type).toBe("turn_completed")
+})
+
+it("uses the source turn identity when a local assistant has no execution id", () => {
+  const transcript = agentTranscript(
+    "local",
+    [
+      {
+        id: "local-assistant",
+        from: "assistant",
+        text: "",
+        status: "completed",
+        parts: [{ offset: 0, kind: "thought", text: "Local thought", toolId: "" }],
+      },
+    ],
+    [],
+  )
+
+  expect(transcript.events[0]?.raw).toMatchObject({
+    sourceTurnId: "local-assistant",
+    executionId: null,
+    executionStatus: "completed",
+    activityRunning: false,
+  })
+  const activity = agentTurnView(transcript.turns[0]!, transcript).content[0]
+  expect(activity && "activity" in activity ? activity.running : undefined).toBe(false)
+})
+
 it("keeps streamed whitespace inside a thought and omits a whole whitespace-only run", () => {
   const transcript = agentTranscript(
     "chat",
@@ -108,8 +240,8 @@ it("keeps streamed whitespace inside a thought and omits a whole whitespace-only
         status: "completed",
         parts: [
           { offset: 0, kind: "thought", text: "hello", messageId: "thought", toolId: "" },
-          { offset: 1, kind: "thought", text: " ", messageId: "thought", toolId: "" },
-          { offset: 2, kind: "thought", text: "world", messageId: "thought", toolId: "" },
+          { offset: 1, kind: "thought", text: " ", messageId: "space", toolId: "" },
+          { offset: 2, kind: "thought", text: "world", messageId: "world", toolId: "" },
           { offset: 3, kind: "tool", text: "", toolId: "tool" },
           { offset: 4, kind: "thought", text: "\n\n", messageId: "empty", toolId: "" },
           { offset: 5, kind: "text", text: "Done", messageId: "answer", toolId: "" },
@@ -127,6 +259,13 @@ it("keeps streamed whitespace inside a thought and omits a whole whitespace-only
       },
     ],
   )
+  expect(
+    transcript.events
+      .filter((event) => event.payload.type === "reasoning")
+      .map((event) =>
+        event.payload.type === "reasoning" ? event.payload.text : "unreachable",
+      ),
+  ).toEqual(["hello", " ", "world", "\n\n"])
   const row = agentTurnView(transcript.turns[0]!, transcript)
   const activities = row.content.filter((part) => "activity" in part)
   expect(activities).toHaveLength(1)
