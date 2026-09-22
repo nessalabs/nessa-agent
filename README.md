@@ -318,14 +318,31 @@ Worktrees are created as **siblings** of this checkout
 
 Claude Code makes worktrees of its own, for background agents and for subagents
 declaring `isolation: worktree`, and its default is a plain `git worktree add`
-under `.claude/worktrees/` with no shared `target/` — a cold build of ~600
-crates each time. `.claude/settings.json` configures a
-[`WorktreeCreate` hook](https://code.claude.com/docs/en/worktrees) pointing at
-`./scripts/worktree.sh claude-hook`, which is the only supported way to replace
-that behaviour; there is no setting for the worktree location. Those worktrees
-then land beside this one and share `target/` like any other. The hook reuses a
-branch or worktree that already exists rather than refusing, because unlike a
-person, Claude Code names the branch and comes back to ones it made earlier.
+with no shared `target/` — a cold build of ~600 crates each time.
+`.claude/settings.json` configures
+[`WorktreeCreate` and `WorktreeRemove` hooks](https://code.claude.com/docs/en/worktrees)
+pointing at `./scripts/worktree.sh claude-hook` and `claude-hook-remove`, which
+is the only supported way to replace that behaviour; there is no setting for it.
+
+Replacing Claude Code's creation means owing it the behaviour it would have had,
+so the hook takes the parts of the payload that decide those things rather than
+inventing them:
+
+| Payload | Used for |
+| --- | --- |
+| `worktree_path` | Where it goes. Claude Code's own location and reuse-by-name semantics are kept, and no directory is ever derived from a name here |
+| `name` | A worktree **slug**, not a branch. The branch is `worktree-<name>`, which is also what Claude Code would have named it — and the prefix is what stops a slug matching a person's branch from handing an agent that person's checkout |
+| — | The base is the repository's default branch, which is what `worktree.baseRef: "fresh"` means. `git worktree add -b` with no start-point instead branches from whatever the clone is sitting on, so a clone parked on a feature branch would have given every agent that branch's commits |
+
+The remove hook is not optional. Claude Code's periodic sweep only removes
+worktrees carrying a marker it writes itself, and one a hook created has none,
+so without it every worktree made this way would stay on disk for ever — the
+accumulation this exists to stop. It unlinks `target/` before removing the
+directory, for the reason the script's own warning gives.
+
+One thing the hook gives up: `.worktreeinclude` is not processed when a
+`WorktreeCreate` hook replaces creation. This repo has no such file, so nothing
+is lost today; add the copying to the hook if one is ever introduced.
 
 ## Build
 

@@ -23,7 +23,10 @@ const root = new URL("..", import.meta.url).pathname
 
 /** The path the script says a branch belongs at. */
 const pathFor = (name) =>
-  execFileSync("bash", [script, "path", name], { cwd: root, encoding: "utf8" }).trim()
+  execFileSync("bash", [script, "path", "--derived", name], {
+    cwd: root,
+    encoding: "utf8",
+  }).trim()
 
 /**
  * Names that differ only in the characters the mapping has to touch, plus the
