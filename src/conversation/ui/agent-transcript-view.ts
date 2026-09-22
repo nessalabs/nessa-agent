@@ -13,8 +13,15 @@ export type AgentToolView = {
   input: string
   details: string
 }
+export type AgentTurnActivityItem =
+  | { key: string; kind: "thought"; text: string }
+  | { key: string; kind: "tool"; tool: AgentToolView }
+export type AgentTurnContentView =
+  | { key: string; text: string }
+  | { key: string; activity: AgentTurnActivityItem[]; running: boolean }
 function rawText(raw: JsonValue, key: string): string {
   if (raw === null || Array.isArray(raw) || typeof raw !== "object") return ""
+  if (!Object.hasOwn(raw, key)) return ""
   return typeof raw[key] === "string" ? raw[key] : ""
 }
 export function agentTurnView(turn: Turn, transcript: Transcript) {
@@ -68,45 +75,60 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
       },
     ]
   })
-  const content: {
-    key: string
-    text?: string
-    thought?: string
-    tools?: AgentToolView[]
-  }[] = []
+  const content: AgentTurnContentView[] = []
+  let activity: Extract<
+    AgentTurnContentView,
+    { activity: AgentTurnActivityItem[] }
+  > | null = null
+  let pendingThought: { key: string; text: string } | null = null
+  const completed = turn.completed?.payload
+  const running = completed?.type !== "turn_completed"
+  const activityFor = (key: string) => {
+    if (!activity) {
+      activity = { key, activity: [], running }
+      content.push(activity)
+    }
+    return activity
+  }
+  const flushThought = () => {
+    if (pendingThought?.text.trim()) {
+      activityFor(pendingThought.key).activity.push({
+        key: pendingThought.key,
+        kind: "thought",
+        text: pendingThought.text,
+      })
+    }
+    pendingThought = null
+  }
   for (const event of events) {
     const payload = event.payload
-    if (payload.type === "assistant_text")
+    if (payload.type === "assistant_text") {
+      flushThought()
       content.push({ key: event.id, text: payload.text })
+    }
     if (payload.type === "reasoning") {
-      const last = content.at(-1)
-      if (last?.thought !== undefined) last.thought += payload.text
-      else content.push({ key: event.id, thought: payload.text })
+      if (pendingThought) pendingThought.text += payload.text
+      else pendingThought = { key: event.id, text: payload.text }
     }
     if (payload.type === "tool_call_started") {
+      flushThought()
       const tool = tools.find((tool) => tool.callId === payload.callId)
       if (tool) {
-        const last = content.at(-1)
-        if (last?.tools) last.tools.push(tool)
-        else content.push({ key: event.id, tools: [tool] })
+        activityFor(event.id).activity.push({ key: event.id, kind: "tool", tool })
       }
     }
   }
+  flushThought()
   if (turn.finalText !== null && !finalEvent)
     content.push({ key: `${turn.key}:answer`, text: turn.finalText })
-  const completed = turn.completed?.payload
   return {
     content,
     key: turn.key,
     promptId: turn.prompt?.id,
     text: turn.finalText ?? "",
-    thought: events
-      .flatMap(({ payload }) => (payload.type === "reasoning" ? [payload.text] : []))
-      .join("\n"),
     status:
       completed?.type === "turn_completed"
         ? (completed.terminalReason ?? completed.status)
         : "running",
-    tools,
   }
 }
