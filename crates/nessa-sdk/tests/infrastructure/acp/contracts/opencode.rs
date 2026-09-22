@@ -781,7 +781,10 @@ async fn opencode_close_cancels_the_exact_pending_review_and_audits_its_caller()
         .await
         .into_result()
         .unwrap();
-    assert_eq!(running.await.unwrap().unwrap(), ExecutionOutcome::Cancelled);
+    // Closing cancels the outstanding review. Opencode answers that cancellation
+    // by completing the enclosing prompt, so its confirmed provider result stays
+    // distinct from the local review cancellation and session closure.
+    assert_eq!(running.await.unwrap().unwrap(), ExecutionOutcome::Completed);
     let cancellations = audit.records.lock().unwrap();
     assert_eq!(cancellations.len(), 1);
     assert_eq!(cancellations[0].session_id(), opened.session.id());
@@ -799,7 +802,11 @@ async fn opencode_close_cancels_the_exact_pending_review_and_audits_its_caller()
     );
     drop(cancellations);
     assert_eq!(audit.closures.lock().unwrap().len(), 1);
-    assert_eq!(audit.finishes.lock().unwrap().len(), 1);
+    let finishes = audit.finishes.lock().unwrap();
+    assert_eq!(finishes.len(), 1);
+    assert_eq!(finishes[0].execution_id().as_str(), "cancelled-review");
+    assert_eq!(finishes[0].result(), &Ok(ExecutionOutcome::Completed));
+    drop(finishes);
     assert_gone(&root, "pid");
 }
 
