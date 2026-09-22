@@ -11,7 +11,9 @@
 //! version can also be a directory name, a path inside an archive does not
 //! escape it, an archive is fetched over https from a host that is named.
 //! Deciding *where* a runtime goes and putting it there is infrastructure.
+mod release_selection;
 pub mod value_objects;
+pub use release_selection::preferred_release;
 pub use value_objects::{
     AgentName, ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveUrl, HostPlatform, Libc,
     NotAnAgentName, PinRejected, PinnedRelease, ReleasePlatform, ReleaseRequirements,
