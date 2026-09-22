@@ -1,6 +1,7 @@
 use super::*;
 use crate::agent_install::domain::{
-    InstallAttemptError, InstallTransitionKind, RollbackState, RuntimeArtifact,
+    InstallAttemptError, InstallFailureEvidence, InstallFailureKind, InstallTransitionError,
+    InstallTransitionKind, RecoveryFailureEvidence, RecoveryState, RollbackState, RuntimeArtifact,
 };
 use crate::agent_install_test_support::{
     agent, platform, release, request, OTHER_DIGEST, PINNED_DIGEST,
@@ -63,4 +64,46 @@ fn rejection_requires_the_started_state_and_preserves_both_digests() {
     assert_eq!(rejected.target(), &target);
     assert_eq!(rejected.actual_digest(), Some(&actual));
     assert_eq!(attempt.verified(), Err(InstallAttemptError::WrongStage));
+}
+
+#[test]
+fn incomplete_recovery_rejects_a_target_reported_as_restored_without_ending_the_attempt() {
+    let target = artifact("1.18.31", PINNED_DIGEST);
+    let (mut attempt, _) = InstallAttempt::start(agent(), target.clone(), request());
+    attempt.verified().unwrap();
+    let failures = RecoveryFailureEvidence::new(
+        InstallFailureEvidence::new(InstallFailureKind::Unwritable, "publish"),
+        Some(InstallFailureEvidence::new(
+            InstallFailureKind::Unwritable,
+            "withdrawal",
+        )),
+        None,
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        attempt.recovery_incomplete(
+            RecoveryState::Confirmed(RollbackState::Restored(target)),
+            failures,
+        ),
+        Err(InstallAttemptError::Contradictory(
+            InstallTransitionError::TargetReportedRestored
+        ))
+    );
+    assert!(attempt
+        .rolled_back(RollbackState::NoInstalledRuntime)
+        .is_ok());
+}
+
+#[test]
+fn incomplete_recovery_requires_at_least_one_cleanup_failure() {
+    let failure = RecoveryFailureEvidence::new(
+        InstallFailureEvidence::new(InstallFailureKind::Unwritable, "publish"),
+        None,
+        None,
+        None,
+    );
+
+    assert_eq!(failure, Err(InstallTransitionError::MissingCleanupFailure));
 }

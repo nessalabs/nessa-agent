@@ -9,7 +9,7 @@
 //! [`install`] can be tested without a network or a real installation.
 mod install;
 mod ports;
-pub use install::{InstallAgentRuntime, InstallFailure, InstalledRuntime};
+pub use install::{InstallAgentRuntime, InstallFailure, InstalledRuntime, RuntimeStateEvidence};
 pub use ports::{
     ArchiveSource, AuditFailure, InstallAudit, Publication, PublicationChange,
     PublicationCleanupFailure, PublicationLease, PublicationRecovery, PublishFailure,

@@ -6,8 +6,9 @@ use super::ports::{
     PublicationRecovery, RollbackChange, RuntimeStore, SourceFailure, StagedArchive, StoreFailure,
 };
 use crate::agent_install::domain::{
-    AgentName, ArchiveRejected, HostPlatform, InstallAttempt, InstallAttemptError, InstallRequest,
-    InstallTransition, PinnedRelease, ReleaseVersion, RollbackState, RuntimeArtifact,
+    AgentName, ArchiveRejected, HostPlatform, InstallAttempt, InstallAttemptError,
+    InstallFailureEvidence, InstallFailureKind, InstallRequest, InstallTransition, PinnedRelease,
+    RecoveryFailureEvidence, RecoveryState, ReleaseVersion, RollbackState, RuntimeArtifact,
 };
 
 /// An agent runtime that is on this machine and ready to launch.
@@ -53,11 +54,11 @@ pub enum InstallFailure {
     /// A store result contradicted the legal install sequence.
     Evidence(InstallAttemptError),
     /// Durable evidence was not acknowledged. `operation` preserves an
-    /// installation failure that happened too; `runtime_installed` prevents a
-    /// successful publication from being described as though it was undone.
+    /// installation failure that happened too, and `runtime_state` retains
+    /// exactly what was established before the audit attempt.
     Audit {
         operation: Option<Box<InstallFailure>>,
-        runtime_installed: bool,
+        runtime_state: RuntimeStateEvidence,
         failure: AuditFailure,
     },
     /// Publication failed and its cleanup also failed. The original operation
@@ -66,6 +67,21 @@ pub enum InstallFailure {
         operation: StoreFailure,
         cleanup: PublicationCleanupFailure,
     },
+}
+
+/// Installed-state evidence retained when audit acknowledgement fails.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeStateEvidence {
+    /// No publication had started, so the operation did not change the state.
+    Unchanged,
+    /// The requested target was durably published.
+    TargetInstalled,
+    /// The prior artifact was durably restored.
+    Restored(RuntimeArtifact),
+    /// Cleanup confirmed that no runtime record remains installed.
+    NoInstalledRuntime,
+    /// Cleanup could not establish the remaining installed state.
+    Unconfirmed,
 }
 
 impl fmt::Display for InstallFailure {
@@ -80,12 +96,12 @@ impl fmt::Display for InstallFailure {
             Self::Evidence(failure) => failure.fmt(f),
             Self::Audit {
                 operation,
-                runtime_installed,
+                runtime_state,
                 failure,
             } => {
                 if let Some(operation) = operation {
                     write!(f, "{operation}; install audit was not committed: {failure}")
-                } else if *runtime_installed {
+                } else if *runtime_state == RuntimeStateEvidence::TargetInstalled {
                     write!(
                         f,
                         "the runtime was installed, but its audit record was not committed: {failure}"
@@ -210,7 +226,11 @@ impl InstallAgentRuntime<'_> {
             let transition = attempt.rejected(digest).map_err(InstallFailure::Evidence)?;
             return match self.audit.record(transition) {
                 Ok(()) => Err(operation),
-                Err(failure) => Err(with_audit_failure(operation, failure)),
+                Err(failure) => Err(with_audit_failure(
+                    operation,
+                    RuntimeStateEvidence::Unchanged,
+                    failure,
+                )),
             };
         }
         self.audit(attempt.verified().map_err(InstallFailure::Evidence)?)?;
@@ -232,37 +252,46 @@ impl InstallAgentRuntime<'_> {
                     .record(transition)
                     .map_err(|failure| InstallFailure::Audit {
                         operation: None,
-                        runtime_installed: true,
+                        runtime_state: RuntimeStateEvidence::TargetInstalled,
                         failure,
                     })?;
                 Ok(publication.executable().to_owned())
             }
             Err(publish) => {
                 let operation = InstallFailure::Store(publish.failure().clone());
-                let (rollback, outcome) = match publish.recovery() {
+                let (transition, runtime_state, outcome) = match publish.recovery() {
                     PublicationRecovery::NotRequired => return Err(operation),
-                    PublicationRecovery::RolledBack(rollback) => (Some(rollback), operation),
-                    PublicationRecovery::Incomplete { rollback, cleanup } => (
-                        rollback.as_ref(),
-                        InstallFailure::Recovery {
+                    PublicationRecovery::RolledBack(rollback) => {
+                        let restored = rollback_state(rollback);
+                        let runtime_state = runtime_state(rollback);
+                        let transition = attempt
+                            .rolled_back(restored)
+                            .map_err(InstallFailure::Evidence)?;
+                        (transition, runtime_state, operation)
+                    }
+                    PublicationRecovery::Incomplete { rollback, cleanup } => {
+                        let state = rollback
+                            .as_ref()
+                            .map(|rollback| RecoveryState::Confirmed(rollback_state(rollback)))
+                            .unwrap_or(RecoveryState::Unconfirmed);
+                        let runtime_state = rollback
+                            .as_ref()
+                            .map(runtime_state)
+                            .unwrap_or(RuntimeStateEvidence::Unconfirmed);
+                        let failures = recovery_failures(publish.failure(), cleanup);
+                        let transition = attempt
+                            .recovery_incomplete(state, failures)
+                            .map_err(InstallFailure::Evidence)?;
+                        let outcome = InstallFailure::Recovery {
                             operation: publish.failure().clone(),
                             cleanup: cleanup.clone(),
-                        },
-                    ),
+                        };
+                        (transition, runtime_state, outcome)
+                    }
                 };
-                let Some(rollback) = rollback else {
-                    return Err(outcome);
-                };
-                let restored = match rollback {
-                    RollbackChange::Restored(artifact) => RollbackState::Restored(artifact.clone()),
-                    RollbackChange::NoInstalledRuntime => RollbackState::NoInstalledRuntime,
-                };
-                let transition = attempt
-                    .rolled_back(restored)
-                    .map_err(InstallFailure::Evidence)?;
                 match self.audit.record(transition) {
                     Ok(()) => Err(outcome),
-                    Err(failure) => Err(with_audit_failure(outcome, failure)),
+                    Err(failure) => Err(with_audit_failure(outcome, runtime_state, failure)),
                 }
             }
         }
@@ -273,16 +302,57 @@ impl InstallAgentRuntime<'_> {
             .record(transition)
             .map_err(|failure| InstallFailure::Audit {
                 operation: None,
-                runtime_installed: false,
+                runtime_state: RuntimeStateEvidence::Unchanged,
                 failure,
             })
     }
 }
 
-fn with_audit_failure(operation: InstallFailure, failure: AuditFailure) -> InstallFailure {
+fn rollback_state(rollback: &RollbackChange) -> RollbackState {
+    match rollback {
+        RollbackChange::Restored(artifact) => RollbackState::Restored(artifact.clone()),
+        RollbackChange::NoInstalledRuntime => RollbackState::NoInstalledRuntime,
+    }
+}
+
+fn runtime_state(rollback: &RollbackChange) -> RuntimeStateEvidence {
+    match rollback {
+        RollbackChange::Restored(artifact) => RuntimeStateEvidence::Restored(artifact.clone()),
+        RollbackChange::NoInstalledRuntime => RuntimeStateEvidence::NoInstalledRuntime,
+    }
+}
+
+fn recovery_failures(
+    publication: &StoreFailure,
+    cleanup: &PublicationCleanupFailure,
+) -> RecoveryFailureEvidence {
+    RecoveryFailureEvidence::new(
+        failure_evidence(publication),
+        cleanup.withdrawal().map(failure_evidence),
+        cleanup.restoration().map(failure_evidence),
+        cleanup.confirmation().map(failure_evidence),
+    )
+    .expect("publication cleanup failure always contains at least one failure")
+}
+
+fn failure_evidence(failure: &StoreFailure) -> InstallFailureEvidence {
+    let (kind, detail) = match failure {
+        StoreFailure::Unwritable(detail) => (InstallFailureKind::Unwritable, detail),
+        StoreFailure::Unreadable(detail) => (InstallFailureKind::Unreadable, detail),
+        StoreFailure::MissingExecutable(detail) => (InstallFailureKind::MissingExecutable, detail),
+        StoreFailure::MalformedArchive(detail) => (InstallFailureKind::MalformedArchive, detail),
+    };
+    InstallFailureEvidence::new(kind, detail.clone())
+}
+
+fn with_audit_failure(
+    operation: InstallFailure,
+    runtime_state: RuntimeStateEvidence,
+    failure: AuditFailure,
+) -> InstallFailure {
     InstallFailure::Audit {
         operation: Some(Box::new(operation)),
-        runtime_installed: false,
+        runtime_state,
         failure,
     }
 }

@@ -6,7 +6,8 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::agent_install::application::{
-    InstallAgentRuntime, InstallFailure, InstalledRuntime, SourceFailure, StoreFailure,
+    InstallAgentRuntime, InstallFailure, InstalledRuntime, RuntimeStateEvidence, SourceFailure,
+    StoreFailure,
 };
 use crate::agent_install::domain::{AgentName, HostPlatform, InstallRequest, PinnedRelease};
 use crate::agent_install::infrastructure::{
@@ -198,12 +199,12 @@ fn explain(failure: &InstallFailure) -> String {
         InstallFailure::Recovery { .. } => failure.to_string(),
         InstallFailure::Evidence(_) => format!("{failure}; the install result was not reported"),
         InstallFailure::Audit {
-            runtime_installed: true,
+            runtime_state: RuntimeStateEvidence::Unchanged,
             ..
-        } => failure.to_string(),
-        InstallFailure::Audit { .. } => {
+        } => {
             format!("{failure}; no unaudited runtime was reported as installed")
         }
+        InstallFailure::Audit { .. } => failure.to_string(),
     }
 }
 

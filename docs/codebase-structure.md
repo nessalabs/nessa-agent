@@ -832,10 +832,13 @@ Install evidence is domain state too. `install_transition.rs` owns the validated
 request identity, target artifact, and immutable transition facts; its private
 representation prevents a rejected digest from equalling the target, a runtime
 from replacing itself, or a rollback from claiming the failed target was
-restored. `entities/install_attempt.rs` is the sequence owner: started may become
-verified or rejected, and only verified may become installed, replaced, or
-rolled back. Application and infrastructure cannot construct contradictory
-before/after evidence around that owner.
+restored. Incomplete recovery retains the original publication failure, each
+cleanup stage that failed, and either the remaining state the store confirmed
+or an explicit unconfirmed state. `entities/install_attempt.rs` is the sequence
+owner: started may become verified or rejected, and only verified may become
+installed, replaced, rolled back, or incomplete recovery. Application and
+infrastructure cannot construct contradictory before/after evidence around that
+owner.
 
 `application/` owns the order and none of the effects: `InstallAgentRuntime`
 does installed-already, then download, hash, accept, publish, and never unpacks
@@ -847,13 +850,16 @@ prior valid artifact while holding the store's per-agent lock and returns that
 authority as a lease. The use case keeps the lease until the installed,
 replaced, or rolled-back evidence is acknowledged, so concurrent installers
 cannot report effects in an order that contradicts their before/after chain.
-Audit failure stays visible; when publication already happened, the error says
-the runtime is installed rather than claiming cleanup reversed it.
+Audit failure stays visible and carries typed state evidence: unchanged, the
+target installed, the prior artifact restored, no runtime installed, or
+unconfirmed. It therefore does not turn an uncertain cleanup into a claim that
+nothing is installed.
 If publication durability fails, the store removes only the target it computed
 from the accepted pin, restores only a prior record whose validated artifact
 still had a private nonempty executable, and re-reads installed state under the
-same lease. The original failure, every cleanup failure, and only a confirmed
-rollback state travel as separate typed facts to the use case.
+same lease. The original failure, every cleanup failure, and the confirmed or
+explicitly unconfirmed remaining state travel as separate typed facts through
+the audit attempt and back to the caller when the sink also fails.
 
 `infrastructure/` holds the four outside things: `pinned_releases.rs` reads
 `data/agent-releases.json`, compiled in so the tested version cannot depend on

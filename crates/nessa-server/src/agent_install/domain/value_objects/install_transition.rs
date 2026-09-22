@@ -97,6 +97,7 @@ pub enum InstallTransitionKind {
     Installed,
     Replaced,
     RolledBack,
+    RecoveryIncomplete,
     SupersededArtifactRemoved,
 }
 
@@ -107,12 +108,100 @@ pub enum RollbackState {
     NoInstalledRuntime,
 }
 
+/// The stable category of one filesystem failure retained as audit evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstallFailureKind {
+    Unwritable,
+    Unreadable,
+    MissingExecutable,
+    MalformedArchive,
+}
+
+/// One immutable failure fact at the installation boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstallFailureEvidence {
+    kind: InstallFailureKind,
+    detail: String,
+}
+
+impl InstallFailureEvidence {
+    pub fn new(kind: InstallFailureKind, detail: impl Into<String>) -> Self {
+        Self {
+            kind,
+            detail: detail.into(),
+        }
+    }
+
+    pub fn kind(&self) -> InstallFailureKind {
+        self.kind
+    }
+
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+}
+
+/// The remaining installed state after cleanup did not fully succeed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RecoveryState {
+    Confirmed(RollbackState),
+    Unconfirmed,
+}
+
+/// Original publication cause and every cleanup failure retained together.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecoveryFailureEvidence {
+    publication: InstallFailureEvidence,
+    withdrawal: Option<InstallFailureEvidence>,
+    restoration: Option<InstallFailureEvidence>,
+    confirmation: Option<InstallFailureEvidence>,
+}
+
+impl RecoveryFailureEvidence {
+    pub fn new(
+        publication: InstallFailureEvidence,
+        withdrawal: Option<InstallFailureEvidence>,
+        restoration: Option<InstallFailureEvidence>,
+        confirmation: Option<InstallFailureEvidence>,
+    ) -> Result<Self, InstallTransitionError> {
+        if withdrawal.is_none() && restoration.is_none() && confirmation.is_none() {
+            return Err(InstallTransitionError::MissingCleanupFailure);
+        }
+        Ok(Self {
+            publication,
+            withdrawal,
+            restoration,
+            confirmation,
+        })
+    }
+
+    pub fn publication(&self) -> &InstallFailureEvidence {
+        &self.publication
+    }
+
+    pub fn withdrawal(&self) -> Option<&InstallFailureEvidence> {
+        self.withdrawal.as_ref()
+    }
+
+    pub fn restoration(&self) -> Option<&InstallFailureEvidence> {
+        self.restoration.as_ref()
+    }
+
+    pub fn confirmation(&self) -> Option<&InstallFailureEvidence> {
+        self.confirmation.as_ref()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum TransitionDetail {
     None,
     ActualDigest(ArchiveDigest),
     Previous(RuntimeArtifact),
     Rollback(RollbackState),
+    RecoveryIncomplete {
+        state: RecoveryState,
+        failures: RecoveryFailureEvidence,
+    },
     Current(RuntimeArtifact),
 }
 
@@ -215,6 +304,26 @@ impl InstallTransition {
         })
     }
 
+    pub(crate) fn recovery_incomplete(
+        agent: AgentName,
+        target: RuntimeArtifact,
+        state: RecoveryState,
+        failures: RecoveryFailureEvidence,
+        request: InstallRequest,
+    ) -> Result<Self, InstallTransitionError> {
+        if matches!(&state, RecoveryState::Confirmed(RollbackState::Restored(restored)) if restored == &target)
+        {
+            return Err(InstallTransitionError::TargetReportedRestored);
+        }
+        Ok(Self {
+            kind: InstallTransitionKind::RecoveryIncomplete,
+            agent,
+            target,
+            request,
+            detail: TransitionDetail::RecoveryIncomplete { state, failures },
+        })
+    }
+
     pub fn kind(&self) -> InstallTransitionKind {
         self.kind
     }
@@ -251,6 +360,13 @@ impl InstallTransition {
             _ => None,
         }
     }
+
+    pub fn recovery(&self) -> Option<(&RecoveryState, &RecoveryFailureEvidence)> {
+        match &self.detail {
+            TransitionDetail::RecoveryIncomplete { state, failures } => Some((state, failures)),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -259,6 +375,7 @@ pub enum InstallTransitionError {
     UnchangedReplacement,
     TargetReportedRestored,
     CurrentArtifactRemoved,
+    MissingCleanupFailure,
 }
 
 impl fmt::Display for InstallTransitionError {
@@ -268,6 +385,7 @@ impl fmt::Display for InstallTransitionError {
             Self::UnchangedReplacement => "an artifact cannot replace itself",
             Self::TargetReportedRestored => "a rolled-back target cannot be the restored runtime",
             Self::CurrentArtifactRemoved => "the current artifact cannot be removed as superseded",
+            Self::MissingCleanupFailure => "incomplete recovery requires a cleanup failure",
         })
     }
 }

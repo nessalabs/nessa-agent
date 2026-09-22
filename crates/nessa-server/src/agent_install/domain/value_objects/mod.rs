@@ -12,8 +12,9 @@ mod pinned_release;
 pub use agent_name::{AgentName, NotAnAgentName};
 pub use host_platform::{HostPlatform, Libc, ReleaseRequirements};
 pub use install_transition::{
-    InstallRequest, InstallRequestError, InstallTransition, InstallTransitionError,
-    InstallTransitionKind, RollbackState, RuntimeArtifact,
+    InstallFailureEvidence, InstallFailureKind, InstallRequest, InstallRequestError,
+    InstallTransition, InstallTransitionError, InstallTransitionKind, RecoveryFailureEvidence,
+    RecoveryState, RollbackState, RuntimeArtifact,
 };
 pub use pinned_release::{
     ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveUrl, PinRejected, PinnedRelease,

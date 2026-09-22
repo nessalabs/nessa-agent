@@ -2,7 +2,7 @@ use std::fmt;
 
 use crate::agent_install::domain::{
     AgentName, ArchiveDigest, InstallRequest, InstallTransition, InstallTransitionError,
-    InstallTransitionKind, RollbackState, RuntimeArtifact,
+    InstallTransitionKind, RecoveryFailureEvidence, RecoveryState, RollbackState, RuntimeArtifact,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,6 +94,23 @@ impl InstallAttempt {
             self.agent.clone(),
             self.target.clone(),
             rollback,
+            self.request.clone(),
+        )?;
+        self.stage = AttemptStage::Finished;
+        Ok(transition)
+    }
+
+    pub fn recovery_incomplete(
+        &mut self,
+        state: RecoveryState,
+        failures: RecoveryFailureEvidence,
+    ) -> Result<InstallTransition, InstallAttemptError> {
+        self.require(AttemptStage::Verified)?;
+        let transition = InstallTransition::recovery_incomplete(
+            self.agent.clone(),
+            self.target.clone(),
+            state,
+            failures,
             self.request.clone(),
         )?;
         self.stage = AttemptStage::Finished;

@@ -17,7 +17,10 @@ use uuid::Uuid;
 
 use crate::agent_install::{
     application::{AuditFailure, InstallAudit},
-    domain::{InstallTransition, InstallTransitionKind, RollbackState, RuntimeArtifact},
+    domain::{
+        InstallFailureEvidence, InstallFailureKind, InstallTransition, InstallTransitionKind,
+        RecoveryState, RollbackState, RuntimeArtifact,
+    },
 };
 
 /// Private host audit storage for agent-runtime installation transitions.
@@ -119,6 +122,16 @@ fn installed(value: &RuntimeArtifact) -> Value {
     json!({"state": "installed", "artifact": artifact(value)})
 }
 
+fn failure(value: &InstallFailureEvidence) -> Value {
+    let kind = match value.kind() {
+        InstallFailureKind::Unwritable => "unwritable",
+        InstallFailureKind::Unreadable => "unreadable",
+        InstallFailureKind::MissingExecutable => "missing_executable",
+        InstallFailureKind::MalformedArchive => "malformed_archive",
+    };
+    json!({"kind": kind, "detail": value.detail()})
+}
+
 fn caller(transition: &InstallTransition) -> Value {
     json!({
         "kind": "local_account",
@@ -209,6 +222,32 @@ fn record_value(transition: &InstallTransition) -> Value {
                 after,
                 "publication_failed",
             )
+        }
+        InstallTransitionKind::RecoveryIncomplete => {
+            let (state, failures) = transition
+                .recovery()
+                .expect("incomplete recovery carries state and failure evidence");
+            let after = match state {
+                RecoveryState::Confirmed(RollbackState::Restored(artifact)) => installed(artifact),
+                RecoveryState::Confirmed(RollbackState::NoInstalledRuntime) => {
+                    json!({"state": "not_installed"})
+                }
+                RecoveryState::Unconfirmed => json!({"state": "unconfirmed"}),
+            };
+            let mut value = common(
+                transition,
+                "agent_runtime_install_recovery_incomplete",
+                json!({"state": "publication_pending", "artifact": artifact(transition.target())}),
+                after,
+                "publication_cleanup_failed",
+            );
+            value["failures"] = json!({
+                "publication": failure(failures.publication()),
+                "withdrawal": failures.withdrawal().map(failure),
+                "restoration": failures.restoration().map(failure),
+                "confirmation": failures.confirmation().map(failure),
+            });
+            value
         }
         InstallTransitionKind::SupersededArtifactRemoved => {
             let mut value = common(

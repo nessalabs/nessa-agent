@@ -1,6 +1,7 @@
 use super::*;
 use crate::agent_install::domain::{
-    InstallAttempt, InstallTransitionKind, RollbackState, RuntimeArtifact,
+    InstallAttempt, InstallFailureEvidence, InstallFailureKind, InstallTransitionKind,
+    RecoveryFailureEvidence, RecoveryState, RollbackState, RuntimeArtifact,
 };
 use crate::agent_install_test_support::{
     agent, platform, release, request, temporary_root, PINNED_DIGEST,
@@ -91,6 +92,38 @@ fn rollback_says_when_no_prior_runtime_was_restored() {
     let value = record_value(&rolled_back);
     assert_eq!(value["transition"]["after"]["state"], "not_installed");
     assert_eq!(value["cause"], "publication_failed");
+}
+
+#[test]
+fn incomplete_recovery_keeps_uncertain_state_and_each_failure_stage() {
+    let (mut attempt, _) = InstallAttempt::start(agent(), target(), request());
+    attempt.verified().unwrap();
+    let failures = RecoveryFailureEvidence::new(
+        InstallFailureEvidence::new(InstallFailureKind::Unwritable, "record sync"),
+        Some(InstallFailureEvidence::new(
+            InstallFailureKind::Unwritable,
+            "withdrawal",
+        )),
+        None,
+        Some(InstallFailureEvidence::new(
+            InstallFailureKind::Unreadable,
+            "confirmation",
+        )),
+    )
+    .unwrap();
+    let transition = attempt
+        .recovery_incomplete(RecoveryState::Unconfirmed, failures)
+        .unwrap();
+
+    let value = record_value(&transition);
+
+    assert_eq!(value["kind"], "agent_runtime_install_recovery_incomplete");
+    assert_eq!(value["transition"]["after"]["state"], "unconfirmed");
+    assert_eq!(value["cause"], "publication_cleanup_failed");
+    assert_eq!(value["failures"]["publication"]["detail"], "record sync");
+    assert_eq!(value["failures"]["withdrawal"]["detail"], "withdrawal");
+    assert!(value["failures"]["restoration"].is_null());
+    assert_eq!(value["failures"]["confirmation"]["detail"], "confirmation");
 }
 
 #[test]

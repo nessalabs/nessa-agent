@@ -16,7 +16,8 @@ pub mod value_objects;
 pub use entities::{InstallAttempt, InstallAttemptError};
 pub use value_objects::{
     AgentName, ArchiveDigest, ArchivePath, ArchiveRejected, ArchiveUrl, HostPlatform,
-    InstallRequest, InstallRequestError, InstallTransition, InstallTransitionError,
-    InstallTransitionKind, Libc, NotAnAgentName, PinRejected, PinnedRelease, ReleasePlatform,
+    InstallFailureEvidence, InstallFailureKind, InstallRequest, InstallRequestError,
+    InstallTransition, InstallTransitionError, InstallTransitionKind, Libc, NotAnAgentName,
+    PinRejected, PinnedRelease, RecoveryFailureEvidence, RecoveryState, ReleasePlatform,
     ReleaseRequirements, ReleaseVersion, RollbackState, RuntimeArtifact,
 };
