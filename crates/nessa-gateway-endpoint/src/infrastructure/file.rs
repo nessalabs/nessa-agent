@@ -92,7 +92,11 @@ impl EndpointDiscovery for FileEndpointDiscovery {
             Err(_) => return Ok(None),
         };
         let mut bytes = Vec::new();
-        if file.by_ref().take(16_385).read_to_end(&mut bytes).is_err() {
+        if Read::by_ref(&mut file)
+            .take(16_385)
+            .read_to_end(&mut bytes)
+            .is_err()
+        {
             return Ok(None);
         }
         if bytes.is_empty() || bytes.len() > 16_384 {
