@@ -110,7 +110,7 @@ export function checkOnlyManifest({ version, notes, target, origin, published })
  * both rather than deciding which setting the build was made under. This
  * repository ships macOS only, so neither is exercised by a release here.
  */
-export function defaultArtifacts(platform, version) {
+export function defaultArtifacts(platform, version, targetDirectory = "target") {
   const artifacts = {
     darwin: ["macos/Nessa.app.tar.gz"],
     linux: [
@@ -121,5 +121,5 @@ export function defaultArtifacts(platform, version) {
   }[platform]
   if (!artifacts)
     throw new Error(`No updater artifact is bundled for platform ${platform}`)
-  return artifacts.map((artifact) => `target/release/bundle/${artifact}`)
+  return artifacts.map((artifact) => `${targetDirectory}/release/bundle/${artifact}`)
 }
