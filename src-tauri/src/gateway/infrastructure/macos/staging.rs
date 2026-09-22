@@ -3,6 +3,11 @@
 use super::{generation::random_generation, runtime_fingerprint};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::{
+    cell::RefCell,
+    time::{Duration, Instant},
+};
 use std::{
     ffi::{CString, OsString},
     fs::{self, DirBuilder, OpenOptions, Permissions},
@@ -11,6 +16,135 @@ use std::{
     os::unix::fs::{symlink, DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+enum ProfileOperation {
+    Clone,
+    ByteCopy,
+    Permissions,
+    ExtendedAttributes,
+    FileSync,
+    DirectorySync,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, Default)]
+struct OperationProfile {
+    count: u64,
+    errors: u64,
+    bytes: u64,
+    sum: Duration,
+    max: Duration,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, Default)]
+struct StagingProfile {
+    clone: OperationProfile,
+    byte_copy: OperationProfile,
+    permissions: OperationProfile,
+    extended_attributes: OperationProfile,
+    file_sync: OperationProfile,
+    directory_sync: OperationProfile,
+    cloned_files: u64,
+    clone_fallbacks: u64,
+}
+
+#[cfg(test)]
+impl StagingProfile {
+    fn operation_mut(&mut self, operation: ProfileOperation) -> &mut OperationProfile {
+        match operation {
+            ProfileOperation::Clone => &mut self.clone,
+            ProfileOperation::ByteCopy => &mut self.byte_copy,
+            ProfileOperation::Permissions => &mut self.permissions,
+            ProfileOperation::ExtendedAttributes => &mut self.extended_attributes,
+            ProfileOperation::FileSync => &mut self.file_sync,
+            ProfileOperation::DirectorySync => &mut self.directory_sync,
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static STAGING_PROFILE: RefCell<Option<StagingProfile>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn start_staging_profile() {
+    STAGING_PROFILE.with(|profile| {
+        assert!(
+            profile.replace(Some(StagingProfile::default())).is_none(),
+            "staging profiling cannot be nested"
+        );
+    });
+}
+
+#[cfg(test)]
+fn finish_staging_profile() -> StagingProfile {
+    STAGING_PROFILE.with(|profile| {
+        profile
+            .borrow_mut()
+            .take()
+            .expect("staging profiling must be started before it is finished")
+    })
+}
+
+#[cfg(test)]
+struct ProfileGuard {
+    operation: ProfileOperation,
+    started: Instant,
+    bytes: u64,
+    succeeded: bool,
+}
+
+#[cfg(test)]
+impl ProfileGuard {
+    fn start(operation: ProfileOperation) -> Option<Self> {
+        STAGING_PROFILE.with(|profile| {
+            profile.borrow().as_ref().map(|_| Self {
+                operation,
+                started: Instant::now(),
+                bytes: 0,
+                succeeded: false,
+            })
+        })
+    }
+
+    fn succeed(&mut self, bytes: u64) {
+        self.bytes = bytes;
+        self.succeeded = true;
+    }
+
+    fn clone_outcome(&mut self, cloned: bool) {
+        STAGING_PROFILE.with(|profile| {
+            if let Some(profile) = profile.borrow_mut().as_mut() {
+                if cloned {
+                    profile.cloned_files += 1;
+                } else {
+                    profile.clone_fallbacks += 1;
+                }
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+impl Drop for ProfileGuard {
+    fn drop(&mut self) {
+        let elapsed = self.started.elapsed();
+        STAGING_PROFILE.with(|profile| {
+            if let Some(profile) = profile.borrow_mut().as_mut() {
+                let operation = profile.operation_mut(self.operation);
+                operation.count += 1;
+                operation.errors += u64::from(!self.succeeded);
+                operation.bytes += self.bytes;
+                operation.sum += elapsed;
+                operation.max = operation.max.max(elapsed);
+            }
+        });
+    }
+}
 
 struct TemporaryRuntime(PathBuf);
 impl Drop for TemporaryRuntime {
@@ -47,12 +181,11 @@ fn stage_runtime_using(
     let source = source.canonicalize().map_err(|error| error.to_string())?;
     utf8(&source)?;
     nessa_local_storage::create_directory(installations).map_err(|error| error.to_string())?;
-    nessa_local_storage::sync_directory(
+    sync_directory(
         installations
             .parent()
             .ok_or("Missing runtime installation parent")?,
-    )
-    .map_err(|error| error.to_string())?;
+    )?;
     let published = installations.join(expected);
     match fs::symlink_metadata(&published) {
         Ok(_) => {
@@ -73,7 +206,7 @@ fn stage_runtime_using(
     publish(&temporary.0, &published)?;
     // After publication the old temporary path no longer exists; its guard cannot
     // remove the published directory even if directory synchronization fails.
-    nessa_local_storage::sync_directory(installations).map_err(|error| error.to_string())?;
+    sync_directory(installations)?;
     Ok(published)
 }
 fn publish(temporary: &Path, published: &Path) -> Result<(), String> {
@@ -141,7 +274,16 @@ fn copy_directory(
             if !opened.is_file() {
                 return Err("Runtime changed to a non-file during copy".into());
             }
+            #[cfg(test)]
+            let mut clone_profile = ProfileGuard::start(ProfileOperation::Clone);
             let cloned = clone(&path, &output)?;
+            #[cfg(test)]
+            if let Some(profile) = clone_profile.as_mut() {
+                profile.clone_outcome(cloned);
+                profile.succeed(0);
+            }
+            #[cfg(test)]
+            drop(clone_profile);
             let mut file = OpenOptions::new()
                 .write(true)
                 .create_new(!cloned)
@@ -150,23 +292,68 @@ fn copy_directory(
                 .open(&output)
                 .map_err(|error| error.to_string())?;
             if !cloned {
-                std::io::copy(&mut input, &mut file).map_err(|error| error.to_string())?;
+                #[cfg(test)]
+                let mut copy_profile = ProfileGuard::start(ProfileOperation::ByteCopy);
+                let _copied =
+                    std::io::copy(&mut input, &mut file).map_err(|error| error.to_string())?;
+                #[cfg(test)]
+                if let Some(profile) = copy_profile.as_mut() {
+                    profile.succeed(_copied);
+                }
+                #[cfg(test)]
+                drop(copy_profile);
             }
             finalize_file(&file, opened.permissions().mode())?;
         } else {
             return Err("Unsupported runtime entry type".into());
         }
     }
-    nessa_local_storage::sync_directory(destination).map_err(|error| error.to_string())
+    sync_directory(destination)
 }
 
 fn finalize_file(file: &fs::File, source_mode: u32) -> Result<(), String> {
+    #[cfg(test)]
+    let mut permissions_profile = ProfileGuard::start(ProfileOperation::Permissions);
     file.set_permissions(Permissions::from_mode(0o600 | (source_mode & 0o111)))
         .map_err(|error| error.to_string())?;
+    #[cfg(test)]
+    if let Some(profile) = permissions_profile.as_mut() {
+        profile.succeed(0);
+    }
+    #[cfg(test)]
+    drop(permissions_profile);
+    #[cfg(test)]
+    let mut attributes_profile = ProfileGuard::start(ProfileOperation::ExtendedAttributes);
     normalize_extended_attributes(file)?;
+    #[cfg(test)]
+    if let Some(profile) = attributes_profile.as_mut() {
+        profile.succeed(0);
+    }
+    #[cfg(test)]
+    drop(attributes_profile);
     // copyfile clones still create a new directory entry whose file state must
     // reach disk before the containing directory can be published durably.
-    file.sync_all().map_err(|error| error.to_string())
+    #[cfg(test)]
+    let mut sync_profile = ProfileGuard::start(ProfileOperation::FileSync);
+    file.sync_all().map_err(|error| error.to_string())?;
+    #[cfg(test)]
+    if let Some(profile) = sync_profile.as_mut() {
+        profile.succeed(0);
+    }
+    #[cfg(test)]
+    drop(sync_profile);
+    Ok(())
+}
+
+fn sync_directory(directory: &Path) -> Result<(), String> {
+    #[cfg(test)]
+    let mut profile = ProfileGuard::start(ProfileOperation::DirectorySync);
+    nessa_local_storage::sync_directory(directory).map_err(|error| error.to_string())?;
+    #[cfg(test)]
+    if let Some(profile) = profile.as_mut() {
+        profile.succeed(0);
+    }
+    Ok(())
 }
 
 fn normalize_extended_attributes(file: &fs::File) -> Result<(), String> {

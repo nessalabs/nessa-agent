@@ -1,7 +1,8 @@
 use super::super::generation::random_generation;
 use super::{
-    clone_file, copy_directory, entry_name, finalize_file, launch_settings, publish, stage_runtime,
-    stage_runtime_using, tree_fingerprint, utf8, validate_runtime,
+    clone_file, copy_directory, entry_name, finalize_file, finish_staging_profile, launch_settings,
+    publish, stage_runtime, stage_runtime_using, start_staging_profile, tree_fingerprint, utf8,
+    validate_runtime, StagingProfile,
 };
 use crate::gateway::infrastructure::macos::runtime_fingerprint;
 use serde_json::json;
@@ -10,11 +11,11 @@ use std::{
     fs::{self, OpenOptions, Permissions},
     os::unix::{
         ffi::OsStringExt,
-        fs::{symlink, PermissionsExt},
+        fs::{symlink, MetadataExt, PermissionsExt},
     },
     path::{Path, PathBuf},
     process::Command,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 const TEST_ATTRIBUTE: &[u8] = b"com.nessa.runtime-staging-test\0";
@@ -130,6 +131,37 @@ fn runtime_size(path: &Path, size: &mut RuntimeSize) -> Result<(), String> {
     Ok(())
 }
 
+fn measured_copy(
+    destination: &Path,
+    source: &Path,
+    clone: super::CloneFile,
+    profile: bool,
+) -> (Duration, Option<StagingProfile>) {
+    nessa_local_storage::create_directory(destination).unwrap();
+    if profile {
+        start_staging_profile();
+    }
+    let started = Instant::now();
+    copy_directory(source, source, destination, clone).unwrap();
+    let elapsed = started.elapsed();
+    let profile = profile.then(finish_staging_profile);
+    (elapsed, profile)
+}
+
+fn assert_success_profile(profile: &StagingProfile) {
+    for operation in [
+        &profile.clone,
+        &profile.byte_copy,
+        &profile.permissions,
+        &profile.extended_attributes,
+        &profile.file_sync,
+        &profile.directory_sync,
+    ] {
+        assert_eq!(operation.errors, 0);
+        assert!(operation.max <= operation.sum);
+    }
+}
+
 /// Measures the real packaged tree without making the routine test suite copy it.
 ///
 /// Run explicitly with `NESSA_STAGING_MEASUREMENT_RUNTIME` naming the runtime
@@ -158,9 +190,11 @@ fn measure_packaged_runtime_staging_phases() {
     let temporary = phases.join(".staging-measurement");
     nessa_local_storage::create_directory(&temporary).unwrap();
 
+    start_staging_profile();
     let copy_started = Instant::now();
     copy_directory(&source, &source, &temporary, clone_file).unwrap();
     let copied_in = copy_started.elapsed();
+    let copy_profile = finish_staging_profile();
 
     let validation_started = Instant::now();
     validate_runtime(&temporary, &expected).unwrap();
@@ -173,20 +207,31 @@ fn measure_packaged_runtime_staging_phases() {
     let published_in = publication_started.elapsed();
 
     let installations = fixture.0.join("stage-runtime");
+    start_staging_profile();
     let staging_started = Instant::now();
     let staged = stage_runtime(&source, &installations, &expected).unwrap();
     let staged_in = staging_started.elapsed();
+    let stage_profile = finish_staging_profile();
 
+    start_staging_profile();
     let reuse_started = Instant::now();
     assert_eq!(
         stage_runtime(&source, &installations, &expected).unwrap(),
         staged
     );
     let reused_in = reuse_started.elapsed();
+    let reuse_profile = finish_staging_profile();
+
+    let source_device = fs::metadata(&source).unwrap().dev();
+    let destination_device = fs::metadata(&fixture.0).unwrap().dev();
 
     eprintln!(
-        "runtime={} fingerprint={} files={} directories={} links={} bytes={} copy_sync_attrs_ms={} validation_ms={} publication_ms={} stage_runtime_ms={} reuse_ms={}",
+        "runtime={} destination_root={} source_device={} destination_device={} same_device={} fingerprint={} files={} directories={} links={} bytes={} copy_sync_attrs_ms={} validation_ms={} publication_ms={} stage_runtime_ms={} reuse_ms={} copy_profile={copy_profile:?} stage_profile={stage_profile:?} reuse_profile={reuse_profile:?}",
         source.display(),
+        fixture.0.display(),
+        source_device,
+        destination_device,
+        source_device == destination_device,
         expected,
         size.files,
         size.directories,
@@ -198,6 +243,122 @@ fn measure_packaged_runtime_staging_phases() {
         staged_in.as_millis(),
         reused_in.as_millis(),
     );
+}
+
+/// Compares clone and byte-copy paths, including the bounded collector overhead.
+///
+/// Run explicitly with `NESSA_STAGING_MEASUREMENT_RUNTIME` naming the runtime.
+/// `NESSA_STAGING_MEASUREMENT_REPETITIONS` may select one through ten repetitions.
+/// Each sample gets a fresh destination, and both mode and collector order alternate.
+#[test]
+#[ignore = "copies a packaged runtime repeatedly for comparative profiling"]
+fn compare_packaged_runtime_clone_and_byte_copy_profiles() {
+    const DEFAULT_REPETITIONS: usize = 4;
+    const MOST_REPETITIONS: usize = 10;
+    const MOST_ENTRIES: u64 = 50_000;
+    const MOST_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+    let source = std::env::var_os("NESSA_STAGING_MEASUREMENT_RUNTIME")
+        .map(PathBuf::from)
+        .expect("NESSA_STAGING_MEASUREMENT_RUNTIME must name a packaged runtime")
+        .canonicalize()
+        .expect("runtime source must exist");
+    let fingerprint = runtime_fingerprint(&source).expect("runtime manifest must be readable");
+    let mut size = RuntimeSize::default();
+    runtime_size(&source, &mut size).expect("runtime tree must be measurable");
+    let entries = size.files + size.directories + size.links;
+    assert!(entries <= MOST_ENTRIES, "runtime has {entries} entries");
+    assert!(size.bytes <= MOST_BYTES, "runtime has {} bytes", size.bytes);
+    let repetitions = std::env::var("NESSA_STAGING_MEASUREMENT_REPETITIONS")
+        .ok()
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .expect("repetitions must be an integer")
+        })
+        .unwrap_or(DEFAULT_REPETITIONS);
+    assert!(
+        (1..=MOST_REPETITIONS).contains(&repetitions),
+        "repetitions must be between 1 and {MOST_REPETITIONS}"
+    );
+
+    let fixture = Fixture::new();
+    let source_device = fs::metadata(&source).unwrap().dev();
+    let destination_device = fs::metadata(&fixture.0).unwrap().dev();
+    eprintln!(
+        "runtime={} destination_root={} source_device={} destination_device={} same_device={} fingerprint={} files={} directories={} links={} bytes={} repetitions={}",
+        source.display(),
+        fixture.0.display(),
+        source_device,
+        destination_device,
+        source_device == destination_device,
+        fingerprint,
+        size.files,
+        size.directories,
+        size.links,
+        size.bytes,
+        repetitions,
+    );
+
+    for repetition in 0..repetitions {
+        let modes: [(&str, super::CloneFile); 2] = if repetition % 2 == 0 {
+            [("clone", clone_file), ("byte-copy", force_byte_copy)]
+        } else {
+            [("byte-copy", force_byte_copy), ("clone", clone_file)]
+        };
+        for (mode_index, (mode, clone)) in modes.into_iter().enumerate() {
+            let profile_first = (repetition + mode_index) % 2 == 0;
+            let collector_order = if profile_first {
+                [true, false]
+            } else {
+                [false, true]
+            };
+            let mut profiled_elapsed = None;
+            let mut ordinary_elapsed = None;
+            for (sample_index, profile_enabled) in collector_order.into_iter().enumerate() {
+                let destination = fixture.0.join(format!(
+                    "comparison-{repetition}-{mode_index}-{sample_index}-{mode}"
+                ));
+                let (elapsed, profile) =
+                    measured_copy(&destination, &source, clone, profile_enabled);
+                validate_runtime(&destination, &fingerprint).unwrap();
+                if let Some(profile) = profile.as_ref() {
+                    assert_success_profile(profile);
+                    assert_eq!(profile.clone.count, size.files);
+                    assert_eq!(profile.cloned_files + profile.clone_fallbacks, size.files);
+                    assert!(profile.byte_copy.bytes <= size.bytes);
+                    if mode == "byte-copy" {
+                        assert_eq!(profile.clone_fallbacks, size.files);
+                        assert_eq!(profile.byte_copy.bytes, size.bytes);
+                    }
+                }
+                if profile_enabled {
+                    profiled_elapsed = Some(elapsed);
+                } else {
+                    ordinary_elapsed = Some(elapsed);
+                }
+                eprintln!(
+                    "repetition={} mode={} collector={} order={} elapsed_ms={} profile={profile:?}",
+                    repetition + 1,
+                    mode,
+                    profile_enabled,
+                    sample_index + 1,
+                    elapsed.as_millis(),
+                );
+                fs::remove_dir_all(destination).unwrap();
+            }
+            let profiled_elapsed = profiled_elapsed.unwrap();
+            let ordinary_elapsed = ordinary_elapsed.unwrap();
+            eprintln!(
+                "repetition={} mode={} collector_overhead_ns={} profiled_ns={} ordinary_ns={}",
+                repetition + 1,
+                mode,
+                profiled_elapsed.as_nanos() as i128 - ordinary_elapsed.as_nanos() as i128,
+                profiled_elapsed.as_nanos(),
+                ordinary_elapsed.as_nanos(),
+            );
+        }
+    }
 }
 #[test]
 fn rust_fingerprint_matches_javascript_with_unicode_and_escape_framing() {
@@ -353,6 +514,54 @@ fn clone_attempt_failure_removes_its_unpublished_runtime() {
     assert_eq!(error, "forced clone failure");
     assert!(!versions.join(&fingerprint).exists());
     assert_eq!(fs::read_dir(versions).unwrap().count(), 0);
+}
+
+#[test]
+fn profiling_guard_counts_an_operation_that_returns_an_error() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    let fingerprint = Fixture::manifest(&source);
+
+    start_staging_profile();
+    let error = stage_runtime_using(
+        &source,
+        &fixture.0.join("versions"),
+        &fingerprint,
+        fail_clone_attempt,
+    )
+    .unwrap_err();
+    let profile = finish_staging_profile();
+
+    assert_eq!(error, "forced clone failure");
+    assert_eq!(profile.clone.count, 1);
+    assert_eq!(profile.clone.errors, 1);
+    assert_eq!(profile.cloned_files, 0);
+    assert_eq!(profile.clone_fallbacks, 0);
+}
+
+#[test]
+fn profiling_records_leaf_operations_and_actual_byte_copy_count() {
+    let fixture = Fixture::new();
+    let source = fixture.source();
+    Fixture::manifest(&source);
+    let destination = fixture.0.join("profiled-copy");
+    let mut size = RuntimeSize::default();
+    runtime_size(&source, &mut size).unwrap();
+
+    let (_, profile) = measured_copy(&destination, &source, force_byte_copy, true);
+    let profile = profile.unwrap();
+
+    assert_success_profile(&profile);
+    assert_eq!(profile.clone.count, size.files);
+    assert_eq!(profile.clone.errors, 0);
+    assert_eq!(profile.cloned_files, 0);
+    assert_eq!(profile.clone_fallbacks, size.files);
+    assert_eq!(profile.byte_copy.count, size.files);
+    assert_eq!(profile.byte_copy.bytes, size.bytes);
+    assert_eq!(profile.permissions.count, size.files);
+    assert_eq!(profile.extended_attributes.count, size.files);
+    assert_eq!(profile.file_sync.count, size.files);
+    assert_eq!(profile.directory_sync.count, size.directories);
 }
 #[test]
 fn mixed_or_interrupted_copy_never_publishes_or_removes_another_attempt() {
