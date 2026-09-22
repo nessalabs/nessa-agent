@@ -136,10 +136,13 @@ it("gathers a turn's thinking and tools into one segment, dropping empty thought
         parts: [
           { offset: 0, kind: "thought", text: "Looking.", toolId: "" },
           { offset: 1, kind: "tool", text: "", toolId: "one" },
-          // Whitespace alone is a disclosure over nothing; it must not add a row.
+          // Whitespace alone is a disclosure over nothing; it must not add a
+          // row, and must not survive as a gap when the adapter coalesces it
+          // onto the thought that follows.
           { offset: 2, kind: "thought", text: "\n\n", toolId: "" },
-          { offset: 3, kind: "tool", text: "", toolId: "two" },
-          { offset: 4, kind: "text", text: "Done.", toolId: "" },
+          { offset: 3, kind: "thought", text: "Wrong name.", toolId: "" },
+          { offset: 4, kind: "tool", text: "", toolId: "two" },
+          { offset: 5, kind: "text", text: "Done.", toolId: "" },
         ],
       },
     ],
@@ -155,10 +158,11 @@ it("gathers a turn's thinking and tools into one segment, dropping empty thought
   const row = agentTurnView(transcript.turns[0]!, transcript)
   // One row of working for the whole turn, whatever it took to get there, and
   // in the order it happened so a thought still reads beside its call.
-  expect(row.content.map((part) => part.text ?? part.work?.length)).toEqual([3, "Done."])
+  expect(row.content.map((part) => part.text ?? part.work?.length)).toEqual([4, "Done."])
   expect(row.content[0]?.work?.map((step) => step.thought ?? step.tool?.title)).toEqual([
     "Looking.",
     "Shell",
+    "Wrong name.",
     "Shell",
   ])
 })

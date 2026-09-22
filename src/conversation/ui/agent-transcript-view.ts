@@ -88,10 +88,12 @@ export function agentTurnView(turn: Turn, transcript: Transcript) {
       event.id !== finalEvent?.id &&
       payload.text.trim()
     )
-      steps.push({ key: event.id, text: payload.text })
-    // A thought of nothing but whitespace is a disclosure over nothing.
+      steps.push({ key: event.id, text: payload.text.trim() })
+    // A thought of nothing but whitespace is a disclosure over nothing — and
+    // one that was coalesced onto the next thought is leading blank lines in
+    // it, which the sheet would render as a gap.
     if (payload.type === "reasoning" && payload.text.trim())
-      steps.push({ key: event.id, thought: payload.text })
+      steps.push({ key: event.id, thought: payload.text.trim() })
     if (payload.type === "tool_call_started") {
       const tool = tools.find((tool) => tool.callId === payload.callId)
       if (tool) steps.push({ key: event.id, tool })
