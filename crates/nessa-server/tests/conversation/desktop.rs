@@ -239,3 +239,54 @@ fn several_configured_agents_with_no_choice_between_them_is_not_the_desktops_to_
     assert_eq!(agents.selected, None);
     assert!(agents.selected().is_err());
 }
+
+#[test]
+fn removing_an_unverified_selected_runtime_falls_back_to_the_bundled_default() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("runtime");
+    bundled_runtime(&bundle);
+    let data = root.path().join("data");
+    nessa_local_storage::create_directory(&data).unwrap();
+    let mut settings = RuntimeConfig::default();
+    configure(&mut settings, &bundle, &data).unwrap();
+    let agents = settings.agents.as_mut().unwrap();
+    agents.runtimes.insert(
+        AgentId::Opencode.name().into(),
+        AgentRuntime {
+            command: PathBuf::from("/unverified/opencode"),
+            args: vec!["acp".into()],
+            model: "opencode/big-pickle".into(),
+            tools_enabled: true,
+            context_tokens: 100_000,
+            output_tokens: 4096,
+        },
+    );
+    agents.selected = Some(AgentId::Opencode.name().into());
+
+    configure(&mut settings, &bundle, &data).unwrap();
+
+    let agents = settings.agents.unwrap();
+    assert!(agents.runtime(AgentId::Opencode).is_none());
+    assert_eq!(agents.selected().unwrap(), DEFAULT_AGENT);
+}
+
+#[test]
+fn an_unreadable_optional_store_does_not_take_down_bundled_agents() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("runtime");
+    bundled_runtime(&bundle);
+    let data = root.path().join("data");
+    nessa_local_storage::create_directory(&data).unwrap();
+    // A file where the managed-runtime directory belongs makes every store
+    // query fail without relying on host permission enforcement.
+    std::fs::write(data.join("agents"), b"not a directory").unwrap();
+    let mut settings = RuntimeConfig::default();
+
+    configure(&mut settings, &bundle, &data).unwrap();
+
+    let agents = settings.agents.unwrap();
+    assert!(agents.runtime(AgentId::Claude).is_some());
+    assert!(agents.runtime(AgentId::Codex).is_some());
+    assert!(agents.runtime(AgentId::Opencode).is_none());
+    assert_eq!(agents.selected().unwrap(), DEFAULT_AGENT);
+}
