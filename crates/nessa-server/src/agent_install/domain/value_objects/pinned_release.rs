@@ -4,6 +4,7 @@ use url::Url;
 
 use super::device_names::names_a_device;
 use super::host_platform::{HostPlatform, ReleaseRequirements};
+use super::release_contents::{ArchivePath, ReleaseContents};
 
 /// What a pinned release can be wrong about, at the moment it is described.
 ///
@@ -28,6 +29,11 @@ pub enum PinRejected {
     Libc(String),
     /// Not sixty-four lowercase hexadecimal characters.
     Digest(String),
+    /// A length no published archive has: nothing at all, or more than any
+    /// agent runtime is. The pin states the archive's exact size and the fetch
+    /// is held to it, so a number that is wrong in the generous direction is a
+    /// pin handing a stranger permission to fill a disk.
+    ArchiveSize(u64),
     /// Not a URL at all, or not one an archive may be fetched from: anything
     /// but `https`, a URL with no host, or one carrying credentials. Plain HTTP
     /// would put the archive on the wire for anyone to replace, and the digest
@@ -39,7 +45,13 @@ pub enum PinRejected {
     /// archive or, once joined, outside the directory being unpacked into — or
     /// leave this type and the unpacker disagreeing about where the segments
     /// divide, which comes to the same thing.
-    ExecutablePath(String),
+    FilePath(String),
+    /// The set of files a release installs is not one a release could have:
+    /// empty, naming no program to launch or naming two, naming one path
+    /// twice, or naming a path that would have to be a file and a directory at
+    /// once. Its own variant because every one of them spans several paths,
+    /// and none is a fault of any single one of them.
+    Contents(String),
     /// What the build needs and the platform it is for do not agree. Every
     /// other variant above is about one value being unreadable on its own;
     /// this is the one rule that spans two of them, which is why it is refused
@@ -65,11 +77,18 @@ impl fmt::Display for PinRejected {
                 f,
                 "archive digest is not sixty-four lowercase hex characters: {value:?}"
             ),
+            Self::ArchiveSize(value) => write!(
+                f,
+                "archive size is not a length a published archive has: {value} bytes"
+            ),
             Self::ArchiveUrl(value) => {
                 write!(f, "archive must be named by an https url: {value:?}")
             }
-            Self::ExecutablePath(value) => {
-                write!(f, "executable path escapes the archive: {value:?}")
+            Self::FilePath(value) => {
+                write!(f, "release file path escapes the archive: {value:?}")
+            }
+            Self::Contents(detail) => {
+                write!(f, "release does not describe what it installs: {detail}")
             }
         }
     }
@@ -115,6 +134,52 @@ impl ArchiveDigest {
 impl fmt::Display for ArchiveDigest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+/// The most bytes a pinned archive may be said to be.
+///
+/// A ceiling on what a *pin* may claim, not on what a server may send — the
+/// fetch is held to the exact size below. It is here because the fetch is held
+/// to that number: a pin that overstated it by a factor of a hundred would be
+/// this repository granting whoever answers the request permission to write a
+/// hundred times an agent runtime onto somebody's disk. Around double the
+/// largest archive Nessa pins, which is Codex at 117 MB compressed.
+const MAXIMUM_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
+
+/// How many bytes one release's archive is, exactly.
+///
+/// Measured when the release was pinned, from the same download the digest was
+/// taken from, and it is what the fetch is bounded by. The digest alone would
+/// catch a body that was not the pinned archive — but only after all of it had
+/// been written to the disk, so an endless answer to a hundred-megabyte request
+/// would be a full disk reported as a failed download. A pinned length turns
+/// that into a refusal at the first byte past the archive.
+///
+/// A value object rather than a bare `u64` so the two rules that make it usable
+/// as a bound — it is a real length, and it is not an absurd one — are checked
+/// where the number is read rather than remembered at each call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArchiveSize(u64);
+
+impl ArchiveSize {
+    /// Read a pinned archive length, refusing one no archive has.
+    pub fn parse(value: u64) -> Result<Self, PinRejected> {
+        if value == 0 || value > MAXIMUM_ARCHIVE_BYTES {
+            return Err(PinRejected::ArchiveSize(value));
+        }
+        Ok(Self(value))
+    }
+
+    /// The length, for the fetch that is bounded by it.
+    pub fn bytes(self) -> u64 {
+        self.0
+    }
+}
+
+impl fmt::Display for ArchiveSize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} bytes", self.0)
     }
 }
 
@@ -268,63 +333,6 @@ impl fmt::Display for ReleasePlatform {
     }
 }
 
-/// A relative path to one file inside an archive.
-///
-/// The invariant is the reason this is a type: an archive is downloaded from
-/// the network and unpacked into a directory Nessa owns, so a path that is
-/// absolute or walks upward out of that directory is a way to write anywhere
-/// the app can write. Rejecting those shapes at construction means the unpacker
-/// cannot be handed one.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArchivePath(String);
-
-impl ArchivePath {
-    /// Read a path that stays inside the archive it describes.
-    ///
-    /// One separator is allowed, `/`, which is the one a tar entry uses. A
-    /// backslash is refused rather than treated as a separator: accepting it
-    /// would mean every reader of this value had to agree on which characters
-    /// divide the segments, and the unpacker, the installed file's name and
-    /// this type would each have had to be taught the same rule.
-    ///
-    /// A colon goes with it. `C:evil` is one legal Unix filename and a
-    /// drive-relative path on Windows, where joining it onto a directory
-    /// replaces the directory rather than extending it.
-    pub fn parse(value: &str) -> Result<Self, PinRejected> {
-        let contained = !value.is_empty()
-            && !value.starts_with('/')
-            && !value.contains(['\\', '\0', ':'])
-            && value
-                .split('/')
-                .all(|segment| !segment.is_empty() && segment != "." && segment != "..");
-        if contained {
-            Ok(Self(value.to_owned()))
-        } else {
-            Err(PinRejected::ExecutablePath(value.to_owned()))
-        }
-    }
-
-    /// The path as written, with `/` separators.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// The last segment: what the file is called inside the archive.
-    ///
-    /// Path semantics belong to the value object that holds the invariant, not
-    /// to whichever adapter needs the name — and because `parse` refuses an
-    /// empty path and empty segments, there is always one to return.
-    pub fn file_name(&self) -> &str {
-        self.0.rsplit('/').next().unwrap_or(&self.0)
-    }
-}
-
-impl fmt::Display for ArchivePath {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
 /// Where one release's archive is fetched from.
 ///
 /// Parsed rather than pattern-matched, because the rules that matter here are
@@ -408,18 +416,20 @@ impl std::error::Error for ArchiveRejected {}
 /// One agent runtime release that Nessa has tested and will install.
 ///
 /// This is the whole of what Nessa trusts about a third-party binary: where to
-/// get it, what it must hash to, and which file inside it is the executable.
-/// Nothing else about the release is taken on faith — in particular the version
-/// is not read back out of the downloaded archive, because a tampered archive
-/// would be the thing telling us what it is.
+/// get it, how long it is, what it must hash to, and which files inside it are
+/// installed. Nothing else about the release is taken on faith — in particular
+/// the version is not read back out of the downloaded archive, because a
+/// tampered archive would be the thing telling us what it is, and neither is
+/// the list of files, for the same reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PinnedRelease {
     version: ReleaseVersion,
     platform: ReleasePlatform,
     requirements: ReleaseRequirements,
     archive_url: ArchiveUrl,
+    archive_size: ArchiveSize,
     archive_digest: ArchiveDigest,
-    executable: ArchivePath,
+    contents: ReleaseContents,
 }
 
 impl PinnedRelease {
@@ -466,8 +476,9 @@ impl PinnedRelease {
         platform: ReleasePlatform,
         requirements: ReleaseRequirements,
         archive_url: ArchiveUrl,
+        archive_size: ArchiveSize,
         archive_digest: ArchiveDigest,
-        executable: ArchivePath,
+        contents: ReleaseContents,
     ) -> Result<Self, PinRejected> {
         if platform.operating_system() == "linux" && requirements.libc().is_none() {
             return Err(PinRejected::Requirements(format!(
@@ -492,8 +503,9 @@ impl PinnedRelease {
             platform,
             requirements,
             archive_url,
+            archive_size,
             archive_digest,
-            executable,
+            contents,
         })
     }
 
@@ -513,12 +525,23 @@ impl PinnedRelease {
         &self.archive_digest
     }
 
+    pub fn archive_size(&self) -> ArchiveSize {
+        self.archive_size
+    }
+
     pub fn archive_url(&self) -> &ArchiveUrl {
         &self.archive_url
     }
 
-    pub fn executable(&self) -> &ArchivePath {
-        &self.executable
+    /// Every file this release installs, and which of them is launched.
+    pub fn contents(&self) -> &ReleaseContents {
+        &self.contents
+    }
+
+    /// The program this release is launched by, which is the one thing outside
+    /// this module ever asks a release about a single file.
+    pub fn launch(&self) -> &ArchivePath {
+        self.contents.launch()
     }
 
     /// Whether this release will run on `host`.

@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 #[cfg(unix)]
 use std::fs::Permissions;
@@ -16,7 +17,9 @@ use sha2::{Digest, Sha256};
 use tar::{Archive, EntryType};
 
 use crate::agent_install::application::{RuntimeStore, StagedArchive, StoreFailure};
-use crate::agent_install::domain::{AgentName, ArchiveDigest, PinnedRelease, ReleaseVersion};
+use crate::agent_install::domain::{
+    AgentName, ArchiveDigest, ArchivePath, FileRole, PinnedRelease, ReleaseFile, ReleaseVersion,
+};
 
 /// How many times a staged download will try for a name of its own before
 /// giving up. The names are sixteen random bytes, so a single collision already
@@ -29,13 +32,16 @@ const NAME_ATTEMPTS: u8 = 10;
 /// so more than a couple is not a race being lost.
 const LOCK_ATTEMPTS: u8 = 5;
 
-/// The most an unpacked executable may be.
+/// The most one release may unpack to, across every file it installs.
 ///
 /// The digest fixes the *compressed* size of an archive and says nothing about
 /// what comes out of it: a gzip member that matches its pin exactly can still
-/// expand a thousandfold. A few times the largest runtime Nessa pins, so the
-/// bound is only ever reached by an archive that is not what it claims to be.
-const MAXIMUM_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
+/// expand a thousandfold. Spent across the release rather than allowed to each
+/// file, because a per-file bound is no bound at all on a pin naming a hundred
+/// of them. A few times the largest runtime Nessa pins — Codex, which unpacks
+/// to 277 MB — so it is only ever reached by an archive that is not what it
+/// claims to be.
+const MAXIMUM_UNPACKED_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// How much of an entry is moved out of the archive at a time.
 const UNPACK_CHUNK: usize = 64 * 1024;
@@ -67,7 +73,7 @@ const UNPACK_CHUNK: usize = 64 * 1024;
 /// would make a pin that corrects one of those fields, leaving the archive
 /// alone, reinstall bytes that are already there — over a directory of the
 /// same name, since the layout does not key on them.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct InstallationRecord {
     version: String,
     /// The operating system and architecture, as [`ReleasePlatform`] writes
@@ -80,8 +86,20 @@ struct InstallationRecord {
     requires_avx2: bool,
     /// The archive digest this runtime was accepted against.
     digest: String,
-    /// The entry inside the archive, exactly as the pin names it.
-    executable: String,
+    /// Every file the install unpacked, exactly as the pin names them.
+    files: Vec<RecordedFile>,
+}
+
+/// One installed file, as the record spells it.
+///
+/// The role is written down rather than derived, because it is what the install
+/// acted on: it decided which file was made runnable and which one is handed
+/// back to launch. A record that lost it could not tell a pin that turned a
+/// document into a program from one that changed nothing.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct RecordedFile {
+    path: String,
+    role: String,
 }
 
 impl InstallationRecord {
@@ -93,28 +111,49 @@ impl InstallationRecord {
             libc: release.requirements().libc().map(|l| l.as_str().to_owned()),
             requires_avx2: release.requirements().avx2(),
             digest: release.archive_digest().as_str().to_owned(),
-            executable: release.executable().as_str().to_owned(),
+            files: release
+                .contents()
+                .files()
+                .iter()
+                .map(|file| RecordedFile {
+                    path: file.path().as_str().to_owned(),
+                    role: file.role().as_str().to_owned(),
+                })
+                .collect(),
         }
     }
 
-    /// Whether this record describes the file the layout would put there.
+    /// Whether this record describes what the layout would put there.
     ///
-    /// Exactly the three fields the path is built from — the version and the
-    /// digest name the directory, and the entry names the file in it. Nothing
-    /// else, deliberately: a field that decided "already installed" without
-    /// deciding *where* would send an install to rename over a file this
-    /// record still names, and the rollback after a failed settle would then
-    /// take away a runtime it did not write.
+    /// Exactly the fields the installation is built from — the version and the
+    /// digest name the directory, and the files name what goes in it and what
+    /// each of them was installed as. Nothing else, deliberately: a field that
+    /// decided "already installed" without deciding *what was written* would
+    /// send an install to rename over files this record still names, and the
+    /// rollback after a failed settle would then take away a runtime it did not
+    /// write.
     ///
-    /// The entry is compared in full rather than by its last segment, because
-    /// two entries of one archive can share a file name. The pin reader
-    /// refuses a file that names one archive twice, so within a valid pin the
-    /// digest already fixes the entry; comparing it costs nothing and does not
-    /// depend on that holding.
+    /// The platform and the requirements are deliberately *not* compared. They
+    /// are facts about the digest rather than part of where anything goes: one
+    /// archive is one build, and the pin reader refuses a file that names an
+    /// archive twice. A pin that corrects one of those fields and leaves the
+    /// archive alone would otherwise reinstall bytes that are already there,
+    /// over a directory of the same name.
+    ///
+    /// Every file is compared, not only the one that is launched. A pin that
+    /// keeps its archive and starts installing a helper program the previous
+    /// one left out describes a different installation, and answering "already
+    /// installed" to it would leave the runtime unable to do its work with
+    /// nothing saying why. The comparison is order-insensitive by construction:
+    /// [`ReleaseContents`] sorts its files, so a record written from one is
+    /// already in the order the next one will be read in.
+    ///
+    /// [`ReleaseContents`]: crate::agent_install::domain::ReleaseContents
     fn describes(&self, release: &PinnedRelease) -> bool {
-        self.version == release.version().as_str()
-            && self.digest == release.archive_digest().as_str()
-            && self.executable == release.executable().as_str()
+        let expected = Self::of(release);
+        self.version == expected.version
+            && self.digest == expected.digest
+            && self.files == expected.files
     }
 }
 
@@ -123,10 +162,17 @@ impl InstallationRecord {
 /// ```text
 /// <root>/<agent>/installed.json                     what is installed, written last
 /// <root>/<agent>/install.lock                       held while one install publishes
-/// <root>/<agent>/versions/<version>/<digest>/<name> the executable itself
+/// <root>/<agent>/versions/<version>/<digest>/<path> one file the pin names
 /// <root>/<agent>/.nessa-<hex>.download              a download in progress, unnamed on unix
-/// <root>/<agent>/.nessa-<hex>.tmp                   a record or executable being written
+/// <root>/<agent>/.nessa-<hex>.tmp                   a record or an installed file being written
 /// ```
+///
+/// `<path>` is the file's path inside the archive, reproduced rather than
+/// flattened: Codex's runtime finds its ripgrep and its zsh through the
+/// directory it sits in, so `vendor/…/bin/codex` and `vendor/…/codex-path/rg`
+/// have to keep their relationship to each other. Which paths those are is the
+/// pin's statement and never the archive's, so an entry claiming to be called
+/// something else is an entry nothing here writes.
 ///
 /// Versions sit under `versions/` so that nothing the store names for itself
 /// can be named by a pin: a version is allowed to be spelled `installed.json`,
@@ -233,13 +279,42 @@ impl ManagedRuntimes {
             .join(release.archive_digest().as_str())
     }
 
+    /// Every directory inside the artifact this release's files need,
+    /// outermost first.
+    ///
+    /// Derived from the pin's paths, never from the archive's entries — an
+    /// archive can carry a directory entry saying anything at all, and an
+    /// unpacker that created what the entries asked for would be letting a
+    /// download choose where directories appear.
+    ///
+    /// A `BTreeSet` both removes the repeats — seven Codex files share four
+    /// directories — and settles the order, because a path always sorts after
+    /// every directory it is inside. That is what makes one iteration a legal
+    /// creation order and the reverse a legal removal order.
+    fn content_directories(&self, agent: &AgentName, release: &PinnedRelease) -> Vec<PathBuf> {
+        let artifact = self.artifact_root(agent, release);
+        release
+            .contents()
+            .files()
+            .iter()
+            .flat_map(|file| file.path().directories())
+            .map(|directory| artifact.join(directory))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     /// Every directory this install creates, innermost first.
     ///
     /// Written out rather than walked with `parent()` so that the chain the
     /// store makes durable is the chain the store made, and stops at its own
-    /// root rather than at whatever is above it.
-    fn created_directories(&self, agent: &AgentName, release: &PinnedRelease) -> [PathBuf; 5] {
-        [
+    /// root rather than at whatever is above it. The directories inside the
+    /// artifact come first and deepest-first, for the reason [`Self::settle`]
+    /// gives: a directory is made durable before the entry naming it is.
+    fn created_directories(&self, agent: &AgentName, release: &PinnedRelease) -> Vec<PathBuf> {
+        let mut directories = self.content_directories(agent, release);
+        directories.reverse();
+        directories.extend([
             self.artifact_root(agent, release),
             self.version_root(agent, release.version()),
             self.versions_root(agent),
@@ -247,7 +322,8 @@ impl ManagedRuntimes {
             // The root itself, which the anchored primitives spell as the
             // empty path: there is no component to walk to reach it.
             PathBuf::new(),
-        ]
+        ]);
+        directories
     }
 
     fn record_path(&self, agent: &AgentName) -> PathBuf {
@@ -258,14 +334,26 @@ impl ManagedRuntimes {
         self.agent_root(agent).join("install.lock")
     }
 
-    /// Where `agent`'s executable is for this artifact, relative to the root.
+    /// Where one of this release's files goes, relative to the root.
     ///
-    /// The file name alone, never the archive entry's own path: the entry can
-    /// be `package/bin/opencode`, and the directories of it are the archive's
-    /// business rather than this layout's.
-    fn executable_path(&self, agent: &AgentName, release: &PinnedRelease) -> PathBuf {
-        self.artifact_root(agent, release)
-            .join(release.executable().file_name())
+    /// The path the *pin* gives it, joined onto the artifact directory. The
+    /// entry's own name is never used for this, so nothing in a downloaded
+    /// archive can direct a write: [`ArchivePath`] has already refused anything
+    /// absolute, drive-relative or walking upward, so the join cannot leave the
+    /// artifact directory.
+    ///
+    /// The archive's layout is kept rather than flattened because a package is
+    /// not a loose pile of files. Codex's runtime looks for its ripgrep at
+    /// `../codex-path/rg` and its zsh under `../codex-resources/`, both
+    /// relative to the program itself; installed side by side in one directory
+    /// they would all be present and none of them findable.
+    fn file_path(&self, agent: &AgentName, release: &PinnedRelease, path: &ArchivePath) -> PathBuf {
+        self.artifact_root(agent, release).join(path.as_str())
+    }
+
+    /// Where the program `agent` is launched from for this artifact.
+    fn launch_path(&self, agent: &AgentName, release: &PinnedRelease) -> PathBuf {
+        self.file_path(agent, release, release.launch())
     }
 
     /// Hold the sole right to publish one agent's runtimes.
@@ -419,25 +507,39 @@ impl ManagedRuntimes {
         self.record(agent, release, durable)
     }
 
-    /// Take an executable back out after the install failed to complete.
+    /// Take back everything this install wrote, after it failed to complete.
+    ///
+    /// `written` is what this call actually renamed into place, collected as it
+    /// went, so the removal can only ever undo this call's own work. That is
+    /// what lets one rollback serve both the install that failed part way
+    /// through unpacking and the one that finished unpacking and could not be
+    /// settled — and what keeps a pin that is wrong about its own contents from
+    /// deleting a runtime somebody was using, since a file this call did not
+    /// write is not in the list.
+    ///
+    /// All of them, in one go: a release that installs seven files and leaves
+    /// four of them behind is worse than one that leaves none, because the four
+    /// are enough for the next install to rename over and not enough to run.
     ///
     /// Best effort on purpose, and the reason it returns nothing: the caller
     /// already has a failure to report, and it is the one worth reporting. A
     /// second one about the clean-up would replace the cause with its
     /// consequence. What cannot be removed is logged, so that a directory
     /// holding an unrecorded runtime is at least explainable.
-    fn withdraw(&self, agent: &AgentName, release: &PinnedRelease, executable: &Path) {
-        if let Err(error) = remove_file_beneath(&self.root, executable) {
-            if error.kind() != io::ErrorKind::NotFound {
-                // `warn`, not `debug`: the shipped default keeps `info` and
-                // above, and a line nobody sees would make the sentence above
-                // untrue. This is the only trace that a runtime was left
-                // somewhere nothing will look for it again.
-                tracing::warn!(
-                    path = %self.absolute(executable).display(),
-                    %error,
-                    "could not withdraw an agent runtime that was not recorded"
-                );
+    fn withdraw(&self, agent: &AgentName, release: &PinnedRelease, written: &[PathBuf]) {
+        for file in written {
+            if let Err(error) = remove_file_beneath(&self.root, file) {
+                if error.kind() != io::ErrorKind::NotFound {
+                    // `warn`, not `debug`: the shipped default keeps `info` and
+                    // above, and a line nobody sees would make the sentence
+                    // above untrue. This is the only trace that a runtime was
+                    // left somewhere nothing will look for it again.
+                    tracing::warn!(
+                        path = %self.absolute(file).display(),
+                        %error,
+                        "could not withdraw an agent runtime file that was not recorded"
+                    );
+                }
             }
         }
         self.sweep_artifact(agent, release);
@@ -445,13 +547,18 @@ impl ManagedRuntimes {
 
     /// Remove the directories this install made and then had no use for.
     ///
-    /// Both of them: the artifact directory holds this artifact alone, and the
-    /// version directory holds nothing but artifact directories of that
-    /// version, so an install that produced neither has left an empty pair
-    /// behind. `versions/` and the agent's own directory are not swept — they
-    /// are the store's furniture rather than this install's leavings, and the
-    /// record and the lock live in the second one.
+    /// Innermost first, because `remove_dir` only takes an empty directory and
+    /// a package's own directories nest several deep. Then the artifact
+    /// directory, which holds this artifact alone, and the version directory,
+    /// which holds nothing but artifact directories of that version — so an
+    /// install that produced no files has left the whole chain empty behind it.
+    /// `versions/` and the agent's own directory are not swept: they are the
+    /// store's furniture rather than this install's leavings, and the record
+    /// and the lock live in the second one.
     fn sweep_artifact(&self, agent: &AgentName, release: &PinnedRelease) {
+        for directory in self.content_directories(agent, release).iter().rev() {
+            self.sweep(directory);
+        }
         self.sweep(&self.artifact_root(agent, release));
         self.sweep(&self.version_root(agent, release.version()));
     }
@@ -468,19 +575,30 @@ impl ManagedRuntimes {
         let _ = remove_directory_beneath(&self.root, directory);
     }
 
-    /// Unpack the one entry the release names, into a file this store chose.
+    /// Unpack every entry the release names, into files this store chose.
     ///
-    /// Reports `false` when the archive simply does not contain it, which is a
-    /// pin that is wrong about its own contents rather than a machine that
-    /// failed.
+    /// One pass over the archive rather than one per file: these archives are
+    /// a hundred megabytes of gzip, and seven passes over Codex's would decode
+    /// it seven times to write it once.
+    ///
+    /// Each destination that is renamed into place is pushed onto `written`
+    /// before anything else can fail, so that the caller can take back exactly
+    /// what this call put there and nothing else. That is why it is an
+    /// out-parameter rather than a return value: a failure part way through has
+    /// files to undo, and a `Result` alone would carry nothing to undo them by.
+    ///
+    /// `budget` is spent across the whole release, and
+    /// [`StoreFailure::MissingExecutable`] is the archive simply not containing
+    /// a file the pin names — a pin that is wrong about its own contents rather
+    /// than a machine that failed.
     fn unpack(
         &self,
+        agent: &AgentName,
         release: &PinnedRelease,
         staged: &mut StagedArchive,
-        destination: &Path,
-        directory: &Path,
-        limit: u64,
-    ) -> Result<bool, StoreFailure> {
+        budget: u64,
+        written: &mut Vec<PathBuf>,
+    ) -> Result<(), StoreFailure> {
         staged.file_mut().rewind().map_err(unreadable)?;
         // `MultiGzDecoder`, not `GzDecoder`: the latter stops at the end of the
         // first gzip member, so a multi-member archive whose entry lives past
@@ -488,50 +606,93 @@ impl ManagedRuntimes {
         // executable — blaming the pin for a decoder that stopped early.
         let mut tar = Archive::new(MultiGzDecoder::new(staged.file_mut()));
         let entries = tar.entries().map_err(malformed)?;
-        let wanted = release.executable().as_str().as_bytes();
+        // Keyed by the bytes of the path the pin gives, and emptied as each one
+        // is found, so that what is left at the end is exactly what the archive
+        // did not hold.
+        let mut wanted: BTreeMap<&[u8], &ReleaseFile> = release
+            .contents()
+            .files()
+            .iter()
+            .map(|file| (file.path().as_str().as_bytes(), file))
+            .collect();
+        let mut remaining = budget;
         for entry in entries {
             let mut entry = entry.map_err(malformed)?;
             // Compared as bytes. A lossy rendering of a name that is not UTF-8
             // turns every undecodable byte into the same replacement character,
             // so two different entries could both come to equal one pin.
-            let path = entry.path_bytes();
-            if path.strip_prefix(b"./".as_slice()).unwrap_or(&path) != wanted {
-                continue;
-            }
+            //
+            // In its own scope because the name borrows the entry, and
+            // everything below needs the entry back to read its data from.
+            let matched = {
+                let path = entry.path_bytes();
+                let name = path.strip_prefix(b"./".as_slice()).unwrap_or(&path);
+                match wanted.remove(name) {
+                    Some(file) => Some(Ok(file)),
+                    // Not wanted *now*. Either the archive carries an entry the
+                    // pin says nothing about, which is simply skipped, or it
+                    // carries a second copy of one it does — and then which of
+                    // the two would be installed depends on nothing but which
+                    // came first.
+                    None => release
+                        .contents()
+                        .files()
+                        .iter()
+                        .find(|file| file.path().as_str().as_bytes() == name)
+                        .map(|file| Err(file.path().clone())),
+                }
+            };
+            let file = match matched {
+                None => continue,
+                Some(Err(path)) => {
+                    return Err(StoreFailure::MalformedArchive(format!(
+                        "{path} is in the archive twice"
+                    )))
+                }
+                Some(Ok(file)) => file,
+            };
             // A link or a directory carries no data, so unpacking one writes an
-            // empty file that this store would then record as the installed
-            // runtime and hand out as something to launch.
+            // empty file that this store would then record as part of the
+            // installed runtime and hand out as something to launch.
             if let Some(reason) = refused_kind(entry.header().entry_type()) {
                 return Err(StoreFailure::MalformedArchive(format!(
                     "{} {reason}",
-                    release.executable()
+                    file.path()
                 )));
             }
             // The entry's own path is never used to decide where bytes land:
-            // the destination was computed from the pin. An archive cannot
+            // the destination is computed from the pin. An archive cannot
             // direct this write anywhere, whatever its entries claim to be
             // called.
+            let destination = self.file_path(agent, release, file.path());
+            // Staged in the directory the file goes in, so the rename that
+            // publishes it never crosses a directory this install did not make.
+            let directory = destination
+                .parent()
+                .expect("a file beneath the artifact directory has a parent")
+                .to_path_buf();
             let mut staging =
-                PrivateTempFile::new_beneath(&self.root, directory).map_err(unwritable)?;
+                PrivateTempFile::new_beneath(&self.root, &directory).map_err(unwritable)?;
             // Bounded, because the digest that has already matched says nothing
-            // about how far these bytes expand. One byte over the limit is read
-            // deliberately, so that reaching it is distinguishable from an
-            // executable that happens to be exactly that size. `limit` is
+            // about how far these bytes expand. One byte over what is left is
+            // read deliberately, so that reaching the bound is distinguishable
+            // from a file that happens to be exactly that size. `budget` is
             // passed in rather than read from the constant so that the bound can
-            // be exercised by a test without moving half a gigabyte.
+            // be exercised by a test without moving a gigabyte.
             // `Entry::size`, not `header().size()`: a PAX extension can carry
             // the real length for an entry whose header field cannot hold it,
             // and the header's own number is then not the one to hold the
             // archive to.
             let declared = entry.size();
-            let mut bounded = entry.by_ref().take(limit + 1);
-            let unpacked = expand(&mut bounded, staging.as_file_mut(), release)?;
-            if unpacked > limit {
+            let mut bounded = entry.by_ref().take(remaining + 1);
+            let unpacked = expand(&mut bounded, staging.as_file_mut(), file.path())?;
+            if unpacked > remaining {
                 return Err(StoreFailure::MalformedArchive(format!(
-                    "{} unpacks to more than {limit} bytes",
-                    release.executable()
+                    "{} unpacks past what is left of the {budget} bytes this release may unpack to",
+                    file.path()
                 )));
             }
+            remaining -= unpacked;
             // Against the header rather than against zero. An entry whose data
             // was cut short still decompresses to something, and a `> 0` test
             // is satisfied by one byte of it — which would be made executable,
@@ -541,25 +702,34 @@ impl ManagedRuntimes {
             if unpacked != declared {
                 return Err(StoreFailure::MalformedArchive(format!(
                     "{} is {unpacked} bytes in the archive, which says it is {declared}",
-                    release.executable()
+                    file.path()
                 )));
             }
             if unpacked == 0 {
                 return Err(StoreFailure::MalformedArchive(format!(
                     "{} is empty in the archive",
-                    release.executable()
+                    file.path()
                 )));
             }
-            make_executable(staging.as_file()).map_err(unwritable)?;
+            set_mode(staging.as_file(), file.role()).map_err(unwritable)?;
             staging.as_file().sync_all().map_err(unwritable)?;
-            // The rename is the last thing this does. Making the directory
-            // durable belongs to the caller, because from here on a failure
-            // has an executable to take back out — and a `?` inside this loop
-            // would return past the only code that knows to do that.
-            staging.persist_beneath(destination).map_err(unwritable)?;
-            return Ok(true);
+            // The rename is the last thing done to this file, and the caller is
+            // told about it in the same breath. Making the directories durable
+            // belongs to the caller too, because from here on a failure has a
+            // file to take back out — and recording it after some later `?`
+            // would leave a window in which one exists and nothing knows.
+            staging.persist_beneath(&destination).map_err(unwritable)?;
+            written.push(destination);
         }
-        Ok(false)
+        // Whatever is left was named by the pin and not carried by the archive.
+        // The first by path, so the message does not depend on the order the
+        // entries happened to come in.
+        match wanted.values().next() {
+            Some(file) => Err(StoreFailure::MissingExecutable(
+                file.path().as_str().to_owned(),
+            )),
+            None => Ok(()),
+        }
     }
     /// Publish a runtime, forcing directories to the disk with `durable`.
     ///
@@ -592,38 +762,30 @@ impl ManagedRuntimes {
         if let Some(installed) = self.installed(agent, release)? {
             return Ok(installed);
         }
-        let directory = self.artifact_root(agent, release);
-        self.private_directory(&directory)?;
-        let destination = self.executable_path(agent, release);
-        let unpacked = self.unpack(
-            release,
-            staged,
-            &destination,
-            &directory,
-            MAXIMUM_EXECUTABLE_BYTES,
-        );
-        // Every way of not getting an executable ends the same: the version
-        // directory was made a moment ago in the expectation of one, and
-        // sweeping it is the whole of the clean-up, because nothing was
-        // written. Deliberately not `withdraw`: this call put no file at that
-        // path, and removing whatever is there would mean a pin that is wrong
-        // about its own contents deleting a runtime somebody was using.
-        match unpacked {
-            Err(failure) => {
-                self.sweep_artifact(agent, release);
-                return Err(failure);
-            }
-            Ok(false) => {
-                self.sweep_artifact(agent, release);
-                return Err(StoreFailure::MissingExecutable(
-                    release.executable().as_str().to_owned(),
-                ));
-            }
-            Ok(true) => {}
+        self.private_directory(&self.artifact_root(agent, release))?;
+        // Outermost first, and from the pin's paths rather than the archive's
+        // entries — see [`Self::content_directories`]. Made before the unpack
+        // rather than during it so that a release whose paths this machine
+        // cannot hold fails before a single file has been written.
+        for directory in self.content_directories(agent, release) {
+            self.private_directory(&directory)?;
         }
-        // Everything from the rename onwards is guarded together, because from
-        // that moment an executable exists and a failure would otherwise leave
-        // it behind.
+        // What this call has renamed into place, so that a failure anywhere
+        // below undoes exactly this call's own work.
+        let mut written = Vec::new();
+        // Every way of not getting the files ends the same: whatever was
+        // written is taken back out and the directories made a moment ago in
+        // the expectation of them are swept. Nothing outside `written` is
+        // touched, so a pin that is wrong about its own contents cannot delete
+        // a runtime somebody was using.
+        if let Err(failure) = self.unpack(agent, release, staged, MAXIMUM_UNPACKED_BYTES, &mut written)
+        {
+            self.withdraw(agent, release, &written);
+            return Err(failure);
+        }
+        // Everything from the renames onwards is guarded together, because from
+        // that moment the files exist and a failure would otherwise leave them
+        // behind.
         //
         // The record is written last, since it is what makes the install true:
         // `installed` answers from it, so writing it before the executable
