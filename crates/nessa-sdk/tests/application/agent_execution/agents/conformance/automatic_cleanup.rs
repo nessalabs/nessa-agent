@@ -10,7 +10,10 @@ async fn automatic_cleanup_failures_survive_every_invocation_result_and_restorat
         Some(Ok(ExecutionOutcome::RequestLimit)),
         Some(Ok(ExecutionOutcome::Refused)),
         Some(Ok(ExecutionOutcome::Cancelled)),
-        Some(Err(AgentError::Provider { code: -32077 })),
+        Some(Err(AgentError::Provider {
+            code: -32077,
+            diagnostic: None,
+        })),
         None,
     ];
     for mode in Mode::ALL {
@@ -145,7 +148,10 @@ async fn automatic_stop_keeps_native_steering_cause_across_retry_and_restoration
         let (release_execution, gate) = oneshot::channel();
         *backend.execution_gate.lock().unwrap() = Some(gate);
         *backend.execution_report.lock().unwrap() = Some(ExecutionReport::new(
-            Some(Err(AgentError::Provider { code: -32077 })),
+            Some(Err(AgentError::Provider {
+                code: -32077,
+                diagnostic: None,
+            })),
             None,
             ProviderSessionState::CleanupRequired,
         ));

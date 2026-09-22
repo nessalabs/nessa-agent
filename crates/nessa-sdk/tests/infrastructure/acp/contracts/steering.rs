@@ -153,7 +153,13 @@ async fn ambiguous_steering_errors_are_terminal_and_never_replayed() {
         .map_err(|failure| failure.into_error());
         assert!(result.is_err(), "{mode}");
         if mode == "steering-error" {
-            assert_eq!(result, Err(AgentError::Provider { code: -32001 }));
+            assert_eq!(
+                result,
+                Err(AgentError::Provider {
+                    code: -32001,
+                    diagnostic: Some(ProviderDiagnostic::new("ambiguous")),
+                })
+            );
         }
         assert!(active.await.unwrap().is_err());
         opened

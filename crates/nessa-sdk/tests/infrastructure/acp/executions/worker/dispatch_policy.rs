@@ -313,7 +313,13 @@ async fn valid_ready_burst_larger_than_batch_preserves_prompt_dispatch() {
         .cleanup(Duration::ZERO, Duration::from_secs(2))
         .await
         .unwrap();
-    assert_eq!(failure, Err(AgentError::Provider { code: -32099 }));
+    assert_eq!(
+        failure,
+        Err(AgentError::Provider {
+            code: -32099,
+            diagnostic: None
+        })
+    );
     assert_eq!(worker.sequence, 1);
     assert_eq!(
         execution.active_execution_id(),

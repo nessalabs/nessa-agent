@@ -349,6 +349,9 @@ limited to 1 MiB of allocated diagnostic payload and node storage, 128 error/hoo
 nodes, and 32 nested error levels. Spare string/vector capacity counts. Oversized leaf configuration, input, unsupported-operation, protocol, and transport
 diagnostics keep their typed variant with compact text capped at 4 KiB and an
 explicit truncation suffix. Storage-port Io/Corrupt diagnostics use the same cap.
+Provider failures retain a separate `ProviderDiagnostic` of at most 4 KiB when
+the provider supplied text; their numeric code remains the typed decision fact.
+Provider diagnostic prose has no admission, settlement, or cleanup authority.
 Oversized composite
 live evidence becomes `AgentError::DiagnosticLimit`; rejected trees are released
 iteratively. This marker contains no reconstructed lifecycle state. Explicit

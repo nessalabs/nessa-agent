@@ -214,7 +214,10 @@ async fn a_refused_model_stops_before_the_approval_mode_is_touched() {
             .err()
             .map(|failure| failure.cause().clone())
             .unwrap(),
-        AgentError::Provider { code: -32042 }
+        AgentError::Provider {
+            code: -32042,
+            diagnostic: Some(ProviderDiagnostic::new("unknown model")),
+        }
     );
     wait_until_gone(&root, "pid").await;
 }
@@ -240,7 +243,10 @@ async fn a_codex_nothing_has_signed_in_refuses_its_session_and_is_reported_as_co
             .err()
             .map(|failure| failure.cause().clone())
             .unwrap(),
-        AgentError::Provider { code: -32000 }
+        AgentError::Provider {
+            code: -32000,
+            diagnostic: Some(ProviderDiagnostic::new("Authentication required")),
+        }
     );
     wait_until_gone(&root, "pid").await;
 }

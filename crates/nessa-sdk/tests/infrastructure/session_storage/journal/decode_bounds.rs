@@ -1,5 +1,6 @@
 //! Decode-pass read counts distinguish early bounds from post-allocation validation.
 use super::{read, Loaded};
+use crate::application::agent_execution::agents::ProviderDiagnostic;
 use crate::application::agent_execution::sessions::StorageError;
 use crate::domain::agent_execution::{
     prompts::{LinkedFile, UserMessage},
@@ -85,6 +86,29 @@ fn oversized_provider_field_is_rejected_before_reading_its_owned_payload() {
             "oversized field was read before its bound: {decoded}/{length}, escaped={escaped}"
         );
     }
+}
+
+#[test]
+fn provider_diagnostic_is_required_and_bounded_before_owned_decode() {
+    let mut missing = record();
+    missing["invocations"][0]["metadata"]["result"] = json!({"Err":{"Provider":{"code":-32000}}});
+    assert!(matches!(
+        load(encoded(&missing)).0,
+        Err(StorageError::Corrupt(_))
+    ));
+
+    let diagnostic = "p".repeat(ProviderDiagnostic::MAX_BYTES + 1);
+    let mut oversized = record();
+    oversized["invocations"][0]["metadata"]["result"] =
+        json!({"Err":{"Provider":{"code":-32000,"diagnostic":diagnostic}}});
+    oversized["invocations"][0]["metadata"]["user_message"] = json!("later".repeat(1024 * 1024));
+    let length = encoded(&oversized).len();
+    let (result, decoded) = load(encoded(&oversized));
+    assert!(matches!(result, Err(StorageError::Corrupt(_))));
+    assert!(
+        decoded <= 64 * 1024,
+        "oversized provider diagnostic was read before its bound: {decoded}/{length}"
+    );
 }
 
 #[test]

@@ -164,7 +164,9 @@ WebFetch. All Nessa-owned tools are supplied through the configured MCP servers;
 arguments come only from trusted local configuration and enter the provider
 restoration fingerprint. There are no automatically discovered MCP servers.
 
-Native Bash, BashOutput and KillShell are disabled so commands use the MCP shell.
+Native Bash, TaskOutput and TaskStop are disabled so commands use the MCP shell.
+The pinned Claude SDK canonicalizes the historical BashOutput and KillShell names
+to TaskOutput and TaskStop before applying permission rules.
 EnterPlanMode/ExitPlanMode remain disabled because this client holds the provider
 in its default permission mode. AskUserQuestion is unavailable until the client
 supports the harness's form elicitation. The preset does not invent capabilities
