@@ -28,15 +28,6 @@ const TRANSFER_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 /// How many hops a redirect chain may take before it is treated as a loop.
 const REDIRECT_LIMIT: usize = 10;
 
-/// The most bytes an agent runtime archive may be.
-///
-/// Around five times the largest pinned archive, so it is not a budget anybody
-/// has to think about — it is there so that a server which answers a hundred
-/// megabyte request with an endless body fills a disk with a failure instead of
-/// with an archive. Nothing has been measured at this point, so this is not a
-/// judgement about the bytes; it is a bound on how many of them are kept.
-const MAXIMUM_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
-
 /// How much is moved between the socket and the disk at a time.
 const TRANSFER_CHUNK: usize = 64 * 1024;
 
@@ -128,7 +119,12 @@ fn install_tls_backend() {
 }
 
 impl ArchiveSource for HttpsArchives {
-    fn download(&self, url: &str, staged: &mut StagedArchive) -> Result<(), SourceFailure> {
+    fn download(
+        &self,
+        url: &str,
+        at_most: u64,
+        staged: &mut StagedArchive,
+    ) -> Result<(), SourceFailure> {
         let mut response = self
             .client
             .get(url)
@@ -137,7 +133,11 @@ impl ArchiveSource for HttpsArchives {
         if let Some(refusal) = refusal(response.status().as_u16()) {
             return Err(refusal);
         }
-        store(&mut response, staged, MAXIMUM_ARCHIVE_BYTES)
+        // The bound is the pin's own measurement of this archive rather than a
+        // constant here. A `Content-Length` is not used for it: it is the
+        // server's claim about a body the server is also sending, so holding
+        // the transfer to it would be holding it to nothing.
+        store(&mut response, staged, at_most)
     }
 }
 
@@ -161,8 +161,9 @@ fn refusal(status: u16) -> Option<SourceFailure> {
 /// is this machine's, and telling somebody with a full disk to check their
 /// connection sends them to look at the wrong thing.
 ///
-/// `limit` is passed in rather than read from the constant so that the bound
-/// can be exercised by a test without moving half a gigabyte.
+/// `limit` is the pinned length of this archive, and the refusal happens on the
+/// chunk that crosses it rather than after the body ends — so the most that is
+/// ever written past the pin is one read buffer.
 fn store(
     body: &mut impl Read,
     staged: &mut StagedArchive,

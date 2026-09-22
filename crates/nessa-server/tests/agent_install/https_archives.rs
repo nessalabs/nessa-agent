@@ -221,7 +221,11 @@ fn a_plain_http_url_is_never_fetched() {
     let source = HttpsArchives::new().expect("an https client");
 
     let failure = source
-        .download(&format!("http://127.0.0.1:{port}/runtime.tgz"), &mut staged)
+        .download(
+            &format!("http://127.0.0.1:{port}/runtime.tgz"),
+            archive.len() as u64,
+            &mut staged,
+        )
         .expect_err("plain http is not fetched");
 
     assert!(
