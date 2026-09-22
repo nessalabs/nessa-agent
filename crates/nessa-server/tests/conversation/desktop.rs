@@ -279,6 +279,51 @@ mod installed_agents {
     }
 
     #[test]
+    fn removing_the_selected_agent_leaves_a_gateway_that_still_starts() {
+        // The consequence the removal test above does not reach. `selected` is
+        // settled before anything knows what is installed, and
+        // `AgentsConfig::selected` refuses a choice with no entry under
+        // `runtimes` — so taking the entry out from under it is a gateway that
+        // does not start, not an agent that is missing.
+        //
+        // Two people meet this: one who wrote a runtime by hand and chose it,
+        // and everybody who selected the agent on the release that moves its
+        // pin. Both would open the app to nothing.
+        let Some(agent) = unbundled() else { return };
+        let root = tempfile::tempdir().unwrap();
+        let bundle = root.path().join("Nessa.app/runtime");
+        bundled_runtime(&bundle);
+        let data = root.path().join("data");
+        nessa_local_storage::create_directory(&data).unwrap();
+        let mut settings = RuntimeConfig::default();
+        configure(&mut settings, &bundle, &data).unwrap();
+        let agents = settings.agents.as_mut().unwrap();
+        agents.runtimes.insert(
+            agent.name().into(),
+            AgentRuntime {
+                command: PathBuf::from("/an/older/build/installed/this"),
+                args: vec!["acp".into()],
+                model: "opencode/big-pickle".into(),
+                tools_enabled: true,
+                context_tokens: 100_000,
+                output_tokens: 4096,
+            },
+        );
+        agents.selected = Some(agent.name().into());
+
+        configure(&mut settings, &bundle, &data).unwrap();
+
+        let agents = settings.agents.as_ref().unwrap();
+        assert!(
+            !agents.runtimes.contains_key(agent.name()),
+            "the runtime this build does not pin is still taken out"
+        );
+        agents
+            .selected()
+            .expect("a gateway that starts, on an agent that can actually run");
+    }
+
+    #[test]
     fn a_runtime_this_build_no_longer_pins_is_removed_rather_than_left() {
         // The half that is easy to forget. A launch written by an earlier build
         // keeps working after the pin moves, because superseded artifacts are

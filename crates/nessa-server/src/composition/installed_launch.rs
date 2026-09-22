@@ -89,9 +89,20 @@ pub(super) fn installed_launch(
     Ok(store.installed(&name, &release).ok().flatten())
 }
 
-/// The arguments that runtime is launched with.
-pub(super) fn installed_arguments() -> Vec<String> {
-    vec![ACP_SUBCOMMAND.to_string()]
+/// The arguments `agent`'s installed runtime is launched with.
+///
+/// Takes the agent rather than answering one way for all of them. `acp` is
+/// Opencode's subcommand and nothing else's, and the only reason a wrong answer
+/// has not been given yet is that no other agent reaches this. Naming each one
+/// means the next agent to arrive has to say what it needs, rather than
+/// inheriting a word that happens to be there.
+pub(super) fn installed_arguments(agent: AgentId) -> Vec<String> {
+    match agent {
+        AgentId::Opencode => vec![ACP_SUBCOMMAND.to_string()],
+        // Bundled today, so this is not reached. Answered rather than
+        // wildcarded: a launch is the one place a wrong guess is silent.
+        AgentId::Claude | AgentId::Codex => Vec::new(),
+    }
 }
 
 #[cfg(test)]

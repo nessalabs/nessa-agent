@@ -142,5 +142,6 @@ fn the_runtime_is_launched_as_an_acp_server() {
     // Recorded from `opencode acp`, which is what the contract fixtures in
     // `nessa-sdk` were taken from. An executable launched without it starts the
     // interactive program instead and never speaks the protocol.
-    assert_eq!(installed_arguments(), vec!["acp".to_string()]);
+    let Some(agent) = unbundled() else { return };
+    assert_eq!(installed_arguments(agent), vec!["acp".to_string()]);
 }

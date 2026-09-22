@@ -182,7 +182,7 @@ pub(super) fn configure(
         let launch = installed_launch(agent, &host, &store).map_err(unusable_runtime)?;
         match launch {
             Some(command) => {
-                let args = installed_arguments();
+                let args = installed_arguments(agent);
                 agents
                     .runtimes
                     .entry(agent.name().into())
@@ -202,7 +202,33 @@ pub(super) fn configure(
                     });
             }
             None => {
-                agents.runtimes.remove(agent.name());
+                // Taking the runtime out can take the selected agent with it,
+                // and that is a gateway that does not start rather than an
+                // agent that is missing: `AgentsConfig::selected` refuses a
+                // choice with no entry under `runtimes`, and composition
+                // settled `selected` sixty lines above this, before anything
+                // knew what was installed.
+                //
+                // Reachable two ways. Somebody who wrote a runtime by hand and
+                // chose it — which was the documented way to run Opencode —
+                // and anybody at all on the release that moves its pin, since
+                // the version they installed stops being the one named. Both
+                // of them would have opened the app to nothing starting.
+                //
+                // So the choice falls back to an agent that can actually run,
+                // and to none when nothing can. An unbuildable agent that is
+                // merely configured is already tolerated; it is only the
+                // selected one that is fatal.
+                if agents.runtimes.remove(agent.name()).is_some()
+                    && agents.selected.as_deref() == Some(agent.name())
+                {
+                    agents.selected = agents
+                        .runtimes
+                        .keys()
+                        .find(|name| name.as_str() == DEFAULT_AGENT.name())
+                        .or_else(|| agents.runtimes.keys().next())
+                        .cloned();
+                }
             }
         }
     }

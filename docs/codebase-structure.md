@@ -700,6 +700,16 @@ private to its owner like everything else there.
 
 `composition/install_command.rs` wires those for `nessa install-agent NAME`,
 picks the build for this machine — the most demanding of the pinned releases
+The domain says what a release *is*: `pinned_release.rs` holds the pin, and
+`release_contents.rs` holds the set of files it installs — each one an
+`ArchivePath` with a `FileRole` of `Launch`, `Helper` or `Document`, exactly one
+of them the launch. That set is why one install path serves an agent that ships
+a single binary and one that ships four programs plus the tools they call.
+`ArchiveSize` bounds the download against the size the pin measured. Composition
+reads the store at every start through `composition/installed_launch.rs`, which
+answers with a launch or with nothing, and never with a path it wrote down
+earlier.
+
 that run on it — and reports one line of JSON on stdout. `scripts/agents/pin-agents.mjs` regenerates
 the pin file by downloading and hashing every platform's archive. Tests under
 `tests/agent_install/` split the domain's rules, the ordering, the two adapters
