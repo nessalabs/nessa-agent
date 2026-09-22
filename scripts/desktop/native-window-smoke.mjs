@@ -460,14 +460,16 @@ try {
   providerPid ??= recordedPid(providerPidPath)
   const driverGroupGone = await stopOwnedGroup(driver?.pid)
   const serverGroupGone = await stopOwnedGroup(server?.pid)
-  await stopRecordedProcess(appPid)
-  await stopRecordedProcess(providerPid)
+  const appProcessGone = await stopRecordedProcess(appPid)
+  const providerProcessGone = await stopRecordedProcess(providerPid)
   for (const [name, gone] of [
     ["driver process group", driverGroupGone],
     ["gateway process group", serverGroupGone],
+    ["application process", appProcessGone],
+    ["provider process", providerProcessGone],
   ]) {
     if (gone) continue
-    const cleanup = new Error(`${name} survived cleanup`)
+    const cleanup = new Error(`${name} cleanup could not be verified`)
     failure = failure ? new AggregateError([failure, cleanup]) : cleanup
   }
   for (const [name, pid] of [
