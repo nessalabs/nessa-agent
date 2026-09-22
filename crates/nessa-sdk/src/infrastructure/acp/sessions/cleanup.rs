@@ -20,7 +20,7 @@ struct CleanupState {
 }
 
 enum CleanupResource {
-    Process(ProcessScope),
+    Process(Box<ProcessScope>),
     Directory(RetainedDirectory),
 }
 impl ProcessCleanup {
@@ -32,7 +32,7 @@ impl ProcessCleanup {
         }
     }
     pub(crate) async fn retain(&self, scope: ProcessScope) {
-        self.state.lock().await.resource = Some(CleanupResource::Process(scope));
+        self.state.lock().await.resource = Some(CleanupResource::Process(Box::new(scope)));
     }
     pub(crate) fn retaining_directory(config: AcpConfig, directory: RetainedDirectory) -> Self {
         Self {

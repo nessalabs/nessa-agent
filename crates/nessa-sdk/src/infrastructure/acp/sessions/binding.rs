@@ -225,7 +225,7 @@ struct RestorationRecovery {
 }
 struct LiveGenerationFailure {
     cause: AgentError,
-    state: Option<ProviderSessionState>,
+    state: Option<Box<ProviderSessionState>>,
 }
 impl Generation {
     fn control(&self) -> Control {
@@ -284,7 +284,7 @@ impl RestorationRecovery {
     fn failure(&self, state: ProviderSessionState) -> LiveGenerationFailure {
         LiveGenerationFailure {
             cause: self.cause.clone(),
-            state: Some(state),
+            state: Some(Box::new(state)),
         }
     }
 
@@ -756,7 +756,7 @@ impl<P: AcpProfile + Clone> AcpSession<P> {
     }
     async fn operation_failure(&self, failure: LiveGenerationFailure) -> ProviderOperationFailure {
         if let Some(state) = failure.state {
-            return ProviderOperationFailure::new(failure.cause, state);
+            return ProviderOperationFailure::new(failure.cause, *state);
         }
         let error = failure.cause;
         let generation = self.generation.lock().await;

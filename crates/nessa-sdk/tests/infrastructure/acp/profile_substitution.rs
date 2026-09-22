@@ -640,7 +640,10 @@ async fn close_during_restoration_cleanup_keeps_the_current_owner_and_cause() {
 
     let retry_session = opened.session.clone();
     let retry = tokio::spawn(async move { retry_session.prepare_invocation().await });
-    let first_path = first_gate.started.await.unwrap();
+    let first_path = timeout(Duration::from_secs(10), first_gate.started)
+        .await
+        .expect("first restoration cleanup starts")
+        .unwrap();
     assert_eq!(first_path, directory);
 
     let waiting_session = opened.session.clone();
@@ -656,6 +659,7 @@ async fn close_during_restoration_cleanup_keeps_the_current_owner_and_cause() {
             .await
     });
     assert_pending_once(closing.as_mut()).await;
+    let closing = tokio::spawn(closing);
 
     first_gate
         .release
@@ -664,7 +668,10 @@ async fn close_during_restoration_cleanup_keeps_the_current_owner_and_cause() {
             "directed first cleanup failure",
         )))
         .unwrap();
-    let second_path = second_gate.started.await.unwrap();
+    let second_path = timeout(Duration::from_secs(10), second_gate.started)
+        .await
+        .expect("close retries restoration cleanup")
+        .unwrap();
     assert_eq!(second_path, directory);
 
     let retried = retry.await.unwrap().unwrap_err();
@@ -684,7 +691,7 @@ async fn close_during_restoration_cleanup_keeps_the_current_owner_and_cause() {
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 
     second_gate.release.send(Ok(())).unwrap();
-    let closed = closing.await;
+    let closed = closing.await.unwrap();
     assert!(matches!(closed.resources(), ResourceCleanup::Confirmed(_)));
     assert_eq!(closed.operation_failure(), Some(&original));
     assert!(!directory.exists());
