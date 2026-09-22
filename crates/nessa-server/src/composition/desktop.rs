@@ -85,9 +85,9 @@ pub(super) fn configure(
     let mcp = bundle.join("nessa-mcp");
     // Only the agents this desktop ships. A bundle checked for files it was
     // never meant to contain would refuse to start, so an agent with no bundled
-    // launch is skipped here rather than looked for. Skipped is all it is: no
-    // launch is written for it anywhere else yet either, so an unbundled agent
-    // stays unconfigured and the picker says exactly that.
+    // launch is skipped here rather than looked for. The installed-runtime
+    // store below independently decides whether that agent has a verified
+    // launch on this host.
     let launches: Vec<(AgentId, PathBuf, PathBuf)> = AgentId::ALL
         .iter()
         .filter_map(|agent| {
@@ -213,9 +213,9 @@ pub(super) fn configure(
 /// Remove a launch the current store did not verify without leaving an invalid
 /// selected/runtime pair behind.
 fn remove_unverified_runtime(agents: &mut AgentsConfig, agent: AgentId) {
-    if agents.runtimes.remove(agent.name()).is_some()
-        && agents.selected.as_deref() == Some(agent.name())
-    {
+    let was_selected = agents.selected.as_deref() == Some(agent.name());
+    agents.runtimes.remove(agent.name());
+    if was_selected {
         // The complete bundled-runtime check above proves this entry exists.
         // Naming it directly keeps fallback deterministic even if HashMap
         // iteration order changes.

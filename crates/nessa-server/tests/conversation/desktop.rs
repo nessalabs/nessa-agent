@@ -1,4 +1,69 @@
 use super::*;
+#[cfg(unix)]
+use std::io::Write;
+
+#[cfg(unix)]
+use crate::agent_install::{
+    application::RuntimeStore,
+    domain::{preferred_release, AgentName, PinnedRelease},
+    infrastructure::releases_for,
+};
+
+fn opencode_runtime(model: &str) -> AgentRuntime {
+    AgentRuntime {
+        command: PathBuf::from("/unverified/opencode"),
+        args: vec!["old-argument".into()],
+        model: model.into(),
+        tools_enabled: false,
+        context_tokens: 72_000,
+        output_tokens: 3072,
+    }
+}
+
+#[cfg(unix)]
+fn opencode_release() -> (AgentName, PinnedRelease) {
+    let agent = AgentName::parse(AgentId::Opencode.name()).expect("known agent name");
+    let releases = releases_for(&agent).expect("compiled release pins parse");
+    let release = preferred_release(releases, &host_platform())
+        .expect("Unix desktop test hosts have a pinned OpenCode release");
+    (agent, release)
+}
+
+#[cfg(unix)]
+fn runtime_archive(release: &PinnedRelease) -> Vec<u8> {
+    let body = b"test OpenCode runtime";
+    let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
+        Vec::new(),
+        flate2::Compression::fast(),
+    ));
+    let mut header = tar::Header::new_gnu();
+    header.set_size(body.len() as u64);
+    header.set_mode(0o755);
+    header.set_entry_type(tar::EntryType::Regular);
+    header.set_cksum();
+    builder
+        .append_data(&mut header, release.executable().as_str(), body.as_slice())
+        .expect("append runtime to archive");
+    builder
+        .into_inner()
+        .expect("finish tar archive")
+        .finish()
+        .expect("finish gzip archive")
+}
+
+#[cfg(unix)]
+fn publish_runtime(data: &Path, release: &PinnedRelease) -> PathBuf {
+    let (agent, _) = opencode_release();
+    let store = ManagedRuntimes::new(data.join("agents"));
+    let mut staged = store.stage(&agent).expect("stage runtime archive");
+    staged
+        .file_mut()
+        .write_all(&runtime_archive(release))
+        .expect("write runtime archive");
+    store
+        .publish(&agent, release, &mut staged)
+        .expect("publish runtime")
+}
 
 /// A bundle holding every file `configure` requires, including one harness per
 /// agent Nessa *bundles*: an installed app that shipped without one of those is
@@ -252,19 +317,138 @@ fn removing_an_unverified_selected_runtime_falls_back_to_the_bundled_default() {
     let agents = settings.agents.as_mut().unwrap();
     agents.runtimes.insert(
         AgentId::Opencode.name().into(),
-        AgentRuntime {
-            command: PathBuf::from("/unverified/opencode"),
-            args: vec!["acp".into()],
-            model: "opencode/big-pickle".into(),
-            tools_enabled: true,
-            context_tokens: 100_000,
-            output_tokens: 4096,
-        },
+        opencode_runtime("opencode/big-pickle"),
     );
     agents.selected = Some(AgentId::Opencode.name().into());
 
     configure(&mut settings, &bundle, &data).unwrap();
 
+    let agents = settings.agents.unwrap();
+    assert!(agents.runtime(AgentId::Opencode).is_none());
+    assert_eq!(agents.selected().unwrap(), DEFAULT_AGENT);
+}
+
+#[test]
+fn an_unverified_selected_agent_without_a_runtime_entry_still_falls_back() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("runtime");
+    bundled_runtime(&bundle);
+    let data = root.path().join("data");
+    nessa_local_storage::create_directory(&data).unwrap();
+    let mut settings = RuntimeConfig::default();
+    configure(&mut settings, &bundle, &data).unwrap();
+    let agents = settings.agents.as_mut().unwrap();
+    assert!(agents.runtime(AgentId::Opencode).is_none());
+    agents.selected = Some(AgentId::Opencode.name().into());
+
+    configure(&mut settings, &bundle, &data).unwrap();
+
+    let agents = settings.agents.unwrap();
+    assert!(agents.runtime(AgentId::Opencode).is_none());
+    assert_eq!(agents.selected().unwrap(), DEFAULT_AGENT);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_verified_current_install_becomes_the_exact_desktop_launch() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("runtime");
+    bundled_runtime(&bundle);
+    let data = root.path().join("data");
+    nessa_local_storage::create_directory(&data).unwrap();
+    let mut settings = RuntimeConfig::default();
+    configure(&mut settings, &bundle, &data).unwrap();
+    let (agent, release) = opencode_release();
+    let releases = releases_for(&agent).expect("compiled release pins parse");
+    let other = releases
+        .into_iter()
+        .find(|candidate| {
+            candidate.version() != release.version()
+                || candidate.archive_digest() != release.archive_digest()
+                || candidate.executable() != release.executable()
+        })
+        .expect("OpenCode pins more than one artifact");
+    let other_path = publish_runtime(&data, &other);
+    let selected_path = publish_runtime(&data, &release);
+    let agents = settings.agents.as_mut().unwrap();
+    agents.runtimes.insert(
+        AgentId::Opencode.name().into(),
+        opencode_runtime("opencode/minimax-m3"),
+    );
+    agents.selected = Some(AgentId::Opencode.name().into());
+
+    configure(&mut settings, &bundle, &data).unwrap();
+
+    let agents = settings.agents.unwrap();
+    let configured = agents.runtime(AgentId::Opencode).unwrap();
+    assert_eq!(configured.command, selected_path);
+    assert_ne!(configured.command, other_path);
+    assert_eq!(configured.args, ["acp"]);
+    assert_eq!(configured.model, "opencode/minimax-m3");
+    assert!(!configured.tools_enabled);
+    assert_eq!(configured.context_tokens, 72_000);
+    assert_eq!(configured.output_tokens, 3072);
+    assert_eq!(agents.selected().unwrap(), AgentId::Opencode);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_stale_current_install_is_not_injected() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("runtime");
+    bundled_runtime(&bundle);
+    let data = root.path().join("data");
+    nessa_local_storage::create_directory(&data).unwrap();
+    let mut settings = RuntimeConfig::default();
+    configure(&mut settings, &bundle, &data).unwrap();
+    let (_, release) = opencode_release();
+    let published = publish_runtime(&data, &release);
+    std::fs::remove_file(&published).expect("remove installed executable");
+    let agents = settings.agents.as_mut().unwrap();
+    agents.runtimes.insert(
+        AgentId::Opencode.name().into(),
+        opencode_runtime("opencode/minimax-m3"),
+    );
+    agents.selected = Some(AgentId::Opencode.name().into());
+
+    configure(&mut settings, &bundle, &data).unwrap();
+
+    let agents = settings.agents.unwrap();
+    assert!(agents.runtime(AgentId::Opencode).is_none());
+    assert_eq!(agents.selected().unwrap(), DEFAULT_AGENT);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_install_record_for_another_pin_is_not_injected() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = root.path().join("runtime");
+    bundled_runtime(&bundle);
+    let data = root.path().join("data");
+    nessa_local_storage::create_directory(&data).unwrap();
+    let mut settings = RuntimeConfig::default();
+    configure(&mut settings, &bundle, &data).unwrap();
+    let (agent, preferred) = opencode_release();
+    let mismatch = releases_for(&agent)
+        .expect("compiled release pins parse")
+        .into_iter()
+        .find(|candidate| {
+            candidate.version() != preferred.version()
+                || candidate.archive_digest() != preferred.archive_digest()
+                || candidate.executable() != preferred.executable()
+        })
+        .expect("OpenCode pins more than one artifact");
+    let mismatched_path = publish_runtime(&data, &mismatch);
+    let agents = settings.agents.as_mut().unwrap();
+    agents.runtimes.insert(
+        AgentId::Opencode.name().into(),
+        opencode_runtime("opencode/minimax-m3"),
+    );
+    agents.selected = Some(AgentId::Opencode.name().into());
+
+    configure(&mut settings, &bundle, &data).unwrap();
+
+    assert!(mismatched_path.is_file());
     let agents = settings.agents.unwrap();
     assert!(agents.runtime(AgentId::Opencode).is_none());
     assert_eq!(agents.selected().unwrap(), DEFAULT_AGENT);
