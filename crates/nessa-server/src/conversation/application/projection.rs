@@ -104,6 +104,13 @@ impl Projection {
             self.bump();
         }
     }
+    /// Replace the coherent capability snapshot and revise the view only when it changed.
+    pub fn capabilities(&mut self, capabilities: ConversationCapabilities) {
+        if self.view.capabilities != capabilities {
+            self.view.capabilities = capabilities;
+            self.bump();
+        }
+    }
     fn ensure_message(&mut self, id: &str) -> usize {
         if let Some(index) = self
             .view

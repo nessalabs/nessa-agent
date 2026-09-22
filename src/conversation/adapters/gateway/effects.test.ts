@@ -33,6 +33,39 @@ import {
 } from "../../model"
 import { BUSY_RETRY_DELAYS_MS, gatewayEffects } from "./effects"
 
+function gatewayView(): ConversationView {
+  return {
+    conversationId: "server",
+    revision: "capabilities",
+    messages: [],
+    pending: [],
+    permissions: [],
+    tools: [],
+    capabilities: {
+      queue: true,
+      steer: true,
+      resume: true,
+      permissions: true,
+      imageInput: false,
+      agentFeatures: {
+        permissionDenial: "supported_for_offered_permission_reviews",
+        nativeHookSuppression: "unknown",
+        compactionReporting: "unsupported_not_implemented",
+        modelSwitchReporting: "unsupported_not_implemented",
+        permissionDeferral: "unsupported_not_implemented",
+        elicitationForwarding: "unknown",
+        preToolPolicy: "unsupported_not_implemented",
+        policyEndTurn: "unsupported_not_implemented",
+        policyCloseSession: "unsupported_not_implemented",
+        incomingElicitation: "unsupported_not_implemented",
+      },
+    },
+    lifecycle: { phase: "attached" },
+    truncated: false,
+    queueComplete: true,
+  }
+}
+
 /** A backoff nothing in the test should reach: waiting here is the failure. */
 const unexpectedWait = () => Promise.reject(new Error("no wait expected"))
 const effectsOf = (client: () => NessaClient | null) =>
@@ -86,7 +119,7 @@ it("serializes opaque-revision reads, including overlapping manual refreshes", a
   await Promise.resolve()
   await Promise.resolve()
   expect(read).toHaveBeenCalledOnce()
-  first.resolve({ conversationId: "server" } as ConversationView)
+  first.resolve(gatewayView())
   await Promise.all([pending, following])
   expect(read).toHaveBeenCalledTimes(2)
 })
@@ -233,12 +266,20 @@ it("keeps a failed read from settling the next one, and translates each on its o
     .mockRejectedValueOnce(
       new NessaRpcError("conversation_configuration_changed", "setup changed"),
     )
-    .mockResolvedValueOnce({ conversationId: "server" } as ConversationView)
+    .mockResolvedValueOnce(gatewayView())
   const effects = effectsOf(() => ({ conversation: { read } }) as unknown as NessaClient)
   const failed = effects.read("server").catch((error: unknown) => error)
   const following = effects.read("server")
   expect(await failed).toMatchObject({ reason: "configuration-changed" })
-  expect(await following).toEqual({ conversationId: "server" })
+  expect(await following).toMatchObject({
+    conversationId: "server",
+    capabilities: {
+      agentFeatures: {
+        permissionDenial: "supported_for_offered_permission_reviews",
+        preToolPolicy: "unsupported_not_implemented",
+      },
+    },
+  })
   expect(read).toHaveBeenCalledTimes(2)
 })
 

@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest"
-import { conversation } from "../model"
+import { conversation, type AgentFeatures } from "../model"
 import { conversationNotice } from "./notification"
+
+const agentFeatures: AgentFeatures = {
+  permissionDenial: "unknown",
+  nativeHookSuppression: "unknown",
+  compactionReporting: "unsupported_not_implemented",
+  modelSwitchReporting: "unsupported_not_implemented",
+  permissionDeferral: "unsupported_not_implemented",
+  elicitationForwarding: "unknown",
+  preToolPolicy: "unsupported_not_implemented",
+  policyEndTurn: "unsupported_not_implemented",
+  policyCloseSession: "unsupported_not_implemented",
+  incomingElicitation: "unsupported_not_implemented",
+}
 
 it("shows a late bounded startup failure from the replacement view", () => {
   const value = conversation("tab")
@@ -15,6 +28,7 @@ it("shows a late bounded startup failure from the replacement view", () => {
       resume: false,
       permissions: false,
       imageInput: false,
+      agentFeatures,
     },
     lifecycle: {
       phase: "failed",
@@ -43,6 +57,7 @@ it("shows late mandatory lifecycle evidence failure after attachment succeeds", 
       resume: false,
       permissions: false,
       imageInput: false,
+      agentFeatures,
     },
     lifecycle: {
       phase: "attached",

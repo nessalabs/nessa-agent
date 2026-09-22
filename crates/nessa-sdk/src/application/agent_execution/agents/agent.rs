@@ -318,11 +318,11 @@ impl Agent {
         self.inner.lifecycle.attachment_status()
     }
 
-    /// Return current provider operation support without I/O or restoration.
-    /// Native steering and session resume are distinct from model capabilities.
-    /// This snapshot can change on reconnection; it does not reserve admission or
-    /// guarantee provider availability. SDK queueing, boundary steering, and local
-    /// invocation hooks do not require these provider capabilities.
+    /// Return current effective operation support without I/O or restoration.
+    /// Provider transport facts are resolved separately from Nessa application
+    /// integrations, so one cannot imply the other. Provider facts reset while a
+    /// reconnection is being verified; known application absences remain unsupported.
+    /// This snapshot does not reserve admission or guarantee provider availability.
     pub fn operation_capabilities(&self) -> OperationCapabilities {
         self.inner.lifecycle.operation_capabilities()
     }

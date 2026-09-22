@@ -28,7 +28,7 @@ use nessa_sdk::application::agent_execution::{
         ActionContext, ApprovalAttribution, ApprovalBasis, PermissionAnswer,
         PermissionCancellationRequest, PermissionSelectionState,
     },
-    providers::AgentProvider,
+    providers::{AgentProvider, OperationCapabilities},
     sessions::{SessionManager, SessionSnapshot, SessionStorage},
 };
 use nessa_sdk::domain::agent_execution::{
@@ -725,12 +725,16 @@ impl ConversationService {
                                 })?;
                             let mut events = agent.subscribe();
                             let snapshot = agent.session_manager().snapshot().await;
+                            let operation_capabilities = agent.operation_capabilities();
                             let capabilities = ConversationCapabilities {
                                 queue: true,
                                 steer: true,
-                                resume: agent.operation_capabilities().session_resume,
+                                resume: operation_capabilities.session_resume(),
                                 permissions: agent.capabilities().features().tool_use(),
-                                image_input: service.takes_images(&agent) == Some(true),
+                                image_input: service
+                                    .takes_images(&agent, operation_capabilities)
+                                    == Some(true),
+                                agent_features: operation_capabilities.into(),
                             };
                             let mut projection =
                                 Projection::new(id.to_string(), capabilities, snapshot.as_ref());
@@ -861,12 +865,23 @@ impl ConversationService {
         let mut projection = live.projection.lock().await;
         projection.recover_permissions(snapshot.as_ref());
         projection.queue_order(&order);
-        projection.view.capabilities.resume = live.agent.operation_capabilities().session_resume;
+        let operation_capabilities = live.agent.operation_capabilities();
         // The last known answer stands while the agent is being restored, so the
         // view never says no to what a send at the same moment would admit.
-        if let Some(takes_images) = self.takes_images(&live.agent) {
-            projection.view.capabilities.image_input = takes_images;
-        }
+        let image_input = self
+            .takes_images(&live.agent, operation_capabilities)
+            .unwrap_or(projection.view.capabilities.image_input);
+        let queue = projection.view.capabilities.queue;
+        let steer = projection.view.capabilities.steer;
+        let permissions = projection.view.capabilities.permissions;
+        projection.capabilities(ConversationCapabilities {
+            queue,
+            steer,
+            resume: operation_capabilities.session_resume(),
+            permissions,
+            image_input,
+            agent_features: operation_capabilities.into(),
+        });
         projection.lifecycle(lifecycle_view(&live.agent));
         Ok(projection.read())
     }
@@ -946,11 +961,14 @@ impl ConversationService {
             if !message.images().is_empty() && !known {
                 // Refuse before acceptance what the agent would refuse at dispatch,
                 // and any digest this conversation did not upload itself.
+                let operation_capabilities = live.agent.operation_capabilities();
                 let attachments = service
                     .inner
                     .attachments
                     .as_ref()
-                    .filter(|_| service.takes_images(&live.agent) != Some(false))
+                    .filter(|_| {
+                        service.takes_images(&live.agent, operation_capabilities) != Some(false)
+                    })
                     .ok_or(ConversationError::ImagesUnsupported)?;
                 for image in message.images() {
                     if !attachments
@@ -1020,7 +1038,7 @@ impl ConversationService {
                     .enqueue(request, actor)
                     .await
                     .map(SubmissionDelivery::Queued),
-                SubmissionMode::Steer if !live.agent.operation_capabilities().native_steering => {
+                SubmissionMode::Steer if !live.agent.operation_capabilities().native_steering() => {
                     live.agent
                         .enqueue_steering(request, actor)
                         .await
@@ -1387,12 +1405,17 @@ impl ConversationService {
     /// opening or being restored, and unknown is not no: a message sent then is
     /// admitted, and the SDK refuses it at dispatch, with the same meaning, if
     /// the restored agent turns out to take no images.
-    fn takes_images(&self, agent: &Agent) -> Option<bool> {
+    fn takes_images(
+        &self,
+        agent: &Agent,
+        operation_capabilities: OperationCapabilities,
+    ) -> Option<bool> {
         if self.inner.attachments.is_none() || !agent.capabilities().features().input().image() {
             return Some(false);
         }
-        let agent = agent.operation_capabilities();
-        agent.negotiated.then_some(agent.image_input)
+        operation_capabilities
+            .negotiated()
+            .then_some(operation_capabilities.image_input())
     }
     async fn admit(&self) -> Result<RwLockReadGuard<'_, ()>, ConversationError> {
         let permit = self.inner.admission.read().await;

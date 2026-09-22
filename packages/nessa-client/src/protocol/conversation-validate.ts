@@ -6,6 +6,18 @@ import type {
   ImageAttachment,
   LinkedFile,
 } from "../generated/product.js"
+import {
+  CompactionReportingSupport,
+  ElicitationForwardingSupport,
+  IncomingElicitationSupport,
+  ModelSwitchReportingSupport,
+  NativeHookSuppressionSupport,
+  PermissionDeferralSupport,
+  PermissionDenialSupport,
+  PolicyCloseSessionSupport,
+  PolicyEndTurnSupport,
+  PreToolPolicySupport,
+} from "../generated/product.js"
 import { imageAttachments, linkedFiles } from "./attachment-validate.js"
 
 const utf8 = new TextEncoder()
@@ -297,9 +309,32 @@ export function conversationView(value: unknown, expected: string): Conversation
     for (const key of ["model", "provider", "workspace"]) text(runtime, key, 4096)
   }
   const capabilities = record(item.capabilities)
-  const capabilityKeys = ["queue", "steer", "resume", "permissions", "imageInput"]
+  const capabilityKeys = [
+    "queue",
+    "steer",
+    "resume",
+    "permissions",
+    "imageInput",
+    "agentFeatures",
+  ]
   exact(capabilities, capabilityKeys)
-  for (const key of capabilityKeys) flag(capabilities, key)
+  for (const key of capabilityKeys.slice(0, 5)) flag(capabilities, key)
+  const features = record(capabilities.agentFeatures)
+  const featureValues = {
+    permissionDenial: PermissionDenialSupport,
+    nativeHookSuppression: NativeHookSuppressionSupport,
+    compactionReporting: CompactionReportingSupport,
+    modelSwitchReporting: ModelSwitchReportingSupport,
+    permissionDeferral: PermissionDeferralSupport,
+    elicitationForwarding: ElicitationForwardingSupport,
+    preToolPolicy: PreToolPolicySupport,
+    policyEndTurn: PolicyEndTurnSupport,
+    policyCloseSession: PolicyCloseSessionSupport,
+    incomingElicitation: IncomingElicitationSupport,
+  } as const
+  exact(features, Object.keys(featureValues))
+  for (const [key, values] of Object.entries(featureValues))
+    oneOf(text(features, key), Object.values(values))
   const lifecycle = record(item.lifecycle)
   exact(lifecycle, ["phase", "failure", "evidenceFailure"])
   const phase = text(lifecycle, "phase")

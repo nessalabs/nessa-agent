@@ -96,12 +96,32 @@ limit. It is a per-message retention guard, not tokenization or a total-history
 budget; provider framing and model limits can impose lower bounds. Restored
 requests obey the same byte limit.
 
-`agent.operation_capabilities()` returns a separate `OperationCapabilities`
-snapshot with `native_steering` and `session_resume`. ACP fills this from the
-successful connection negotiation and rechecks it whenever the provider context
-is restored. During reconnection both fields are false until validation succeeds;
-closing retains the last negotiation. Custom provider backends advertise neither
-operation unless they explicitly implement this accessor.
+`agent.operation_capabilities()` returns a separate effective
+`OperationCapabilities` snapshot. Provider adapters publish raw
+`ProviderOperationCapabilities`; `ProviderSession` resolves that input so a
+provider cannot enable an application feature whose common integration does not
+exist. The effective type has private fields and scoped accessors, which prevents
+constructing combinations such as provider permission denial implying a configured
+pre-tool policy evaluator.
+
+ACP publishes its provider facts only after successful connection and session
+verification, and resets them before restoration. Until negotiation completes,
+provider-derived feature facts are `Unknown`. The existing boolean steering,
+resume, and image fields retain their negotiated flag for the same boundary.
+Closing retains the last negotiation. Permission denial means only that Nessa can
+select a rejecting option from a provider-raised review that offers one. Explicit
+permission deferral is a distinct provider outcome; ordinary waiting for a user
+answer is not deferral. Raw hook suppression, provider compaction notices,
+provider model-switch notices, and provider elicitation forwarding remain unknown
+until an adapter proves their full scoped behavior.
+
+The effective snapshot currently reports compaction and model-switch reporting,
+explicit permission deferral, configured pre-tool policy enforcement, policy
+end-turn, policy session-close, and incoming elicitation as
+`UnsupportedNotImplemented`. The SDK has no correlated application event or
+transition for those operations. This remains true even if a custom backend
+advertises every raw transport feature. These values describe present application
+behavior; they are not provider capability guesses.
 
 Support is a UI hint, not an admission permit: a supported operation can still
 fail because the target finished, the connection failed, or saved history is
